@@ -1,0 +1,43 @@
+USE GRAPH Mule_Pattern_Learner
+CREATE DISTRIBUTED QUERY account_money_flow_features() FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+
+
+  SumAccum<INT>   @out_deg;
+  SumAccum<FLOAT> @out_amt;
+  SumAccum<INT>   @out_txn;
+  SumAccum<INT>   @in_deg;
+  SumAccum<FLOAT> @in_amt;
+  SumAccum<INT>   @in_txn;
+
+  out_e = SELECT a
+          FROM Account:a -(HAS_PAID>:e)- Account:b
+          ACCUM
+            a.@out_deg += 1,
+            a.@out_amt += e.total_amount,
+            a.@out_txn += e.total_num_txns;
+
+  in_e = SELECT a
+         FROM Account:a -(reverse_HAS_PAID>:e)- Account:b
+         ACCUM
+           a.@in_deg += 1,
+           a.@in_amt += e.total_amount,
+           a.@in_txn += e.total_num_txns;
+
+  fin = SELECT a
+        FROM Account:a
+        POST-ACCUM
+          a.in_degree     = a.@in_deg,
+          a.out_degree    = a.@out_deg,
+          a.in_amount     = a.@in_amt,
+          a.out_amount    = a.@out_amt,
+          a.in_txn_count  = a.@in_txn,
+          a.out_txn_count = a.@out_txn,
+          a.net_flow      = a.@in_amt - a.@out_amt,
+          a.fan_in_ratio  = a.@in_deg  / (a.@out_deg + 1.0),
+          a.fan_out_ratio = a.@out_deg / (a.@in_deg  + 1.0),
+          FLOAT lo = CASE WHEN a.@in_amt < a.@out_amt THEN a.@in_amt ELSE a.@out_amt END,
+          FLOAT hi = CASE WHEN a.@in_amt > a.@out_amt THEN a.@in_amt ELSE a.@out_amt END,
+          a.pass_through_ratio = lo / (hi + 0.01);
+
+  PRINT "Money-flow features computed" AS Status;
+}

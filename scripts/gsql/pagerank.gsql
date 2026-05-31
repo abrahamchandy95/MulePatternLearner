@@ -1,0 +1,77 @@
+USE GRAPH Mule_Pattern_Learner
+CREATE QUERY tg_pagerank_wt_account(
+  STRING v_type = "Account",
+  STRING e_type = "Account_Account",
+  STRING weight_attribute = "weight",
+  FLOAT max_change = 0.001,
+  INT maximum_iteration = 25,
+  FLOAT damping = 0.85,
+  INT top_k = 100,
+  BOOL print_results = FALSE,
+  BOOL store_result = TRUE,
+  STRING file_path = "",
+  BOOL display_edges = FALSE) FOR GRAPH Mule_Pattern_Learner SYNTAX V1 {
+
+  TYPEDEF TUPLE<VERTEX Vertex_ID, FLOAT score> Vertex_Score;
+  HeapAccum<Vertex_Score>(top_k, score DESC) @@top_scores_heap;
+  SetAccum<VERTEX> @@top_vertices;
+  MaxAccum<FLOAT> @@max_diff = 9999;
+  SumAccum<FLOAT> @sum_recvd_score = 0;
+  SumAccum<FLOAT> @sum_score = 1;
+  SetAccum<EDGE> @@edge_set;
+  SumAccum<FLOAT> @sum_total_wt;
+  FILE f(file_path);
+
+  Start = {v_type};
+
+  // Per-vertex total incident weight (denominator for weighted distribution).
+  Start = SELECT s
+          FROM Start:s -(e_type:e)- v_type:t
+          ACCUM s.@sum_total_wt += e.getAttr(weight_attribute, "INT");
+
+  // Power iteration.
+  WHILE @@max_diff > max_change LIMIT maximum_iteration DO
+    @@max_diff = 0;
+    V = SELECT s
+        FROM Start:s -(e_type:e)- v_type:t
+        ACCUM t.@sum_recvd_score += s.@sum_score * (e.getAttr(weight_attribute, "INT") / s.@sum_total_wt)
+        POST-ACCUM
+          s.@sum_score = (1.0 - damping) + damping * s.@sum_recvd_score,
+          s.@sum_recvd_score = 0,
+          @@max_diff += abs(s.@sum_score - s.@sum_score');
+  END;
+
+  // Write scores back and optionally collect top-k / output file.
+  IF file_path != "" THEN
+    f.println("Vertex_ID", "PageRank");
+  END;
+
+  V = SELECT s
+      FROM Start:s
+      POST-ACCUM
+        IF store_result THEN
+          s.pagerank = s.@sum_score
+        END,
+        IF file_path != "" THEN
+          f.println(s, s.@sum_score)
+        END,
+        IF print_results THEN
+          @@top_scores_heap += Vertex_Score(s, s.@sum_score)
+        END;
+
+  IF print_results THEN
+    PRINT @@top_scores_heap;
+    IF display_edges THEN
+      FOREACH vert IN @@top_scores_heap DO
+        @@top_vertices += vert.Vertex_ID;
+      END;
+      Top = {@@top_vertices};
+      Top = SELECT s
+            FROM Top:s -(e_type:e)- v_type:t
+            WHERE @@top_vertices.contains(t)
+            ACCUM @@edge_set += e;
+      PRINT @@edge_set;
+      PRINT Top;
+    END;
+  END;
+}

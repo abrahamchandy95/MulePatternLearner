@@ -1,0 +1,50 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mule-pattern-learner"
+version = "0.1.0"
+description = "Account-level mule detection on TigerGraph"
+readme = "README.md"
+requires-python = ">=3.14"
+license = { text = "MIT" }
+authors = [{ name = "Abraham Chandy" }]
+
+dependencies = [
+    "pyTigerGraph>=1.8",
+    "numpy>=2.2",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+model = [
+    "torch>=2.9",
+    "torch-geometric>=2.7",
+]
+baseline = [
+    "xgboost>=3.0",
+    "scikit-learn>=1.6",
+]
+dev = [
+    "pytest>=8.3",
+    "basedpyright>=1.21",
+    "ruff>=0.9",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mule_pattern_learner"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.basedpyright]
+include = ["src", "tests", "scripts"]
+typeCheckingMode = "strict"
+pythonVersion = "3.14"
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+src = ["src", "tests", "scripts"]

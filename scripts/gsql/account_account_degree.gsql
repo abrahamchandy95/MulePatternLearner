@@ -1,0 +1,16 @@
+USE GRAPH Mule_Pattern_Learner
+CREATE DISTRIBUTED QUERY account_aa_degree_feature() FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+
+
+  SumAccum<INT> @aa_deg;
+
+  deg = SELECT a
+        FROM Account:a -(Account_Account:e)- Account:b
+        ACCUM a.@aa_deg += 1;
+
+  fin = SELECT a
+        FROM Account:a
+        POST-ACCUM a.aa_degree = a.@aa_deg;
+
+  PRINT "Account_Account degree computed" AS Status;
+}

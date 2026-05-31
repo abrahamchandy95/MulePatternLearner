@@ -1,0 +1,73 @@
+USE GRAPH Mule_Pattern_Learner
+CREATE QUERY tg_wcc_account_with_weights(
+  INT min_link_weight = 2,
+  INT print_limit = 100,
+  BOOL print_results = FALSE,
+  STRING file_path = "") FOR GRAPH Mule_Pattern_Learner SYNTAX V1 {
+
+
+
+  MinAccum<INT> @min_cc_id = 0;
+  MapAccum<INT, INT> @@comp_sizes_map;
+  MapAccum<INT, ListAccum<INT>> @@comp_group_by_size_map;
+  FILE f(file_path);
+
+
+  Start = {Account.*};
+
+  S = SELECT x
+      FROM Start:x
+      POST-ACCUM x.@min_cc_id = getvid(x);
+
+  WHILE (S.size() > 0) DO
+    S = SELECT t
+        FROM S:s -(Account_Account:e)- Account:t
+        WHERE e.weight >= min_link_weight
+        ACCUM t.@min_cc_id += s.@min_cc_id
+        HAVING t.@min_cc_id != t.@min_cc_id';
+  END;
+
+  // Tally component sizes.
+  Start = SELECT s
+          FROM Account:s
+          POST-ACCUM @@comp_sizes_map += (s.@min_cc_id -> 1);
+
+  // Write com_id / com_size back onto each Account.
+  tmp = SELECT s
+        FROM Account:s
+        POST-ACCUM
+          s.setAttr("com_id", s.@min_cc_id),
+          s.setAttr("com_size", @@comp_sizes_map.get(s.@min_cc_id));
+
+  // Materialize Connected_Component vertices and Account_In_Ring edges.
+  tmp = SELECT s
+        FROM Account:s
+        POST-ACCUM
+          INSERT INTO Connected_Component VALUES (s.@min_cc_id),
+          INSERT INTO Account_In_Ring VALUES (s, s.@min_cc_id);
+
+  IF file_path != "" THEN
+    f.println("Vertex_ID", "Component_ID");
+  END;
+
+  Start = SELECT s
+          FROM Start:s
+          POST-ACCUM
+            IF file_path != "" THEN
+              f.println(s, s.@min_cc_id)
+            END;
+
+  IF print_results THEN
+    IF print_limit >= 0 THEN
+      Start = SELECT s
+              FROM Start:s
+              LIMIT print_limit;
+    END;
+    FOREACH (compId, size) IN @@comp_sizes_map DO
+      @@comp_group_by_size_map += (size -> compId);
+    END;
+    PRINT @@comp_group_by_size_map;
+    PRINT @@comp_sizes_map AS sizes;
+    PRINT Start[Start.@min_cc_id];
+  END;
+}

@@ -1,0 +1,129 @@
+CREATE GRAPH Mule_Pattern_Learner ()
+
+CREATE SCHEMA_CHANGE JOB add_schema FOR GRAPH Mule_Pattern_Learner {
+
+  ADD VERTEX Account (
+    PRIMARY_ID id STRING,
+    is_fraud INT DEFAULT 0,
+    fraud INT DEFAULT 0,
+    victim INT DEFAULT 0,
+    is_external INT DEFAULT 0,
+    external_type STRING DEFAULT "",
+    category STRING DEFAULT "",
+    pagerank FLOAT DEFAULT 0.0,
+    com_size INT DEFAULT 0,
+    com_id INT DEFAULT 0,
+    aa_degree INT DEFAULT 0,
+    triangle_count INT DEFAULT 0,
+    clustering_coef FLOAT DEFAULT 0.0,
+    in_degree INT DEFAULT 0,
+    out_degree INT DEFAULT 0,
+    in_amount FLOAT DEFAULT 0.0,
+    out_amount FLOAT DEFAULT 0.0,
+    in_txn_count INT DEFAULT 0,
+    out_txn_count INT DEFAULT 0,
+    fan_in_ratio FLOAT DEFAULT 0.0,
+    fan_out_ratio FLOAT DEFAULT 0.0,
+    pass_through_ratio FLOAT DEFAULT 0.0,
+    net_flow FLOAT DEFAULT 0.0,
+    activity_span_days FLOAT DEFAULT 0.0,
+    days_since_last_txn FLOAT DEFAULT -1.0,
+    account_age_days FLOAT DEFAULT -1.0,
+    mean_inter_txn_days FLOAT DEFAULT -1.0,
+    txn_per_active_day FLOAT DEFAULT 0.0,
+    burst_ratio FLOAT DEFAULT 0.0,
+    active_bin_count INT DEFAULT 0,
+    activity_concentration FLOAT DEFAULT 0.0,
+    peak_bin_fraction FLOAT DEFAULT 0.0,
+    early_late_ratio FLOAT DEFAULT 0.0,
+    in_out_lag_days FLOAT DEFAULT 0.0,
+    device_share_cnt INT DEFAULT 0,
+    ip_share_cnt INT DEFAULT 0,
+    phone_share_cnt INT DEFAULT 0,
+    email_share_cnt INT DEFAULT 0,
+    fastrp_embedding LIST<DOUBLE>,
+    mule_cnt INT DEFAULT 0,
+    fraud_ip INT DEFAULT 0,
+    fraud_device INT DEFAULT 0,
+    trans_in_mule_ratio FLOAT DEFAULT 0.0,
+    trans_out_mule_ratio FLOAT DEFAULT 0.0,
+    shortest_path_length INT DEFAULT -1,
+    is_train INT DEFAULT 0,
+    is_val INT DEFAULT 0,
+    is_test INT DEFAULT 0
+  ) WITH STATS="OUTDEGREE_BY_EDGETYPE", PRIMARY_ID_AS_ATTRIBUTE="true";
+
+  ADD VERTEX Party (
+    PRIMARY_ID id STRING,
+    is_fraud INT DEFAULT 0,
+    fraud INT DEFAULT 0,
+    victim INT DEFAULT 0
+  ) WITH STATS="OUTDEGREE_BY_EDGETYPE", PRIMARY_ID_AS_ATTRIBUTE="true";
+
+  ADD VERTEX Device (
+    PRIMARY_ID id STRING,
+    device_type STRING DEFAULT "",
+    is_blocked INT DEFAULT 0
+  ) WITH STATS="OUTDEGREE_BY_EDGETYPE", PRIMARY_ID_AS_ATTRIBUTE="true";
+
+  ADD VERTEX IP (
+    PRIMARY_ID id STRING,
+    is_blocked INT DEFAULT 0
+  ) WITH STATS="OUTDEGREE_BY_EDGETYPE", PRIMARY_ID_AS_ATTRIBUTE="true";
+
+  ADD VERTEX Phone (
+    PRIMARY_ID id STRING
+  ) WITH STATS="OUTDEGREE_BY_EDGETYPE", PRIMARY_ID_AS_ATTRIBUTE="true";
+
+  ADD VERTEX Email (
+    PRIMARY_ID id STRING
+  ) WITH STATS="OUTDEGREE_BY_EDGETYPE", PRIMARY_ID_AS_ATTRIBUTE="true";
+
+  ADD VERTEX Connected_Component (
+    PRIMARY_ID id INT
+  ) WITH STATS="OUTDEGREE_BY_EDGETYPE", PRIMARY_ID_AS_ATTRIBUTE="true";
+
+
+  ADD DIRECTED EDGE HAS_PAID (
+    FROM Account,
+    TO Account,
+    total_amount FLOAT DEFAULT 0.0,
+    total_num_txns INT DEFAULT 0,
+    first_txn_date DATETIME,
+    last_txn_date DATETIME,
+    span_days FLOAT DEFAULT 0.0,
+    num_bins INT DEFAULT 0,
+    bin_days INT DEFAULT 14,
+    amount_bins LIST<DOUBLE>,
+    count_bins LIST<INT>
+  ) WITH REVERSE_EDGE="reverse_HAS_PAID";
+
+
+  ADD UNDIRECTED EDGE Account_Account (
+    FROM Account,
+    TO Account,
+    weight INT DEFAULT 1
+  );
+
+  ADD UNDIRECTED EDGE Party_Has_Account (FROM Party, TO Account);
+
+  ADD UNDIRECTED EDGE Has_Device (
+    FROM Party,
+    TO Device,
+    first_seen DATETIME,
+    last_seen DATETIME
+  );
+  ADD UNDIRECTED EDGE Has_IP (
+    FROM Party,
+    TO IP,
+    first_seen DATETIME,
+    last_seen DATETIME
+  );
+  ADD UNDIRECTED EDGE Has_Phone (FROM Party, TO Phone);
+  ADD UNDIRECTED EDGE Has_Email (FROM Party, TO Email);
+
+  ADD UNDIRECTED EDGE Account_In_Ring (FROM Account, TO Connected_Component);
+}
+
+RUN SCHEMA_CHANGE JOB add_schema
+DROP JOB add_schema
