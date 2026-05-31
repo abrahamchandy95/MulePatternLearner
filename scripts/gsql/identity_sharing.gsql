@@ -1,0 +1,47 @@
+USE GRAPH Mule_Pattern_Learner
+CREATE DISTRIBUTED QUERY account_identity_sharing_features() FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+
+
+  SetAccum<VERTEX<Account>> @device_peers;
+  SetAccum<VERTEX<Account>> @ip_peers;
+  SetAccum<VERTEX<Account>> @phone_peers;
+  SetAccum<VERTEX<Account>> @email_peers;
+
+  dev = SELECT a
+        FROM Account:a -(Party_Has_Account:e0)- Party:pa
+             -(Has_Device:e1)- Device:d -(Has_Device:e2)- Party:pt
+             -(Party_Has_Account:e3)- Account:a2
+        WHERE a2 != a
+        ACCUM a.@device_peers += a2;
+
+  ipq = SELECT a
+        FROM Account:a -(Party_Has_Account:e0)- Party:pa
+             -(Has_IP:e1)- IP:ip -(Has_IP:e2)- Party:pt
+             -(Party_Has_Account:e3)- Account:a2
+        WHERE a2 != a
+        ACCUM a.@ip_peers += a2;
+
+  phq = SELECT a
+        FROM Account:a -(Party_Has_Account:e0)- Party:pa
+             -(Has_Phone:e1)- Phone:ph -(Has_Phone:e2)- Party:pt
+             -(Party_Has_Account:e3)- Account:a2
+        WHERE a2 != a
+        ACCUM a.@phone_peers += a2;
+
+  emq = SELECT a
+        FROM Account:a -(Party_Has_Account:e0)- Party:pa
+             -(Has_Email:e1)- Email:em -(Has_Email:e2)- Party:pt
+             -(Party_Has_Account:e3)- Account:a2
+        WHERE a2 != a
+        ACCUM a.@email_peers += a2;
+
+  fin = SELECT a
+        FROM Account:a
+        POST-ACCUM
+          a.device_share_cnt = a.@device_peers.size(),
+          a.ip_share_cnt     = a.@ip_peers.size(),
+          a.phone_share_cnt  = a.@phone_peers.size(),
+          a.email_share_cnt  = a.@email_peers.size();
+
+  PRINT "Identity-sharing features computed" AS Status;
+}

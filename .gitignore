@@ -1,0 +1,134 @@
+# ============================================================================
+# .gitignore — Mule Pattern Learner
+# ============================================================================
+
+# ── Secrets / environment ──────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.secret
+secrets/
+cfg.py                  # pyTigerGraph convention sometimes holds a secret
+
+# ── Data (large / sensitive — never version-controlled) ─────────────────────
+data/*.csv
+data/*.tsv
+data/*.parquet
+data/*.json
+data/*.jsonl
+data/*.feather
+data/*.arrow
+data/*.h5
+data/*.hdf5
+data/*.pkl
+data/*.pickle
+data/*.npy
+data/*.npz
+*.csv
+*.tsv
+*.parquet
+!data/.gitkeep        # keep the empty data/ dir tracked
+
+# ── Python build / packaging artifacts ─────────────────────────────────────
+*.egg-info/
+*.egg
+.eggs/
+build/
+dist/
+sdist/
+wheels/
+develop-eggs/
+.installed.cfg
+MANIFEST
+pip-wheel-metadata/
+share/python-wheels/
+
+# ── Byte-compiled / optimized / C extensions ───────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# ── Virtual environments ────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.python-version       # remove this line if you commit a pinned version
+
+# ── Type checkers / linters / test caches ───────────────────────────────────
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+.basedpyright/
+.pyright/
+.ruff_cache/
+.pytest_cache/
+.cache/
+.hypothesis/
+.tox/
+.nox/
+
+# ── Coverage reports ────────────────────────────────────────────────────────
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+*.py,cover
+htmlcov/
+nosetests.xml
+
+# ── ML / experiment artifacts ───────────────────────────────────────────────
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.safetensors
+*.joblib
+checkpoints/
+lightning_logs/
+mlruns/
+mlartifacts/
+wandb/
+runs/
+outputs/
+artifacts/
+*.log
+
+# ── Jupyter / IPython ───────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/*
+profile_default/
+ipython_config.py
+
+# ── TigerGraph / GSQL local junk ────────────────────────────────────────────
+*.gsql.log
+gsql_output/
+tigergraph_logs/
+
+# ── OS files ────────────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ── Editors / IDEs ──────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+*.swn
+*~
+*.sublime-project
+*.sublime-workspace
+.spyderproject
+.spyproject
+.ropeproject

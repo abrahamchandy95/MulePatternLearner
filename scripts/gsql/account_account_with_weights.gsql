@@ -1,0 +1,27 @@
+USE GRAPH Mule_Pattern_Learner
+CREATE DISTRIBUTED QUERY account_account_with_weights(
+  INT min_edge_weight = 1) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+
+  MapAccum<VERTEX<Account>, INT> @edge_weight;
+
+  tmp = SELECT s
+        FROM Account:s -(Account_Account:e)- Account:t
+        ACCUM DELETE(e);
+
+  src = SELECT a
+        FROM Account:a -(HAS_PAID>:e)- Account:b
+        ACCUM
+          a.@edge_weight += (b -> e.total_num_txns),
+          b.@edge_weight += (a -> e.total_num_txns);
+
+  ins = SELECT m
+        FROM Account:m
+        POST-ACCUM
+          FOREACH (nbr, w) IN m.@edge_weight DO
+            IF w >= min_edge_weight THEN
+              INSERT INTO Account_Account VALUES (m, nbr, w)
+            END
+          END;
+
+  PRINT "Account_Account edges inserted" AS Status;
+}

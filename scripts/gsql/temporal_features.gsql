@@ -1,0 +1,121 @@
+USE GRAPH Mule_Pattern_Learner
+CREATE DISTRIBUTED QUERY account_temporal_features(
+  STRING dataset_max_date = "") FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+
+
+  MaxAccum<DATETIME> @@max_last_dt;
+  SumAccum<INT> @@have_edges;
+
+  scan = SELECT a
+         FROM Account:a -(HAS_PAID>:e)- Account:b
+         ACCUM @@max_last_dt += e.last_txn_date, @@have_edges += 1;
+
+  IF @@have_edges == 0 THEN
+    PRINT "No HAS_PAID edges; nothing to compute" AS Status;
+    RETURN;
+  END;
+
+  DATETIME ref_dt;
+  IF dataset_max_date != "" THEN
+    ref_dt = to_datetime(dataset_max_date);
+  ELSE
+    ref_dt = @@max_last_dt;
+  END;
+  INT ref_epoch = datetime_to_epoch(ref_dt);
+
+  MinAccum<DATETIME> @first_dt;
+  MaxAccum<DATETIME> @last_dt;
+  SumAccum<INT>      @total_txns;
+
+  MinAccum<DATETIME> @out_first_dt;
+  MaxAccum<DATETIME> @out_last_dt;
+  SumAccum<INT>      @out_present;
+  // Incoming-side timing.
+  MinAccum<DATETIME> @in_first_dt;
+  MaxAccum<DATETIME> @in_last_dt;
+  SumAccum<INT>      @in_present;
+
+  MapAccum<INT, SumAccum<FLOAT>> @bin_amount;
+  MapAccum<INT, SumAccum<INT>>   @bin_count_map;
+  SumAccum<FLOAT> @sum_amount; 
+
+  // ── Outgoing edges: account is the payer (a -> b) ──
+  out_e = SELECT a
+          FROM Account:a -(HAS_PAID>:e)- Account:b
+          ACCUM
+            a.@first_dt += e.first_txn_date,
+            a.@last_dt  += e.last_txn_date,
+            a.@total_txns += e.total_num_txns,
+            a.@out_first_dt += e.first_txn_date,
+            a.@out_last_dt  += e.last_txn_date,
+            a.@out_present += 1,
+            // unroll the bin sequences onto the payer
+            FOREACH i IN RANGE[0, e.amount_bins.size() - 1] DO
+              a.@bin_amount += (i -> e.amount_bins.get(i)),
+              a.@bin_count_map += (i -> e.count_bins.get(i)),
+              a.@sum_amount += e.amount_bins.get(i)
+            END;
+
+  in_e = SELECT a
+         FROM Account:a -(reverse_HAS_PAID>:e)- Account:b
+         ACCUM
+           a.@first_dt += e.first_txn_date,
+           a.@last_dt  += e.last_txn_date,
+           a.@in_first_dt += e.first_txn_date,
+           a.@in_last_dt  += e.last_txn_date,
+           a.@in_present += 1;
+
+  fin = SELECT a
+        FROM Account:a
+        WHERE a.@total_txns > 0
+        POST-ACCUM
+          INT first_ep = datetime_to_epoch(a.@first_dt),
+          INT last_ep  = datetime_to_epoch(a.@last_dt),
+          FLOAT span_d = (last_ep - first_ep) / 86400.0,
+
+          // recency / age (relative to reference time)
+          a.days_since_last_txn = (ref_epoch - last_ep) / 86400.0,
+          a.account_age_days = (ref_epoch - first_ep) / 86400.0,
+
+          // velocity: mean gap between transactions over the active span
+          a.mean_inter_txn_days =
+            CASE WHEN a.@total_txns > 1 THEN (span_d / (a.@total_txns - 1)) ELSE -1.0 END,
+          a.txn_per_active_day =
+            CASE WHEN span_d > 0.0 THEN (a.@total_txns / span_d) ELSE (a.@total_txns * 1.0) END,
+
+          // ── bin-shape features ──
+          INT n_active = 0,
+          FLOAT peak_amt = 0.0,
+          INT peak_cnt = 0,
+          FLOAT mean_cnt = 0.0,
+          INT n_bins = a.@bin_count_map.size(),
+          FLOAT early_sum = 0.0,
+          FLOAT late_sum = 0.0,
+          INT half = n_bins / 2,
+          FOREACH (bi, cnt) IN a.@bin_count_map DO
+            IF cnt > 0 THEN n_active = n_active + 1 END,
+            IF cnt > peak_cnt THEN peak_cnt = cnt END
+          END,
+          FOREACH (bi, amt) IN a.@bin_amount DO
+            IF amt > peak_amt THEN peak_amt = amt END,
+            IF bi < half THEN early_sum = early_sum + amt
+            ELSE late_sum = late_sum + amt END
+          END,
+          a.active_bin_count = n_active,
+          mean_cnt = CASE WHEN n_bins > 0 THEN (a.@total_txns * 1.0 / n_bins) ELSE 0.0 END,
+          a.burst_ratio = CASE WHEN mean_cnt > 0.0 THEN (peak_cnt / mean_cnt) ELSE 0.0 END,
+          a.peak_bin_fraction =
+            CASE WHEN a.@sum_amount > 0.0 THEN (peak_amt / a.@sum_amount) ELSE 0.0 END,
+          a.activity_concentration = a.peak_bin_fraction,
+          a.early_late_ratio =
+            CASE WHEN late_sum > 0.0 THEN (early_sum / late_sum)
+                 WHEN early_sum > 0.0 THEN 999.0
+                 ELSE 0.0 END,
+
+          a.in_out_lag_days =
+            CASE WHEN a.@in_present > 0 AND a.@out_present > 0
+                 THEN (datetime_to_epoch(a.@out_last_dt) - datetime_to_epoch(a.@in_first_dt)) / 86400.0
+                 ELSE 0.0 END;
+
+  PRINT "Temporal features computed" AS Status;
+}
