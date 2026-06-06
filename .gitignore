@@ -132,3 +132,10 @@ desktop.ini
 .spyderproject
 .spyproject
 .ropeproject
+
+# ── ML / experiment artifacts ──
+*.pt
+*.pth
+*.ckpt
+...
+!models/.gitkeep        # keep the empty models/ dir tracked

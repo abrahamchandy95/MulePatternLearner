@@ -1,0 +1,59 @@
+USE GRAPH Mule_Pattern_Learner
+
+CREATE OR REPLACE DISTRIBUTED QUERY export_edges_by_type(
+  STRING relation,
+  STRING cursor = "",
+  INT    page_size = 50000
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+
+  TYPEDEF TUPLE<STRING from_id, STRING to_id> EdgeRow;
+  SetAccum<EdgeRow> @@edges;
+  MaxAccum<STRING>  @@next_cursor;
+
+  IF relation == "HAS_PAID" THEN
+    Src = SELECT s FROM Account:s
+          WHERE s.id > cursor ORDER BY s.id LIMIT page_size;
+    Col = SELECT s FROM Src:s -(HAS_PAID>:e)- Account:tgt
+          ACCUM @@edges += EdgeRow(to_string(s.id), to_string(tgt.id));
+    Cur = SELECT s FROM Src:s ACCUM @@next_cursor += to_string(s.id);
+
+  ELSE IF relation == "Account_Account" THEN
+    Src = SELECT s FROM Account:s
+          WHERE s.id > cursor ORDER BY s.id LIMIT page_size;
+    Col = SELECT s FROM Src:s -(Account_Account:e)- Account:tgt
+          ACCUM @@edges += EdgeRow(to_string(s.id), to_string(tgt.id));
+    Cur = SELECT s FROM Src:s ACCUM @@next_cursor += to_string(s.id);
+
+  ELSE IF relation == "Account_Party" THEN
+    Src = SELECT s FROM Account:s
+          WHERE s.id > cursor ORDER BY s.id LIMIT page_size;
+    Col = SELECT s FROM Src:s -(Party_Has_Account:e)- Party:tgt
+          ACCUM @@edges += EdgeRow(to_string(s.id), to_string(tgt.id));
+    Cur = SELECT s FROM Src:s ACCUM @@next_cursor += to_string(s.id);
+
+  ELSE IF relation == "Party_Account" THEN
+    Src = SELECT s FROM Party:s
+          WHERE s.id > cursor ORDER BY s.id LIMIT page_size;
+    Col = SELECT s FROM Src:s -(Party_Has_Account:e)- Account:tgt
+          ACCUM @@edges += EdgeRow(to_string(s.id), to_string(tgt.id));
+    Cur = SELECT s FROM Src:s ACCUM @@next_cursor += to_string(s.id);
+
+  ELSE IF relation == "Party_Entity" THEN
+    Src = SELECT s FROM Party:s
+          WHERE s.id > cursor ORDER BY s.id LIMIT page_size;
+    Col = SELECT s FROM Src:s -(Party_In_Entity:e)- Resolved_Entity:tgt
+          ACCUM @@edges += EdgeRow(to_string(s.id), to_string(tgt.id));
+    Cur = SELECT s FROM Src:s ACCUM @@next_cursor += to_string(s.id);
+
+  ELSE IF relation == "Entity_Party" THEN
+    Src = SELECT s FROM Resolved_Entity:s
+          WHERE to_string(s.id) > cursor ORDER BY s.id LIMIT page_size;
+    Col = SELECT s FROM Src:s -(Party_In_Entity:e)- Party:tgt
+          ACCUM @@edges += EdgeRow(to_string(s.id), to_string(tgt.id));
+    Cur = SELECT s FROM Src:s ACCUM @@next_cursor += to_string(s.id);
+  END;
+
+  PRINT @@edges AS edges;
+  PRINT @@next_cursor AS next_cursor;
+}
+INSTALL QUERY export_edges_by_type

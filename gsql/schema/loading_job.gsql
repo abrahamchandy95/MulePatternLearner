@@ -1,0 +1,116 @@
+USE GRAPH Mule_Pattern_Learner
+
+CREATE LOADING JOB load_all FOR GRAPH Mule_Pattern_Learner {
+
+  DEFINE FILENAME f_accounts        = "/home/tigergraph/tigergraph/data/gui/loading_data/abraham.chandy@tigergraph.com/accountnumber.csv";
+  DEFINE FILENAME f_external        = "/home/tigergraph/tigergraph/data/gui/loading_data/abraham.chandy@tigergraph.com/external_accounts.csv";
+  DEFINE FILENAME f_merchants       = "/home/tigergraph/tigergraph/data/gui/loading_data/abraham.chandy@tigergraph.com/merchants.csv";
+  DEFINE FILENAME f_person          = "/home/tigergraph/tigergraph/data/gui/loading_data/abraham.chandy@tigergraph.com/person.csv";
+  DEFINE FILENAME f_device          = "/home/tigergraph/tigergraph/data/gui/loading_data/abraham.chandy@tigergraph.com/device.csv";
+  DEFINE FILENAME f_ip              = "/home/tigergraph/tigergraph/data/gui/loading_data/abraham.chandy@tigergraph.com/ipaddress.csv";
+  DEFINE FILENAME f_phone           = "/home/tigergraph/tigergraph/data/gui/loading_data/abraham.chandy@tigergraph.com/phone.csv";
+  DEFINE FILENAME f_email           = "/home/tigergraph/tigergraph/data/gui/loading_data/abraham.chandy@tigergraph.com/email.csv";
+  DEFINE FILENAME f_name            = "/home/tigergraph/tigergraph/data/gui/loading_data/abraham.chandy@tigergraph.com/name.csv";
+  DEFINE FILENAME f_birthdate       = "/home/tigergraph/tigergraph/data/gui/loading_data/abraham.chandy@tigergraph.com/birthdate.csv";
+  DEFINE FILENAME f_street_address  = "/home/tigergraph/tigergraph/data/gui/loading_data/abraham.chandy@tigergraph.com/street_address.csv";
+  DEFINE FILENAME f_city            = "/home/tigergraph/tigergraph/data/gui/loading_data/abraham.chandy@tigergraph.com/city.csv";
+  DEFINE FILENAME f_state           = "/home/tigergraph/tigergraph/data/gui/loading_data/abraham.chandy@tigergraph.com/state.csv";
+  DEFINE FILENAME f_postcode        = "/home/tigergraph/tigergraph/data/gui/loading_data/abraham.chandy@tigergraph.com/postcode.csv";
+  DEFINE FILENAME f_name_mh         = "/home/tigergraph/tigergraph/data/gui/loading_data/abraham.chandy@tigergraph.com/name_minhash.csv";
+  DEFINE FILENAME f_address_mh      = "/home/tigergraph/tigergraph/data/gui/loading_data/abraham.chandy@tigergraph.com/address_minhash.csv";
+  DEFINE FILENAME f_street_mh       = "/home/tigergraph/tigergraph/data/gui/loading_data/abraham.chandy@tigergraph.com/street_minhash.csv";
+
+  DEFINE FILENAME f_has_account     = "/home/tigergraph/tigergraph/data/gui/loading_data/abraham.chandy@tigergraph.com/HAS_ACCOUNT.csv";
+  DEFINE FILENAME f_has_phone       = "/home/tigergraph/tigergraph/data/gui/loading_data/abraham.chandy@tigergraph.com/HAS_PHONE.csv";
+  DEFINE FILENAME f_has_email       = "/home/tigergraph/tigergraph/data/gui/loading_data/abraham.chandy@tigergraph.com/HAS_EMAIL.csv";
+  DEFINE FILENAME f_has_used        = "/home/tigergraph/tigergraph/data/gui/loading_data/abraham.chandy@tigergraph.com/HAS_USED.csv";
+  DEFINE FILENAME f_has_ip          = "/home/tigergraph/tigergraph/data/gui/loading_data/abraham.chandy@tigergraph.com/HAS_IP.csv";
+  DEFINE FILENAME f_has_name        = "/home/tigergraph/tigergraph/data/gui/loading_data/abraham.chandy@tigergraph.com/HAS_NAME.csv";
+  DEFINE FILENAME f_has_birthdate   = "/home/tigergraph/tigergraph/data/gui/loading_data/abraham.chandy@tigergraph.com/HAS_BIRTHDATE.csv";
+  DEFINE FILENAME f_has_street_addr = "/home/tigergraph/tigergraph/data/gui/loading_data/abraham.chandy@tigergraph.com/HAS_STREET_ADDRESS.csv";
+  DEFINE FILENAME f_has_city        = "/home/tigergraph/tigergraph/data/gui/loading_data/abraham.chandy@tigergraph.com/HAS_CITY.csv";
+  DEFINE FILENAME f_has_state       = "/home/tigergraph/tigergraph/data/gui/loading_data/abraham.chandy@tigergraph.com/HAS_STATE.csv";
+  DEFINE FILENAME f_has_postcode    = "/home/tigergraph/tigergraph/data/gui/loading_data/abraham.chandy@tigergraph.com/HAS_POSTCODE.csv";
+  DEFINE FILENAME f_has_name_mh     = "/home/tigergraph/tigergraph/data/gui/loading_data/abraham.chandy@tigergraph.com/HAS_NAME_MINHASH.csv";
+  DEFINE FILENAME f_has_address_mh  = "/home/tigergraph/tigergraph/data/gui/loading_data/abraham.chandy@tigergraph.com/HAS_ADDRESS_MINHASH.csv";
+  DEFINE FILENAME f_has_street_mh   = "/home/tigergraph/tigergraph/data/gui/loading_data/abraham.chandy@tigergraph.com/HAS_STREET_MINHASH.csv";
+  DEFINE FILENAME f_has_paid        = "/home/tigergraph/tigergraph/data/gui/loading_data/abraham.chandy@tigergraph.com/ACCOUNT_FLOW_AGG.csv";
+
+  LOAD f_accounts TO VERTEX Account VALUES (
+    $"account_number", $"mule", $"fraud", $"victim", $"is_external", _, _, _, _, _, _, _,
+    _, _, _, _, _, _, _, _, _, _, _, _,
+    _, _, _, _, _, _, _, _, _, _, _, _,
+    _, _, _, _, _, _, _, _, _, _, _, _,
+    _
+  ) USING HEADER="true", SEPARATOR=",";
+
+  LOAD f_external TO VERTEX Account VALUES (
+    $"account_id", _, _, _, _, $"kind", $"category", _, _, _, _, _,
+    _, _, _, _, _, _, _, _, _, _, _, _,
+    _, _, _, _, _, _, _, _, _, _, _, _,
+    _, _, _, _, _, _, _, _, _, _, _, _,
+    _
+  ) USING HEADER="true", SEPARATOR=",";
+
+  LOAD f_merchants TO VERTEX Account VALUES (
+    $"counterparty_acct", _, _, _, _, _, $"category", _, _, _, _, _,
+    _, _, _, _, _, _, _, _, _, _, _, _,
+    _, _, _, _, _, _, _, _, _, _, _, _,
+    _, _, _, _, _, _, _, _, _, _, _, _,
+    _
+  ) USING HEADER="true", SEPARATOR=",";
+
+  LOAD f_person TO VERTEX Party VALUES (
+    $"customer_id", $"mule", $"fraud", $"victim"
+  ) USING HEADER="true", SEPARATOR=",";
+
+  LOAD f_device TO VERTEX Device VALUES ($"device_id", $"device_type", "1")
+    WHERE $"flagged_device" == "True" USING HEADER="true", SEPARATOR=",";
+  LOAD f_device TO VERTEX Device VALUES ($"device_id", $"device_type", "0")
+    WHERE $"flagged_device" != "True" USING HEADER="true", SEPARATOR=",";
+  LOAD f_ip TO VERTEX IP VALUES ($"ip_address", "1")
+    WHERE $"blacklisted_ip" == "True" USING HEADER="true", SEPARATOR=",";
+  LOAD f_ip TO VERTEX IP VALUES ($"ip_address", "0")
+    WHERE $"blacklisted_ip" != "True" USING HEADER="true", SEPARATOR=",";
+
+  LOAD f_phone          TO VERTEX Phone          VALUES ($"phone_id")           USING HEADER="true", SEPARATOR=",";
+  LOAD f_email          TO VERTEX Email          VALUES ($"email_id")           USING HEADER="true", SEPARATOR=",";
+  LOAD f_name           TO VERTEX Name           VALUES ($"name_id")            USING HEADER="true", SEPARATOR=",";
+  LOAD f_birthdate      TO VERTEX Birthdate      VALUES ($"birthdate_id")       USING HEADER="true", SEPARATOR=",";
+  LOAD f_street_address TO VERTEX Street_Address  VALUES ($"street_address_id")  USING HEADER="true", SEPARATOR=",";
+  LOAD f_city           TO VERTEX City           VALUES ($"city_id")            USING HEADER="true", SEPARATOR=",";
+  LOAD f_state          TO VERTEX State          VALUES ($"state_id")           USING HEADER="true", SEPARATOR=",";
+  LOAD f_postcode       TO VERTEX Postcode       VALUES ($"postcode_id")        USING HEADER="true", SEPARATOR=",";
+
+  LOAD f_name_mh    TO VERTEX Name_Minhash    VALUES ($"name_minhash_id")    USING HEADER="true", SEPARATOR=",";
+  LOAD f_address_mh TO VERTEX Address_Minhash VALUES ($"address_minhash_id") USING HEADER="true", SEPARATOR=",";
+  LOAD f_street_mh  TO VERTEX Street_Minhash  VALUES ($"street_minhash_id")  USING HEADER="true", SEPARATOR=",";
+
+  LOAD f_has_account TO EDGE Party_Has_Account VALUES ($"FROM", $"TO") USING HEADER="true", SEPARATOR=",";
+
+  LOAD f_has_used TO EDGE Has_Device VALUES ($"FROM", $"TO", $"first_seen", $"last_seen") USING HEADER="true", SEPARATOR=",";
+  LOAD f_has_ip   TO EDGE Has_IP     VALUES ($"FROM", $"TO", $"first_seen", $"last_seen") USING HEADER="true", SEPARATOR=",";
+  LOAD f_has_phone TO EDGE Has_Phone VALUES ($"FROM", $"TO") USING HEADER="true", SEPARATOR=",";
+  LOAD f_has_email TO EDGE Has_Email VALUES ($"FROM", $"TO") USING HEADER="true", SEPARATOR=",";
+
+  LOAD f_has_name        TO EDGE Has_Name           VALUES ($"FROM", $"TO") USING HEADER="true", SEPARATOR=",";
+  LOAD f_has_birthdate   TO EDGE Has_Birthdate      VALUES ($"FROM", $"TO") USING HEADER="true", SEPARATOR=",";
+  LOAD f_has_street_addr TO EDGE Has_Street_Address VALUES ($"FROM", $"TO") USING HEADER="true", SEPARATOR=",";
+  LOAD f_has_city        TO EDGE Has_City           VALUES ($"FROM", $"TO") USING HEADER="true", SEPARATOR=",";
+  LOAD f_has_state       TO EDGE Has_State          VALUES ($"FROM", $"TO") USING HEADER="true", SEPARATOR=",";
+  LOAD f_has_postcode    TO EDGE Has_Postcode       VALUES ($"FROM", $"TO") USING HEADER="true", SEPARATOR=",";
+
+  LOAD f_has_name_mh    TO EDGE Has_Name_Minhash    VALUES ($"FROM", $"TO") USING HEADER="true", SEPARATOR=",";
+  LOAD f_has_address_mh TO EDGE Has_Address_Minhash VALUES ($"FROM", $"TO") USING HEADER="true", SEPARATOR=",";
+  LOAD f_has_street_mh  TO EDGE Has_Street_Minhash  VALUES ($"FROM", $"TO") USING HEADER="true", SEPARATOR=",";
+
+  LOAD f_has_paid TO EDGE HAS_PAID VALUES (
+    $"from_id", $"to_id",
+    $"total_amount", $"txn_count",
+    $"first_txn_date", $"last_txn_date",
+    $"span_days", $"num_bins", $"bin_days",
+    SPLIT($"amount_bins", ";"), SPLIT($"count_bins", ";")
+  ) USING HEADER="true", SEPARATOR=",";
+}
+
+RUN LOADING JOB load_all

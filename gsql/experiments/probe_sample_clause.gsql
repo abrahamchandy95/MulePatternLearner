@@ -1,0 +1,20 @@
+USE GRAPH Mule_Pattern_Learner
+
+CREATE OR REPLACE DISTRIBUTED QUERY probe_sample_clause() FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+
+  SumAccum<INT> @@edges_sampled;
+
+  Seeds =
+    SELECT a
+    FROM Account:a
+    LIMIT 10;
+
+  // The thing under test: SAMPLE <n> EDGE per source in a V2 FROM clause.
+  Sampled =
+    SELECT tgt
+    FROM Seeds:src -(HAS_PAID>:e)- Account:tgt
+    SAMPLE 3 EDGE WHEN src.outdegree("HAS_PAID") > 0
+    ACCUM @@edges_sampled += 1;
+
+  PRINT @@edges_sampled AS edges_sampled_with_cap;
+}

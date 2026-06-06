@@ -1,0 +1,39 @@
+USE GRAPH Mule_Pattern_Learner
+
+CREATE OR REPLACE DISTRIBUTED QUERY diagnose_export(
+  STRING cursor = "",
+  INT    page_size = 50
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+
+  SumAccum<INT> @@accounts_all;
+  SumAccum<INT> @@accounts_after_cursor;
+  SumAccum<INT> @@edges_from_page;
+  ListAccum<EDGE> @out_edges;
+
+  AllAccounts =
+    SELECT a
+    FROM Account:a
+    ACCUM @@accounts_all += 1;
+
+  PageAccounts =
+    SELECT a
+    FROM Account:a
+    WHERE a.id > cursor
+    ORDER BY a.id
+    LIMIT page_size;
+
+  Counted =
+    SELECT a
+    FROM PageAccounts:a
+    ACCUM @@accounts_after_cursor += 1;
+
+  Collected =
+    SELECT src
+    FROM PageAccounts:src -(HAS_PAID>:e)- Account:tgt
+    ACCUM src.@out_edges += e, @@edges_from_page += 1;
+
+  PRINT @@accounts_all AS accounts_all;
+  PRINT @@accounts_after_cursor AS accounts_after_cursor;
+  PRINT @@edges_from_page AS edges_from_page;
+  PRINT PageAccounts[PageAccounts.@out_edges AS out_edges];
+}

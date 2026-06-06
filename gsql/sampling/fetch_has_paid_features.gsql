@@ -1,0 +1,19 @@
+USE GRAPH Mule_Pattern_Learner
+
+CREATE OR REPLACE DISTRIBUTED QUERY fetch_has_paid_features(
+  SET<VERTEX<Account>> ids
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+
+  ListAccum<EDGE> @out_edges;
+
+  SeedSet = {ids};
+
+  Collected =
+    SELECT src
+    FROM SeedSet:src -(HAS_PAID>:e)- Account:tgt
+    WHERE tgt IN ids
+    ACCUM src.@out_edges += e;
+
+  PRINT Collected[Collected.@out_edges AS out_edges];
+}
+INSTALL QUERY fetch_has_paid_features

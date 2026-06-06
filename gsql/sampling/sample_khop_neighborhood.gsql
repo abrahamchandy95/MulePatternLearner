@@ -1,0 +1,143 @@
+USE GRAPH Mule_Pattern_Learner
+
+CREATE OR REPLACE DISTRIBUTED QUERY sample_khop_neighborhood(
+  SET<VERTEX<Account>> seeds,
+  INT fanout_has_paid        = 15,
+  INT fanout_account_account = 10,
+  INT fanout_acct_party      = 5,
+  INT fanout_party_entity    = 5,
+  INT fanout_entity_party    = 10,
+  INT fanout_party_acct      = 10,
+  INT fanout_has_paid_2        = 5,
+  INT fanout_account_account_2 = 5,
+  INT fanout_acct_party_2      = 3,
+  INT fanout_party_entity_2    = 3,
+  INT fanout_entity_party_2    = 5,
+  INT fanout_party_acct_2      = 5,
+  BOOL allow_val  = TRUE,
+  BOOL allow_test = TRUE
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+
+
+  TYPEDEF TUPLE<STRING from_id, STRING to_id, STRING e_type> EdgeRow;
+  SetAccum<EdgeRow> @@edges;
+
+  // node sets discovered, by type (raw global ids)
+  SetAccum<STRING>  @@account_ids;
+  SetAccum<STRING>  @@party_ids;
+  SetAccum<STRING>  @@entity_ids;
+
+  // current frontier of accounts to expand from
+  Frontier = seeds;
+
+  // seed accounts are in the node set (always kept, regardless of their split)
+  Seeded =
+    SELECT a
+    FROM Frontier:a
+    ACCUM @@account_ids += a.id;
+
+  // ── ROUND 1: money + similarity expansion (account -> account) ──
+  PaidNbrs =
+    SELECT tgt
+    FROM Frontier:src -(HAS_PAID>:e)- Account:tgt
+    SAMPLE fanout_has_paid EDGE WHEN src.outdegree("HAS_PAID") > 0
+    WHERE (allow_val OR tgt.is_val == 0) AND (allow_test OR tgt.is_test == 0)
+    ACCUM @@edges += EdgeRow(src.id, tgt.id, "HAS_PAID")
+    POST-ACCUM @@account_ids += tgt.id;
+
+  SimNbrs =
+    SELECT tgt
+    FROM Frontier:src -(Account_Account:e)- Account:tgt
+    SAMPLE fanout_account_account EDGE WHEN src.outdegree("Account_Account") > 0
+    WHERE (allow_val OR tgt.is_val == 0) AND (allow_test OR tgt.is_test == 0)
+    ACCUM @@edges += EdgeRow(src.id, tgt.id, "Account_Account")
+    POST-ACCUM @@account_ids += tgt.id;
+
+
+  IdParty1 =
+    SELECT p1
+    FROM Frontier:a -(Party_Has_Account:e0)- Party:p1
+    SAMPLE fanout_acct_party EDGE WHEN a.outdegree("Party_Has_Account") > 0
+    ACCUM @@edges += EdgeRow(a.id, p1.id, "Account_Party")
+    POST-ACCUM @@party_ids += p1.id;
+
+  // hop 2: Party -> Resolved_Entity
+  IdEntity =
+    SELECT re
+    FROM IdParty1:p -(Party_In_Entity:e1)- Resolved_Entity:re
+    SAMPLE fanout_party_entity EDGE WHEN p.outdegree("Party_In_Entity") > 0
+    ACCUM @@edges += EdgeRow(p.id, to_string(re.id), "Party_Entity")
+    POST-ACCUM @@entity_ids += to_string(re.id);
+
+  // hop 3: Resolved_Entity -> Party (the other parties in the same entity)
+  IdParty2 =
+    SELECT p2
+    FROM IdEntity:re -(Party_In_Entity:e2)- Party:p2
+    SAMPLE fanout_entity_party EDGE WHEN re.outdegree("Party_In_Entity") > 0
+    ACCUM @@edges += EdgeRow(to_string(re.id), p2.id, "Entity_Party")
+    POST-ACCUM @@party_ids += p2.id;
+
+  // hop 4: Party -> Account (peer accounts sharing the entity)
+  IdAcct =
+    SELECT a2
+    FROM IdParty2:p -(Party_Has_Account:e3)- Account:a2
+    SAMPLE fanout_party_acct EDGE WHEN p.outdegree("Party_Has_Account") > 0
+    WHERE (allow_val OR a2.is_val == 0) AND (allow_test OR a2.is_test == 0)
+    ACCUM @@edges += EdgeRow(p.id, a2.id, "Party_Account")
+    POST-ACCUM @@account_ids += a2.id;
+
+  // ── ROUND 2 ──
+  Frontier2 = PaidNbrs UNION SimNbrs UNION IdAcct;
+
+  // round 2: money + similarity expansion (account -> account)
+  PaidNbrs2 =
+    SELECT tgt
+    FROM Frontier2:src -(HAS_PAID>:e)- Account:tgt
+    SAMPLE fanout_has_paid_2 EDGE WHEN src.outdegree("HAS_PAID") > 0
+    WHERE (allow_val OR tgt.is_val == 0) AND (allow_test OR tgt.is_test == 0)
+    ACCUM @@edges += EdgeRow(src.id, tgt.id, "HAS_PAID")
+    POST-ACCUM @@account_ids += tgt.id;
+
+  SimNbrs2 =
+    SELECT tgt
+    FROM Frontier2:src -(Account_Account:e)- Account:tgt
+    SAMPLE fanout_account_account_2 EDGE WHEN src.outdegree("Account_Account") > 0
+    WHERE (allow_val OR tgt.is_val == 0) AND (allow_test OR tgt.is_test == 0)
+    ACCUM @@edges += EdgeRow(src.id, tgt.id, "Account_Account")
+    POST-ACCUM @@account_ids += tgt.id;
+
+  // round 2: identity expansion via entity-resolution result (single hops)
+  IdParty1_2 =
+    SELECT p1
+    FROM Frontier2:a -(Party_Has_Account:e0)- Party:p1
+    SAMPLE fanout_acct_party_2 EDGE WHEN a.outdegree("Party_Has_Account") > 0
+    ACCUM @@edges += EdgeRow(a.id, p1.id, "Account_Party")
+    POST-ACCUM @@party_ids += p1.id;
+
+  IdEntity_2 =
+    SELECT re
+    FROM IdParty1_2:p -(Party_In_Entity:e1)- Resolved_Entity:re
+    SAMPLE fanout_party_entity_2 EDGE WHEN p.outdegree("Party_In_Entity") > 0
+    ACCUM @@edges += EdgeRow(p.id, to_string(re.id), "Party_Entity")
+    POST-ACCUM @@entity_ids += to_string(re.id);
+
+  IdParty2_2 =
+    SELECT p2
+    FROM IdEntity_2:re -(Party_In_Entity:e2)- Party:p2
+    SAMPLE fanout_entity_party_2 EDGE WHEN re.outdegree("Party_In_Entity") > 0
+    ACCUM @@edges += EdgeRow(to_string(re.id), p2.id, "Entity_Party")
+    POST-ACCUM @@party_ids += p2.id;
+
+  IdAcct_2 =
+    SELECT a2
+    FROM IdParty2_2:p -(Party_Has_Account:e3)- Account:a2
+    SAMPLE fanout_party_acct_2 EDGE WHEN p.outdegree("Party_Has_Account") > 0
+    WHERE (allow_val OR a2.is_val == 0) AND (allow_test OR a2.is_test == 0)
+    ACCUM @@edges += EdgeRow(p.id, a2.id, "Party_Account")
+    POST-ACCUM @@account_ids += a2.id;
+
+  PRINT @@account_ids AS account_ids;
+  PRINT @@party_ids AS party_ids;
+  PRINT @@entity_ids AS entity_ids;
+  PRINT @@edges AS edges;
+}

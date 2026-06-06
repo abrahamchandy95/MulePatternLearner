@@ -1,5 +1,5 @@
 USE GRAPH Mule_Pattern_Learner
-CREATE DISTRIBUTED QUERY account_temporal_features(
+CREATE OR REPLACE DISTRIBUTED QUERY account_temporal_features(
   STRING dataset_max_date = "") FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
 
 
@@ -72,6 +72,9 @@ CREATE DISTRIBUTED QUERY account_temporal_features(
           INT first_ep = datetime_to_epoch(a.@first_dt),
           INT last_ep  = datetime_to_epoch(a.@last_dt),
           FLOAT span_d = (last_ep - first_ep) / 86400.0,
+
+          // activity span: first-to-last transaction, in days
+          a.activity_span_days = span_d,
 
           // recency / age (relative to reference time)
           a.days_since_last_txn = (ref_epoch - last_ep) / 86400.0,

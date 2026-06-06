@@ -1,0 +1,20 @@
+USE GRAPH Mule_Pattern_Learner
+
+CREATE OR REPLACE DISTRIBUTED QUERY derive_max_bins() FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+
+  MaxAccum<INT> @@max_bins;
+  MaxAccum<INT> @@max_amount_len;
+  MaxAccum<INT> @@max_count_len;
+
+  Edges =
+    SELECT src
+    FROM Account:src -(HAS_PAID>:e)- Account:tgt
+    ACCUM
+      @@max_bins += e.num_bins,
+      @@max_amount_len += e.amount_bins.size(),
+      @@max_count_len += e.count_bins.size();
+
+  PRINT @@max_bins AS max_bins;
+  PRINT @@max_amount_len AS max_amount_len;
+  PRINT @@max_count_len AS max_count_len;
+}

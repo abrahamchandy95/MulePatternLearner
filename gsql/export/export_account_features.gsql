@@ -1,0 +1,24 @@
+USE GRAPH Mule_Pattern_Learner
+
+CREATE OR REPLACE DISTRIBUTED QUERY export_account_features(
+  STRING cursor = "",
+  INT    page_size = 20000
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+
+  MaxAccum<STRING> @@next_cursor;
+
+  PageAccounts =
+    SELECT a
+    FROM Account:a
+    WHERE a.id > cursor
+    ORDER BY a.id
+    LIMIT page_size;
+
+  Cursored =
+    SELECT a
+    FROM PageAccounts:a
+    ACCUM @@next_cursor += a.id;
+
+  PRINT PageAccounts;
+  PRINT @@next_cursor AS next_cursor;
+}

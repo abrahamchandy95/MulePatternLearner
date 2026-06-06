@@ -1,0 +1,44 @@
+USE GRAPH Mule_Pattern_Learner
+
+CREATE OR REPLACE DISTRIBUTED QUERY account_triangle_clustering(
+  INT max_degree = 1000
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+
+  SetAccum<VERTEX<Account>> @neighbors;
+  SumAccum<INT> @degree;
+  SumAccum<INT> @tri;
+  OrAccum @active;
+
+  gather = SELECT s
+           FROM Account:s -(Account_Account:e)- Account:t
+           ACCUM s.@neighbors += t
+           POST-ACCUM
+             s.@degree = s.@neighbors.size(),
+             s.@active = (s.@neighbors.size() <= max_degree);
+
+  tally = SELECT s
+          FROM Account:s -(Account_Account:e)- Account:t
+          WHERE s.@active AND t.@active
+                AND ( s.@degree < t.@degree
+                      OR (s.@degree == t.@degree AND getvid(s) < getvid(t)) )
+          ACCUM
+            FOREACH w IN s.@neighbors DO
+              IF t.@neighbors.contains(w) THEN
+                s.@tri += 1,
+                t.@tri += 1
+              END
+            END;
+
+  result = SELECT s
+           FROM Account:s
+           POST-ACCUM
+             INT tri = s.@tri / 2,
+             INT deg = s.@degree,
+             s.triangle_count = tri,
+             s.clustering_coef =
+               CASE WHEN deg > 1
+                    THEN (2.0 * tri) / (deg * (deg - 1))
+                    ELSE 0.0 END;
+
+  PRINT "Triangle/clustering features computed (degree-ordered, endpoint-credit)" AS Status;
+}

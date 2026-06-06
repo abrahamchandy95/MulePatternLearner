@@ -1,0 +1,38 @@
+USE GRAPH Mule_Pattern_Learner
+
+CREATE OR REPLACE DISTRIBUTED QUERY unify_parties() FOR GRAPH Mule_Pattern_Learner {
+
+
+  MinAccum<INT> @cc_id;
+
+  DATETIME start_time = now();
+  log(true, "UDF:: unify_parties start time: " + datetime_format(start_time));
+
+  start = {Party.*};
+
+  S = SELECT x
+      FROM start:x
+      POST-ACCUM x.@cc_id = getvid(x)
+  ;
+
+  WHILE (S.size() > 0) DO
+      S = SELECT t
+          FROM S:s -(Same_As:e)- :t
+          ACCUM t.@cc_id += s.@cc_id
+          HAVING t.@cc_id != t.@cc_id';
+  END;
+
+  // Materialize one Resolved_Entity per final id; link each Party to it.
+  result = SELECT t
+      FROM start:t
+      POST-ACCUM
+          INSERT INTO Resolved_Entity VALUES (t.@cc_id),
+          INSERT INTO Party_In_Entity VALUES (t, t.@cc_id)
+  ;
+
+  DATETIME end_time = now();
+  STRING execution_time = to_string(datetime_diff(end_time, start_time));
+  log(true, "UDF:: unify_parties execution time (seconds): " + execution_time);
+
+  PRINT execution_time AS execution_time_in_seconds, end_time AS timestamp;
+}
