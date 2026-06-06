@@ -1,0 +1,51 @@
+USE GRAPH Mule_Pattern_Learner
+
+CREATE OR REPLACE DISTRIBUTED QUERY diagnose_sentinels(INT page_size = 5000) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+
+  // Counts to test the hypothesis: -1 on day-features == low transaction history.
+  SumAccum<INT> @@total_accounts;
+  SumAccum<INT> @@dsl_is_neg1;          // days_since_last_txn == -1
+  SumAccum<INT> @@age_is_neg1;          // account_age_days == -1
+  SumAccum<INT> @@mit_is_neg1;          // mean_inter_txn_days == -1
+  SumAccum<INT> @@neg1_with_zero_txns;  // -1 AND in_txn_count+out_txn_count == 0
+  SumAccum<INT> @@neg1_with_one_txn;    // mean_inter==-1 AND exactly 1 total txn
+  SumAccum<INT> @@span_is_zero;         // activity_span_days == 0
+  SumAccum<INT> @@span_nonzero;         // activity_span_days != 0
+  MinAccum<INT> @@min_comsize;
+  MaxAccum<INT> @@max_comsize;
+
+  Sample =
+    SELECT a
+    FROM Account:a
+    LIMIT page_size;
+
+  Counted =
+    SELECT a
+    FROM Sample:a
+    ACCUM
+      @@total_accounts += 1,
+      INT total_txns = a.in_txn_count + a.out_txn_count,
+      IF a.days_since_last_txn == -1.0 THEN @@dsl_is_neg1 += 1 END,
+      IF a.account_age_days == -1.0 THEN @@age_is_neg1 += 1 END,
+      IF a.mean_inter_txn_days == -1.0 THEN
+        @@mit_is_neg1 += 1,
+        IF total_txns == 1 THEN @@neg1_with_one_txn += 1 END
+      END,
+      IF a.days_since_last_txn == -1.0 AND total_txns == 0 THEN
+        @@neg1_with_zero_txns += 1
+      END,
+      IF a.activity_span_days == 0.0 THEN @@span_is_zero += 1 ELSE @@span_nonzero += 1 END,
+      @@min_comsize += a.com_size,
+      @@max_comsize += a.com_size;
+
+  PRINT @@total_accounts AS total_accounts;
+  PRINT @@dsl_is_neg1 AS days_since_last_eq_neg1;
+  PRINT @@age_is_neg1 AS account_age_eq_neg1;
+  PRINT @@mit_is_neg1 AS mean_inter_eq_neg1;
+  PRINT @@neg1_with_zero_txns AS neg1_AND_zero_txns;
+  PRINT @@neg1_with_one_txn AS mean_inter_neg1_AND_one_txn;
+  PRINT @@span_is_zero AS activity_span_is_zero;
+  PRINT @@span_nonzero AS activity_span_nonzero;
+  PRINT @@min_comsize AS min_com_size;
+  PRINT @@max_comsize AS max_com_size;
+}

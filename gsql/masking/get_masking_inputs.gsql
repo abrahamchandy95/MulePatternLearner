@@ -1,0 +1,25 @@
+USE GRAPH Mule_Pattern_Learner
+
+CREATE OR REPLACE DISTRIBUTED QUERY get_masking_inputs() FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+  MaxAccum<STRING> @party_id;
+  MaxAccum<INT>    @party_entity = -1;
+  MaxAccum<INT>    @entity_id = -1;
+
+  p_ent = SELECT p
+          FROM Party:p -(Party_In_Entity:e)- Resolved_Entity:re
+          ACCUM p.@party_entity += re.id;
+
+  owned = SELECT a
+          FROM Party:p -(Party_Has_Account:e)- Account:a
+          ACCUM
+            a.@party_id += p.id,
+            a.@entity_id += p.@party_entity;
+
+  result = SELECT a FROM Account:a;
+  PRINT result[
+    result.id          AS account_id,
+    result.is_fraud    AS is_fraud,
+    result.@party_id   AS party_id,
+    result.@entity_id  AS resolved_entity_id
+  ];
+}

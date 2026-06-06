@@ -50,7 +50,8 @@ CREATE SCHEMA_CHANGE JOB add_schema FOR GRAPH Mule_Pattern_Learner {
     shortest_path_length INT DEFAULT -1,
     is_train INT DEFAULT 0,
     is_val INT DEFAULT 0,
-    is_test INT DEFAULT 0
+    is_test INT DEFAULT 0,
+    pu_label INT DEFAULT 0
   ) WITH STATS="OUTDEGREE_BY_EDGETYPE", PRIMARY_ID_AS_ATTRIBUTE="true";
 
   ADD VERTEX Party (
@@ -65,24 +66,26 @@ CREATE SCHEMA_CHANGE JOB add_schema FOR GRAPH Mule_Pattern_Learner {
     device_type STRING DEFAULT "",
     is_blocked INT DEFAULT 0
   ) WITH STATS="OUTDEGREE_BY_EDGETYPE", PRIMARY_ID_AS_ATTRIBUTE="true";
-
   ADD VERTEX IP (
     PRIMARY_ID id STRING,
     is_blocked INT DEFAULT 0
   ) WITH STATS="OUTDEGREE_BY_EDGETYPE", PRIMARY_ID_AS_ATTRIBUTE="true";
+  ADD VERTEX Phone (PRIMARY_ID id STRING) WITH STATS="OUTDEGREE_BY_EDGETYPE", PRIMARY_ID_AS_ATTRIBUTE="true";
+  ADD VERTEX Email (PRIMARY_ID id STRING) WITH STATS="OUTDEGREE_BY_EDGETYPE", PRIMARY_ID_AS_ATTRIBUTE="true";
 
-  ADD VERTEX Phone (
-    PRIMARY_ID id STRING
-  ) WITH STATS="OUTDEGREE_BY_EDGETYPE", PRIMARY_ID_AS_ATTRIBUTE="true";
+  ADD VERTEX Name           (PRIMARY_ID id STRING) WITH PRIMARY_ID_AS_ATTRIBUTE="true";
+  ADD VERTEX Birthdate      (PRIMARY_ID id STRING) WITH PRIMARY_ID_AS_ATTRIBUTE="true";
+  ADD VERTEX Street_Address (PRIMARY_ID id STRING) WITH PRIMARY_ID_AS_ATTRIBUTE="true";
+  ADD VERTEX City           (PRIMARY_ID id STRING) WITH PRIMARY_ID_AS_ATTRIBUTE="true";
+  ADD VERTEX State          (PRIMARY_ID id STRING) WITH PRIMARY_ID_AS_ATTRIBUTE="true";
+  ADD VERTEX Postcode       (PRIMARY_ID id STRING) WITH PRIMARY_ID_AS_ATTRIBUTE="true";
 
-  ADD VERTEX Email (
-    PRIMARY_ID id STRING
-  ) WITH STATS="OUTDEGREE_BY_EDGETYPE", PRIMARY_ID_AS_ATTRIBUTE="true";
+  ADD VERTEX Name_Minhash    (PRIMARY_ID id STRING) WITH PRIMARY_ID_AS_ATTRIBUTE="true";
+  ADD VERTEX Address_Minhash (PRIMARY_ID id STRING) WITH PRIMARY_ID_AS_ATTRIBUTE="true";
+  ADD VERTEX Street_Minhash  (PRIMARY_ID id STRING) WITH PRIMARY_ID_AS_ATTRIBUTE="true";
 
-  ADD VERTEX Connected_Component (
-    PRIMARY_ID id INT
-  ) WITH STATS="OUTDEGREE_BY_EDGETYPE", PRIMARY_ID_AS_ATTRIBUTE="true";
-
+  ADD VERTEX Connected_Component (PRIMARY_ID id INT) WITH STATS="OUTDEGREE_BY_EDGETYPE", PRIMARY_ID_AS_ATTRIBUTE="true";
+  ADD VERTEX Resolved_Entity     (PRIMARY_ID id INT) WITH STATS="OUTDEGREE_BY_EDGETYPE", PRIMARY_ID_AS_ATTRIBUTE="true";
 
   ADD DIRECTED EDGE HAS_PAID (
     FROM Account,
@@ -97,31 +100,27 @@ CREATE SCHEMA_CHANGE JOB add_schema FOR GRAPH Mule_Pattern_Learner {
     amount_bins LIST<DOUBLE>,
     count_bins LIST<INT>
   ) WITH REVERSE_EDGE="reverse_HAS_PAID";
-
-
-  ADD UNDIRECTED EDGE Account_Account (
-    FROM Account,
-    TO Account,
-    weight INT DEFAULT 1
-  );
+  ADD UNDIRECTED EDGE Account_Account (FROM Account, TO Account, weight INT DEFAULT 1);
 
   ADD UNDIRECTED EDGE Party_Has_Account (FROM Party, TO Account);
-
-  ADD UNDIRECTED EDGE Has_Device (
-    FROM Party,
-    TO Device,
-    first_seen DATETIME,
-    last_seen DATETIME
-  );
-  ADD UNDIRECTED EDGE Has_IP (
-    FROM Party,
-    TO IP,
-    first_seen DATETIME,
-    last_seen DATETIME
-  );
+  ADD UNDIRECTED EDGE Has_Device (FROM Party, TO Device, first_seen DATETIME, last_seen DATETIME);
+  ADD UNDIRECTED EDGE Has_IP (FROM Party, TO IP, first_seen DATETIME, last_seen DATETIME);
   ADD UNDIRECTED EDGE Has_Phone (FROM Party, TO Phone);
   ADD UNDIRECTED EDGE Has_Email (FROM Party, TO Email);
 
+  ADD UNDIRECTED EDGE Has_Name           (FROM Party, TO Name);
+  ADD UNDIRECTED EDGE Has_Birthdate      (FROM Party, TO Birthdate);
+  ADD UNDIRECTED EDGE Has_Street_Address (FROM Party, TO Street_Address);
+  ADD UNDIRECTED EDGE Has_City           (FROM Party, TO City);
+  ADD UNDIRECTED EDGE Has_State          (FROM Party, TO State);
+  ADD UNDIRECTED EDGE Has_Postcode       (FROM Party, TO Postcode);
+
+  ADD UNDIRECTED EDGE Has_Name_Minhash    (FROM Party, TO Name_Minhash);
+  ADD UNDIRECTED EDGE Has_Address_Minhash (FROM Party, TO Address_Minhash);
+  ADD UNDIRECTED EDGE Has_Street_Minhash  (FROM Party, TO Street_Minhash);
+
+  ADD UNDIRECTED EDGE Same_As         (FROM Party, TO Party, score DOUBLE);
+  ADD UNDIRECTED EDGE Party_In_Entity (FROM Party, TO Resolved_Entity);
   ADD UNDIRECTED EDGE Account_In_Ring (FROM Account, TO Connected_Component);
 }
 

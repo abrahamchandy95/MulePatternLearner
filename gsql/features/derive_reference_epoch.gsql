@@ -1,0 +1,20 @@
+USE GRAPH Mule_Pattern_Learner
+
+CREATE OR REPLACE DISTRIBUTED QUERY derive_reference_epoch() FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+
+
+  MaxAccum<DATETIME> @@max_last_dt;
+  SumAccum<INT>      @@have_edges;
+
+  scan = SELECT a
+         FROM Account:a -(HAS_PAID>:e)- Account:b
+         ACCUM @@max_last_dt += e.last_txn_date, @@have_edges += 1;
+
+  IF @@have_edges == 0 THEN
+    PRINT "No HAS_PAID edges; cannot derive a reference epoch" AS status;
+    RETURN;
+  END;
+
+  INT reference_epoch_s = datetime_to_epoch(@@max_last_dt);
+  PRINT reference_epoch_s AS reference_epoch_s;
+}

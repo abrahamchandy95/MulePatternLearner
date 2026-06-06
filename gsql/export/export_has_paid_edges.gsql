@@ -1,0 +1,30 @@
+USE GRAPH Mule_Pattern_Learner
+
+CREATE OR REPLACE DISTRIBUTED QUERY export_has_paid_edges(
+  STRING cursor = "",
+  INT    page_size = 20000
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+
+  MaxAccum<STRING>   @@next_cursor;
+  ListAccum<EDGE>    @out_edges;
+
+  PageAccounts =
+    SELECT a
+    FROM Account:a
+    WHERE a.id > cursor
+    ORDER BY a.id
+    LIMIT page_size;
+
+  Collected =
+    SELECT src
+    FROM PageAccounts:src -(HAS_PAID>:e)- Account:tgt
+    ACCUM src.@out_edges += e;
+
+  Cursored =
+    SELECT a
+    FROM PageAccounts:a
+    ACCUM @@next_cursor += a.id;
+
+  PRINT PageAccounts[PageAccounts.@out_edges AS out_edges];
+  PRINT @@next_cursor AS next_cursor;
+}

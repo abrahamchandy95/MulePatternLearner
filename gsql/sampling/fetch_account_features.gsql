@@ -1,0 +1,44 @@
+USE GRAPH Mule_Pattern_Learner
+
+CREATE OR REPLACE DISTRIBUTED QUERY fetch_account_features(
+  SET<VERTEX<Account>> ids
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+
+
+  Accounts = {ids};
+
+  PRINT Accounts[
+    Accounts.id AS id,
+    Accounts.pagerank AS pagerank,
+    Accounts.com_size AS com_size,
+    Accounts.aa_degree AS aa_degree,
+    Accounts.triangle_count AS triangle_count,
+    Accounts.clustering_coef AS clustering_coef,
+    Accounts.in_degree AS in_degree,
+    Accounts.out_degree AS out_degree,
+    Accounts.in_amount AS in_amount,
+    Accounts.out_amount AS out_amount,
+    Accounts.in_txn_count AS in_txn_count,
+    Accounts.out_txn_count AS out_txn_count,
+    Accounts.fan_in_ratio AS fan_in_ratio,
+    Accounts.fan_out_ratio AS fan_out_ratio,
+    Accounts.pass_through_ratio AS pass_through_ratio,
+    Accounts.net_flow AS net_flow,
+    Accounts.activity_span_days AS activity_span_days,
+    Accounts.days_since_last_txn AS days_since_last_txn,
+    Accounts.account_age_days AS account_age_days,
+    Accounts.mean_inter_txn_days AS mean_inter_txn_days,
+    Accounts.txn_per_active_day AS txn_per_active_day,
+    Accounts.burst_ratio AS burst_ratio,
+    Accounts.active_bin_count AS active_bin_count,
+    Accounts.activity_concentration AS activity_concentration,
+    Accounts.peak_bin_fraction AS peak_bin_fraction,
+    Accounts.early_late_ratio AS early_late_ratio,
+    Accounts.in_out_lag_days AS in_out_lag_days,
+    Accounts.device_share_cnt AS device_share_cnt,
+    Accounts.ip_share_cnt AS ip_share_cnt,
+    Accounts.phone_share_cnt AS phone_share_cnt,
+    Accounts.email_share_cnt AS email_share_cnt,
+    Accounts.is_external AS is_external
+  ];
+}

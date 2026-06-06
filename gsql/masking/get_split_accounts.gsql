@@ -1,0 +1,16 @@
+USE GRAPH Mule_Pattern_Learner
+
+CREATE OR REPLACE DISTRIBUTED QUERY get_split_accounts(STRING split = "train") FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+
+  result =
+    SELECT a FROM Account:a
+    WHERE (split == "train" AND a.is_train == 1)
+       OR (split == "val"   AND a.is_val == 1)
+       OR (split == "test"  AND a.is_test == 1);
+
+  PRINT result[
+    result.id       AS account_id,
+    result.pu_label AS pu_label
+  ];
+}
+INSTALL QUERY get_split_accounts

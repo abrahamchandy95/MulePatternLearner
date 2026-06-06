@@ -2,27 +2,34 @@
 Per-type feature/label declarations and PyG relation specs for
 Mule_Pattern_Learner.
 
-Single source of truth for what the model reads from TigerGraph and how it maps
-into PyG. The loader builds pyTigerGraph dicts from these; the encoder reads the
-edge specs to know which relations carry edge features.
+The loader builds from these:
 
-THE FEATURE / LEAKAGE PARTITION (the critical part)
----------------------------------------------------
-Target: Account.is_fraud (semantics: "is a mule account"). Treated as
-positive-unlabeled — unlabeled accounts (is_fraud=0) are NOT confirmed clean;
-they may be undiscovered mules, including whole rings disconnected from any
-known fraud.
+  * pu_label  — the MASKED, realistic label we would actually have in production.
+                1 = a CONFIRMED (revealed) mule; 0 = unlabeled (could be a clean
+                account OR an undiscovered mule).
+  * is_fraud  — the FULL ground truth (all ~216 true mules). EVAL ONLY. Used to
+                measure how many HIDDEN mules the model surfaced. NEVER a feature,
+                NEVER a training target, NEVER a sampling-bias signal
 
-That constraint imposes a hard rule: a model feature may not read fraud labels,
-directly or transitively. The kit's hand-engineered features all violate it
-(seeded FROM is_fraud==1, propagated outward) so they (a) leak under an honest
-split and (b) are zero for new disconnected rings — useless on the cases we
-most need. They are EXCLUDED here and live in TG only for the XGBoost baseline
-and eval diagnostics.
+pu_label has TWO legitimate roles:
+  1. Training target  — what the (nnPU) loss is computed against.
+  2. Sampling bias     — with so few revealed positives, uniform seed sampling
+     yields batches with zero positives and nnPU's positive-risk term never gets
+     a gradient. So the loader OVER-SAMPLES revealed-positive seeds (pu_label=1)
+     each epoch; standard K-hop neighbor sampling around them pulls in their ring
+     co-members (incl. hidden positives), which the model then DISCOVERS.
 
-Account.fraud / Account.victim (and Party.is_fraud) are likewise never features:
-they correlate with the mule label. They are pulled only as masked aux columns
-for PU negative-set selection and evaluation context, never as model inputs.
+pu_label is therefore in v_out_labels (the label tensor y) and is read from y by
+the sampler/loss. It is NOT added to v_in_feats and NOT duplicated into the extra
+attrs.
+
+A model feature may not read fraud labels, directly or transitively.
+
+The model message-passes over the RAW PII-sharing edges (Party -> value
+vertex): Has_Device / Has_IP / Has_Phone / Has_Email / Has_Name / Has_Birthdate /
+Has_Street_Address. Two parties sharing a value are two hops apart through it —
+the "guilt by association" signal. These carry strictly MORE information than the
+clusters (sub-threshold links, which value type, how many).
 """
 
 from dataclasses import dataclass
@@ -30,33 +37,23 @@ from collections.abc import Mapping
 
 from .enums import UNDIRECTED_EDGES, EdgeType, VertexType
 
-# ── Target ────────────────────────────────────────────────────────────
-
 TARGET_VERTEX: str = VertexType.ACCOUNT.value
-TARGET_LABEL_ATTR: str = "is_fraud"  # 1 = mule
 
-#: Split masks (INT 0/1) on the target vertex; written back by the prep step.
+TARGET_LABEL_ATTR: str = "pu_label"
+EVAL_LABEL_ATTR: str = "is_fraud"
+
 SPLIT_ATTRS: tuple[str, ...] = ("is_train", "is_val", "is_test")
 
-#: Masked aux labels carried for PU negative-set selection + eval, NOT features.
 AUX_LABEL_ATTRS: tuple[str, ...] = ("fraud", "victim")
 
-#: Everything carried alongside Account seeds beyond input features.
-ACCOUNT_EXTRA_ATTRS: tuple[str, ...] = SPLIT_ATTRS + AUX_LABEL_ATTRS
+ACCOUNT_EXTRA_ATTRS: tuple[str, ...] = SPLIT_ATTRS + AUX_LABEL_ATTRS + (EVAL_LABEL_ATTR,)
 
-
-# ── Account feature partition (explicit & auditable) ──────────────────
-
-#: LABEL-FREE numeric Account features used as model inputs. Generalize to new
-#: disconnected rings because none reads is_fraud.
 ACCOUNT_NUMERIC_FEATURES: tuple[str, ...] = (
-    # structural (Account_Account: PageRank / WCC / degree / motifs)
     "pagerank",
     "com_size",
     "aa_degree",
     "triangle_count",
     "clustering_coef",
-    # money-flow (HAS_PAID directed aggregates)
     "in_degree",
     "out_degree",
     "in_amount",
@@ -67,7 +64,6 @@ ACCOUNT_NUMERIC_FEATURES: tuple[str, ...] = (
     "fan_out_ratio",
     "pass_through_ratio",
     "net_flow",
-    # temporal
     "activity_span_days",
     "days_since_last_txn",
     "account_age_days",
@@ -79,45 +75,31 @@ ACCOUNT_NUMERIC_FEATURES: tuple[str, ...] = (
     "peak_bin_fraction",
     "early_late_ratio",
     "in_out_lag_days",
-    # identity-sharing density (label-free: counts ALL sharing accounts)
     "device_share_cnt",
     "ip_share_cnt",
     "phone_share_cnt",
     "email_share_cnt",
-    # external-counterparty flag (label-free, structural)
     "is_external",
 )
 
-#: Optional unsupervised structural embedding (reserved; LIST<DOUBLE>). Pulled
-#: as a vector feature only when the ablation enables it.
 ACCOUNT_EMBEDDING_FEATURE: str = "fastrp_embedding"
 
-#: Account attributes EXCLUDED from model inputs — leaky (read is_fraud
-#: directly/transitively) or ring identifiers (memorization). Documented so the
-#: choice is reviewable and never silently reversed.
 LEAKY_EXCLUDED_ATTRS: tuple[str, ...] = (
-    "is_fraud",  # target
-    "fraud",  # aux label
-    "victim",  # aux label
-    "mule_cnt",  # n-hop count of known mules
-    "fraud_ip",  # n-hop fraud reachable via shared IP
-    "fraud_device",  # n-hop fraud reachable via shared device
+    "is_fraud",
+    "pu_label",
+    "fraud",
+    "victim",
+    "mule_cnt",
+    "fraud_ip",
+    "fraud_device",
     "trans_in_mule_ratio",
     "trans_out_mule_ratio",
-    "shortest_path_length",  # distance to nearest known fraud
-    "com_id",  # ring identifier
+    "shortest_path_length",
+    "com_id",
 )
 
-#: Categorical Account attrs deferred (need encoding before use): external_type,
-#: category. Not in the numeric feature set yet.
 DEFERRED_CATEGORICAL_ATTRS: tuple[str, ...] = ("external_type", "category")
 
-
-# ── Vertex input features per type ────────────────────────────────────
-#
-# Only numeric, label-free attributes. Empty tuple = featureless (the encoder
-# substitutes a learnable per-type embedding). Device/IP carry the label-free
-# is_blocked risk flag. Party/Phone/Email are pure relays.
 
 VERTEX_FEATURES: Mapping[str, tuple[str, ...]] = {
     VertexType.ACCOUNT.value: ACCOUNT_NUMERIC_FEATURES,
@@ -126,10 +108,10 @@ VERTEX_FEATURES: Mapping[str, tuple[str, ...]] = {
     VertexType.IP.value: ("is_blocked",),
     VertexType.PHONE.value: (),
     VertexType.EMAIL.value: (),
+    VertexType.NAME.value: (),
+    VertexType.BIRTHDATE.value: (),
+    VertexType.STREET_ADDRESS.value: (),
 }
-
-
-# ── Edge spec ─────────────────────────────────────────────────────────
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,12 +143,10 @@ _DEV = VertexType.DEVICE
 _IP = VertexType.IP
 _PH = VertexType.PHONE
 _EM = VertexType.EMAIL
+_NM = VertexType.NAME
+_BD = VertexType.BIRTHDATE
+_SA = VertexType.STREET_ADDRESS
 
-#: HAS_PAID scalar edge attributes, in TG column order. The two trailing dates
-#: are converted to recency/duration features by models.edge_transform. The
-#: bi-weekly bin sequences (amount_bins, count_bins) are LIST<...> attributes
-#: handled separately by the loader (padded/truncated to a fixed bin count for
-#: PyG), not part of the fixed scalar edge_attr vector.
 _HAS_PAID_ATTRS = (
     "total_amount",
     "total_num_txns",
@@ -175,13 +155,9 @@ _HAS_PAID_ATTRS = (
     "span_days",
 )
 
-#: HAS_PAID temporal sequence attributes (LIST). Loaded and padded/truncated to
-#: HAS_PAID_MAX_BINS by the loader; consumed flat or by a sequence encoder.
 HAS_PAID_SEQUENCE_ATTRS: tuple[str, ...] = ("amount_bins", "count_bins")
 
-#: Fixed bin count the loader pads/truncates the sequences to when forming a
-#: dense per-edge tensor for PyG (covers up to ~64 weeks at bi-weekly width).
-HAS_PAID_MAX_BINS: int = 32
+HAS_PAID_MAX_BINS: int = 100
 
 
 def _spec(
@@ -196,17 +172,17 @@ def _spec(
 
 
 _BASE_EDGE_SPECS: tuple[EdgeSpec, ...] = (
-    # Directed money-flow (real TG edges; both carry the aggregates)
     _spec(_A, EdgeType.HAS_PAID, _A, _HAS_PAID_ATTRS, time=True),
     _spec(_A, EdgeType.REV_HAS_PAID, _A, _HAS_PAID_ATTRS, time=True),
-    # Undirected structural backbone (forward; reverse expanded below)
     _spec(_A, EdgeType.ACCOUNT_ACCOUNT, _A, ("weight",)),
-    # Undirected identity / ownership (forward)
     _spec(_P, EdgeType.PARTY_HAS_ACCOUNT, _A),
     _spec(_P, EdgeType.HAS_DEVICE, _DEV),
     _spec(_P, EdgeType.HAS_IP, _IP),
     _spec(_P, EdgeType.HAS_PHONE, _PH),
     _spec(_P, EdgeType.HAS_EMAIL, _EM),
+    _spec(_P, EdgeType.HAS_NAME, _NM),
+    _spec(_P, EdgeType.HAS_BIRTHDATE, _BD),
+    _spec(_P, EdgeType.HAS_STREET_ADDRESS, _SA),
 )
 
 
@@ -215,15 +191,12 @@ def _expand_undirected(base: tuple[EdgeSpec, ...]) -> tuple[EdgeSpec, ...]:
     out: list[EdgeSpec] = list(base)
     for s in base:
         if s.name not in UNDIRECTED_EDGES or s.src == s.dst:
-            continue  # directed edges + self-relations need no synthetic reverse
+            continue
         out.append(EdgeSpec(s.dst, s.name, s.src, s.raw_attrs, s.has_time_attrs, True))
     return tuple(out)
 
 
 EDGE_SPECS: tuple[EdgeSpec, ...] = _expand_undirected(_BASE_EDGE_SPECS)
-
-
-# ── Lookup / loader-dict builders ─────────────────────────────────────
 
 
 def edge_spec(triple: tuple[str, str, str]) -> EdgeSpec:
@@ -238,10 +211,13 @@ def pytigergraph_v_in_feats() -> dict[str, list[str]]:
 
 
 def pytigergraph_v_out_labels() -> dict[str, list[str]]:
+    """The training target: pu_label (the masked, realistic PU label)."""
     return {TARGET_VERTEX: [TARGET_LABEL_ATTR]}
 
 
 def pytigergraph_v_extra_feats() -> dict[str, list[str]]:
+    """Carried alongside seeds: split masks + aux labels + is_fraud (eval only).
+    pu_label is the target (v_out_labels), so it is not repeated here."""
     return {TARGET_VERTEX: list(ACCOUNT_EXTRA_ATTRS)}
 
 
