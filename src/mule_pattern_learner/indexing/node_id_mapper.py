@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 
 NodeType = str
@@ -46,6 +44,18 @@ class NodeIDMapper:
             else:
                 out.append(existing)
         return out
+
+    def reset(self) -> None:
+        """Drop all registered ids, returning the mapper to its empty state.
+
+        The sampler calls this at the start of each batch so the table holds
+        only the current batch's nodes, not every node sampled across the run.
+        Safe because the loader is synchronous (num_workers=0): the previous
+        batch's feature fetch has completed before the next sample begins, so
+        no in-flight integer id is invalidated by the reset.
+        """
+        self._to_int.clear()
+        self._to_str.clear()
 
     def to_string(self, node_type: NodeType, int_id: int) -> str:
         """Recover the global string id for an assigned integer id."""

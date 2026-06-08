@@ -20,7 +20,6 @@ from mule_pattern_learner.training.metrics import ValScores, evaluate_ranking
 _HAS_PAID: EdgeType = ("Account", "HAS_PAID", "Account")
 _ACCOUNT: NodeType = "Account"
 
-# A batch transform hook (e.g. for augmentation); identity by default.
 BatchTransform = Callable[[HeteroData], HeteroData]
 
 
@@ -39,6 +38,12 @@ class TrainConfig:
     lr / weight_decay: AdamW settings (weight_decay is the decoupled L2 lever).
     eval_k:       cutoff for precision@k in validation.
     min_delta:    minimum val-PAUC gain to count as a significant improvement.
+    positive_weight: weight on the nnPU positive_risk term. None reproduces the
+        textbook objective (weight == prior); under extreme imbalance that makes
+        the positive term a negligible fraction of the loss, so the optimizer
+        drives every logit negative and inverts the ranking. Set it well above
+        prior (e.g. 0.5) to give the positives real gradient weight. Passed
+        straight through to NonNegativePULoss; see its docstring.
     """
 
     prior: float
@@ -48,6 +53,7 @@ class TrainConfig:
     weight_decay: float = 1e-4
     eval_k: int = 100
     min_delta: float = 1e-4
+    positive_weight: float | None = None
 
 
 class EarlyStopper:
@@ -138,8 +144,6 @@ def _edge_store(batch: HeteroData, key: EdgeType) -> _EdgeStore:
 
 
 def _forward(model: Module, batch: HeteroData, device: torch.device) -> Tensor:
-    # assemble the model's inputs from a HeteroData batch, moving every tensor
-    # onto the compute device, then run the forward
     x_dict: dict[NodeType, Tensor] = {_ACCOUNT: _node_store(batch, _ACCOUNT).x.to(device)}
     node_counts: dict[NodeType, int] = {
         ntype: int(_node_store(batch, ntype).n_id.shape[0]) for ntype in batch.node_types
@@ -154,7 +158,6 @@ def _forward(model: Module, batch: HeteroData, device: torch.device) -> Tensor:
 
 
 def _seed_ids(batch: HeteroData, mapper_to_ids: Callable[[list[int]], list[str]]) -> list[str]:
-    # the first batch_size Account nodes are exactly the seeds (PyG guarantee)
     bsize = int(batch[_ACCOUNT].batch_size)  # pyright: ignore[reportAny]
     seed_int = cast(list[int], _node_store(batch, _ACCOUNT).n_id[:bsize].tolist())
     return mapper_to_ids(seed_int)
@@ -336,7 +339,7 @@ def fit(
         if optimizer is not None
         else AdamW(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
     )
-    loss_fn = NonNegativePULoss(prior=config.prior)
+    loss_fn = NonNegativePULoss(prior=config.prior, positive_weight=config.positive_weight)
     stopper = EarlyStopper(patience=config.patience, min_delta=config.min_delta)
 
     reports: list[EpochReport] = []
@@ -368,12 +371,9 @@ def fit(
         )
         is_best = stopper.update(val.roc_auc, epoch)
         if is_best:
-            # deep-copy so subsequent epochs do not mutate the saved best weights
             best_state = copy.deepcopy(model.state_dict())
             best_epoch = epoch
             best_val_pauc = val.roc_auc
-            # persist immediately, so an interrupted run still leaves the best
-            # model on disk (the function only returns after all epochs)
             if on_best is not None:
                 on_best(best_state, best_epoch, best_val_pauc)
         reports.append(
@@ -387,12 +387,6 @@ def fit(
             )
         )
 
-        # Print val metrics live, every epoch, so overfitting is visible as it
-        # happens: watch val PAUC (the early-stop signal) against the falling
-        # train loss. If train loss keeps dropping while PAUC stalls or falls,
-        # the model is memorizing the few positives -- and the "since best"
-        # countdown shows how close early stopping is to halting. AP and P@k are
-        # diagnostics. (All metrics here use pu_label only.)
         marker = " *best" if is_best else f"  (no gain for {stopper.bad_epochs})"
         print(
             f"epoch {epoch:>2} | train_loss {train_loss:.4f} | "
@@ -411,7 +405,6 @@ def fit(
             )
             break
 
-    # leave the model holding its best weights, not the last (possibly worse) ones
     _ = model.load_state_dict(best_state)
     return FitResult(
         reports=reports,
