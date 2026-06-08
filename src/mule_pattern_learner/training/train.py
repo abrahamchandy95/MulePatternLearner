@@ -66,32 +66,21 @@ _COL_ACCOUNT_ID = "account_id"
 _MODELS_DIR = Path("models")
 _ACCOUNT_FEATURES = 31
 
-# Seed-batch composition and training schedule. These are project defaults
-# (in-code constants, not CLI args). Each seed-batch is one TigerGraph sampling
-# round-trip (~the per-batch cost), so batch size trades round-trips against
-# per-query work: larger batches mean far fewer queries per epoch.
-# positives_per_batch holds the per-batch positive density (~6.25%) that nnPU's
-# positive_risk term needs, scaled with batch size.
-#
-# The one exception is the class prior pi, which is NOT a constant here: in
-# production it is an assumption that cannot be derived (we never know the true
-# number of mules), so it is supplied per run as --estimated-mules and turned
-# into pi against the graph's account count. See _parse_args / _resolve_prior.
 _BATCH_SIZE = 512
-# Kept at 1/16 of the batch (6.25% positives) so halving _BATCH_SIZE changes
-# only peak memory, not the per-batch positive fraction.
 _POSITIVES_PER_BATCH = 32
 _MAX_EPOCHS = 30
 _PATIENCE = 5
 _EVAL_K = 100
 _RNG_SEED = 1337
-# Validation cost is dominated by the unlabeled accounts, not the few positives,
-# so per-epoch validation scores a fixed seeded subsample: ALL revealed positives
-# (the rare-class signal, kept whole to avoid inflating metric variance) plus this
-# many unlabeled. Full-population scoring is left to the separate hidden-mule eval.
+# Weight on the nnPU positive_risk term. At the true prior (pi ~ 1e-4 here) the
+# positive term is ~0.1% of the loss, so the optimizer minimizes the unlabeled
+# term alone, drives every logit negative, and ranks mules BELOW unlabeled
+# (confirmed: hidden-mule AUC 0.43, below random). Weighting the positives well
+# above pi restores their gradient and flips the ranking the right way; the TRUE
+# pi is still used inside the unbiased negative-risk correction (see loss.py).
+# None would reproduce the broken textbook-weight behavior.
+_POSITIVE_WEIGHT = 0.5
 _VAL_UNLABELED_CAP = 10_000
-# Train accounts are fetched in chunks to fit the normalizer without pulling all
-# ~130k feature rows in a single request.
 _FEATURE_FETCH_CHUNK = 5_000
 _VERTEX_ACCOUNT = "Account"
 
@@ -135,8 +124,6 @@ def _resolve_prior(client: Client, estimated_mules: int) -> float:
     # out-of-range estimate is rejected here with a message naming both numbers.
     if estimated_mules < 1:
         raise ValueError(f"--estimated-mules must be >= 1, got {estimated_mules}")
-    # getVertexCount returns int for a single vertex type (dict only for "*" or a
-    # list of types), so narrow the int | dict union to the int we expect here.
     raw_count = client.conn.getVertexCount(_VERTEX_ACCOUNT, realtime=True)
     if not isinstance(raw_count, int):
         raise TypeError(f"expected int account count, got {type(raw_count).__name__}")
@@ -165,10 +152,8 @@ def main() -> None:
     device = select_device()
     print(f"device: {device}")
 
-    # pi is supplied per run (not derivable): estimated total mules / accounts.
     prior = _resolve_prior(client, args.estimated_mules)
 
-    # derived from the graph (single source of truth)
     spec = derive_temporal_spec(client)
     max_bins = spec.max_bins
     edge_dim = spec.edge_dim
@@ -178,7 +163,6 @@ def main() -> None:
         + f"reference_epoch_s={reference_epoch_s:.0f}"
     )
 
-    # ── seeds + PU targets FROM THE GRAPH (production path) ──
     train_seeds = fetch_split_seeds(client, "train")
     val_seeds = fetch_split_seeds(client, "val")
     pu_label_of = dict(train_seeds.pu_label_of)
@@ -193,12 +177,6 @@ def main() -> None:
         + f"val={len(val_seeds.account_ids)}"
     )
 
-    # Fail fast, BEFORE the first (multi-hour) epoch: nnPU needs revealed
-    # positives in train (its positive_risk term), and PU model selection (Proxy
-    # AUC early-stop) needs at least one revealed positive in val to rank against
-    # the unlabeled. With so few revealed mules, a party-grouped split can leave
-    # val with none -- which previously surfaced only as a crash at the end of
-    # epoch 0's validation, after hours of wasted compute. Refuse up front.
     if train_pool.num_positives < 1:
         raise SystemExit(
             "train split has 0 revealed positives (pu_label==1); nnPU cannot train. "
@@ -211,13 +189,6 @@ def main() -> None:
             "reveal prevalence) or adjust the split so val receives some positives."
         )
 
-    # Shrink the per-epoch validation set: keep every revealed positive, take a
-    # fixed seeded sample of the unlabeled up to _VAL_UNLABELED_CAP. Drawn ONCE
-    # here (not per epoch) so the val set is identical across epochs and the only
-    # thing moving PAUC is the model, not the sample. Keeping all positives means
-    # this does not worsen the rare-class variance that dominates the metric; it
-    # only removes redundant unlabeled scoring, which is pure cost. The full
-    # population is still scored by the separate hidden-mule evaluation.
     val_positives = [a for a in val_seeds.account_ids if pu_label_of.get(a) == 1]
     val_unlabeled = [a for a in val_seeds.account_ids if pu_label_of.get(a) != 1]
     if len(val_unlabeled) > _VAL_UNLABELED_CAP:
@@ -228,11 +199,6 @@ def main() -> None:
         + f"= {len(val_seed_ids)} (full val was {len(val_seeds.account_ids)})"
     )
 
-    # Fit feature standardization on the TRAIN split only (leakage-safe), using
-    # the same log/symlog transforms the loaders apply, then reuse it unchanged
-    # for val/test. Computed here in Python (not GSQL) so it sees the post-
-    # transform values and never mixes in val/test statistics. Saved with the
-    # checkpoint so scoring reproduces the exact training-time standardization.
     train_ids = tuple(train_seeds.account_ids)
     feature_rows: list[Tensor] = []
     for start in range(0, len(train_ids), _FEATURE_FETCH_CHUNK):
@@ -251,7 +217,6 @@ def main() -> None:
     def mapper_to_ids(int_ids: list[int]) -> list[str]:
         return mapper.to_strings("Account", int_ids)
 
-    # TRAIN loader: strict-inductive, excludes val AND test from neighborhoods.
     def make_train_loader() -> Iterator[HeteroData]:
         for seed_batch in epoch_batches(
             train_pool,
@@ -272,7 +237,6 @@ def main() -> None:
             )
             yield from cast(Iterable[HeteroData], loader)
 
-    # VAL loader: may use train neighbors (seen), never test.
     def make_val_loader() -> Iterator[HeteroData]:
         loader = backend.make_loader(
             seed_ids=val_seed_ids,
@@ -288,12 +252,14 @@ def main() -> None:
         yield from cast(Iterable[HeteroData], loader)
 
     model = MulePatternModel(account_in_dim=_ACCOUNT_FEATURES, edge_dim=edge_dim)
-    config = TrainConfig(prior=prior, max_epochs=_MAX_EPOCHS, patience=_PATIENCE, eval_k=_EVAL_K)
+    config = TrainConfig(
+        prior=prior,
+        max_epochs=_MAX_EPOCHS,
+        patience=_PATIENCE,
+        eval_k=_EVAL_K,
+        positive_weight=_POSITIVE_WEIGHT,
+    )
 
-    # per-epoch batch counts, for the progress-bar ETA (loaders are lazy
-    # generators with no len): train consumes the unlabeled pool once per epoch
-    # at (batch_size - positives_per_batch) unlabeled per batch; val covers all
-    # val seeds at batch_size per batch.
     unlabeled_per_batch = _BATCH_SIZE - _POSITIVES_PER_BATCH
     train_batches = max(1, math.ceil(train_pool.num_unlabeled / unlabeled_per_batch))
     val_batches = max(1, math.ceil(len(val_seed_ids) / _BATCH_SIZE))
@@ -304,9 +270,6 @@ def main() -> None:
     _MODELS_DIR.mkdir(parents=True, exist_ok=True)
     checkpoint_path = _MODELS_DIR / f"mule_model_seed{_RNG_SEED}.pt"
 
-    # save the best checkpoint the moment each new best epoch is found, so an
-    # interrupted long run still leaves the best model on disk. A fixed filename
-    # means each new best overwrites the previous one.
     def save_best(state: dict[str, Tensor], epoch: int, val_pauc: float) -> None:
         checkpoint: dict[str, object] = {
             "model_state_dict": state,

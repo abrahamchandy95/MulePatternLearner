@@ -122,6 +122,10 @@ class TigerGraphHeteroSampler(BaseSampler):
     @override
     def sample_from_nodes(self, index: NodeSamplerInput, **kwargs: object) -> HeteroSamplerOutput:
         _ = kwargs
+        # Reset the shared mapper so it holds only this batch's nodes, not every
+        # node sampled across the run. Loader is synchronous (num_workers=0), so
+        # the prior batch's feature fetch is already done and no live id is lost.
+        self._mapper.reset()
         seed_ids = self._seed_indices_to_ids(index.node)
         raw = self._run_query(seed_ids)
         # order seeds first so the first len(seeds) Account rows ARE the seeds
