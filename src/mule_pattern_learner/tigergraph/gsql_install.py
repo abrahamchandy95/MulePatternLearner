@@ -3,6 +3,7 @@ Install GSQL queries onto the graph from files in this repo.
 """
 
 import re
+import time
 from typing import cast
 
 from mule_pattern_learner.tigergraph.client import Client
@@ -93,14 +94,93 @@ def install_queries(
     return logs
 
 
+def _extract_request_id(submitted: object) -> str:
+    # runInstalledQuery(runAsync=True) returns the detached-mode request id. It
+    # is normally a bare string, but tolerate a 1-element list or a dict with a
+    # request id so a pyTigerGraph version change does not silently break this.
+    if isinstance(submitted, str):
+        return submitted
+    if isinstance(submitted, list) and len(submitted) == 1 and isinstance(submitted[0], str):
+        return submitted[0]
+    if isinstance(submitted, dict):
+        for key in ("request_id", "requestid", "requestId"):
+            value = submitted.get(key)
+            if isinstance(value, str):
+                return value
+    raise GsqlInstallError(f"could not read a request id from async submission: {submitted!r}")
+
+
+def _status_of(status_response: object) -> str:
+    # checkQueryStatus returns a list of {status: success|running|aborted, ...}.
+    # We submit one query at a time, so read the first entry's status. The bare
+    # "error"/"fail" markers are deliberately NOT applied here: a "running"
+    # status legitimately contains neither, and reusing _check_output would
+    # misread an in-progress poll as a failure.
+    rows: list[object]
+    if isinstance(status_response, list):
+        rows = cast(list[object], status_response)
+    elif isinstance(status_response, dict):
+        results = status_response.get("results")
+        rows = cast(list[object], results) if isinstance(results, list) else [status_response]
+    else:
+        raise GsqlInstallError(f"unexpected query-status payload: {status_response!r}")
+    if not rows:
+        raise GsqlInstallError("empty query-status payload")
+    first = rows[0]
+    if not isinstance(first, dict):
+        raise GsqlInstallError(f"unexpected query-status row: {first!r}")
+    status = cast(dict[str, object], first).get("status")
+    if not isinstance(status, str):
+        raise GsqlInstallError(f"query-status row has no string status: {first!r}")
+    return status
+
+
 def run_query(
-    client: Client, registry_name: str, params: dict[str, object] | None = None
+    client: Client,
+    registry_name: str,
+    params: dict[str, object] | None = None,
+    poll_seconds: float = 5.0,
+    max_wait_seconds: float = 14_400.0,
 ) -> list[object]:
     """
-    Run an installed query by its gsql_paths registry key.
+    Run an installed query by its gsql_paths registry key, in detached (async)
+    mode, and block until it finishes.
+
+    On Savanna a synchronous runInstalledQuery holds one HTTPS connection open
+    for the query's whole duration; long feature queries on a large graph
+    outlive the managed load balancer's idle window and the connection is
+    dropped (surfacing as ReadTimeout even with read timeout=None -- the value
+    is irrelevant because the socket is severed, not timed out). Detached mode
+    avoids this: the query runs server-side and we issue only short calls --
+    submit, then poll, then fetch -- so there is no long-lived connection to
+    drop. The feature queries are idempotent, so a re-run after any transient
+    failure is safe.
+
+    poll_seconds: gap between status checks. max_wait_seconds: hard ceiling on
+    total wait (default 4h) so a genuinely stuck query cannot hang forever.
     """
     name = get_query_from_file(registry_name)
-    return cast(
-        list[object],
-        client.conn.runInstalledQuery(name, params if params is not None else {}),
+    submitted: object = client.conn.runInstalledQuery(
+        name, params if params is not None else {}, runAsync=True
     )
+    request_id = _extract_request_id(submitted)
+
+    waited = 0.0
+    while True:
+        status = _status_of(client.conn.checkQueryStatus(request_id))
+        if status == "success":
+            break
+        if status in ("aborted", "timeout"):
+            raise GsqlInstallError(
+                f"async query {name!r} ended with status {status!r} "
+                + f"(request_id {request_id})."
+            )
+        if waited >= max_wait_seconds:
+            raise GsqlInstallError(
+                f"async query {name!r} still {status!r} after {max_wait_seconds:.0f}s "
+                + f"(request_id {request_id}); aborting the wait."
+            )
+        time.sleep(poll_seconds)
+        waited += poll_seconds
+
+    return cast(list[object], client.conn.getQueryResult(request_id))

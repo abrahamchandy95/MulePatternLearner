@@ -1,4 +1,6 @@
-CREATE OR REPLACE DISTRIBUTED QUERY match_parties(
+SET query_timeout = 9200000
+USE GRAPH Mule_Pattern_Learner
+CREATE OR REPLACE QUERY match_parties(
   FLOAT email_weight          = 0.5,
   FLOAT phone_weight          = 0.5,
   FLOAT birthdate_weight      = 0.3,
@@ -6,136 +8,92 @@ CREATE OR REPLACE DISTRIBUTED QUERY match_parties(
   FLOAT city_weight           = 0.1,
   FLOAT state_weight          = 0.1,
   FLOAT postcode_weight       = 0.2,
-  FLOAT name_bucket_weight    = 0.2,
-  FLOAT address_bucket_weight = 0.1,
-  FLOAT street_bucket_weight  = 0.1,
+  FLOAT name_bucket_weight    = 0.15,
+  FLOAT address_bucket_weight = 0.08,
+  FLOAT street_bucket_weight  = 0.08,
   FLOAT threshold = 1.0,
-  INT max_value_degree = 100
+  INT pii_low_connections_limit = 100,
+  INT pii_high_connections_limit = 25000,
+  INT num_value_batches = 8
 ) FOR GRAPH Mule_Pattern_Learner {
 
-
-  ListAccum<VERTEX<Party>> @members;
+  SetAccum<INT> @cand;
   MapAccum<VERTEX<Party>, FLOAT> @score_map;
+  SetAccum<STRING> @@pii_edges;
 
+  SumAccum<INT> @@cand_pairs;
   SumAccum<INT> @@edge_count;
   MaxAccum<FLOAT> @@max_score;
   MinAccum<FLOAT> @@min_score;
   AvgAccum @@avg_score;
 
+  @@pii_edges = (
+    "Has_Email", "Has_Phone", "Has_Birthdate", "Has_Street_Address",
+    "Has_City", "Has_State", "Has_Postcode",
+    "Has_Name_Minhash", "Has_Address_Minhash", "Has_Street_Minhash"
+  );
+
   DATETIME start_time = now();
   log(true, "UDF:: match_parties start time: " + datetime_format(start_time));
 
-
-  vals = SELECT v FROM Email:v - (Has_Email:e) - Party:p
-         WHERE v.outdegree("Has_Email") <= max_value_degree
-         ACCUM v.@members += p;
-  pairs = SELECT v FROM vals:v
-          ACCUM FOREACH a IN v.@members DO FOREACH b IN v.@members DO
-            CASE WHEN getvid(a) < getvid(b) THEN b.@score_map += (a -> email_weight) END
-          END END
-          POST-ACCUM v.@members.clear();
-
-  vals = SELECT v FROM Phone:v - (Has_Phone:e) - Party:p
-         WHERE v.outdegree("Has_Phone") <= max_value_degree
-         ACCUM v.@members += p;
-  pairs = SELECT v FROM vals:v
-          ACCUM FOREACH a IN v.@members DO FOREACH b IN v.@members DO
-            CASE WHEN getvid(a) < getvid(b) THEN b.@score_map += (a -> phone_weight) END
-          END END
-          POST-ACCUM v.@members.clear();
-
-  vals = SELECT v FROM Birthdate:v - (Has_Birthdate:e) - Party:p
-         WHERE v.outdegree("Has_Birthdate") <= max_value_degree
-         ACCUM v.@members += p;
-  pairs = SELECT v FROM vals:v
-          ACCUM FOREACH a IN v.@members DO FOREACH b IN v.@members DO
-            CASE WHEN getvid(a) < getvid(b) THEN b.@score_map += (a -> birthdate_weight) END
-          END END
-          POST-ACCUM v.@members.clear();
+  all_parties = {Party.*};
 
 
-  vals = SELECT v FROM Street_Address:v - (Has_Street_Address:e) - Party:p
-         WHERE v.outdegree("Has_Street_Address") <= max_value_degree
-         ACCUM v.@members += p;
-  pairs = SELECT v FROM vals:v
-          ACCUM FOREACH a IN v.@members DO FOREACH b IN v.@members DO
-            CASE WHEN getvid(a) < getvid(b) THEN b.@score_map += (a -> street_weight) END
-          END END
-          POST-ACCUM v.@members.clear();
+  cand = SELECT b
+      FROM Party:a -(@@pii_edges:e1)- :v -(@@pii_edges:e2)- Party:b
+      WHERE v.outdegree() > 1 AND v.outdegree() < pii_low_connections_limit
+            AND getvid(a) < getvid(b)
+      ACCUM b.@cand += getvid(a);
 
-  vals = SELECT v FROM City:v - (Has_City:e) - Party:p
-         WHERE v.outdegree("Has_City") <= max_value_degree
-         ACCUM v.@members += p;
-  pairs = SELECT v FROM vals:v
-          ACCUM FOREACH a IN v.@members DO FOREACH b IN v.@members DO
-            CASE WHEN getvid(a) < getvid(b) THEN b.@score_map += (a -> city_weight) END
-          END END
-          POST-ACCUM v.@members.clear();
+  cand_count = SELECT p FROM all_parties:p
+      POST-ACCUM @@cand_pairs += p.@cand.size();
+  log(true, "UDF:: match_parties candidate pairs: " + to_string(@@cand_pairs));
 
-  vals = SELECT v FROM State:v - (Has_State:e) - Party:p
-         WHERE v.outdegree("Has_State") <= max_value_degree
-         ACCUM v.@members += p;
-  pairs = SELECT v FROM vals:v
-          ACCUM FOREACH a IN v.@members DO FOREACH b IN v.@members DO
-            CASE WHEN getvid(a) < getvid(b) THEN b.@score_map += (a -> state_weight) END
-          END END
-          POST-ACCUM v.@members.clear();
+  FOREACH batch_id IN RANGE[0, num_value_batches - 1] DO
 
-  vals = SELECT v FROM Postcode:v - (Has_Postcode:e) - Party:p
-         WHERE v.outdegree("Has_Postcode") <= max_value_degree
-         ACCUM v.@members += p;
-  pairs = SELECT v FROM vals:v
-          ACCUM FOREACH a IN v.@members DO FOREACH b IN v.@members DO
-            CASE WHEN getvid(a) < getvid(b) THEN b.@score_map += (a -> postcode_weight) END
-          END END
-          POST-ACCUM v.@members.clear();
+    scored = SELECT b
+        FROM Party:a -(@@pii_edges:e1)- :v -(@@pii_edges:e2)- Party:b
+        WHERE v.outdegree() > 1 AND v.outdegree() < pii_high_connections_limit
+              AND getvid(v) % num_value_batches == batch_id
+              AND getvid(a) < getvid(b)
+              AND b.@cand.contains(getvid(a))
+        ACCUM
+          CASE v.type
+            WHEN "Email"           THEN b.@score_map += (a -> email_weight)
+            WHEN "Phone"           THEN b.@score_map += (a -> phone_weight)
+            WHEN "Birthdate"       THEN b.@score_map += (a -> birthdate_weight)
+            WHEN "Street_Address"  THEN b.@score_map += (a -> street_weight)
+            WHEN "City"            THEN b.@score_map += (a -> city_weight)
+            WHEN "State"           THEN b.@score_map += (a -> state_weight)
+            WHEN "Postcode"        THEN b.@score_map += (a -> postcode_weight)
+            WHEN "Name_Minhash"    THEN b.@score_map += (a -> name_bucket_weight)
+            WHEN "Address_Minhash" THEN b.@score_map += (a -> address_bucket_weight)
+            WHEN "Street_Minhash"  THEN b.@score_map += (a -> street_bucket_weight)
+          END;
 
+    finalize = SELECT t FROM all_parties:t
+        POST-ACCUM
+          FOREACH (s_party, sc) IN t.@score_map DO
+            @@max_score += sc, @@min_score += sc, @@avg_score += sc,
+            IF sc > (threshold - 0.000001) THEN
+              INSERT INTO Same_As VALUES (s_party, t, sc),
+              @@edge_count += 1
+            END
+          END,
+          t.@score_map.clear();
 
-  vals = SELECT v FROM Name_Minhash:v - (Has_Name_Minhash:e) - Party:p
-         WHERE v.outdegree("Has_Name_Minhash") <= max_value_degree
-         ACCUM v.@members += p;
-  pairs = SELECT v FROM vals:v
-          ACCUM FOREACH a IN v.@members DO FOREACH b IN v.@members DO
-            CASE WHEN getvid(a) < getvid(b) THEN b.@score_map += (a -> name_bucket_weight) END
-          END END
-          POST-ACCUM v.@members.clear();
-
-  vals = SELECT v FROM Address_Minhash:v - (Has_Address_Minhash:e) - Party:p
-         WHERE v.outdegree("Has_Address_Minhash") <= max_value_degree
-         ACCUM v.@members += p;
-  pairs = SELECT v FROM vals:v
-          ACCUM FOREACH a IN v.@members DO FOREACH b IN v.@members DO
-            CASE WHEN getvid(a) < getvid(b) THEN b.@score_map += (a -> address_bucket_weight) END
-          END END
-          POST-ACCUM v.@members.clear();
-
-  vals = SELECT v FROM Street_Minhash:v - (Has_Street_Minhash:e) - Party:p
-         WHERE v.outdegree("Has_Street_Minhash") <= max_value_degree
-         ACCUM v.@members += p;
-  pairs = SELECT v FROM vals:v
-          ACCUM FOREACH a IN v.@members DO FOREACH b IN v.@members DO
-            CASE WHEN getvid(a) < getvid(b) THEN b.@score_map += (a -> street_bucket_weight) END
-          END END
-          POST-ACCUM v.@members.clear();
-
-  finalize = SELECT t FROM Party:t
-      POST-ACCUM
-        FOREACH (s_party, sc) IN t.@score_map DO
-          @@max_score += sc, @@min_score += sc, @@avg_score += sc,
-          IF sc > (threshold - 0.000001) THEN
-            INSERT INTO Same_As VALUES (s_party, t, sc),
-            @@edge_count += 1
-          END
-        END,
-        t.@score_map.clear();
+  END;
 
   DATETIME end_time = now();
   STRING execution_time = to_string(datetime_diff(end_time, start_time));
   log(true, "UDF:: match_parties execution time (seconds): " + execution_time);
 
   PRINT to_string(@@edge_count) AS same_as_edges_created,
+        to_string(@@cand_pairs) AS candidate_pairs_considered,
         to_string(@@max_score)  AS max_pair_score,
         to_string(@@min_score)  AS min_pair_score,
         to_string(@@avg_score)  AS avg_pair_score;
   PRINT execution_time AS execution_time_in_seconds;
 }
+INSTALL QUERY match_parties
+RUN QUERY match_parties()
