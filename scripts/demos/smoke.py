@@ -3,17 +3,22 @@
 No arguments. Run this BEFORE a real training job. It exercises every moving
 part once -- connect, derive temporal spec + reference epoch, read train/val
 seeds + pu_label FROM THE GRAPH, auto-discover the eval parquet for the
-synthetic answer key, build both loaders with the strict-inductive flags, run a
-capped number of real-sized batches through forward -> nnPU loss -> backward,
-a validation pass, best-weight capture, and a throwaway checkpoint.
+synthetic answer key, FIT THE FEATURE NORMALIZER on the train split, build both
+loaders with the strict-inductive flags AND the normalizer, run a capped number
+of real-sized batches through forward -> nnPU loss -> backward, a validation
+pass, best-weight capture, and a throwaway checkpoint.
 
-Unlike a minimal wiring check, this uses the REAL batch size and runs enough
-batches to read a steady-state rate off the tqdm bar, then extrapolates the
-per-epoch and full-training time for the actual seed counts. So a clean finish
-proves the wiring, and the printed estimate tells you whether a full run is
-feasible before you commit to it.
+This probe is configured to match train.py EXACTLY on the two settings that
+decide whether the model learns:
+  * positive_weight=0.5 is passed to TrainConfig (without it the loss runs the
+    textbook nnPU weight = pi ~ 1e-4, which starves the positive term and
+    inverts the ranking -- the probe would then mislead you into thinking the
+    model cannot learn when really the FIX just was not wired in).
+  * the feature normalizer is fitted and passed to BOTH loaders (without it,
+    raw unstandardized features produce runaway logits, another false alarm).
+If this probe and train.py ever diverge on these, the probe is lying.
 
-    python scripts/smoke.py
+    python scripts/demos/smoke.py
 """
 
 from collections.abc import Iterable, Iterator
@@ -25,10 +30,16 @@ from typing import cast
 
 import pandas as pd
 import torch
+from torch import Tensor
 from torch_geometric.data import HeteroData
 
 from mule_pattern_learner.device import select_device
+from mule_pattern_learner.features.nodes import (
+    build_account_features,
+    normalizer_from_features,
+)
 from mule_pattern_learner.pyg.backend import TigerGraphRemoteBackend
+from mule_pattern_learner.pyg.fetch import fetch_account_vertices
 from mule_pattern_learner.pyg.model import MulePatternModel
 from mule_pattern_learner.pyg.neighbors import NeighborFanout
 from mule_pattern_learner.tigergraph.client import Client
@@ -46,24 +57,17 @@ _COL_ACCOUNT_ID = "account_id"
 _COL_TRUE_LABEL = "true_label"
 _ACCOUNT_FEATURES = 31
 
-# REAL training settings, so the measured per-batch time matches a full run.
 _BATCH_SIZE = 1024
 _POSITIVES_PER_BATCH = 64
-# Synthetic true mule count (the answer-key total). The smoke test knows it
-# because it runs on synthetic data; production never does -- there it is the
-# operator's --estimated-mules guess. pi is derived from it the same way the
-# real entrypoint does, so this probe exercises that path too.
+_POSITIVE_WEIGHT = 0.5
 _SYNTHETIC_MULE_COUNT = 216
+_FEATURE_FETCH_CHUNK = 5_000
 _VERTEX_ACCOUNT = "Account"
 
-# Probe scale: enough real-sized batches for a steady-state rate, but capped so
-# the probe finishes quickly. Each batch is now large (one big TigerGraph query),
-# so fewer probe batches still give a stable per-batch figure.
 _PROBE_TRAIN_BATCHES = 10
 _PROBE_VAL_SEEDS = 1024
 _PROBE_EPOCHS = 2
 
-# Full-run schedule we are estimating the cost of.
 _FULL_MAX_EPOCHS = 30
 
 
@@ -129,8 +133,6 @@ def main() -> None:
     true_label_of = _eval_labels(eval_frame, _COL_TRUE_LABEL)
     print(f"      {eval_path.name}")
 
-    # Stratify the probe val sample so it contains BOTH classes (ranking metrics
-    # are undefined on one class): every true-mule val account plus negatives.
     val_pos = [a for a in val_ids_all if true_label_of.get(a, 0) == 1]
     val_neg = [a for a in val_ids_all if true_label_of.get(a, 0) == 0]
     n_neg = max(0, _PROBE_VAL_SEEDS - len(val_pos))
@@ -140,13 +142,24 @@ def main() -> None:
         + f"val_seeds={len(val_seed_ids)} (val_pos={len(val_pos)})"
     )
 
+    # Fit the feature normalizer on the TRAIN split, exactly as train.py does,
+    # and pass it to BOTH loaders below. Without this the loaders serve raw
+    # unstandardized features and the logits blow up (mean ~ -70, min ~ -700),
+    # a false-alarm "inversion" that has nothing to do with the model.
+    print("      fitting feature normalizer on train split ...")
+    train_ids = tuple(train_seeds.account_ids)
+    feature_rows: list[Tensor] = []
+    for start in range(0, len(train_ids), _FEATURE_FETCH_CHUNK):
+        chunk = list(train_ids[start : start + _FEATURE_FETCH_CHUNK])
+        vertices = fetch_account_vertices(client, chunk)
+        feature_rows.append(build_account_features(vertices).feats)
+    normalizer = normalizer_from_features(torch.cat(feature_rows, dim=0))
+
     fanout = NeighborFanout()
 
     def mapper_to_ids(int_ids: list[int]) -> list[str]:
         return mapper.to_strings("Account", int_ids)
 
-    # REAL-sized seed batches, but only the first _PROBE_TRAIN_BATCHES per epoch
-    # so the probe stays quick while timing the true per-batch cost.
     def make_train_loader() -> Iterator[HeteroData]:
         batches = epoch_batches(
             train_pool,
@@ -164,6 +177,7 @@ def main() -> None:
                 shuffle=False,
                 allow_val=False,
                 allow_test=False,
+                normalizer=normalizer,
             )
             yield from cast(Iterable[HeteroData], loader)
 
@@ -177,19 +191,23 @@ def main() -> None:
             shuffle=False,
             allow_val=True,
             allow_test=False,
+            normalizer=normalizer,
         )
         yield from cast(Iterable[HeteroData], loader)
 
     print("[5/7] building model ...")
     model = MulePatternModel(account_in_dim=_ACCOUNT_FEATURES, edge_dim=edge_dim)
-    # pi from the known synthetic count over the derived account total, matching
-    # how the real entrypoint forms it (there the count is an operator estimate).
-    # getVertexCount returns int for a single type; narrow the int | dict union.
     raw_count = client.conn.getVertexCount(_VERTEX_ACCOUNT, realtime=True)
     if not isinstance(raw_count, int):
         raise TypeError(f"expected int account count, got {type(raw_count).__name__}")
     prior = _SYNTHETIC_MULE_COUNT / raw_count
-    config = TrainConfig(prior=prior, max_epochs=_PROBE_EPOCHS, patience=99, eval_k=50)
+    config = TrainConfig(
+        prior=prior,
+        max_epochs=_PROBE_EPOCHS,
+        patience=99,
+        eval_k=50,
+        positive_weight=_POSITIVE_WEIGHT,
+    )
 
     print(
         f"[6/7] timing {_PROBE_TRAIN_BATCHES} real-sized train batches x {_PROBE_EPOCHS} "
@@ -218,8 +236,6 @@ def main() -> None:
     torch.save({"model_state_dict": result.best_state_dict, "edge_dim": edge_dim}, out_path)
     print(f"      wrote {out_path}")
 
-    # ── extrapolate full-run cost from the measured per-batch rate ──
-    # batches actually run = (train batches + val batches) per epoch * epochs
     probe_val_batches = max(1, math.ceil(len(val_seed_ids) / _BATCH_SIZE))
     batches_run = (_PROBE_TRAIN_BATCHES + probe_val_batches) * _PROBE_EPOCHS
     per_batch = elapsed / max(batches_run, 1)

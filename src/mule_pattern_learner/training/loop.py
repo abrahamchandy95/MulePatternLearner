@@ -1,7 +1,10 @@
 from collections.abc import Callable, Iterator, Mapping, Sequence
 import copy
 from dataclasses import dataclass
+import time
 from typing import Protocol, cast
+
+import requests
 
 import numpy as np
 from numpy.typing import NDArray
@@ -25,6 +28,65 @@ BatchTransform = Callable[[HeteroData], HeteroData]
 
 def _identity(batch: HeteroData) -> HeteroData:
     return batch
+
+
+# Transient TigerGraph/network failures that should be retried rather than crash
+# a multi-day run. A dropped read (ReadTimeout) or truncated response
+# (ChunkedEncodingError / IncompleteRead) on ONE batch is not a fatal error: the
+# batch is re-fetched and the run continues, losing seconds instead of days.
+_TRANSIENT_ERRORS: tuple[type[Exception], ...] = (
+    requests.exceptions.ReadTimeout,
+    requests.exceptions.ConnectionError,
+    requests.exceptions.ChunkedEncodingError,
+    requests.exceptions.Timeout,
+)
+_MAX_BATCH_RETRIES = 5
+_RETRY_BACKOFF_S = 10.0
+
+
+def _resilient_batches(
+    make_loader: Callable[[], Iterator[HeteroData]],
+) -> Iterator[HeteroData]:
+    """Iterate a loader, surviving transient network errors per batch.
+
+    make_loader is a zero-arg factory returning a FRESH batch iterator (each call
+    re-issues the underlying TigerGraph queries from the start). When iteration
+    raises a transient error mid-stream, we rebuild the loader and fast-forward
+    past the batches already yielded, so no batch is reprocessed (which would
+    double-count into the optimizer) or skipped (which would drop training data
+    or corrupt the validation metric). The re-fetch of skipped batches is wasted
+    work, but it is bounded by where the failure occurred and is the price of
+    not losing the whole run. A batch that fails _MAX_BATCH_RETRIES times in a
+    row re-raises -- that is a real outage, not a blip.
+
+    NOTE: relies on the loader being deterministic across rebuilds (same seed,
+    same order), which it is -- make_*_loader uses a fixed seed and shuffle=False.
+    """
+    delivered = 0
+    attempts = 0
+    while True:
+        produced_this_pass = 0
+        try:
+            for i, batch in enumerate(make_loader()):
+                if i < delivered:
+                    continue  # already yielded on a previous pass; skip past it
+                yield batch
+                delivered += 1
+                produced_this_pass += 1
+                attempts = 0  # a clean delivery resets the retry budget
+            return  # loader exhausted normally -> epoch complete
+        except _TRANSIENT_ERRORS as err:
+            attempts += 1
+            if attempts > _MAX_BATCH_RETRIES:
+                raise
+            wait = _RETRY_BACKOFF_S * attempts
+            print(
+                f"    transient fetch error after {delivered} batches "
+                + f"(attempt {attempts}/{_MAX_BATCH_RETRIES}); "
+                + f"rebuilding loader, retrying in {wait:.0f}s: {type(err).__name__}",
+                flush=True,
+            )
+            time.sleep(wait)
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,7 +231,7 @@ def _targets(seed_ids: Sequence[str], label_of: Mapping[str, int], device: torch
 
 def train_epoch(
     model: Module,
-    loader: Iterator[HeteroData],
+    make_loader: Callable[[], Iterator[HeteroData]],
     loss_fn: NonNegativePULoss,
     optimizer: Optimizer,
     pu_label_of: Mapping[str, int],
@@ -195,7 +257,13 @@ def train_epoch(
     _ = model.train()
     total = 0.0
     count = 0
-    bar = tqdm(loader, total=total_batches, unit="batch", miniters=1, desc=f"train e{epoch}")
+    bar = tqdm(
+        _resilient_batches(make_loader),
+        total=total_batches,
+        unit="batch",
+        miniters=1,
+        desc=f"train e{epoch}",
+    )
     for raw in bar:
         batch = batch_transform(raw)
         logits = _forward(model, batch, dev)
@@ -216,7 +284,7 @@ def train_epoch(
 
 def validate(
     model: Module,
-    loader: Iterator[HeteroData],
+    make_loader: Callable[[], Iterator[HeteroData]],
     pu_label_of: Mapping[str, int],
     mapper_to_ids: Callable[[list[int]], list[str]],
     eval_k: int,
@@ -239,7 +307,13 @@ def validate(
     scores: list[float] = []
     labels: list[int] = []
     raw_logits: list[float] = []
-    bar = tqdm(loader, total=total_batches, unit="batch", miniters=1, desc=f"  val e{epoch}")
+    bar = tqdm(
+        _resilient_batches(make_loader),
+        total=total_batches,
+        unit="batch",
+        miniters=1,
+        desc=f"  val e{epoch}",
+    )
     with torch.no_grad():
         for batch in bar:
             logits = _forward(model, batch, dev)
@@ -349,7 +423,7 @@ def fit(
     for epoch in range(config.max_epochs):
         train_loss = train_epoch(
             model,
-            make_train_loader(),
+            make_train_loader,
             loss_fn,
             opt,
             pu_label_of,
@@ -361,7 +435,7 @@ def fit(
         )
         val = validate(
             model,
-            make_val_loader(),
+            make_val_loader,
             pu_label_of,
             mapper_to_ids,
             config.eval_k,
