@@ -1,0 +1,10 @@
+============================================================
+HIDDEN-MULE GENERALIZATION on the test split (synthetic)
+============================================================
+  accounts scored        : 82850
+  true mules             : 176
+  hidden mules           : 169
+  hidden_recall@100     : 0.1953
+  AP (vs true labels)    : 0.2198
+  AUC (vs true labels)   : 0.9615
+============================================================

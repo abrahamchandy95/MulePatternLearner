@@ -1,0 +1,511 @@
+❯ cat /tmp/train_stack.txt | grep -A30 "Thread.*DispatchQueue\|python\|recv\|read\|socket"
+Identifier:      org.python.python
+Version:         3.14.0 (3.14.0)
+Code Type:       ARM64
+Platform:        macOS
+Parent Process:  zsh [3103]
+Target Type:     live task
+
+Date/Time:       2026-06-10 12:08:19.789 +0530
+Launch Time:     2026-06-10 08:36:04.345 +0530
+OS Version:      macOS 26.3.1 (25D2128)
+Report Version:  7
+Analysis Tool:   /usr/bin/sample
+
+Physical footprint:         16.9G
+Physical footprint (peak):  17.1G
+Idle exit:                  untracked
+----
+
+Call graph:
+    1640 Thread_7684189   DispatchQueue_1: com.apple.main-thread  (serial)
+    + 1640 start  (in dyld) + 7184  [0x185c39d54]
+    +   1640 Py_BytesMain  (in Python) + 40  [0x1055a62c4]
+    +     1640 pymain_main  (in Python) + 444  [0x1055a6144]
+    +       1640 Py_RunMain  (in Python) + 1432  [0x1055a4e60]
+    +         1640 pymain_run_file  (in Python) + 72  [0x1055a5720]
+    +           1640 pymain_run_file_obj  (in Python) + 164  [0x1055a5e8c]
+    +             1640 _PyRun_AnyFileObject  (in Python) + 80  [0x105574864]
+    +               1640 _PyRun_SimpleFileObject  (in Python) + 256  [0x105574ee4]
+    +                 1640 pyrun_file  (in Python) + 144  [0x105575498]
+    +                   1640 run_mod  (in Python) + 308  [0x1055756f8]
+    +                     1640 PyEval_EvalCode  (in Python) + 160  [0x105467ac4]
+    +                       1640 _PyEval_Vector  (in Python) + 632  [0x105467de0]
+    +                         1640 _PyEval_EvalFrameDefault  (in Python) + 222192  [0x1054a087c]
+    +                           1640 enum_next  (in Python) + 48  [0x1052feaa0]
+    +                             1640 gen_iternext  (in Python) + 136  [0x105309b10]
+    +                               1640 _PyEval_EvalFrameDefault  (in Python) + 402656  [0x1054cc96c]
+    +                                 1640 slot_tp_iternext  (in Python) + 52  [0x1053aaf28]
+    +                                   1640 vectorcall_method  (in Python) + 828  [0x1053afe1c]
+    +                                     1640 _PyEval_Vector  (in Python) + 632  [0x105467de0]
+    +                                       1640 _PyEval_EvalFrameDefault  (in Python) + 148732  [0x10548e988]
+    +                                         1640 slot_tp_call  (in Python) + 864  [0x1053a77e0]
+    +                                           1640 _PyObject_Call_Prepend  (in Python) + 160  [0x1052ec688]
+    +                                             1640 _PyEval_Vector  (in Python) + 632  [0x105467de0]
+    +                                               1640 _PyEval_EvalFrameDefault  (in Python) + 130844  [0x10548a3a8]
+    +                                                 1640 partial_call  (in Python) + 140  [0x10561d950]
+    +                                                   1640 PyObject_Call  (in Python) + 288  [0x1052ebe00]
+    +                                                     1640 method_vectorcall  (in Python) + 328  [0x1052ef8d0]
+    +                                                       1640 _PyEval_Vector  (in Python) + 632  [0x105467de0]
+    +                                                         1640 _PyEval_EvalFrameDefault  (in Python) + 113864  [0x105486154]
+    +                                                           1640 method_vectorcall  (in Python) + 328  [0x1052ef8d0]
+--
+    +                                                                         ! 1639 _io__Buffered_read  (in Python) + 1312  [0x1055e5994]
+    +                                                                         !   1639 _bufferedreader_raw_read  (in Python) + 140  [0x1055e8344]
+    +                                                                         !     1639 PyObject_VectorcallMethod  (in Python) + 152  [0x1052edcc8]
+    +                                                                         !       1639 _PyEval_Vector  (in Python) + 632  [0x105467de0]
+    +                                                                         !         1639 _PyEval_EvalFrameDefault  (in Python) + 148444  [0x10548e868]
+    +                                                                         !           1639 method_vectorcall_VARARGS  (in Python) + 416  [0x1052fe00c]
+    +                                                                         !             1639 _ssl__SSLSocket_read  (in _ssl.cpython-314-darwin.so) + 152  [0x10b5f41b4]
+    +                                                                         !               1639 _ssl__SSLSocket_read_impl  (in _ssl.cpython-314-darwin.so) + 440  [0x10b5f548c]
+    +                                                                         !                 1639 SSL_read_ex  (in libssl.3.dylib) + 12  [0x10bcfb710]
+    +                                                                         !                   1639 ssl3_read_internal  (in libssl.3.dylib) + 172  [0x10bcee8e8]
+    +                                                                         !                     1639 ssl3_read_bytes  (in libssl.3.dylib) + 516  [0x10bd19104]
+    +                                                                         !                       1638 ssl3_get_record  (in libssl.3.dylib) + 748  [0x10bd1a2d0]
+    +                                                                         !                       : 1638 ssl3_read_n  (in libssl.3.dylib) + 532  [0x10bd17a40]
+    +                                                                         !                       :   1638 BIO_read  (in libcrypto.3.dylib) + 28  [0x10b69a200]
+    +                                                                         !                       :     1638 bio_read_intern  (in libcrypto.3.dylib) + 292  [0x10b69a344]
+    +                                                                         !                       :       1638 bread_conv  (in libcrypto.3.dylib) + 40  [0x10b69bbf8]
+    +                                                                         !                       :         1638 sock_read  (in libcrypto.3.dylib) + 56  [0x10b6a3498]
+    +                                                                         !                       :           1638 read  (in libsystem_kernel.dylib) + 8  [0x185fc1908]
+    +                                                                         !                       1 ssl3_get_record  (in libssl.3.dylib) + 180  [0x10bd1a098]
+    +                                                                         !                         1 ssl3_read_n  (in libssl.3.dylib) + 532  [0x10bd17a40]
+    +                                                                         !                           1 BIO_read  (in libcrypto.3.dylib) + 28  [0x10b69a200]
+    +                                                                         !                             1 bio_read_intern  (in libcrypto.3.dylib) + 292  [0x10b69a344]
+    +                                                                         !                               1 bread_conv  (in libcrypto.3.dylib) + 40  [0x10b69bbf8]
+    +                                                                         !                                 1 sock_read  (in libcrypto.3.dylib) + 56  [0x10b6a3498]
+    +                                                                         !                                   1 read  (in libsystem_kernel.dylib) + 8  [0x185fc1908]
+    +                                                                         1 _PyEval_EvalFrameDefault  (in Python) + 101160  [0x105482fb4]
+    +                                                                           1 builtin_next  (in Python) + 72  [0x105464b24]
+    +                                                                             1 gen_iternext  (in Python) + 0  [0x105309a88]
+    1640 Thread_7687329
+    + 1640 thread_start  (in libsystem_pthread.dylib) + 8  [0x185ffeba8]
+    +   1640 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x186003c08]
+    +     1640 __kmp_launch_worker(void*)  (in libomp.dylib) + 280  [0x109efebcc]
+    +       1640 __kmp_launch_thread  (in libomp.dylib) + 336  [0x109eb6934]
+    +         1640 __kmp_fork_barrier(int, int)  (in libomp.dylib) + 464  [0x109ede1c4]
+    +           1640 __kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*)  (in libomp.dylib) + 172  [0x109eda994]
+    +             1640 kmp_flag_64<false, true>::wait(kmp_info*, int, void*)  (in libomp.dylib) + 1896  [0x109edf67c]
+    +               1640 void __kmp_suspend_64<false, true>(int, kmp_flag_64<false, true>*)  (in libomp.dylib) + 388  [0x109f00254]
+    +                 1640 _pthread_cond_wait  (in libsystem_pthread.dylib) + 984  [0x1860040dc]
+    +                   1640 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x185fc44f8]
+    1640 Thread_7687330
+    + 1640 thread_start  (in libsystem_pthread.dylib) + 8  [0x185ffeba8]
+    +   1640 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x186003c08]
+    +     1640 __kmp_launch_worker(void*)  (in libomp.dylib) + 280  [0x109efebcc]
+    +       1640 __kmp_launch_thread  (in libomp.dylib) + 336  [0x109eb6934]
+    +         1640 __kmp_fork_barrier(int, int)  (in libomp.dylib) + 464  [0x109ede1c4]
+    +           1640 __kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*)  (in libomp.dylib) + 172  [0x109eda994]
+    +             1640 kmp_flag_64<false, true>::wait(kmp_info*, int, void*)  (in libomp.dylib) + 1896  [0x109edf67c]
+    +               1640 void __kmp_suspend_64<false, true>(int, kmp_flag_64<false, true>*)  (in libomp.dylib) + 388  [0x109f00254]
+    +                 1640 _pthread_cond_wait  (in libsystem_pthread.dylib) + 984  [0x1860040dc]
+    +                   1640 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x185fc44f8]
+    1640 Thread_7687331
+    + 1640 thread_start  (in libsystem_pthread.dylib) + 8  [0x185ffeba8]
+    +   1640 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x186003c08]
+    +     1640 __kmp_launch_worker(void*)  (in libomp.dylib) + 280  [0x109efebcc]
+    +       1640 __kmp_launch_thread  (in libomp.dylib) + 336  [0x109eb6934]
+    +         1640 __kmp_fork_barrier(int, int)  (in libomp.dylib) + 464  [0x109ede1c4]
+    +           1640 __kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*)  (in libomp.dylib) + 172  [0x109eda994]
+    +             1640 kmp_flag_64<false, true>::wait(kmp_info*, int, void*)  (in libomp.dylib) + 1896  [0x109edf67c]
+    +               1640 void __kmp_suspend_64<false, true>(int, kmp_flag_64<false, true>*)  (in libomp.dylib) + 388  [0x109f00254]
+    +                 1640 _pthread_cond_wait  (in libsystem_pthread.dylib) + 984  [0x1860040dc]
+    +                   1640 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x185fc44f8]
+    1640 Thread_7687332
+    + 1640 thread_start  (in libsystem_pthread.dylib) + 8  [0x185ffeba8]
+    +   1640 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x186003c08]
+    +     1640 __kmp_launch_worker(void*)  (in libomp.dylib) + 280  [0x109efebcc]
+    +       1640 __kmp_launch_thread  (in libomp.dylib) + 336  [0x109eb6934]
+    +         1640 __kmp_fork_barrier(int, int)  (in libomp.dylib) + 464  [0x109ede1c4]
+    +           1640 __kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*)  (in libomp.dylib) + 172  [0x109eda994]
+    +             1640 kmp_flag_64<false, true>::wait(kmp_info*, int, void*)  (in libomp.dylib) + 1896  [0x109edf67c]
+    +               1640 void __kmp_suspend_64<false, true>(int, kmp_flag_64<false, true>*)  (in libomp.dylib) + 388  [0x109f00254]
+    +                 1640 _pthread_cond_wait  (in libsystem_pthread.dylib) + 984  [0x1860040dc]
+    +                   1640 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x185fc44f8]
+    1640 Thread_7687333
+    + 1640 thread_start  (in libsystem_pthread.dylib) + 8  [0x185ffeba8]
+    +   1640 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x186003c08]
+    +     1640 __kmp_launch_worker(void*)  (in libomp.dylib) + 280  [0x109efebcc]
+    +       1640 __kmp_launch_thread  (in libomp.dylib) + 336  [0x109eb6934]
+    +         1640 __kmp_fork_barrier(int, int)  (in libomp.dylib) + 464  [0x109ede1c4]
+    +           1640 __kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*)  (in libomp.dylib) + 172  [0x109eda994]
+    +             1640 kmp_flag_64<false, true>::wait(kmp_info*, int, void*)  (in libomp.dylib) + 1896  [0x109edf67c]
+    +               1640 void __kmp_suspend_64<false, true>(int, kmp_flag_64<false, true>*)  (in libomp.dylib) + 388  [0x109f00254]
+    +                 1640 _pthread_cond_wait  (in libsystem_pthread.dylib) + 984  [0x1860040dc]
+    +                   1640 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x185fc44f8]
+    1640 Thread_7687334
+    + 1640 thread_start  (in libsystem_pthread.dylib) + 8  [0x185ffeba8]
+    +   1640 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x186003c08]
+    +     1640 __kmp_launch_worker(void*)  (in libomp.dylib) + 280  [0x109efebcc]
+    +       1640 __kmp_launch_thread  (in libomp.dylib) + 336  [0x109eb6934]
+    +         1640 __kmp_fork_barrier(int, int)  (in libomp.dylib) + 464  [0x109ede1c4]
+    +           1640 __kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*)  (in libomp.dylib) + 172  [0x109eda994]
+    +             1640 kmp_flag_64<false, true>::wait(kmp_info*, int, void*)  (in libomp.dylib) + 1896  [0x109edf67c]
+    +               1640 void __kmp_suspend_64<false, true>(int, kmp_flag_64<false, true>*)  (in libomp.dylib) + 388  [0x109f00254]
+    +                 1640 _pthread_cond_wait  (in libsystem_pthread.dylib) + 984  [0x1860040dc]
+    +                   1640 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x185fc44f8]
+    1640 Thread_7687335
+    + 1640 thread_start  (in libsystem_pthread.dylib) + 8  [0x185ffeba8]
+    +   1640 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x186003c08]
+    +     1640 __kmp_launch_worker(void*)  (in libomp.dylib) + 280  [0x109efebcc]
+    +       1640 __kmp_launch_thread  (in libomp.dylib) + 336  [0x109eb6934]
+    +         1640 __kmp_fork_barrier(int, int)  (in libomp.dylib) + 464  [0x109ede1c4]
+    +           1640 __kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*)  (in libomp.dylib) + 172  [0x109eda994]
+    +             1640 kmp_flag_64<false, true>::wait(kmp_info*, int, void*)  (in libomp.dylib) + 1896  [0x109edf67c]
+    +               1640 void __kmp_suspend_64<false, true>(int, kmp_flag_64<false, true>*)  (in libomp.dylib) + 388  [0x109f00254]
+    +                 1640 _pthread_cond_wait  (in libsystem_pthread.dylib) + 984  [0x1860040dc]
+    +                   1640 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x185fc44f8]
+    1640 Thread_7687341: Thread-1
+    + 1640 thread_start  (in libsystem_pthread.dylib) + 8  [0x185ffeba8]
+    +   1640 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x186003c08]
+    +     1640 pythread_wrapper  (in Python) + 48  [0x105591b84]
+    +       1640 thread_run  (in Python) + 124  [0x105616000]
+    +         1640 method_vectorcall  (in Python) + 396  [0x1052ef914]
+    +           1640 _PyEval_Vector  (in Python) + 632  [0x105467de0]
+    +             1640 _PyEval_EvalFrameDefault  (in Python) + 72856  [0x10547c124]
+    +               1640 context_run  (in Python) + 132  [0x105501e54]
+    +                 1640 method_vectorcall  (in Python) + 396  [0x1052ef914]
+    +                   1640 _PyEval_Vector  (in Python) + 632  [0x105467de0]
+    +                     1639 _PyEval_EvalFrameDefault  (in Python) + 148444  [0x10548e868]
+    +                     ! 1639 method_vectorcall_VARARGS_KEYWORDS  (in Python) + 136  [0x1052fd62c]
+    +                     !   1639 lock_PyThread_acquire_lock  (in Python) + 60  [0x105613f74]
+    +                     !     1639 _PyMutex_LockTimed  (in Python) + 424  [0x10554f3a0]
+    +                     !       1639 _PyParkingLot_Park  (in Python) + 312  [0x105561640]
+    +                     !         1639 _PySemaphore_Wait  (in Python) + 256  [0x1055614ac]
+    +                     !           1639 _pthread_cond_wait  (in libsystem_pthread.dylib) + 1028  [0x186004108]
+    +                     !             1639 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x185fc44f8]
+    +                     1 _PyEval_EvalFrameDefault  (in Python) + 294596  [0x1054b2350]
+    +                       1 _PyObject_GetMethod  (in Python) + 4784  [0x105373f28]
+    1640 Thread_7687822
+    + 1640 thread_start  (in libsystem_pthread.dylib) + 8  [0x185ffeba8]
+    +   1640 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x186003c08]
+    +     1640 std::__thread_proxy[abi:ne200100]<std::tuple<std::unique_ptr<std::__thread_struct>, void (torch::autograd::Engine::*)(int, std::shared_ptr<torch::autograd::ReadyQueue> const&, bool), torch::autograd::Engine*, signed char, std::shared_ptr<torch::autograd::ReadyQueue>, bool>>(void*)  (in libtorch_cpu.dylib) + 84  [0x120621de8]
+    +       1640 torch::autograd::python::PythonEngine::thread_init(int, std::shared_ptr<torch::autograd::ReadyQueue> const&, bool)  (in libtorch_python.dylib) + 112  [0x10c359b60]
+    +         1640 torch::autograd::Engine::thread_init(int, std::shared_ptr<torch::autograd::ReadyQueue> const&, bool)  (in libtorch_cpu.dylib) + 484  [0x120613a88]
+    +           1640 torch::autograd::Engine::thread_main(std::shared_ptr<torch::autograd::GraphTask> const&)  (in libtorch_cpu.dylib) + 172  [0x120613c28]
+    +             1640 torch::autograd::ReadyQueue::pop()  (in libtorch_cpu.dylib) + 72  [0x120615fb8]
+    +               1640 std::condition_variable::wait(std::unique_lock<std::mutex>&)  (in libc++.1.dylib) + 32  [0x185f34754]
+    +                 1640 _pthread_cond_wait  (in libsystem_pthread.dylib) + 984  [0x1860040dc]
+    +                   1640 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x185fc44f8]
+    1640 Thread_7700184
+    + 1640 start_wqthread  (in libsystem_pthread.dylib) + 8  [0x185ffeb9c]
+    +   1640 _pthread_wqthread  (in libsystem_pthread.dylib) + 368  [0x185fffe98]
+    +     1640 __workq_kernreturn  (in libsystem_kernel.dylib) + 8  [0x185fc29dc]
+    1640 Thread_7736539
+      1640 start_wqthread  (in libsystem_pthread.dylib) + 8  [0x185ffeb9c]
+        1640 _pthread_wqthread  (in libsystem_pthread.dylib) + 368  [0x185fffe98]
+          1640 __workq_kernreturn  (in libsystem_kernel.dylib) + 8  [0x185fc29dc]
+
+Total number in stack (recursive counted multiple, when >=5):
+        9       __psynch_cvwait  (in libsystem_kernel.dylib) + 0  [0x185fc44f0]
+        9       _pthread_start  (in libsystem_pthread.dylib) + 136  [0x186003c08]
+        9       thread_start  (in libsystem_pthread.dylib) + 8  [0x185ffeba8]
+        8       _PyEval_Vector  (in Python) + 632  [0x105467de0]
+        8       _pthread_cond_wait  (in libsystem_pthread.dylib) + 984  [0x1860040dc]
+        7       __kmp_fork_barrier(int, int)  (in libomp.dylib) + 464  [0x109ede1c4]
+        7       __kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*)  (in libomp.dylib) + 172  [0x109eda994]
+        7       __kmp_launch_thread  (in libomp.dylib) + 336  [0x109eb6934]
+        7       __kmp_launch_worker(void*)  (in libomp.dylib) + 280  [0x109efebcc]
+        7       kmp_flag_64<false, true>::wait(kmp_info*, int, void*)  (in libomp.dylib) + 1896  [0x109edf67c]
+        7       void __kmp_suspend_64<false, true>(int, kmp_flag_64<false, true>*)  (in libomp.dylib) + 388  [0x109f00254]
+
+Sort by top of stack, same collapsed (when >= 5):
+        __psynch_cvwait  (in libsystem_kernel.dylib)        14759
+        __workq_kernreturn  (in libsystem_kernel.dylib)        3280
+        read  (in libsystem_kernel.dylib)        1639
+
+Binary Images:
+       0x104194000 -        0x104197fff +org.python.python (3.14.0 - 3.14.0) <CFDA5BFF-0ACF-3AD7-8E48-E8EA6D1B8A30> /Library/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python
+       0x1043cc000 -        0x1043d3fff  libffi-trampolines.dylib (40) <331278DD-0B94-3958-B271-BC75EEE7EF38> /usr/lib/libffi-trampolines.dylib
+       0x1043e4000 -        0x1043e7fff +grp.cpython-314-darwin.so (0) <91034B88-E654-3E94-993E-C38170AC99E7> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/grp.cpython-314-darwin.so
+       0x1043f8000 -        0x1043fa097 +libtorch_global_deps.dylib (0) <FE8E7A3C-EA05-3D6A-AFAC-83F36D1AFB38> /Users/*/Documents/*/libtorch_global_deps.dylib
+       0x1046ac000 -        0x1046b7fff +math.cpython-314-darwin.so (0) <B22C4FB0-E64C-3351-B3DC-ABFF3FFF0B5F> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/math.cpython-314-darwin.so
+       0x1046cc000 -        0x1046ced67 +libtorch.dylib (0) <58A83E6E-3CE0-3B41-B92F-FF3B3D0D6DE5> /Users/*/Documents/*/libtorch.dylib
+       0x104f2c000 -        0x104f2ffff +fcntl.cpython-314-darwin.so (0) <5F837AFF-AFC7-3F50-9A97-E18FB76807AA> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/fcntl.cpython-314-darwin.so
+       0x105040000 -        0x105043fff +_bisect.cpython-314-darwin.so (0) <2C42EF2A-4BBA-3246-93BD-2923C0580C69> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/_bisect.cpython-314-darwin.so
+       0x105054000 -        0x105057fff +_random.cpython-314-darwin.so (0) <5CA18C73-3DF9-3DC4-B885-1FA540B77B2A> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/_random.cpython-314-darwin.so
+       0x105068000 -        0x10507fff7 +_pickle.cpython-314-darwin.so (0) <E0B5D54F-163C-3814-A84D-80A5FD670616> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/_pickle.cpython-314-darwin.so
+       0x10509c000 -        0x1050a3fff +_struct.cpython-314-darwin.so (0) <6FB7EF96-7552-3660-9DF9-F0D09EB6C311> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/_struct.cpython-314-darwin.so
+       0x1050b8000 -        0x1050bbffb +_bz2.cpython-314-darwin.so (0) <6655AA08-D14C-31B5-9B62-1CC40DDBC1C3> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/_bz2.cpython-314-darwin.so
+       0x1050cc000 -        0x1050e3ffb +_ctypes.cpython-314-darwin.so (0) <FBC0003A-B29C-3F9F-B8BA-ACD60FD4B013> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/_ctypes.cpython-314-darwin.so
+       0x105200000 -        0x10520bffb +_zstd.cpython-314-darwin.so (0) <8C704053-7797-3E58-97E8-EC0227FFEAA5> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/_zstd.cpython-314-darwin.so
+       0x105220000 -        0x105223fff +_posixsubprocess.cpython-314-darwin.so (0) <BE97A218-4E71-3E9B-92CA-26387A1870E5> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/_posixsubprocess.cpython-314-darwin.so
+       0x105234000 -        0x10523bffb +zlib.cpython-314-darwin.so (0) <361BCD7E-1065-314F-AC25-A578FCB9EB83> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/zlib.cpython-314-darwin.so
+       0x105250000 -        0x1052505d3 +_C.cpython-314-darwin.so (0) <859AF429-EE41-35B0-A72E-E07981F2D2B4> /Users/*/Documents/*/_C.cpython-314-darwin.so
+       0x105264000 -        0x10573ffeb +org.python.python (3.14.0, [c] 2001-2024 Python Software Foundation. - 3.14.0) <91C2E3EE-A2B8-350C-9AFB-02F96C3E2677> /Library/Frameworks/Python.framework/Versions/3.14/Python
+       0x109aa8000 -        0x109ab7fff +_socket.cpython-314-darwin.so (0) <F50F46BB-43D6-3108-A45E-A1CE220EDC6D> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/_socket.cpython-314-darwin.so
+       0x109ad4000 -        0x109adbff3 +_json.cpython-314-darwin.so (0) <5931E72D-5956-30DC-9EDF-1B341ED97255> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/_json.cpython-314-darwin.so
+       0x109aec000 -        0x109af3fff +select.cpython-314-darwin.so (0) <F58A2C83-230B-3AC6-B1B4-2053709BBDC9> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/select.cpython-314-darwin.so
+       0x109b04000 -        0x109b07fff +cd.cpython-314-darwin.so (0) <4ED37A64-61F0-3EEA-8404-3EB82C9E5812> /Users/*/Documents/*/cd.cpython-314-darwin.so
+       0x109b14000 -        0x109b1b3cb +libshm.dylib (0) <8A1C1CE3-8607-3BEB-BAEA-E7AC47D19263> /Users/*/Documents/*/libshm.dylib
+       0x109b30000 -        0x109b63fff +_lzma.cpython-314-darwin.so (0) <4879A91F-3593-3147-82AA-6D35B85FC3A9> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/_lzma.cpython-314-darwin.so
+       0x109d84000 -        0x109e20007 +libc10.dylib (0) <301AA028-4AB4-33DD-9A52-01AF215DE066> /Users/*/Documents/*/libc10.dylib
+       0x109e90000 -        0x109f27ffb +libomp.dylib (0) <E56FEBF1-776C-35BB-B9A1-8C978A01425C> /Users/*/Documents/*/libomp.dylib
+       0x109f68000 -        0x109f6ffff +_interpreters.cpython-314-darwin.so (0) <F6911112-34D7-3207-862A-933CDB41751E> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/_interpreters.cpython-314-darwin.so
+       0x109f90000 -        0x109fa7ff3 +_umath_linalg.cpython-314-darwin.so (0) <DB11F106-E295-3C29-90CA-AF4B71A96D77> /Users/*/Documents/*/_umath_linalg.cpython-314-darwin.so
+       0x109fb8000 -        0x109fbbfff +_heapq.cpython-314-darwin.so (0) <D6588FD8-B5D8-3B1B-9A17-2256DBF129D2> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/_heapq.cpython-314-darwin.so
+       0x109fd4000 -        0x10a1b3fff +libzstd.1.5.7.dylib (0) <A91769F4-2F8E-39D3-A2A2-75C703FB83E1> /Library/Frameworks/Python.framework/Versions/3.14/lib/libzstd.1.5.7.dylib
+       0x10a4dc000 -        0x10a4dffff +mmap.cpython-314-darwin.so (0) <DF142D48-A8F6-309D-ADD3-DA7FD0CC5BF1> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/mmap.cpython-314-darwin.so
+       0x10a4f0000 -        0x10a4f3fff +binascii.cpython-314-darwin.so (0) <0A2EF30F-7076-38D8-A5EA-E3785ECAFAEE> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/binascii.cpython-314-darwin.so
+       0x10a504000 -        0x10a50bfff +_hashlib.cpython-314-darwin.so (0) <297CE5C6-CE7F-3EFF-A91E-F10C11E2B5BB> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/_hashlib.cpython-314-darwin.so
+       0x10a528000 -        0x10a52bff3 +_queue.cpython-314-darwin.so (0) <D5BB7674-9D0D-35CE-9375-B8E7BA858BE7> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/_queue.cpython-314-darwin.so
+       0x10a540000 -        0x10a54bfff +array.cpython-314-darwin.so (0) <5FBF2686-F6FC-347F-862D-B74C457048C9> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/array.cpython-314-darwin.so
+       0x10a564000 -        0x10a853ff7 +_multiarray_umath.cpython-314-darwin.so (0) <F54BD6FA-E928-3F19-B169-C60B70299CA0> /Users/*/Documents/*/_multiarray_umath.cpython-314-darwin.so
+       0x10af04000 -        0x10af0ffff +_asyncio.cpython-314-darwin.so (0) <6A8D90EF-1332-32D4-8729-E927210E8356> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/_asyncio.cpython-314-darwin.so
+       0x10af34000 -        0x10af3bfff +_blake2.cpython-314-darwin.so (0) <2DEB8554-41E0-34A5-A7B2-C8D858CAC8FE> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/_blake2.cpython-314-darwin.so
+       0x10b54c000 -        0x10b553fff +cmath.cpython-314-darwin.so (0) <A79C9676-4337-3B40-B637-4FCF819C6855> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/cmath.cpython-314-darwin.so
+       0x10b564000 -        0x10b567fff +_uuid.cpython-314-darwin.so (0) <A06D5F24-92C9-3203-9B64-C6CC2FC1724C> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/_uuid.cpython-314-darwin.so
+       0x10b578000 -        0x10b57bfff +_scproxy.cpython-314-darwin.so (0) <97F9A6B9-BC1F-31F4-B3AC-D9DE8C87C819> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/_scproxy.cpython-314-darwin.so
+       0x10b58c000 -        0x10b58ffff +_multiprocessing.cpython-314-darwin.so (0) <1CF0A6CB-5087-3EFE-A49F-CB9F8C4FEE62> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/_multiprocessing.cpython-314-darwin.so
+       0x10b5a0000 -        0x10b5a3fff +_posixshmem.cpython-314-darwin.so (0) <094D6F82-4B5D-3160-9A68-29839EF7D1D0> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/_posixshmem.cpython-314-darwin.so
+       0x10b5b4000 -        0x10b5b7fff +_lsprof.cpython-314-darwin.so (0) <5B545D59-DBA9-348E-A478-30572308AC10> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/_lsprof.cpython-314-darwin.so
+       0x10b5d0000 -        0x10b5dbfd3 +_xxhash.cpython-314-darwin.so (0) <F0D4A4DC-1532-32A1-996E-76136B15E549> /Users/*/Documents/*/_xxhash.cpython-314-darwin.so
+       0x10b5ec000 -        0x10b607fff +_ssl.cpython-314-darwin.so (0) <D15C6A6E-F89E-3670-9FD5-8EB28099DB20> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/_ssl.cpython-314-darwin.so
+       0x10b628000 -        0x10b628ed3 +_speedups.cpython-314-darwin.so (0) <A1FD94A9-77C0-38C5-9903-9911D15F04C3> /Users/*/Documents/*/_speedups.cpython-314-darwin.so
+       0x10b64c000 -        0x10b64ffff +termios.cpython-314-darwin.so (0) <A2D39F4F-8C52-3A1A-B11A-3A8F4C5D9968> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/termios.cpython-314-darwin.so
+       0x10b670000 -        0x10b8d341f +libcrypto.3.dylib (0) <6BC23E03-627A-3171-B667-3F7D2ADBD89F> /Library/Frameworks/Python.framework/Versions/3.14/lib/libcrypto.3.dylib
+       0x10bce4000 -        0x10bd4bfff +libssl.3.dylib (0) <AA6BFE0A-74DD-31DD-B432-3F1F153B924A> /Library/Frameworks/Python.framework/Versions/3.14/lib/libssl.3.dylib
+       0x10bd84000 -        0x10bd87ff7 +_statistics.cpython-314-darwin.so (0) <A0312E85-132C-3D05-8C84-2F23D3B760E4> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/_statistics.cpython-314-darwin.so
+       0x10bd98000 -        0x10cdf92ab +libtorch_python.dylib (0) <9402A466-E38A-3502-8EF2-82741F7AB075> /Users/*/Documents/*/libtorch_python.dylib
+       0x10dfc0000 -        0x10dffbff3 +_decimal.cpython-314-darwin.so (0) <E46A6E99-C7F6-3295-8888-63B561E0D9B2> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/_decimal.cpython-314-darwin.so
+       0x10e018000 -        0x10e02bfff +_hmac.cpython-314-darwin.so (0) <846631CF-9968-36DF-A0A5-2E3AC94F356F> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/_hmac.cpython-314-darwin.so
+       0x10e044000 -        0x10e0f7ffb +unicodedata.cpython-314-darwin.so (0) <9BA36EE8-CB27-38B2-97AD-05BF9E7B7C32> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/unicodedata.cpython-314-darwin.so
+       0x110f08000 -        0x110f1bfff +_pcg64.cpython-314-darwin.so (0) <BAB8787D-213A-385D-A283-0F50FB37D6CF> /Users/*/Documents/*/_pcg64.cpython-314-darwin.so
+       0x110f2c000 -        0x110f3ffff +_mt19937.cpython-314-darwin.so (0) <473AB20C-3C86-3B1D-AB89-BE318AFA3258> /Users/*/Documents/*/_mt19937.cpython-314-darwin.so
+       0x110f5c000 -        0x110f9bfff +_pocketfft_umath.cpython-314-darwin.so (0) <2642F4C9-A4F6-3DF9-9ECC-668BDA2BAC7E> /Users/*/Documents/*/_pocketfft_umath.cpython-314-darwin.so
+       0x110fb0000 -        0x110febff7 +_bounded_integers.cpython-314-darwin.so (0) <2FC523BF-71EC-3A95-BFE5-053DEB74338A> /Users/*/Documents/*/_bounded_integers.cpython-314-darwin.so
+       0x110ffc000 -        0x11101ffff +bit_generator.cpython-314-darwin.so (0) <306704A1-9C88-3E28-B406-CE4DB93E812A> /Users/*/Documents/*/bit_generator.cpython-314-darwin.so
+       0x111030000 -        0x11105bfff +_common.cpython-314-darwin.so (0) <0914C774-44D1-332B-B99D-F9F0CBCCCDDA> /Users/*/Documents/*/_common.cpython-314-darwin.so
+       0x11106c000 -        0x11107bffb +_philox.cpython-314-darwin.so (0) <E8CC4A7A-3160-3EF8-8C89-87F9B51756EB> /Users/*/Documents/*/_philox.cpython-314-darwin.so
+       0x11108c000 -        0x111097ffb +_sfc64.cpython-314-darwin.so (0) <24A0AE32-93EF-3CEB-8FF1-DD3D42DC2553> /Users/*/Documents/*/_sfc64.cpython-314-darwin.so
+       0x1110a4000 -        0x1110acd93 +_psutil_osx.abi3.so (0) <9F38D1A0-1AF2-3062-9683-0E0D0AF4A252> /Users/*/Documents/*/_psutil_osx.abi3.so
+       0x11110c000 -        0x111197fff +_generator.cpython-314-darwin.so (0) <B4B9807C-9834-36CF-97E5-E545A3B90FEB> /Users/*/Documents/*/_generator.cpython-314-darwin.so
+       0x111238000 -        0x1112abffb +mtrand.cpython-314-darwin.so (0) <E080C7BC-0F1D-3837-AD4F-0E1C48892B87> /Users/*/Documents/*/mtrand.cpython-314-darwin.so
+       0x112cc0000 -        0x112cc3ffb +_codecs_iso2022.cpython-314-darwin.so (0) <E752CBB0-365E-35C9-A9E3-56A38630B590> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/_codecs_iso2022.cpython-314-darwin.so
+       0x112cd4000 -        0x112cd945f +pandas_parser.cpython-314-darwin.so (0) <E24386D1-F2D3-322B-99B0-6926A6EF5EFA> /Users/*/Documents/*/pandas_parser.cpython-314-darwin.so
+       0x112ce8000 -        0x112cee8a7 +pandas_datetime.cpython-314-darwin.so (0) <8F2557E8-4107-3CB2-A4BA-1D367EAEA2BA> /Users/*/Documents/*/pandas_datetime.cpython-314-darwin.so
+       0x112cfc000 -        0x112d03b17 +base.cpython-314-darwin.so (0) <7D85FA57-2F4D-37B9-AAA1-31F5AF140BEE> /Users/*/Documents/*/base.cpython-314-darwin.so
+       0x112d18000 -        0x112d23f73 +ccalendar.cpython-314-darwin.so (0) <A36F5350-9971-31A3-8EB3-41B7E5FB264C> /Users/*/Documents/*/ccalendar.cpython-314-darwin.so
+       0x113860000 -        0x11387dc0f +missing.cpython-314-darwin.so (0) <8DE7E47A-8A74-3858-A548-207E8859E77A> /Users/*/Documents/*/missing.cpython-314-darwin.so
+       0x113890000 -        0x1138a82f7 +dtypes.cpython-314-darwin.so (0) <662A8B3E-6625-3BAF-AC8A-E60E8EF7E979> /Users/*/Documents/*/dtypes.cpython-314-darwin.so
+       0x1138bc000 -        0x1138c332f +ops_dispatch.cpython-314-darwin.so (0) <EF628D3E-D6E2-35EB-AE2C-87E8DC6BD3AE> /Users/*/Documents/*/ops_dispatch.cpython-314-darwin.so
+       0x1138d0000 -        0x1138d7ff3 +_csv.cpython-314-darwin.so (0) <5C1DDA3A-AA22-3A17-8CBB-6F402A8182BB> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/_csv.cpython-314-darwin.so
+       0x1138e8000 -        0x113902f67 +_cyutility.cpython-314-darwin.so (0) <A98D43A8-BF62-38ED-82D5-939233E59E5C> /Users/*/Documents/*/_cyutility.cpython-314-darwin.so
+       0x113914000 -        0x11392908b +np_datetime.cpython-314-darwin.so (0) <689A6659-E6B0-3893-BD16-0C3B6F5A0932> /Users/*/Documents/*/np_datetime.cpython-314-darwin.so
+       0x11393c000 -        0x113956127 +conversion.cpython-314-darwin.so (0) <C89964B6-708E-3F46-ACD1-783A77442A38> /Users/*/Documents/*/conversion.cpython-314-darwin.so
+       0x113968000 -        0x113982fdf +timezones.cpython-314-darwin.so (0) <D18F604F-E6D3-3DC5-B57B-2A06ED40653E> /Users/*/Documents/*/timezones.cpython-314-darwin.so
+       0x113994000 -        0x11399bfff +_zoneinfo.cpython-314-darwin.so (0) <2B13200B-B1BF-3C2D-B49B-CDA4372D3A18> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/_zoneinfo.cpython-314-darwin.so
+       0x1139ac000 -        0x1139b6e47 +properties.cpython-314-darwin.so (0) <D540977E-88C8-3A36-9841-16898CEF645B> /Users/*/Documents/*/properties.cpython-314-darwin.so
+       0x1139cc000 -        0x113c77fff +lib.cpython-314-darwin.so (0) <30127B23-D6DF-356B-9189-09D87B6B66FF> /Users/*/Documents/*/lib.cpython-314-darwin.so
+       0x113d44000 -        0x113e67fff +libarrow_python.2400.dylib (0) <925AE4D4-208D-3088-A8F4-4864E6A88072> /Users/*/Documents/*/libarrow_python.2400.dylib
+       0x113f28000 -        0x114067ffb +libarrow_dataset.2400.dylib (0) <39DFD797-3B6D-3C4B-B908-521C58226795> /Users/*/Documents/*/libarrow_dataset.2400.dylib
+       0x1141c8000 -        0x11428221f +interval.cpython-314-darwin.so (0) <58A85268-482F-31BD-8CA6-16B558EF3B62> /Users/*/Documents/*/interval.cpython-314-darwin.so
+       0x1142c4000 -        0x1142e60ef +nattype.cpython-314-darwin.so (0) <6C46FE68-77D2-35E1-A3A9-9F127BDA599B> /Users/*/Documents/*/nattype.cpython-314-darwin.so
+       0x1142f8000 -        0x1143126ef +tzconversion.cpython-314-darwin.so (0) <928E3A75-1DCE-3E94-8B18-E48F0DE96914> /Users/*/Documents/*/tzconversion.cpython-314-darwin.so
+       0x114324000 -        0x114327fff +_zeros.cpython-314-darwin.so (0) <534A3692-C11C-3316-A7A4-97F67ED50F63> /Users/*/Documents/*/_zeros.cpython-314-darwin.so
+       0x114338000 -        0x114392e2f +timestamps.cpython-314-darwin.so (0) <4D26458B-AC1A-3EB8-9BEF-30E58C1EA9B9> /Users/*/Documents/*/timestamps.cpython-314-darwin.so
+       0x1143b8000 -        0x114657fc7 +libarrow_substrait.2400.dylib (0) <F95BD3D1-B528-3425-8D48-7B26D37737B9> /Users/*/Documents/*/libarrow_substrait.2400.dylib
+       0x11484c000 -        0x114973ff7 +libarrow_acero.2400.dylib (0) <3DBEC5FB-DC59-3D6F-97F4-A9A6B3C0BAEC> /Users/*/Documents/*/libarrow_acero.2400.dylib
+       0x114a6c000 -        0x114b2c327 +offsets.cpython-314-darwin.so (0) <96ECFF87-2EAA-36A4-8759-B9F8C4263D36> /Users/*/Documents/*/offsets.cpython-314-darwin.so
+       0x114c64000 -        0x114c84bc7 +fields.cpython-314-darwin.so (0) <A0257C7C-573F-3062-8C84-2D2C8981D38E> /Users/*/Documents/*/fields.cpython-314-darwin.so
+       0x114c9c000 -        0x114cabd67 +vectorized.cpython-314-darwin.so (0) <F82EF401-14C5-334C-BDCF-5161CA4BF143> /Users/*/Documents/*/vectorized.cpython-314-darwin.so
+       0x114cbc000 -        0x114cc3fff +_multibytecodec.cpython-314-darwin.so (0) <EA1E0566-ABB6-3E1B-857D-6EF7BC316143> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/_multibytecodec.cpython-314-darwin.so
+       0x114cdc000 -        0x114f6fff7 +libparquet.2400.dylib (0) <B2DBC668-B763-391F-82B9-ECE7B038ED54> /Users/*/Documents/*/libparquet.2400.dylib
+       0x1155ac000 -        0x11571c2df +hashtable.cpython-314-darwin.so (0) <91CB8986-F537-3240-88FD-6F960CE14CA9> /Users/*/Documents/*/hashtable.cpython-314-darwin.so
+       0x11577c000 -        0x1157cfb7f +timedeltas.cpython-314-darwin.so (0) <CC5ED5B6-F190-3F81-BBB6-F1AEC863295E> /Users/*/Documents/*/timedeltas.cpython-314-darwin.so
+       0x1157ec000 -        0x115815be7 +parsing.cpython-314-darwin.so (0) <D9161B4F-51F5-3B7F-AC74-2A0EF3AB85D7> /Users/*/Documents/*/parsing.cpython-314-darwin.so
+       0x11592c000 -        0x11594e2fb +strptime.cpython-314-darwin.so (0) <DB4C3137-8E96-3E03-95AB-65BBED5E9A19> /Users/*/Documents/*/strptime.cpython-314-darwin.so
+       0x115964000 -        0x11596ebab +hashing.cpython-314-darwin.so (0) <449BD7F0-DD53-3D82-B2AD-1CA64B7964E9> /Users/*/Documents/*/hashing.cpython-314-darwin.so
+       0x115988000 -        0x11599b027 +ops.cpython-314-darwin.so (0) <FFB968D5-AE31-3527-B298-8C980B90BB49> /Users/*/Documents/*/ops.cpython-314-darwin.so
+       0x1159ac000 -        0x1159b3fff +_check_build.cpython-314-darwin.so (0) <41935836-52FD-397B-81F4-46656908B975> /Users/*/Documents/*/_check_build.cpython-314-darwin.so
+       0x1159c0000 -        0x115a01fff +period.cpython-314-darwin.so (0) <C244C474-97D6-3760-B3DB-7338CB59292B> /Users/*/Documents/*/period.cpython-314-darwin.so
+       0x115a1c000 -        0x115a24573 +indexing.cpython-314-darwin.so (0) <6287F1FC-EA75-3ED5-9A8E-90623F50594E> /Users/*/Documents/*/indexing.cpython-314-darwin.so
+       0x115a40000 -        0x115a5149b +arrays.cpython-314-darwin.so (0) <C1F391D0-8BD5-329D-B926-A8BE26B4146B> /Users/*/Documents/*/arrays.cpython-314-darwin.so
+       0x115a64000 -        0x115a72f9f +writers.cpython-314-darwin.so (0) <F38E82CB-7671-33B9-82B9-78CC4B01DF0A> /Users/*/Documents/*/writers.cpython-314-darwin.so
+       0x115a84000 -        0x115a8da47 +json.cpython-314-darwin.so (0) <63EFAB75-71FC-3D64-9344-02124CEF05B1> /Users/*/Documents/*/json.cpython-314-darwin.so
+       0x115aa8000 -        0x115b16417 +lib.cpython-314-darwin.so (0) <E1D660A3-BD4C-30A6-A7C9-50F9FB5A85F7> /Users/*/Documents/*/lib.cpython-314-darwin.so
+       0x115b5c000 -        0x115b72daf +tslib.cpython-314-darwin.so (0) <ECD208E7-9822-31D3-BFA9-B1D36195294B> /Users/*/Documents/*/tslib.cpython-314-darwin.so
+       0x115b84000 -        0x115b93127 +testing.cpython-314-darwin.so (0) <BB60329E-760B-32A4-A680-3A3E6A0544FA> /Users/*/Documents/*/testing.cpython-314-darwin.so
+       0x115ba4000 -        0x115ba7ff3 +_rank_filter_1d.cpython-314-darwin.so (0) <0A7C4F9C-880B-376B-A422-B3A70EC4125B> /Users/*/Documents/*/_rank_filter_1d.cpython-314-darwin.so
+       0x115bb4000 -        0x115d113e7 +algos.cpython-314-darwin.so (0) <46638C80-DA6B-320D-BC9D-EF28B8365C43> /Users/*/Documents/*/algos.cpython-314-darwin.so
+       0x116050000 -        0x116057ffb +_comb.cpython-314-darwin.so (0) <C4F59688-9B6D-327F-8A8F-9F5F3E0C4A1D> /Users/*/Documents/*/_comb.cpython-314-darwin.so
+       0x116064000 -        0x116b07fe7 +libarrow_compute.2400.dylib (0) <270B860A-64D6-3C0E-8EED-09DF85A0F0E2> /Users/*/Documents/*/libarrow_compute.2400.dylib
+       0x117064000 -        0x11706bff7 +_matfuncs_schur_sqrtm.cpython-314-darwin.so (0) <0C633E53-29F2-3057-B09F-847AC444D5AD> /Users/*/Documents/*/_matfuncs_schur_sqrtm.cpython-314-darwin.so
+       0x11707c000 -        0x11712bfff +_compute.cpython-314-darwin.so (0) <EE45488B-46A9-307F-974B-C573C70B0360> /Users/*/Documents/*/_compute.cpython-314-darwin.so
+       0x117398000 -        0x1173b205b +reshape.cpython-314-darwin.so (0) <3A59DD53-B9BF-3783-B587-EB31CFE08CA7> /Users/*/Documents/*/reshape.cpython-314-darwin.so
+       0x1173c4000 -        0x1173cbdbf +_http_writer.cpython-314-darwin.so (0) <7F25E938-6D78-338C-AC0A-B6F2D1A63BF0> /Users/*/Documents/*/_http_writer.cpython-314-darwin.so
+       0x1173e0000 -        0x11740d68f +internals.cpython-314-darwin.so (0) <BBEB9CDE-0826-3AE4-8CD5-0641EFAE600A> /Users/*/Documents/*/internals.cpython-314-darwin.so
+       0x117428000 -        0x11742d907 +mask.cpython-314-darwin.so (0) <AFB9C000-788D-3493-9319-C4C18DA12F1E> /Users/*/Documents/*/mask.cpython-314-darwin.so
+       0x11744c000 -        0x1174db2af +sparse.cpython-314-darwin.so (0) <6458B4F5-695D-331A-9ECC-A0E8F764DA3E> /Users/*/Documents/*/sparse.cpython-314-darwin.so
+       0x117700000 -        0x11771d44b +indexers.cpython-314-darwin.so (0) <9FEACAF0-4794-399A-ACCF-852AF93C54B2> /Users/*/Documents/*/indexers.cpython-314-darwin.so
+       0x117734000 -        0x11776fff7 +81d243bd2c585b0f4821__mypyc.cpython-314-darwin.so (0) <C8C56CF5-55E8-3C9D-A21E-1DE0CF4F1E3F> /Users/*/Documents/*/81d243bd2c585b0f4821__mypyc.cpython-314-darwin.so
+       0x117790000 -        0x117797fff +_lbfgsb.cpython-314-darwin.so (0) <87649805-83A9-33ED-BC32-D07E55AD8FD7> /Users/*/Documents/*/_lbfgsb.cpython-314-darwin.so
+       0x1177ac000 -        0x11782bd1f +index.cpython-314-darwin.so (0) <91613C81-C48A-32C6-B860-FC660920BC82> /Users/*/Documents/*/index.cpython-314-darwin.so
+       0x117858000 -        0x11789b087 +aggregations.cpython-314-darwin.so (0) <65496F76-8037-3CD1-845D-E8A02C9B1089> /Users/*/Documents/*/aggregations.cpython-314-darwin.so
+       0x1178b4000 -        0x1178fba4f +parsers.cpython-314-darwin.so (0) <794F46D1-6DB7-337F-AA31-38E14048E0A7> /Users/*/Documents/*/parsers.cpython-314-darwin.so
+       0x117914000 -        0x11792bffb +_codecs_tw.cpython-314-darwin.so (0) <B79D0F62-AA69-3A73-85D9-0A49B05BFCE2> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/_codecs_tw.cpython-314-darwin.so
+       0x117948000 -        0x117a0d837 +join.cpython-314-darwin.so (0) <8F4B9B31-9E4A-3CB2-A213-89002715E6B0> /Users/*/Documents/*/join.cpython-314-darwin.so
+       0x117e38000 -        0x117e67ff3 +_codecs_jp.cpython-314-darwin.so (0) <C3DC4687-56A6-35E2-A8FF-DE514B8518CF> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/_codecs_jp.cpython-314-darwin.so
+       0x117e84000 -        0x117e8bfff +_slsqplib.cpython-314-darwin.so (0) <13DE3FA8-60BD-3226-A2B1-86ED37C1B0D5> /Users/*/Documents/*/_slsqplib.cpython-314-darwin.so
+       0x117e98000 -        0x117eb7ff7 +_codecs_hk.cpython-314-darwin.so (0) <9BEC7807-F5CA-3099-BBC4-3504774D11BC> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/_codecs_hk.cpython-314-darwin.so
+       0x117ec8000 -        0x117ed6447 +_multidict.cpython-314-darwin.so (0) <BB177D05-A39D-3D07-A532-CEE4BBD9BDB7> /Users/*/Documents/*/_multidict.cpython-314-darwin.so
+       0x117ee8000 -        0x117ef90e7 +_quoting_c.cpython-314-darwin.so (0) <009D2B7B-0490-3F8B-87ED-59F8E2503C0F> /Users/*/Documents/*/_quoting_c.cpython-314-darwin.so
+       0x117f08000 -        0x117f17ff3 +_ellip_harm_2.cpython-314-darwin.so (0) <CAEEFB60-0351-3E21-9351-5F2705D72282> /Users/*/Documents/*/_ellip_harm_2.cpython-314-darwin.so
+       0x117f24000 -        0x117f27fff +_heap.cpython-314-darwin.so (0) <B08FA84C-EEF1-31CF-B156-FC5B97A9BC89> /Users/*/Documents/*/_heap.cpython-314-darwin.so
+       0x117f34000 -        0x1180e84ef +groupby.cpython-314-darwin.so (0) <4A247AE2-3F6F-3EF0-BF73-AAAF87E93DB6> /Users/*/Documents/*/groupby.cpython-314-darwin.so
+       0x118634000 -        0x11864fff7 +_codecs_kr.cpython-314-darwin.so (0) <837F9C1A-CE2E-3217-BC5D-F366A11FF544> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/_codecs_kr.cpython-314-darwin.so
+       0x118660000 -        0x11867bff7 +_codecs_cn.cpython-314-darwin.so (0) <E17781C5-328D-37B0-A7DA-44868C3528DE> /Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/lib-dynload/_codecs_cn.cpython-314-darwin.so
+       0x118a90000 -        0x118aa6e17 +_helpers_c.cpython-314-darwin.so (0) <4A317DD0-811D-3DBA-B5DB-80B90380CF1B> /Users/*/Documents/*/_helpers_c.cpython-314-darwin.so
+       0x118bb8000 -        0x118bc5393 +_frozenlist.cpython-314-darwin.so (0) <F123B9DB-39D4-39A7-BFA9-3FE5D37630E9> /Users/*/Documents/*/_frozenlist.cpython-314-darwin.so
+       0x118bdc000 -        0x118bebffb +_ccallback_c.cpython-314-darwin.so (0) <062F4941-45B7-3266-8DCE-B8FD403D9121> /Users/*/Documents/*/_ccallback_c.cpython-314-darwin.so
+       0x118bfc000 -        0x118c17ffb +_cyutility.cpython-314-darwin.so (0) <95F0AFCD-7D13-35EC-A010-40FEA180DBEC> /Users/*/Documents/*/_cyutility.cpython-314-darwin.so
+       0x118c2c000 -        0x118c78277 +_http_parser.cpython-314-darwin.so (0) <BA98694A-C9E3-31BF-97AA-F1BB551664CE> /Users/*/Documents/*/_http_parser.cpython-314-darwin.so
+       0x118ca0000 -        0x118cc1e63 +reader_c.cpython-314-darwin.so (0) <54EFFD5F-633B-33A0-B40B-6573CD9F6513> /Users/*/Documents/*/reader_c.cpython-314-darwin.so
+       0x1192e0000 -        0x1192efff3 +_decomp_lu_cython.cpython-314-darwin.so (0) <EC3D94D4-8C29-3153-BF8A-561FDA1F61E8> /Users/*/Documents/*/_decomp_lu_cython.cpython-314-darwin.so
+       0x1192fc000 -        0x119303ffb +givens_elimination.cpython-314-darwin.so (0) <3F52D911-C6EA-34A2-92DF-A2BE0251551C> /Users/*/Documents/*/givens_elimination.cpython-314-darwin.so
+       0x119310000 -        0x11932ffff +_specfun.cpython-314-darwin.so (0) <05AF129E-4845-3643-8926-801912B72757> /Users/*/Documents/*/_specfun.cpython-314-darwin.so
+       0x119348000 -        0x11939fff3 +_csparsetools.cpython-314-darwin.so (0) <FD15E231-3879-3595-8404-EC9D03F0B2A2> /Users/*/Documents/*/_csparsetools.cpython-314-darwin.so
+       0x1193b0000 -        0x1193bfffb +_solve_toeplitz.cpython-314-darwin.so (0) <8EC64697-9214-3BA7-90BC-D2A218DF4ECB> /Users/*/Documents/*/_solve_toeplitz.cpython-314-darwin.so
+       0x1193dc000 -        0x11978ca37 +_pydantic_core.cpython-314-darwin.so (0) <CD899DE6-EA55-3224-A82A-C93F78C16BB9> /Users/*/Documents/*/_pydantic_core.cpython-314-darwin.so
+       0x119ad8000 -        0x119aebfff +_batched_linalg.cpython-314-darwin.so (0) <61C4EEF1-6601-352C-81E7-5EFCE0C35668> /Users/*/Documents/*/_batched_linalg.cpython-314-darwin.so
+       0x119af8000 -        0x119afbfff +_sorting.cpython-314-darwin.so (0) <A3E2A1D1-9159-31AC-B213-D5491C07A361> /Users/*/Documents/*/_sorting.cpython-314-darwin.so
+       0x119b08000 -        0x11b6f7e4f +libarrow.2400.dylib (0) <1733C8DF-F104-3D3C-957C-FEEB63AA0553> /Users/*/Documents/*/libarrow.2400.dylib
+       0x11c6c0000 -        0x11c6cffff +_matfuncs_expm.cpython-314-darwin.so (0) <C3D4D2FB-94DF-351B-BB01-4092788E33EC> /Users/*/Documents/*/_matfuncs_expm.cpython-314-darwin.so
+       0x11c6dc000 -        0x11c6e7fff +messagestream.cpython-314-darwin.so (0) <CA9F8905-F4D7-3C1F-81A3-6CC30FC0639E> /Users/*/Documents/*/messagestream.cpython-314-darwin.so
+       0x11c6f4000 -        0x11c6ffff7 +_voronoi.cpython-314-darwin.so (0) <23EED5D8-DCAD-3296-A680-3881A6EB5FDD> /Users/*/Documents/*/_voronoi.cpython-314-darwin.so
+       0x11c718000 -        0x126e3075f +libtorch_cpu.dylib (0) <F9727E80-5302-3F36-A023-8D0BFB86C75C> /Users/*/Documents/*/libtorch_cpu.dylib
+       0x12b840000 -        0x12b873fff +_cythonized_array_utils.cpython-314-darwin.so (0) <8B5CEDAB-6FD8-32A9-9283-B24B7C188EB1> /Users/*/Documents/*/_cythonized_array_utils.cpython-314-darwin.so
+       0x12b884000 -        0x12b89bfff +_linalg_pythran.cpython-314-darwin.so (0) <10029AC3-28B0-3851-9919-B51EE49C8FAC> /Users/*/Documents/*/_linalg_pythran.cpython-314-darwin.so
+       0x12b8a8000 -        0x12b8b7ffb +cython_blas.cpython-314-darwin.so (0) <C233C6B0-7B48-3DFE-8C97-F65612556F38> /Users/*/Documents/*/cython_blas.cpython-314-darwin.so
+       0x12b8cc000 -        0x12b8d7fff +_hausdorff.cpython-314-darwin.so (0) <D66FBC6A-84B7-3747-9BCC-9E37EF5D8EB4> /Users/*/Documents/*/_hausdorff.cpython-314-darwin.so
+       0x12b8ec000 -        0x12b983fff +_ufuncs.cpython-314-darwin.so (0) <2CEC5243-CF5C-33F8-92B4-F3B43711A624> /Users/*/Documents/*/_ufuncs.cpython-314-darwin.so
+       0x12b99c000 -        0x12b9a7ff7 +_group_columns.cpython-314-darwin.so (0) <8336D03C-08F2-334E-BE17-65997C0A2D77> /Users/*/Documents/*/_group_columns.cpython-314-darwin.so
+       0x12b9b4000 -        0x12bcb3ff7 +_sparsetools.cpython-314-darwin.so (0) <38C6C6E1-FEEA-3D23-89FE-1164028C0AD3> /Users/*/Documents/*/_sparsetools.cpython-314-darwin.so
+       0x12bd28000 -        0x12bd83ff3 +_gufuncs.cpython-314-darwin.so (0) <5C29E2F1-626D-322A-BE2A-5945C213BB5F> /Users/*/Documents/*/_gufuncs.cpython-314-darwin.so
+       0x12bdc4000 -        0x12be13ffa +_fblas.cpython-314-darwin.so (0) <D3231E61-DF4A-3937-A7CF-A20DAC821E69> /Users/*/Documents/*/_fblas.cpython-314-darwin.so
+       0x12be4c000 -        0x12be63fff +_propack.cpython-314-darwin.so (0) <869AA062-007E-345D-9093-8CFB7776DA08> /Users/*/Documents/*/_propack.cpython-314-darwin.so
+       0x12be74000 -        0x12bf63fff +_ufuncs_cxx.cpython-314-darwin.so (0) <D333DA2E-21C2-3F8D-8F4C-3657C5CFF447> /Users/*/Documents/*/_ufuncs_cxx.cpython-314-darwin.so
+       0x12bfc0000 -        0x12c0a7ffb +_special_ufuncs.cpython-314-darwin.so (0) <29D69CB3-2495-3F17-A075-6DD56A4E4CE3> /Users/*/Documents/*/_special_ufuncs.cpython-314-darwin.so
+       0x12c2d8000 -        0x12c2f7ffb +cython_lapack.cpython-314-darwin.so (0) <EB9F6A20-D0D9-3E14-A44C-40D69273D5CD> /Users/*/Documents/*/cython_lapack.cpython-314-darwin.so
+       0x12c334000 -        0x12c363fff +_decomp_update.cpython-314-darwin.so (0) <AC040991-7CBD-32BE-8F2B-BF7BCFE4FCAA> /Users/*/Documents/*/_decomp_update.cpython-314-darwin.so
+       0x12c3a4000 -        0x12c3c3ffb +_arpacklib.cpython-314-darwin.so (0) <ED27F061-EFDF-3D45-BD3B-C39B00DBAE57> /Users/*/Documents/*/_arpacklib.cpython-314-darwin.so
+       0x12c3d0000 -        0x12c3dfff7 +_distance_wrap.cpython-314-darwin.so (0) <EBC92B45-3D10-36A9-BBA4-34E57B6D6D4D> /Users/*/Documents/*/_distance_wrap.cpython-314-darwin.so
+       0x12c430000 -        0x12c467ff7 +_superlu.cpython-314-darwin.so (0) <20F3270A-321E-30CC-950E-A954F14AC86E> /Users/*/Documents/*/_superlu.cpython-314-darwin.so
+       0x12c4a4000 -        0x12c5b3fff +_flapack.cpython-314-darwin.so (0) <CCF2A833-6693-31C6-80B7-A92A7EFF1C16> /Users/*/Documents/*/_flapack.cpython-314-darwin.so
+       0x12c770000 -        0x12c787ff7 +_moduleTNC.cpython-314-darwin.so (0) <5012C447-C309-36A0-B495-51613F6B68FD> /Users/*/Documents/*/_moduleTNC.cpython-314-darwin.so
+       0x12c7b4000 -        0x12c7c3ff7 +_minpack.cpython-314-darwin.so (0) <9F89C1C4-27A4-34D7-8A35-D05CA6DC1CF5> /Users/*/Documents/*/_minpack.cpython-314-darwin.so
+       0x12c7f8000 -        0x12c807ff3 +_uarray.cpython-314-darwin.so (0) <D6831BA5-3749-38B7-B8CE-BC97557C2F05> /Users/*/Documents/*/_uarray.cpython-314-darwin.so
+       0x12c818000 -        0x12c81fff3 +_lsap.cpython-314-darwin.so (0) <76AC2F4D-1272-3616-A1D3-AE256B7CFC19> /Users/*/Documents/*/_lsap.cpython-314-darwin.so
+       0x12c82c000 -        0x12c833ff7 +_direct.cpython-314-darwin.so (0) <154662B1-91AD-35E0-85F7-7BC031666AE4> /Users/*/Documents/*/_direct.cpython-314-darwin.so
+       0x12c880000 -        0x12c88bff7 +_odepack.cpython-314-darwin.so (0) <74B8DADF-B90E-3BD8-B6FC-DDCEDDD75015> /Users/*/Documents/*/_odepack.cpython-314-darwin.so
+       0x12c8c4000 -        0x12c8d3fff +_quadpack.cpython-314-darwin.so (0) <02A80188-8BB5-3E4E-A41B-5AE250EFEB7F> /Users/*/Documents/*/_quadpack.cpython-314-darwin.so
+       0x12c908000 -        0x12c92ffff +_rigid_transform_cy.cpython-314-darwin.so (0) <689CE0A7-EC7C-367B-8C2F-EA756928F008> /Users/*/Documents/*/_rigid_transform_cy.cpython-314-darwin.so
+       0x12c970000 -        0x12c983fff +_vode.cpython-314-darwin.so (0) <E01A389F-5D73-3AC5-BE79-AD46C7EBEF2D> /Users/*/Documents/*/_vode.cpython-314-darwin.so
+       0x12c9b4000 -        0x12c9d3ffb +_trlib.cpython-314-darwin.so (0) <5AB9225B-DF53-30C8-90DA-16BE7B127342> /Users/*/Documents/*/_trlib.cpython-314-darwin.so
+       0x12c9e4000 -        0x12c9effff +_dop.cpython-314-darwin.so (0) <1983EE06-8DF4-307D-924E-7F263770B3BB> /Users/*/Documents/*/_dop.cpython-314-darwin.so
+       0x12ca1c000 -        0x12ca2bfff +_fitpack.cpython-314-darwin.so (0) <0B511DA4-CFF2-312F-BD1B-E56DF3F2093C> /Users/*/Documents/*/_fitpack.cpython-314-darwin.so
+       0x12ca60000 -        0x12ca6fff7 +_dierckx.cpython-314-darwin.so (0) <9BA5AF2B-643D-3D6E-A5B6-530E034849CA> /Users/*/Documents/*/_dierckx.cpython-314-darwin.so
+       0x12cc24000 -        0x12cc8bff3 +_ckdtree.cpython-314-darwin.so (0) <205B47A1-A600-32E4-B63D-5F85E7D4B7AA> /Users/*/Documents/*/_ckdtree.cpython-314-darwin.so
+       0x12cca4000 -        0x12ccb3ffb +_rgi_cython.cpython-314-darwin.so (0) <94F8D921-3447-3165-8E52-11017966850D> /Users/*/Documents/*/_rgi_cython.cpython-314-darwin.so
+       0x12ccc4000 -        0x12cccbffb +levyst.cpython-314-darwin.so (0) <0673C06F-5EBD-3A2A-A247-241CC235049D> /Users/*/Documents/*/levyst.cpython-314-darwin.so
+       0x12cd2c000 -        0x12cd47fff +_bglu_dense.cpython-314-darwin.so (0) <1A17B517-BEB8-34A0-8AC3-34EED11731C7> /Users/*/Documents/*/_bglu_dense.cpython-314-darwin.so
+       0x12cd5c000 -        0x12cdfbff7 +_qhull.cpython-314-darwin.so (0) <A7758D60-4D41-37AA-9EEA-972CAD611F97> /Users/*/Documents/*/_qhull.cpython-314-darwin.so
+       0x12ce34000 -        0x12ce53ffb +_pava_pybind.cpython-314-darwin.so (0) <91DA9079-8A3E-3F18-A603-71B2CAD2B640> /Users/*/Documents/*/_pava_pybind.cpython-314-darwin.so
+       0x12cea0000 -        0x12cf07ff7 +_distance_pybind.cpython-314-darwin.so (0) <F5F4FBB2-776A-3545-AA1E-767128D8C159> /Users/*/Documents/*/_distance_pybind.cpython-314-darwin.so
+       0x12cf2c000 -        0x12cf7fff3 +_rotation_cy.cpython-314-darwin.so (0) <B5237F1E-C686-37FC-A3EB-4701F85F0E26> /Users/*/Documents/*/_rotation_cy.cpython-314-darwin.so
+       0x12d090000 -        0x12d09ffff +libgcc_s.1.1.dylib (0) <CC460BEA-9872-3F83-8668-C69259E63B43> /Users/*/Documents/*/libgcc_s.1.1.dylib
+       0x12d0bc000 -        0x12d0cbfff +_ansari_swilk_statistics.cpython-314-darwin.so (0) <69A6C67C-3DA7-377F-B95F-7EE77F6EAA19> /Users/*/Documents/*/_ansari_swilk_statistics.cpython-314-darwin.so
+       0x12d118000 -        0x12d13bfff +_ppoly.cpython-314-darwin.so (0) <3C16992A-4767-3AF0-8184-2909DCCFD2BB> /Users/*/Documents/*/_ppoly.cpython-314-darwin.so
+       0x12d1a0000 -        0x12d1afffb +_min_spanning_tree.cpython-314-darwin.so (0) <28204D5D-6773-3B80-9A23-EE6BE2F2E453> /Users/*/Documents/*/_min_spanning_tree.cpython-314-darwin.so
+       0x12d1e4000 -        0x12d1f3ffb +_qmc_cy.cpython-314-darwin.so (0) <32A5B628-1EC3-3659-9748-622C68923F95> /Users/*/Documents/*/_qmc_cy.cpython-314-darwin.so
+       0x12d3ec000 -        0x12d3f7fff +rcont.cpython-314-darwin.so (0) <C7F3475A-3E0B-3F89-A77F-668254937A4E> /Users/*/Documents/*/rcont.cpython-314-darwin.so
+       0x12d430000 -        0x12d473ffb +_highs_options.cpython-314-darwin.so (0) <74721342-0197-37E3-8C89-D02D406A8558> /Users/*/Documents/*/_highs_options.cpython-314-darwin.so
+       0x12d4b4000 -        0x12d4c7fff +_qmvnt_cy.cpython-314-darwin.so (0) <051EC14F-A475-3D87-A4A8-612596FC51BA> /Users/*/Documents/*/_qmvnt_cy.cpython-314-darwin.so
+       0x12d4f8000 -        0x12d503fff +_isfinite.cpython-314-darwin.so (0) <AEB6528B-A82C-3358-B966-6DB122D5A359> /Users/*/Documents/*/_isfinite.cpython-314-darwin.so
+       0x12d520000 -        0x12d59bff3 +_decomp_interpolative.cpython-314-darwin.so (0) <3F3B6BCA-31C3-330F-B850-EF917C12DA7C> /Users/*/Documents/*/_decomp_interpolative.cpython-314-darwin.so
+       0x12d5cc000 -        0x12d5f3fff +_interpnd.cpython-314-darwin.so (0) <F2C650CE-3B31-3EAE-BE5A-F46340670039> /Users/*/Documents/*/_interpnd.cpython-314-darwin.so
+       0x12d654000 -        0x12d66bff3 +_biasedurn.cpython-314-darwin.so (0) <DA6AF4C0-7A6B-3978-BDF2-59341621AFFD> /Users/*/Documents/*/_biasedurn.cpython-314-darwin.so
+       0x12d694000 -        0x12d73bfff +pypocketfft.cpython-314-darwin.so (0) <D697993E-176B-3B85-B25A-B42449A32E3E> /Users/*/Documents/*/pypocketfft.cpython-314-darwin.so
+       0x12d8b0000 -        0x12dc87ff7 +_core.cpython-314-darwin.so (0) <C74BB9EC-B24A-37BC-AA94-F177601D5823> /Users/*/Documents/*/_core.cpython-314-darwin.so
+       0x12ddcc000 -        0x12dde3ff3 +_reordering.cpython-314-darwin.so (0) <AB12E7E1-A6F6-39C2-8E6A-017763F6CF20> /Users/*/Documents/*/_reordering.cpython-314-darwin.so
+       0x12ddfc000 -        0x12de1bfff +_stats_pythran.cpython-314-darwin.so (0) <A9E2A60A-526E-3B90-94B4-BFB01DF47CD3> /Users/*/Documents/*/_stats_pythran.cpython-314-darwin.so
+       0x12de78000 -        0x12de87ffb +murmurhash.cpython-314-darwin.so (0) <93B47BA5-DA69-35D9-8827-4BF3536E1BBD> /Users/*/Documents/*/murmurhash.cpython-314-darwin.so
+       0x12e0bc000 -        0x12e0fbfff +libquadmath.0.dylib (0) <13842585-89B5-3A2B-9482-99F7B4DDE5BD> /Users/*/Documents/*/libquadmath.0.dylib
+       0x12e118000 -        0x12e14ffff +_dfitpack.cpython-314-darwin.so (0) <39091CA8-5FD3-38B7-9CA9-26392DF3C30C> /Users/*/Documents/*/_dfitpack.cpython-314-darwin.so
+       0x12e168000 -        0x12e1a3ff7 +_rbfinterp_pythran.cpython-314-darwin.so (0) <91BEAD57-7063-3F84-BAA4-5CAC268D89EF> /Users/*/Documents/*/_rbfinterp_pythran.cpython-314-darwin.so
+       0x12e1e8000 -        0x12e23bffb +_stats.cpython-314-darwin.so (0) <5D3F9263-0EE6-37B5-A041-9FBC8269E6DD> /Users/*/Documents/*/_stats.cpython-314-darwin.so
+       0x12e274000 -        0x12e27fffb +_openmp_helpers.cpython-314-darwin.so (0) <3976E5B1-14A5-36BF-9912-B1EE12D0F708> /Users/*/Documents/*/_openmp_helpers.cpython-314-darwin.so
+       0x12e290000 -        0x12e3e3fff +libgfortran.5.dylib (0) <18BCCF8F-B816-387F-BAAB-97018C5046CB> /Users/*/Documents/*/libgfortran.5.dylib
+       0x12e484000 -        0x12e48ffff +_expected_mutual_info_fast.cpython-314-darwin.so (0) <DA595EAE-DDA8-30FA-BE6D-F72A7C5B4817> /Users/*/Documents/*/_expected_mutual_info_fast.cpython-314-darwin.so
+       0x12e4c8000 -        0x12e4e3ff3 +_tools.cpython-314-darwin.so (0) <5952C35D-BF25-382D-A87B-B189DCADD2DF> /Users/*/Documents/*/_tools.cpython-314-darwin.so
+       0x12e4f4000 -        0x12e50ffff +_flow.cpython-314-darwin.so (0) <904A614C-22D0-3F14-9DDC-B13E93A5FC67> /Users/*/Documents/*/_flow.cpython-314-darwin.so
+       0x12e554000 -        0x12e56ffff +_matching.cpython-314-darwin.so (0) <6E269062-E80B-3195-BA10-2A5BE672773D> /Users/*/Documents/*/_matching.cpython-314-darwin.so
+       0x12e5dc000 -        0x12e623ff7 +_shortest_path.cpython-314-darwin.so (0) <A836B74B-742B-34D4-AAB7-51E9167467F1> /Users/*/Documents/*/_shortest_path.cpython-314-darwin.so
+       0x12e788000 -        0x12e7bfffb +_traversal.cpython-314-darwin.so (0) <0034A423-98AB-3798-A605-8F42CEB2779A> /Users/*/Documents/*/_traversal.cpython-314-darwin.so
+       0x12e7f0000 -        0x12e803fff +_vector_sentinel.cpython-314-darwin.so (0) <330E4196-3D78-3F0C-8246-6D9AE8AAB6B0> /Users/*/Documents/*/_vector_sentinel.cpython-314-darwin.so
+       0x12e814000 -        0x12e98bfff +cython_special.cpython-314-darwin.so (0) <DD6D3A7F-905C-3A18-A28F-ECB686B273E8> /Users/*/Documents/*/cython_special.cpython-314-darwin.so
+       0x12ec68000 -        0x12ec83ffb +_nd_image.cpython-314-darwin.so (0) <BA995DC1-864E-32B4-ACC0-994DBD208343> /Users/*/Documents/*/_nd_image.cpython-314-darwin.so
+       0x12ec98000 -        0x12ecb7fff +_sobol.cpython-314-darwin.so (0) <4200086A-5900-354A-841D-97D5C11FC28B> /Users/*/Documents/*/_sobol.cpython-314-darwin.so
+       0x12ed38000 -        0x12ed53ffb +_cyutility.cpython-314-darwin.so (0) <383BEBFA-C883-36D0-BCB8-71A2E3544891> /Users/*/Documents/*/_cyutility.cpython-314-darwin.so
+       0x12ed68000 -        0x12ed87ff7 +_ni_label.cpython-314-darwin.so (0) <024C8439-223C-3E20-BD9A-CE5677D89BF3> /Users/*/Documents/*/_ni_label.cpython-314-darwin.so
+       0x12ee08000 -        0x12ee1bfff +_argkmin_classmode.cpython-314-darwin.so (0) <B9E02BC5-803E-3F26-A48A-60BFC625349D> /Users/*/Documents/*/_argkmin_classmode.cpython-314-darwin.so
+       0x12ee70000 -        0x12ee8ffff +_argkmin.cpython-314-darwin.so (0) <AA9ECE76-0AC0-3FDE-AC0C-0EE1F5AFAFC1> /Users/*/Documents/*/_argkmin.cpython-314-darwin.so
+       0x12ef1c000 -        0x12ef37ffb +_base.cpython-314-darwin.so (0) <7F90EA28-2613-3E83-B686-C8C7901D17F9> /Users/*/Documents/*/_base.cpython-314-darwin.so
+       0x12ef50000 -        0x12ef73fff +_cython_blas.cpython-314-darwin.so (0) <0FA374A9-A7EF-38E5-AE46-716FFBF50A7D> /Users/*/Documents/*/_cython_blas.cpython-314-darwin.so
+       0x12f2d8000 -        0x12f307fff +_datasets_pair.cpython-314-darwin.so (0) <66C522B1-21F6-38B2-8149-8B84FBE7DB5A> /Users/*/Documents/*/_datasets_pair.cpython-314-darwin.so
+       0x12f31c000 -        0x12f32fffb +_pairwise_fast.cpython-314-darwin.so (0) <7D77C699-FDCB-31E7-A445-61722F4A597D> /Users/*/Documents/*/_pairwise_fast.cpython-314-darwin.so
+       0x12f474000 -        0x12f4ebffb +sparsefuncs_fast.cpython-314-darwin.so (0) <B95A0EAC-0DCF-3644-B32E-C133A0711E15> /Users/*/Documents/*/sparsefuncs_fast.cpython-314-darwin.so
+       0x12f640000 -        0x12f657fff +_radius_neighbors_classmode.cpython-314-darwin.so (0) <A37E5655-8E5C-3B0D-B4AE-6B8BB6DF4508> /Users/*/Documents/*/_radius_neighbors_classmode.cpython-314-darwin.so
+       0x12f6a4000 -        0x12f717ff7 +libomp.dylib (0) <E3A31AB3-3AE5-3371-87D0-7FD870A41A0D> /Users/*/Documents/*/libomp.dylib
+       0x12f770000 -        0x12f793ff3 +_radius_neighbors.cpython-314-darwin.so (0) <3B915597-8B62-34BA-B932-A2A9E3C8806D> /Users/*/Documents/*/_radius_neighbors.cpython-314-darwin.so
+       0x12f7c8000 -        0x12f823fff +_dist_metrics.cpython-314-darwin.so (0) <A004A568-DB42-31F3-A4C7-D1174828800D> /Users/*/Documents/*/_dist_metrics.cpython-314-darwin.so
+       0x12f8ec000 -        0x12f91ffff +_middle_term_computer.cpython-314-darwin.so (0) <BE4F2ACD-3B0C-3732-90C7-8E0C5E1F3571> /Users/*/Documents/*/_middle_term_computer.cpython-314-darwin.so
+       0x12f9e0000 -        0x12fa0bffb +_csr_polynomial_expansion.cpython-314-darwin.so (0) <09652040-E0B2-3CC0-BB28-B1B93E76ED57> /Users/*/Documents/*/_csr_polynomial_expansion.cpython-314-darwin.so
+       0x12fab8000 -        0x12faf3fff +_target_encoder_fast.cpython-314-darwin.so (0) <DBF9AEA1-48AC-3419-AE68-7B7011D1CF23> /Users/*/Documents/*/_target_encoder_fast.cpython-314-darwin.so
+       0x133f04000 -        0x1346c699f  com.apple.AGXMetalG14X (345.20.4 - 345.20.4) <40ABE912-A137-38EE-93FE-79141A0786AE> /System/Library/Extensions/AGXMetalG14X.bundle/Contents/MacOS/AGXMetalG14X
+       0x185bac000 -        0x185bff4bb  libobjc.A.dylib (951.1) <9E66CFF2-3EBD-3242-8166-D5D0C204755B> /usr/lib/libobjc.A.dylib
+       0x185c00000 -        0x185c30bcb  libdyld.dylib (1340) <D0CBB392-9301-3174-8904-D869F1D973CF> /usr/lib/system/libdyld.dylib
+       0x185c31000 -        0x185cd0713  dyld (1.0.0 - 1340) <044CD67E-3A0A-3CA4-8BB3-A9687D5328FE> /usr/lib/dyld
+       0x185cd1000 -        0x185cd41d0  libsystem_blocks.dylib (96) <F1D9FC62-B5CE-3FB6-B264-B1933396C05F> /usr/lib/system/libsystem_blocks.dylib
+       0x185cd5000 -        0x185d2a07f  libxpc.dylib (3089.80.10) <3B264F68-2825-3790-8796-4B49581D6425> /usr/lib/system/libxpc.dylib
+       0x185d2b000 -        0x185d4b95f  libsystem_trace.dylib (1815.80.2) <2CE5667A-97C5-35F3-8124-BB48185D0D3D> /usr/lib/system/libsystem_trace.dylib
+       0x185d4c000 -        0x185df8ccf  libcorecrypto.dylib (1922.80.7) <A6FB5220-05F1-36A3-93CA-E45F15C98D3A> /usr/lib/system/libcorecrypto.dylib
+       0x185df9000 -        0x185e44c67  libsystem_malloc.dylib (792.80.2) <102061AD-AC62-30E9-A960-0CC2E38A2D5D> /usr/lib/system/libsystem_malloc.dylib
+       0x185e45000 -        0x185e8be5f  libdispatch.dylib (1542.0.4) <4C58AB31-F363-3E75-A8F8-302105812DBF> /usr/lib/system/libdispatch.dylib
+       0x185e8c000 -        0x185e8efeb  libsystem_featureflags.dylib (101) <36BE75BA-0B53-3ACA-ABAF-C639D711C90B> /usr/lib/system/libsystem_featureflags.dylib
+       0x185e8f000 -        0x185f11047  libsystem_c.dylib (1725.40.4) <EB569350-0696-3397-838E-0344948107C0> /usr/lib/system/libsystem_c.dylib
+       0x185f12000 -        0x185fa4ea3  libc++.1.dylib (2000.67) <652836CA-32B1-3388-A72A-D6B90DDDA958> /usr/lib/libc++.1.dylib
+       0x185fa5000 -        0x185fbf92f  libc++abi.dylib (2000.67) <580BCE60-F6A6-3764-BFE9-57A0DB800C54> /usr/lib/libc++abi.dylib
+       0x185fc0000 -        0x185ffc49f  libsystem_kernel.dylib (12377.91.3) <78EC33A6-6330-3836-8900-EB90836936E8> /usr/lib/system/libsystem_kernel.dylib
+       0x185ffd000 -        0x186009acb  libsystem_pthread.dylib (539.80.3) <0596A7B6-BCE2-3F06-A2E8-3EAAB5371ED8> /usr/lib/system/libsystem_pthread.dylib
+       0x18600a000 -        0x1860124af  libsystem_platform.dylib (359.80.2) <62C9CD37-272D-3D2D-9A1C-6F4EF24F7EC7> /usr/lib/system/libsystem_platform.dylib
+       0x186013000 -        0x186042e23  libsystem_info.dylib (600) <05CCB208-0B54-38D8-B736-6C7043F446AA> /usr/lib/system/libsystem_info.dylib
+       0x186043000 -        0x18658c2bf  com.apple.CoreFoundation (6.9 - 4302) <646518BB-A6E8-3DA7-AB32-9D97BCBDC25D> /System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation
+       0x18658d000 -        0x1868a87bf  com.apple.LaunchServices (1141.1 - 1141.1) <F97A8838-1235-37F9-984E-5685FBBFB23B> /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/LaunchServices
+       0x1868a9000 -        0x186a8cd3f  com.apple.gpusw.MetalTools (1.0 - 1) <15A3C78C-DDC1-3B6B-82C6-A2066EEEBEDD> /System/Library/PrivateFrameworks/MetalTools.framework/Versions/A/MetalTools
+       0x186a8d000 -        0x18726c13f  libBLAS.dylib (1545.81.3) <564BF0A2-5703-303C-8C04-C7192B02F86D> /System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A/libBLAS.dylib
+       0x18726d000 -        0x187381adf  com.apple.Lexicon-framework (1.0 - 195.1.5) <6FAB22BC-822D-3CFC-88FA-6AB1FDA096E4> /System/Library/PrivateFrameworks/Lexicon.framework/Versions/A/Lexicon
+       0x187382000 -        0x1874f4237  libSparse.dylib (184.80.2) <540DC1AE-7285-3272-9F22-7095E8ED1899> /System/Library/Frameworks/Accelerate.framework/Versions/A/Frameworks/vecLib.framework/Versions/A/libSparse.dylib
+       0x1874f5000 -        0x1875886fb  com.apple.SystemConfiguration (1.21 - 1.21) <03D1F2EA-F649-3B3B-8BA0-69FFFE117405> /System/Library/Frameworks/SystemConfiguration.framework/Versions/A/SystemConfiguration
+       0x187589000 -        0x1875bdfbb  libCRFSuite.dylib (55) <B9E5C113-D809-3E9B-ADED-BF338771D129> /usr/lib/libCRFSuite.dylib
+       0x187896000 -        0x188839c1f  com.apple.Foundation (6.9 - 4302) <187E7913-B154-30A7-8070-852767AAC3CF> /System/Library/Frameworks/Foundation.framework/Versions/C/Foundation
+       0x1889f8000 -        0x188b1bedf  com.apple.CoreDisplay (291.3 - 291.3) <545E233D-9D22-3997-9564-BC3E5A03E764> /System/Library/Frameworks/CoreDisplay.framework/Versions/A/CoreDisplay
+       0x188b1c000 -        0x188ee64ff  com.apple.audio.AudioToolboxCore (1.0 - 1556.418.1) <2D1BAF76-D7C0-3E10-98B9-021ECBF3339C> /System/Library/PrivateFrameworks/AudioToolboxCore.framework/Versions/A/AudioToolboxCore
+       0x188ee7000 -        0x1891138bf  com.apple.CoreText (877.3.0.1 - 877.3.0.1) <EB907A00-507D-36E0-A2D0-625D2B830957> /System/Library/Frameworks/CoreText.framework/Versions/A/CoreText
+       0x189114000 -        0x1898c539f  com.apple.audio.CoreAudio (5.0 - 5.0) <16B7552A-EAD3-374C-A642-5A11A7523189> /System/Library/Frameworks/CoreAudio.framework/Versions/A/CoreAudio
+       0x1898c6000 -        0x189cea83f  com.apple.security (7.0 - 61901.80.25) <F2DC6225-1517-3285-8262-CF24DDE3678E> /System/Library/Frameworks/Security.framework/Versions/A/Security
+       0x189ceb000 -        0x189fbc56b  libicucore.A.dylib (76142.3.1.1) <255E234A-2B69-30EF-954B-2FF5A99A285E> /usr/lib/libicucore.A.dylib
+       0x189fbd000 -        0x189fc7397  libsystem_darwin.dylib (1725.40.4) <EAC9A3D8-2048-3E6A-BA11-77D1C25C0EF3> /usr/lib/system/libsystem_darwin.dylib
+       0x189fc8000 -        0x18a2c139f  com.apple.CoreServices.CarbonCore (1333 - 1333) <F5924C0D-5C7C-3587-9A43-C7048C2865AC> /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/CarbonCore.framework/Versions/A/CarbonCore
+       0x18a2c2000 -        0x18a3024cb  com.apple.CoreServicesInternal (505 - 505) <BBD8DD43-3E71-3344-99FF-D3C698DD0305> /System/Library/PrivateFrameworks/CoreServicesInternal.framework/Versions/A/CoreServicesInternal
+       0x18a303000 -        0x18a342bbf  com.apple.CSStore (1141.1 - 1141.1) <31ABD7AC-0E11-3DC4-B501-B064A1249992> /System/Library/PrivateFrameworks/CoreServicesStore.framework/Versions/A/CoreServicesStore
+       0x18a343000 -        0x18a42d63f  com.apple.framework.IOKit (2.0.2 - 100222.80.4) <D3872802-A97B-3B16-B110-3828CD151702> /System/Library/Frameworks/IOKit.framework/Versions/A/IOKit
+       0x18a42e000 -        0x18a43fff3  libsystem_notify.dylib (344.0.1) <73D7BFA7-9433-3ECD-929F-06220C37F214> /usr/lib/system/libsystem_notify.dylib
+       0x18a440000 -        0x18a49b35f  libsandbox.1.dylib (2680.80.20) <04D23AA8-A9F4-3D3E-8A54-4CCFA243C516> /usr/lib/libsandbox.1.dylib
+       0x18bd84000 -        0x18bd9a1df  com.apple.UniformTypeIdentifiers (709 - 709) <EC5271F7-8C18-347C-9DAA-8590E068E8FF> /System/Library/Frameworks/UniformTypeIdentifiers.framework/Versions/A/UniformTypeIdentifiers
+       0x18c279000 -        0x18c34de5f  libboringssl.dylib (532.80.2) <BD4F0F25-2ABF-38B1-A9C6-2C7DB0BFB44B> /usr/lib/libboringssl.dylib
+       0x18c34e000 -        0x18c709a3f  com.apple.CFNetwork (1.0 - 3860.400.51) <708EB37B-5A66-3845-8BC8-29F429A3BC4E> /System/Library/Frameworks/CFNetwork.framework/Versions/A/CFNetwork
+       0x18c70a000 -        0x18c724fdb  libsystem_networkextension.dylib (2205.81.1) <645A9697-79B5-3E35-A642-5FFDD53CB6A7> /usr/lib/system/libsystem_networkextension.dylib
+       0x18c725000 -        0x18c726067  libenergytrace.dylib (23) <6983B383-07F2-39CE-A1B3-BCB8B2AEF1B4> /usr/lib/libenergytrace.dylib
+       0x18c727000 -        0x18c7a787f  libMobileGestalt.dylib (1462.80.9) <F0CE855D-F582-396D-843F-956572409B32> /usr/lib/libMobileGestalt.dylib
+
