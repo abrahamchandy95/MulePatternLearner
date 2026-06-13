@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from typing import cast
 
 from mule_pattern_learner.tigergraph.client import Client
@@ -18,13 +16,10 @@ def fetch_account_vertices(
     account_ids: list[str],
     query_name: str = _ACCOUNT_FEATURE_QUERY,
 ) -> list[object]:
-    """Fetch raw Account vertices (v_id + attributes) for the given ids.
+    """Fetch raw Account vertices ({"v_id", "attributes"}) for the given ids.
 
-    Calls the fetch_account_features installed query with the ids as a vertex
-    set and returns the vertex rows in pyTigerGraph's standard shape
-    ({"v_id": ..., "attributes": {...}}), ready for build_account_features.
-    Vertex parameters are passed as (id,) tuples as the REST endpoint requires.
-    An empty id list short-circuits without a server call.
+    Returns the rows in pyTigerGraph's shape, ready for build_account_features.
+    Empty id list short-circuits without a server call.
     """
     if not account_ids:
         return []
@@ -50,13 +45,11 @@ def fetch_has_paid_edges(
     account_ids: list[str],
     query_name: str = _HAS_PAID_FEATURE_QUERY,
 ) -> list[object]:
-    """Fetch HAS_PAID edges internal to a batch (both endpoints in account_ids).
+    """Fetch HAS_PAID edges with both endpoints in account_ids.
 
-    Calls the fetch_has_paid_features installed query, which collects edges into
-    a per-source ListAccum<EDGE> and prints them nested under each source vertex.
-    This flattens that nesting into one edge list, each edge in pyTigerGraph's
-    shape ({"from_id", "to_id", "attributes": {...}}), ready for
-    build_edge_features. An empty id list short-circuits without a server call.
+    The query nests edges under each source vertex; this flattens them into one
+    list of {"from_id", "to_id", "attributes"}, ready for build_edge_features.
+    Empty id list short-circuits without a server call.
     """
     if not account_ids:
         return []

@@ -26,27 +26,17 @@ class TigerGraphSamplerError(RuntimeError):
 
 
 class TigerGraphHeteroSampler(BaseSampler):
-    """A PyG BaseSampler that delegates k-hop sampling to TigerGraph.
+    """
+    A PyG BaseSampler that delegates k-hop neighborhood sampling to TigerGraph.
 
-    Per batch, sample_from_nodes maps the seed indices PyG provides to their
-    global account ids, runs the sample_khop_neighborhood installed query on
-    the server, reindexes the raw global-id result to per-type local indices
-    (the pure reindex core), and returns structure as a HeteroSamplerOutput.
-    A fresh NodeIDMapper for the batch (the FalkorDB shared-mapper pattern)
-    rides along in metadata, so a FeatureStore can recover each node's global
-    id from its integer to fetch features, following PyG's structure/feature
-    split.
-
-    seed_ids defines the seed index<->id mapping: position i in seed_ids is
-    PyG integer index i. It is bounded by the labeled/seed set, never the full
-    graph, so it stays small at any graph scale.
-
-    allow_val / allow_test enforce strict-inductive split filtering in the
-    query: when False, a sampled neighborhood does not traverse INTO val / test
-    accounts, so their features cannot leak into a seed's embedding through
-    message passing. Train batches pass both False; validation passes
-    allow_val=True, allow_test=False; test passes both True. The seed accounts
-    themselves are never filtered.
+    Samples each batch's neighborhood with a server-side query and returns it as
+    PyG structure, registering the batch's nodes in the shared NodeIDMapper so the
+    FeatureStore can fetch their features. seed_ids defines the index<->id mapping,
+    bounded by the seed set, not the full graph.
+    allow_val/allow_test gate strict-
+    inductive filtering: when False, neighborhoods don't traverse into val/test
+    accounts (no leakage).
+    Train passes both False; val (True, False); test both True.
     """
 
     _client: Client
@@ -96,14 +86,14 @@ class TigerGraphHeteroSampler(BaseSampler):
         return self._client.conn.runInstalledQuery(self._query_name, params)
 
     def _to_hetero_output(self, local: LocalGraph, index: NodeSamplerInput) -> HeteroSamplerOutput:
-        # Register this batch's global ids into the shared persistent mapper and
-        # write the assigned integers into the node tensor. The mapper is shared
-        # with the feature store via the backend (not via metadata), so those
-        # integers are reversible to global ids when features are fetched.
-        #
-        # metadata carries what PyG's filter_fn expects for a NodeLoader batch:
-        # (input_id, batch_size). PyG reads these to set data.input_id and
-        # data.batch_size; it is not a free slot for the mapper.
+        """
+        Pack a reindexed LocalGraph into PyG's HeteroSamplerOutput.
+
+        Registers each node's global id in the shared mapper and writes the
+        assigned integers into the node tensors, so the FeatureStore can reverse
+        them to fetch features. edge is all-None (edge features are attached
+        later by the transform, not at sample time).
+        """
         node: dict[NodeType, Tensor] = {}
         for ntype, ids in local.node.items():
             int_ids = self._mapper.register(ntype, list(ids))

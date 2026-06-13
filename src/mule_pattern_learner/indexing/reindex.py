@@ -29,11 +29,8 @@ def edge_type_schema() -> dict[str, EdgeType]:
 
 @dataclass(frozen=True, slots=True)
 class RawNeighborhood:
-    """Raw sampler output: per-type global id lists and global-id edge triples.
-
-    This is the parsed form of the GSQL query result. Each node-type list holds
-    the global ids of that type in a stable order; each edge is a
-    (from_global_id, to_global_id, e_type) triple referencing those ids.
+    """Parsed GSQL sampler output: per-type global id lists, plus edges as
+    (from_global_id, to_global_id, e_type) triples referencing those ids.
     """
 
     node_ids: dict[NodeType, list[str]]
@@ -44,8 +41,8 @@ class RawNeighborhood:
 class LocalGraph:
     """Local-indexed neighborhood, ready to become a PyG HeteroSamplerOutput.
 
-    node holds the ordered global ids per type (index position == local id);
-    row/col hold local indices into those per-type lists for each edge type.
+    node: ordered global ids per type (position == local id).
+    row/col: local indices into the per-type lists, per edge type.
     """
 
     node: dict[NodeType, list[str]]
@@ -69,13 +66,10 @@ def _build_index(node_ids: Sequence[str]) -> dict[str, int]:
 
 
 def _order_seeds_first(account_ids: Sequence[str], seed_ids: Sequence[str]) -> list[str]:
-    # Put the seed accounts at the front, in the given seed order, followed by
-    # the remaining accounts in their original order. This makes the first
-    # len(seeds) Account rows be exactly the seeds, so PyG's "first batch_size
-    # nodes are the seeds" contract holds for this custom sampler. Without it,
-    # the GSQL SetAccum returns accounts in arbitrary order and logits[:bsize]
-    # would slice non-seed neighbors -- corrupting both the training loss and
-    # the validation metric. Seeds absent from the result are skipped.
+    """
+    Reorder account_ids with seeds first, so logits[:batch_size] hits the seeds,
+    not neighbors.
+    """
     present = set(account_ids)
     seen: set[str] = set()
     ordered_seeds: list[str] = []
@@ -88,18 +82,13 @@ def _order_seeds_first(account_ids: Sequence[str], seed_ids: Sequence[str]) -> l
 
 
 def reindex_neighborhood(raw: RawNeighborhood, seed_ids: Sequence[str] | None = None) -> LocalGraph:
-    """Convert a RawNeighborhood (global ids) into a LocalGraph (local indices).
+    """
+    Convert global-id neighborhood to local indices, seeds ordered first.
 
-    For each edge, the relation's schema gives the source and destination node
-    types; the endpoint global ids are looked up in those per-type index maps to
-    produce local row/col indices. An edge whose endpoint id is absent from the
-    corresponding node-type list is a real inconsistency and is rejected.
-
-    If seed_ids is given, the Account node list is reordered so the seeds come
-    first (in seed order). The index maps are built AFTER this reorder, so the
-    row/col edge indices remain consistent. This guarantees the first
-    len(seed_ids) Account rows are the seeds, which the loader relies on to slice
-    seed logits for the loss and metrics.
+    Each edge's endpoints are looked up in the per-type node lists to produce
+    local row/col indices; an endpoint absent from its list is rejected. With
+    seed_ids, Accounts are reordered (seeds first) before indices are built, so
+    the first len(seed_ids) Account rows are the seeds.
     """
     node: dict[NodeType, list[str]] = {ntype: list(ids) for ntype, ids in raw.node_ids.items()}
     if seed_ids is not None and _ACCOUNT in node:
@@ -147,11 +136,11 @@ def reindex_neighborhood(raw: RawNeighborhood, seed_ids: Sequence[str] | None = 
 
 
 def parse_raw_result(result: Sequence[object]) -> RawNeighborhood:
-    """Parse the GSQL sampler result into a RawNeighborhood.
+    """
+    Parse the GSQL sampler result into a RawNeighborhood.
 
-    The query prints separate blocks keyed account_ids / party_ids / entity_ids
-    (mapped to PyG node-type names) and an edges block of {from_id, to_id,
-    e_type} objects.
+    Reads the per-type id blocks (account_ids/party_ids/entity_ids) and the
+    edges block of {from_id, to_id, e_type} objects.
     """
     name_to_type: dict[str, NodeType] = {
         "account_ids": "Account",

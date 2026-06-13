@@ -141,6 +141,7 @@ def run_query(
     params: dict[str, object] | None = None,
     poll_seconds: float = 5.0,
     max_wait_seconds: float = 14_400.0,
+    query_timeout_ms: int = 7_200_000,
 ) -> list[object]:
     """
     Run an installed query by its gsql_paths registry key, in detached (async)
@@ -158,10 +159,18 @@ def run_query(
 
     poll_seconds: gap between status checks. max_wait_seconds: hard ceiling on
     total wait (default 4h) so a genuinely stuck query cannot hang forever.
+    query_timeout_ms: the SERVER-SIDE limit (milliseconds) TigerGraph applies
+    before it aborts the query itself, the same value a GSQL session sets with
+    SET query_timeout. This is distinct from max_wait_seconds (client-side poll
+    ceiling): heavy feature queries (fastrp, pagerank) far exceed RESTPP's small
+    default and are aborted server-side unless this is raised. Default 2h.
     """
     name = get_query_from_file(registry_name)
     submitted: object = client.conn.runInstalledQuery(
-        name, params if params is not None else {}, runAsync=True
+        name,
+        params if params is not None else {},
+        timeout=query_timeout_ms,
+        runAsync=True,
     )
     request_id = _extract_request_id(submitted)
 

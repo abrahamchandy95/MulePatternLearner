@@ -9,23 +9,21 @@ class NodeIDMapperError(KeyError):
 
 @dataclass(slots=True)
 class NodeIDMapper:
-    """Per-batch bidirectional map between global string ids and PyG integer ids.
+    """
+    Per-batch bidirectional map between global string ids and PyG integer ids.
 
-    This is the TigerGraph analogue of FalkorDB's NodeIDMapper: for one sampled
-    batch it assigns each global string id (e.g. "A0000000001") a contiguous
-    integer per node type, so the integer can live in PyG's node tensor while
-    the FeatureStore can recover the string id to fetch features.
-
-    It is built per batch and bounded by batch size, so no global id table is
-    ever materialized regardless of graph scale. Integers are assigned per node
-    type starting at 0, mirroring PyG's per-type local indexing.
+    For one sampled batch, assigns each global string id a contiguous per-type
+    integer so it can live in PyG's node tensor, and reverses it
+    so the FeatureStore can recover the string id to fetch features. Reset each
+    batch, so it never materializes a global id table regardless of graph scale.
     """
 
     _to_int: dict[NodeType, dict[str, int]] = field(default_factory=dict)
     _to_str: dict[NodeType, list[str]] = field(default_factory=dict)
 
     def register(self, node_type: NodeType, string_ids: list[str]) -> list[int]:
-        """Register an ordered list of global string ids for a node type.
+        """
+        Register an ordered list of global string ids for a node type.
 
         Returns the assigned integer ids, in the same order. Ids already
         registered keep their previously assigned integer; new ids extend the
@@ -46,13 +44,11 @@ class NodeIDMapper:
         return out
 
     def reset(self) -> None:
-        """Drop all registered ids, returning the mapper to its empty state.
+        """
+        Drop all registered ids, returning the mapper to its empty state.
 
         The sampler calls this at the start of each batch so the table holds
         only the current batch's nodes, not every node sampled across the run.
-        Safe because the loader is synchronous (num_workers=0): the previous
-        batch's feature fetch has completed before the next sample begins, so
-        no in-flight integer id is invalidated by the reset.
         """
         self._to_int.clear()
         self._to_str.clear()

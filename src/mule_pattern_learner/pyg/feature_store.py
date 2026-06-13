@@ -27,18 +27,12 @@ _FEATURE_DIMS: dict[NodeType, int] = {_ACCOUNT: NUM_ACCOUNT_FEATURES}
 
 class TigerGraphFeatureStore(FeatureStore):
     """
-    PyG FeatureStore backed by TigerGraph, sharing a backend's mapper.
+    PyG FeatureStore that serves Account node features from TigerGraph.
 
-    PyG calls _get_tensor with a TensorAttr carrying only (group_name,
-    attr_name, index); index holds the global integer ids the sampler wrote
-    into the node tensor (PyG's n_id), in batch-local order. This store reverses
-    those integers to global string ids through the shared NodeIDMapper, fetches
-    the rows from TigerGraph, applies the same transforms used everywhere else
-    (node_features.py), and returns a tensor aligned row-for-row to index.
-
-    The store is read-only: features live in TigerGraph, so put/remove are not
-    supported (matching the remote-backend pattern, where the store is a view
-    over the database rather than a writable cache).
+    PyG calls _get_tensor with integer node ids. This reverses them to global
+    string ids via the shared NodeIDMapper, fetches and builds those accounts'
+    features, normalizes, and returns a tensor aligned to the requested order.
+    Read-only.
     """
 
     _client: Client
@@ -85,10 +79,7 @@ class TigerGraphFeatureStore(FeatureStore):
         vertices = fetch_account_vertices(self._client, string_ids)
         features = build_account_features(vertices)
 
-        # Align the fetched rows to the requested index order: TigerGraph may
-        # return vertices in any order, so reorder by the requested ids.
         aligned = self._align(features.node_ids, features.feats, string_ids)
-        # Standardize with the training-fit stats (identical at train and eval).
         if self._normalizer is not None:
             aligned = self._normalizer.apply(aligned)
         return aligned
