@@ -1,5 +1,6 @@
 from collections.abc import Callable, Iterator, Mapping, Sequence
 import copy
+import socket
 from dataclasses import dataclass
 import time
 from typing import Protocol, cast
@@ -30,15 +31,14 @@ def _identity(batch: HeteroData) -> HeteroData:
     return batch
 
 
-# Transient TigerGraph/network failures that should be retried rather than crash
-# a multi-day run. A dropped read (ReadTimeout) or truncated response
-# (ChunkedEncodingError / IncompleteRead) on ONE batch is not a fatal error: the
-# batch is re-fetched and the run continues, losing seconds instead of days.
 _TRANSIENT_ERRORS: tuple[type[Exception], ...] = (
     requests.exceptions.ReadTimeout,
     requests.exceptions.ConnectionError,
     requests.exceptions.ChunkedEncodingError,
     requests.exceptions.Timeout,
+    TimeoutError,
+    ConnectionError,
+    socket.timeout,
 )
 _MAX_BATCH_RETRIES = 5
 _RETRY_BACKOFF_S = 10.0
