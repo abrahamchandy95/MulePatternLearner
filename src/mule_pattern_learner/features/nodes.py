@@ -185,18 +185,10 @@ def build_account_features(vertices: Sequence[object]) -> NodeFeatures:
 
 @dataclass(frozen=True, slots=True)
 class FeatureNormalizer:
-    """Per-feature z-score applied AFTER the log/symlog transforms above.
+    """Per-feature z-score, applied after the log/symlog transforms.
 
-    The log family tames heavy tails but leaves features on different centers and
-    spreads (a log-amount near 14 sitting beside a ratio in [0, 1] and a pagerank
-    near 1e-3). Standardizing to zero mean / unit variance puts them on one scale
-    so no single feature dominates the first linear layer and drives activations
-    (and logits) to extremes.
-
-    mean and std are length-NUM_ACCOUNT_FEATURES, in ACCOUNT_NUMERIC_FEATURES
-    column order, and MUST be fit on the training split only (see fit_normalizer)
-    then reused unchanged for val / test / inference -- otherwise val and test
-    feature statistics leak into training. They are saved with the checkpoint, so
+    Fit on the TRAIN split only (then reused unchanged for val/test/inference),
+    or val/test statistics leak into training. Saved with the checkpoint so
     scoring reuses the exact training-time standardization.
     """
 
@@ -211,8 +203,6 @@ class FeatureNormalizer:
             )
 
     def apply(self, feats: Tensor) -> Tensor:
-        # std is floored away from zero in fit_normalizer, so this never divides
-        # by zero (a constant feature becomes all-zeros, which is harmless).
         return (feats - self.mean.to(feats.device)) / self.std.to(feats.device)
 
 

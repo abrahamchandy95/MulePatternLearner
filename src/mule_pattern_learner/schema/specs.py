@@ -1,35 +1,13 @@
 """
-Per-type feature/label declarations and PyG relation specs for
-Mule_Pattern_Learner.
+Schema declarations for the graph, and their conversion into PyG's loader spec.
 
-The loader builds from these:
+Defines which attributes are node features (per vertex type), which edges exist
+(EdgeSpec / EDGE_SPECS, including synthetic reverses for undirected edges), and
+which attributes are labels: pu_label (the partially-known training target) and
+is_fraud (eval-only ground truth, never a feature).
 
-  * pu_label  — the MASKED, realistic label we would actually have in production.
-                1 = a CONFIRMED (revealed) mule; 0 = unlabeled (could be a clean
-                account OR an undiscovered mule).
-  * is_fraud  — the FULL ground truth (all ~216 true mules). EVAL ONLY. Used to
-                measure how many HIDDEN mules the model surfaced. NEVER a feature,
-                NEVER a training target, NEVER a sampling-bias signal
-
-pu_label has TWO legitimate roles:
-  1. Training target  — what the (nnPU) loss is computed against.
-  2. Sampling bias     — with so few revealed positives, uniform seed sampling
-     yields batches with zero positives and nnPU's positive-risk term never gets
-     a gradient. So the loader OVER-SAMPLES revealed-positive seeds (pu_label=1)
-     each epoch; standard K-hop neighbor sampling around them pulls in their ring
-     co-members (incl. hidden positives), which the model then DISCOVERS.
-
-pu_label is therefore in v_out_labels (the label tensor y) and is read from y by
-the sampler/loss. It is NOT added to v_in_feats and NOT duplicated into the extra
-attrs.
-
-A model feature may not read fraud labels, directly or transitively.
-
-The model message-passes over the RAW PII-sharing edges (Party -> value
-vertex): Has_Device / Has_IP / Has_Phone / Has_Email / Has_Name / Has_Birthdate /
-Has_Street_Address. Two parties sharing a value are two hops apart through it —
-the "guilt by association" signal. These carry strictly MORE information than the
-clusters (sub-threshold links, which value type, how many).
+The pytigergraph_* functions translate these declarations into the v_in_feats /
+v_out_labels / e_in_feats dicts the loader consumes.
 """
 
 from dataclasses import dataclass
@@ -116,13 +94,11 @@ VERTEX_FEATURES: Mapping[str, tuple[str, ...]] = {
 
 @dataclass(frozen=True, slots=True)
 class EdgeSpec:
-    """One directed PyG relation.
+    """One directed PyG relation: (src, name, dst), where name is the TG edge id.
 
-    src/name/dst form the PyG triple; name matches the TG edge id.
-    raw_attrs are the TG edge attributes pulled into edge_attr (pre-transform).
-    has_time_attrs flags trailing DATETIME attrs needing epoch->feature
-    conversion. synthetic_reverse marks a reverse direction we add for an
-    UNDIRECTED TG edge.
+    raw_attrs:         TG edge attributes pulled into edge_attr (pre-transform).
+    has_time_attrs:    trailing DATETIME attrs need epoch->feature conversion.
+    synthetic_reverse: a reverse direction we add for an undirected TG edge.
     """
 
     src: str

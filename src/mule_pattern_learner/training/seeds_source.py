@@ -8,13 +8,12 @@ _COL_PU_LABEL = "pu_label"
 
 
 class SplitSeeds:
-    """Seeds and PU targets for one split, read from the graph.
+    """
+    One split's seed account ids, plus an in-memory lookup of each account's
+    pu_label attribute (1 = revealed positive, 0 = unlabeled), read from the graph.
 
-    account_ids are the seed accounts of the split (in query order);
-    pu_label_of maps each account id to its PU target (1 = revealed positive,
-    0 = unlabeled). Both come from TigerGraph (the is_train/is_val/is_test flags
-    and pu_label the masking step wrote), so training does not depend on the
-    eval parquet for anything it would also need on real data.
+    pu_label lives on the account vertex; this just caches it by id so the
+    training loop reads labels from memory instead of re-querying per batch.
     """
 
     account_ids: tuple[str, ...]
@@ -51,7 +50,8 @@ def _parse_rows(raw: list[object]) -> list[dict[str, object]]:
 
 
 def fetch_split_seeds(client: Client, split: str) -> SplitSeeds:
-    """Fetch one split's accounts + pu_label from the graph.
+    """
+    Fetch one split's accounts + pu_label from the graph.
 
     split is "train" | "val" | "test". Runs get_split_accounts and returns the
     seed ids plus the pu_label lookup the trainer feeds to the nnPU loss.
