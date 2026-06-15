@@ -13,7 +13,8 @@ from mule_pattern_learner.tigergraph.client import Client
 
 
 class TigerGraphRemoteBackend:
-    """Shared container wiring TigerGraph into PyG's remote-backend interfaces.
+    """
+    Shared container wiring TigerGraph into PyG's remote-backend interfaces.
 
     Holds the single TigerGraph client and the one persistent NodeIDMapper that
     the sampler and the feature store must agree on: the sampler registers each
@@ -55,7 +56,8 @@ class TigerGraphRemoteBackend:
         allow_val: bool = True,
         allow_test: bool = True,
     ) -> TigerGraphHeteroSampler:
-        """Build a k-hop sampler bound to this backend's client and mapper.
+        """
+        Build a k-hop sampler bound to this backend's client and mapper.
 
         The sampler shares this backend's mapper, so the integers it writes into
         PyG node tensors are reversible by the feature store built from the same
@@ -80,7 +82,8 @@ class TigerGraphRemoteBackend:
     def make_feature_store(
         self, normalizer: FeatureNormalizer | None = None
     ) -> TigerGraphFeatureStore:
-        """Build a feature store bound to this backend's client and mapper.
+        """
+        Build a feature store bound to this backend's client and mapper.
 
         The store shares this backend's mapper, so it reverses the same integer
         ids the sampler assigned back to global string ids when fetching
@@ -96,7 +99,8 @@ class TigerGraphRemoteBackend:
         )
 
     def make_graph_store(self) -> TigerGraphGraphStore:
-        """Build a graph store bound to this backend's client and mapper.
+        """
+        Build a graph store bound to this backend's client and mapper.
 
         The store shares this backend's mapper so any edge indices it exports
         use the same integer id space as the sampler and feature store. Note the
@@ -127,7 +131,8 @@ class TigerGraphRemoteBackend:
         allow_test: bool = True,
         normalizer: FeatureNormalizer | None = None,
     ) -> NodeLoader:
-        """Build a PyG NodeLoader that yields HeteroData batches from TigerGraph.
+        """
+        Build a PyG NodeLoader that yields HeteroData batches from TigerGraph.
 
         Wires the (feature_store, graph_store) pair, the k-hop sampler, and the
         HAS_PAID edge-feature transform, all sharing this backend's client and
