@@ -40,7 +40,8 @@ class EdgeFeatureError(RuntimeError):
 
 
 class HasPaidEdgeFeatureAttacher:
-    """Batch transform that attaches HAS_PAID temporal edge features.
+    """
+    Batch transform that attaches HAS_PAID temporal edge features.
 
     PyG's remote FeatureStore does not serve edge features (node features only),
     so per PyG's design edge features are attached with a loader transform. For

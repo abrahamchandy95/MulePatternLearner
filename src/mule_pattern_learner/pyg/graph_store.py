@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from typing import cast, override
 
 import torch
@@ -23,23 +21,21 @@ _RELATION_BY_TYPE: dict[EdgeType, str] = {
 
 
 class TigerGraphGraphStore(GraphStore):
-    """PyG GraphStore over TigerGraph, sharing a backend's mapper.
+    """
+    PyG GraphStore over TigerGraph, sharing a backend's mapper.
 
-    This serves graph structure (edge indices) per edge type from TigerGraph on
-    demand. get_all_edge_attrs reports the heterogeneous edge types (which PyG's
-    NodeLoader reads at construction), and _get_edge_index exports one edge
-    type's COO connectivity by querying the database, mapping global string ids
-    to the shared integer ids.
+    Used on the training path via get_all_edge_attrs: PyG's NodeLoader calls it
+    at construction to learn the heterogeneous edge types. (Batch connectivity
+    itself comes from the k-hop sampler, which queries the server directly, not
+    from this store.)
 
-    Scope: batch sampling does NOT go through this store. Our
-    TigerGraphHeteroSampler samples k-hop neighborhoods directly on the server
-    (the scalable path), so PyG never pulls the full edge index here for
-    training. _get_edge_index is provided for completeness and off-the-hot-path
-    uses (e.g. link-level loaders, ad-hoc whole-type export); it queries by edge
-    type and never materializes the entire multi-relation graph at once.
+    _get_edge_index exports one edge type's full COO connectivity, mapping global
+    string ids to shared integer ids. PyG's GraphStore interface requires it, but
+    nothing on the training path calls it — only scripts/demos/graph_store.py
+    exercises it, and it's available for whole-type export. It queries one edge
+    type at a time, never the whole graph.
 
-    Edges are treated as static (PyG's GraphStore assumption), so put and remove
-    are unsupported: structure lives in TigerGraph and is not mutated here.
+    Edges are static, so put/remove are unsupported.
     """
 
     _client: Client
