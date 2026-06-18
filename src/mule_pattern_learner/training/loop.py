@@ -116,41 +116,66 @@ class TrainConfig:
     eval_k: int = 100
     min_delta: float = 1e-4
     positive_weight: float | None = None
+    pauc_tie_epsilon: float = 2e-3
+    """Half-width of the PAUC 'tie' band for PR-AUC tiebreaking (see EarlyStopper).
+
+    Under heavy class imbalance ROC-AUC (the Proxy AUC) saturates near 1.0, so
+    differences between strong epochs at the top end are dominated by validation
+    noise rather than real ranking gains -- and selecting on raw PAUC can pin the
+    'best' checkpoint to an early epoch that happens to win by noise while having
+    worse top-of-ranking behaviour (more false positives). When two epochs are
+    within pauc_tie_epsilon of the best PAUC, they are treated as a statistical
+    tie on PAUC and broken by PR-AUC (average_precision), which does NOT saturate
+    under imbalance and is sensitive to exactly the high-score false positives we
+    pay for. PAUC remains the primary, coarse signal; PR-AUC only adjudicates
+    near-ties. Set to 0.0 to recover pure-PAUC selection.
+    """
 
 
 class EarlyStopper:
     """
-    Tracks the best validation score and decides when to stop.
+    Tracks the best validation epoch and decides when to stop.
 
-    A higher score is better (we use validation Proxy AUC). Two distinct
-    judgments, deliberately separated:
+    SELECTION is PAUC-primary with a PR-AUC tiebreaker. Higher is better for
+    both (PAUC = validation Proxy AUC; PR-AUC = average_precision). Under heavy
+    class imbalance PAUC saturates near 1.0, so among strong epochs its tiny
+    differences are mostly validation noise -- and pure-PAUC selection can pin
+    the checkpoint to an early epoch that won by noise yet has worse top-of-
+    ranking behaviour (more false positives). To fix that WITHOUT abandoning
+    PAUC (which PU theory endorses as robust to unlabeled-as-negative label
+    corruption), an epoch is taken as the new best-to-save when EITHER:
 
-      * is_best (the return of update): a STRICT improvement, score > best so
-        far. Any genuine gain, however small, makes these the best weights, so
-        the caller should save them. Using strict comparison here means the
-        saved checkpoint is always the true best-val-PAUC model.
-      * patience: only a SIGNIFICANT improvement -- beating the last significant
-        score by at least min_delta -- resets the no-improve counter. Sub-delta
-        gains are treated as noise for stopping purposes, so training still
-        halts once real progress stalls.
+      * its PAUC exceeds the best PAUC by more than tie_epsilon (a clear PAUC
+        win -- decided on PAUC alone, exactly as before), OR
+      * its PAUC is within tie_epsilon of the best PAUC (a statistical tie on a
+        saturated metric) AND its PR-AUC strictly exceeds the best epoch's
+        PR-AUC. PR-AUC does not saturate under imbalance and is sensitive to the
+        high-score false positives, so it is the right adjudicator for ties.
 
-    Keeping these apart fixes the trap where a tiny-but-real improvement was
-    neither saved nor counted as progress: now it is saved (is_best) even though
-    it does not reset patience.
+    Two judgments remain deliberately separated:
+
+      * is_best (the return of update): the save signal, per the rule above.
+      * patience: only a min_delta-significant PAUC gain resets the no-improve
+        counter, so stopping behaviour is driven by PAUC alone and is unchanged.
+        (The tiebreaker changes WHICH saved checkpoint is best, not WHEN we stop.)
     """
 
     _patience: int
     _min_delta: float
+    _tie_epsilon: float
     _best: float
+    _best_secondary: float
     _significant_best: float
     _bad_epochs: int
     best_epoch: int
 
-    def __init__(self, patience: int, min_delta: float) -> None:
+    def __init__(self, patience: int, min_delta: float, tie_epsilon: float = 0.0) -> None:
         self._patience = patience
         self._min_delta = min_delta
-        self._best = float("-inf")
-        self._significant_best = float("-inf")
+        self._tie_epsilon = tie_epsilon
+        self._best = float("-inf")  # best PAUC seen at a saved epoch
+        self._best_secondary = float("-inf")  # PR-AUC at the saved best epoch
+        self._significant_best = float("-inf")  # PAUC for patience accounting
         self._bad_epochs = 0
         self.best_epoch = -1
 
@@ -159,22 +184,46 @@ class EarlyStopper:
         return self._best
 
     @property
+    def best_secondary(self) -> float:
+        """PR-AUC recorded at the currently-saved best epoch."""
+        return self._best_secondary
+
+    @property
     def bad_epochs(self) -> int:
-        """Epochs since the last min_delta-significant improvement (patience progress)."""
+        """Epochs since the last min_delta-significant PAUC improvement (patience progress)."""
         return self._bad_epochs
 
-    def update(self, score: float, epoch: int) -> bool:
-        """Record an epoch's score; return True if it was a new (strict) best.
+    def update(self, score: float, epoch: int, secondary: float = float("-inf")) -> bool:
+        """Record an epoch and return True if it is the new best to save.
 
-        A True result means save: score beat the best seen so far. Patience is
-        managed separately -- it only resets on a min_delta-significant gain --
-        so a sub-delta improvement returns True (save it) yet still advances the
-        no-improve counter toward early stopping.
+        score:     primary selection metric (validation Proxy AUC / PAUC).
+        secondary: tiebreaker metric (PR-AUC / average_precision); used only when
+                   score is within tie_epsilon of the current best PAUC.
+
+        Selection (see class docstring): a clear PAUC win (score > best + eps) is
+        best; otherwise a near-tie on PAUC (|score - best| <= eps, i.e.
+        score >= best - eps) that strictly improves PR-AUC is also best. Patience
+        is managed separately on PAUC, so a sub-delta gain can still be saved
+        while the no-improve counter advances toward early stopping.
+
+        With tie_epsilon == 0.0 this reduces to the original strict-PAUC rule
+        (the near-tie branch requires score >= best AND better PR-AUC, which only
+        improves the secondary at an exact PAUC plateau and never regresses PAUC).
         """
-        is_best = score > self._best
+        clear_primary_win = score > self._best + self._tie_epsilon
+        within_tie_band = score >= self._best - self._tie_epsilon
+        tie_broken_by_secondary = within_tie_band and (secondary > self._best_secondary)
+
+        is_best = clear_primary_win or tie_broken_by_secondary
         if is_best:
-            self._best = score
+            # Track the PAUC of the saved epoch as the comparison point. On a
+            # tiebreak the saved PAUC may dip by up to eps; that is the intended
+            # trade (a noise-sized PAUC concession for a real PR-AUC gain).
+            self._best = max(self._best, score)
+            self._best_secondary = max(self._best_secondary, secondary)
             self.best_epoch = epoch
+
+        # patience: PAUC-only, unchanged from the original.
         if score > self._significant_best + self._min_delta:
             self._significant_best = score
             self._bad_epochs = 0
@@ -414,7 +463,11 @@ def fit(
         else AdamW(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
     )
     loss_fn = NonNegativePULoss(prior=config.prior, positive_weight=config.positive_weight)
-    stopper = EarlyStopper(patience=config.patience, min_delta=config.min_delta)
+    stopper = EarlyStopper(
+        patience=config.patience,
+        min_delta=config.min_delta,
+        tie_epsilon=config.pauc_tie_epsilon,
+    )
 
     reports: list[EpochReport] = []
     best_state: dict[str, Tensor] = copy.deepcopy(model.state_dict())
@@ -443,7 +496,9 @@ def fit(
             epoch=epoch,
             device=dev,
         )
-        is_best = stopper.update(val.roc_auc, epoch)
+        prev_best_pauc = stopper.best
+        prev_best_ap = stopper.best_secondary
+        is_best = stopper.update(val.roc_auc, epoch, secondary=val.average_precision)
         if is_best:
             best_state = copy.deepcopy(model.state_dict())
             best_epoch = epoch
@@ -461,7 +516,19 @@ def fit(
             )
         )
 
-        marker = " *best" if is_best else f"  (no gain for {stopper.bad_epochs})"
+        if is_best:
+            # Was this a clear PAUC win, or a PR-AUC tiebreak within the PAUC
+            # noise band? Classify from the pre-update bests for a transparent log.
+            if val.roc_auc > prev_best_pauc + config.pauc_tie_epsilon:
+                marker = " *best (PAUC)"
+            else:
+                marker = (
+                    f" *best (PR-AUC tiebreak: PAUC {val.roc_auc:.4f}~"
+                    + f"{prev_best_pauc:.4f}, AP {val.average_precision:.4f}>"
+                    + f"{prev_best_ap:.4f})"
+                )
+        else:
+            marker = f"  (no gain for {stopper.bad_epochs})"
         print(
             f"epoch {epoch:>2} | train_loss {train_loss:.4f} | "
             + f"val PAUC {val.roc_auc:.4f} | "

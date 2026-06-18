@@ -18,16 +18,23 @@ class MaskConfig:
 
     reveal_prevalence:
         Target fraction of ALL mules that remain labeled (pu_label = 1).
-        ~0.04 models "under 4% of fraudsters are known".
+        Default 0.10 models "about 10% of fraudsters are known". Raised from an
+        earlier 0.04: at 4% the train/val split was starved of positives (val
+        could round to zero revealed positives, which the trainer rejects), and
+        a near-saturated ROC-AUC over so few positives is noisy to select on.
+        More revealed positives stabilise the selection signal and give nnPU's
+        positive-risk term cleaner gradients. Still a realistic minority.
     dark_ring_fraction:
         Fraction of mule-containing rings made FULLY DARK (no revealed labels).
         Their accounts are emitted as forced-test (see MaskResult.forced_test).
+        Lowered 0.30 -> 0.20 so more positive-bearing rings stay available to
+        train/val rather than being pinned to test with zero training signal.
     seed:
         RNG seed; the assignment is deterministic given inputs and seed.
     """
 
-    reveal_prevalence: float = 0.04
-    dark_ring_fraction: float = 0.30
+    reveal_prevalence: float = 0.10
+    dark_ring_fraction: float = 0.20
     seed: int = 1337
 
     def validate(self) -> None:

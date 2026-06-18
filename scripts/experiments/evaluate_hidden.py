@@ -32,11 +32,19 @@ from mule_pattern_learner.pyg.model import MulePatternModel
 from mule_pattern_learner.pyg.neighbors import NeighborFanout
 from mule_pattern_learner.tigergraph.client import Client
 from mule_pattern_learner.tigergraph.settings import Settings
-from mule_pattern_learner.training.metrics import evaluate_hidden
+from mule_pattern_learner.training.metrics import (
+    evaluate_hidden,
+    evaluate_summary,
+    format_summary_report,
+    save_summary_chart,
+)
 from mule_pattern_learner.training.seeds_source import fetch_split_seeds
 
 _MASKS_DIR = Path("data/masks")
 _MODELS_DIR = Path("models")
+# Summary report (gains/lift table + chart) is written here, next to the
+# checkpoints it evaluates. Created on demand.
+_EVAL_OUT_DIR = Path("models/eval")
 _COL_ACCOUNT_ID = "account_id"
 _COL_TRUE_LABEL = "true_label"
 _COL_BUCKET = "bucket"
@@ -46,6 +54,17 @@ _COL_BUCKET = "bucket"
 _EVAL_SPLIT = "test"
 _EVAL_K = 100
 _BATCH_SIZE = 1024
+
+# Capacity sweep for the summary report's gains/lift chart. A dense range of
+# alert rates (fractions of accounts reviewed) brackets the realistic AML band
+# from a true-bank alert rate (~0.05%) up to a generous review budget (5%), so
+# the curve is smooth and each viewer reads off their own operating point. The
+# printed table uses a coarse subset for legibility; the chart uses the full
+# range.
+_SUMMARY_ALERT_RATES_TABLE: tuple[float, ...] = (0.0005, 0.001, 0.005, 0.01, 0.02)
+_SUMMARY_ALERT_RATES_CHART: tuple[float, ...] = tuple(
+    round(0.0005 + (0.05 - 0.0005) * i / 59, 6) for i in range(60)
+)
 
 
 _HAS_PAID: EdgeType = ("Account", "HAS_PAID", "Account")
@@ -205,6 +224,36 @@ def main() -> None:
     print("hidden_recall@k is the headline: of mules the model was NEVER told")
     print("about, the fraction it ranked in the top-k. High = it learned the")
     print("pattern, not the few labelled examples.")
+
+    # ── Summary report: gains/lift across review capacity + chart ──
+    # The single-k recall above answers "did it find hidden mules at one cutoff".
+    # The summary adds the operating curve an analyst team actually faces: recall,
+    # precision, and lift across a sweep of alert rates, plus PR-AUC as the
+    # imbalance-robust headline (ROC-AUC reported but de-emphasised). Precision
+    # and lift are trustworthy ONLY because this is synthetic (true-label answer
+    # key); on real PU data they are biased and only recall / PR-AUC carry over.
+    _EVAL_OUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    summary = evaluate_summary(scores_arr, true_arr, alert_rates=_SUMMARY_ALERT_RATES_TABLE)
+    print("\n" + format_summary_report(summary))
+
+    # write the printed table to a text file alongside the chart
+    table_path = _EVAL_OUT_DIR / f"summary_{_EVAL_SPLIT}.txt"
+    _ = table_path.write_text(format_summary_report(summary) + "\n")
+
+    # the chart uses the dense sweep for smooth curves; the provenance note
+    # records which checkpoint produced the scores so the figure is never
+    # mistaken for a different run's results.
+    summary_chart = evaluate_summary(scores_arr, true_arr, alert_rates=_SUMMARY_ALERT_RATES_CHART)
+    chart_path = _EVAL_OUT_DIR / f"summary_{_EVAL_SPLIT}.png"
+    _ = save_summary_chart(
+        summary_chart,
+        str(chart_path),
+        title=f"Mule detection - gains across review capacity ({_EVAL_SPLIT} split)",
+        note=f"scores from checkpoint {ckpt_path.name}; synthetic answer key {eval_path.name}",
+    )
+    print(f"\nsummary report -> {table_path}")
+    print(f"gains/lift chart -> {chart_path}")
 
 
 if __name__ == "__main__":
