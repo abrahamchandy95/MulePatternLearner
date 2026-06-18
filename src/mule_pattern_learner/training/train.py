@@ -72,13 +72,7 @@ _MAX_EPOCHS = 30
 _PATIENCE = 5
 _EVAL_K = 100
 _RNG_SEED = 1337
-# Weight on the nnPU positive_risk term. At the true prior (pi ~ 1e-4 here) the
-# positive term is ~0.1% of the loss, so the optimizer minimizes the unlabeled
-# term alone, drives every logit negative, and ranks mules BELOW unlabeled
-# (confirmed: hidden-mule AUC 0.43, below random). Weighting the positives well
-# above pi restores their gradient and flips the ranking the right way; the TRUE
-# pi is still used inside the unbiased negative-risk correction (see loss.py).
-# None would reproduce the broken textbook-weight behavior.
+
 _POSITIVE_WEIGHT = 0.5
 _VAL_UNLABELED_CAP = 10_000
 _FEATURE_FETCH_CHUNK = 5_000

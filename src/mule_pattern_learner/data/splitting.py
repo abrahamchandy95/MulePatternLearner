@@ -23,7 +23,7 @@ class SplitConfig:
         RNG seed; the assignment is deterministic given inputs and seed.
     """
 
-    val_fraction: float = 0.15
+    val_fraction: float = 0.20
     test_fraction: float = 0.15
     seed: int = 1337
 
