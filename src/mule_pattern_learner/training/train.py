@@ -15,8 +15,6 @@ synthetic data the true count is ~216; passing that emulates "we guessed right".
 Everything else (max_bins, edge_dim, reference_epoch_s) is derived from the
 graph, never hardcoded.
 
-    mule-train --estimated-mules 216
-
 Everything here uses pu_label only -- the labels the model trains on, which
 exist on real data too -- so nothing depends on knowing the true (hidden) mules.
 Measuring generalization to hidden mules is a SEPARATE, synthetic-only step
@@ -66,8 +64,13 @@ _COL_ACCOUNT_ID = "account_id"
 _MODELS_DIR = Path("models")
 _ACCOUNT_FEATURES = 31
 
-_BATCH_SIZE = 512
-_POSITIVES_PER_BATCH = 32
+# Batch size and positives-per-batch are COUPLED: the positive fraction
+# (_POSITIVES_PER_BATCH / _BATCH_SIZE) is the training signal and must stay
+# fixed when batch size changes for memory reasons. At 16/256 = 6.25%, identical
+# to the prior 32/512. Halved from 512->256 (and 32->16) purely to lower peak
+# memory; do NOT change one without scaling the other or you alter the signal.
+_BATCH_SIZE = 256
+_POSITIVES_PER_BATCH = 16
 _MAX_EPOCHS = 30
 _PATIENCE = 5
 _EVAL_K = 100

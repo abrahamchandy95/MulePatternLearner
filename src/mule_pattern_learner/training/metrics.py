@@ -750,3 +750,203 @@ def save_summary_chart(
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
     return out_path
+
+
+# ── Generalization chart (synthetic only; the hidden-vs-revealed story) ──
+# save_summary_chart shows the operating-point (staffing) view against TRUE
+# labels, which does NOT separate hidden mules from revealed ones. This chart
+# answers the project's actual thesis question -- did the model find mules it
+# was NEVER told about -- by splitting on bucket. It needs the synthetic answer
+# key (bucket), so it lives in the synthetic-only half of the module alongside
+# evaluate_hidden, and is never imported by the training loop. Like
+# save_summary_chart, matplotlib is imported inside the function so the module
+# has no hard plotting dependency, and it fabricates nothing: every point comes
+# from the scores / labels passed in.
+
+
+def save_generalization_chart(
+    scores: NDArray[np.float64],
+    true_label: NDArray[np.int64],
+    bucket: NDArray[np.int64],
+    out_path: str,
+    ks: Sequence[int] = _DEFAULT_KS,
+    primary_k: int = 100,
+    title: str = "Mule detection - generalization to hidden mules",
+    note: str | None = None,
+) -> str:
+    """Render a three-panel hidden-mule generalization chart and save to disk.
+
+    The panels, left to right:
+
+    1. Score distribution by bucket -- overlaid histograms of model score for
+       hidden mules, revealed mules, and unlabeled accounts, on a log-count
+       y-axis (the unlabeled class outnumbers mules by orders of magnitude, so a
+       linear count axis would flatten the mule bars to invisibility). This is
+       the visual form of the logit separation: if hidden-mule scores pile up
+       with the revealed ones and apart from unlabeled, the model generalized.
+    2. Hidden-recall vs. k, with the achievable-ceiling line -- of mules never
+       labelled, the fraction ranked in the top k at each review depth, plotted
+       against the mathematical maximum recall_ceiling_at_k allows. Closeness to
+       the ceiling is ranking quality; the gap to 1.0 at small k is the keyhole
+       effect, not a model failure.
+    3. Precision-recall curve vs. TRUE labels -- the curve behind the scalar
+       PR-AUC, with the random baseline (the true-label base rate) for contrast.
+
+    scores:     model output per account (higher = more mule-like); shape [M].
+    true_label: 1 if the account is truly a mule, else 0; shape [M].
+    bucket:     REVEALED_POS / HIDDEN_POS / UNLABELED_NEG per account; shape [M].
+    out_path:   file path to write (extension sets the format, e.g. .png/.pdf).
+    ks:         review-queue depths for the recall-vs-k panel (deduped, sorted).
+    primary_k:  the k flagged as the headline/production depth; must be in ks.
+    title:      figure suptitle.
+    note:       optional caption under the title for provenance / caveats (e.g.
+                which checkpoint produced the scores). If the scores are not real
+                model output, say so here.
+
+    SYNTHETIC ONLY: requires the answer key (true_label, bucket) that does not
+    exist in production. Never call inside the training loop.
+
+    Returns out_path. Raises ImportError (with guidance) if matplotlib is absent,
+    ValueError on shape mismatch or a single-class true_label vector.
+    """
+    if not (scores.shape == true_label.shape == bucket.shape):
+        raise ValueError("scores, true_label, and bucket must have the same shape.")
+    if scores.ndim != 1:
+        raise ValueError("scores must be 1-D.")
+
+    n_total = _length(true_label)
+    n_pos = _count(true_label)
+    if n_pos == 0 or n_pos == n_total:
+        raise ValueError(
+            f"true_label must contain both classes; got {n_pos} positives of {n_total}."
+        )
+
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")  # headless-safe; no display needed
+        import matplotlib.pyplot as plt
+        from sklearn.metrics import precision_recall_curve
+    except ImportError as exc:  # pragma: no cover - environment dependent
+        raise ImportError(
+            "save_generalization_chart needs matplotlib; install it or use the "
+            + "numeric reports (format_hidden_multi_k) instead (no plotting needed)."
+        ) from exc
+
+    # multi-k recall is computed by the existing helper so the chart and the
+    # printed multi-k table can never disagree
+    multi_k = evaluate_hidden_multi_k(scores, true_label, bucket, ks=ks, primary_k=primary_k)
+
+    # split scores by bucket for the distribution panel
+    is_hidden: NDArray[np.bool_] = np.equal(bucket, int(Bucket.HIDDEN_POS))
+    is_revealed: NDArray[np.bool_] = np.equal(bucket, int(Bucket.REVEALED_POS))
+    is_unlabeled: NDArray[np.bool_] = np.equal(bucket, int(Bucket.UNLABELED_NEG))
+    hidden_scores: NDArray[np.float64] = scores[is_hidden]
+    revealed_scores: NDArray[np.float64] = scores[is_revealed]
+    unlabeled_scores: NDArray[np.float64] = scores[is_unlabeled]
+
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    fig.suptitle(title, fontsize=11, fontweight="bold")
+    if note:
+        # small caption line under the suptitle for provenance / caveats
+        fig.text(0.5, 0.94, note, ha="center", va="top", fontsize=8, color="#555555")
+
+    # panel 1: score distribution by bucket (log-count y; mules are rare)
+    ax = axes[0]
+    bins: NDArray[np.float64] = np.linspace(0.0, 1.0, 41)
+    _ = ax.hist(
+        unlabeled_scores,
+        bins=bins,
+        color="#9aa5b1",
+        alpha=0.55,
+        label=f"Unlabeled (n={_length(unlabeled_scores)})",
+    )
+    _ = ax.hist(
+        revealed_scores,
+        bins=bins,
+        color="#1b5e9c",
+        alpha=0.7,
+        label=f"Revealed mules (n={_length(revealed_scores)})",
+    )
+    _ = ax.hist(
+        hidden_scores,
+        bins=bins,
+        color="#c0392b",
+        alpha=0.7,
+        label=f"Hidden mules (n={_length(hidden_scores)})",
+    )
+    ax.set_yscale("log")
+    ax.set_xlabel("Model score  (higher = more mule-like)")
+    ax.set_ylabel("Account count  (log scale)")
+    ax.set_title("Score distribution by bucket")
+    ax.set_xlim(0.0, 1.0)
+    ax.grid(alpha=0.25)
+    ax.legend(fontsize=8, loc="upper center")
+
+    # panel 2: hidden-recall vs. k, against the achievable ceiling
+    ax = axes[1]
+    k_vals = [row.k for row in multi_k.rows]
+    recall_vals = [row.recall for row in multi_k.rows]
+    ceiling_vals = [row.ceiling for row in multi_k.rows]
+    _ = ax.plot(
+        k_vals,
+        recall_vals,
+        color="#c0392b",
+        lw=2.2,
+        marker="o",
+        label="Hidden-mule recall (achieved)",
+    )
+    _ = ax.plot(
+        k_vals,
+        ceiling_vals,
+        color="#7f8c8d",
+        ls="--",
+        lw=1.6,
+        marker="x",
+        label="Achievable ceiling (perfect ranker)",
+    )
+    primary_row = multi_k.primary
+    _ = ax.axvline(
+        primary_row.k,
+        color="#27772f",
+        ls=":",
+        lw=1.4,
+        label=f"Primary k={primary_row.k} (recall {primary_row.recall:.3f})",
+    )
+    ax.set_xlabel("Review depth k  (top-k accounts by score)")
+    ax.set_ylabel("Hidden-mule recall")
+    ax.set_title("Generalization: recall vs. review depth")
+    ax.set_ylim(0.0, 1.0)
+    ax.grid(alpha=0.25)
+    ax.legend(fontsize=8, loc="lower right")
+
+    # panel 3: precision-recall curve vs. TRUE labels (the curve behind PR-AUC)
+    ax = axes[2]
+    precision_curve, recall_curve, _thresholds = precision_recall_curve(true_label, scores)
+    base_rate = n_pos / float(n_total)
+    _ = ax.plot(
+        recall_curve,
+        precision_curve,
+        color="#1b5e9c",
+        lw=2.2,
+        label=f"PR curve (AP={multi_k.average_precision_true:.4f})",
+    )
+    _ = ax.axhline(
+        base_rate,
+        color="#7f8c8d",
+        ls="--",
+        lw=1.2,
+        label=f"Random baseline (base rate {base_rate:.4f})",
+    )
+    ax.set_xlabel("Recall  (vs. true labels)")
+    ax.set_ylabel("Precision  (vs. true labels)")
+    ax.set_title("Precision-recall (all true mules)")
+    ax.set_xlim(0.0, 1.0)
+    ax.set_ylim(0.0, 1.0)
+    ax.grid(alpha=0.25)
+    ax.legend(fontsize=8, loc="upper right")
+
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.92 if note else 0.95))
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    return out_path

@@ -1,4 +1,4 @@
-from typing import override
+from typing import cast, override
 
 import torch
 from torch import Tensor
@@ -19,6 +19,14 @@ from mule_pattern_learner.indexing.reindex import (
     reindex_neighborhood,
 )
 from mule_pattern_learner.tigergraph.client import Client
+
+# Per-query timeout in MILLISECONDS, passed to runInstalledQuery. pyTigerGraph
+# uses this both as the server-side GSQL query timeout AND to derive its HTTP
+# socket read timeout (http_timeout = this/1000 + 30s). 270000 ms -> a 300s
+# socket read timeout, which is what interrupts a stalled mid-stream read; a
+# batch query that legitimately needs longer than ~4.5 min does not exist here
+# (observed batches complete in ~30s), so this only ever fires on a real stall.
+_QUERY_TIMEOUT_MS = 270000
 
 
 class TigerGraphSamplerError(RuntimeError):
@@ -83,7 +91,24 @@ class TigerGraphHeteroSampler(BaseSampler):
         # strict-inductive split flags: gate traversal into held-out accounts
         params["allow_val"] = self._allow_val
         params["allow_test"] = self._allow_test
-        return self._client.conn.runInstalledQuery(self._query_name, params)
+        # Pass an explicit query timeout (milliseconds). This is load-bearing for
+        # robustness, not just a server hint: pyTigerGraph derives its HTTP socket
+        # READ timeout from this value (http_timeout = timeout_ms/1000 + 30s); if
+        # timeout is omitted, pyTigerGraph sets http_timeout=None -- an INFINITE
+        # socket read -- so a mid-stream stall (server sends some bytes then
+        # stops) hangs the read forever (observed: a ~2-hour wedge that no
+        # thread- or signal-based timeout could interrupt, because a blocking C
+        # read holds the GIL). A finite socket read timeout is the only thing
+        # that aborts such a stall: the read syscall itself returns and raises
+        # requests.exceptions.ReadTimeout, which the training loop's
+        # _resilient_batches catches and retries. The value also caps the
+        # server-side GSQL query time, aborting a genuinely-too-slow query.
+        return cast(
+            "list[object]",
+            self._client.conn.runInstalledQuery(
+                self._query_name, params, timeout=_QUERY_TIMEOUT_MS
+            ),
+        )
 
     def _to_hetero_output(self, local: LocalGraph, index: NodeSamplerInput) -> HeteroSamplerOutput:
         """

@@ -5,14 +5,23 @@ the masking parquet, which does not exist in production -- so this is separate
 from training, run after it. It loads the latest checkpoint, scores a split's
 accounts, and reports generalization to mules that were never labelled.
 
-No arguments. Loads the most recent models/mule_model_*.pt, scores the TEST
-split (the held-out dark rings -- the hardest generalization test) against the
-parquet answer key, and prints hidden-recall@k plus AP/AUC against true labels.
+No config files. Loads the most recent models/mule_model_*.pt and scores the
+TEST split (the held-out dark rings -- the hardest generalization test) against
+the answer key for the REQUESTED reveal prevalence, printing hidden-recall@k
+plus AP/AUC against true labels.
 
-    python scripts/.../evaluate_hidden.py
+--reveal-prevalence is required and must match the prevalence the loaded
+checkpoint was trained at: the checkpoint does not record its own prevalence, so
+scoring it against a different-prevalence answer key (a different mule
+population and split) yields a meaningless but plausible-looking number. The
+answer-key path is built from the prevalence, never auto-discovered.
+
+    python scripts/.../evaluate_hidden.py --reveal-prevalence 0.2
 """
 
 from collections.abc import Iterable
+import argparse
+from dataclasses import dataclass
 import math
 from pathlib import Path
 from typing import Protocol, cast
@@ -36,6 +45,7 @@ from mule_pattern_learner.training.metrics import (
     evaluate_hidden,
     evaluate_summary,
     format_summary_report,
+    save_generalization_chart,
     save_summary_chart,
 )
 from mule_pattern_learner.training.seeds_source import fetch_split_seeds
@@ -53,7 +63,12 @@ _COL_BUCKET = "bucket"
 # whose whole ring was hidden) -- the strongest test of finding unseen mules.
 _EVAL_SPLIT = "test"
 _EVAL_K = 100
-_BATCH_SIZE = 1024
+# Eval scoring is read-only: batch size affects only memory / speed, never the
+# scores or metrics. The test split holds the dark rings -- the densest, hubbiest
+# accounts in the graph -- so neighbor-sampled subgraphs here are the largest
+# anywhere in the pipeline. 256 keeps peak memory well under the OOM ceiling that
+# killed training; raise it only after watching RSS on a completing run.
+_BATCH_SIZE = 256
 
 # Capacity sweep for the summary report's gains/lift chart. A dense range of
 # alert rates (fractions of accounts reviewed) brackets the realistic AML band
@@ -100,15 +115,27 @@ def _find_latest_checkpoint(models_dir: Path) -> Path:
     return candidates[0]
 
 
-def _find_eval_parquet(masks_dir: Path) -> Path:
-    candidates = sorted(
-        masks_dir.glob("pu_labels_*.parquet"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
-    if not candidates:
-        raise FileNotFoundError(f"no pu_labels_*.parquet in {masks_dir}.")
-    return candidates[0]
+def _eval_parquet_path(masks_dir: Path, seed: int, reveal_prevalence: float) -> Path:
+    # Build the EXACT answer-key path for the requested seed and reveal
+    # prevalence, matching masking.py's naming (pu_labels_seed{seed}_p{prev}).
+    # This deliberately replaces the old latest-by-mtime auto-discovery: that
+    # silently paired whatever parquet was written most recently with the loaded
+    # checkpoint, so re-masking at a new prevalence (e.g. p0.2) caused a model
+    # trained at p0.1 to be scored against a p0.2 answer key -- a different mule
+    # population and split, producing a meaningless but plausible-looking number.
+    # The checkpoint does not record its prevalence, so the match cannot be
+    # auto-verified; requiring the prevalence explicitly, and failing if the file
+    # is absent, makes the mismatch impossible to hit silently.
+    path = masks_dir / f"pu_labels_seed{seed}_p{reveal_prevalence}.parquet"
+    if not path.exists():
+        available = sorted(p.name for p in masks_dir.glob("pu_labels_*.parquet"))
+        raise FileNotFoundError(
+            f"answer key {path.name} not found in {masks_dir}. "
+            + f"available: {available}. Pass --reveal-prevalence / --seed matching "
+            + "the prevalence the loaded checkpoint was TRAINED at; scoring a model "
+            + "against a different-prevalence key gives meaningless results."
+        )
+    return path
 
 
 def _labels(frame: pd.DataFrame, column: str) -> dict[str, int]:
@@ -117,7 +144,35 @@ def _labels(frame: pd.DataFrame, column: str) -> dict[str, int]:
     return dict(zip(ids, values))
 
 
+@dataclass(frozen=True, slots=True)
+class _Args:
+    reveal_prevalence: float
+    seed: int
+
+
+def _parse_args() -> _Args:
+    # reveal-prevalence is REQUIRED (no default): the answer key must match the
+    # prevalence the loaded checkpoint was trained at, and the checkpoint does
+    # not record its own prevalence, so there is no safe default to guess. Seed
+    # defaults to the project seed (masking's default), overridable for parity.
+    p = argparse.ArgumentParser(description="Synthetic hidden-mule generalization eval.")
+    _ = p.add_argument(
+        "--reveal-prevalence",
+        type=float,
+        required=True,
+        help="reveal prevalence of the answer key to score against; MUST match "
+        + "the prevalence the loaded checkpoint was trained at.",
+    )
+    _ = p.add_argument("--seed", type=int, default=1337, help="masking seed (default 1337).")
+    ns = p.parse_args()
+    return _Args(
+        reveal_prevalence=cast(float, ns.reveal_prevalence),
+        seed=cast(int, ns.seed),
+    )
+
+
 def main() -> None:
+    args = _parse_args()
     client = Client(Settings())
     print(f"connected: {client.graphname}")
     backend = TigerGraphRemoteBackend(client)
@@ -150,8 +205,9 @@ def main() -> None:
     seed_ids = split_seeds.account_ids
     print(f"{_EVAL_SPLIT} split: {len(seed_ids)} accounts")
 
-    # answer key from the parquet (synthetic only)
-    eval_path = _find_eval_parquet(_MASKS_DIR)
+    # answer key from the parquet (synthetic only); path built from the
+    # explicitly-requested prevalence + seed, never auto-discovered by mtime.
+    eval_path = _eval_parquet_path(_MASKS_DIR, args.seed, args.reveal_prevalence)
     frame = pd.read_parquet(eval_path)
     true_label_of = _labels(frame, _COL_TRUE_LABEL)
     bucket_of = _labels(frame, _COL_BUCKET)
@@ -187,6 +243,13 @@ def main() -> None:
     )
     with torch.no_grad():
         for batch in bar:
+            # A degenerate tail batch can come back without the Account node type
+            # at all (no seeds survived sampling); accessing batch["Account"]
+            # would raise KeyError: 'Account'. Skip it -- there is nothing to
+            # score and it contributes no seeds to the metrics. (The edge-attr
+            # guard below handles the related sparse-batch case for HAS_PAID.)
+            if "Account" not in batch.node_types:
+                continue
             account = _node_store(batch, "Account")
             bsize = int(account.batch_size)
             n_id = cast("list[int]", account.n_id[:bsize].tolist())
@@ -198,9 +261,14 @@ def main() -> None:
             edge_index_dict: dict[EdgeType, Tensor] = {
                 et: _edge_store(batch, et).edge_index for et in batch.edge_types
             }
-            edge_attr_dict: dict[EdgeType, Tensor] = {
-                _HAS_PAID: _edge_store(batch, _HAS_PAID).edge_attr
-            }
+            # HAS_PAID edge features only exist when the batch sampled HAS_PAID
+            # edges. A sparse tail batch (isolated accounts) may have none,
+            # leaving the edge store without edge_attr; forcing the key raises
+            # AttributeError. HeteroConv runs the HAS_PAID conv only when the
+            # type is present in edge_index_dict, so omitting it here is correct.
+            edge_attr_dict: dict[EdgeType, Tensor] = {}
+            if _HAS_PAID in batch.edge_types:
+                edge_attr_dict[_HAS_PAID] = _edge_store(batch, _HAS_PAID).edge_attr
             logits = cast(Tensor, model(x_dict, edge_index_dict, edge_attr_dict, node_counts))
             probs = cast("list[float]", torch.sigmoid(logits[:bsize]).tolist())
             scores.extend(probs)
@@ -254,6 +322,26 @@ def main() -> None:
     )
     print(f"\nsummary report -> {table_path}")
     print(f"gains/lift chart -> {chart_path}")
+
+    # ── Generalization chart: the hidden-vs-revealed story ──
+    # The gains chart above is the operating-point (staffing) view against TRUE
+    # labels and does NOT separate hidden mules from revealed ones. This chart
+    # answers the project's thesis directly -- did the model rank mules it was
+    # NEVER labelled (hidden) alongside the ones it saw (revealed)? -- via three
+    # panels: score distribution by bucket, hidden-recall vs. review depth
+    # against the achievable ceiling, and the precision-recall curve. Same
+    # provenance note so the figure is tied to its checkpoint.
+    generalization_path = _EVAL_OUT_DIR / f"generalization_{_EVAL_SPLIT}.png"
+    _ = save_generalization_chart(
+        scores_arr,
+        true_arr,
+        bucket_arr,
+        str(generalization_path),
+        primary_k=_EVAL_K,
+        title=f"Mule detection - generalization to hidden mules ({_EVAL_SPLIT} split)",
+        note=f"scores from checkpoint {ckpt_path.name}; synthetic answer key {eval_path.name}",
+    )
+    print(f"generalization chart -> {generalization_path}")
 
 
 if __name__ == "__main__":

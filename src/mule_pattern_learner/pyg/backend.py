@@ -16,19 +16,23 @@ class TigerGraphRemoteBackend:
     """
     Shared container wiring TigerGraph into PyG's remote-backend interfaces.
 
-    Holds the single TigerGraph client and the one persistent NodeIDMapper that
-    the sampler and the feature store must agree on: the sampler registers each
+    Holds the single TigerGraph client and the one NodeIDMapper object that the
+    sampler and the feature store must agree on: the sampler registers each
     sampled node's global string id and writes the assigned integer into PyG's
     node tensor, and the feature store later reverses those same integers back
     to string ids to fetch features. Because PyG's _get_tensor receives only
     (group_name, attr_name, index) and not the sampler's metadata, this mapping
     has to live on a shared object both sides reference (the FalkorDB pattern).
 
-    The mapper persists across the run, so it grows with the set of distinct
-    nodes actually sampled (bounded by the labeled seeds and their sampled
-    neighborhoods), not the full graph. For true billion-scale with a fixed
-    memory ceiling, the mapper could later evict stale batches (LRU); that is a
-    future optimization and not required at the current scale.
+    The mapper OBJECT is constructed once and reused, but its CONTENTS are reset
+    every batch: the sampler calls mapper.reset() at the start of each
+    sample_from_nodes (see TigerGraphHeteroSampler), so the table holds only the
+    current batch's sampled nodes, never an accumulating global-id table. This is
+    safe because the loader is synchronous (num_workers=0), so the prior batch's
+    feature fetch has completed before the next reset and no live integer id is
+    dropped mid-use. Consequently the mapper does NOT grow over a run and is not
+    a source of unbounded memory; per-batch peak memory is driven by the sampled
+    subgraph size (neighbor fanout x seeds), not by the mapper.
     """
 
     _client: Client
@@ -45,7 +49,7 @@ class TigerGraphRemoteBackend:
 
     @property
     def mapper(self) -> NodeIDMapper:
-        """The shared, persistent global-id <-> integer mapper."""
+        """The shared global-id <-> integer mapper (reset each batch)."""
         return self._mapper
 
     def make_sampler(

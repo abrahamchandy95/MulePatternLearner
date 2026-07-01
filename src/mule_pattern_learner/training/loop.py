@@ -1,10 +1,13 @@
 from collections.abc import Callable, Iterator, Mapping, Sequence
 import copy
+import gc
+import os
 import socket
 from dataclasses import dataclass
 import time
 from typing import Protocol, cast
 
+import psutil
 import requests
 
 import numpy as np
@@ -23,6 +26,57 @@ from mule_pattern_learner.training.metrics import ValScores, evaluate_ranking
 
 _HAS_PAID: EdgeType = ("Account", "HAS_PAID", "Account")
 _ACCOUNT: NodeType = "Account"
+
+# Run a full Python GC + allocator release every this many batches. gc.collect()
+# walks the whole object graph and is too expensive to call every batch, so it
+# stays on this coarser cadence; the device cache is released every batch
+# separately (see _CLEAR_MPS_EVERY) because that is the cheap, load-bearing one.
+_CACHE_CLEAR_EVERY = 50
+
+# Release the MPS/CUDA caching allocator EVERY this many batches. On MPS (Apple
+# Silicon, unified memory) the device allocator's footprint is NOT visible in
+# process RSS -- a run can show a flat, bounded rss_mb yet still be OOM-killed by
+# the OS because the MPS/driver allocation (which shares physical RAM) climbed
+# unbounded. A prior run died at epoch 2 ~16h in with rss_mb pinned at 1-2 GB:
+# the kill came from MPS memory that rss_mb could not see. Clearing the device
+# cache every batch keeps that (invisible-to-RSS) high-water mark low. It is
+# cheap relative to a TigerGraph round-trip per batch, so per-batch is affordable.
+_CLEAR_MPS_EVERY = 1
+
+_PROCESS = psutil.Process(os.getpid())
+
+
+def _rss_mb() -> float:
+    # Resident set size in MB for the current process; logged per batch so a
+    # slow memory climb is visible in the training output itself (vs. needing an
+    # external watcher), and so a killed run leaves a record of where RSS was.
+    # WARNING: RSS does NOT include MPS device memory on Apple Silicon -- see
+    # _mps_mb for the gauge that actually predicts an MPS OOM kill.
+    return float(_PROCESS.memory_info().rss) / (1024.0 * 1024.0)
+
+
+def _mps_mb(device: torch.device) -> float:
+    # MPS driver-allocated memory in MB (0.0 off MPS). This is the gauge that was
+    # missing: it reports the device allocation the OS sees and kills on, which
+    # process RSS does not include. Logged per batch so an MPS climb is visible
+    # in the training output BEFORE it triggers an OOM kill, instead of the run
+    # dying silently with a healthy-looking rss_mb. driver_allocated_memory is
+    # the total the driver reserved (>= current_allocated_memory, and closer to
+    # what the OS accounts), so it is the right early-warning number.
+    if device.type != "mps":
+        return 0.0
+    return float(torch.mps.driver_allocated_memory()) / (1024.0 * 1024.0)
+
+
+def _release_device_memory(device: torch.device) -> None:
+    # Hand back the caching allocator's retained blocks. No-op on CPU. This is
+    # the standard mitigation for slow allocator growth on MPS/CUDA across long
+    # runs; it does not change results, only the memory high-water mark.
+    if device.type == "mps":
+        torch.mps.empty_cache()
+    elif device.type == "cuda":
+        torch.cuda.empty_cache()
+
 
 BatchTransform = Callable[[HeteroData], HeteroData]
 
@@ -254,6 +308,21 @@ def _edge_store(batch: HeteroData, key: EdgeType) -> _EdgeStore:
     return cast(_EdgeStore, cast(object, batch[key]))
 
 
+def _subgraph_size(batch: HeteroData) -> tuple[int, int]:
+    # Total nodes and edges in a sampled batch, summed across all node / edge
+    # types. The dominant driver of per-batch memory: a hub seed whose k-hop
+    # neighborhood explodes produces a batch whose totals dwarf the median, which
+    # is the signature of a single-batch OOM spike (vs a steady leak). Logged per
+    # batch so a run that OOM-kills leaves evidence of which batch and how large.
+    n_nodes = 0
+    for ntype in batch.node_types:
+        n_nodes += int(_node_store(batch, ntype).n_id.shape[0])
+    n_edges = 0
+    for etype in batch.edge_types:
+        n_edges += int(_edge_store(batch, etype).edge_index.shape[1])
+    return n_nodes, n_edges
+
+
 def _forward(model: Module, batch: HeteroData, device: torch.device) -> Tensor:
     x_dict: dict[NodeType, Tensor] = {_ACCOUNT: _node_store(batch, _ACCOUNT).x.to(device)}
     node_counts: dict[NodeType, int] = {
@@ -262,9 +331,15 @@ def _forward(model: Module, batch: HeteroData, device: torch.device) -> Tensor:
     edge_index_dict: dict[EdgeType, Tensor] = {
         etype: _edge_store(batch, etype).edge_index.to(device) for etype in batch.edge_types
     }
-    edge_attr_dict: dict[EdgeType, Tensor] = {
-        _HAS_PAID: _edge_store(batch, _HAS_PAID).edge_attr.to(device)
-    }
+    # HAS_PAID edge features only exist when the batch actually sampled HAS_PAID
+    # edges. A sparse batch (e.g. a tail batch of isolated accounts) may have
+    # none, leaving the edge store without an edge_attr; forcing the key would
+    # raise AttributeError. HeteroConv runs the HAS_PAID conv only when the edge
+    # type is present in edge_index_dict, so omitting it here is correct and the
+    # attention simply skips that relation for this batch.
+    edge_attr_dict: dict[EdgeType, Tensor] = {}
+    if _HAS_PAID in batch.edge_types:
+        edge_attr_dict[_HAS_PAID] = _edge_store(batch, _HAS_PAID).edge_attr.to(device)
     return cast(Tensor, model(x_dict, edge_index_dict, edge_attr_dict, node_counts))
 
 
@@ -306,6 +381,7 @@ def train_epoch(
     _ = model.train()
     total = 0.0
     count = 0
+    max_nodes = 0
     bar = tqdm(
         _resilient_batches(make_loader),
         total=total_batches,
@@ -315,6 +391,17 @@ def train_epoch(
     )
     for raw in bar:
         batch = batch_transform(raw)
+        # subgraph-size diagnostic: surface the per-batch node/edge totals so a
+        # memory spike is visible BEFORE the forward allocates on top of it, and
+        # so an OOM-killed run leaves a record of the largest batch it reached.
+        n_nodes, n_edges = _subgraph_size(batch)
+        if n_nodes > max_nodes:
+            max_nodes = n_nodes
+            print(
+                f"    [subgraph] new max batch: {n_nodes} nodes, {n_edges} edges "
+                + f"(batch #{count})",
+                flush=True,
+            )
         logits = _forward(model, batch, dev)
         seeds = _seed_ids(batch, mapper_to_ids)
         seed_logits = logits[: len(seeds)]
@@ -327,7 +414,24 @@ def train_epoch(
 
         total += float(train_loss.item())
         count += 1
-        bar.set_postfix(loss=f"{total / count:.4f}")
+        # Two-tier memory release. The device cache is freed EVERY batch because
+        # MPS allocator growth (invisible to rss_mb) is what OOM-kills a long run;
+        # this is cheap next to the per-batch TigerGraph round-trip. The full
+        # gc.collect() is far more expensive (whole-heap walk) so it stays on the
+        # coarser cadence, dropping any Python-side reference cycles so the next
+        # device release can actually reclaim them.
+        if count % _CLEAR_MPS_EVERY == 0:
+            _release_device_memory(dev)
+        if count % _CACHE_CLEAR_EVERY == 0:
+            gc.collect()
+            _release_device_memory(dev)
+        bar.set_postfix(
+            loss=f"{total / count:.4f}",
+            nodes=n_nodes,
+            edges=n_edges,
+            rss_mb=f"{_rss_mb():.0f}",
+            mps_mb=f"{_mps_mb(dev):.0f}",
+        )
     return total / max(count, 1)
 
 
@@ -364,6 +468,7 @@ def validate(
         desc=f"  val e{epoch}",
     )
     with torch.no_grad():
+        val_count = 0
         for batch in bar:
             logits = _forward(model, batch, dev)
             seeds = _seed_ids(batch, mapper_to_ids)
@@ -372,6 +477,17 @@ def validate(
             scores.extend(probs)
             raw_logits.extend(cast(list[float], seed_logits.tolist()))
             labels.extend(pu_label_of[s] for s in seeds)
+            val_count += 1
+            if val_count % _CLEAR_MPS_EVERY == 0:
+                _release_device_memory(dev)
+            if val_count % _CACHE_CLEAR_EVERY == 0:
+                gc.collect()
+                _release_device_memory(dev)
+
+    # release once more after validation so the next epoch starts from a clean
+    # allocator high-water mark rather than carrying validation's peak forward
+    gc.collect()
+    _release_device_memory(dev)
 
     scores_arr: NDArray[np.float64] = np.asarray(scores, dtype=np.float64)
     labels_arr: NDArray[np.int64] = np.asarray(labels, dtype=np.int64)
