@@ -9,13 +9,32 @@ from typing import cast
 from mule_pattern_learner.tigergraph.client import Client
 from mule_pattern_learner.tigergraph.gsql_paths import gsql_path
 
+# TigerGraph's positive install/drop signals. If one of these appears, the
+# operation compiled successfully -- even if the same log also prints a benign
+# status line such as "0 error(s)". Positive confirmation is checked BEFORE the
+# failure markers below, so a success log can never be misread as a failure.
+_SUCCESS_MARKERS: tuple[str, ...] = (
+    "successfully created queries",
+    "successfully installed",
+    "query installation finished",
+)
+_DROP_SUCCESS_MARKERS: tuple[str, ...] = (
+    "successfully dropped",
+    "not exist",  # nothing to drop == success for our purposes
+)
+
+# Real-failure phrases. These are phrase-level on purpose: NOT the bare words
+# "error" / "fail" / "syntax", which match benign substrings like "0 error(s)",
+# "0 failures", or "syntax-highlighted". Because success is confirmed first, a
+# genuine failure (which carries no success marker) still trips these.
 _FAILURE_MARKERS: tuple[str, ...] = (
-    "error",
-    "fail",
+    "failed",
     "could not",
     "cannot",
     "not valid",
-    "syntax",
+    "syntax error",
+    "semantic error",
+    "compilation error",
 )
 
 # CREATE [OR REPLACE] [DISTRIBUTED] QUERY <name> -- captures the installed name.
@@ -52,11 +71,28 @@ def _run_gsql(client: Client, statement: str) -> str:
 
 
 def _check_output(registry_name: str, action: str, output: str) -> None:
+    """
+    Raise GsqlInstallError unless the install log confirms success.
+
+    Success-first: if TigerGraph printed a success marker, the install compiled
+    and we return -- even if the log also contains a benign "0 error(s)" line.
+    Only when NO success marker is present do we scan for failure phrases. This
+    is why bare "error"/"fail" are no longer needed (and were removed): they
+    matched success logs and produced false failures (e.g. match_parties).
+    """
     low = output.lower()
+    if any(marker in low for marker in _SUCCESS_MARKERS):
+        return
     if any(marker in low for marker in _FAILURE_MARKERS):
         raise GsqlInstallError(
             f"{action} {registry_name!r} reported a problem:\n{output.strip()[:800]}"
         )
+    # No success marker AND no known failure phrase: ambiguous. Surface it
+    # rather than silently assuming success -- a swallowed failure here would
+    # let the pipeline build on a query that never installed.
+    raise GsqlInstallError(
+        f"{action} {registry_name!r} produced no success confirmation:\n{output.strip()[:800]}"
+    )
 
 
 def install_query(client: Client, registry_name: str, drop_first: bool = True) -> str:
@@ -71,10 +107,15 @@ def install_query(client: Client, registry_name: str, drop_first: bool = True) -
     text = path.read_text(encoding="utf-8")
 
     if drop_first:
-        # a failed drop is tolerated only when the query was simply not installed
+        # A failed drop is tolerated only when the query was simply not
+        # installed. Success-first, same as _check_output: a drop log that
+        # confirms it dropped (or that the query did not exist) is fine, even if
+        # it also prints a benign "error" substring. Only an unconfirmed drop
+        # that ALSO carries a failure phrase is treated as a real failure.
         drop_out = _run_gsql(client, f"USE GRAPH {client.graphname}\nDROP QUERY {name}\n")
         low = drop_out.lower()
-        if any(m in low for m in _FAILURE_MARKERS) and "not exist" not in low:
+        dropped_ok = any(marker in low for marker in _DROP_SUCCESS_MARKERS)
+        if not dropped_ok and any(m in low for m in _FAILURE_MARKERS):
             raise GsqlInstallError(f"drop {name!r} failed:\n{drop_out.strip()[:800]}")
 
     install_out = _run_gsql(client, text + f"\nINSTALL QUERY {name}\n")
@@ -112,10 +153,10 @@ def _extract_request_id(submitted: object) -> str:
 
 def _status_of(status_response: object) -> str:
     # checkQueryStatus returns a list of {status: success|running|aborted, ...}.
-    # We submit one query at a time, so read the first entry's status. The bare
-    # "error"/"fail" markers are deliberately NOT applied here: a "running"
-    # status legitimately contains neither, and reusing _check_output would
-    # misread an in-progress poll as a failure.
+    # We submit one query at a time, so read the first entry's status. The
+    # failure markers are deliberately NOT applied here: a "running" status
+    # legitimately contains no success/failure phrase, and reusing _check_output
+    # would misread an in-progress poll as a failure.
     rows: list[object]
     if isinstance(status_response, list):
         rows = cast(list[object], status_response)

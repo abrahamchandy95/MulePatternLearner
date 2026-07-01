@@ -169,6 +169,15 @@ class MulePatternModel(Module):
             out[ntype] = cast(Tensor, embed(idx))
         return out
 
+    @staticmethod
+    def _merge_conv_output(
+        conv_out: dict[NodeType, Tensor], layer_in: dict[NodeType, Tensor]
+    ) -> dict[NodeType, Tensor]:
+        merged: dict[NodeType, Tensor] = dict(layer_in)
+        for ntype, value in conv_out.items():
+            merged[ntype] = value
+        return merged
+
     @override
     def forward(
         self,
@@ -184,9 +193,16 @@ class MulePatternModel(Module):
         # Layer 1: per-relation GATv2 attention, summed per node (1-hop mixing).
         #   for each type, h_i^(1) = sum_r sigma( sum_j alpha_ij^r * W^r . h_j )
         #   h1[type] : [N_type, 64]
-        h1: dict[NodeType, Tensor] = cast(
-            dict[NodeType, Tensor],
-            self._conv1(h_dict, edge_index_dict, edge_attr_dict),
+        # _merge_conv_output backfills any node type the conv dropped (no incoming
+        # edges) with its pre-conv representation, so h1 always covers every type
+        # present in h_dict -- including the empty-edge batch where HeteroConv
+        # returns {} and a bare h1[_ACCOUNT] would otherwise KeyError.
+        h1: dict[NodeType, Tensor] = self._merge_conv_output(
+            cast(
+                dict[NodeType, Tensor],
+                self._conv1(h_dict, edge_index_dict, edge_attr_dict),
+            ),
+            h_dict,
         )
         # ELU nonlinearity:  ELU(x) = x if x > 0 else (exp(x) - 1)
         h1 = {k: F.elu(v) for k, v in h1.items()}
@@ -195,9 +211,12 @@ class MulePatternModel(Module):
 
         # Layer 2: aggregates the 1-hop summaries -> each node reflects 2 hops.
         #   h2[type] : [N_type, 64]
-        h2: dict[NodeType, Tensor] = cast(
-            dict[NodeType, Tensor],
-            self._conv2(h1, edge_index_dict, edge_attr_dict),
+        h2: dict[NodeType, Tensor] = self._merge_conv_output(
+            cast(
+                dict[NodeType, Tensor],
+                self._conv2(h1, edge_index_dict, edge_attr_dict),
+            ),
+            h1,
         )
         h2 = {k: F.elu(v) for k, v in h2.items()}
 

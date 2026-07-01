@@ -73,6 +73,15 @@ class HasPaidEdgeFeatureAttacher:
     def __call__(self, data: HeteroData) -> HeteroData:
         if _HAS_PAID not in data.edge_types:
             return data
+        # A degenerate tail batch can carry a HAS_PAID edge type but no "Account"
+        # node store (no Account nodes survived sampling); accessing data["Account"]
+        # below would raise KeyError: 'Account'. Without Account nodes there are no
+        # edges to attach features to, so return unchanged. This transform runs
+        # INSIDE loader iteration (applied as each batch is produced), so the crash
+        # it prevents fires before any caller-side loop guard can see the batch --
+        # which is why guarding only in the eval/train loop did not stop it.
+        if "Account" not in data.node_types:
+            return data
 
         edge_store = _edge_store(data, _HAS_PAID)
         edge_index = edge_store.edge_index

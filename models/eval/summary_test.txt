@@ -1,0 +1,26 @@
+========================================================================
+MULE-DETECTION EVALUATION  (synthetic; true-label answer key)
+========================================================================
+  accounts scored        : 91018
+  true mules             : 208
+  base rate              : 0.00229  (0.229% of accounts)
+
+  PRIMARY (threshold-free, robust to imbalance):
+    PR-AUC / Avg Precision : 0.1963
+    ROC-AUC                : 0.9507
+
+  OPERATING POINTS across review capacity:
+    recall is PU-estimable; PRECISION & LIFT are trustworthy
+    ONLY because this is synthetic (biased on real PU data).
+    human-analyst precision reference ~ 0.45
+
+  alert_rate        k    recall   precision      lift    TP_in_k
+      0.050%       46    0.0721      0.3261    142.7x    15/208   
+      0.100%       91    0.1154      0.2637    115.4x    24/208   
+      0.500%      455    0.5385      0.2462    107.7x   112/208   
+      1.000%      910    0.7356      0.1681     73.6x   153/208   
+      2.000%     1820    0.8077      0.0923     40.4x   168/208   
+
+  ( * = precision at this depth meets/beats the human-analyst
+    reference; the slide-worthy 'matches expert triage' point )
+========================================================================
