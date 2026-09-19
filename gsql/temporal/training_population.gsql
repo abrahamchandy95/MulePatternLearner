@@ -1,0 +1,30 @@
+USE GRAPH Mule_Pattern_Learner
+
+/* Production population and observed-label metadata, separate from model features.
+   is_mule=0 is UNLABELED for nnPU, never a confirmed negative target.
+   The producer must attest label discovery time; no oracle/masking fields leave this query. */
+CREATE OR REPLACE QUERY temporal_training_population(
+  STRING after_id = "", INT batch_size = 10000, BOOL include_observed = TRUE
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+  SetAccum<STRING> @owners;
+  OrAccum @observed_positive;
+  MaxAccum<UINT> @known_from_ms;
+  IF batch_size < 1 OR batch_size > 10000 THEN
+    PRINT "invalid_batch_size" AS status; RETURN;
+  END;
+  Accounts = SELECT a FROM Account:a
+    WHERE a.id > after_id AND a.account_type == "deposit" AND NOT a.is_external
+    ORDER BY a.id ASC LIMIT batch_size;
+  IF include_observed THEN
+    Observed = SELECT a FROM Accounts:a
+      ACCUM a.@observed_positive += (a.is_mule == 1 AND a.mule_label_known),
+        a.@known_from_ms += a.mule_label_available_ts_ms;
+  END;
+  Owners = SELECT a FROM Accounts:a -(Account_Owned_By_Party>:e)- Party:p
+    ACCUM a.@owners += p.id;
+  PRINT "ok" AS status;
+  PRINT Accounts[Accounts.id AS account_id, Accounts.first_seen_seq AS first_seen_seq,
+    Accounts.first_seen_ts_ms AS first_seen_ts_ms, Accounts.@owners AS owner_ids,
+    Accounts.@observed_positive AS observed_positive,
+    Accounts.@known_from_ms AS known_from_ms] AS accounts;
+}

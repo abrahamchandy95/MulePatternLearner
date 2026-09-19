@@ -1,0 +1,21 @@
+/* Add account-level ground truth and separate masking state.
+   Existing accounts remain unknown and masked until explicitly labeled.
+   No account, event, relationship or temporal encoding is removed. */
+USE GRAPH Mule_Pattern_Learner
+CREATE SCHEMA_CHANGE JOB add_account_mule_supervision
+FOR GRAPH Mule_Pattern_Learner {
+  ALTER VERTEX Account ADD ATTRIBUTE (
+    mule_label_known BOOL DEFAULT "false",
+    is_mule_masked BOOL DEFAULT "true",
+    pu_label INT DEFAULT 0,
+    mule_label_effective_seq UINT DEFAULT 0,
+    mule_label_effective_ts_ms UINT DEFAULT 0,
+    mule_label_available_seq UINT DEFAULT 0,
+    mule_label_available_ts_ms UINT DEFAULT 0,
+    mule_ring_id INT DEFAULT -1,
+    mule_label_source STRING DEFAULT "",
+    is_mule INT DEFAULT 0
+  );
+}
+RUN SCHEMA_CHANGE JOB add_account_mule_supervision -warn
+DROP JOB add_account_mule_supervision

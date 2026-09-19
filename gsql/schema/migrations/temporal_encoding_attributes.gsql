@@ -1,0 +1,29 @@
+/* Additive migration for an existing, possibly populated graph.
+   Run once. No base facts, edges, labels, or existing attributes are removed.
+*/
+USE GRAPH Mule_Pattern_Learner
+CREATE SCHEMA_CHANGE JOB add_temporal_encoding_attributes
+FOR GRAPH Mule_Pattern_Learner {
+  ALTER VERTEX Zelle_Transfer ADD ATTRIBUTE (
+    pair_delta_t_ms UINT DEFAULT 0,
+    pair_delta_t_present BOOL DEFAULT "false",
+    pair_time_encoding LIST<DOUBLE>,
+    time_encoding_basis_id STRING DEFAULT "",
+    pair_previous_event_id STRING DEFAULT "",
+    pair_sender_id STRING DEFAULT "",
+    pair_recipient_type STRING DEFAULT "",
+    pair_recipient_id STRING DEFAULT ""
+  );
+  ALTER VERTEX Payment_Transaction ADD ATTRIBUTE (
+    pair_delta_t_ms UINT DEFAULT 0,
+    pair_delta_t_present BOOL DEFAULT "false",
+    pair_time_encoding LIST<DOUBLE>,
+    time_encoding_basis_id STRING DEFAULT "",
+    pair_previous_event_id STRING DEFAULT "",
+    pair_sender_id STRING DEFAULT "",
+    pair_recipient_type STRING DEFAULT "",
+    pair_recipient_id STRING DEFAULT ""
+  );
+}
+RUN SCHEMA_CHANGE JOB add_temporal_encoding_attributes -warn
+DROP JOB add_temporal_encoding_attributes

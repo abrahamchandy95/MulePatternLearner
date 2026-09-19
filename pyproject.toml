@@ -36,6 +36,7 @@ all = ["mule-pattern-learner[model,baseline,dev]"]
 
 [project.scripts]
 mule-train = "mule_pattern_learner.training.train:main"
+mule-temporal = "mule_pattern_learner.temporal.live.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mule_pattern_learner"]
@@ -44,8 +45,21 @@ packages = ["src/mule_pattern_learner"]
 testpaths = ["tests"]
 pythonpath = ["src"]
 
-# Type checking is configured in pyrightconfig.json (single source of truth);
-# basedpyright ignores [tool.basedpyright] here when that file is present.
+[tool.basedpyright]
+include = ["src", "tests", "scripts"]
+exclude = ["**/__pycache__", ".venv", "local_experiments"]
+extraPaths = ["src"]
+venvPath = "."
+venv = ".venv"
+typeCheckingMode = "strict"
+pythonVersion = "3.14"
+useLibraryCodeForTypes = true
+reportMissingTypeStubs = "none"
+reportUnknownMemberType = "none"
+reportUnknownVariableType = "none"
+reportUnknownArgumentType = "none"
+reportUnknownParameterType = "warning"
+reportUnknownLambdaType = "warning"
 
 [tool.ruff]
 line-length = 100

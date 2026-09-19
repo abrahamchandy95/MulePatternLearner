@@ -1,0 +1,90 @@
+USE GRAPH Mule_Pattern_Learner
+
+/* Frozen experiment partition; never reads truth or changes business attributes.
+   Whole ownership components share a partition, including closed tenures.
+   Internal IDs are used only to seed a source-specific partition, not model inputs.
+   New/reloaded graphs require a new scope/source ID. */
+CREATE OR REPLACE QUERY temporal_create_training_scope(
+  STRING scope_id, STRING source_id, UINT split_seed = 42, INT max_iterations = 100
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+  MinAccum<UINT> @component;
+  OrAccum @@changed;
+  SumAccum<INT> @@existing;
+  MapAccum<INT, SumAccum<INT>> @@accounts;
+  INT iteration = 0;
+  UINT bucket = 0;
+  IF scope_id == "" OR source_id == "" OR max_iterations < 1 THEN
+    PRINT "invalid_parameters" AS status; RETURN;
+  END;
+  Scopes = {Temporal_Training_Scope.*};
+  Existing = SELECT r FROM Scopes:r WHERE r.scope_id == scope_id;
+  IF Existing.size() > 0 THEN PRINT "scope_already_exists" AS status; RETURN; END;
+  Entities = {Account.*, Party.*};
+  Init = SELECT s FROM Entities:s POST-ACCUM s.@component = getvid(s);
+  @@changed = TRUE;
+  WHILE @@changed AND iteration < max_iterations DO
+    @@changed = FALSE;
+    Propagate = SELECT t FROM Entities:s -((Party_Owns_Account>|Account_Owned_By_Party>):e)- :t
+      ACCUM IF s.@component < t.@component THEN
+        t.@component += s.@component, @@changed += TRUE
+      END;
+    iteration = iteration + 1;
+  END;
+  IF @@changed THEN PRINT "ownership_components_did_not_converge" AS status; RETURN; END;
+  INSERT INTO Temporal_Training_Scope VALUES (scope_id, source_id, split_seed, FALSE);
+  Membership = SELECT s FROM Entities:s
+    ACCUM INSERT INTO Entity_In_Training_Scope VALUES (
+      s, scope_id Temporal_Training_Scope,
+      CASE WHEN (((s.@component % 2147483647) * 1103515245 + split_seed) % 2147483647) % 10000 < 7000 THEN 1
+           WHEN (((s.@component % 2147483647) * 1103515245 + split_seed) % 2147483647) % 10000 < 8500 THEN 2
+           ELSE 3 END,
+      to_string(s.@component));
+  PRINT "ok" AS status, scope_id AS scope_id, iteration AS iterations,
+    Entities.size() AS expected_members;
+}
+
+CREATE OR REPLACE QUERY temporal_scope_population(
+  STRING scope_id, STRING after_id = "", INT batch_size = 10000,
+  BOOL include_observed = TRUE
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+  MaxAccum<INT> @partition;
+  MaxAccum<STRING> @group;
+  OrAccum @positive;
+  MaxAccum<UINT> @known_ms;
+  IF batch_size < 1 OR batch_size > 10000 THEN PRINT "invalid_batch_size" AS status; RETURN; END;
+  Scopes = {Temporal_Training_Scope.*};
+  ReadyScope = SELECT r FROM Scopes:r WHERE r.scope_id == scope_id AND r.ready;
+  IF ReadyScope.size() != 1 THEN PRINT "scope_not_ready" AS status; RETURN; END;
+  Accounts = SELECT a FROM ReadyScope:r -(Training_Scope_Has_Entity>:e)- Account:a
+    WHERE a.id > after_id AND a.account_type == "deposit" AND NOT a.is_external
+    ACCUM a.@partition += e.partition, a.@group += e.group_id
+    ORDER BY a.id ASC LIMIT batch_size;
+  IF include_observed THEN
+    Labels = SELECT a FROM Accounts:a
+      ACCUM a.@positive += (a.is_mule == 1 AND a.mule_label_known),
+        a.@known_ms += a.mule_label_available_ts_ms;
+  END;
+  PRINT "ok" AS status;
+  PRINT Accounts[Accounts.id AS account_id, Accounts.first_seen_seq AS first_seen_seq,
+    Accounts.first_seen_ts_ms AS first_seen_ts_ms, Accounts.@partition AS partition,
+    Accounts.@group AS group_id, Accounts.@positive AS observed_positive,
+    Accounts.@known_ms AS known_from_ms] AS accounts;
+}
+
+/* A separate query sees committed membership writes and verifies completeness. */
+CREATE OR REPLACE QUERY temporal_finalize_training_scope(STRING scope_id, UINT expected_members)
+FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+  SumAccum<UINT> @@members;
+  SumAccum<UINT> @@invalid;
+  Scopes = {Temporal_Training_Scope.*};
+  Selected = SELECT r FROM Scopes:r WHERE r.scope_id == scope_id;
+  IF Selected.size() != 1 OR expected_members == 0 THEN PRINT "invalid_scope" AS status; RETURN; END;
+  Members = SELECT a FROM Selected:r -(Training_Scope_Has_Entity>:e)- :a
+    ACCUM @@members += 1,
+      IF e.partition < 1 OR e.partition > 3 OR e.group_id == "" THEN @@invalid += 1 END;
+  IF @@members != expected_members OR @@invalid > 0 THEN
+    PRINT "incomplete_membership" AS status, @@members AS members; RETURN;
+  END;
+  Mark = SELECT r FROM Selected:r POST-ACCUM r.ready = TRUE;
+  PRINT "ok" AS status, @@members AS members;
+}

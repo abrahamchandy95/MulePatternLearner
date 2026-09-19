@@ -27,7 +27,6 @@ data/*.npz
 *.csv
 *.tsv
 *.parquet
-!data/.gitkeep        # keep the empty data/ dir tracked
 
 # ── Python build / packaging artifacts ─────────────────────────────────────
 *.egg-info/
@@ -133,9 +132,41 @@ desktop.ini
 .spyproject
 .ropeproject
 
-# ── ML / experiment artifacts ──
-*.pt
-*.pth
-*.ckpt
-...
-!models/.gitkeep        # keep the empty models/ dir tracked
+# Repository contains source and generic configuration only.
+# JSON is allowed as a local interchange format, never as a tracked file.
+*.json
+*.jsonl
+*.json5
+*.JSON
+*.JSONL
+*.JSON5
+/data/
+/models/
+/artifacts/
+/outputs/
+/runs/
+/logs/
+/docs/experiments/
+/local_experiments/
+/configs/local/
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+*.npy
+*.npz
+*.arrow
+*.feather
+*.h5
+*.hdf5
+*.pkl
+*.pickle
+*.ipynb
+# Dataset simulation is local and is not a dependency of production training.
+/src/mule_pattern_learner/data/pu_masking.py
+/scripts/pipeline/after_load/masking.py
+/gsql/masking/get_masking_inputs.gsql
+
+# Local research attachments and deprecated oracle export.
+/docs/*.pdf
+/gsql/temporal/training_accounts.gsql

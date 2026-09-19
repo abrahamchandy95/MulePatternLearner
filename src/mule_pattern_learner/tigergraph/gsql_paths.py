@@ -26,8 +26,6 @@ _GSQL_RELPATHS: dict[str, str] = {
     "export_account_features": "export/export_account_features.gsql",
     "export_edges_by_type": "export/export_edges_by_type.gsql",
     "export_has_paid_edges": "export/export_has_paid_edges.gsql",
-    # masking inputs
-    "get_masking_inputs": "masking/get_masking_inputs.gsql",
     # experiments (throwaway probes / diagnostics)
     "diagnose_export": "experiments/diagnose_export.gsql",
     "diagnose_sentinels": "experiments/diagnose_sentinels.gsql",

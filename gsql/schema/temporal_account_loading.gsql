@@ -1,0 +1,20 @@
+/* Full Account CSV contract for the regenerated dataset.
+   Header names are explicit; no labels are inferred from payment fraud.
+   Load one row per Account, including explicit truth for known negatives.
+   Account IDs must be identical to the IDs on event/association endpoints. */
+USE GRAPH Mule_Pattern_Learner
+CREATE LOADING JOB load_temporal_accounts FOR GRAPH Mule_Pattern_Learner {
+  DEFINE HEADER account_header = "id", "account_type", "is_external", "first_seen_seq", "first_seen_ts_ms",
+    "is_mule", "mule_label_known", "is_mule_masked", "pu_label",
+    "mule_label_effective_seq", "mule_label_effective_ts_ms",
+    "mule_label_available_seq", "mule_label_available_ts_ms",
+    "mule_ring_id", "mule_label_source";
+  DEFINE FILENAME accounts;
+  LOAD accounts TO VERTEX Account VALUES (
+    $"id", $"account_type", $"is_external", $"first_seen_seq", $"first_seen_ts_ms",
+    $"mule_label_known", $"is_mule_masked", $"pu_label",
+    $"mule_label_effective_seq", $"mule_label_effective_ts_ms",
+    $"mule_label_available_seq", $"mule_label_available_ts_ms",
+    $"mule_ring_id", $"mule_label_source", $"is_mule"
+  ) USING HEADER="true", SEPARATOR=",", USER_DEFINED_HEADER="account_header";
+}
