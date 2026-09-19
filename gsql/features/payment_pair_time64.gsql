@@ -1,0 +1,160 @@
+USE GRAPH Mule_Pattern_Learner
+
+/* Exact pair history, intended for bounded POC extraction/materialization.
+   Non-Zelle payments are grouped separately for each payment_rail.
+   Canonical recipient: observed Account if present; otherwise observed Token.
+   No current token registration lookup and no label attributes are read.
+   All matching history before the cutoff is needed to find true predecessors.
+   An oversized or malformed history returns a status without writes.
+*/
+CREATE OR REPLACE QUERY payment_pair_time64(
+  VERTEX<Account> sender,
+  STRING recipient_type,
+  STRING recipient_id,
+  UINT seed_seq,
+  UINT seed_ts_ms,
+  STRING payment_rail,
+  BOOL persist = FALSE,
+  INT max_events = 1000
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+  TYPEDEF TUPLE<UINT event_seq, UINT event_ts_ms,
+                STRING event_id, VERTEX event_vertex> EventRow;
+  HeapAccum<EventRow>(10000, event_seq ASC, event_id ASC) @@heap;
+  ListAccum<EventRow> @@ordered;
+  ListAccum<DOUBLE> @@gap_encoding;
+  ListAccum<DOUBLE> @@age_encoding;
+  MapAccum<VERTEX, UINT> @@gap_by_event;
+  MapAccum<VERTEX, BOOL> @@present_by_event;
+  MapAccum<VERTEX, STRING> @@previous_by_event;
+  MapAccum<VERTEX, ListAccum<DOUBLE>> @@encoding_by_event;
+  SumAccum<INT> @sender_count, @account_count, @token_count;
+  OrAccum @invalid;
+  OrAccum @@invalid;
+  UINT previous_seq = 0;
+  UINT previous_ts_ms = 0;
+  STRING previous_id = "";
+  UINT gap_ms = 0;
+  UINT age_ms = 0;
+  BOOL have_previous = FALSE;
+  INT count_1h = 0;
+  INT count_24h = 0;
+  INT count_7d = 0;
+
+  IF seed_seq == 0 OR seed_ts_ms == 0 OR max_events < 1 OR max_events > 10000
+     OR (recipient_type != "Account" AND recipient_type != "Token")
+     OR recipient_id == "" OR payment_rail == "" OR payment_rail == "zelle" THEN
+    PRINT "invalid_parameters" AS status;
+    RETURN;
+  END;
+
+  Sources = {sender};
+  Candidates = SELECT t
+    FROM Sources:s -(Account_Initiated_Transaction>:e)- Payment_Transaction:t
+    WHERE t.event_seq < seed_seq AND t.event_ts_ms <= seed_ts_ms
+      AND t.payment_rail == payment_rail;
+
+  Matches = Candidates;
+  IF recipient_type == "Account" THEN
+    Matches = SELECT t FROM Candidates:t -(Transaction_To_Account>:e)- Account:r
+      WHERE r.id == recipient_id;
+  ELSE
+    Matches = SELECT t FROM Candidates:t -(Transaction_To_Token>:e)- Token:r
+      WHERE r.token_id == recipient_id;
+  END;
+
+  // Inspect all participating account/token roles, including malformed edges.
+  CheckSender = SELECT t FROM Matches:t -(Transaction_From_Account>:e)- Account:s
+    ACCUM t.@sender_count += 1,
+      t.@invalid += (e.event_seq != t.event_seq OR e.event_ts_ms != t.event_ts_ms
+        OR s.first_seen_seq == 0 OR s.first_seen_seq > t.event_seq
+        OR s.first_seen_ts_ms > t.event_ts_ms);
+  CheckAccounts = SELECT t FROM Matches:t -(Transaction_To_Account>:e)- Account:r
+    ACCUM t.@account_count += 1,
+      t.@invalid += (e.event_seq != t.event_seq OR e.event_ts_ms != t.event_ts_ms
+        OR r.first_seen_seq == 0 OR r.first_seen_seq > t.event_seq
+        OR r.first_seen_ts_ms > t.event_ts_ms);
+  CheckTokens = SELECT t FROM Matches:t -(Transaction_To_Token>:e)- Token:r
+    ACCUM t.@token_count += 1,
+      t.@invalid += (e.event_seq != t.event_seq OR e.event_ts_ms != t.event_ts_ms
+        OR r.first_seen_seq == 0 OR r.first_seen_seq > t.event_seq
+        OR r.first_seen_ts_ms > t.event_ts_ms);
+  Checked = SELECT t FROM Matches:t
+    ACCUM @@invalid += (t.@invalid OR t.@sender_count != 1
+      OR t.@account_count > 1 OR t.@token_count > 1
+      OR t.event_seq == 0 OR t.event_ts_ms == 0);
+  IF @@invalid THEN
+    PRINT "invalid_event_roles_or_clocks" AS status;
+    RETURN;
+  END;
+
+  Canonical = SELECT t FROM Matches:t
+    WHERE recipient_type == "Account" OR t.@account_count == 0;
+  IF Canonical.size() > max_events THEN
+    PRINT "history_limit_exceeded" AS status, Canonical.size() AS event_count;
+    RETURN;
+  END;
+  Ordered = SELECT t FROM Canonical:t
+    ACCUM @@heap += EventRow(t.event_seq, t.event_ts_ms, t.transaction_id, t);
+
+  // Validate the entire ordering before calculating or persisting any row.
+  WHILE @@heap.size() > 0 DO
+    @@ordered += @@heap.pop();
+  END;
+  FOREACH item IN @@ordered DO
+    IF have_previous AND (item.event_seq <= previous_seq
+       OR item.event_ts_ms < previous_ts_ms) THEN
+      PRINT "invalid_event_order" AS status;
+      RETURN;
+    END;
+    have_previous = TRUE;
+    previous_seq = item.event_seq;
+    previous_ts_ms = item.event_ts_ms;
+  END;
+  have_previous = FALSE;
+  previous_ts_ms = 0;
+
+  FOREACH item IN @@ordered DO
+    @@gap_encoding.clear();
+    gap_ms = 0;
+    IF have_previous THEN
+      gap_ms = item.event_ts_ms - previous_ts_ms;
+      @@gap_encoding = temporal_fourier64_values(gap_ms);
+    END;
+    age_ms = seed_ts_ms - item.event_ts_ms;
+    @@age_encoding = temporal_fourier64_values(age_ms);
+    IF age_ms <= 3600000 THEN count_1h = count_1h + 1; END;
+    IF age_ms <= 86400000 THEN count_24h = count_24h + 1; END;
+    IF age_ms <= 604800000 THEN count_7d = count_7d + 1; END;
+
+    IF persist THEN
+      @@gap_by_event += (item.event_vertex -> gap_ms);
+      @@present_by_event += (item.event_vertex -> have_previous);
+      @@previous_by_event += (item.event_vertex -> previous_id);
+      @@encoding_by_event += (item.event_vertex -> @@gap_encoding);
+    END;
+    PRINT item.event_id AS event_id, item.event_seq AS event_seq,
+      item.event_ts_ms AS event_ts_ms, previous_id AS previous_event_id,
+      gap_ms AS pair_delta_t_ms, have_previous AS pair_delta_t_present,
+      @@gap_encoding AS pair_time_encoding,
+      age_ms AS age_ms, @@age_encoding AS age_time_encoding;
+    have_previous = TRUE;
+    previous_ts_ms = item.event_ts_ms;
+    previous_id = item.event_id;
+  END;
+  IF persist THEN
+    Saved = SELECT t FROM Canonical:t
+      POST-ACCUM
+        t.pair_delta_t_ms = @@gap_by_event.get(t),
+        t.pair_delta_t_present = @@present_by_event.get(t),
+        t.pair_time_encoding = @@encoding_by_event.get(t),
+        t.time_encoding_basis_id = "log1p_s_400d_32x_sincos_v1",
+        t.pair_previous_event_id = @@previous_by_event.get(t),
+        t.pair_sender_id = sender.id,
+        t.pair_recipient_type = recipient_type,
+        t.pair_recipient_id = recipient_id;
+  END;
+  PRINT "ok" AS status, "log1p_s_400d_32x_sincos_v1" AS basis_id,
+    64 AS dimensions, @@ordered.size() AS event_count, persist AS persisted,
+    count_1h AS count_1h, count_24h AS count_24h, count_7d AS count_7d,
+    seed_seq AS seed_seq, seed_ts_ms AS seed_ts_ms;
+}

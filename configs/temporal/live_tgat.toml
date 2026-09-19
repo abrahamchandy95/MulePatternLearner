@@ -1,0 +1,34 @@
+# Generic example. Set snapshot identity and dates for your own source.
+dataset_id = "example_snapshot"
+label_policy = "observed"
+context_storage = "stream"
+evaluation_unlabeled_limit = 2000
+fanouts = [8, 4]
+per_relation = 2
+prepare_batch_size = 16
+hidden = 64
+heads = 4
+dropout = 0.15
+variant = "temporal"
+epochs = 30
+steps_per_epoch = 100
+patience = 6
+batch_size = 64
+learning_rate = 0.001
+class_prior = 0.001
+seed = 42
+split_seed = 42
+device = "auto"
+threads = 4
+evaluation_protocol = "strict_inductive"
+scope_id = "example_strict_scope"
+
+[dates]
+train = ["2024-07-01"]
+validation = ["2024-10-01"]
+test = ["2025-01-01"]
+
+[seed_limits]
+train = 20000
+validation = 2000
+test = 2000

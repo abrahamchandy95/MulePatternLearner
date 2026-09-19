@@ -1,0 +1,65 @@
+USE GRAPH Mule_Pattern_Learner
+
+/* Oracle supervision export, deliberately separate from feature queries.
+   A page is bounded; subsequent pages use the last returned account_id. */
+CREATE OR REPLACE QUERY temporal_get_account_supervision(
+  STRING after_id = "", INT batch_size = 1000
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+  IF batch_size < 1 OR batch_size > 10000 THEN
+    PRINT "invalid_batch_size" AS status;
+    RETURN;
+  END;
+  result = SELECT a FROM Account:a
+    WHERE a.id > after_id
+    ORDER BY a.id ASC LIMIT batch_size;
+  PRINT "ok" AS status;
+  PRINT result[
+    result.id AS account_id,
+    result.is_mule AS is_mule,
+    result.mule_label_known AS mule_label_known,
+    result.is_mule_masked AS is_mule_masked,
+    result.pu_label AS pu_label,
+    result.mule_label_effective_seq AS mule_label_effective_seq,
+    result.mule_label_effective_ts_ms AS mule_label_effective_ts_ms,
+    result.mule_label_available_seq AS mule_label_available_seq,
+    result.mule_label_available_ts_ms AS mule_label_available_ts_ms,
+    result.mule_ring_id AS mule_ring_id,
+    result.mule_label_source AS mule_label_source
+  ] AS accounts;
+}
+
+/* Validate the raw load/mask contract. All counters are supervision audits,
+   never model features. Clock visibility must additionally be checked at each
+   training cutoff, even for an account whose current pu_label is 1. */
+CREATE OR REPLACE QUERY temporal_validate_account_supervision()
+FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+  SumAccum<INT> @@accounts, @@known, @@mules, @@masked_mules, @@revealed;
+  SumAccum<INT> @@invalid_mule, @@invalid_pu, @@invalid_unknown, @@invalid_clocks, @@invalid_ring;
+  result = SELECT a FROM Account:a
+    ACCUM
+      @@accounts += 1,
+      IF a.is_mule != 0 AND a.is_mule != 1 THEN @@invalid_mule += 1 END,
+      IF a.mule_label_known THEN @@known += 1 END,
+      IF a.mule_label_known AND a.is_mule == 1 THEN
+        @@mules += 1,
+        IF a.is_mule_masked THEN @@masked_mules += 1 END
+      END,
+      IF a.pu_label == 1 THEN @@revealed += 1 END,
+      IF (a.pu_label != 0 AND a.pu_label != 1)
+        OR (a.pu_label == 1 AND (a.is_mule != 1 OR NOT a.mule_label_known OR a.is_mule_masked))
+        OR (a.pu_label == 0 AND a.mule_label_known AND a.is_mule == 1 AND NOT a.is_mule_masked)
+      THEN @@invalid_pu += 1 END,
+      IF NOT a.mule_label_known AND (a.is_mule != 0 OR NOT a.is_mule_masked OR a.mule_ring_id != -1)
+      THEN @@invalid_unknown += 1 END,
+      IF a.mule_label_known AND
+        (a.mule_label_effective_seq == 0 OR a.mule_label_effective_ts_ms == 0
+         OR a.mule_label_available_seq < a.mule_label_effective_seq
+         OR a.mule_label_available_ts_ms < a.mule_label_effective_ts_ms)
+      THEN @@invalid_clocks += 1 END,
+      IF a.mule_ring_id < -1 OR (a.is_mule != 1 AND a.mule_ring_id != -1)
+      THEN @@invalid_ring += 1 END;
+  PRINT @@accounts AS accounts, @@known AS known_labels, @@mules AS true_mules,
+    @@masked_mules AS masked_mules, @@revealed AS revealed_positives,
+    @@invalid_mule AS invalid_mule, @@invalid_pu AS invalid_pu, @@invalid_unknown AS invalid_unknown,
+    @@invalid_clocks AS invalid_clocks, @@invalid_ring AS invalid_ring;
+}

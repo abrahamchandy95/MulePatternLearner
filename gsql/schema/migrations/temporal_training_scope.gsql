@@ -1,0 +1,17 @@
+/* Add experiment membership without changing business vertices or labels. */
+USE GRAPH Mule_Pattern_Learner
+CREATE SCHEMA_CHANGE JOB add_temporal_training_scope FOR GRAPH Mule_Pattern_Learner {
+  ADD VERTEX Temporal_Training_Scope (
+    PRIMARY_ID scope_id STRING,
+    source_id STRING,
+    split_seed UINT,
+    ready BOOL DEFAULT "false"
+  ) WITH PRIMARY_ID_AS_ATTRIBUTE="true";
+  ADD DIRECTED EDGE Entity_In_Training_Scope (
+    FROM Account, TO Temporal_Training_Scope | FROM Party, TO Temporal_Training_Scope,
+    partition INT DEFAULT 0,
+    group_id STRING DEFAULT ""
+  ) WITH REVERSE_EDGE="Training_Scope_Has_Entity";
+}
+RUN SCHEMA_CHANGE JOB add_temporal_training_scope
+DROP JOB add_temporal_training_scope
