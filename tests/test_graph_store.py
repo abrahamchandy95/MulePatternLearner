@@ -9,7 +9,7 @@ from mule_pattern_learner.pyg.graph_store import (
     GraphStoreError,
     TigerGraphGraphStore,
 )
-from mule_pattern_learner.pyg.node_id_mapper import NodeIDMapper
+from mule_pattern_learner.indexing.node_id_mapper import NodeIDMapper
 from mule_pattern_learner.tigergraph.client import Client
 from torch_geometric.data import EdgeLayout
 

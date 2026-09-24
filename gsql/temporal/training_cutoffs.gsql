@@ -2,7 +2,8 @@ USE GRAPH Mule_Pattern_Learner
 
 /* Resolve calendar cutoffs once when preparing a dataset, never per batch.
    A full scan is intentional; unknown association timestamps are not invented.
-   Associations after the last witnessed sequence remain conservatively hidden. */
+   Associations after the last witnessed sequence remain conservatively hidden.
+   Every requested cutoff is a key of last_visible_seqs, 0 when nothing is visible. */
 CREATE OR REPLACE QUERY temporal_training_cutoffs(LIST<UINT> cutoff_times)
 FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
   ListAccum<UINT> @@times;
@@ -10,6 +11,9 @@ FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
   @@times = cutoff_times;
   IF @@times.size() < 1 OR @@times.size() > 24 THEN
     PRINT "invalid_cutoffs" AS status; RETURN;
+  END;
+  FOREACH cutoff IN @@times DO
+    @@sequences += (cutoff -> 0);
   END;
   Events = {Zelle_Transfer.*, Payment_Transaction.*};
   ScanEvents = SELECT t FROM Events:t

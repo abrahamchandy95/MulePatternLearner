@@ -12,12 +12,25 @@ from mule_pattern_learner.temporal.live.batching import make_live_batch, child_k
 from mule_pattern_learner.temporal.live.contract import ContextKey, contract_fingerprint
 from mule_pattern_learner.temporal.live.memory import BatchIndex, BatchCapacityError
 from mule_pattern_learner.temporal.live.model import LiveTGAT
-from mule_pattern_learner.temporal.live.source import StreamingContextSource, validate_context
+from mule_pattern_learner.temporal.live.contract import SamplerPlan
+from mule_pattern_learner.temporal.live.source import (
+    StreamingContextSource,
+    extraction_plan,
+    validate_context,
+)
 from mule_pattern_learner.temporal.live.predictor import score_new_accounts
 from mule_pattern_learner.temporal.live.cohort import scoped_cohort
 from mule_pattern_learner.temporal.live.sampling import pu_batches
 from mule_pattern_learner.temporal.live.supervision import FrameObservedLabels
-from test_live_pipeline import FakeExecutor, context, message
+from temporal_fakes import (
+    FakeExecutor,
+    assigned_accounts,
+    context,
+    live_config,
+    message,
+    scope_counts,
+    supplied_labels,
+)
 
 
 def test_batch_ids_are_dense_scoped_and_temporal_and_never_global() -> None:
@@ -59,7 +72,7 @@ def test_scope_follows_recursive_events_and_cache_never_crosses_scope() -> None:
 
 
 def test_stream_retention_is_bounded_across_many_disjoint_batches() -> None:
-    backend = StreamingContextSource(FakeExecutor({}), capacity=8)
+    backend = StreamingContextSource(FakeExecutor({}), capacity=8, request_batch_size=16)
     for start in range(0, 512, 16):
         backend.fetch([ContextKey("Account", str(i), 100, 1000) for i in range(start, start + 16)])
         assert len(backend.memory) <= 8
@@ -90,15 +103,12 @@ def test_new_account_scoring_needs_neither_training_dataset_nor_labels(tmp_path:
     )
 
     class Executor(FakeExecutor):
-        def run(self, name: str, params: dict[str, Any]) -> list[dict[str, Any]]:
-            if name == "temporal_training_cutoffs":
-                return [
-                    {"status": "ok", "last_visible_seqs": {str(params["cutoff_times"][0]): 100}}
-                ]
-            assert params["scope_id"] == "" and params["per_relation"] == 1
-            return super().run(name, params)
+        def run(self, name: str, params: dict[str, Any], **kwargs: Any) -> list[dict[str, Any]]:
+            if name == "temporal_training_context":
+                assert params["scope_id"] == "" and params["per_relation"] == 1
+            return super().run(name, params, **kwargs)
 
-    executor = Executor({})
+    executor = Executor({}, last_visible=lambda index, ms: 99)
     output = tmp_path / "new.parquet"
     result = score_new_accounts(
         checkpoint,
@@ -114,6 +124,10 @@ def test_new_account_scoring_needs_neither_training_dataset_nor_labels(tmp_path:
     assert all(len(v) == 16 for v in frame.embedding)
     assert not (tmp_path / "new.parquet.pending").exists()
     assert not {"is_mule", "known_positive", "pu_label"} & set(frame.columns)
+    # The hub registry was computed for the requested cutoff only (one past the last event).
+    hubs = [params for name, params in executor.calls if name == "temporal_hub_registry"]
+    assert [params["cutoff_seqs"] for params in hubs] == [[100]]
+    assert result["rejected"] == 0 and result["rejected_output"] is None
 
 
 def test_bounded_seed_reservoir_does_not_enrich_the_nnpu_marginal() -> None:
@@ -162,18 +176,20 @@ def test_bounded_seed_reservoir_does_not_enrich_the_nnpu_marginal() -> None:
     assert all(observed[p].all() for p, _ in draws)
 
 
-def test_strict_preparation_and_nnpu_use_the_correct_phase_end_to_end(tmp_path: Path) -> None:
+@pytest.mark.parametrize("profile", ["legacy", "v5"])
+def test_strict_preparation_and_nnpu_use_the_correct_phase_end_to_end(
+    tmp_path: Path, profile: str
+) -> None:
     from mule_pattern_learner.temporal.live.dataset import prepare
     from mule_pattern_learner.temporal.live.training import train
-    from test_live_training import config, assigned_accounts, supplied_labels
 
-    cfg = {
-        **config(),
-        "evaluation_protocol": "strict_inductive",
-        "scope_id": "unit_strict",
-        "context_storage": "stream",
-        "seed_limits": {"train": 10, "validation": 10, "test": 10},
-    }
+    cfg = live_config(
+        profile,
+        evaluation_protocol="strict_inductive",
+        scope_id="unit_strict",
+        context_storage="stream",
+        seed_limits={"train": 10, "validation": 10, "test": 10},
+    )
     rows = assigned_accounts().drop(columns="owner_ids").copy()
     rows["partition"] = rows["split"].map({"train": 1, "validation": 2, "test": 3})
     rows = rows.drop(columns="split")
@@ -181,29 +197,26 @@ def test_strict_preparation_and_nnpu_use_the_correct_phase_end_to_end(tmp_path: 
     phases = []
 
     class Executor(FakeExecutor):
-        def run(self, name: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+        def run(self, name: str, params: dict[str, Any], **kwargs: Any) -> list[dict[str, Any]]:
             if name == "temporal_scope_population":
+                assert params["include_observed"] is False
                 return [{"status": "ok", "accounts": rows.to_dict("records")}]
-            if name == "temporal_training_cutoffs":
-                return [
-                    {
-                        "status": "ok",
-                        "last_visible_seqs": {str(ms): 100 for ms in params["cutoff_times"]},
-                    }
-                ]
-            assert params["scope_id"] == "unit_strict"
-            phases.append(params["visibility_phase"])
-            if params["visibility_phase"] == 3:
-                assert checkpoint.exists(), "Test evaluation happened before checkpoint was frozen"
-            return super().run(name, params)
+            if name == "temporal_training_context":
+                assert params["scope_id"] == "unit_strict"
+                phases.append(params["visibility_phase"])
+                if params["visibility_phase"] == 3:
+                    assert checkpoint.exists(), "Test evaluation happened before checkpoint froze"
+            return super().run(name, params, **kwargs)
 
-    executor = Executor({})
+    executor = Executor({}, last_visible=lambda index, ms: 100)
     dataset = tmp_path / "dataset"
     manifest = prepare(
         cfg, dataset, executor, {"Account": len(rows)}, FrameObservedLabels(supplied_labels())
     )
     assert manifest["cached_contexts"] == 0
-    source = StreamingContextSource(executor)
+    source = StreamingContextSource(
+        executor, plan=extraction_plan(cfg), sampler=SamplerPlan.from_config(cfg)
+    )
     result = train(cfg, dataset, checkpoint, contexts=source)
     assert set(phases) == {1, 2, 3}
     assert result["known_mules"] == {"train": 20, "validation": 20, "test": 20}
@@ -216,14 +229,29 @@ def test_resumed_stream_checks_live_source_before_fetching(monkeypatch: pytest.M
 
     counts = {"Account": 10}
     header = {"ready": True, "source_id": "snapshot", "split_seed": 42}
+    policy = {"scope_unowned": "linked"}
     conn = SimpleNamespace(
         getVertexCount=lambda *args, **kwargs: dict(counts),
         getVerticesById=lambda *args: [{"attributes": dict(header)}],
     )
-    executor = SimpleNamespace(client=SimpleNamespace(conn=conn))
+    policy_calls: list[dict[str, Any]] = []
+
+    def run(name: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+        assert name == "temporal_scope_policy"
+        policy_calls.append(params)
+        return [{"status": "ok", **scope_counts(policy["scope_unowned"])}]
+
+    executor = SimpleNamespace(client=SimpleNamespace(conn=conn), run=run)
     checked = []
     monkeypatch.setattr(installation, "verify_sources", lambda client: checked.append(client))
-    monkeypatch.setattr(source, "TigerGraphExecutor", lambda: executor)
+    budgets: list[tuple[int, int]] = []
+
+    def live_executor(config: dict[str, Any]) -> Any:
+        transport = source.transport_settings(config)
+        budgets.append((transport["max_query_attempts"], transport["max_outage_s"]))
+        return executor
+
+    monkeypatch.setattr(source, "live_executor", live_executor)
     manifest = {
         "config": {
             "dataset_id": "snapshot",
@@ -232,9 +260,17 @@ def test_resumed_stream_checks_live_source_before_fetching(monkeypatch: pytest.M
         },
         "source": {"context_storage": "stream", "source_counts": dict(counts)},
     }
-    backend = source.open_context_source(Path("unused"), manifest)
+    backend = source.open_context_source(
+        Path("unused"), manifest, {"max_query_attempts": 3, "max_outage_s": 60}
+    )
     backend.close()
-    assert checked == [executor]
+    assert checked == [executor] and budgets == [(3, 60)]
+    assert policy_calls == [{"scope_id": "scope"}]
+    # A scope created with another scope_unowned rule than the configured one is refused.
+    policy["scope_unowned"] = "independent"
+    with pytest.raises(ValueError, match="no longer valid.*scope_unowned = 'independent'"):
+        source.open_context_source(Path("unused"), manifest)
+    policy["scope_unowned"] = "linked"
     counts["Account"] += 1
     with pytest.raises(ValueError, match="counts changed"):
         source.open_context_source(Path("unused"), manifest)

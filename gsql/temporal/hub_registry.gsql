@@ -1,0 +1,154 @@
+USE GRAPH Mule_Pattern_Learner
+
+/* Read-only registry of Accounts whose child contexts are replaced by client-side stubs.
+   A row (account_id, cutoff_seq, visibility_phase) means that, counting only events with
+   event_seq < cutoff_seq that are visible in that phase, one of the account's four payment
+   relations has more than `threshold` events. That count (all currencies) is an upper
+   bound of the per-relation history temporal_training_context can see there (its capacity
+   check counts USD events only). Hub status therefore depends only on history before the
+   cutoff and, in a scope, only on events visible in the phase: no post-cutoff event and
+   no event hidden in that phase can create a row.
+   - scope_id == "": counts are unscoped and every row has visibility_phase 3 (the
+     unscoped score-new case).
+   - scope_id != "" (the scope must be ready): for each phase p in 1..3 an event counts
+     only when every Account endpoint (From/To role) has a membership in this scope with
+     partition in [1, p], exactly the endpoint rule of temporal_training_context. The hub
+     itself must be visible in p, otherwise that phase has no row. Each member Account's
+     partition is read once, then each candidate event is marked once with the first
+     phase in which all of its Account endpoints are visible (4: never).
+   Candidates come from an O(1) all-time outdegree prefilter, a superset of every hub.
+   max_degree (the largest all-time relation outdegree) is informational only and never
+   decides a row. Rows are unordered; callers sort them. No labels are read. */
+CREATE OR REPLACE QUERY temporal_hub_registry(
+  LIST<UINT> cutoff_seqs, UINT threshold = 2048, STRING scope_id = ""
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+  TYPEDEF TUPLE<STRING account_id, UINT cutoff_seq, INT visibility_phase, UINT max_visible,
+                UINT max_degree, STRING reason> HubRow;
+  ListAccum<UINT> @@requested;
+  SetAccum<UINT> @@cutoffs;
+  MaxAccum<UINT> @@last_cutoff;
+  SetAccum<INT> @@phases;
+  OrAccum @in_scope;
+  MaxAccum<INT> @partition, @event_phase;
+  /* cutoff -> phase -> events of one relation visible in that phase before the cutoff */
+  MapAccum<UINT, MapAccum<INT, SumAccum<UINT>>> @initiated, @received, @sent_zelle,
+    @received_zelle;
+  MapAccum<UINT, MapAccum<INT, MaxAccum<UINT>>> @visible;
+  MaxAccum<UINT> @max_degree;
+  ListAccum<HubRow> @@hubs;
+  SumAccum<INT> @@candidates, @@invalid;
+  @@requested = cutoff_seqs;
+  FOREACH cutoff IN @@requested DO
+    IF cutoff == 0 THEN @@invalid += 1; END;
+    @@cutoffs += cutoff;
+    @@last_cutoff += cutoff;
+  END;
+  IF @@requested.size() < 1 OR @@requested.size() > 24 OR @@invalid > 0 OR threshold < 1 THEN
+    PRINT "invalid_parameters" AS status; RETURN;
+  END;
+  IF scope_id == "" THEN
+    @@phases += 3;
+  ELSE
+    Scopes = {Temporal_Training_Scope.*};
+    ReadyScope = SELECT r FROM Scopes:r WHERE r.scope_id == scope_id AND r.ready;
+    IF ReadyScope.size() != 1 THEN PRINT "scope_not_ready" AS status; RETURN; END;
+    /* One membership edge per Account and scope: its partition, read once. */
+    Members = SELECT a FROM ReadyScope:r -(Training_Scope_Has_Entity>:m)- Account:a
+      ACCUM a.@in_scope += TRUE, a.@partition += m.partition;
+    @@phases += 1;
+    @@phases += 2;
+    @@phases += 3;
+  END;
+  Accounts = {Account.*};
+  Candidates = SELECT a FROM Accounts:a
+    WHERE (a.outdegree("Account_Initiated_Transaction") > threshold
+       OR a.outdegree("Account_Received_Transaction") > threshold
+       OR a.outdegree("Account_Sent_Zelle_Transfer") > threshold
+       OR a.outdegree("Account_Received_Zelle_Transfer") > threshold)
+      AND (scope_id == "" OR (a.@in_scope AND a.@partition >= 1 AND a.@partition <= 3))
+    ACCUM a.@max_degree += a.outdegree("Account_Initiated_Transaction"),
+      a.@max_degree += a.outdegree("Account_Received_Transaction"),
+      a.@max_degree += a.outdegree("Account_Sent_Zelle_Transfer"),
+      a.@max_degree += a.outdegree("Account_Received_Zelle_Transfer"),
+      @@candidates += 1;
+  IF scope_id != "" THEN
+    /* Every event a count below can reach, marked once with its first visible phase. */
+    Payments = SELECT t FROM Candidates:a
+      -((Account_Initiated_Transaction>|Account_Received_Transaction>):e)- Payment_Transaction:t
+      WHERE e.event_seq < @@last_cutoff;
+    Transfers = SELECT t FROM Candidates:a
+      -((Account_Sent_Zelle_Transfer>|Account_Received_Zelle_Transfer>):e)- Zelle_Transfer:t
+      WHERE e.event_seq < @@last_cutoff;
+    PaymentPhases = SELECT t FROM Payments:t
+      -((Transaction_From_Account>|Transaction_To_Account>):role)- Account:a
+      ACCUM IF a.@in_scope AND a.@partition >= 1 AND a.@partition <= 3 THEN
+          t.@event_phase += a.@partition
+        ELSE
+          t.@event_phase += 4
+        END;
+    TransferPhases = SELECT t FROM Transfers:t
+      -((Transfer_From_Account>|Transfer_To_Account>):role)- Account:a
+      ACCUM IF a.@in_scope AND a.@partition >= 1 AND a.@partition <= 3 THEN
+          t.@event_phase += a.@partition
+        ELSE
+          t.@event_phase += 4
+        END;
+  END;
+  /* An event visible from phase q counts in every phase p >= q. Unscoped calls have the
+     single phase 3 and count every event. */
+  Initiated = SELECT a FROM Candidates:a -(Account_Initiated_Transaction>:e)- Payment_Transaction:t
+    ACCUM FOREACH cutoff IN @@cutoffs DO
+      IF e.event_seq < cutoff THEN
+        FOREACH p IN @@phases DO
+          IF scope_id == "" OR t.@event_phase <= p THEN a.@initiated += (cutoff -> (p -> 1)) END
+        END
+      END
+    END;
+  Received = SELECT a FROM Candidates:a -(Account_Received_Transaction>:e)- Payment_Transaction:t
+    ACCUM FOREACH cutoff IN @@cutoffs DO
+      IF e.event_seq < cutoff THEN
+        FOREACH p IN @@phases DO
+          IF scope_id == "" OR t.@event_phase <= p THEN a.@received += (cutoff -> (p -> 1)) END
+        END
+      END
+    END;
+  SentZelle = SELECT a FROM Candidates:a -(Account_Sent_Zelle_Transfer>:e)- Zelle_Transfer:t
+    ACCUM FOREACH cutoff IN @@cutoffs DO
+      IF e.event_seq < cutoff THEN
+        FOREACH p IN @@phases DO
+          IF scope_id == "" OR t.@event_phase <= p THEN a.@sent_zelle += (cutoff -> (p -> 1)) END
+        END
+      END
+    END;
+  ReceivedZelle = SELECT a FROM Candidates:a -(Account_Received_Zelle_Transfer>:e)- Zelle_Transfer:t
+    ACCUM FOREACH cutoff IN @@cutoffs DO
+      IF e.event_seq < cutoff THEN
+        FOREACH p IN @@phases DO
+          IF scope_id == "" OR t.@event_phase <= p THEN
+            a.@received_zelle += (cutoff -> (p -> 1))
+          END
+        END
+      END
+    END;
+  Visible = SELECT a FROM Candidates:a
+    POST-ACCUM FOREACH cutoff IN @@cutoffs DO
+      FOREACH p IN @@phases DO
+        a.@visible += (cutoff -> (p -> a.@initiated.get(cutoff).get(p))),
+        a.@visible += (cutoff -> (p -> a.@received.get(cutoff).get(p))),
+        a.@visible += (cutoff -> (p -> a.@sent_zelle.get(cutoff).get(p))),
+        a.@visible += (cutoff -> (p -> a.@received_zelle.get(cutoff).get(p)))
+      END
+    END;
+  Rows = SELECT a FROM Candidates:a
+    POST-ACCUM FOREACH cutoff IN @@cutoffs DO
+      FOREACH p IN @@phases DO
+        IF a.@visible.get(cutoff).get(p) > threshold
+           AND (scope_id == "" OR (a.@in_scope AND a.@partition >= 1 AND a.@partition <= p)) THEN
+          @@hubs += HubRow(a.id, cutoff, p, a.@visible.get(cutoff).get(p), a.@max_degree,
+                           "visible_history")
+        END
+      END
+    END;
+  PRINT "ok" AS status, @@requested AS cutoff_seqs, threshold AS threshold,
+    scope_id AS scope_id, @@candidates AS candidates, @@hubs AS hubs;
+}

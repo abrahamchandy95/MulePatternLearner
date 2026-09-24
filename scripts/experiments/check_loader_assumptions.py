@@ -146,10 +146,10 @@ def _install_real_query(client: Client, gsql_path: Path) -> str:
 
 def main() -> int:
     settings = Settings()
-    secret = settings.secret.get_secret_value()
     print(f"host:   {settings.host}")
     print(f"graph:  {settings.graphname}")
-    print(f"secret: {secret[:6]}...{secret[-4:]}  (length {len(secret)})")
+    # Only whether a secret is configured; no part of it is ever printed.
+    print(f"secret: {'configured' if settings.secret.get_secret_value() else 'missing'}")
     print()
 
     client = _check("connect + auth", lambda: Client(settings))

@@ -10,7 +10,7 @@ from mule_pattern_learner.tigergraph.derivation import (
     TemporalDerivationError,
     derive_temporal_spec,
 )
-from mule_pattern_learner.tigergraph.temporal import flat_edge_dim
+from mule_pattern_learner.features.edge_spec import flat_edge_dim
 
 
 class _FakeConn:

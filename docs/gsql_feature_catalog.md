@@ -1,5 +1,7 @@
 # GSQL feature and query catalog
 
+The [feature-group redesign](feature_redesign.md) documents the window-free feature groups, optional summaries, sampler, and migration. Fixed 83/135 dimensions below describe the legacy control profile. The v5 default profile and its candidate pools are described in [training from the live temporal graph](live_temporal_training.md#candidate-pools-and-resampling).
+
 This describes `temporal/live`, the live TGAT-style path. The older snapshot
 queries are a separate implementation. The live strict path applies server-side
 ownership-group partitions before sampling and feature aggregation; see
@@ -9,12 +11,14 @@ ownership-group partitions before sampling and feature aggregation; see
 
 | Query | Inputs and output | When used |
 |---|---|---|
-| `temporal_create_training_scope` | Creates a frozen, label-blind Account/Party ownership-group partition. | Once per strict experiment scope; writes only experiment membership. |
+| `temporal_create_training_scope` | Creates a frozen, label-blind Account/Party ownership-group partition. `unowned_policy` places Accounts whose ownership component has no Party: `"independent"` (the query's default, the original behaviour) gives each its own hash partition; `"shared"` gives unowned external accounts partition 1 (visible in every phase) and group ID `shared:<component>`, while unowned internal accounts keep their own hash partition; `"linked"` (the client default) is `"shared"` plus: an unowned internal account whose distinct owned internal deposit counterparties (the other endpoint of any Payment_Transaction or Zelle_Transfer, all time) are exactly one account takes that account's component, partition and group ID. Any other value is `invalid_parameters`. Components with a Party keep the same component and hash partition under every policy. Also prints `unowned_policy`, `shared_accounts` and `linked_accounts`. | Once per strict experiment scope, only with `create_scope` or `prepare --create-scope`; writes only experiment membership. |
 | `temporal_finalize_training_scope` | Checks committed membership count/attributes and marks the scope ready. | After scope creation; incomplete scopes fail closed. |
-| `temporal_scope_population` | Pages internal deposit accounts with preassigned partition, first-seen clocks and optional observed supervision. | Strict preparation; bounded reservoir selection, never model features. |
-| `temporal_training_population` | Legacy metadata pages including ownership IDs. | Optional shared-history preparation only; client metadata is capped. |
-| `temporal_training_cutoffs` | Converts exclusive calendar cutoffs to sequence watermarks using payments and entity first observations. | Preparation. Scans history; not a constant-time lookup. |
-| `temporal_training_context` | Accepts up to 16 entity/time contexts plus scope and phase. Filters excluded Account/Party contributions before rolling features, neighbor selection and pair history. | Each batch in streaming mode; once per context in optional SQLite staging. |
+| `temporal_scope_policy` | Read-only. For a ready scope, prints `members` (all member Accounts and Parties), `unowned_accounts` and six counts of unowned member Accounts (no `Account_Owned_By_Party` edge) by class and side: `shared_internal`, `shared_external` (group ID starts with `shared:`), `independent_internal`, `independent_external` (group ID is the account's own component), `linked_internal`, `linked_external` (any other group ID). The client infers the creation policy from them. `scope_not_ready` otherwise. | When a strict preparation reuses or creates a scope, and when every streamed run opens. |
+| `temporal_scope_population` | Pages internal deposit accounts with preassigned partition, first-seen clocks and optional observed supervision (`include_observed`, default FALSE): `observed_positive` is the label contract's revealed positive, and only such an account has a nonzero `known_from_ms`. | Strict preparation; bounded reservoir selection, never model features. |
+| `temporal_training_population` | Legacy metadata pages including ownership IDs, with the same optional observed supervision (`include_observed`, default FALSE). | Optional shared-history preparation only; client metadata is capped. |
+| `temporal_training_cutoffs` | Converts exclusive calendar cutoffs to sequence watermarks using payments and entity first observations. Every requested cutoff key is present, 0 when nothing is visible. | Preparation and `score-new`. Scans history; not a constant-time lookup. |
+| `temporal_hub_registry` | For 1 to 24 cutoff sequences, lists Accounts whose visible history (events before the cutoff, all currencies) in some payment relation exceeds `threshold`; the only reason is `visible_history`. With `scope_id` empty the counts are unscoped and every row has `visibility_phase` 3. With a `scope_id` (the scope must be ready, else `scope_not_ready`) it counts per phase 1, 2 and 3 only events whose From/To Account endpoints are all members with partition at most that phase, the endpoint rule of `temporal_training_context`, and the hub itself must be allowed in the phase. Rows are `(account_id, cutoff_seq, visibility_phase, max_visible, max_degree, reason)`; `max_degree`, the all-time relation outdegree, is informational only. The response echoes `cutoff_seqs`, `threshold` and `scope_id`. O(1) outdegree prefilter; read-only. | Preparation (dataset cutoffs; the scope for `strict_inductive`) and `score-new` (the requested cutoff, unscoped). |
+| `temporal_training_context` | Accepts 1 to 64 entity/time contexts plus scope and phase, and returns one candidate pool per context. Filters excluded Account/Party contributions before rolling features, neighbor selection and pair history. | Every batch in streaming mode (roots, then children); once per context in optional SQLite staging. |
 | `temporal_fourier64_values` | Encodes a nonnegative millisecond delta into 32 sine/cosine pairs. | Called inside temporal queries. |
 | `temporal_fourier64` | Public validation wrapper for the same calculation. | Diagnostics and parity checks. |
 
@@ -24,12 +28,55 @@ relation/window contract. Edit the generator and regenerate when changing the
 feature contract. Preparation fingerprints the query sources and feature contract;
 old prepared datasets cannot silently reuse changed definitions.
 
-The population queries' `include_observed=false` avoids reading graph labels when
-an external observed-label provider is used. With it enabled, a positive is
-`is_mule == 1 AND mule_label_known`, accompanied by its discovery timestamp.
+The population queries default to `include_observed = FALSE`, which reads no
+graph label attribute. Only `label_policy = "graph_observed"` turns it on; then a
+positive is the revealed positive of the
+[account label contract](account_mule_labels.md),
+`pu_label == 1 AND is_mule == 1 AND mule_label_known AND NOT is_mule_masked`,
+accompanied by its discovery timestamp (`mule_label_available_ts_ms`). Every other
+account, including masked mules and labeled non-mules, has `observed_positive`
+FALSE and `known_from_ms` 0, so neither field reveals a withheld label or which
+accounts are labeled. The client fails fast on a nonzero `known_from_ms` without a
+positive, the sign of an older installed query.
 The query never exports raw oracle truth or the synthetic mask. The old
 `temporal_training_accounts` oracle export is local experiment material and is
 not installed or called by the production path.
+
+## Context query contract
+
+`temporal_training_context` parameters, in signature order:
+
+| Parameter | Bounds | Meaning |
+|---|---|---|
+| `node_types`, `node_ids`, `cutoff_seqs`, `cutoff_times` | 1 to 64 entries each | One request per index. |
+| `per_relation`, `k_old`, `k_div` | 1..32, 0..16, 0..16 | Candidate pool per payment relation: most recent, rank quantiles, new peers. |
+| `k_assoc` | 0..8 | Valid-time associations per association relation (0 for payments-only children). |
+| `max_history` | 32..4096 | Visible events per relation above which the request is rejected. |
+| `emit_encodings` | default FALSE | When TRUE, `age_encoding` and `gap_encoding` hold Fourier vectors; otherwise they are empty maps and no `temporal_fourier64_values` call runs. |
+| `include_*` | 14 flags | Exactly the non-categorical, non-client groups of `FeaturePlan.query_flags()`; there is no `include_hub_indicator`. |
+| `scope_id`, `visibility_phase` | phase 1..3 | Strict scope filtering, applied before any feature or sampling. |
+
+A failed request never aborts the call: it prints `{status, request_index}` and
+the query continues with the next request, so every index gets exactly one row.
+Per-request statuses are `invalid_request`, `missing_entity` (unknown IDs are
+resolved with typed lookups, never a runtime error), `invisible_entity`,
+`history_capacity_exceeded`, `nonmonotonic_pair_clock`, `invalid_payment_fields`
+and `invalid_event_roles`; the client maps them to a rejected context. Only
+`invalid_parameters`, `invalid_visibility_phase` and `scope_not_ready` stop the
+whole call.
+
+The client computes Fourier features on the training device from `age_ms` and
+`gap_ms`. It asks for encodings only on the first request of a source and every
+`encoding_check_every`-th request after it, and then checks every vector against
+numpy `fourier64` (tolerance 1e-5).
+
+Roles, peer metadata, device/IP context and the prior-pair scan are set-based
+SELECTs over all sampled events of a request. When `include_pair_window_counts`
+is on, the prior-pair scan supplies the pair clock, so the chronology pass (and
+its `nonmonotonic_pair_clock` check) is skipped. Rolling-window and decayed sums
+keep the original traversal order, so their floating-point values are identical
+to the earlier query text. The exact repository text also runs under INTERPRET:
+`queries.as_interpreted(text)` swaps only the header.
 
 ## The 83 entity/context features
 
@@ -179,9 +226,11 @@ claims. Merely filtering held-out neighbors at training time does not sanitize
 already-computed features. These legacy stored statistics are not inputs to the
 live temporal model.
 
-The live context query limits returned recent neighbors per relation, then Python
-uses layer fanouts (default 8 and 4). A small output is not proof of a cheap query:
-rolling summaries and predecessor searches still traverse candidate history.
-The sampler now enforces strict scopes. Time-organized adjacency and server-side
-rollups remain required work for larger deployments. The bounded client response
-is not a bound on server scan memory or latency.
+The live context query returns a bounded candidate pool per relation, then Python
+selects the layer fanouts (default 16 and 4 in the v5 profile). A small output is
+not proof of a cheap query: rolling summaries and predecessor searches still
+traverse candidate history, which is why hub accounts from `temporal_hub_registry`
+are never expanded as children. The sampler enforces strict scopes.
+Time-organized adjacency and server-side rollups remain required work for larger
+deployments. The bounded client response is not a bound on server scan memory or
+latency.

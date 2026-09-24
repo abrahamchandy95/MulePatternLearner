@@ -9,8 +9,8 @@ from mule_pattern_learner.pyg.feature_store import (
     FeatureStoreError,
     TigerGraphFeatureStore,
 )
-from mule_pattern_learner.pyg.node_id_mapper import NodeIDMapper
-from mule_pattern_learner.schema.node_features import NUM_ACCOUNT_FEATURES
+from mule_pattern_learner.indexing.node_id_mapper import NodeIDMapper
+from mule_pattern_learner.features.nodes import NUM_ACCOUNT_FEATURES
 from mule_pattern_learner.tigergraph.client import Client
 
 

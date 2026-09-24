@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from mule_pattern_learner.pyg.reindex import (
+from mule_pattern_learner.indexing.reindex import (
     parse_raw_result,
     reindex_neighborhood,
 )
@@ -48,7 +48,7 @@ def main() -> int:
     print("STEP 3: LOCAL edges  (row/col = positions, what the GNN consumes)")
     print("=" * 68)
     for etype in local.row:
-        src_type, rel, dst_type = etype
+        src_type, _, dst_type = etype
         print(f"  edge type {etype}:")
         rows = local.row[etype]
         cols = local.col[etype]

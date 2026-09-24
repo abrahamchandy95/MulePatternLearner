@@ -6,14 +6,16 @@ from typing import cast
 
 import pytest
 
-from mule_pattern_learner.tigergraph.temporal import (
+from mule_pattern_learner.features.edge_spec import (
     NUM_BIN_CHANNELS,
     NUM_SCALAR_FEATURES,
     SCALAR_FEATURE_NAMES,
     EdgeFeatureError,
+    flat_edge_dim,
+)
+from mule_pattern_learner.features.temporal import (
     EdgeFeatures,
     build_edge_features,
-    flat_edge_dim,
     flat_edge_features,
     flatten_bin_seq,
     log1p_compress,

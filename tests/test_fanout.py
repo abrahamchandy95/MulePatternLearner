@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from mule_pattern_learner.pyg.fanout import NeighborFanout, NeighborFanoutError
+from mule_pattern_learner.pyg.neighbors import NeighborFanout, NeighborFanoutError
 
 
 class TestDefaults:

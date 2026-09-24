@@ -7,7 +7,7 @@ name = "mule-pattern-learner"
 version = "0.1.0"
 description = "Account-level mule detection on TigerGraph"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.12"
 license = { text = "MIT" }
 authors = [{ name = "Abraham Chandy" }]
 dependencies = [
@@ -19,11 +19,26 @@ dependencies = [
     "pydantic-settings>=2.7",
     "tqdm>=4.67",
     "matplotlib>=3.10.9",
+    "scikit-learn>=1.6",
+    "orjson>=3.10",
 ]
 
 [project.optional-dependencies]
-model = ["torch>=2.9", "torch-geometric>=2.7"]
-baseline = ["xgboost>=3.0", "scikit-learn>=1.6"]
+model = ["torch>=2.9"]
+# The original static-snapshot PyG path (mule-train); the live temporal path needs only torch.
+legacy = ["torch-geometric>=2.7"]
+baseline = ["xgboost>=3.0"]
+# GPU neighbor resampling for the live temporal trainer (Linux x86_64 with CUDA). Pick the
+# extra that matches the CUDA major version of the installed torch wheel: cu12 wheels are on
+# pypi.nvidia.com (use with torch cu129), cu13 wheels are on pypi.org (torch>=2.13 cu130/cu132).
+cuda12 = [
+    "pylibcugraph-cu12==26.8.*; sys_platform == 'linux'",
+    "cupy-cuda12x>=14.0.1,!=14.1.0; sys_platform == 'linux'",
+]
+cuda13 = [
+    "pylibcugraph-cu13==26.8.*; sys_platform == 'linux'",
+    "cupy-cuda13x>=14.0.1,!=14.1.0; sys_platform == 'linux'",
+]
 # Dev tooling.
 dev = [
     "pytest>=8.3",
@@ -32,7 +47,7 @@ dev = [
     "notebook>=7.0",
     "ipykernel>=6.29",
 ]
-all = ["mule-pattern-learner[model,baseline,dev]"]
+all = ["mule-pattern-learner[model,legacy,baseline,dev]"]
 
 [project.scripts]
 mule-train = "mule_pattern_learner.training.train:main"
@@ -52,7 +67,7 @@ extraPaths = ["src"]
 venvPath = "."
 venv = ".venv"
 typeCheckingMode = "strict"
-pythonVersion = "3.14"
+pythonVersion = "3.12"
 useLibraryCodeForTypes = true
 reportMissingTypeStubs = "none"
 reportUnknownMemberType = "none"
@@ -63,7 +78,7 @@ reportUnknownLambdaType = "warning"
 
 [tool.ruff]
 line-length = 100
-target-version = "py314"
+target-version = "py312"
 src = ["src", "tests", "scripts"]
 
 [tool.ruff.lint.isort]

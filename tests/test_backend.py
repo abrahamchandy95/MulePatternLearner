@@ -3,8 +3,8 @@ from __future__ import annotations
 from typing import cast
 
 from mule_pattern_learner.pyg.backend import TigerGraphRemoteBackend
-from mule_pattern_learner.pyg.fanout import NeighborFanout
-from mule_pattern_learner.pyg.node_id_mapper import NodeIDMapper
+from mule_pattern_learner.pyg.neighbors import NeighborFanout
+from mule_pattern_learner.indexing.node_id_mapper import NodeIDMapper
 from mule_pattern_learner.tigergraph.client import Client
 
 

@@ -1,5 +1,7 @@
 # Training from the live temporal graph
 
+The [feature-group redesign](feature_redesign.md) documents the window-free feature groups, optional summaries and migration. Fixed 83/135 dimensions below describe the legacy control profile (`configs/temporal/live_tgat_legacy.toml`). The v5 default profile (`configs/temporal/live_tgat.toml`) adds per-hop candidate pools, per-step resampling and a hub registry; see [candidate pools and resampling](#candidate-pools-and-resampling).
+
 The live path is `mule_pattern_learner.temporal.live`: cutoff-aware GSQL features,
 two layers of temporal attention and nnPU learning. Source and generic TOML
 configuration belong in Git. Data, local configuration, masks, checkpoints and
@@ -52,6 +54,46 @@ a deterministic 70/15/15 partition. It never reads mule truth. All ownership
 history is used conservatively for grouping, not as a model feature. Membership
 is frozen and verified before the scope becomes ready.
 
+An Account without an ownership edge has no Party in its component. Where such
+unowned accounts go is decided by `scope_unowned` when the scope is created:
+
+| `scope_unowned` | Unowned external accounts | Unowned internal accounts |
+|---|---|---|
+| `"independent"` | Own hash partition, like any component | Own hash partition |
+| `"shared"` | Partition 1 (visible in every phase), group ID `shared:<component>` | Own hash partition |
+| `"linked"` (default) | As `"shared"` | The partition and group ID of their only owned internal deposit counterparty, when there is exactly one; otherwise their own hash partition |
+
+For `"linked"`, the counterparties of an unowned internal account are the other
+Account endpoints of all its Payment_Transaction and Zelle_Transfer events, over
+all time and without labels, restricted to internal deposit accounts that have an
+owner. The link is assigned after the ownership components are final. Components
+that contain a Party therefore keep the same component, partition and group ID
+under every rule. Linking reads every event of every unowned internal account
+once. This happens only in the one-off creation call, which has a one-hour timeout
+and a single attempt, and its server time has not been measured yet.
+
+The rule is read back from the stored membership by the read-only
+`temporal_scope_policy` query. It counts the scope's unowned member Accounts by
+class and side (internal or external). An account is shared when its group ID
+starts with `shared:`, independent when its group ID is its own component, and
+linked otherwise. The counts map to a rule as follows:
+
+- `"independent"`: nothing shared and nothing linked.
+- `"shared"`: every unowned external account shared, nothing linked.
+- `"linked"`: every unowned external account shared (if there are any), at least
+  one internal account linked.
+- No rule: anything else, such as shared internal accounts (an early draft rule).
+
+Preparation checks the inferred rule against `scope_unowned` when it reuses a
+scope and right after it creates one. Every streamed run checks it again, and a
+mismatch names the stored rule and asks for either that `scope_unowned` value or a
+new `scope_id`. Scopes created before the rule existed, such as `strict_mule_v1`,
+read as `"independent"`. Rules that write identical membership cannot be told
+apart and read as the simplest of them: a `"linked"` scope in which no internal
+account qualified reads as `"shared"`, and a scope with neither unowned external
+accounts nor links reads as `"independent"`. Set `scope_unowned` to the inferred
+value to use such a scope; its membership is the same.
+
 Visibility is cumulative:
 
 | Phase | Context may use | Optimizer updates? |
@@ -69,22 +111,43 @@ Scope identity includes a source ID and split seed. Component partitioning uses
 TigerGraph internal IDs only during server-side setup; those IDs are not model
 features or tensor indices. After reloading or materially changing the graph,
 use a new dataset ID and scope. Count/source fingerprints detect several mistakes
-but cannot detect all same-count edits. Live query definitions, counts and the
-scope header are rechecked when opening a streamed run, including reuse of prepared
-metadata. Keep the source frozen for the experiment.
+but cannot detect all same-count edits. Live query definitions, counts, the
+scope header and the scope's unowned rule are rechecked when opening a streamed
+run, including reuse of prepared metadata. Keep the source frozen for the
+experiment.
 
 ## Observed labels and masking
 
 The trainer depends on `ObservedLabelSource`, not on a masking implementation.
 Its table contains `account_id`, `known_positive`, `known_from_ms`. Unlisted
 accounts are unlabeled; usable positives must be known before the scoring cutoff.
-Oracle `is_mule`, mask and ring columns are rejected from this interface.
+Oracle `is_mule`, mask and ring columns are rejected from this interface. The
+label source must be configured explicitly; preparation fails before any query
+when it is not.
 
-- `GraphObservedLabels` maps `is_mule == 1 AND mule_label_known`, together with
-  discovery time, to observed positives. Use it only when those graph fields
-  represent actual available labels.
-- `ParquetObservedLabels` accepts an observed-only table. With this provider the
-  population query skips graph label reads completely.
+- `observed_labels = "<parquet>"` (relative to the repository root) selects
+  `ParquetObservedLabels`, an observed-only table. The population queries then
+  skip graph label reads completely.
+- `label_policy = "graph_observed"` selects `GraphObservedLabels`. It is the only
+  source that runs the population queries with `include_observed = TRUE`. An
+  observed positive is then the revealed positive of the
+  [account label contract](account_mule_labels.md):
+  `pu_label == 1 AND is_mule == 1 AND mule_label_known AND NOT is_mule_masked`.
+  Only those accounts carry a discovery time (`known_from_ms`, from
+  `mule_label_available_ts_ms`); masked mules and every other account come back
+  with `observed_positive` false and `known_from_ms` 0. The client fails fast when
+  any other row carries `known_from_ms > 0`, which means an older population query
+  that also revealed masked labels is still installed. Strict preparation checks
+  this on every population page, and there any label information in a page
+  requested without `include_observed` is refused too. Use this policy only when
+  those graph fields represent actual available labels.
+  Datasets prepared with it before the masked-label predicate counted masked mules
+  as positives and must be prepared again.
+
+A configured `observed_labels` file that does not exist stops `prepare`, `train`
+and the batch benchmark with "Observed-label source file not found at <path>: copy
+it next to the prepared artifacts or point observed_labels at it". Its content hash
+is a preparation setting, so the check cannot be skipped.
 
 Simulation masking lives under ignored `local_experiments/`. It may read complete
 synthetic truth during setup to reveal 20 training, 20 validation and 20 test
@@ -124,8 +187,55 @@ population claims, including when using complete synthetic truth.
 
 The default `context_storage="stream"` makes bounded installed-query HTTPS/REST
 requests. It never writes a full feature cache. `ContextSource` separates transport
-from batching/model/loss. Optional SQLite staging remains available for small,
-repeated experiments; it is not required by training or new-account prediction.
+from batching/model/loss: `fetch(keys, hop=1|2)` returns rows in key order, `None`
+where TigerGraph rejected a request, and counts rejections by status
+(`rejections`, once per rejected key and fetch) and per hop (`rejections_by_hop`,
+1 for roots and 2 for children). Several batch-builder threads share one bounded
+request pool; a key already being fetched is awaited instead of requested twice,
+and the LRU is keyed by `(hop, key)`. The pool's workers are daemon threads.
+After an error or Ctrl-C, training and scoring close the source without waiting:
+queued requests are cancelled, and requests already in flight finish on their own
+or are dropped when the process exits, so neither the error nor the exit waits for
+a REST retry chain.
+
+Optional SQLite staging remains available for small, repeated experiments; it is
+not required by training or new-account prediction. For the `resample` policy it
+caches every candidate child, because training draws different children each step.
+
+Every failure is classified before it is retried, and each class has its own
+budget:
+
+| Class | Examples | Budget |
+|---|---|---|
+| Availability | Connection errors, HTTP 502, 503, 504, 408, 429 and every other 5xx except 500, HTML error pages (including the page TigerGraph Cloud serves while a workspace starts), chunked-encoding errors, overload and not-ready messages | Retried with jittered exponential backoff (from 4 s, capped at 60 s) until `max_outage_s` seconds (default 900) have passed since the operation's first such failure |
+| Server timeout | Code REST-3002 (also inside a JSON 5xx body), a timeout message, a client read timeout | Retried once, then `ServerTimeoutError` |
+| Suspected deterministic | A bare HTTP 500, a response that is neither JSON nor HTML, query out of memory | Retried once |
+
+Contract and validation errors, per-request statuses and every other error are
+permanent and raise on the first attempt; writes (scope creation) get exactly one
+attempt. `max_query_attempts` (default 6) caps the attempts that count: every
+attempt except an availability failure that failed within 30 s. A fast-failing
+outage is therefore bounded by the wall clock and a request that hangs on every
+attempt by the attempt cap. Worker threads share one "backoff until" time, so when
+one of them finds TigerGraph unavailable the others pause too, and any success
+ends the pause. Retry logs name the query and its key count.
+
+The TigerGraph client raises `requests.HTTPError` for a 5xx, 408 or 429 response
+before pyTigerGraph reads the body. pyTigerGraph would otherwise turn a JSON error
+body into an exception without a status, so a JSON-bodied 503 would look like a
+permanent query error. 401, 404 and the other 4xx responses are left to
+pyTigerGraph (token refresh and endpoint fallbacks need them). Every HTTP session
+has finite timeouts (30 s connect, 600 s read).
+
+A context request that TigerGraph times out on is not repeated as a whole. A block
+of several keys is split in half at once (without a timeout retry) and each half is
+requested on its own, which isolates a slow key in a logarithmic number of extra
+calls; `diagnostics["timeout_splits"]` counts the splits and `query_calls` counts
+successful REST calls. A single key gets one retry and then raises
+`ContextTimeoutError`, which names the context key and hop. It is fatal on purpose:
+which keys time out depends on server load, so dropping one would make the
+training data depend on it. Retry when the server is less busy, or prepare again
+with a lower `max_history`.
 
 `BatchIndex` maps `(vertex_type, public_id, cutoff_seq, cutoff_ms, scope_id, phase)`
 to dense integers for the current batch only. Duplicate contexts reuse an index;
@@ -136,12 +246,15 @@ parameters. TigerGraph's largest internal ID never determines a tensor size.
 
 | Limit | Default or hard cap |
 |---|---|
-| Root batch / fanouts | 64 roots; 8 then 4 neighbors |
-| Queried unique contexts at those settings | At most 576 per batch |
-| Contexts per REST request | 16 |
-| Concurrent requests / queued results | 2; configurable maximum 4 |
-| Retained context LRU | 64 contexts; maximum 256 |
+| Root batch / fanouts (v5 profile) | 64 roots; 16 then 4 neighbors |
+| Queried unique contexts at those settings | At most 1,088 per batch |
+| Contexts per REST request (`request_batch_size`) | 16; maximum 64 |
+| Concurrent requests (`query_concurrency`) | 8; maximum 16 |
+| Retained context LRU (`context_lru_capacity`) | 256 contexts; maximum 4,096 |
+| Counted attempts per request (`max_query_attempts`) | 6; maximum 20 |
+| Outage budget per request (`max_outage_s`) | 900 s; maximum 86,400; backoff capped at 60 s |
 | Accepted roots / unique contexts | 128 / 2,048 |
+| Candidate messages per batch (both hops) | 524,288 |
 | Input tensor admission budget | 64 MiB |
 | Estimated model working budget | 512 MiB |
 
@@ -151,11 +264,13 @@ processes or a bound on TigerGraph's server memory. MPS shares system memory.
 `choose_device()` selects CUDA, then available Apple MPS, then CPU. No full graph
 is copied to the accelerator.
 
-At the default fanouts, inputs include `x[N,83]`, `first_edge[B,8,135]`,
-`second_edge[N,4,135]` and `second_x[N,4,9]`, plus relation/rail indices and masks.
-Here `N <= 9*B`. The outermost peers carry base metadata; the intermediate contexts
-carry rolling features. Learned account embeddings are outputs of these layers,
-not persisted time encodings from GSQL.
+With the legacy profile, inputs include `x[N,83]`, `first_edge[B,8,135]`,
+`second_edge[N,4,135]` and `second_x[N,4,9]`, plus relation/rail indices and masks,
+where `N <= 9*B`. The v5 profile gives `x[N,9]`, `first_edge[B,16,142]`,
+`second_edge[N,4,142]` and `second_x[N,4,9]`, with `N <= 17*B`. The outermost peers
+carry base metadata; the intermediate contexts carry the requested node features.
+Learned account embeddings are outputs of these layers, not persisted time
+encodings from GSQL.
 
 Client memory is bounded by cohort and batch limits, but server work still needs
 measurement. Scope setup scans ownership, cutoff resolution scans event clocks,
@@ -163,19 +278,170 @@ and context aggregation can scan long adjacency histories. Time buckets/rollups,
 better sampling access and shared staging near GPUs are later production work;
 see [leakage and scaling](leakage_and_scaling.md).
 
+## Candidate pools and resampling
+
+TigerGraph returns a bounded, cutoff-safe candidate pool per context and hop, and
+the client selects the fanout from it. `[sampler]` pool keys (`recent`, `older`,
+`distinct`, `associations`, `max_history`) describe the roots pool (hop 1);
+`[sampler.children]` describes the children pool (hop 2). A context returns at
+most `4*(recent+older+distinct) + 14*associations` messages.
+
+The `recent` and `stratified` policies are the deterministic legacy selections
+and keep their exact outputs. The `resample` policy draws, per context and payment
+relation, at most `relation_fanouts[0]` candidates (hop 1) or `relation_fanouts[1]`
+(hop 2) uniformly without replacement, and at most `association_fanout` per
+association relation at hop 1. It then merges them into the `K` fanout slots:
+payments interleaved by position across the four payment relations, associations
+across the association relations, `reserve = min(association_slots, n_assoc, K // 4)`,
+`chosen = P[:K - reserve] + A[:reserve]`, then backfill from the remaining payments
+and associations up to `K`. The second hop is payments only: `chosen = P[:K]`.
+
+- Training steps (`mode="train"`) draw from the step seed, a stable hash of
+  `(seed, epoch, step)`, mixed with the hop. The torch sampler takes its keys from
+  a CPU `torch.Generator`, so with `backend = "torch"` a fixed seed gives the same
+  neighborhoods on every device. cuGraph draws a different, equally distributed
+  subset for the same step seed, so only `backend = "torch"` reproduces
+  neighborhoods across devices and backends.
+- Evaluation and scoring (`mode="eval"`) always take the torch path with hash keys
+  built from `hop_seed(evaluation_seed, hop)`, the context key and the item, so
+  scores do not depend on the machine, the torch version or the backend. A root's
+  hop-2 draw is independent of its hop-1 draw. Hop-1 keys are unchanged from
+  earlier versions; hop-2 draws changed, and the resample fingerprint records the
+  key scheme (`selection_keys = 2`). A resample preparation with SQLite storage made
+  before this change reports a changed `sqlite_selection` and must be prepared
+  again. `model.pt` records the fingerprint as `sampler_fingerprint`.
+- `backend = "auto"` uses cuGraph only on a CUDA device whose functional probe
+  passed. The probe runs once per process and device: it subsets a tiny candidate
+  table with both hops' default quotas, twice with one random state, and requires
+  exactly min(candidates, fan-out) rows per (context, relation), identical draws
+  and the leakage checks. Otherwise `auto` uses the torch sampler, with a
+  RuntimeWarning when cuGraph is installed but failed the probe (when cupy or
+  pylibcugraph is simply not installed it falls back silently). `backend =
+  "cugraph"` raises with the probe's reason instead, and `"torch"` always uses the
+  torch sampler. After every cuGraph call the client checks that each (context,
+  relation) got exactly min(visible candidates, quota) rows, so over- and
+  under-sampling both fail loudly; a run never switches backend midway. cuGraph
+  time keys are `2*event_seq` for payments, `2*cutoff_seq - 1` for associations and
+  `2*cutoff_seq` for the context seed, so its strict comparison matches the
+  visibility contract.
+
+`event_channel` is no longer a default group: live data carries only `digital`,
+`branch_or_atm`, `bank` and `unknown`, one to one with rail. The `CHANNELS` order
+changed with the v5 contract, so checkpoints trained with that group under the v4
+contract are incompatible (the contract fingerprint refuses them).
+
+### Hub accounts and rejected contexts
+
+Preparation runs `temporal_hub_registry` for the dataset cutoffs and saves
+`hubs.parquet` with the columns `account_id`, `cutoff_seq`, `visibility_phase`,
+`max_visible`, `max_degree` and `reason`. An Account is a hub at a root cutoff and
+phase when its visible history in some payment relation, counting only events
+before that cutoff, exceeds `min(roots.max_history, children.max_history)`; the
+reason is always `visible_history`. All-time degree never decides hub status:
+`max_degree` is informational only, and the former all-time `scan_cap` rule (with
+its `hub_scan_cap` key) is gone.
+
+For `strict_inductive` the registry is computed for the preparation's `scope_id`
+and has rows per visibility phase 1, 2 and 3. A phase counts only the events whose
+Account endpoints are all allowed in that phase, the endpoint rule of the context
+query, and the hub itself must be allowed in the phase. A held-out partition
+therefore cannot change a training-phase stub decision. Without a scope
+(`shared_history` preparations and `score-new`) the counts are unscoped and every
+row has phase 3. Counts cover all currencies, an upper bound of the context
+query's USD-only capacity check, so an account whose USD history would fit can
+still be stubbed; that costs history, never leaks it. The manifest records
+`hub_scope_id`, `hub_threshold` and `hub_counts` (`{cutoff_seq: {phase: count}}`),
+and loading checks them against the file and the dataset's scope. A dataset
+prepared before the scoped registry must be prepared again under a new
+`prepared_id`.
+
+A hub child is never fetched: the batch uses a local stub with peer metadata and
+`history_withheld = 1` (the client-only `hub_indicator` group). The lookup
+`is_stub(node_type, node_id, root_cutoff_seq, phase)` uses the root's cutoff and
+the batch's phase (3 for unscoped roots), so it only counts history visible before
+the prediction time and in that phase. A cutoff or phase that the registry does not
+cover is an error, never a silent "not a hub". A non-stub child can never exceed
+`max_history`, because a child's cutoff precedes its root's and a child inherits
+its root's phase. When the registry lists hubs but the feature plan has no
+`hub_indicator` group, training and scoring warn once at start: such a model
+cannot tell a stub from a dormant account.
+
+A child that TigerGraph rejects is masked out of the first hop. A rejected root is
+dropped from its batch, but only within `max_rejected_root_fraction` (default 0.0,
+so any rejected root fails the run):
+
+- A training epoch fails as soon as its rejected roots exceed the limit times the
+  epoch's requested roots, or when any rejected root is an observed positive.
+- Validation (every epoch) and test apply the same rules to the whole split, and
+  validation must still have both observed classes after its rejections.
+- A run in which no epoch produced a finite validation AP refuses to save weights.
+- The test split is scored after `model.pt` is saved, so a test-split failure
+  leaves `model.pt` without `metrics.json`. Resume with a higher limit to finish it:
+  the limit decides only whether a run may go on, never its numbers, so a resume
+  may change it.
+
+`metrics.json` reports `rejected_roots` per split (`requested`, `rejected`,
+`positive`, `unlabeled`) and `max_rejected_root_fraction`. A non-finite model
+probability for an accepted root raises instead of counting as a rejection.
+Scoring commands list rejected IDs in `<output>.rejected.txt`. Their results
+report `rejected` (roots not scored), `rejected_roots_by_status`,
+`rejected_children` (child contexts masked out of scored batches),
+`rejected_children_by_status`, `stub_children` and `rejection_events_by_status`.
+The last is the source's raw counter over both hops, cache replays included, and
+replaces the former `rejected_by_status`.
+
 ## Commands
 
-Install dependencies with `pip install -e '.[all]'` and supply the TigerGraph
-connection in a local `.env`. The example is `configs/temporal/live_tgat.toml`.
-If present, ignored `configs/local/live_tgat.toml` is selected automatically;
-otherwise the example is used. Set source/scope identity, dates and observed-label
-source in configuration rather than adding training flags.
+Install dependencies with `pip install -e '.[all]'` (Python 3.12 or newer) and
+supply the TigerGraph connection in the repository `.env`; environment variables
+override it. The example is `configs/temporal/live_tgat.toml`. If present, ignored
+`configs/local/live_tgat.toml` is selected automatically; otherwise the example is
+used. Every command validates the configuration and rejects unknown keys by name.
+Set source/scope identity, dates and observed-label source in configuration rather
+than adding training flags.
 
 After schema/query changes, install the reviewed sources:
 
 ```bash
 .venv/bin/python -m mule_pattern_learner.temporal.live.cli install
 ```
+
+Installation is incremental. A query is stale when its `SHOW QUERY` text differs
+from the repository, its REST endpoint is missing or disabled, or the endpoint's
+parameters differ. Queries that call a stale query are installed with it (a change
+to `temporal_fourier64_values` also reinstalls `temporal_training_context`). Only
+stale definitions are created again, because `CREATE OR REPLACE` disables an
+installed endpoint until it is installed again, and the command prints which
+queries it installs and which are up to date. `--force` treats every query as
+stale; `--include-optional` also installs the pair_time64 parity queries.
+
+On TigerGraph 4.2.5 the install request answers only when compilation finishes,
+so it runs with a 45-minute read timeout. When the client gives up first (read
+timeout, dropped connection or gateway error), the endpoint listing is polled every
+30 s until every installed query is enabled. If the 45 minutes pass first, the
+command fails and asks you to run `install` again later; the new run installs only
+what is still stale. Success is decided by checking every endpoint against the
+repository text and parameters, not by a status message.
+
+Preparation writes to `artifacts/temporal/<prepared_id or dataset_id>`. A ready
+directory is reused without connecting, but only when its GSQL hashes and its
+preparation settings still match; otherwise set a new `prepared_id`. Preparation
+settings are the dates, seed limits, protocol, scope, split and cohort seeds, label
+source (content hash), storage, sampler pools, extraction groups, `scope_unowned`
+and, for SQLite storage, the fanouts, sampler and architecture that decide what the
+cache holds. Model, optimisation and transport settings may change freely.
+Set `cohort_seed` to train several model `seed` values on one prepared cohort
+(it defaults to `seed`). A missing strict scope is created only on request,
+because creation writes to TigerGraph:
+
+```bash
+.venv/bin/python -m mule_pattern_learner.temporal.live.cli prepare --create-scope
+```
+
+`scope_unowned` (default `"linked"`) places the accounts without an owning Party
+when the scope is created; see [strict experiment scope](#strict-experiment-scope).
+An existing scope keeps the rule it was created with, and preparation checks it
+against the configuration, so a different rule needs a new `scope_id`.
 
 The ordinary command prepares bounded metadata if necessary, then trains:
 
@@ -185,18 +451,69 @@ The ordinary command prepares bounded metadata if necessary, then trains:
 ```
 
 It writes the checkpoint and a sibling `model_run/` report directory, both ignored.
-It refuses to overwrite an existing run. Old unscoped datasets/checkpoints are
-not compatible; use fresh artifacts. Do not delete valid prepared metadata just
-to change model hyperparameters in a separate experiment. Automatic preparation
-checks the complete configuration; use the advanced `--dataset` argument to
-reuse existing metadata with a different model configuration. The trainer still
-checks that dates, scope, feature and sampling contracts match.
+It refuses to overwrite an existing run unless `--resume` is given. Old unscoped
+datasets/checkpoints are not compatible; use fresh artifacts. Do not delete valid
+prepared metadata just to change model hyperparameters in a separate experiment.
+Use the advanced `--dataset` argument to reuse existing metadata with a different
+model configuration. The trainer still checks the preparation settings, that the
+source requests every input the model reads at both hops, and that it uses the
+training sampler.
 
-Qualify one configured batch without saving a model:
+The run directory holds `config.json` (the validated configuration),
+`progress.jsonl` (start, training intervals, evaluation, epoch and completion
+records with REST calls, rejection, stub and rejected-child counts, sampler
+backend, seconds per step and batch wait time) and `checkpoint_last.pt`, written
+atomically every epoch and every `checkpoint_every_steps` steps. `train --resume`
+continues from it and reproduces the uninterrupted run exactly. It refuses a
+changed result-affecting setting but allows transport (including `max_outage_s`),
+prefetch and logging settings and `max_rejected_root_fraction` to change. REST
+calls, rejections, rejected-root counts and sampler totals are kept in
+`checkpoint_last.pt`, so `progress.jsonl` and `metrics.json`
+(`database_calls_during_training`, `rejections`, `sampler_totals`,
+`rejected_roots`) cover every segment of a resumed run. `patience = 0` disables
+early stopping.
+
+The sampler backend is resolved once per run on the main thread, before batches
+are prefetched, and passed to every batch. It is recorded in `progress.jsonl`,
+`metrics.json`, `checkpoint_last.pt` and `model.pt`. A resume on a host that
+resolves another backend than the checkpoint's is refused, unless `[sampler]
+backend` names the new backend explicitly; the remaining steps then sample a
+different stream, and the run says so.
+
+Batches are built ahead by `prefetch_batches` daemon worker threads. On an error or
+Ctrl-C the prefetcher cancels queued builds and re-raises at once, without waiting
+for builds in progress, and the context source is closed without waiting for
+requests in flight. `deterministic = true` enables deterministic algorithms
+(warn-only on CUDA), `"strict"` makes CUDA gaps fail, and `false` turns them off;
+the CLI sets `CUBLAS_WORKSPACE_CONFIG=:4096:8` before torch loads unless it is
+already set.
+
+Qualify one configured batch without saving a model. The report has REST calls,
+retries, seconds, stub and rejected counts and the sampler backend;
+`--train-step` adds one optimizer step on the chosen device:
 
 ```bash
-.venv/bin/python scripts/temporal/benchmark_live_batch.py
+.venv/bin/python scripts/temporal/benchmark_live_batch.py --train-step
 ```
+
+On a CUDA host, install the GPU sampler with the extra that matches the CUDA major
+version of the torch wheel: `pip install -e '.[all,cuda12]'
+--extra-index-url=https://pypi.nvidia.com` (pylibcugraph-cu12 from pypi.nvidia.com, with
+torch cu129) or `pip install -e '.[all,cuda13]'`
+(pylibcugraph-cu13 from pypi.org, with torch 2.13 or newer on cu130/cu132). Then
+check it before relying on `backend = "auto"`:
+
+```bash
+.venv/bin/python scripts/temporal/verify_cugraph_sampler.py
+.venv/bin/python scripts/temporal/verify_cugraph_sampler.py --live
+```
+
+The script starts with the functional probe that `backend = "auto"` runs, then
+compares cuGraph with the torch sampler on a synthetic table (exact counts,
+temporal validity, uniform inclusion, determinism and latency). Exit code 0 means
+every check passed, 1 a failed check, 2 that cuGraph cannot run on the host.
+`--live` builds one real batch per backend from the prepared dataset (read-only
+queries) and runs one deterministic CUDA training step twice.
 
 Score IDs absent from training, using an ID text file with one account per line:
 
@@ -210,9 +527,14 @@ Score IDs absent from training, using an ID text file with one account per line:
 
 This command streams ID batches and writes scores/embeddings incrementally. It
 uses history available before the requested date without the experimental scope,
-as an operational scorer would. It needs neither the training cohort nor labels.
-An account with no history can be scored from available metadata, but accuracy
-on such accounts must be measured separately.
+as an operational scorer would, and computes the hub registry for that cutoff. It
+needs neither the training cohort nor labels. IDs that TigerGraph rejects
+(missing, not yet visible, over capacity) are not scored; they go to
+`<output>.rejected.txt`, and the result reports root and child rejections apart
+(see [hub accounts and rejected contexts](#hub-accounts-and-rejected-contexts)).
+The command uses the checkpoint's `max_query_attempts` and `max_outage_s`. An
+account with no history can be scored from available metadata, but accuracy on
+such accounts must be measured separately.
 
 Evaluate frozen predictions separately:
 
@@ -227,6 +549,30 @@ Evaluate frozen predictions separately:
 Truth contains `account_id`, integer `is_mule` and optionally `date`. Duplicate
 keys fail validation. The current evaluator is for bounded experiment prediction
 files; it is not a distributed full-population metrics service.
+
+`evaluate-final` scores all test positives and weighted sampled negatives of the
+frozen test partition. It takes the test cutoff and hub registry from the
+checkpoint's prepared dataset (`--dataset`, or the path recorded in `model.pt`),
+and the retry budgets from the checkpoint. It fails before writing anything when a
+test positive is rejected or the rejected fraction exceeds the checkpoint's
+`max_rejected_root_fraction`, because weighted metrics would then describe a
+censored population. Rejected negatives within the limit are listed in
+`<output>.rejected.txt`, and the metrics' `evaluation_cohort` ends in
+`_minus_rejected_negatives`.
+
+### Upgrading earlier preparations
+
+- Install the changed and new queries first (`temporal_training_population`,
+  `temporal_scope_population`, `temporal_create_training_scope`,
+  `temporal_hub_registry` and the new `temporal_scope_policy`); `install` finds
+  them by itself.
+- Prepared datasets without a scoped hub registry (no `hub_scope_id` in the
+  manifest) are refused; prepare them again under a new `prepared_id`.
+- Datasets prepared with `label_policy = "graph_observed"` before the masked-label
+  predicate count masked mules as positives; prepare them again.
+- Configurations may no longer set `hub_scan_cap`.
+- A scope keeps its unowned rule: set `scope_unowned = "independent"` for scopes
+  created before the rule existed, such as `strict_mule_v1`, or create a new scope.
 
 ## Difference from the main snapshot path
 

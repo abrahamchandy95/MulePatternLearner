@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from mule_pattern_learner.pyg.fanout import NeighborFanout, NeighborFanoutError
+from mule_pattern_learner.pyg.neighbors import NeighborFanout, NeighborFanoutError
 
 
 def main() -> int:
