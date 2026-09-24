@@ -1,6 +1,11 @@
 # Mule Pattern Learner
 
+The [feature-group redesign](docs/feature_redesign.md) documents the v4 window-free experiment, optional summaries, sampler, and migration. Fixed 83/135 dimensions below describe the legacy control profile.
+
 For the populated temporal graph, start with the
+[end-to-end guide](docs/temporal_training_end_to_end.md): the data in TigerGraph, every
+query and what it pulls, per-batch sampling with cuGraph, the training loop and the CUDA
+runbook. Then read the
 [live TGAT-style training guide](docs/live_temporal_training.md): cutoff-aware
 GSQL features, bounded streaming, observed-label supervision and embedding export.
 Read the [leakage and scaling assessment](docs/leakage_and_scaling.md) before
@@ -32,8 +37,13 @@ TigerGraph. The target graph name used in this project is `Mule_Pattern_Learner`
 
 ## Setup
 
+Python 3.12 or newer.
+
 ```bash
-pip install -e ".[model]"        # add ,baseline,dev as needed, or use [all]
+pip install -e ".[model]"        # live temporal path; add ,legacy for the PyG snapshot path
+pip install -e ".[all]"          # model, legacy, baseline and dev tools
+pip install -e ".[all,cuda12]" --extra-index-url=https://pypi.nvidia.com  # CUDA 12 hosts
+pip install -e ".[all,cuda13]"   # CUDA 13 hosts (install the matching CUDA torch wheel first)
 ```
 
 Create a `.env` for the TigerGraph connection (read by `Settings`):

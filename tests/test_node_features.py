@@ -5,7 +5,7 @@ from typing import cast
 
 import pytest
 
-from mule_pattern_learner.schema.node_features import (
+from mule_pattern_learner.features.nodes import (
     NUM_ACCOUNT_FEATURES,
     NodeFeatureError,
     NodeFeatures,
@@ -15,7 +15,7 @@ from mule_pattern_learner.schema.node_features import (
     log1p_compress,
     symlog_compress,
 )
-from mule_pattern_learner.schema.node_features import (
+from mule_pattern_learner.features.nodes import (
     _ACCOUNT_FEATURE_TRANSFORMS as ACCOUNT_FEATURE_TRANSFORMS,  # pyright: ignore[reportPrivateUsage]
 )
 

@@ -2,9 +2,15 @@ USE GRAPH Mule_Pattern_Learner
 
 /* Production population and observed-label metadata, separate from model features.
    is_mule=0 is UNLABELED for nnPU, never a confirmed negative target.
-   The producer must attest label discovery time; no oracle/masking fields leave this query. */
+   include_observed = TRUE maps only the label contract's revealed positive:
+   observed_positive iff pu_label == 1 AND is_mule == 1 AND mule_label_known AND NOT
+   is_mule_masked, and known_from_ms is its discovery time (mule_label_available_ts_ms).
+   Every other account, including masked (withheld) mules and labeled non-mules, gets
+   FALSE and 0, so neither field reveals a withheld label or label knowledge.
+   The producer must attest label discovery time; no other oracle/masking fields leave
+   this query. */
 CREATE OR REPLACE QUERY temporal_training_population(
-  STRING after_id = "", INT batch_size = 10000, BOOL include_observed = TRUE
+  STRING after_id = "", INT batch_size = 10000, BOOL include_observed = FALSE
 ) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
   SetAccum<STRING> @owners;
   OrAccum @observed_positive;
@@ -17,7 +23,8 @@ CREATE OR REPLACE QUERY temporal_training_population(
     ORDER BY a.id ASC LIMIT batch_size;
   IF include_observed THEN
     Observed = SELECT a FROM Accounts:a
-      ACCUM a.@observed_positive += (a.is_mule == 1 AND a.mule_label_known),
+      WHERE a.pu_label == 1 AND a.is_mule == 1 AND a.mule_label_known AND NOT a.is_mule_masked
+      ACCUM a.@observed_positive += TRUE,
         a.@known_from_ms += a.mule_label_available_ts_ms;
   END;
   Owners = SELECT a FROM Accounts:a -(Account_Owned_By_Party>:e)- Party:p

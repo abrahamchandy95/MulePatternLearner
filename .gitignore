@@ -167,6 +167,9 @@ desktop.ini
 /scripts/pipeline/after_load/masking.py
 /gsql/masking/get_masking_inputs.gsql
 
+# Generated knowledge-graph output of the local graphify tool.
+/graphify-out/
+
 # Local research attachments and deprecated oracle export.
 /docs/*.pdf
 /gsql/temporal/training_accounts.gsql

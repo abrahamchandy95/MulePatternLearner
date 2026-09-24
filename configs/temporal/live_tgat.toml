@@ -1,27 +1,66 @@
-# Generic example. Set snapshot identity and dates for your own source.
+# Generic v5 example (candidate pools plus per-step resampling). Copy it to
+# configs/local/live_tgat.toml and set the snapshot identity, scope, label file and dates
+# for your own source. configs/temporal/live_tgat_legacy.toml is the deterministic
+# legacy profile.
 dataset_id = "example_snapshot"
+# Names the prepared directory artifacts/temporal/<prepared_id>; change it whenever a
+# preparation setting changes.
+prepared_id = "example_snapshot_v5"
+evaluation_protocol = "strict_inductive"
+scope_id = "example_strict_scope"
+# Accounts without an owning Party. "linked": unowned external accounts are visible in
+# every phase, and an unowned internal account whose only owned internal deposit
+# counterparty is one account joins that account's partition. "shared" does only the
+# first, "independent" neither. The rule is fixed when the scope is created and is
+# checked on every run, so a different rule needs a new scope_id.
+scope_unowned = "linked"
+# Creating a scope writes to TigerGraph; use `mule-temporal prepare --create-scope` once.
+create_scope = false
 label_policy = "observed"
+# Parquet with account_id, known_positive and known_from_ms (relative to the repository).
+observed_labels = "local_experiments/example/observed_labels.parquet"
 context_storage = "stream"
 evaluation_unlabeled_limit = 2000
-fanouts = [8, 4]
-per_relation = 2
-prepare_batch_size = 16
+
+fanouts = [16, 4]
+batch_size = 64
+epochs = 30
+steps_per_epoch = 100
+# 0 disables early stopping.
+patience = 6
+# Largest fraction of an epoch's or evaluation split's roots TigerGraph may reject
+# (0.0: any rejected root fails the run). A rejected observed positive always fails.
+max_rejected_root_fraction = 0.0
 hidden = 64
 heads = 4
 dropout = 0.15
 variant = "temporal"
-epochs = 30
-steps_per_epoch = 100
-patience = 6
-batch_size = 64
+architecture = "split"
+feature_groups = ["entity_meta", "hub_indicator", "message_core", "time_encoding", "pair_history", "flow_timing"]
 learning_rate = 0.001
+weight_decay = 0.0001
 class_prior = 0.001
+# Textbook nnPU baseline; compare 0.1 and 0.5 on observed validation only.
+positive_weight = "prior"
 seed = 42
 split_seed = 42
+
 device = "auto"
 threads = 4
-evaluation_protocol = "strict_inductive"
-scope_id = "example_strict_scope"
+# true: deterministic algorithms (warn-only on CUDA); "strict": fail on CUDA; false: off.
+deterministic = true
+
+request_batch_size = 8
+query_concurrency = 16
+context_lru_capacity = 256
+encoding_check_every = 64
+# Cap on the attempts of one request; an outage that fails fast is bounded by max_outage_s.
+max_query_attempts = 6
+# Seconds one request keeps retrying while TigerGraph is unavailable (restart, gateway).
+max_outage_s = 900
+prefetch_batches = 2
+checkpoint_every_steps = 0
+log_every_steps = 10
 
 [dates]
 train = ["2024-07-01"]
@@ -32,3 +71,25 @@ test = ["2025-01-01"]
 train = 20000
 validation = 2000
 test = 2000
+
+[sampler]
+policy = "resample"
+recent = 8
+older = 4
+distinct = 4
+associations = 2
+max_history = 2048
+relation_fanouts = [8, 4]
+association_fanout = 1
+association_slots = 2
+# auto: cuGraph on CUDA when its functional probe passes, otherwise the torch sampler.
+# Only "torch" draws the same neighbourhoods for one seed on every device.
+backend = "auto"
+evaluation_seed = 0
+
+[sampler.children]
+recent = 4
+older = 2
+distinct = 2
+associations = 0
+max_history = 2048

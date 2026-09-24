@@ -49,16 +49,12 @@ class NonNegativePULoss(Module):
             The paper fixes gamma = 1.
         positive_weight: weight on the positive_risk term ONLY. Defaults to
             prior, which reproduces the textbook nnPU objective exactly. Under
-            extreme imbalance (pi ~ 0.003) the textbook weight makes
-            positive_risk a negligible fraction of the loss (here ~0.001), so
-            the optimizer minimizes the unlabeled term alone by driving every
-            logit down -- dragging positives BELOW unlabeled and inverting the
-            ranking. Raising positive_weight (e.g. to pi-balanced 0.5, or any
-            value >> pi) restores gradient signal to the positives WITHOUT
-            touching the prior used in the unbiased negative-risk correction
-            below, so that estimator stays unbiased. This separation is the fix:
-            it reweights how much positives matter, not the statistics of the
-            negatives-as-negative estimate. Must be in (0, 1).
+            extreme imbalance, optimization may underweight positive examples.
+            A larger value is a cost-sensitive experimental objective, not the
+            textbook nnPU risk and not a guaranteed fix for ranking quality.
+            The negative-risk correction still uses prior. Select this setting
+            on observed validation labels and keep hidden truth sealed.
+            Must be in (0, 1).
 
     Convention: targets t use +1 for revealed positives and 0 for unlabeled
     (matching pu_label in this project). f are raw logits, shape [N].
@@ -132,9 +128,11 @@ class NonNegativePULoss(Module):
         # nnPU correction: if the estimated negative risk dips below -beta, the
         # unbiased objective is overfitting; replace the backprop target with the
         # gradient-ascending term gamma * (-negative_risk) to push it back up.
-        if negative_risk.item() < -self._beta:
-            train_loss = self._gamma * (-negative_risk)
-        else:
-            train_loss = objective
+        # torch.where keeps the branch on the device (no host synchronization);
+        # the unselected branch receives an exact zero gradient, so values and
+        # gradients equal the former Python branch.
+        train_loss = torch.where(
+            negative_risk < -self._beta, self._gamma * (-negative_risk), objective
+        )
 
         return train_loss, objective

@@ -49,10 +49,12 @@ def main() -> None:
                 "cutoff_seqs": [key.cutoff_seq],
                 "cutoff_times": [key.cutoff_ms],
                 "per_relation": 2,
+                # Print the Fourier vectors so they are compared with numpy fourier64.
+                "emit_encodings": True,
             },
         )
     )[0]
-    validate_context(key, row)
+    validate_context(key, row, require_encodings=True)
     pairs = []
     for relation in ("zelle_out", "payment_out", "payment_in"):
         message = next((m for m in row["messages"] if m["relation"] == relation), None)

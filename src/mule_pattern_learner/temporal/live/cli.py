@@ -2,32 +2,72 @@
 
 from __future__ import annotations
 
-import argparse
-import json
-from pathlib import Path
+import os
 
-from mule_pattern_learner.configuration import load_config
+# Deterministic cuBLAS GEMMs need a fixed workspace, read once when CUDA initializes,
+# so it is set before anything imports torch. An explicit user value wins.
+os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 
-from .installation import install
-from .source import TigerGraphExecutor
-from .inference import score
-from .predictor import score_new_accounts, read_account_ids
-from .evaluation import ParquetEvaluationTruth, evaluate_predictions
-from .pipeline import DEFAULT_CONFIG, DEFAULT_MODEL, dataset_path, prepare_live, run
+import argparse  # noqa: E402
+import json  # noqa: E402
+from pathlib import Path  # noqa: E402
+from typing import Any  # noqa: E402
+
+from mule_pattern_learner.configuration import load_config  # noqa: E402
+
+from .evaluation import (  # noqa: E402
+    ParquetEvaluationTruth,
+    evaluate_final_population,
+    evaluate_predictions,
+)
+from .inference import score  # noqa: E402
+from .installation import install  # noqa: E402
+from .pipeline import DEFAULT_CONFIG, DEFAULT_MODEL, dataset_path, prepare_live  # noqa: E402
+from .predictor import read_account_ids, score_new_accounts  # noqa: E402
+from .source import TigerGraphExecutor  # noqa: E402
+from .training import output_paths, train  # noqa: E402
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("install")
+    installing = commands.add_parser(
+        "install",
+        help="Create and install the training queries that differ from the repository",
+    )
+    installing.add_argument(
+        "--include-optional",
+        action="store_true",
+        help="Also install the pair_time64 parity queries (training never calls them)",
+    )
+    installing.add_argument(
+        "--force",
+        action="store_true",
+        help="Reinstall every query, even those already installed with the repository text",
+    )
     prep = commands.add_parser("prepare", help="Optionally stage the data ahead of training")
     prep.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     prep.add_argument("--output", type=Path)
+    prep.add_argument(
+        "--create-scope",
+        action="store_true",
+        help="Allow writing a new training scope to TigerGraph (sets create_scope = true)",
+    )
     training = commands.add_parser("train", help="Prepare as needed, train with nnPU and save")
     training.add_argument("--output", type=Path, default=DEFAULT_MODEL, help="Model .pt path")
+    training.add_argument(
+        "--resume",
+        action="store_true",
+        help="Continue an interrupted run from its checkpoint_last.pt (or start it)",
+    )
     advanced = training.add_argument_group("optional experiment overrides")
     advanced.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     advanced.add_argument("--dataset", type=Path, help="Reuse an existing prepared dataset")
+    advanced.add_argument(
+        "--create-scope",
+        action="store_true",
+        help="Allow preparation to write a new training scope to TigerGraph",
+    )
     scoring = commands.add_parser("score")
     scoring.add_argument("--checkpoint", type=Path, required=True)
     scoring.add_argument("--dataset", type=Path, required=True)
@@ -42,7 +82,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--accounts", type=Path, required=True, help="Text file: one Account ID per line"
     )
     new.add_argument("--date", required=True)
-    new.add_argument("--output", type=Path, required=True)
+    new.add_argument(
+        "--output", type=Path, required=True, help="Parquet path; rejected IDs go beside it"
+    )
     evaluation = commands.add_parser(
         "evaluate", help="Evaluate saved predictions against external truth"
     )
@@ -50,13 +92,49 @@ def build_parser() -> argparse.ArgumentParser:
     evaluation.add_argument("--checkpoint", type=Path, required=True)
     evaluation.add_argument("--truth", type=Path, required=True)
     evaluation.add_argument("--output", type=Path, required=True)
+    final = commands.add_parser(
+        "evaluate-final",
+        help="Frozen-model audit: all test positives and weighted sampled negatives",
+    )
+    final.add_argument("--checkpoint", type=Path, required=True)
+    final.add_argument("--truth", type=Path, required=True)
+    final.add_argument("--output", type=Path, required=True)
+    final.add_argument(
+        "--dataset", type=Path, help="Prepared dataset (default: recorded in the checkpoint)"
+    )
     return parser
+
+
+def validated_config(path: Path) -> dict[str, Any]:
+    """Load a TOML/JSON training configuration and check it against the schema."""
+    from .config_schema import validate_config
+
+    return validate_config(load_config(path))
+
+
+def train_command(args: argparse.Namespace) -> dict[str, Any]:
+    """Prepare when no dataset is given, then train (or resume) and save the model."""
+    config = validated_config(args.config)
+    checkpoint, run_dir = output_paths(args.output)
+    if not args.resume and (checkpoint.exists() or run_dir.exists()):
+        raise FileExistsError(f"Experiment already exists: {args.output}; pass --resume")
+    dataset = args.dataset
+    if dataset is None:
+        dataset = dataset_path(config)
+        prepare_live({**config, "create_scope": True} if args.create_scope else config, dataset)
+    return train(config, dataset, args.output, resume=args.resume)
 
 
 def main() -> None:
     args = build_parser().parse_args()
     if args.command == "install":
-        result = install(TigerGraphExecutor())
+        result = install(
+            TigerGraphExecutor(), include_optional=args.include_optional, force=args.force
+        )
+    elif args.command == "evaluate-final":
+        result = evaluate_final_population(
+            args.checkpoint, ParquetEvaluationTruth(args.truth), args.output, dataset=args.dataset
+        )
     elif args.command == "evaluate":
         if args.output.exists():
             raise FileExistsError(args.output)
@@ -72,10 +150,12 @@ def main() -> None:
     elif args.command == "score":
         result = score(args.checkpoint, args.dataset, args.date, args.split, args.output)
     elif args.command == "prepare":
-        config = load_config(args.config)
+        config = validated_config(args.config)
+        if args.create_scope:
+            config["create_scope"] = True
         result = prepare_live(config, args.output or dataset_path(config))
     else:
-        result = run(args.output, config_path=args.config, dataset=args.dataset)
+        result = train_command(args)
     print(json.dumps(result, indent=2, allow_nan=False))
 
 

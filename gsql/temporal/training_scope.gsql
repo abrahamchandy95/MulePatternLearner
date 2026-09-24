@@ -3,23 +3,52 @@ USE GRAPH Mule_Pattern_Learner
 /* Frozen experiment partition; never reads truth or changes business attributes.
    Whole ownership components share a partition, including closed tenures.
    Internal IDs are used only to seed a source-specific partition, not model inputs.
-   New/reloaded graphs require a new scope/source ID. */
+   New/reloaded graphs require a new scope/source ID.
+   unowned_policy places the unowned Accounts: those whose ownership component contains
+   no Party (they have no ownership edge, so each is its own singleton component).
+   - "independent": every component, owned or not, gets its own hash partition and
+     group_id to_string(component). It reproduces scopes built by the original query,
+     which had no unowned rule.
+   - "shared": unowned EXTERNAL accounts (counterparties outside the bank) are shared
+     infrastructure: partition 1 (visible in every phase) and group_id
+     "shared:<component>". Unowned INTERNAL accounts keep their independent hash
+     partition and are never shared.
+   - "linked": external as in "shared". An unowned internal account whose distinct
+     counterparties among OWNED internal deposit accounts (the other Account endpoint of
+     any Payment_Transaction or Zelle_Transfer, all time, label blind) are exactly one
+     account D takes D's ownership component, so it gets D's partition and group_id.
+     This runs after the components are final and never feeds the min propagation.
+     Other unowned internal accounts keep their independent hash partition.
+   Any other value is invalid_parameters. Components that contain a Party keep exactly
+   the same component, hash partition and group_id under every policy: the component
+   labels and the hash expression do not depend on the policy, and only unowned accounts
+   are ever moved. temporal_scope_policy reads the policy back from stored membership. */
 CREATE OR REPLACE QUERY temporal_create_training_scope(
-  STRING scope_id, STRING source_id, UINT split_seed = 42, INT max_iterations = 100
+  STRING scope_id, STRING source_id, UINT split_seed = 42, INT max_iterations = 100,
+  STRING unowned_policy = "independent"
 ) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
   MinAccum<UINT> @component;
+  OrAccum @shared;
+  /* Linking: on an event, its owned deposit endpoints; on an unowned internal account,
+     the union over its events. min == max means exactly one distinct counterparty. */
+  OrAccum @link_found;
+  MinAccum<INT> @link_min;
+  MaxAccum<INT> @link_max;
+  MinAccum<UINT> @link_component;
+  SetAccum<UINT> @@party_components;
   OrAccum @@changed;
-  SumAccum<INT> @@existing;
-  MapAccum<INT, SumAccum<INT>> @@accounts;
+  SumAccum<INT> @@shared_accounts, @@linked_accounts;
   INT iteration = 0;
-  UINT bucket = 0;
-  IF scope_id == "" OR source_id == "" OR max_iterations < 1 THEN
+  IF scope_id == "" OR source_id == "" OR max_iterations < 1
+     OR (unowned_policy != "independent" AND unowned_policy != "shared"
+         AND unowned_policy != "linked") THEN
     PRINT "invalid_parameters" AS status; RETURN;
   END;
   Scopes = {Temporal_Training_Scope.*};
   Existing = SELECT r FROM Scopes:r WHERE r.scope_id == scope_id;
   IF Existing.size() > 0 THEN PRINT "scope_already_exists" AS status; RETURN; END;
   Entities = {Account.*, Party.*};
+  Accounts = {Account.*};
   Init = SELECT s FROM Entities:s POST-ACCUM s.@component = getvid(s);
   @@changed = TRUE;
   WHILE @@changed AND iteration < max_iterations DO
@@ -31,21 +60,69 @@ CREATE OR REPLACE QUERY temporal_create_training_scope(
     iteration = iteration + 1;
   END;
   IF @@changed THEN PRINT "ownership_components_did_not_converge" AS status; RETURN; END;
+  IF unowned_policy != "independent" THEN
+    Parties = {Party.*};
+    PartyComponents = SELECT p FROM Parties:p ACCUM @@party_components += p.@component;
+    SharedAccounts = SELECT a FROM Accounts:a
+      WHERE a.is_external AND NOT @@party_components.contains(a.@component)
+      ACCUM a.@shared += TRUE, @@shared_accounts += 1;
+  END;
+  IF unowned_policy == "linked" THEN
+    Linkable = SELECT a FROM Accounts:a
+      WHERE NOT a.is_external AND NOT @@party_components.contains(a.@component);
+    LinkPayments = SELECT t FROM Linkable:a
+      -((Account_Initiated_Transaction>|Account_Received_Transaction>):e)- Payment_Transaction:t;
+    LinkTransfers = SELECT t FROM Linkable:a
+      -((Account_Sent_Zelle_Transfer>|Account_Received_Zelle_Transfer>):e)- Zelle_Transfer:t;
+    PaymentHolders = SELECT t FROM LinkPayments:t
+      -((Transaction_From_Account>|Transaction_To_Account>):role)- Account:d
+      WHERE d.account_type == "deposit" AND NOT d.is_external
+        AND @@party_components.contains(d.@component)
+      ACCUM t.@link_found += TRUE, t.@link_min += getvid(d), t.@link_max += getvid(d),
+        t.@link_component += d.@component;
+    TransferHolders = SELECT t FROM LinkTransfers:t
+      -((Transfer_From_Account>|Transfer_To_Account>):role)- Account:d
+      WHERE d.account_type == "deposit" AND NOT d.is_external
+        AND @@party_components.contains(d.@component)
+      ACCUM t.@link_found += TRUE, t.@link_min += getvid(d), t.@link_max += getvid(d),
+        t.@link_component += d.@component;
+    PaymentLinks = SELECT a FROM PaymentHolders:t
+      -((Transaction_From_Account>|Transaction_To_Account>):role)- Account:a
+      WHERE NOT a.is_external AND NOT @@party_components.contains(a.@component)
+      ACCUM a.@link_found += TRUE, a.@link_min += t.@link_min, a.@link_max += t.@link_max,
+        a.@link_component += t.@link_component;
+    TransferLinks = SELECT a FROM TransferHolders:t
+      -((Transfer_From_Account>|Transfer_To_Account>):role)- Account:a
+      WHERE NOT a.is_external AND NOT @@party_components.contains(a.@component)
+      ACCUM a.@link_found += TRUE, a.@link_min += t.@link_min, a.@link_max += t.@link_max,
+        a.@link_component += t.@link_component;
+    Linked = SELECT a FROM Linkable:a
+      WHERE a.@link_found AND a.@link_min == a.@link_max
+      POST-ACCUM a.@component = a.@link_component, @@linked_accounts += 1;
+  END;
   INSERT INTO Temporal_Training_Scope VALUES (scope_id, source_id, split_seed, FALSE);
   Membership = SELECT s FROM Entities:s
-    ACCUM INSERT INTO Entity_In_Training_Scope VALUES (
-      s, scope_id Temporal_Training_Scope,
-      CASE WHEN (((s.@component % 2147483647) * 1103515245 + split_seed) % 2147483647) % 10000 < 7000 THEN 1
-           WHEN (((s.@component % 2147483647) * 1103515245 + split_seed) % 2147483647) % 10000 < 8500 THEN 2
-           ELSE 3 END,
-      to_string(s.@component));
-  PRINT "ok" AS status, scope_id AS scope_id, iteration AS iterations,
-    Entities.size() AS expected_members;
+    ACCUM IF s.@shared THEN
+        INSERT INTO Entity_In_Training_Scope VALUES (
+          s, scope_id Temporal_Training_Scope, 1, "shared:" + to_string(s.@component))
+      ELSE
+        INSERT INTO Entity_In_Training_Scope VALUES (
+          s, scope_id Temporal_Training_Scope,
+          CASE WHEN (((s.@component % 2147483647) * 1103515245 + split_seed) % 2147483647) % 10000 < 7000 THEN 1
+               WHEN (((s.@component % 2147483647) * 1103515245 + split_seed) % 2147483647) % 10000 < 8500 THEN 2
+               ELSE 3 END,
+          to_string(s.@component))
+      END;
+  PRINT "ok" AS status, scope_id AS scope_id, unowned_policy AS unowned_policy,
+    iteration AS iterations, Entities.size() AS expected_members,
+    @@shared_accounts AS shared_accounts, @@linked_accounts AS linked_accounts;
 }
 
+/* include_observed = TRUE maps only the label contract's revealed positive (see
+   temporal_training_population): withheld labels and label knowledge never leave. */
 CREATE OR REPLACE QUERY temporal_scope_population(
   STRING scope_id, STRING after_id = "", INT batch_size = 10000,
-  BOOL include_observed = TRUE
+  BOOL include_observed = FALSE
 ) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
   MaxAccum<INT> @partition;
   MaxAccum<STRING> @group;
@@ -61,8 +138,8 @@ CREATE OR REPLACE QUERY temporal_scope_population(
     ORDER BY a.id ASC LIMIT batch_size;
   IF include_observed THEN
     Labels = SELECT a FROM Accounts:a
-      ACCUM a.@positive += (a.is_mule == 1 AND a.mule_label_known),
-        a.@known_ms += a.mule_label_available_ts_ms;
+      WHERE a.pu_label == 1 AND a.is_mule == 1 AND a.mule_label_known AND NOT a.is_mule_masked
+      ACCUM a.@positive += TRUE, a.@known_ms += a.mule_label_available_ts_ms;
   END;
   PRINT "ok" AS status;
   PRINT Accounts[Accounts.id AS account_id, Accounts.first_seen_seq AS first_seen_seq,
@@ -87,4 +164,57 @@ FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
   END;
   Mark = SELECT r FROM Selected:r POST-ACCUM r.ready = TRUE;
   PRINT "ok" AS status, @@members AS members;
+}
+
+/* Read-only: how a ready scope placed its unowned member Accounts. An Account is unowned
+   when it has no Account_Owned_By_Party edge; it is then its own ownership component, so
+   its component id is getvid(account). Its membership group_id names the rule used:
+   - shared: group_id starts with "shared:" (partition 1, visible in every phase);
+   - independent: group_id == to_string(getvid(account)), its own component's hash;
+   - linked: any other group_id, the component of the one owned deposit account it
+     transacts with.
+   Counts are split by internal/external. Infer the scope's unowned_policy:
+   - independent: shared_internal + shared_external + linked_internal + linked_external
+     == 0 (also scopes built by the original query, which had no unowned rule);
+   - shared: shared_external > 0, independent_external == 0, shared_internal == 0 and
+     linked_internal + linked_external == 0;
+   - linked: as shared, but linked_internal > 0 (shared_external is 0 when the scope has
+     no unowned external accounts).
+   shared_internal > 0 (or linked_external > 0) is none of the three policies:
+   shared_internal comes from the older rule that shared every unowned account.
+   Policies that write identical membership cannot be told apart and need not be: without
+   unowned external accounts all three agree, and shared equals linked when no internal
+   account has exactly one owned deposit counterparty. */
+CREATE OR REPLACE QUERY temporal_scope_policy(STRING scope_id)
+FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+  MaxAccum<STRING> @group;
+  OrAccum @classified;
+  SumAccum<INT> @@members, @@unowned;
+  SumAccum<INT> @@shared_internal, @@shared_external, @@independent_internal,
+    @@independent_external, @@linked_internal, @@linked_external;
+  Scopes = {Temporal_Training_Scope.*};
+  ReadyScope = SELECT r FROM Scopes:r WHERE r.scope_id == scope_id AND r.ready;
+  IF ReadyScope.size() != 1 THEN PRINT "scope_not_ready" AS status; RETURN; END;
+  Members = SELECT v FROM ReadyScope:r -(Training_Scope_Has_Entity>:e)- :v
+    ACCUM @@members += 1;
+  Unowned = SELECT a FROM ReadyScope:r -(Training_Scope_Has_Entity>:e)- Account:a
+    WHERE a.outdegree("Account_Owned_By_Party") == 0
+    ACCUM a.@group += e.group_id, @@unowned += 1;
+  Shared = SELECT a FROM Unowned:a
+    WHERE a.@group LIKE "shared:%"
+    ACCUM a.@classified += TRUE,
+      IF a.is_external THEN @@shared_external += 1 ELSE @@shared_internal += 1 END;
+  Independent = SELECT a FROM Unowned:a
+    WHERE a.@group == to_string(getvid(a))
+    ACCUM a.@classified += TRUE,
+      IF a.is_external THEN @@independent_external += 1 ELSE @@independent_internal += 1 END;
+  Linked = SELECT a FROM Unowned:a
+    WHERE NOT a.@classified
+    ACCUM IF a.is_external THEN @@linked_external += 1 ELSE @@linked_internal += 1 END;
+  PRINT "ok" AS status, scope_id AS scope_id, @@members AS members,
+    @@unowned AS unowned_accounts,
+    @@shared_internal AS shared_internal, @@shared_external AS shared_external,
+    @@independent_internal AS independent_internal,
+    @@independent_external AS independent_external,
+    @@linked_internal AS linked_internal, @@linked_external AS linked_external;
 }

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from mule_pattern_learner.pyg.feature_fetch import (
+from mule_pattern_learner.pyg.fetch import (
     fetch_account_vertices,
     fetch_has_paid_edges,
 )
-from mule_pattern_learner.schema.node_features import build_account_features
-from mule_pattern_learner.tigergraph.temporal import build_edge_features
+from mule_pattern_learner.features.nodes import build_account_features
+from mule_pattern_learner.features.temporal import build_edge_features
 from mule_pattern_learner.tigergraph.client import Client
 from mule_pattern_learner.tigergraph.settings import Settings
 

@@ -1,11 +1,15 @@
 """Live integration test using isolated temporary vertices, cleaned up afterwards.
 
-Only UUID-prefixed fixture IDs are written/deleted. Existing business data and
-labels are never modified. Run after installing the scoped training queries.
+This WRITES to TigerGraph: it upserts UUID-prefixed fixture vertices and edges,
+then deletes exactly those. Existing business data and labels are never
+modified, but vertex counts change while it runs, so never run it during a
+streamed training run (verify_frozen_source would see the drift). It requires
+--write-fixture. Run after installing the scoped training queries.
 """
 
 from __future__ import annotations
 
+import argparse
 from collections import defaultdict
 from dataclasses import replace
 import json
@@ -27,6 +31,16 @@ from mule_pattern_learner.device import choose_device
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "--write-fixture",
+        action="store_true",
+        help="Confirm that temporary fixture vertices may be written to and deleted from TigerGraph",
+    )
+    if not parser.parse_args().write_fixture:
+        parser.error("this live test writes temporary vertices; pass --write-fixture to run it")
     executor = TigerGraphExecutor()
     conn = executor.client.conn
     prefix = "temporal_fixture_" + uuid4().hex + "_"
@@ -94,6 +108,14 @@ def main() -> None:
         return event
 
     source = StreamingContextSource(executor, capacity=0)
+
+    def fetch_all(keys: list[ContextKey]) -> list[dict[str, Any]]:
+        rows = source.fetch(keys)
+        missing = [key for key, row in zip(keys, rows, strict=True) if row is None]
+        if missing:
+            raise AssertionError(f"Fixture contexts rejected {dict(source.rejections)}: {missing}")
+        return [row for row in rows if row is not None]
+
     association = {"valid_from_seq": 1, "valid_to_seq": 0}
     try:
         put(
@@ -138,7 +160,7 @@ def main() -> None:
             ContextKey(kind, entities[name], 1000, base + 100000, scope, 1)
             for kind, name in [("Account", "a"), ("Token", "token"), ("Device", "device")]
         ]
-        baseline = source.fetch(keys)
+        baseline = fetch_all(keys)
         assert baseline[0]["features"]["1h_out_count"] == 5
         assert baseline[0]["features"]["1h_out_amount"] == 50
         for window in ("1d", "7d"):
@@ -156,9 +178,7 @@ def main() -> None:
         link("Party", entities["q"], "Party_Uses_Device", "Device", entities["device"], association)
         link("Party", entities["q"], "Party_Uses_Token", "Token", entities["token"], association)
         link("Token", entities["token"], "Token_Bound_To_Account", "Account", b, association)
-        assert source.fetch(keys) == baseline, (
-            "Held-out events/associations changed training inputs"
-        )
+        assert fetch_all(keys) == baseline, "Held-out events/associations changed training inputs"
         conn.upsertVertex("Zelle_Transfer", hidden, {"amount": 999999.0})
         payment("future", 1100, a, c)
         link(
@@ -177,18 +197,16 @@ def main() -> None:
             entities["device"],
             {"valid_from_seq": 1, "valid_to_seq": 1200},
         )
-        assert source.fetch(keys) == baseline, (
+        assert fetch_all(keys) == baseline, (
             "Hidden mutation/future event or association changed training inputs"
         )
-        shared = source.fetch([replace(key, scope_id="", visibility_phase=3) for key in keys])
+        shared = fetch_all([replace(key, scope_id="", visibility_phase=3) for key in keys])
         assert shared[0]["features"] != baseline[0]["features"], (
             "Fixture did not exercise exclusion"
         )
-        try:
-            source.fetch([ContextKey("Account", b, 1000, base + 100000, scope, 1)])
-        except ValueError as error:
-            assert "invisible_entity" in str(error)
-        else:
+        # A held-out root is a per-request rejection: None, counted by status.
+        rejected = source.fetch([ContextKey("Account", b, 1000, base + 100000, scope, 1)])
+        if rejected != [None] or not source.rejections["invisible_entity"]:
             raise AssertionError("Held-out account accepted as a training root")
         # Real accelerator update, then inductive prediction for B with unchanged weights.
         device = choose_device()

@@ -9,7 +9,20 @@ def test_early_stopper_detects_improvement() -> None:
     assert s.best == pytest.approx(0.50)
     assert s.update(0.55, 1) is True  # improved by more than min_delta
     assert s.best_epoch == 1
-    assert s.update(0.553, 2) is False  # gain below min_delta -> no improvement
+    # Since the tie_epsilon rule, any strict gain is saved as the new best, but a
+    # gain below min_delta does not reset patience.
+    assert s.update(0.553, 2) is True
+    assert s.best == pytest.approx(0.553) and s.best_epoch == 2
+    assert s.bad_epochs == 1
+
+
+def test_early_stopper_tie_epsilon_ignores_noise_sized_gains() -> None:
+    s = EarlyStopper(patience=3, min_delta=0.01, tie_epsilon=0.01)
+    assert s.update(0.55, 0, secondary=0.2) is True
+    assert s.update(0.553, 1, secondary=0.1) is False  # PAUC tie, worse PR-AUC
+    assert s.best_epoch == 0 and s.bad_epochs == 1
+    assert s.update(0.552, 2, secondary=0.3) is True  # PAUC tie broken by PR-AUC
+    assert s.best_epoch == 2 and s.best_secondary == pytest.approx(0.3)
 
 
 def test_early_stopper_stops_after_patience() -> None:

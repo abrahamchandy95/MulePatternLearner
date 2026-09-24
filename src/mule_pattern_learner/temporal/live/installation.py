@@ -1,16 +1,48 @@
 """Install and verify only the query definitions used by temporal training."""
 
+from __future__ import annotations
+
+from collections.abc import Callable
+from contextlib import nullcontext
+import json
 import re
-from typing import Any
+import time
+from typing import Any, TypeVar
 
+from .config_schema import OPERATIONAL_DEFAULTS
 from .dataset import QUERY_FILES, ROOT
-from .source import TigerGraphExecutor
+from .source import AVAILABILITY, SERVER_TIMEOUT, checked_rows, failure_class, run_query
 
-REVIEW_FILES = (
-    *QUERY_FILES,
+T = TypeVar("T")
+
+GRAPH = "Mule_Pattern_Learner"
+TRAINING_QUERY_FILES = QUERY_FILES
+# Parity tools for the persisted pair encodings; training never calls them.
+OPTIONAL_QUERY_FILES = (
     "gsql/features/zelle_pair_time64.gsql",
     "gsql/features/payment_pair_time64.gsql",
 )
+REVIEW_FILES = (*TRAINING_QUERY_FILES, *OPTIONAL_QUERY_FILES)
+# Experiment metadata written by preparation itself; never part of source identity.
+EXPERIMENT_METADATA_TYPES = frozenset({"Temporal_Training_Scope"})
+BUILTIN_ENDPOINT_PARAMETERS = frozenset({"query", "read_committed"})
+INSTALL_DEADLINE_S = 45 * 60.0
+
+
+def _read(executor: Any, what: str, operation: Callable[[Any], T]) -> T:
+    """Retry through the executor when it supports it (test doubles may not)."""
+    call = getattr(executor, "call", None)
+    if call is not None:
+        return call(operation, what=what)
+    return operation(executor.client.conn)
+
+
+def _show_query(executor: Any, name: str) -> str:
+    text = f"USE GRAPH {GRAPH}\nSHOW QUERY {name}"
+    gsql = getattr(executor, "gsql", None)
+    if gsql is not None:
+        return str(gsql(text, what="SHOW QUERY " + name))
+    return str(executor.client.conn.gsql(text))
 
 
 def normalized(source: str) -> str:
@@ -28,72 +60,411 @@ def definitions(source: str) -> dict[str, str]:
     return result
 
 
-def verify_sources(executor: TigerGraphExecutor) -> list[str]:
-    expected = {}
-    for path in REVIEW_FILES:
-        expected.update(definitions((ROOT / path).read_text()))
-    for name, source in expected.items():
-        live = str(executor.client.conn.gsql("USE GRAPH Mule_Pattern_Learner\nSHOW QUERY " + name))
-        actual = definitions(live).get(name)
-        if actual is None or normalized(actual) != normalized(source):
-            raise ValueError("Installed query differs from repository source: " + name)
-    return list(expected)
+def parameter_names(definition: str) -> set[str]:
+    """Names in `CREATE QUERY name(TYPE a, TYPE b = default, ...)`."""
+    match = re.search(r"QUERY\s+\w+\s*\(", definition, re.I)
+    if match is None:
+        raise ValueError("Query definition has no parameter list")
+    depth, quoted, current, parts = 1, False, "", []
+    for char in definition[match.end() :]:
+        if quoted:
+            quoted = char != '"'
+        elif char == '"':
+            quoted = True
+        elif char in "(<[":
+            depth += 1
+        elif char in ")>]":
+            depth -= 1
+            if depth == 0:
+                break
+        elif char == "," and depth == 1:
+            parts.append(current)
+            current = ""
+            continue
+        current += char
+    else:
+        raise ValueError("Unterminated query parameter list")
+    parts.append(current)
+    names = set()
+    for part in parts:
+        declaration = part.split("=", 1)[0].split()
+        if declaration:
+            names.add(declaration[-1])
+    return names
 
 
-def verify_frozen_source(executor: TigerGraphExecutor, manifest: dict[str, Any]) -> None:
+def installed_endpoints(executor: Any) -> dict[str, dict[str, Any]]:
+    """Installed-query endpoint metadata by query name (includes `enabled`)."""
+    raw = _read(executor, "getInstalledQueries", lambda conn: conn.getInstalledQueries())
+    if not isinstance(raw, dict):
+        raise ValueError("TigerGraph did not return installed query endpoints")
+    prefix = f"GET /query/{GRAPH}/"
+    return {
+        endpoint[len(prefix) :]: info
+        for endpoint, info in raw.items()
+        if endpoint.startswith(prefix) and isinstance(info, dict)
+    }
+
+
+def repository_queries(files: tuple[str, ...]) -> dict[str, tuple[str, str]]:
+    """Query name -> (repository file, definition text), in file order."""
+    result: dict[str, tuple[str, str]] = {}
+    for path in files:
+        for name, text in definitions((ROOT / path).read_text()).items():
+            result[name] = (path, text)
+    return result
+
+
+def query_problems(
+    executor: Any, files: tuple[str, ...] = TRAINING_QUERY_FILES
+) -> dict[str, list[str]]:
+    """Per query: why the server copy is not the installed repository query (empty if it is).
+
+    SHOW QUERY also returns created but uninstalled text, so the REST endpoint is
+    checked separately, including its parameter names.
+    """
+    endpoints = installed_endpoints(executor)
+    problems: dict[str, list[str]] = {}
+    for name, (_, source) in repository_queries(files).items():
+        actual = definitions(_show_query(executor, name)).get(name)
+        if actual is None:
+            problems[name] = ["is missing on the server"]
+            continue
+        issues = []
+        if normalized(actual) != normalized(source):
+            issues.append("differs from repository source")
+        endpoint = endpoints.get(name)
+        if endpoint is None or endpoint.get("enabled") is not True:
+            issues.append("is not installed (REST endpoint disabled)")
+        else:
+            served = set(endpoint.get("parameters", {})) - BUILTIN_ENDPOINT_PARAMETERS
+            if served != parameter_names(source):
+                issues.append("endpoint parameters differ from repository source")
+        if issues:
+            problems[name] = issues
+    return problems
+
+
+def verify_sources(executor: Any, files: tuple[str, ...] = TRAINING_QUERY_FILES) -> list[str]:
+    """Every training query must match the repository text and be installed and enabled."""
+    problems = query_problems(executor, files)
+    if problems:
+        raise ValueError(
+            "Installed query differs from repository source or is not installed: "
+            + "; ".join(f"{name} {issue}" for name, issues in problems.items() for issue in issues)
+            + ". Run `mule-temporal install`."
+        )
+    return list(repository_queries(files))
+
+
+def source_counts(executor: Any) -> dict[str, int]:
+    """Live vertex counts by type, excluding experiment metadata vertex types."""
+    raw = _read(executor, "getVertexCount", lambda conn: conn.getVertexCount("*", realtime=True))
+    if not isinstance(raw, dict):
+        raise ValueError("TigerGraph did not return counts by vertex type")
+    return {
+        str(name): int(count)
+        for name, count in raw.items()
+        if str(name) not in EXPERIMENT_METADATA_TYPES
+    }
+
+
+def scope_header(executor: Any, scope_id: str) -> dict[str, Any] | None:
+    """Attributes of the Temporal_Training_Scope vertex, or None when it does not exist."""
+    from pyTigerGraph.common.exception import TigerGraphException
+
+    try:
+        rows = _read(
+            executor,
+            "getVerticesById",
+            lambda conn: conn.getVerticesById("Temporal_Training_Scope", [scope_id]),
+        )
+    except TigerGraphException as error:
+        if str(error.code) != "601":
+            raise
+        return None
+    if not isinstance(rows, list) or len(rows) > 1:
+        raise ValueError("Unexpected scope metadata response")
+    return dict(rows[0]["attributes"]) if rows else None
+
+
+def check_scope(attrs: dict[str, Any] | None, config: dict[str, Any]) -> None:
+    if attrs is None:
+        raise ValueError(f"Prepared experiment scope is missing: {config['scope_id']}")
+    if (
+        not attrs["ready"]
+        or attrs["source_id"] != config["dataset_id"]
+        or attrs["split_seed"] != int(config.get("split_seed", 42))
+    ):
+        raise ValueError("Scope is incomplete or belongs to a different source/partition")
+
+
+SCOPE_POLICY_QUERY = "temporal_scope_policy"
+# Unowned member Accounts by membership class and side, as temporal_scope_policy prints them.
+SCOPE_POLICY_COUNTS = (
+    "shared_internal",
+    "shared_external",
+    "independent_internal",
+    "independent_external",
+    "linked_internal",
+    "linked_external",
+)
+
+
+def scope_policy_counts(executor: Any, scope_id: str) -> dict[str, int]:
+    """Membership classes of the scope's unowned Accounts, plus `members` (read-only)."""
+    rows = checked_rows(
+        run_query(executor, SCOPE_POLICY_QUERY, {"scope_id": scope_id}, timeout_s=900.0)
+    )
+    merged: dict[str, Any] = {}
+    for row in rows:
+        merged.update(row)
+    names = (*SCOPE_POLICY_COUNTS, "members")
+    missing = [name for name in names if name not in merged]
+    if missing:
+        raise ValueError(
+            f"{SCOPE_POLICY_QUERY} response lacks {missing}; install the current queries "
+            "(mule-temporal install)"
+        )
+    return {name: int(merged[name]) for name in names}
+
+
+def inferred_scope_policy(counts: dict[str, int]) -> str | None:
+    """The scope_unowned rule a scope was created with, from its membership classes.
+
+    Under every rule an unowned internal account is never shared and an unowned
+    external account is never linked. "independent": nothing shared or linked
+    (every scope created before the policy existed, such as strict_mule_v1).
+    "shared": every unowned external account shared, nothing linked. "linked":
+    every unowned external account shared (possibly none exist) and at least one
+    internal account linked to its sole owned deposit counterparty. None: no rule
+    produces this membership (for example an early draft that also shared
+    internal accounts). Rules that wrote identical membership read as the
+    simplest of them: "independent" without unowned external accounts or links,
+    "shared" when no internal account was linked.
+    """
+    if counts["shared_internal"] or counts["linked_external"]:
+        return None
+    shared, linked = counts["shared_external"], counts["linked_internal"]
+    if counts["independent_external"] and (shared or linked):
+        return None  # shared and linked scopes share every unowned external account
+    if linked:
+        return "linked"
+    return "shared" if shared else "independent"
+
+
+def check_scope_policy(counts: dict[str, int], config: dict[str, Any]) -> str:
+    """Raise unless the scope was created with the configured scope_unowned rule."""
+    configured = config.get("scope_unowned", OPERATIONAL_DEFAULTS["scope_unowned"])
+    stored = inferred_scope_policy(counts)
+    if stored is not None and stored == configured:
+        return stored
+    scope_id = config["scope_id"]
+    if stored is None:
+        raise ValueError(
+            f"Scope {scope_id!r} matches no scope_unowned rule (unowned member classes "
+            f"{json.dumps(counts, sort_keys=True)}). Create a new scope: set a new scope_id "
+            "and run `mule-temporal prepare --create-scope`."
+        )
+    raise ValueError(
+        f"Scope {scope_id!r} was created with scope_unowned = {stored!r}, but the "
+        f"configuration says {configured!r} (unowned member classes "
+        f"{json.dumps(counts, sort_keys=True)}). Set scope_unowned = {stored!r} to use this "
+        "scope, or set a new scope_id and run `mule-temporal prepare --create-scope`."
+    )
+
+
+def verify_scope(executor: Any, config: dict[str, Any]) -> dict[str, int]:
+    """Header (ready, source, split seed) and scope_unowned rule of an existing scope."""
+    check_scope(scope_header(executor, config["scope_id"]), config)
+    counts = scope_policy_counts(executor, config["scope_id"])
+    check_scope_policy(counts, config)
+    return counts
+
+
+def verify_frozen_source(executor: Any, manifest: dict[str, Any]) -> None:
     """Recheck live provenance on every streamed run, including prepared-data reuse.
 
     Counts and headers catch drift, but cannot prove absence of same-count edits.
-    The experiment still requires an operationally frozen source.
+    The experiment still requires an operationally frozen source. Scope vertices
+    are experiment metadata, so creating another scope does not invalidate data.
     """
     verify_sources(executor)
-    conn = executor.client.conn
-    if conn.getVertexCount("*", realtime=True) != manifest["source"]["source_counts"]:
+    recorded = {
+        name: count
+        for name, count in manifest["source"]["source_counts"].items()
+        if name not in EXPERIMENT_METADATA_TYPES
+    }
+    if source_counts(executor) != recorded:
         raise ValueError("Live graph counts changed; freeze the source and prepare a new dataset")
     config = manifest["config"]
     if config["evaluation_protocol"] == "strict_inductive":
-        rows = conn.getVerticesById("Temporal_Training_Scope", [config["scope_id"]])
-        if not isinstance(rows, list) or len(rows) != 1:
-            raise ValueError("Prepared experiment scope is missing")
-        attrs = rows[0]["attributes"]
-        if (
-            not attrs["ready"]
-            or attrs["source_id"] != config["dataset_id"]
-            or attrs["split_seed"] != int(config.get("split_seed", 42))
-        ):
-            raise ValueError("Prepared experiment scope is no longer valid")
+        try:
+            verify_scope(executor, config)
+        except ValueError as error:
+            raise ValueError(f"Prepared experiment scope is no longer valid: {error}") from None
 
 
-def install(executor: TigerGraphExecutor) -> dict[str, str]:
-    logs = {}
-    schema = executor.client.conn.getSchema(force=True)
+def _installation_state(status: Any) -> str:
+    if not isinstance(status, dict):
+        return "running"
+    message = str(status.get("message", ""))
+    if status.get("error") in (True, "true") or "FAILED" in message.upper():
+        return "failed"
+    return "success" if "SUCCESS" in message.upper() else "running"
+
+
+def _with_callers(stale: set[str], queries: dict[str, tuple[str, str]]) -> set[str]:
+    """Add every repository query that calls a stale query (subqueries are linked in)."""
+    bodies = {
+        name: re.sub(r"/\*.*?\*/|//[^\n]*|#[^\n]*", "", text, flags=re.S)
+        for name, (_, text) in queries.items()
+    }
+    result = set(stale)
+    changed = True
+    while changed:
+        changed = False
+        for name, body in bodies.items():
+            if name not in result and any(
+                re.search(rf"\b{re.escape(callee)}\s*\(", body) for callee in result
+            ):
+                result.add(name)
+                changed = True
+    return result
+
+
+def _created(output: str) -> bool:
+    return "Successfully created queries" in output and not re.search(
+        r"(?:[1-9]\d* syntax error|(?:Type Check|Semantic Check|Syntax) Error|draft query)",
+        output,
+        re.I,
+    )
+
+
+def install(
+    executor: Any,
+    *,
+    force: bool = False,
+    include_optional: bool = False,
+    deadline_s: float = INSTALL_DEADLINE_S,
+    poll_s: float = 30.0,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+) -> dict[str, Any]:
+    """Create and install only the training queries that are stale on the server.
+
+    A query is stale when SHOW QUERY differs from the repository, its endpoint is
+    missing or disabled, or its endpoint parameters differ (see query_problems);
+    `force=True` treats every query as stale. Queries that call a stale query
+    (temporal_training_context calls temporal_fourier64_values) are installed
+    with it. Only stale definitions are re-created, because CREATE OR REPLACE
+    disables an installed endpoint until the query is installed again.
+
+    TigerGraph 4.2.5 answers GET /gsql/v1/queries/install only when compilation
+    finishes and returns no requestId, so that request gets a read timeout of
+    `deadline_s`. When the client gives up first (read timeout, dropped
+    connection, gateway error), the endpoint listing is polled every `poll_s`
+    seconds until every installed query is enabled or the deadline passes. A
+    requestId, when a server returns one, is polled with getQueryInstallationStatus.
+    Success is decided by verify_sources, not by a status message.
+    """
+    conn = executor.client.conn
+    logs: dict[str, Any] = {}
+    schema = conn.getSchema(force=True)
     if "Temporal_Training_Scope" not in {v["Name"] for v in schema["VertexTypes"]}:
         result = str(
-            executor.client.conn.gsql(
-                (ROOT / "gsql/schema/migrations/temporal_training_scope.gsql").read_text()
-            )
+            conn.gsql((ROOT / "gsql/schema/migrations/temporal_training_scope.gsql").read_text())
         )
         if "Local schema change succeeded" not in result:
             raise RuntimeError(result)
         logs["scope_schema"] = result
-    names = []
-    for relative in REVIEW_FILES:
-        source = (ROOT / relative).read_text()
-        text = str(executor.client.conn.gsql(source))
-        if "Successfully created queries" not in text or re.search(
-            r"(?:[1-9]\d* syntax error|(?:Type Check|Semantic Check|Syntax) Error|draft query)",
-            text,
-            re.I,
-        ):
-            raise RuntimeError(text)
-        logs[relative] = text
-        names.extend(re.findall(r"CREATE OR REPLACE QUERY (\w+)", source))
-    text = str(
-        executor.client.conn.gsql(
-            "USE GRAPH Mule_Pattern_Learner\nINSTALL QUERY " + ", ".join(names)
+    files = (*TRAINING_QUERY_FILES, *(OPTIONAL_QUERY_FILES if include_optional else ()))
+    queries = repository_queries(files)
+    stale = set(queries) if force else _with_callers(set(query_problems(executor, files)), queries)
+    names = [name for name in queries if name in stale]
+    logs["installed"] = names
+    logs["up_to_date"] = [name for name in queries if name not in stale]
+    print(json.dumps({"install": names, "up_to_date": logs["up_to_date"]}), flush=True)
+    if not names:
+        logs["verified"] = verify_sources(executor, files)
+        return logs
+    for relative in files:
+        chosen = [queries[name][1] for name in names if queries[name][0] == relative]
+        if not chosen:
+            continue
+        output = str(conn.gsql(f"USE GRAPH {GRAPH}\n" + "\n\n".join(chosen) + "\n"))
+        if not _created(output):
+            raise RuntimeError(output)
+        logs[relative] = output
+    started = clock()
+    status: Any = None
+    timeout = getattr(executor.client, "request_timeout", None)
+    try:
+        with timeout(read_s=deadline_s) if timeout is not None else nullcontext():
+            status = conn.installQueries(names, wait=False)
+    except Exception as error:
+        if failure_class(error) not in (AVAILABILITY, SERVER_TIMEOUT):
+            raise
+        print(
+            json.dumps(
+                {
+                    "install_request": "no answer; polling the endpoint listing",
+                    "error": type(error).__name__,
+                }
+            ),
+            flush=True,
         )
-    )
-    if "Query installation finished" not in text or not re.search(r"failed: 0\b", text):
-        raise RuntimeError(text)
-    logs["install"] = text
+    request_id = status.get("requestId") if isinstance(status, dict) else None
+    while request_id and _installation_state(status) == "running":
+        elapsed = clock() - started
+        if elapsed > deadline_s:
+            raise TimeoutError(
+                f"Query installation {request_id} still running after {elapsed:.0f}s; "
+                "check it with getQueryInstallationStatus before retrying"
+            )
+        print(
+            json.dumps(
+                {"installing": len(names), "request_id": request_id, "elapsed_s": round(elapsed)}
+            ),
+            flush=True,
+        )
+        sleep(poll_s)
+        status = _read(
+            executor,
+            "getQueryInstallationStatus",
+            lambda conn: conn.getQueryInstallationStatus(str(request_id)),
+        )
+    state = _installation_state(status)
+    if state == "failed":
+        raise RuntimeError(f"Query installation failed: {status}")
+    if state != "success":
+        _await_enabled(executor, names, started, deadline_s, poll_s, sleep, clock)
+    logs["install"] = status
+    logs["verified"] = verify_sources(executor, files)
     return logs
+
+
+def _await_enabled(
+    executor: Any,
+    names: list[str],
+    started: float,
+    deadline_s: float,
+    poll_s: float,
+    sleep: Callable[[float], None],
+    clock: Callable[[], float],
+) -> None:
+    """Poll the endpoint listing until every named query is installed and enabled."""
+    while True:
+        endpoints = installed_endpoints(executor)
+        pending = [name for name in names if endpoints.get(name, {}).get("enabled") is not True]
+        elapsed = clock() - started
+        if not pending:
+            return
+        if elapsed > deadline_s:
+            raise TimeoutError(
+                f"Queries {pending} are still not installed after {elapsed:.0f}s. The server "
+                "may still be compiling: re-run `mule-temporal install` later, which installs "
+                "only what is still stale."
+            )
+        print(json.dumps({"awaiting": pending, "elapsed_s": round(elapsed)}), flush=True)
+        sleep(poll_s)

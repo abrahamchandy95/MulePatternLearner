@@ -122,9 +122,9 @@ CREATE OR REPLACE QUERY payment_pair_time64(
     END;
     age_ms = seed_ts_ms - item.event_ts_ms;
     @@age_encoding = temporal_fourier64_values(age_ms);
-    IF age_ms <= 3600000 THEN count_1h = count_1h + 1; END;
-    IF age_ms <= 86400000 THEN count_24h = count_24h + 1; END;
-    IF age_ms <= 604800000 THEN count_7d = count_7d + 1; END;
+    IF age_ms < 3600000 THEN count_1h = count_1h + 1; END;
+    IF age_ms < 86400000 THEN count_24h = count_24h + 1; END;
+    IF age_ms < 604800000 THEN count_7d = count_7d + 1; END;
 
     IF persist THEN
       @@gap_by_event += (item.event_vertex -> gap_ms);
