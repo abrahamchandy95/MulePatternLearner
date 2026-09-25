@@ -6,13 +6,15 @@ children pool (hop 2). Neighbors are chosen by a deterministic legacy policy
 children become local stubs instead of fetches, and a child that TigerGraph
 rejects is masked out of the first hop. Tensors are assembled by column gathers;
 Fourier time features are computed on the target device from `age_ms` and
-`gap_ms` and never read from TigerGraph.
+`gap_ms` and never read from TigerGraph. `build_root_batch`, which training,
+preparation and scoring share, drops the roots TigerGraph rejected first.
 """
 
 from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Sequence
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
 import numpy as np
@@ -436,7 +438,7 @@ def make_live_batch(
     limits.validate(len(roots), fanouts, plan, sampler)
     if len({(key.scope_id, key.visibility_phase) for key in roots}) != 1:
         raise ValueError("A batch must have one visibility scope and phase")
-    phase = roots[0].visibility_phase if roots[0].scope_id else 3
+    phase = roots[0].batch_phase
     device = torch.device(device)
     backend = batch_backend(sampler, device, mode, sampler_backend)
     counts: dict[str, Any] = {"roots": len(roots), "sampler_backend": backend}
@@ -576,3 +578,86 @@ def make_live_batch(
             second_edges=int(arrays["second_mask"].sum()),
         )
     return batch
+
+
+class PinnedRoots:
+    """Serve already fetched root rows to make_live_batch without a second request.
+
+    Anything else (children, other keys) goes to the wrapped source, so concurrent
+    batch builders cannot evict a batch's roots between filtering and assembly.
+    """
+
+    def __init__(
+        self, store: ContextSource, keys: list[ContextKey], rows: list[dict[str, Any]]
+    ) -> None:
+        self.store = store
+        self.rows = dict(zip(keys, rows, strict=True))
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.store, name)
+
+    def fetch(self, keys: list[ContextKey], *, hop: int = 1) -> list[dict[str, Any] | None]:
+        if hop == 1 and all(key in self.rows for key in keys):
+            return [self.rows[key] for key in keys]
+        return self.store.fetch(keys, hop=hop)
+
+
+@dataclass
+class RootBatch:
+    """One assembled batch for the accepted roots; rejected roots are reported, not scored."""
+
+    requested: list[ContextKey]
+    accepted: np.ndarray
+    batch: dict[str, torch.Tensor] | None
+    stats: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def keys(self) -> list[ContextKey]:
+        return [k for k, ok in zip(self.requested, self.accepted, strict=True) if ok]
+
+    @property
+    def rejected(self) -> list[ContextKey]:
+        return [k for k, ok in zip(self.requested, self.accepted, strict=True) if not ok]
+
+
+def build_root_batch(
+    store: ContextSource,
+    keys: list[ContextKey],
+    *,
+    fanouts: tuple[int, int],
+    device: str | torch.device,
+    plan: FeaturePlan,
+    sampler: SamplerPlan,
+    hubs: HubLookup,
+    mode: str,
+    step_seed: int = 0,
+    sampler_backend: str | None = None,
+) -> RootBatch:
+    """Drop roots TigerGraph rejected (per-request status), then assemble the rest.
+
+    Rejections are counted by status on ``store.rejections``; the batch statistics
+    carry ``rejected_roots``. A batch with no accepted root has ``batch=None``.
+    ``sampler_backend`` is the backend resolved once per run (``resolve_backend``);
+    None lets make_live_batch resolve it.
+    """
+    rows = store.fetch(keys, hop=1)
+    accepted = np.fromiter((row is not None for row in rows), dtype=bool, count=len(keys))
+    stats: dict[str, Any] = {"rejected_roots": int(len(keys) - accepted.sum())}
+    kept = [k for k, ok in zip(keys, accepted, strict=True) if ok]
+    if not kept:
+        return RootBatch(keys, accepted, None, stats)
+    pinned = PinnedRoots(store, kept, [row for row in rows if row is not None])
+    batch = make_live_batch(
+        pinned,  # type: ignore[arg-type]
+        kept,
+        fanouts=fanouts,
+        device=device,
+        plan=plan,
+        sampler=sampler,
+        hubs=hubs,
+        mode=mode,
+        step_seed=step_seed,
+        stats=stats,
+        sampler_backend=sampler_backend,
+    )
+    return RootBatch(keys, accepted, batch, stats)

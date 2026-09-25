@@ -6,6 +6,7 @@ Does not clear data, manufacture labels, or change any account's ground truth.
 
 from __future__ import annotations
 
+import argparse
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -33,7 +34,7 @@ FIELDS = (
 QUERIES = ("temporal_get_account_supervision", "temporal_validate_account_supervision")
 
 
-def main() -> None:
+def main(output: Path) -> None:
     settings = Settings()
     if settings.graphname != GRAPH:
         raise ValueError("Unexpected graph")
@@ -129,10 +130,19 @@ def main() -> None:
         "labels_inferred_or_populated": False,
         "label_contract": "Ground truth is integer is_mule (0/1); hidden positives retain is_mule=1 and have is_mule_masked=true, pu_label=0. Unknown truth has mule_label_known=false.",
     }
-    destination = ROOT / "docs/temporal_account_supervision_deployment.json"
-    destination.write_text(json.dumps(report, indent=2) + "\n")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report, indent=2))
 
 
 if __name__ == "__main__":
-    main()
+    # Parse before main() so --help never connects to TigerGraph.
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=ROOT / "artifacts/temporal/reports/temporal_account_supervision_deployment.json",
+        help="Where the deployment record is written",
+    )
+    args = parser.parse_args()
+    main(args.output)

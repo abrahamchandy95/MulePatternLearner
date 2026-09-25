@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 from datetime import datetime, timezone
 import io
 import csv
@@ -12,12 +13,14 @@ import uuid
 
 from pyTigerGraph import TigerGraphException
 
-from mule_pattern_learner.temporal.account_labels import ACCOUNT_LOAD_COLUMNS
+from mule_pattern_learner.temporal.live.labels import ACCOUNT_LOAD_COLUMNS
 from mule_pattern_learner.tigergraph.client import Client
 from mule_pattern_learner.tigergraph.settings import Settings
 
+ROOT = Path(__file__).resolve().parents[2]
 
-def main() -> None:
+
+def main(output: Path) -> None:
     print("Connecting for account supervision verification", flush=True)
     conn = Client(Settings()).conn
     print("Connected", flush=True)
@@ -206,14 +209,23 @@ def main() -> None:
         "final_validation": final,
         "production_account_labels_modified": False,
     }
-    path = Path(__file__).resolve().parents[2] / "docs/temporal_account_supervision_tests.json"
-    path.write_text(json.dumps(report, indent=2) + "\n")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report, indent=2))
 
 
 if __name__ == "__main__":
+    # Parse before main() so --help never connects to TigerGraph.
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=ROOT / "artifacts/temporal/reports/temporal_account_supervision_tests.json",
+        help="Where the test record is written",
+    )
+    args = parser.parse_args()
     try:
-        main()
+        main(args.output)
     except BaseException as exc:
         import traceback
 

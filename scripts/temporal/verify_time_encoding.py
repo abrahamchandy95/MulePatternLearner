@@ -4,6 +4,7 @@ Run explicitly after installing the queries. Existing records are never edited.
 Only randomly named vertices created here are deleted, including their edges.
 """
 
+import argparse
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -14,11 +15,11 @@ from typing import Any, cast
 
 from pyTigerGraph import TigerGraphException
 
+from mule_pattern_learner.temporal.encoding import BASIS_ID
 from mule_pattern_learner.tigergraph.client import Client
 from mule_pattern_learner.tigergraph.settings import Settings
 
 ROOT = Path(__file__).resolve().parents[2]
-BASIS = "log1p_s_400d_32x_sincos_v1"
 
 
 def reference(delta_ms: int) -> list[float]:
@@ -40,7 +41,7 @@ def close(actual: list[float], delta_ms: int) -> None:
     assert max(abs(x - y) for x, y in zip(actual, expected, strict=True)) < 1e-5
 
 
-def main() -> None:
+def main(output: Path) -> None:
     conn = Client(Settings()).conn
     if conn.graphname != "Mule_Pattern_Learner":
         raise RuntimeError("Unexpected graph")
@@ -83,7 +84,7 @@ def main() -> None:
     try:
         for delta in (0, 1, 1000, 180000, 1209600000, 34560000000, 10**13):
             result = summary(run("temporal_fourier64", delta_t_ms=delta))
-            assert result["status"] == "ok" and result["basis_id"] == BASIS
+            assert result["status"] == "ok" and result["basis_id"] == BASIS_ID
             close(result["time_encoding"], delta)
         assert summary(run("temporal_fourier64", delta_t_ms=-1))["status"] == "invalid_delta_t"
         checks.append(
@@ -193,7 +194,7 @@ def main() -> None:
         assert persisted["pair_previous_event_id"] == first
         assert persisted["pair_sender_id"] == sender
         assert persisted["pair_recipient_id"] == recipient
-        assert persisted["time_encoding_basis_id"] == BASIS
+        assert persisted["time_encoding_basis_id"] == BASIS_ID
         assert attrs("Zelle_Transfer", first)["pair_time_encoding"] == []
         checks.append(
             "history cap prevents writes; persistence round-trip and idempotent list replacement"
@@ -332,7 +333,7 @@ def main() -> None:
     evidence = {
         "verified_at_utc": datetime.now(timezone.utc).isoformat(),
         "graph": conn.graphname,
-        "basis_id": BASIS,
+        "basis_id": BASIS_ID,
         "dimensions": 64,
         "checks_passed": checks,
         "temporary_fixture_cleanup": "verified",
@@ -342,11 +343,19 @@ def main() -> None:
             str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in files
         },
     }
-    (ROOT / "docs/temporal_encoding_deployment.json").write_text(
-        json.dumps(evidence, indent=2) + "\n"
-    )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(evidence, indent=2) + "\n")
     print("Verified: all fixture records removed; original vertex counts unchanged.", flush=True)
 
 
 if __name__ == "__main__":
-    main()
+    # Parse before main() so --help never connects to TigerGraph.
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=ROOT / "artifacts/temporal/reports/temporal_encoding_deployment.json",
+        help="Where the verification record is written",
+    )
+    args = parser.parse_args()
+    main(args.output)

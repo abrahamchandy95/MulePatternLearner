@@ -10,9 +10,12 @@ import numpy as np
 import pandas as pd
 
 from ..common import timestamp
+from .config_schema import setting
+from .contract import SPLITS
 
-SPLITS = ("train", "validation", "test")
 LABEL_COLUMNS = ("account_id", "known_positive", "known_from_ms")
+# Ground-truth fields that must never reach training metadata or observed labels.
+ORACLE_COLUMNS = frozenset({"is_mule", "true_label", "is_mule_masked", "ring_id"})
 
 
 class ObservedLabelSource(Protocol):
@@ -41,11 +44,9 @@ class ParquetObservedLabels:
     path: Path
 
     def _frame(self) -> pd.DataFrame:
-        import pyarrow.parquet as pq
-
-        if pq.ParquetFile(self.path).metadata.num_rows > 100000:
-            raise ValueError("Observed-label source exceeds the 100000-row bounded pool")
-        return pd.read_parquet(self.path)
+        return read_bounded_parquet(
+            self.path, "Observed-label source exceeds the 100000-row bounded pool"
+        )
 
     def positive_ids(self) -> set[str]:
         return FrameObservedLabels(self._frame()).positive_ids()
@@ -96,12 +97,13 @@ def check_graph_label_rows(rows: pd.DataFrame) -> None:
 def label_source(config: dict[str, Any]) -> ObservedLabelSource:
     """The explicitly configured observed-label source; there is no implicit default.
 
-    `observed_labels = <parquet>` (relative to the repository root) is the
-    production path. `label_policy = "graph_observed"` opts in to graph labels.
+    `label_policy = "graph_observed"` (the built-in run) reads the labels revealed
+    in the graph. `observed_labels = <parquet>` (relative to the repository root)
+    overrides it, for experiments or an external label feed.
     """
     from mule_pattern_learner.configuration import resolve_path
 
-    policy = config.get("label_policy", "observed")
+    policy = setting(config, "label_policy")
     path = config.get("observed_labels")
     if policy == "graph_observed":
         if path:
@@ -126,8 +128,9 @@ def label_source(config: dict[str, Any]) -> ObservedLabelSource:
 def missing_label_source(path: Path) -> str:
     """The error for a configured observed-label file that does not exist."""
     return (
-        f"Observed-label source file not found at {path}: copy it next to the prepared "
-        "artifacts or point observed_labels at it"
+        f"Observed-label source file not found at {path}: point observed_labels at an "
+        "existing file (paths are relative to the repository root), or remove "
+        "observed_labels to use the labels revealed in the graph"
     )
 
 
@@ -136,8 +139,17 @@ def reads_graph_labels(labels: ObservedLabelSource) -> bool:
     return isinstance(labels, GraphObservedLabels)
 
 
+def read_bounded_parquet(path: Path, message: str, limit: int = 100_000) -> pd.DataFrame:
+    """Read a parquet file, refusing (with message) one of more than limit rows before loading."""
+    import pyarrow.parquet as pq
+
+    if pq.ParquetFile(path).metadata.num_rows > limit:
+        raise ValueError(message)
+    return pd.read_parquet(path)
+
+
 def validate_label_table(labels: pd.DataFrame) -> None:
-    forbidden = {"is_mule", "true_label", "ring_id", "is_mule_masked"} & set(labels.columns)
+    forbidden = set(labels.columns) & ORACLE_COLUMNS
     if forbidden:
         raise ValueError(f"Oracle fields cannot enter the observed-label interface: {forbidden}")
     if not set(LABEL_COLUMNS) <= set(labels.columns):

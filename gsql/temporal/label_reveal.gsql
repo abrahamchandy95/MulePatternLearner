@@ -1,0 +1,368 @@
+USE GRAPH Mule_Pattern_Learner
+
+/* Deterministic uniforms in (0, 1) for the label reveal: streams 1..n of one key.
+   GSQL has no bitwise operators, so the mixer is modular arithmetic over the prime
+   2^31 - 1 with two squaring rounds (non-linear in the key). Every product stays
+   below 2^62. labels.reveal_uniforms mirrors it exactly. */
+CREATE OR REPLACE QUERY temporal_reveal_uniforms(INT key, INT salt, INT n)
+FOR GRAPH Mule_Pattern_Learner RETURNS (ListAccum<DOUBLE>) SYNTAX V2 {
+  ListAccum<DOUBLE> @@u;
+  INT p = 2147483647;
+  INT x = 0;
+  INT y = 0;
+  FOREACH i IN RANGE[1, n] DO
+    x = ((key % p) + i * 1000003 + (salt % p) * 7919) % p;
+    x = (x * 48271 + 11) % p;
+    y = (x * x + 1013904223) % p;
+    x = (y * 69621 + x) % p;
+    y = (x * x + 12345) % p;
+    x = (y * 48271 + x) % p;
+    @@u += (x + 0.5) / p;
+  END;
+  RETURN @@u;
+}
+
+/* Reveal known mules once, through the Account label contract (docs/account_mule_labels.md).
+
+   The simulator's ground truth (is_mule) is read here and never by training. Each
+   internal mule gets a simulated DISCOVERY TIME from the channels banks really use
+   (docs/label_reveal.md has the sources and the offline check):
+   - victim report: each fraud-labelled Zelle inflow is reported by its victim with
+     probability p_report after a scam-type reporting delay, reaches the mule's bank
+     after a notification lag, and is acted on with probability p_action_first (the
+     mule's first report) or p_action_later; the mule is confirmed after an
+     investigation lag. The graph's per-payment oracle arrives at the payment instant,
+     so these delays are simulated here, never read from it;
+   - network trace: a discovered mule exposes each mule it exchanged money with before
+     its discovery, with probability trace_probability per counterpart (three rounds);
+   - monitoring: a constant proactive hazard per day from account opening.
+   A mule is eligible for its scope partition's split only if discovered before that
+   split's cutoff. Per split, up to `budget` eligible mules are revealed by stratified
+   Pareto pi-ps sampling with propensity floor + (1 - floor) * sigmoid(slope * z), z the
+   standardized log(1 + reports received by the cutoff). A shortfall is printed, never
+   filled with a mule no channel had found.
+
+   apply = FALSE (default) only prints the plan. apply = TRUE writes every internal
+   Account: a known label with effective clocks at first observation; mules get the
+   end of their discovery day (and the last sequence at or before it) as availability,
+   and revealed mules get is_mule_masked = FALSE and pu_label = 1. External accounts stay
+   unknown. A graph that already has known labels is left alone unless force = TRUE. */
+CREATE OR REPLACE QUERY temporal_reveal_mule_labels(
+  STRING scope_id, UINT train_cutoff_ms, UINT validation_cutoff_ms, UINT test_cutoff_ms,
+  INT budget = 20, INT salt = 42, BOOL apply = FALSE, BOOL force = FALSE,
+  DOUBLE p_report = 0.65, DOUBLE p_action_first = 0.5, DOUBLE p_action_later = 0.7,
+  DOUBLE proactive_per_day = 0.00045, DOUBLE trace_probability = 0.25,
+  DOUBLE propensity_slope = 1.0, DOUBLE propensity_floor = 0.05,
+  STRING version = "reveal_v1"
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+  TYPEDEF TUPLE<DOUBLE report_ms, DOUBLE action_u, DOUBLE confirm_days> Report;
+  TYPEDEF TUPLE<DOUBLE q, VERTEX<Account> account> Pick;
+  TYPEDEF TUPLE<STRING account_id, INT split, INT known_ts_ms, STRING channel, DOUBLE inclusion> Revealed;
+  SumAccum<INT> @@known_labels, @@revealed_labels, @@mules_without_split;
+  MapAccum<INT, SumAccum<INT>> @@mules, @@eligible, @@revealed, @@capped, @@new_caps;
+  MapAccum<STRING, SumAccum<INT>> @@eligible_by_channel, @@revealed_by_channel;
+  MapAccum<INT, SumAccum<DOUBLE>> @@z_sum, @@z_sq, @@w_sum;
+  MapAccum<INT, MaxAccum<INT>> @@day_seq, @@prefix_seq;
+  MaxAccum<INT> @@last_ts, @@last_seq, @@last_day;
+  MinAccum<INT> @@first_day;
+  HeapAccum<Pick>(budget, q ASC) @@pick1, @@pick2, @@pick3;
+  SetAccum<VERTEX<Account>> @@picked;
+  ListAccum<Revealed> @@revealed_rows;
+  MaxAccum<INT> @part, @day, @avail_ts, @avail_seq;
+  SumAccum<INT> @seen_reports;
+  MinAccum<INT> @key;
+  ListAccum<DOUBLE> @u, @pro_u, @sel_u;
+  ListAccum<Report> @reports;
+  MinAccum<DOUBLE> @first_report, @t_react, @candidate;
+  MaxAccum<DOUBLE> @t_pro, @cutoff, @evidence, @w, @lambda;
+  SumAccum<DOUBLE> @t_known;
+  SumAccum<STRING> @channel;
+  OrAccum @mule, @eligible, @capped, @revealed, @link;
+  MapAccum<INT, MinAccum<DOUBLE>> @carriers, @trace_time;
+  MapAccum<INT, MinAccum<INT>> @trace_seq;
+  MapAccum<INT, ListAccum<DOUBLE>> @trace_u;
+  DOUBLE day_ms = 86400000.0;
+  DOUBLE never = 1000000000000000.0;
+  DOUBLE two_pi = 6.283185307179586;
+  INT round = 0;
+  INT sweep = 0;
+  INT running = 0;
+  STRING status = "dry_run";
+
+  IF budget < 0 OR budget > 1000 THEN PRINT "invalid_budget" AS status; RETURN; END;
+  IF NOT (train_cutoff_ms < validation_cutoff_ms AND validation_cutoff_ms < test_cutoff_ms) THEN
+    PRINT "invalid_cutoffs" AS status; RETURN;
+  END;
+  IF p_report < 0 OR p_report > 1 OR p_action_first < 0 OR p_action_first > 1
+     OR p_action_later < 0 OR p_action_later > 1 OR trace_probability < 0
+     OR trace_probability > 1 OR proactive_per_day < 0 OR propensity_floor < 0.000001
+     OR propensity_floor > 1 THEN
+    PRINT "invalid_parameters" AS status; RETURN;
+  END;
+  Scopes = {Temporal_Training_Scope.*};
+  Ready = SELECT r FROM Scopes:r WHERE r.scope_id == scope_id AND r.ready;
+  IF Ready.size() != 1 THEN PRINT "scope_not_ready" AS status; RETURN; END;
+  Internal = {Account.*};
+  Internal = SELECT a FROM Internal:a WHERE NOT a.is_external
+    POST-ACCUM
+      IF a.mule_label_known THEN @@known_labels += 1 END,
+      IF a.pu_label == 1 THEN @@revealed_labels += 1 END;
+  IF (@@known_labels > 0 OR @@revealed_labels > 0) AND NOT force THEN
+    PRINT "already_revealed" AS status, @@known_labels AS known_labels,
+      @@revealed_labels AS revealed_labels;
+    RETURN;
+  END;
+
+  /* Mules, their split (scope partition) and a stable draw key: the smallest sequence
+     of an event they sent (every event has one sender, so keys never collide). */
+  Mules = SELECT a FROM Internal:a WHERE a.is_mule == 1 POST-ACCUM a.@mule += TRUE;
+  InScope = SELECT a FROM Ready:r -(Training_Scope_Has_Entity>:e)- Account:a
+    WHERE a.@mule ACCUM a.@part += e.partition;
+  SentPay = SELECT t FROM Mules:a -(Account_Initiated_Transaction>:e)- Payment_Transaction:t
+    ACCUM a.@key += t.event_seq;
+  SentZelle = SELECT z FROM Mules:a -(Account_Sent_Zelle_Transfer>:e)- Zelle_Transfer:z
+    ACCUM a.@key += z.event_seq;
+  Mules = SELECT a FROM Mules:a
+    POST-ACCUM
+      IF a.@key > 4000000000000 THEN a.@key = getvid(a) END,
+      IF a.@part == 1 THEN a.@cutoff += train_cutoff_ms
+      ELSE IF a.@part == 2 THEN a.@cutoff += validation_cutoff_ms
+      ELSE IF a.@part == 3 THEN a.@cutoff += test_cutoff_ms END,
+      IF a.@part < 1 OR a.@part > 3 THEN @@mules_without_split += 1
+      ELSE @@mules += (a.@part -> 1) END,
+      a.@t_react += never, a.@first_report += never;
+
+  /* Victim reports. Streams: 1 reported, 2 scam type, 3-4 reporting delay, 5 notification
+     branch, 6 fast notification, 7-8 slow notification, 9 action, 10-11 investigation.
+     Reporting delay, a lognormal mixture by the UK Finance 2024 case mix: 69% fast
+     (median 1 day, sigma 1.3), 10% medium (14 days, 1.0), 21% slow (60 days, 1.0).
+     Notification to the mule's bank: 85% within a day, 15% lognormal (7 days, 1.0).
+     Investigation: lognormal (5 days, 1.0), after Zelle's 5-business-day rule. */
+  Inflows = SELECT z FROM Mules:a -(Account_Received_Zelle_Transfer>:e)- Zelle_Transfer:z
+    WHERE z.fraud_label == 1 AND z.label_known
+    POST-ACCUM z.@u = temporal_reveal_uniforms(z.event_seq, salt, 11);
+  Delivered = SELECT a FROM Inflows:z -(Transfer_To_Account>:e)- Account:a
+    WHERE a.@mule AND z.@u.get(0) < p_report
+    ACCUM
+      DOUBLE n1 = sqrt(-2.0 * log(z.@u.get(2))) * cos(two_pi * z.@u.get(3)),
+      DOUBLE n2 = sqrt(-2.0 * log(z.@u.get(6))) * cos(two_pi * z.@u.get(7)),
+      DOUBLE n3 = sqrt(-2.0 * log(z.@u.get(9))) * cos(two_pi * z.@u.get(10)),
+      DOUBLE report_days = (CASE WHEN z.@u.get(1) < 0.69 THEN exp(1.3 * n1)
+                                 WHEN z.@u.get(1) < 0.79 THEN exp(log(14.0) + n1)
+                                 ELSE exp(log(60.0) + n1) END),
+      DOUBLE fast_notice = (CASE WHEN z.@u.get(4) < 0.85 THEN 1.0 ELSE 0.0 END),
+      DOUBLE notify_days = fast_notice * z.@u.get(5) + (1.0 - fast_notice) * exp(log(7.0) + n2),
+      DOUBLE report_ms = z.label_available_ts_ms + (report_days + notify_days) * day_ms,
+      a.@reports += Report(report_ms, z.@u.get(8), exp(log(5.0) + n3)),
+      a.@first_report += report_ms;
+  /* The mule's first report is acted on with p_action_first and each later one with
+     p_action_later; the mule is confirmed when the earliest acted-on investigation ends. */
+  Mules = SELECT a FROM Mules:a
+    POST-ACCUM
+      FOREACH r IN a.@reports DO
+        IF r.action_u < (CASE WHEN r.report_ms <= a.@first_report THEN p_action_first
+                              ELSE p_action_later END) THEN
+          a.@t_react += r.report_ms + r.confirm_days * day_ms
+        END,
+        IF r.report_ms < a.@cutoff THEN a.@seen_reports += 1 END
+      END,
+      a.@pro_u = temporal_reveal_uniforms(a.@key, salt + 1000, 1),
+      a.@sel_u = temporal_reveal_uniforms(a.@key, salt + 2000, 1);
+  Mules = SELECT a FROM Mules:a
+    POST-ACCUM
+      a.@t_pro += (CASE WHEN proactive_per_day > 0
+                        THEN a.first_seen_ts_ms + (-log(a.@pro_u.get(0)) / proactive_per_day) * day_ms
+                        ELSE never END);
+  Mules = SELECT a FROM Mules:a
+    POST-ACCUM
+      IF a.@t_react <= a.@t_pro THEN
+        a.@t_known = a.@t_react, a.@channel = "victim_report"
+      ELSE
+        a.@t_known = a.@t_pro, a.@channel = "monitoring"
+      END;
+
+  /* Network trace: an event between two mules carries each discovered endpoint's
+     discovery time to the other endpoint when the event precedes that discovery. Per
+     (discovered mule, counterpart) pair the earliest such event gives one trace chance;
+     a success exposes the counterpart after a lognormal (30 days, 1.0) investigation. */
+  LinkZelle = SELECT z FROM Mules:a -((Account_Sent_Zelle_Transfer>|Account_Received_Zelle_Transfer>):e)- Zelle_Transfer:z
+    ACCUM z.@carriers += (a.@key -> never);
+  LinkPay = SELECT t FROM Mules:a -((Account_Initiated_Transaction>|Account_Received_Transaction>):e)- Payment_Transaction:t
+    ACCUM t.@carriers += (a.@key -> never);
+  LinkZelle = SELECT z FROM LinkZelle:z WHERE z.@carriers.size() > 1 POST-ACCUM z.@link += TRUE;
+  LinkPay = SELECT t FROM LinkPay:t WHERE t.@carriers.size() > 1 POST-ACCUM t.@link += TRUE;
+  WHILE round < 3 DO
+    LinkZelle = SELECT z FROM LinkZelle:z POST-ACCUM z.@carriers.clear();
+    LinkPay = SELECT t FROM LinkPay:t POST-ACCUM t.@carriers.clear();
+    Mules = SELECT a FROM Mules:a
+      POST-ACCUM a.@trace_seq.clear(), a.@trace_time.clear(), a.@trace_u.clear(),
+        a.@candidate = never;
+    CarryZ = SELECT z FROM Mules:a -((Account_Sent_Zelle_Transfer>|Account_Received_Zelle_Transfer>):e)- Zelle_Transfer:z
+      WHERE z.@link AND a.@t_known < never AND z.event_ts_ms < a.@t_known
+      ACCUM z.@carriers += (a.@key -> a.@t_known);
+    CarryP = SELECT t FROM Mules:a -((Account_Initiated_Transaction>|Account_Received_Transaction>):e)- Payment_Transaction:t
+      WHERE t.@link AND a.@t_known < never AND t.event_ts_ms < a.@t_known
+      ACCUM t.@carriers += (a.@key -> a.@t_known);
+    ReachZ = SELECT b FROM CarryZ:z -((Transfer_From_Account>|Transfer_To_Account>):e)- Account:b
+      WHERE b.@mule
+      ACCUM FOREACH (source, found) IN z.@carriers DO
+        IF source != b.@key THEN
+          b.@trace_seq += (source -> z.event_seq), b.@trace_time += (source -> found)
+        END
+      END;
+    ReachP = SELECT b FROM CarryP:t -((Transaction_From_Account>|Transaction_To_Account>):e)- Account:b
+      WHERE b.@mule
+      ACCUM FOREACH (source, found) IN t.@carriers DO
+        IF source != b.@key THEN
+          b.@trace_seq += (source -> t.event_seq), b.@trace_time += (source -> found)
+        END
+      END;
+    Mules = SELECT a FROM Mules:a
+      POST-ACCUM
+        FOREACH (source, seq) IN a.@trace_seq DO
+          a.@trace_u += (source -> temporal_reveal_uniforms(seq * 31 + source, salt + 3000, 3))
+        END;
+    Mules = SELECT a FROM Mules:a
+      POST-ACCUM
+        FOREACH (source, tu) IN a.@trace_u DO
+          IF tu.get(0) < trace_probability THEN
+            a.@candidate += a.@trace_time.get(source)
+              + exp(log(30.0) + sqrt(-2.0 * log(tu.get(1))) * cos(two_pi * tu.get(2))) * day_ms
+          END
+        END;
+    Mules = SELECT a FROM Mules:a
+      POST-ACCUM
+        IF a.@candidate < a.@t_known THEN
+          a.@t_known = a.@candidate, a.@channel = "network_trace"
+        END;
+    round = round + 1;
+  END;
+
+  /* Eligibility and evidence at the split's cutoff: reports received before it. */
+  Mules = SELECT a FROM Mules:a
+    POST-ACCUM
+      a.@evidence += log(1.0 + a.@seen_reports),
+      IF a.@part >= 1 AND a.@part <= 3 AND a.@t_known < a.@cutoff THEN
+        a.@eligible += TRUE
+      END;
+  Eligible = SELECT a FROM Mules:a WHERE a.@eligible
+    POST-ACCUM
+      @@eligible += (a.@part -> 1), @@eligible_by_channel += (a.@channel -> 1),
+      @@z_sum += (a.@part -> a.@evidence), @@z_sq += (a.@part -> a.@evidence * a.@evidence);
+  Eligible = SELECT a FROM Eligible:a
+    POST-ACCUM
+      DOUBLE n = @@eligible.get(a.@part),
+      DOUBLE m = @@z_sum.get(a.@part) / n,
+      DOUBLE v = @@z_sq.get(a.@part) / n - m * m,
+      DOUBLE spread = (CASE WHEN v > 0.000000000001 THEN 1.0 ELSE 0.0 END),
+      DOUBLE z = spread * (a.@evidence - m) / sqrt(v + (1.0 - spread)),
+      a.@w += propensity_floor + (1.0 - propensity_floor) / (1.0 + exp(-propensity_slope * z));
+
+  /* Stratified Pareto pi-ps (Rosen 1997): lambda = k * w / sum(w) with k = min(budget,
+     eligible), capped at 1 and renormalized until stable; q = u (1 - lambda) /
+     (lambda (1 - u)); the k smallest q are revealed. With k = eligible all are. */
+  WHILE sweep < 50 DO
+    @@w_sum.clear();
+    @@capped.clear();
+    @@new_caps.clear();
+    Tally = SELECT a FROM Eligible:a
+      POST-ACCUM
+        IF a.@capped THEN @@capped += (a.@part -> 1) ELSE @@w_sum += (a.@part -> a.@w) END;
+    Grow = SELECT a FROM Eligible:a WHERE NOT a.@capped
+      POST-ACCUM
+        INT quota = (CASE WHEN budget < @@eligible.get(a.@part) THEN budget
+                          ELSE @@eligible.get(a.@part) END) - @@capped.get(a.@part),
+        DOUBLE share = quota * a.@w / @@w_sum.get(a.@part),
+        IF share >= 1.0 THEN
+          a.@capped += TRUE, a.@lambda = 1.0, @@new_caps += (a.@part -> 1)
+        ELSE
+          a.@lambda = share
+        END;
+    IF @@new_caps.size() == 0 THEN BREAK; END;
+    sweep = sweep + 1;
+  END;
+  Ranked = SELECT a FROM Eligible:a
+    POST-ACCUM
+      DOUBLE su = a.@sel_u.get(0),
+      DOUBLE q = (CASE WHEN a.@capped OR a.@lambda >= 1.0 THEN -1.0
+                       ELSE su * (1.0 - a.@lambda) / (a.@lambda * (1.0 - su)) END),
+      IF a.@part == 1 THEN @@pick1 += Pick(q, a)
+      ELSE IF a.@part == 2 THEN @@pick2 += Pick(q, a)
+      ELSE @@pick3 += Pick(q, a) END;
+  FOREACH pick IN @@pick1 DO @@picked += pick.account; END;
+  FOREACH pick IN @@pick2 DO @@picked += pick.account; END;
+  FOREACH pick IN @@pick3 DO @@picked += pick.account; END;
+  Chosen = SELECT a FROM Eligible:a WHERE @@picked.contains(a) POST-ACCUM a.@revealed += TRUE;
+
+  /* Label clocks: a discovery is available at the end of its UTC day, with the last
+     sequence at or before that instant (a real point on the shared clock). */
+  Events = {Zelle_Transfer.*, Payment_Transaction.*};
+  ScanEvents = SELECT t FROM Events:t
+    POST-ACCUM
+      @@day_seq += (t.event_ts_ms / 86400000 -> t.event_seq),
+      @@first_day += t.event_ts_ms / 86400000, @@last_day += t.event_ts_ms / 86400000,
+      @@last_ts += t.event_ts_ms, @@last_seq += t.event_seq;
+  Entities = {Account.*, Token.*, Party.*, Device.*, IP.*, Address.*};
+  ScanEntities = SELECT s FROM Entities:s
+    POST-ACCUM
+      @@day_seq += (s.first_seen_ts_ms / 86400000 -> s.first_seen_seq),
+      @@last_seq += s.first_seen_seq;
+  FOREACH d IN RANGE[@@first_day, @@last_day] DO
+    IF @@day_seq.containsKey(d) AND @@day_seq.get(d) > running THEN
+      running = @@day_seq.get(d);
+    END;
+    @@prefix_seq += (d -> running);
+  END;
+  Mules = SELECT a FROM Mules:a
+    POST-ACCUM
+      IF a.@t_known < @@last_ts THEN
+        a.@day += float_to_int(a.@t_known / day_ms)
+      ELSE
+        a.@day += @@last_day
+      END;
+  Mules = SELECT a FROM Mules:a
+    POST-ACCUM
+      IF a.@t_known < @@last_ts AND (a.@day + 1) * 86400000 - 1 < @@last_ts THEN
+        a.@avail_ts += (a.@day + 1) * 86400000 - 1
+      ELSE
+        a.@avail_ts += @@last_ts
+      END;
+  Mules = SELECT a FROM Mules:a
+    POST-ACCUM
+      IF a.@avail_ts >= @@last_ts THEN a.@avail_seq += @@last_seq
+      ELSE a.@avail_seq += @@prefix_seq.get(a.@day) END,
+      a.@avail_seq += a.first_seen_seq, a.@avail_ts += a.first_seen_ts_ms;
+  Mules = SELECT a FROM Mules:a WHERE a.@revealed
+    POST-ACCUM
+      @@revealed += (a.@part -> 1), @@revealed_by_channel += (a.@channel -> 1),
+      @@revealed_rows += Revealed(a.id, a.@part, a.@avail_ts, a.@channel, a.@lambda);
+
+  IF apply THEN
+    status = "ok";
+    Written = SELECT a FROM Internal:a
+      POST-ACCUM
+        a.mule_label_known = TRUE,
+        a.mule_label_effective_seq = a.first_seen_seq,
+        a.mule_label_effective_ts_ms = a.first_seen_ts_ms,
+        IF a.@mule THEN
+          a.is_mule_masked = NOT a.@revealed,
+          a.pu_label = (CASE WHEN a.@revealed THEN 1 ELSE 0 END),
+          a.mule_label_available_seq = a.@avail_seq,
+          a.mule_label_available_ts_ms = a.@avail_ts,
+          a.mule_label_source = "phantomledger_role;" + version + ";salt=" + to_string(salt) + ";"
+            + (CASE WHEN a.@revealed THEN "revealed:" + a.@channel ELSE "hidden" END)
+        ELSE
+          a.is_mule_masked = TRUE,
+          a.pu_label = 0,
+          a.mule_label_available_seq = a.first_seen_seq,
+          a.mule_label_available_ts_ms = a.first_seen_ts_ms,
+          a.mule_label_source = "phantomledger_role"
+        END;
+  END;
+  PRINT status AS status, version AS version, salt AS salt, budget AS budget,
+    @@mules AS mules, @@eligible AS eligible, @@revealed AS revealed,
+    @@eligible_by_channel AS eligible_by_channel, @@revealed_by_channel AS revealed_by_channel,
+    @@mules_without_split AS mules_without_split, Internal.size() AS internal_accounts,
+    @@last_ts AS data_end_ts_ms;
+  PRINT @@revealed_rows AS revealed_mules;
+}

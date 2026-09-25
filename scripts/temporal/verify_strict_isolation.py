@@ -24,9 +24,10 @@ import torch
 from mule_pattern_learner.temporal.encoding import BASIS_ID
 from mule_pattern_learner.temporal.live.batching import make_live_batch
 from mule_pattern_learner.temporal.live.contract import ContextKey, contract_fingerprint
+from mule_pattern_learner.temporal.live.executor import TigerGraphExecutor
 from mule_pattern_learner.temporal.live.model import LiveTGAT
 from mule_pattern_learner.temporal.live.predictor import TemporalPredictor
-from mule_pattern_learner.temporal.live.source import TigerGraphExecutor, StreamingContextSource
+from mule_pattern_learner.temporal.live.source import StreamingContextSource
 from mule_pattern_learner.device import choose_device
 
 

@@ -18,11 +18,12 @@ missing; install the cuda12 or cuda13 extra, pylibcugraph 26.8).
 
 Usage:
   python scripts/temporal/verify_cugraph_sampler.py [--seeds 600] [--rmm-pool 2GiB]
-  python scripts/temporal/verify_cugraph_sampler.py --live [--config configs/local/live_tgat.toml]
+  python scripts/temporal/verify_cugraph_sampler.py --live [--config overrides.toml]
 
---live reads the prepared dataset of --config (default: the pipeline default config,
-configs/local/live_tgat.toml when present). Roots that TigerGraph rejects are dropped
-and reported, like training does.
+--live builds one batch from the live graph with the built-in run settings (a --config
+file only overrides keys). It prepares the default run's cache first if needed, which
+`mule-temporal train` then reuses. Roots that TigerGraph rejects are dropped and
+reported, like training does.
 """
 
 from __future__ import annotations
@@ -283,15 +284,20 @@ def merged_slots(engine: CuGraphSampler, sampler: SamplerPlan, device: str = "cu
     )
 
 
-def live(config_path: Path, roots: int, sampler_override: dict[str, Any]) -> None:
-    from mule_pattern_learner.configuration import load_config
+def live(config_path: Path | None, roots: int, sampler_override: dict[str, Any]) -> None:
     from mule_pattern_learner.device import torch_runtime
+    from mule_pattern_learner.temporal.live.config_schema import fanouts as configured_fanouts
+    from mule_pattern_learner.temporal.live.config_schema import run_config
     from mule_pattern_learner.temporal.live.contract import FeaturePlan
     from mule_pattern_learner.temporal.live.dataset import load_prepared, sample_keys
     from mule_pattern_learner.temporal.live.hubs import load_hub_registry
-    from mule_pattern_learner.temporal.live.model import LiveTGAT
-    from mule_pattern_learner.temporal.live.pipeline import dataset_path
-    from mule_pattern_learner.temporal.live.predictor import build_root_batch
+    from mule_pattern_learner.temporal.live.model import build_model
+    from mule_pattern_learner.temporal.live.pipeline import (
+        dataset_path,
+        prepare_live,
+        prepared_config,
+    )
+    from mule_pattern_learner.temporal.live.batching import build_root_batch
     from mule_pattern_learner.temporal.live.source import open_context_source
 
     def make_live_batch(store: Any, keys: Any, **options: Any) -> dict[str, torch.Tensor]:
@@ -303,7 +309,7 @@ def live(config_path: Path, roots: int, sampler_override: dict[str, Any]) -> Non
             stats.update(prepared.stats)
         return prepared.batch
 
-    config = load_config(config_path, live=True)
+    config = run_config(config_path)
     plan = FeaturePlan.from_config(config)
     sampler = SamplerPlan.from_config(config)
     if sampler.policy != "resample":
@@ -311,13 +317,16 @@ def live(config_path: Path, roots: int, sampler_override: dict[str, Any]) -> Non
         sampler = SamplerPlan(
             "resample", roots=sampler.roots, children=sampler.children, **sampler_override
         )
+    # The default run's prepared cache; preparing it here is what `train` would do first.
     dataset = dataset_path(config)
+    prepare_live(config, dataset)
     manifest, accounts = load_prepared(dataset)
+    config = prepared_config(config, manifest)
     hubs = load_hub_registry(dataset, manifest)
     date = config["dates"]["train"][0]
     train = accounts[accounts["split"] == "train"].head(roots)
     keys = sample_keys(train, date, manifest)
-    fanouts = tuple(config.get("fanouts", (8, 4)))
+    fanouts = configured_fanouts(config)
     store = open_context_source(dataset, manifest, config)
     try:
         batches = {}
@@ -366,9 +375,7 @@ def live(config_path: Path, roots: int, sampler_override: dict[str, Any]) -> Non
         with torch_runtime(torch.device("cuda"), deterministic=config["deterministic"]):
             for _ in range(2):
                 torch.manual_seed(0)
-                model = LiveTGAT(
-                    int(config.get("hidden", 64)), int(config.get("heads", 4)), 0.0, plan=plan
-                ).cuda()
+                model = build_model(config, plan, dropout=0.0).cuda()
                 logits = model(batches["cugraph"])
                 target = torch.arange(len(logits), device="cuda") % 2
                 loss = torch.nn.functional.binary_cross_entropy_with_logits(logits, target.float())
@@ -390,7 +397,7 @@ def main() -> int:
     parser.add_argument("--seeds", type=int, default=600, help="seeds for the uniformity test")
     parser.add_argument("--rmm-pool", default=None, help="optional RMM pool size, e.g. 2GiB")
     parser.add_argument("--live", action="store_true", help="also run one real batch and step")
-    parser.add_argument("--config", type=Path, help="live training config (default: pipeline)")
+    parser.add_argument("--config", type=Path, help="optional overrides of the built-in run")
     parser.add_argument("--roots", type=int, default=32)
     args = parser.parse_args()
     if not versions():
@@ -425,10 +432,7 @@ def main() -> int:
     latency(engine, sampler)
     if args.live:
         print("live batch:")
-        from mule_pattern_learner.temporal.live.pipeline import DEFAULT_CONFIG
-
-        config = args.config or DEFAULT_CONFIG
-        live(config, args.roots, {"relation_fanouts": sampler.relation_fanouts})
+        live(args.config, args.roots, {"relation_fanouts": sampler.relation_fanouts})
     print(f"{len(FAILURES)} failed checks" if FAILURES else "all checks passed")
     return 1 if FAILURES else 0
 

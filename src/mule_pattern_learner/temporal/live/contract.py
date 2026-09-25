@@ -31,6 +31,10 @@ RELATIONS = ("zelle_out", "zelle_in", "payment_out", "payment_in") + tuple(
     name for pair in ASSOCIATIONS for name in pair
 )
 RAILS = ("unknown", "zelle", "ach", "card", "cash", "check", "internal")
+# The scope visibility phase of each split; unscoped contexts use phase 3.
+SPLIT_PHASE = {"train": 1, "validation": 2, "test": 3}
+SPLITS = tuple(SPLIT_PHASE)
+PHASE_SPLIT = {phase: split for split, phase in SPLIT_PHASE.items()}
 ROLLING_FIELDS = (
     "out_count",
     "in_count",
@@ -71,12 +75,17 @@ class ContextKey:
     def __post_init__(self) -> None:
         if len(self.node_id.encode()) > 1024 or len(self.scope_id.encode()) > 256:
             raise ValueError("Entity/scope ID exceeds the transport limit")
-        if self.visibility_phase not in (1, 2, 3):
+        if self.visibility_phase not in PHASE_SPLIT:
             raise ValueError("Visibility phase must be train=1, validation=2 or test=3")
         if self.node_type not in NODE_TYPES or not self.node_id:
             raise ValueError("Unsupported or empty entity")
         if not 0 < self.cutoff_seq < 2**63 or not 0 < self.cutoff_ms < 2**63:
             raise ValueError("Cutoff clocks must be positive signed-64-bit values")
+
+    @property
+    def batch_phase(self) -> int:
+        """The phase of a batch of this root: its own when scoped, 3 when unscoped."""
+        return self.visibility_phase if self.scope_id else 3
 
 
 def fingerprint(value: object) -> str:
@@ -580,3 +589,35 @@ class SamplerPlan:
                 raise ValueError(f"Unknown [sampler.children] key(s): {', '.join(unknown)}")
             children = replace(_default_children(policy, roots), **children_values)
         return cls(policy, roots=roots, children=children, **values)
+
+
+def sampler_pools(sampler: SamplerPlan) -> dict[str, dict[str, Any]]:
+    """The query-relevant part of a sampler: what TigerGraph returns per hop."""
+    return {"roots": sampler.query_params(1), "children": sampler.query_params(2)}
+
+
+def extraction_groups(config: dict[str, Any]) -> tuple[str, ...]:
+    """The configured extraction superset without client groups.
+
+    `extraction_groups`, else `feature_groups`, else the legacy groups. Model
+    variants (no_fourier, tabular) do not change it, so they share a preparation.
+    """
+    groups = config.get("extraction_groups") or config.get("feature_groups") or LEGACY_GROUPS
+    return tuple(g for g in groups if g not in CLIENT_GROUPS)
+
+
+def extraction_plan(config: dict[str, Any]) -> FeaturePlan:
+    """What the context source asks TigerGraph for.
+
+    Groups are `extraction_groups(config)`; client groups are computed locally.
+    The architecture is the model's, so a split model skips summary groups at
+    hop 2 while a single model keeps them.
+    """
+    model = FeaturePlan.from_config(config)
+    groups = extraction_groups(config)
+    missing = set(model.groups) - set(groups) - CLIENT_GROUPS
+    if missing:
+        raise ValueError(
+            f"Extraction groups must cover all model inputs; missing {sorted(missing)}"
+        )
+    return FeaturePlan(groups, model.architecture)

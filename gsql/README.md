@@ -1,7 +1,7 @@
 # GSQL for the temporal graph
 
-The live graph uses `schema/temporal_schema.gsql`. Use the following files on the
-`temporal` branch:
+The live graph uses `schema/temporal_schema.gsql`. Every file in this directory
+belongs to it. The schema, loading and encoding files are:
 
 | File | Purpose |
 | --- | --- |
@@ -17,11 +17,6 @@ stated prerequisites. Do not run fresh graph DDL or the original empty-graph
 migration on the populated instance. Schema changes may invalidate compiled
 queries and positional loading jobs; verify and restore both afterwards.
 
-The other files remain from the static implementation. In particular,
-`schema/schema.gsql`, `schema/loading_job.gsql`, `features/temporal_features.gsql`,
-the static sampling/export queries, and the legacy Python GSQL registry target
-the old schema. Do not bulk-install that registry on the temporal graph.
-
 The pair queries default to `persist=false`. Their `max_events` limit bounds
 pair results and sorting, but still requires traversing the sender's candidate
 history. They are POC extraction queries, not a batched temporal training
@@ -33,27 +28,33 @@ See [encoding semantics](../docs/temporal_encoding.md),
 
 ## Live temporal training queries
 
-The training path installs `temporal/training_context.gsql`,
-`temporal/training_scope.gsql`, `temporal/training_population.gsql`,
-`temporal/training_cutoffs.gsql` and `features/temporal_fourier64.gsql`:
+The training path installs `features/temporal_fourier64.gsql`,
+`temporal/training_context.gsql`, `temporal/training_population.gsql`,
+`temporal/training_scope.gsql`, `temporal/training_cutoffs.gsql`,
+`temporal/hub_registry.gsql`, `temporal/account_supervision.gsql` and
+`temporal/label_reveal.gsql` (`TRAINING_QUERY_FILES` in
+`src/mule_pattern_learner/temporal/live/installation.py`). `mule-temporal train`
+installs whatever is stale; to install ahead of time:
 
 ```bash
 python -m mule_pattern_learner.temporal.live.cli install
 ```
 
 The installer applies `schema/migrations/temporal_training_scope.gsql` when
-needed. Scope creation/finalization write experiment metadata only. The population,
-context and cutoff queries are read-only. Business labels and relationships are
-not changed by preparation.
+needed. The first run writes to the graph in two steps: scope creation and
+finalization write experiment metadata only, and the one-time label reveal
+(`temporal/label_reveal.gsql`) writes the Account label contract of every internal
+account on a graph without known labels. The population, context, cutoff and hub
+queries are read-only. Relationships are never changed.
 
 The context query is generated from the shared Python relation/window contract.
 Strict mode removes excluded Account/Party contributions before aggregation,
 sampling and predecessor searches. The paged scope population exports observed
 supervision only and skips label reads for external observed-label providers.
-Complete synthetic truth/masking queries are excluded from the normal installer.
+Only the label reveal and the `account_supervision.gsql` audit and evaluation
+queries read complete truth; no feature or preparation query calls them.
 
-Existing pair queries provide independent timing checks; the legacy stored
-whole-history feature queries are not used by this model. See the
+Existing pair queries provide independent timing checks. See the
 [live training guide](../docs/live_temporal_training.md) and
 [GSQL feature catalog](../docs/gsql_feature_catalog.md) for dimensions,
 all-payment time-encoding support and remaining server scan limits.

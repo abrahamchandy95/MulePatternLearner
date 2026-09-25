@@ -7,6 +7,7 @@ other attributes and CSV input column positions remain intact.
 
 from __future__ import annotations
 
+import argparse
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -15,7 +16,7 @@ from typing import Any, cast
 
 from pyTigerGraph import TigerGraphConnection
 
-from mule_pattern_learner.temporal.account_labels import ACCOUNT_STORAGE_COLUMNS
+from mule_pattern_learner.temporal.live.labels import ACCOUNT_STORAGE_COLUMNS
 from mule_pattern_learner.tigergraph.client import Client
 from mule_pattern_learner.tigergraph.settings import Settings
 
@@ -43,7 +44,7 @@ def export_labels(conn: TigerGraphConnection) -> dict[str, dict[str, Any]]:
         cursor = max(str(row["v_id"]) for row in rows)
 
 
-def main() -> None:
+def main(output: Path) -> None:
     settings = Settings()
     if settings.graphname != GRAPH:
         raise ValueError("Unexpected graph")
@@ -139,7 +140,7 @@ def main() -> None:
         print(f"Updated Account column mapping: {name}", flush=True)
     gsql(conn, (ROOT / "gsql/temporal/account_supervision.gsql").read_text())
     gsql(conn, prefix + "INSTALL QUERY " + ", ".join(installed))
-    verify_conversion(conn, schema, before, labels, repairs, installed, backup)
+    verify_conversion(conn, schema, before, labels, repairs, installed, backup, output)
 
 
 def verify_conversion(
@@ -150,8 +151,9 @@ def verify_conversion(
     repairs: list[tuple[str, str]],
     installed: list[str],
     backup: Path,
+    output: Path,
 ) -> None:
-    """Check the restored graph against the pre-conversion backup."""
+    """Check the restored graph against the pre-conversion backup; write the record."""
     prefix = f"USE GRAPH {GRAPH}\n"
     account = next(v for v in schema["VertexTypes"] if v["Name"] == "Account")
     new_columns = ACCOUNT_STORAGE_COLUMNS
@@ -203,15 +205,23 @@ def verify_conversion(
             "installed_queries_preserved": installed,
         },
     }
-    (ROOT / "docs/temporal_account_supervision_deployment.json").write_text(
-        json.dumps(report, indent=2) + "\n"
-    )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report, indent=2), flush=True)
 
 
 if __name__ == "__main__":
+    # Parse before main() so --help never connects to TigerGraph.
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=ROOT / "artifacts/temporal/reports/temporal_account_supervision_deployment.json",
+        help="Where the deployment record is written",
+    )
+    args = parser.parse_args()
     try:
-        main()
+        main(args.output)
     except BaseException as exc:
         import traceback
 

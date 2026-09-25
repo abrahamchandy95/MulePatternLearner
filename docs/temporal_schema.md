@@ -143,9 +143,8 @@ backtesting limitation rather than fabricating when a fact was learned.
 
 ## Retired feature storage and supervision
 
-The large Account feature block described in the legacy
-`gsql/schema/schema.gsql` was not in the live six-vertex schema created in the
-previous step. Account stores account type, external flag, first-seen metadata,
+The large Account feature block of the retired static snapshot schema was not
+carried into the live schema. Account stores account type, external flag, first-seen metadata,
 and explicit mule ground truth with separate masking/availability fields.
 See [Account mule labels and masking](account_mule_labels.md) for the corrected
 schema and regenerated-data contract. No PageRank, WCC/community features, embeddings, full-history
@@ -197,6 +196,5 @@ features, not learned model embeddings.
 - [Additive encoding migration](../gsql/schema/migrations/temporal_encoding_attributes.gsql).
 - [Account supervision migration](../gsql/schema/migrations/account_mule_supervision.gsql).
 
-The legacy snapshot schema/loading/training code is retained as reference and
-is not compatible with this live schema. It has not been run. Do not rerun the
-fresh-graph DDL or the empty-graph migration on a populated graph.
+Do not rerun the fresh-graph DDL or the empty-graph migration on a populated
+graph.

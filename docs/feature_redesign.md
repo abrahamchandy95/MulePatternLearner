@@ -1,10 +1,12 @@
 # Temporal feature redesign
 
-This implements the first feature experiment stage of `feature_plan_v4.md`.
-The new default example keeps memoryless TGAT and removes every hard-window
-input. Features are hypotheses; no mule-detection lift has been established.
-The existing local configuration is deliberately preserved: configuration files
-without `feature_groups` still select the legacy feature profile.
+This implements the first feature experiment stage of the
+[feature plan v4 draft](feature_plan_v4.md). The built-in run (`DEFAULT_RUN` in
+`config_schema.py`) keeps memoryless TGAT and removes every hard-window input.
+Features are hypotheses; no mule-detection lift has been established. The legacy
+feature profile is what the components choose when a raw configuration has no
+`feature_groups`; `mule-temporal train` always starts from the built-in groups, so
+select legacy groups explicitly in an overrides file to compare against them.
 
 ## Implemented inputs
 
@@ -105,21 +107,20 @@ binary truth for that test population and one test date. It is a bounded POC aud
 (up to one million test metadata rows and 100,000 scored rows), not a production
 truth service. Weighted metrics are sample estimates; uncertainty intervals and
 ring-level bootstrap remain future evaluation work. Test reports cannot be used
-for feature selection. Sparse-label masking stays in the existing external
-observed-label provider.
+for feature selection. Which mules are observed is decided once in the graph by the
+[label reveal](label_reveal.md).
 
 ## Commands and experiment order
 
 Use a fresh prepared-data directory for the new contract. Keep the immutable
-source identity, scope and reveal file; do not regenerate masks between feature
-arms. The generic defaults are in `configs/temporal/live_tgat.toml`; the previous
-example is `configs/temporal/live_tgat_legacy.toml`. Since `configs/local/live_tgat.toml`
-takes precedence, explicitly copy the new `feature_groups`, `architecture`,
-`sampler` and fanouts into a new local experiment configuration when adopting v4.
+source identity, scope and revealed labels; do not reveal labels again between
+feature arms. The settings are the built-in run; an arm's `--config overrides.toml`
+sets only the keys it changes (tables such as `[sampler]` merge key by key).
+`--dataset <run>_run/prepared` trains another arm on an existing preparation.
 
 ```sh
 # Review dimensions and parameter counts; does not train or open truth.
-.venv/bin/python scripts/temporal/feature_experiments.py --config configs/temporal/live_tgat.toml
+.venv/bin/python scripts/temporal/feature_experiments.py
 
 # Install only after query parity/validation is satisfactory.
 .venv/bin/python -m mule_pattern_learner.temporal.live.cli install
@@ -127,11 +128,11 @@ takes precedence, explicitly copy the new `feature_groups`, `architecture`,
 # A label-blind account audit; choose the account without consulting truth.
 .venv/bin/python scripts/temporal/verify_feature_redesign.py --account ACCOUNT_ID --date 2025-01-01
 
-# After scoped isolation and batch-cost qualification, train with a local config.
-.venv/bin/python -m mule_pattern_learner.temporal.live.cli train --config configs/local/feature_v4.toml --output models/temporal/feature_v4.pt
+# After scoped isolation and batch-cost qualification, train an arm.
+.venv/bin/python -m mule_pattern_learner.temporal.live.cli train --config overrides.toml --output models/temporal/feature_v4.pt
 
-# Final-only; do not run during feature selection.
-.venv/bin/python -m mule_pattern_learner.temporal.live.cli evaluate-final --checkpoint models/temporal/feature_v4.pt --truth local_experiments/truth.parquet --output artifacts/temporal/final_audit.json
+# Final-only; do not run during feature selection. Truth comes from the graph.
+.venv/bin/python -m mule_pattern_learner.temporal.live.cli evaluate-final --checkpoint models/temporal/feature_v4.pt --output artifacts/temporal/final_audit.json
 ```
 
 Run parity and cost qualification first, then nnPU/noise-floor comparisons, then

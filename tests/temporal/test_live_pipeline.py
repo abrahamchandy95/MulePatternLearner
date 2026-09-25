@@ -13,7 +13,13 @@ import pandas as pd
 import pytest
 import torch
 
-from mule_pattern_learner.temporal.live.batching import child_key, make_live_batch, node_features
+from mule_pattern_learner.temporal.live.batching import (
+    build_root_batch,
+    child_key,
+    make_live_batch,
+    node_features,
+)
+from mule_pattern_learner.temporal.live.context_query import validate_context
 from mule_pattern_learner.temporal.live.contract import (
     DEFAULT_GROUPS,
     FEATURE_NAMES,
@@ -26,13 +32,8 @@ from mule_pattern_learner.temporal.live.contract import (
 from mule_pattern_learner.temporal.live.dataset import assign_groups, validate_dates
 from mule_pattern_learner.temporal.live.hubs import HUB_COLUMNS, HubRegistry
 from mule_pattern_learner.temporal.live.model import LiveTGAT
-from mule_pattern_learner.temporal.live.predictor import build_root_batch
 from mule_pattern_learner.temporal.live.queries import render_context_query
-from mule_pattern_learner.temporal.live.source import (
-    ContextStore,
-    StreamingContextSource,
-    validate_context,
-)
+from mule_pattern_learner.temporal.live.source import ContextStore, StreamingContextSource
 from temporal_fakes import FakeExecutor, association, context, message
 
 V5_PLAN = FeaturePlan(DEFAULT_GROUPS, "split")
@@ -299,8 +300,7 @@ def test_same_context_in_two_scopes_or_hops_is_never_shared(tmp_path: Path) -> N
 
 
 def test_extraction_plan_ignores_client_groups_and_keeps_the_model_architecture() -> None:
-    from mule_pattern_learner.temporal.live.contract import LEGACY_GROUPS
-    from mule_pattern_learner.temporal.live.source import extraction_plan
+    from mule_pattern_learner.temporal.live.contract import LEGACY_GROUPS, extraction_plan
 
     superset = sorted({*LEGACY_GROUPS, *DEFAULT_GROUPS} - {"hub_indicator"})
     split = extraction_plan(

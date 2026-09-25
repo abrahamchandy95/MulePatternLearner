@@ -67,7 +67,3 @@ def torch_runtime(
     finally:
         torch.use_deterministic_algorithms(previous[0], warn_only=previous[1])
         torch.set_num_threads(previous[2])
-
-
-# Keep the established public name for existing training callers.
-select_device = choose_device

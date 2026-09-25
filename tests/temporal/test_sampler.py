@@ -59,6 +59,7 @@ from mule_pattern_learner.temporal.live.sampler import (
     selection_keys,
     splitmix64,
 )
+from temporal_fakes import encode
 
 MPS = torch.backends.mps.is_available()
 MS_PER_SEQ = 3_600_000  # synthetic clocks: one event sequence number per hour
@@ -212,14 +213,7 @@ def synthetic_row(
         "age_encoding": {},
         "gap_encoding": {},
     }
-    if encodings:
-        for m in messages:
-            if m["event_id"]:
-                name = m["relation"] + ":" + m["event_id"]
-                row["age_encoding"][name] = fourier64(np.array([m["age_ms"]]))[0].tolist()
-                if m["gap_present"]:
-                    row["gap_encoding"][name] = fourier64(np.array([m["gap_ms"]]))[0].tolist()
-    return row
+    return encode(row) if encodings else row
 
 
 class FakeStore:
@@ -485,6 +479,17 @@ def test_fourier_columns_come_from_scalar_deltas_on_every_device() -> None:
         for name, value in cpu.items():
             atol = 1e-5 if name.endswith("edge") else 0
             torch.testing.assert_close(mps[name].cpu(), value, atol=atol, rtol=0)
+
+
+def test_fourier_matches_gsql_basis_and_rejects_negative() -> None:
+    actual = fourier64(np.array([0, 1000, 34_560_000_000], dtype=np.int64))
+    np.testing.assert_array_equal(actual[0, ::2], 0)
+    np.testing.assert_array_equal(actual[0, 1::2], 1)
+    frequencies = 0.125 * 16 ** (np.arange(32) / 31)
+    np.testing.assert_allclose(actual[2, ::2], np.sin(2 * np.pi * frequencies), atol=1e-6)
+    np.testing.assert_allclose(actual[2, 1::2], np.cos(2 * np.pi * frequencies), atol=1e-6)
+    with pytest.raises(ValueError):
+        fourier64(np.array([-1], dtype=np.int64))
 
 
 @pytest.mark.parametrize("device", ["cpu"] + (["mps"] if MPS else []))

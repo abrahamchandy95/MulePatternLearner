@@ -13,13 +13,14 @@ import pandas as pd
 import pytest
 import torch
 
-from mule_pattern_learner.device import choose_device, select_device
+from mule_pattern_learner.device import choose_device
 from mule_pattern_learner.temporal.live.batching import make_live_batch
 from mule_pattern_learner.temporal.live.cli import build_parser
 from mule_pattern_learner.temporal.live.contract import (
     ContextKey,
     FeaturePlan,
     SamplerPlan,
+    extraction_plan,
 )
 from mule_pattern_learner.temporal.live.dataset import (
     load_prepared,
@@ -34,21 +35,18 @@ from mule_pattern_learner.temporal.live.evaluation import (
 )
 from mule_pattern_learner.temporal.live.hubs import load_hub_registry
 from mule_pattern_learner.temporal.live.model import LiveTGAT
-from mule_pattern_learner.temporal.live.pipeline import DEFAULT_CONFIG, run
+from mule_pattern_learner.temporal.live.config_schema import DEFAULT_RUN
+from mule_pattern_learner.temporal.live.pipeline import DEFAULT_MODEL, run
 from mule_pattern_learner.temporal.live.policy import validate_protocol
 from mule_pattern_learner.temporal.live.sampling import pu_batches
-from mule_pattern_learner.temporal.live.source import (
-    ContextStore,
-    StreamingContextSource,
-    extraction_plan,
-)
+from mule_pattern_learner.temporal.live.source import ContextStore, StreamingContextSource
 from mule_pattern_learner.temporal.live.supervision import (
     FrameObservedLabels,
     align_observed_labels,
     label_summary,
 )
 from mule_pattern_learner.temporal.live.training import train
-from mule_pattern_learner.training.loss import NonNegativePULoss
+from mule_pattern_learner.temporal.loss import NonNegativePULoss
 from temporal_fakes import (
     FakeExecutor,
     assigned_accounts,
@@ -77,7 +75,6 @@ def test_choose_device_prefers_available_accelerator(cuda: bool, mps: bool, expe
         patch("torch.backends.mps.is_available", return_value=mps),
     ):
         assert choose_device().type == expected
-        assert select_device().type == expected
         assert choose_device("auto").type == expected
         assert choose_device("cpu").type == "cpu"
         if not mps:
@@ -188,21 +185,28 @@ def test_hidden_truth_cannot_change_updates_or_checkpoint_selection(
 
 
 def test_minimal_command_and_run_defaults(tmp_path: Path) -> None:
-    args = build_parser().parse_args(["train", "--output", "model.pt"])
-    assert args.config == DEFAULT_CONFIG and args.dataset is None
+    # `mule-temporal train` needs no flag, file or identifier.
+    args = build_parser().parse_args(["train"])
+    assert args.config is None and args.dataset is None and args.output == DEFAULT_MODEL
+    manifest = {"source": {"dataset_id": "graph_snapshot"}}
     with (
         patch(
-            "mule_pattern_learner.temporal.live.pipeline.load_config", return_value=live_config()
-        ),
-        patch("mule_pattern_learner.temporal.live.pipeline.prepare_live") as prep,
+            "mule_pattern_learner.temporal.live.pipeline.prepare_live", return_value=manifest
+        ) as prep,
         patch(
             "mule_pattern_learner.temporal.live.pipeline.train", return_value={"status": "complete"}
         ) as fit,
     ):
         assert run(tmp_path / "model.pt")["status"] == "complete"
         prep.assert_called_once()
+        # The prepared cache lives inside the run directory.
+        assert prep.call_args.args[1] == tmp_path / "model_run" / "prepared"
         fit.assert_called_once()
-        assert fit.call_args.args[-1] == tmp_path / "model.pt"
+        config, dataset, output = fit.call_args.args
+        assert output == tmp_path / "model.pt" and dataset == tmp_path / "model_run" / "prepared"
+        assert config["dataset_id"] == "graph_snapshot"
+        assert config["label_policy"] == "graph_observed" and config["device"] == "auto"
+        assert config["scope_id"] == DEFAULT_RUN["scope_id"]
 
 
 def test_ready_pipeline_reuses_cache_without_connecting(tmp_path: Path) -> None:
@@ -216,7 +220,7 @@ def test_ready_pipeline_reuses_cache_without_connecting(tmp_path: Path) -> None:
         "source": {"query_hashes": query_hashes(), "preparation": preparation_view(c)},
     }
     (tmp_path / "manifest.json").write_text(json.dumps(manifest))
-    with patch("mule_pattern_learner.temporal.live.pipeline.TigerGraphExecutor") as client:
+    with patch("mule_pattern_learner.temporal.live.pipeline.live_executor") as client:
         assert prepare_live(c, tmp_path) == manifest
         # Model settings may change; preparation settings may not, and nothing connects.
         assert prepare_live({**c, "hidden": 32, "learning_rate": 0.01}, tmp_path) == manifest
