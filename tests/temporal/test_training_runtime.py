@@ -7,7 +7,6 @@ from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import asdict
 import hashlib
-import importlib.util
 import inspect
 import json
 import os
@@ -27,8 +26,16 @@ import torch
 from mule_pattern_learner.device import torch_runtime
 from mule_pattern_learner.temporal.common import digest, timestamp
 from mule_pattern_learner.temporal.encoding import BASIS_ID
-from mule_pattern_learner.temporal.live import cli, inference, predictor, training
+from mule_pattern_learner.temporal.live import (
+    batching,
+    cli,
+    inference,
+    pipeline,
+    predictor,
+    training,
+)
 from mule_pattern_learner.temporal.live import dataset as dataset_module
+from mule_pattern_learner.temporal.live.checkpoint import restore_cuda_rng
 from mule_pattern_learner.temporal.live.config_schema import validate_config
 from mule_pattern_learner.temporal.live.contract import (
     DEFAULT_GROUPS,
@@ -37,11 +44,12 @@ from mule_pattern_learner.temporal.live.contract import (
     FeaturePlan,
     SamplerPlan,
     contract_fingerprint,
+    extraction_plan,
 )
 from mule_pattern_learner.temporal.live.dataset import preparation_view
 from mule_pattern_learner.temporal.live.evaluation import evaluate_final_population
 from mule_pattern_learner.temporal.live.experiments import feature_experiments
-from mule_pattern_learner.temporal.live.hubs import HUB_COLUMNS, HubRegistry
+from mule_pattern_learner.temporal.live.hubs import HUB_COLUMNS, HubRegistry, warn_hub_stubs
 from mule_pattern_learner.temporal.live.model import LiveTGAT
 from mule_pattern_learner.temporal.live.sampling import (
     BatchPrefetcher,
@@ -51,12 +59,11 @@ from mule_pattern_learner.temporal.live.sampling import (
     pu_batches,
     step_seed,
 )
-from mule_pattern_learner.temporal.live.source import extraction_plan
+from mule_pattern_learner.temporal.live.source import rejection_summary
 from mule_pattern_learner.temporal.live.supervision import align_observed_labels
-from mule_pattern_learner.training.loss import NonNegativePULoss
+from mule_pattern_learner.temporal.loss import NonNegativePULoss
 
 ROOT = Path(__file__).resolve().parents[2]
-BASELINE_LOSS = Path("/tmp/impl/baseline/src/mule_pattern_learner/training/loss.py")
 DATES = {"train": ["2024-07-01"], "validation": ["2024-10-01"], "test": ["2025-01-01"]}
 CUTOFFS = {"2024-07-01": 10_000, "2024-10-01": 20_000, "2025-01-01": 30_000}
 HUB = "P3"
@@ -130,9 +137,13 @@ def _loss_outputs(
 def test_nnpu_values_and_gradients_equal_the_former_branch(dtype: torch.dtype) -> None:
     fired = set()
     for case in loss_cases():
+        # positive_weight None exercises the constructor's default (the prior).
         weight = case["positive_weight"] or case["prior"]
         new = NonNegativePULoss(
-            case["prior"], beta=case["beta"], gamma=case["gamma"], positive_weight=weight
+            case["prior"],
+            beta=case["beta"],
+            gamma=case["gamma"],
+            positive_weight=case["positive_weight"],
         )
         logits = case["logits"].to(dtype).clone().requires_grad_(True)
         old_train, old_objective = reference_nnpu(
@@ -150,26 +161,6 @@ def test_nnpu_values_and_gradients_equal_the_former_branch(dtype: torch.dtype) -
         torch.testing.assert_close(objective, old_objective.detach(), rtol=0, atol=0)
         torch.testing.assert_close(gradient, logits.grad, rtol=0, atol=0)
     assert fired == {True, False}, "Both the corrected and the plain branch must be covered"
-
-
-@pytest.mark.skipif(not BASELINE_LOSS.exists(), reason="baseline snapshot not available")
-def test_nnpu_equals_the_baseline_module() -> None:
-    spec = importlib.util.spec_from_file_location("baseline_loss", BASELINE_LOSS)
-    assert spec is not None and spec.loader is not None
-    baseline = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(baseline)
-    for case in loss_cases():
-        kwargs = {
-            "beta": case["beta"],
-            "gamma": case["gamma"],
-            "positive_weight": case["positive_weight"],
-        }
-        old = _loss_outputs(
-            baseline.NonNegativePULoss(case["prior"], **kwargs), case, torch.float32
-        )
-        new = _loss_outputs(NonNegativePULoss(case["prior"], **kwargs), case, torch.float32)
-        for left, right in zip(old, new, strict=True):
-            torch.testing.assert_close(left, right, rtol=0, atol=0)
 
 
 def test_nnpu_forward_never_reads_a_value_on_the_host(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -797,7 +788,7 @@ def test_batches_use_train_mode_step_seeds_and_the_hub_registry(
     backends: set[str | None] = set()
     resolved: list[threading.Thread] = []
     lock = threading.Lock()
-    real = predictor.make_live_batch
+    real = batching.make_live_batch
     real_resolve = training.resolve_backend
 
     def resolve(sampler: SamplerPlan, device: torch.device) -> str:
@@ -820,7 +811,7 @@ def test_batches_use_train_mode_step_seeds_and_the_hub_registry(
             )
         return batch
 
-    monkeypatch.setattr(predictor, "make_live_batch", record)
+    monkeypatch.setattr(batching, "make_live_batch", record)
     monkeypatch.setattr(training, "resolve_backend", resolve)
     result = fit(tmp_path, "run", config)
     # One resolution per run, on the main thread; every batch gets its result.
@@ -981,13 +972,13 @@ def test_cuda_rng_restore_tolerates_a_different_gpu_count(
     monkeypatch.setattr(torch.cuda, "set_rng_state", set_rng_state)
     states = [torch.zeros(16, dtype=torch.uint8) for _ in range(8)]
     # A checkpoint written with one state per GPU of an 8-GPU node, resumed on one GPU.
-    training.restore_cuda_rng(states, torch.device("cuda"))
+    restore_cuda_rng(states, torch.device("cuda"))
     assert restored == [0]
     restored.clear()
-    training.restore_cuda_rng(states[0], torch.device("cuda", 0))
+    restore_cuda_rng(states[0], torch.device("cuda", 0))
     assert restored == [torch.device("cuda", 0)]
-    training.restore_cuda_rng(states, torch.device("cpu"))
-    training.restore_cuda_rng(None, torch.device("cuda"))
+    restore_cuda_rng(states, torch.device("cpu"))
+    restore_cuda_rng(None, torch.device("cuda"))
     assert len(restored) == 1
     assert "get_rng_state_all" not in inspect.getsource(training)
 
@@ -1020,8 +1011,8 @@ def test_missing_hub_indicator_warns_once_at_start(
     plan = FeaturePlan.from_config(config)
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        predictor.warn_hub_stubs(HubRegistry.empty(), plan)
-        predictor.warn_hub_stubs(hub_registry(), FeaturePlan.from_config(base_config()))
+        warn_hub_stubs(HubRegistry.empty(), plan)
+        warn_hub_stubs(hub_registry(), FeaturePlan.from_config(base_config()))
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     with pytest.warns(UserWarning, match="no hub_indicator group") as caught:
         fit(tmp_path, "run", config)
@@ -1126,7 +1117,7 @@ class ScoringExecutor:
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.accounts = accounts
 
-    def run(self, name: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+    def run(self, name: str, params: dict[str, Any], **_: Any) -> list[dict[str, Any]]:
         self.calls.append((name, params))
         if name == "temporal_training_cutoffs":
             return [{"status": "ok", "last_visible_seqs": {str(params["cutoff_times"][0]): 29_999}}]
@@ -1210,7 +1201,7 @@ def test_score_new_reports_root_and_child_rejections_separately(tmp_path: Path) 
     assert result["rejection_events_by_status"] == {"missing_entity": 1 + children}
     # Without per-hop counts the root statuses are unknown, never the mixed counter.
     del source.rejections_by_hop
-    plain = predictor.rejection_summary(source, 1, Counter({"rejected_children": 3}))
+    plain = rejection_summary(source, 1, Counter({"rejected_children": 3}))
     assert plain["rejected_roots_by_status"] is None and plain["rejected_children"] == 3
 
 
@@ -1247,13 +1238,13 @@ def test_final_population_audit_scores_through_the_dataset_clock_and_hubs(
     truth["is_mule"] = truth.is_mule.astype(int)
     source = FakeSource(config, reject=frozenset({test_accounts.account_id.iloc[1]}))
     seen: list[int] = []
-    real = predictor.make_live_batch
+    real = batching.make_live_batch
 
     def record(store: Any, roots: list[ContextKey], **kwargs: Any) -> dict[str, torch.Tensor]:
         seen.extend(k.cutoff_seq for k in roots)
         return real(store, roots, **kwargs)
 
-    monkeypatch.setattr(predictor, "make_live_batch", record)
+    monkeypatch.setattr(batching, "make_live_batch", record)
 
     class Truth:
         def read(self) -> pd.DataFrame:
@@ -1311,16 +1302,19 @@ def test_final_population_audit_fails_on_censored_rejections(
 # CLI and experiment matrix ------------------------------------------------------------
 
 
-def test_cli_parses_resume_create_scope_and_final_dataset() -> None:
+def test_cli_needs_no_config_truth_or_dataset() -> None:
     parser = cli.build_parser()
-    args = parser.parse_args(["train", "--output", "m.pt", "--resume", "--create-scope"])
-    assert args.resume and args.create_scope
-    assert not parser.parse_args(["train"]).resume
-    assert parser.parse_args(["prepare", "--create-scope"]).create_scope
-    final = parser.parse_args(
-        ["evaluate-final", "--checkpoint", "m.pt", "--truth", "t", "--output", "o.json"]
+    args = parser.parse_args(["train"])
+    assert args.config is None and args.dataset is None
+    assert parser.parse_args(["prepare"]).config is None
+    final = parser.parse_args(["evaluate-final", "--checkpoint", "m.pt", "--output", "o.json"])
+    assert final.dataset is None and final.truth is None
+    assert isinstance(cli.truth_source(None), cli.GraphEvaluationTruth)
+    assert isinstance(cli.truth_source(Path("t.parquet")), cli.ParquetEvaluationTruth)
+    scoring = parser.parse_args(
+        ["score", "--checkpoint", "m.pt", "--date", "2025-01-01", "--output", "s.parquet"]
     )
-    assert final.dataset is None
+    assert scoring.dataset is None
 
 
 def test_cli_install_passes_force_and_optional(
@@ -1347,24 +1341,26 @@ def test_cli_install_passes_force_and_optional(
 def test_train_command_prepares_then_trains_or_resumes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    config = base_config()
+    # Like run_config, without a dataset_id: preparation resolves it.
+    config = {k: v for k, v in base_config().items() if k != "dataset_id"}
     prepared, trained = [], []
-    monkeypatch.setattr(cli, "validated_config", lambda path: dict(config))
-    monkeypatch.setattr(cli, "prepare_live", lambda c, path: prepared.append((c, path)))
+
+    def prepare(c: dict[str, Any], path: Path) -> dict[str, Any]:
+        prepared.append((c, path))
+        return {"source": {"dataset_id": "derived"}}
+
+    # `mule-temporal train` is pipeline.run with resume: patch the pipeline's steps.
+    monkeypatch.setattr(pipeline, "run_config", lambda path: dict(config))
+    monkeypatch.setattr(pipeline, "prepare_live", prepare)
     monkeypatch.setattr(
-        cli, "train", lambda c, d, o, *, resume: trained.append((d, o, resume)) or {}
+        pipeline, "train", lambda c, d, o, *, resume: trained.append((c, d, o, resume)) or {}
     )
-    monkeypatch.setattr(cli, "dataset_path", lambda c: tmp_path / "prepared")
     output = tmp_path / "model.pt"
     cli.train_command(cli.build_parser().parse_args(["train", "--output", str(output)]))
-    assert prepared[-1][0].get("create_scope") is False and trained[-1][2] is False
-    (tmp_path / "model_run").mkdir()
-    with pytest.raises(FileExistsError, match="--resume"):
-        cli.train_command(cli.build_parser().parse_args(["train", "--output", str(output)]))
-    args = ["train", "--output", str(output), "--resume", "--create-scope"]
-    cli.train_command(cli.build_parser().parse_args(args))
-    assert prepared[-1][0]["create_scope"] is True
-    assert trained[-1] == (tmp_path / "prepared", output, True)
+    # One command prepares into the run directory, then trains (resuming if interrupted).
+    assert prepared[-1][1] == tmp_path / "model_run" / "prepared"
+    c, d, o, resume = trained[-1]
+    assert c["dataset_id"] == "derived" and d == prepared[-1][1] and o == output and resume
 
 
 def test_feature_arms_keep_the_base_extraction() -> None:

@@ -76,11 +76,7 @@ id,account_type,is_external,first_seen_seq,first_seen_ts_ms,is_mule,mule_label_k
 
 Use integer `0`/`1` for `is_mule`, and lowercase `true`/`false` for boolean flags.
 The corresponding manifest-based PSV export uses the same fifteen columns,
-separated by `|`, without a header. The
-feature stager accepts both the earlier five-column Account export and this new
-fifteen-column form. In the new form it writes supervision to
-`account_labels.parquet` plus metadata **separately** from `nodes.parquet`;
-none of the label columns enter the entity feature table.
+separated by `|`, without a header. None of the label columns are model features.
 
 For server-file loading, keep the CSV header. For the REST++ streaming interface
 (`runLoadingJobWithData` / `runLoadingJobWithFile`), send data rows without the
@@ -89,9 +85,9 @@ header, as required by that API. The live integration check exercises this path.
 Only the Account loading contract changes. Zelle transfers, tokens, payment
 participation, association tenures and Fourier encoding fields remain as defined
 in [the temporal schema](temporal_schema.md). Refresh the exporter manifest and
-loader verification for the regenerated dataset, and stage it into a new output
-directory. Old snapshot caches/checkpoints belong to the old dataset and must not
-be reused as though they were trained on the new labels.
+loader verification for the regenerated dataset. Prepared cohorts and checkpoints
+of the old dataset must not be reused as though they were trained on the new
+labels.
 
 After loading, run:
 
@@ -119,24 +115,6 @@ replacing the attribute and verifies every label afterwards. TigerGraph appends
 the replacement integer attribute in storage; the loader maps the unchanged CSV
 column order to that storage order. The canonical schema uses the same final order.
 
-## Legacy snapshot training with the stored mask
-
-`configs/temporal/mule_graph_mask.toml` sets `mask_source="graph"`. It reads the
-staged `pu_label`/mask fields and additionally gates label availability and train
-membership. Its `reveal_fraction=1` means no second masking pass; it does **not**
-unmask accounts whose stored mask is true.
-
-`configs/temporal/mule_pu.toml` sets `mask_source="resample"`. It preserves graph
-truth, computes independent experiment masks locally, and supports the
-10%/25%/50%/100% label-budget comparison without overwriting graph state. Run it
-only when intentionally conducting that experiment. The model's input features
-are identical under both modes.
-
-The default label path for both configurations is now
-`artifacts/temporal/stage/account_labels.parquet`. Update paths and chronological
-cutoffs to match the regenerated dataset before training. There is no need for
-the laundering-intermediary proxy importer for correctly generated mule labels.
-
 ## Files
 
 - [Canonical schema](../gsql/schema/temporal_schema.gsql)
@@ -145,10 +123,14 @@ the laundering-intermediary proxy importer for correctly generated mule labels.
 - [Supervision export and validation queries](../gsql/temporal/account_supervision.gsql)
 
 
-## Production training and local experiments
+## Production training and the label reveal
 
-The live trainer uses an observed-label provider, not the schema's synthetic
-masking fields. Complete synthetic truth is used by a separate local setup
-utility and by post-training evaluation only. Production observed positives
-require discovery-time semantics; a zero is unlabeled for nnPU.
-See [the current training contract](live_temporal_training.md).
+The live trainer reads the revealed positives of this contract
+(`label_policy = "graph_observed"`). A PhantomLedger load masks every mule, so the
+first run writes the contract once with `temporal_reveal_mule_labels`: every
+internal Account becomes a known label, and up to 20 mules per split that a bank
+would have discovered before the split's cutoff are revealed with their discovery
+clocks. See [label reveal](label_reveal.md) for the discovery model and its
+sources. Complete synthetic truth is read only by that job and by post-training
+evaluation. Production observed positives require discovery-time semantics; a zero
+is unlabeled for nnPU. See [the current training contract](live_temporal_training.md).

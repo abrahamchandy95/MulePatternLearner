@@ -16,18 +16,26 @@ import time
 from types import SimpleNamespace
 from typing import Any, cast
 
-import numpy as np
 import pandas as pd
 import pytest
 import requests
 from pyTigerGraph.common.exception import TigerGraphException
 
 from mule_pattern_learner.configuration import REPOSITORY_ROOT, load_config, resolve_path
-from mule_pattern_learner.temporal.encoding import BASIS_ID, fourier64
-from mule_pattern_learner.temporal.live import dataset, installation, pipeline, source
+from mule_pattern_learner.temporal.encoding import BASIS_ID
+from mule_pattern_learner.temporal.live import dataset, installation, pipeline, scope, source
 from mule_pattern_learner.temporal.live.config_schema import (
+    DEFAULT_RUN,
     OPERATIONAL_DEFAULTS,
+    LiveConfig,
+    run_config,
     validate_config,
+)
+from mule_pattern_learner.temporal.live.context_query import (
+    ContextTimeoutError,
+    query_context_batch,
+    query_context_split,
+    validate_context,
 )
 from mule_pattern_learner.temporal.live.contract import (
     CONTRACT_VERSION,
@@ -37,6 +45,16 @@ from mule_pattern_learner.temporal.live.contract import (
     PoolPlan,
     SamplerPlan,
 )
+from mule_pattern_learner.temporal.live.executor import (
+    AVAILABILITY,
+    DETERMINISTIC,
+    SERVER_TIMEOUT,
+    ServerTimeoutError,
+    TigerGraphExecutor,
+    TransientQueryError,
+    failure_class,
+    is_transient,
+)
 from mule_pattern_learner.temporal.live.hubs import (
     HUB_COLUMNS,
     HubRegistry,
@@ -45,21 +63,14 @@ from mule_pattern_learner.temporal.live.hubs import (
     load_hub_registry,
     query_hub_registry,
 )
-from mule_pattern_learner.temporal.live.source import (
-    ContextStore,
-    StreamingContextSource,
-    TigerGraphExecutor,
-    TransientQueryError,
-    is_transient,
-    query_context_batch,
-    validate_context,
-)
+from mule_pattern_learner.temporal.live.source import ContextStore, StreamingContextSource
 from mule_pattern_learner.temporal.live.supervision import (
     GraphObservedLabels,
     ParquetObservedLabels,
     label_source,
 )
 from mule_pattern_learner.tigergraph.client import Client, _status_error, _TimeoutConnection
+from temporal_fakes import encode, request_keys
 
 PLAN = FeaturePlan(("entity_meta", "message_core", "time_encoding"), "split")
 SAMPLER = SamplerPlan(
@@ -115,13 +126,7 @@ def context_row(
         "age_encoding": {},
         "gap_encoding": {},
     }
-    if encodings:
-        for message in messages:
-            name = message["relation"] + ":" + message["event_id"]
-            row["age_encoding"][name] = fourier64(np.array([message["age_ms"]]))[0].tolist()
-            if message["gap_present"]:
-                row["gap_encoding"][name] = fourier64(np.array([message["gap_ms"]]))[0].tolist()
-    return row
+    return encode(row) if encodings else row
 
 
 def root(i: int, **changes: Any) -> ContextKey:
@@ -146,19 +151,10 @@ class ContextServer:
         self.lock = threading.Lock()
         self.active = self.peak = 0
 
-    def run(self, name: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+    def run(self, name: str, params: dict[str, Any], **_: Any) -> list[dict[str, Any]]:
         assert name == "temporal_training_context"
         hop = 1 if params["k_assoc"] else 2
-        keys = [
-            ContextKey(t, i, s, c, params["scope_id"], params["visibility_phase"])
-            for t, i, s, c in zip(
-                params["node_types"],
-                params["node_ids"],
-                params["cutoff_seqs"],
-                params["cutoff_times"],
-                strict=True,
-            )
-        ]
+        keys = request_keys(params)
         with self.lock:
             self.calls.append(params)
             self.requested.update((hop, key) for key in keys)
@@ -246,7 +242,7 @@ class Runner:
     def __init__(self, respond: Callable[[str, dict[str, Any]], list[dict[str, Any]]]) -> None:
         self.respond = respond
 
-    def run(self, name: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+    def run(self, name: str, params: dict[str, Any], **_: Any) -> list[dict[str, Any]]:
         return self.respond(name, params)
 
 
@@ -295,33 +291,33 @@ def test_availability_failures_are_retried_with_capped_exponential_backoff() -> 
 @pytest.mark.parametrize(
     "error, kind",
     [
-        (requests.ConnectionError("refused"), source.AVAILABILITY),
-        (requests.exceptions.ConnectTimeout("connect"), source.AVAILABILITY),
-        (requests.exceptions.ChunkedEncodingError("cut"), source.AVAILABILITY),
-        (http_error(502), source.AVAILABILITY),
-        (http_error(503, {"error": True, "message": "anything"}), source.AVAILABILITY),
-        (http_error(504, b"<html>504 Gateway Time-out</html>"), source.AVAILABILITY),
-        (http_error(408), source.AVAILABILITY),
-        (http_error(429, {"error": True, "message": "Rate limit exceeded"}), source.AVAILABILITY),
-        (http_error(500, b"<!DOCTYPE html><p>oops</p>"), source.AVAILABILITY),
+        (requests.ConnectionError("refused"), AVAILABILITY),
+        (requests.exceptions.ConnectTimeout("connect"), AVAILABILITY),
+        (requests.exceptions.ChunkedEncodingError("cut"), AVAILABILITY),
+        (http_error(502), AVAILABILITY),
+        (http_error(503, {"error": True, "message": "anything"}), AVAILABILITY),
+        (http_error(504, b"<html>504 Gateway Time-out</html>"), AVAILABILITY),
+        (http_error(408), AVAILABILITY),
+        (http_error(429, {"error": True, "message": "Rate limit exceeded"}), AVAILABILITY),
+        (http_error(500, b"<!DOCTYPE html><p>oops</p>"), AVAILABILITY),
         (
             TigerGraphException("Cannot parse json: <html>Starting workspace</html>"),
-            source.AVAILABILITY,
+            AVAILABILITY,
         ),
-        (TigerGraphException("The graph engine is not ready yet"), source.AVAILABILITY),
-        (TigerGraphException("Server is busy, try again later"), source.AVAILABILITY),
-        (source.TransientQueryError("HTML page"), source.AVAILABILITY),
-        (json.JSONDecodeError("x", "<html><body>resuming</body></html>", 0), source.AVAILABILITY),
-        (TigerGraphException("Query timeout exceeded", "REST-3002"), source.SERVER_TIMEOUT),
-        (TigerGraphException("The query timed out"), source.SERVER_TIMEOUT),
-        (requests.ReadTimeout("no answer 30 s after the server timeout"), source.SERVER_TIMEOUT),
-        (http_error(500, {"error": True, "code": "REST-3002"}), source.SERVER_TIMEOUT),
-        (http_error(504, {"error": True, "code": "REST-3002"}), source.SERVER_TIMEOUT),
-        (http_error(500), source.DETERMINISTIC),
-        (http_error(500, {"error": True, "message": "Runtime error"}), source.DETERMINISTIC),
-        (TigerGraphException("Cannot parse json: {'a': NaN}"), source.DETERMINISTIC),
-        (TigerGraphException("Query aborted: out of memory"), source.DETERMINISTIC),
-        (json.JSONDecodeError("x", '{"a": NaN}', 6), source.DETERMINISTIC),
+        (TigerGraphException("The graph engine is not ready yet"), AVAILABILITY),
+        (TigerGraphException("Server is busy, try again later"), AVAILABILITY),
+        (TransientQueryError("HTML page"), AVAILABILITY),
+        (json.JSONDecodeError("x", "<html><body>resuming</body></html>", 0), AVAILABILITY),
+        (TigerGraphException("Query timeout exceeded", "REST-3002"), SERVER_TIMEOUT),
+        (TigerGraphException("The query timed out"), SERVER_TIMEOUT),
+        (requests.ReadTimeout("no answer 30 s after the server timeout"), SERVER_TIMEOUT),
+        (http_error(500, {"error": True, "code": "REST-3002"}), SERVER_TIMEOUT),
+        (http_error(504, {"error": True, "code": "REST-3002"}), SERVER_TIMEOUT),
+        (http_error(500), DETERMINISTIC),
+        (http_error(500, {"error": True, "message": "Runtime error"}), DETERMINISTIC),
+        (TigerGraphException("Cannot parse json: {'a': NaN}"), DETERMINISTIC),
+        (TigerGraphException("Query aborted: out of memory"), DETERMINISTIC),
+        (json.JSONDecodeError("x", '{"a": NaN}', 6), DETERMINISTIC),
         (http_error(400), None),
         (http_error(401), None),
         (http_error(404), None),
@@ -331,14 +327,14 @@ def test_availability_failures_are_retried_with_capped_exponential_backoff() -> 
     ],
 )
 def test_failure_classes(error: BaseException, kind: str | None) -> None:
-    assert source.failure_class(error) == kind
+    assert failure_class(error) == kind
     assert is_transient(error) is (kind is not None)
 
 
 def test_suspected_deterministic_failures_are_retried_once() -> None:
     cases: list[tuple[BaseException, type[BaseException]]] = [
-        (TigerGraphException("Query timeout exceeded", "REST-3002"), source.ServerTimeoutError),
-        (requests.ReadTimeout("slow"), source.ServerTimeoutError),
+        (TigerGraphException("Query timeout exceeded", "REST-3002"), ServerTimeoutError),
+        (requests.ReadTimeout("slow"), ServerTimeoutError),
         (http_error(500), TransientQueryError),
         (TigerGraphException("Cannot parse json: NaN"), TransientQueryError),
         (TigerGraphException("out of memory"), TransientQueryError),
@@ -354,13 +350,13 @@ def test_suspected_deterministic_failures_are_retried_once() -> None:
         assert executor(conn).run("q", {}) == [{"status": "ok"}]
     # Callers that split a timed-out request instead ask for no timeout retry.
     conn = FakeConn([TigerGraphException("x", "REST-3002"), [{"status": "ok"}]])
-    with pytest.raises(source.ServerTimeoutError, match="after 1 attempt"):
+    with pytest.raises(ServerTimeoutError, match="after 1 attempt"):
         executor(conn).run("q", {}, timeout_retries=0)
     assert len(conn.calls) == 1
     # A mixed sequence: availability failures do not use up the deterministic retry.
     timeout = TigerGraphException("x", "REST-3002")
     conn = FakeConn([timeout, requests.ConnectionError("down"), timeout])
-    with pytest.raises(source.ServerTimeoutError, match="after 3 attempt"):
+    with pytest.raises(ServerTimeoutError, match="after 3 attempt"):
         executor(conn).run("q", {})
 
 
@@ -471,7 +467,7 @@ def test_json_bodied_status_errors_keep_their_status_through_pytigergraph(
         tg.run("q", {})
     assert not tg.sleeps and len(script) == 1
     script[:] = [(500, {"error": True, "message": "timed out", "code": "REST-3002"})] * 2
-    with pytest.raises(source.ServerTimeoutError):
+    with pytest.raises(ServerTimeoutError):
         executor(conn).run("q", {})
     assert not script
     for status in (401, 404, 400, 200):
@@ -659,7 +655,7 @@ def test_concurrent_fetches_share_requests_and_respect_concurrency() -> None:
 
 def test_failed_request_propagates_to_every_waiting_fetch() -> None:
     class Failing(ContextServer):
-        def run(self, name: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+        def run(self, name: str, params: dict[str, Any], **_: Any) -> list[dict[str, Any]]:
             time.sleep(0.05)
             raise ValueError("contract violation")
 
@@ -687,7 +683,7 @@ def test_close_without_wait_cancels_queued_requests_and_leaves_daemon_workers() 
     entered: list[int] = []
 
     class Blocking(ContextServer):
-        def run(self, name: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+        def run(self, name: str, params: dict[str, Any], **_: Any) -> list[dict[str, Any]]:
             entered.append(len(params["node_ids"]))
             release.wait(10)
             return super().run(name, params)
@@ -736,11 +732,11 @@ def test_timed_out_blocks_are_bisected_and_a_single_slow_key_is_fatal() -> None:
             self.limit, self.slow_ids = limit, slow_ids
             self.sizes: list[int] = []
 
-        def run(self, name: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+        def run(self, name: str, params: dict[str, Any], **_: Any) -> list[dict[str, Any]]:
             with self.lock:
                 self.sizes.append(len(params["node_ids"]))
             if len(params["node_ids"]) > self.limit or self.slow_ids & set(params["node_ids"]):
-                raise source.ServerTimeoutError("temporal_training_context timed out")
+                raise ServerTimeoutError("temporal_training_context timed out")
             return super().run(name, params)
 
     keys = [root(i) for i in range(8)]
@@ -753,7 +749,7 @@ def test_timed_out_blocks_are_bisected_and_a_single_slow_key_is_fatal() -> None:
     store.close()
     server = Slow(limit=8, slow_ids={keys[5].node_id})
     store = StreamingContextSource(server, plan=PLAN, sampler=SAMPLER, request_batch_size=8)
-    with pytest.raises(source.ContextTimeoutError, match="A0005") as caught:
+    with pytest.raises(ContextTimeoutError, match="A0005") as caught:
         store.fetch(keys)
     assert caught.value.key == keys[5] and caught.value.hop == 1
     assert not store._inflight
@@ -767,11 +763,11 @@ def test_timed_out_blocks_are_bisected_and_a_single_slow_key_is_fatal() -> None:
         return responder.run(name, params)
 
     conn = FakeConn([timeout, answer, answer])
-    rows, calls = source.query_context_split(executor(conn), keys[:2], plan=PLAN, sampler=SAMPLER)
+    rows, calls = query_context_split(executor(conn), keys[:2], plan=PLAN, sampler=SAMPLER)
     assert calls == 2 and [len(call[1]["node_ids"]) for call in conn.calls] == [2, 1, 1]
     conn = FakeConn([timeout, timeout, answer])
-    with pytest.raises(source.ContextTimeoutError):
-        source.query_context_split(executor(conn), keys[:1], plan=PLAN, sampler=SAMPLER)
+    with pytest.raises(ContextTimeoutError):
+        query_context_split(executor(conn), keys[:1], plan=PLAN, sampler=SAMPLER)
     assert len(conn.calls) == 2
 
 
@@ -1030,25 +1026,72 @@ def test_prepare_live_checks_query_hashes_before_reusing_a_ready_dataset(
     out = tmp_path / "prepared"
     manifest = write_manifest(out, config, fixed_hashes)
 
-    def no_connection(**kwargs: Any) -> None:
+    def no_connection(config: dict[str, Any]) -> None:
         raise AssertionError("prepare_live must not connect for a ready dataset")
 
-    monkeypatch.setattr(pipeline, "TigerGraphExecutor", no_connection)
+    monkeypatch.setattr(pipeline, "live_executor", no_connection)
     assert pipeline.prepare_live(config, out) == manifest
     # Model and transport settings are not preparation settings.
     assert pipeline.prepare_live({**config, "learning_rate": 0.1, "query_concurrency": 2}, out)
-    with pytest.raises(ValueError, match=r"split_seed.*prepared_id"):
+    with pytest.raises(ValueError, match=r"split_seed.*new output"):
         pipeline.prepare_live({**config, "split_seed": 7}, out)
     fixed_hashes["gsql/temporal/hub_registry.gsql"] = "changed"
-    with pytest.raises(ValueError, match=r"hub_registry\.gsql.*mule-temporal install.*prepared_id"):
+    with pytest.raises(ValueError, match=r"hub_registry\.gsql.*mule-temporal install.*new output"):
         pipeline.prepare_live(config, out)
     with pytest.raises(ValueError, match="different GSQL sources"):
         dataset.load_prepared(out)
 
 
-def test_prepared_directory_uses_prepared_id() -> None:
-    assert pipeline.dataset_path({"dataset_id": "d"}).name == "d"
-    assert pipeline.dataset_path({"dataset_id": "d", "prepared_id": "p2"}).name == "p2"
+def test_prepared_directory_is_inside_the_run_unless_prepared_id_is_set(tmp_path: Path) -> None:
+    assert pipeline.dataset_path({}, tmp_path / "m.pt") == tmp_path / "m_run" / "prepared"
+    shared = pipeline.dataset_path({"prepared_id": "p2"}, tmp_path / "m.pt")
+    assert shared.name == "p2" and shared.parent.name == "temporal"
+
+
+def test_dataset_identity_comes_from_the_scope_or_the_graph(tmp_path: Path) -> None:
+    counts = {"Account": 10, "Party": 4}
+    header = {"ready": True, "source_id": "unit_snapshot", "split_seed": 42}
+    config = {k: v for k, v in live_config(tmp_path).items() if k != "dataset_id"}
+    server = ScopeServer(header, "linked")
+    server.client.conn.graphname = "G"
+    assert pipeline.resolve_identity(cast(Any, server), config, counts)["dataset_id"] == (
+        "unit_snapshot"
+    )
+    fresh = ScopeServer(None, "linked")
+    fresh.client.conn.graphname = "G"
+    derived = pipeline.resolve_identity(cast(Any, fresh), config, counts)["dataset_id"]
+    assert derived == pipeline.derived_dataset_id("G", counts) and derived.startswith("G_")
+    assert derived != pipeline.derived_dataset_id("G", {**counts, "Account": 11})
+    explicit = {**config, "dataset_id": "pinned"}
+    assert pipeline.resolve_identity(cast(Any, fresh), explicit, counts) == explicit
+    # With an existing dataset the identity comes from its manifest, and a pin is kept.
+    manifest = {"source": {"dataset_id": "unit_snapshot"}}
+    assert pipeline.prepared_config(config, manifest)["dataset_id"] == "unit_snapshot"
+    assert pipeline.prepared_config(explicit, manifest)["dataset_id"] == "pinned"
+
+
+def test_only_strict_runs_reveal_labels(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    reveals: list[str] = []
+    monkeypatch.setattr(pipeline, "live_executor", lambda config: SimpleNamespace())
+    monkeypatch.setattr(pipeline, "install", lambda executor: None)
+    monkeypatch.setattr(pipeline, "source_counts", lambda executor: {"Account": 10})
+    monkeypatch.setattr(pipeline, "ensure_scope", lambda executor, config: None)
+    monkeypatch.setattr(
+        pipeline,
+        "ensure_revealed_labels",
+        lambda executor, config: reveals.append(config["evaluation_protocol"]),
+    )
+    monkeypatch.setattr(pipeline, "prepare", lambda config, *args, **kwargs: {"status": "ready"})
+    config = {
+        **live_config(tmp_path, dataset_id="unit_snapshot"),
+        "label_policy": "graph_observed",
+        "observed_labels": None,
+    }
+    for protocol in ("shared_history", "strict_inductive"):
+        run = {**config, "evaluation_protocol": protocol}
+        assert pipeline.prepare_live(run, tmp_path / protocol) == {"status": "ready"}
+    # A shared_history run reads whatever labels the graph has.
+    assert reveals == ["strict_inductive"]
 
 
 def test_preparation_keys_fingerprint_only_preparation_settings(tmp_path: Path) -> None:
@@ -1181,13 +1224,13 @@ def test_source_counts_ignore_experiment_scopes(monkeypatch: pytest.MonkeyPatch)
         installation.verify_frozen_source(tg, manifest)
 
 
-def test_missing_scope_is_created_only_on_request(tmp_path: Path) -> None:
+def test_missing_scope_is_created_unless_forbidden(tmp_path: Path) -> None:
     config = live_config(tmp_path)
     server = ScopeServer(None, "independent")
-    with pytest.raises(ValueError, match="--create-scope"):
-        pipeline.ensure_scope(cast(Any, server), config)
+    with pytest.raises(ValueError, match="create_scope = false"):
+        scope.ensure_scope(cast(Any, server), {**config, "create_scope": False})
     assert not server.calls
-    pipeline.ensure_scope(cast(Any, server), {**config, "create_scope": True})
+    scope.ensure_scope(cast(Any, server), config)
     names = [call[0] for call in server.calls]
     assert names == [
         "temporal_create_training_scope",
@@ -1200,8 +1243,8 @@ def test_missing_scope_is_created_only_on_request(tmp_path: Path) -> None:
     assert server.calls[1][1] == {"scope_id": "unit_scope", "expected_members": 3}
     for policy in ("independent", "shared"):
         server = ScopeServer(None, "independent")
-        changed = {**config, "create_scope": True, "scope_unowned": policy}
-        pipeline.ensure_scope(cast(Any, server), changed)
+        changed = {**config, "scope_unowned": policy}
+        scope.ensure_scope(cast(Any, server), changed)
         assert server.calls[0][1]["unowned_policy"] == policy
 
 
@@ -1209,41 +1252,38 @@ def test_existing_scope_must_have_the_configured_unowned_policy(tmp_path: Path) 
     header = {"ready": True, "source_id": "unit_snapshot", "split_seed": 42}
     config = live_config(tmp_path)
     for policy in ("independent", "shared", "linked"):
-        assert installation.inferred_scope_policy(policy_counts(policy)) == policy
+        assert scope.inferred_scope_policy(policy_counts(policy)) == policy
         server = ScopeServer(header, policy)
-        pipeline.ensure_scope(cast(Any, server), {**config, "scope_unowned": policy})
+        scope.ensure_scope(cast(Any, server), {**config, "scope_unowned": policy})
         assert [call[0] for call in server.calls] == ["temporal_scope_policy"]
-    assert installation.inferred_scope_policy(policy_counts("retired")) is None
+    assert scope.inferred_scope_policy(policy_counts("retired")) is None
     # Without unowned external accounts a linked scope is still recognised by its links.
     no_external = {**policy_counts("linked"), "shared_external": 0, "independent_external": 0}
-    assert installation.inferred_scope_policy(no_external) == "linked"
-    assert installation.inferred_scope_policy({**no_external, "linked_internal": 0}) == (
-        "independent"
-    )
+    assert scope.inferred_scope_policy(no_external) == "linked"
+    assert scope.inferred_scope_policy({**no_external, "linked_internal": 0}) == "independent"
     # Linking without sharing the external accounts is no rule.
     unshared = {**policy_counts("linked"), "shared_external": 0, "independent_external": 3}
-    assert installation.inferred_scope_policy(unshared) is None
+    assert scope.inferred_scope_policy(unshared) is None
     partly = {**policy_counts("shared"), "independent_external": 1}
-    assert installation.inferred_scope_policy(partly) is None
+    assert scope.inferred_scope_policy(partly) is None
     # A pre-policy scope (strict_mule_v1) under the default "linked" configuration.
     with pytest.raises(ValueError, match=r"created with scope_unowned = 'independent'.*set a new"):
-        pipeline.ensure_scope(cast(Any, ScopeServer(header, "independent")), config)
+        scope.ensure_scope(cast(Any, ScopeServer(header, "independent")), config)
     with pytest.raises(ValueError, match="matches no scope_unowned rule"):
-        pipeline.ensure_scope(cast(Any, ScopeServer(header, "retired")), config)
+        scope.ensure_scope(cast(Any, ScopeServer(header, "retired")), config)
     with pytest.raises(ValueError, match="different source"):
-        pipeline.ensure_scope(cast(Any, ScopeServer({**header, "split_seed": 7}, "linked")), config)
+        scope.ensure_scope(cast(Any, ScopeServer({**header, "split_seed": 7}, "linked")), config)
     with pytest.raises(ValueError, match="lacks"):
-        installation.scope_policy_counts(Runner(lambda n, p: [{"status": "ok", "members": 3}]), "s")
+        scope.scope_policy_counts(Runner(lambda n, p: [{"status": "ok", "members": 3}]), "s")
 
 
 def test_scope_policy_query_prints_what_the_client_reads() -> None:
     text = (REPOSITORY_ROOT / "gsql/temporal/training_scope.gsql").read_text()
     queries = installation.definitions(text)
-    if installation.SCOPE_POLICY_QUERY not in queries:
-        pytest.skip("temporal_scope_policy is not in the repository yet")
-    query = queries[installation.SCOPE_POLICY_QUERY]
+    assert scope.SCOPE_POLICY_QUERY in queries
+    query = queries[scope.SCOPE_POLICY_QUERY]
     assert installation.parameter_names(query) == {"scope_id"}
-    for name in (*installation.SCOPE_POLICY_COUNTS, "members"):
+    for name in (*scope.SCOPE_POLICY_COUNTS, "members"):
         assert f"AS {name}" in query, name
     create = installation.parameter_names(queries["temporal_create_training_scope"])
     assert "unowned_policy" in create and "shared_unowned" not in create
@@ -1388,31 +1428,57 @@ def test_config_schema_rejects_unknown_keys_and_applies_operational_defaults(
     assert validate_config({**base, "positive_weight": "prior"})["positive_weight"] == "prior"
 
 
-def test_repository_live_configs_validate_and_load_config_is_opt_in(tmp_path: Path) -> None:
-    paths = [
-        REPOSITORY_ROOT / "configs/temporal/live_tgat.toml",
-        REPOSITORY_ROOT / "configs/temporal/live_tgat_legacy.toml",
-        REPOSITORY_ROOT / "configs/temporal/live_tgat_smoke.toml",
-    ]
-    for path in paths:
-        if path.exists():
-            assert load_config(path, live=True)["request_batch_size"] == 8
+def test_built_in_run_validates_and_only_run_config_applies_the_schema(tmp_path: Path) -> None:
+    config = run_config()
+    assert config == validate_config(config) and config["request_batch_size"] == 8
+    assert {key: config[key] for key in DEFAULT_RUN} == DEFAULT_RUN
+    # The field defaults are the operational defaults validate_config fills in.
+    for key, value in OPERATIONAL_DEFAULTS.items():
+        assert LiveConfig.model_fields[key].default == value, key
     toml = tmp_path / "c.toml"
     toml.write_text('dataset_id = "x"\nstage = "offline-only key"\n')
     assert load_config(toml)["stage"] == "offline-only key"
     with pytest.raises(ValueError, match="Unknown configuration key.*stage"):
-        load_config(toml, live=True)
+        run_config(toml)
+
+
+def test_override_tables_merge_into_the_built_in_run(tmp_path: Path) -> None:
+    def overridden(text: str) -> dict[str, Any]:
+        path = tmp_path / "overrides.toml"
+        path.write_text(text)
+        return run_config(path)
+
+    default = run_config()
+    torch_only = overridden('[sampler]\nbackend = "torch"\n')
+    assert torch_only["sampler"] == {**DEFAULT_RUN["sampler"], "backend": "torch"}
+    assert SamplerPlan.from_config(torch_only).fingerprint() == (
+        SamplerPlan.from_config(default).fingerprint()
+    )
+    # A pool setting keeps the default policy and every other sampler key.
+    fewer = overridden("[sampler]\nrecent = 4\n[sampler.children]\nolder = 1\n")
+    assert fewer["sampler"]["policy"] == "resample" and fewer["sampler"]["recent"] == 4
+    assert fewer["sampler"]["children"] == {**DEFAULT_RUN["sampler"]["children"], "older": 1}
+    assert fewer["sampler"]["relation_fanouts"] == DEFAULT_RUN["sampler"]["relation_fanouts"]
+    # Another policy starts from the override's table alone.
+    recent = overridden('[sampler]\npolicy = "recent"\nrecent = 4\n')
+    assert recent["sampler"] == {"policy": "recent", "recent": 4}
+    dates = overridden('[dates]\ntrain = ["2024-05-01", "2024-07-01"]\n')
+    assert dates["dates"] == {**DEFAULT_RUN["dates"], "train": ["2024-05-01", "2024-07-01"]}
+    # Lists and scalars replace the default.
+    assert overridden("fanouts = [8, 2]\nepochs = 3\n")["fanouts"] == [8, 2]
+    assert overridden('observed_labels = "x.parquet"\n')["label_policy"] == "observed"
+    assert run_config() == default
 
 
 def test_transport_settings_come_from_the_training_config(monkeypatch: pytest.MonkeyPatch) -> None:
     seen = {}
-    monkeypatch.setattr(installation, "verify_frozen_source", lambda executor, manifest: None)
+    monkeypatch.setattr(source, "verify_frozen_source", lambda executor, manifest: None)
 
     class Executor:
         def __init__(self, **kwargs: Any) -> None:
             seen.update(kwargs)
 
-    monkeypatch.setattr(source, "TigerGraphExecutor", Executor)
+    monkeypatch.setattr("mule_pattern_learner.temporal.live.executor.TigerGraphExecutor", Executor)
     prepared = {"dataset_id": "d", "evaluation_protocol": "shared_history"}
     manifest = {"config": prepared, "source": {"context_storage": "stream"}}
     training = {
@@ -1661,7 +1727,7 @@ def test_sent_parameters_match_the_repository_query_signatures() -> None:
         threshold=1024,
     )
     assert set(calls[0]) == signature("gsql/temporal/hub_registry.gsql", "temporal_hub_registry")
-    scope = signature("gsql/temporal/training_scope.gsql", "temporal_create_training_scope")
-    assert {"scope_id", "source_id", "split_seed", "unowned_policy"} <= scope
-    policy = signature("gsql/temporal/training_scope.gsql", installation.SCOPE_POLICY_QUERY)
+    creation = signature("gsql/temporal/training_scope.gsql", "temporal_create_training_scope")
+    assert {"scope_id", "source_id", "split_seed", "unowned_policy"} <= creation
+    policy = signature("gsql/temporal/training_scope.gsql", scope.SCOPE_POLICY_QUERY)
     assert policy == {"scope_id"}

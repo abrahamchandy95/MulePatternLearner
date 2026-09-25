@@ -6,14 +6,17 @@ import importlib.util
 import json
 from pathlib import Path
 import sys
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
 
-from mule_pattern_learner.temporal.live.contract import SamplerPlan
+from mule_pattern_learner.temporal.live import labels, reveal_model
+from mule_pattern_learner.temporal.live.config_schema import run_config
+from mule_pattern_learner.temporal.live.contract import SamplerPlan, extraction_plan
 from mule_pattern_learner.temporal.live.dataset import prepare
-from mule_pattern_learner.temporal.live.source import StreamingContextSource, extraction_plan
+from mule_pattern_learner.temporal.live.experiments import feature_experiments
+from mule_pattern_learner.temporal.live.source import StreamingContextSource
 from mule_pattern_learner.temporal.live.supervision import FrameObservedLabels
 from temporal_fakes import (
     REPOSITORY,
@@ -21,6 +24,7 @@ from temporal_fakes import (
     fixture_accounts,
     live_config,
     neighbourhood,
+    reveal_inputs,
     supplied_labels,
 )
 
@@ -31,11 +35,12 @@ LIVE_SCRIPTS = (
     "feature_experiments",
     "render_training_queries",
     "run_live_experiments",
+    "simulate_label_reveal",
     "verify_cugraph_sampler",
     "verify_feature_redesign",
+    "verify_label_reveal",
     "verify_live_training",
     "verify_strict_isolation",
-    "verify_training_source",
 )
 
 
@@ -51,12 +56,12 @@ def load(name: str) -> ModuleType:
 def test_live_scripts_import_and_print_help_without_connecting(
     name: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    from mule_pattern_learner.temporal.live import source
+    from mule_pattern_learner.temporal.live.executor import TigerGraphExecutor
 
     def refuse(*args: Any, **kwargs: Any) -> None:
         raise AssertionError("--help must not connect to TigerGraph")
 
-    monkeypatch.setattr(source.TigerGraphExecutor, "__init__", refuse)
+    monkeypatch.setattr(TigerGraphExecutor, "__init__", refuse)
     module = load(name)
     monkeypatch.setattr(sys, "argv", [name, "--help"])
     with pytest.raises(SystemExit) as stopped:
@@ -88,7 +93,8 @@ def test_benchmark_builds_one_training_batch_and_step(
 ) -> None:
     config = live_config(context_storage="stream", batch_size=32, fanouts=[8, 2])
     config_path = tmp_path / "config.json"
-    config_path.write_text(json.dumps(config))
+    # The identity comes from the prepared dataset, as it does for `mule-temporal train`.
+    config_path.write_text(json.dumps({k: v for k, v in config.items() if k != "dataset_id"}))
     dataset = tmp_path / "dataset"
     executor = PopulationExecutor(factory=neighbourhood, hubs=[("N3", 101)])
     prepare(
@@ -114,3 +120,105 @@ def test_benchmark_builds_one_training_batch_and_step(
     assert report["batch"]["stub_children"] > 0 and report["batch"]["first_edges"] > 0
     assert report["context_requests"] > 0 and report["rest_calls"] == 0  # fakes count none
     assert report["loss"] > 0 and report["train_step_seconds"] > 0
+
+
+def test_feature_experiments_run_on_the_built_in_settings(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["feature_experiments"])
+    load("feature_experiments").main()
+    printed = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [row["experiment"] for row in printed] == list(feature_experiments(run_config()))
+
+
+class RevealGraph:
+    """The reveal's read-only inputs, and a dry run that agrees with the Python mirror."""
+
+    def __init__(self) -> None:
+        self.client = SimpleNamespace(conn=SimpleNamespace(runInterpretedQuery=self.inputs))
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    def inputs(self, text: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+        assert text == reveal_model.INPUTS_QUERY and set(params) == {"scope_id"}
+        return reveal_inputs()
+
+    def run(self, name: str, params: dict[str, Any], **kwargs: Any) -> list[dict[str, Any]]:
+        self.calls.append((name, params))
+        result = reveal_model.plan(reveal_inputs(), params)
+        mules = result["mules"]
+        rows = [
+            {
+                "account_id": k,
+                "channel": mules[k]["channel"],
+                "known_ts_ms": reveal_model.available_ms(mules[k], 10**13),
+            }
+            for k in result["revealed"]
+        ]
+        eligible = reveal_model.counts_by_split(result, "eligible")
+        return [
+            {
+                "status": "dry_run",
+                "data_end_ts_ms": 10**13,
+                "eligible": {str(part): n for part, n in eligible.items() if n},
+            },
+            {"revealed_mules": rows},
+        ]
+
+
+def test_label_reveal_scripts_run_offline(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    graph = RevealGraph()
+    verify = load("verify_label_reveal")
+    monkeypatch.setattr(verify, "TigerGraphExecutor", lambda: graph)
+    monkeypatch.setattr(sys, "argv", ["verify_label_reveal"])
+    assert verify.main() == 0
+    ((name, params),) = graph.calls
+    # force only skips the already-revealed check; apply = FALSE writes nothing.
+    assert name == labels.REVEAL_QUERY and params["apply"] is False and params["force"] is True
+    capsys.readouterr()
+    simulate = load("simulate_label_reveal")
+    monkeypatch.setattr(simulate, "TigerGraphExecutor", lambda: graph)
+    monkeypatch.setattr(sys, "argv", ["simulate_label_reveal", "--runs", "3"])
+    simulate.main()
+    report = json.loads(capsys.readouterr().out)
+    assert report["salts"] == [0, 2] and len(graph.calls) == 1  # never runs the job
+    assert {name: split["mules"] for name, split in report["splits"].items()} == {
+        "train": 2,
+        "validation": 1,
+        "test": 1,
+    }
+
+
+# One-time schema installers and label-contract migrations. They parse --help in their
+# __main__ block before main() connects, so --help never changes the graph.
+SCHEMA_SCRIPTS = (
+    "convert_mule_label_to_integer",
+    "install_account_supervision",
+    "install_time_encoding",
+    "verify_account_supervision",
+    "verify_time_encoding",
+)
+
+
+@pytest.mark.parametrize("name", SCHEMA_SCRIPTS)
+def test_schema_scripts_print_help_before_connecting(
+    name: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import runpy
+
+    from pyTigerGraph import TigerGraphConnection
+
+    from mule_pattern_learner.tigergraph.client import Client
+
+    def refuse(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("--help must not connect to TigerGraph")
+
+    monkeypatch.setattr(Client, "__init__", refuse)
+    monkeypatch.setattr(TigerGraphConnection, "__init__", refuse)
+    monkeypatch.syspath_prepend(str(SCRIPTS))
+    monkeypatch.setattr(sys, "argv", [name, "--help"])
+    with pytest.raises(SystemExit) as stopped:
+        runpy.run_path(str(SCRIPTS / f"{name}.py"), run_name="__main__")
+    assert stopped.value.code == 0
+    assert "usage:" in capsys.readouterr().out

@@ -39,16 +39,16 @@ inclusive 1h/24h/7d frequency boundaries for both Zelle and non-Zelle payments.
 
 The pair queries calculate fixed time features, not learned account embeddings.
 They do not traverse association tenures or implement a production batched
-sampler. The staged training pipeline applies association visibility; a future
-GSQL sampler must apply the same predicate in every traversal direction.
+sampler. The live context query (`temporal_training_context`) applies association
+visibility; any other GSQL sampler must apply the same predicate in every
+traversal direction.
 
 The history cap does not bound sender adjacency traversal. Large-scale training
 still needs staged/cached temporal indexes and bounded sampling. Valid-time
 data also cannot reconstruct when a backdated correction became known; frozen
 extracts or source-supported known-time history are needed for that case.
 
-No GSQL algorithm or live schema change was needed for this review. The older
-static GSQL files are identified separately in [the GSQL guide](../gsql/README.md).
+No GSQL algorithm or live schema change was needed for this review.
 
 The underlying MCP and integration reports remain local, Git-ignored artifacts.
 This is a historical review; use the [current query catalog](gsql_feature_catalog.md)

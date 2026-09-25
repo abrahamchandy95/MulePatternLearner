@@ -27,31 +27,30 @@ from typing import Any  # noqa: E402
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
 
-from mule_pattern_learner.configuration import load_config  # noqa: E402
 from mule_pattern_learner.device import choose_device, torch_runtime  # noqa: E402
-from mule_pattern_learner.temporal.common import timestamp  # noqa: E402
+from mule_pattern_learner.temporal.live.batching import build_root_batch  # noqa: E402
 from mule_pattern_learner.temporal.live.contract import FeaturePlan, SamplerPlan  # noqa: E402
 from mule_pattern_learner.temporal.live.dataset import (  # noqa: E402
     load_prepared,
     preparation_mismatches,
     sample_keys,
 )
+from mule_pattern_learner.temporal.live.executor import TigerGraphExecutor  # noqa: E402
 from mule_pattern_learner.temporal.live.hubs import load_hub_registry  # noqa: E402
-from mule_pattern_learner.temporal.live.memory import BatchLimits  # noqa: E402
-from mule_pattern_learner.temporal.live.model import LiveTGAT  # noqa: E402
-from mule_pattern_learner.temporal.live.pipeline import DEFAULT_CONFIG, dataset_path  # noqa: E402
-from mule_pattern_learner.temporal.live.predictor import build_root_batch  # noqa: E402
-from mule_pattern_learner.temporal.live.sampling import PUSample, epoch_schedule  # noqa: E402
-from mule_pattern_learner.temporal.live.source import (  # noqa: E402
-    TigerGraphExecutor,
-    open_context_source,
+from mule_pattern_learner.temporal.live.model import build_model  # noqa: E402
+from mule_pattern_learner.temporal.live.config_schema import run_config  # noqa: E402
+from mule_pattern_learner.temporal.live.pipeline import dataset_path, prepared_config  # noqa: E402
+from mule_pattern_learner.temporal.live.sampling import epoch_schedule  # noqa: E402
+from mule_pattern_learner.temporal.live.source import open_context_source  # noqa: E402
+from mule_pattern_learner.temporal.live.supervision import load_observed_labels  # noqa: E402
+from mule_pattern_learner.temporal.live.training import (  # noqa: E402
+    RunSettings,
+    build_optimizer,
+    nnpu_objective,
+    nnpu_step,
+    training_samples,
 )
-from mule_pattern_learner.temporal.live.supervision import (  # noqa: E402
-    load_observed_labels,
-    visible_labels,
-)
-from mule_pattern_learner.temporal.live.training import RunSettings, setting  # noqa: E402
-from mule_pattern_learner.training.loss import NonNegativePULoss  # noqa: E402
+from mule_pattern_learner.temporal.loss import NonNegativePULoss  # noqa: E402
 
 
 def rest_calls(source: Any) -> tuple[int, dict[str, int]]:
@@ -64,7 +63,7 @@ def rest_calls(source: Any) -> tuple[int, dict[str, int]]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    parser.add_argument("--config", type=Path, help="Optional overrides of the built-in run")
     parser.add_argument("--dataset", type=Path, help="prepared dataset (default: from config)")
     parser.add_argument(
         "--output", type=Path, default=Path("artifacts/temporal/batch_readiness.json")
@@ -75,44 +74,32 @@ def main() -> None:
     )
     parser.add_argument("--train-step", action="store_true", help="also run one optimizer step")
     args = parser.parse_args()
-    config = load_config(args.config, live=True)
+    config = run_config(args.config)
     dataset = args.dataset or dataset_path(config)
     manifest, accounts = load_prepared(dataset)
+    config = prepared_config(config, manifest)
     changed = preparation_mismatches(config, manifest)
     if changed:
         raise ValueError(f"Configuration differs from the prepared dataset: {changed}")
     plan, sampler = FeaturePlan.from_config(config), SamplerPlan.from_config(config)
     settings = RunSettings.from_config(config)
-    BatchLimits().validate_model(
-        settings.batch_size, settings.fanouts, settings.hidden, plan, sampler
-    )
+    settings.check_limits(plan, sampler)
     device = choose_device(args.device or settings.device)
     hubs = load_hub_registry(dataset, manifest)
 
     # The first step of epoch 0, exactly as train() schedules it.
-    date = config["dates"]["train"][0]
-    observed = visible_labels(load_observed_labels(accounts, dataset, manifest), date)
-    marginal_rows = (
-        accounts["in_marginal"].to_numpy(bool)
-        if "in_marginal" in accounts
-        else np.ones(len(accounts), dtype=bool)
-    )
-    eligible = np.flatnonzero(
-        accounts["split"].eq("train").to_numpy()
-        & (accounts["first_seen_ts_ms"].to_numpy() < timestamp(date))
-    )
-    sample = PUSample(
-        date, eligible[marginal_rows[eligible]], observed, eligible[observed[eligible]]
-    )
+    samples = training_samples(config, accounts, load_observed_labels(accounts, dataset, manifest))
+    if not samples:
+        raise ValueError("No train cutoff has revealed positives; train() would refuse too")
     step = epoch_schedule(
-        [sample],
+        samples,
         np.random.default_rng(settings.seed),
         settings.batch_size,
         epoch=0,
         seed=settings.seed,
         max_steps=1,
     )[0]
-    keys = sample_keys(accounts.iloc[step.indices], date, manifest)
+    keys = sample_keys(accounts.iloc[step.indices], step.date, manifest)
 
     started = time.perf_counter()
     source = open_context_source(dataset, manifest, config)
@@ -186,35 +173,22 @@ def train_step(
 ) -> dict[str, Any]:
     """One nnPU optimizer step with the trainer's model, loss and seeding."""
     torch.manual_seed(settings.seed)
-    model = LiveTGAT(
-        settings.hidden,
-        int(setting(config, "heads", 4)),
-        float(setting(config, "dropout", 0.15)),
-        setting(config, "variant", "temporal"),
-        plan=plan,
-    ).to(device)
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=float(setting(config, "learning_rate", 0.001)),
-        weight_decay=float(setting(config, "weight_decay", 0.0001)),
-    )
-    prior = float(config["class_prior"])
-    weight = setting(config, "positive_weight", "prior")
-    loss_fn = NonNegativePULoss(
-        prior=prior, positive_weight=prior if weight == "prior" else float(weight)
-    )
+    model = build_model(config, plan).to(device)
+    optimizer = build_optimizer(model, config)
+    prior, positive_weight = nnpu_objective(config)
+    loss_fn = NonNegativePULoss(prior=prior, positive_weight=positive_weight)
     started = time.perf_counter()
-    torch.manual_seed(step.seed)
-    logits = model({k: v.to(device) for k, v in batch.items()})
-    targets = torch.zeros_like(logits)
     # Rejected roots were dropped; the leading accepted rows are the positives.
-    targets[: int(prepared.accepted[: len(step.positives)].sum())] = 1
-    loss, _ = loss_fn(logits, targets)
-    optimizer.zero_grad(set_to_none=True)
-    loss.backward()
-    torch.nn.utils.clip_grad_norm_(model.parameters(), 5)
-    optimizer.step()
-    value = float(loss.detach().cpu())  # waits for the accelerator
+    positives = int(prepared.accepted[: len(step.positives)].sum())
+    loss = nnpu_step(
+        model,
+        optimizer,
+        loss_fn,
+        {k: v.to(device) for k, v in batch.items()},
+        positives,
+        step.seed,
+    )
+    value = float(loss.cpu())  # waits for the accelerator
     if not np.isfinite(value):
         raise ValueError("Non-finite training loss in the benchmark step")
     return {

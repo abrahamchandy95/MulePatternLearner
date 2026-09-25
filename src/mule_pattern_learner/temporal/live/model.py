@@ -8,9 +8,12 @@ with zero node features; no recurrent memory or account embedding table is used.
 
 from __future__ import annotations
 
+from typing import Any
+
 import torch
 from torch import nn
 
+from .config_schema import FALLBACKS, setting
 from .contract import FeaturePlan, RELATIONS, RAILS, CHANNELS, STRATA
 
 
@@ -45,10 +48,10 @@ class AttentionBlock(nn.Module):
 class LiveTGAT(nn.Module):
     def __init__(
         self,
-        hidden: int = 64,
-        heads: int = 4,
-        dropout: float = 0.15,
-        variant: str = "temporal",
+        hidden: int = FALLBACKS["hidden"],
+        heads: int = FALLBACKS["heads"],
+        dropout: float = FALLBACKS["dropout"],
+        variant: str = FALLBACKS["variant"],
         *,
         plan: FeaturePlan | None = None,
     ) -> None:
@@ -143,3 +146,19 @@ class LiveTGAT(nn.Module):
 
     def forward(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
         return self.head(self.encode(batch)).squeeze(-1)
+
+
+def build_model(
+    config: dict[str, Any], plan: FeaturePlan, *, dropout: float | None = None
+) -> LiveTGAT:
+    """The model a configuration describes (hidden, heads, dropout, variant).
+
+    ``dropout`` replaces the configured rate, for dropout-free determinism checks.
+    """
+    return LiveTGAT(
+        int(setting(config, "hidden")),
+        int(setting(config, "heads")),
+        float(setting(config, "dropout") if dropout is None else dropout),
+        str(setting(config, "variant")),
+        plan=plan,
+    )

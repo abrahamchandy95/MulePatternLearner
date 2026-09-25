@@ -6,13 +6,14 @@ from collections import deque
 from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import Future
 from dataclasses import dataclass
-import hashlib
 import queue
 import threading
 from types import TracebackType
 from typing import Generic, TypeVar
 
 import numpy as np
+
+from ..common import hash64
 
 T = TypeVar("T")
 R = TypeVar("R")
@@ -83,8 +84,7 @@ def evaluation_indices(
 
 def step_seed(seed: int, epoch: int, step: int) -> int:
     """Stable nonnegative 63-bit seed for one training step, identical on every machine."""
-    value = hashlib.sha256(f"temporal_live_step:{seed}:{epoch}:{step}".encode()).digest()
-    return int.from_bytes(value[:8], "big") >> 1
+    return hash64("temporal_live_step", seed, epoch, step) >> 1
 
 
 @dataclass(frozen=True)

@@ -6,17 +6,16 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-import torch
 
-from ..common import digest, timestamp
-from .dataset import load_prepared, sample_keys
+from .checkpoint import ModelCheckpoint
+from .dataset import eligible_mask, load_prepared, sample_keys
 from .hubs import HubRegistry, load_hub_registry
-from .predictor import TemporalPredictor, close_source, rejected_path, rejection_summary
-from .source import ContextSource, open_context_source
+from .predictor import TemporalPredictor, rejected_path, write_rejected
+from .source import ContextSource, close_source, open_context_source, rejection_summary
 
 
 def score(
-    checkpoint: Path,
+    checkpoint: Path | ModelCheckpoint,
     dataset: Path,
     date: str,
     split: str,
@@ -29,43 +28,33 @@ def score(
 
     Roots that TigerGraph rejects are not scored; their IDs go to
     ``<output>.rejected.txt``. Rejected roots and masked child contexts are
-    reported separately (see ``predictor.rejection_summary``). ``contexts``/``hubs``
+    reported separately (see ``source.rejection_summary``). ``contexts``/``hubs``
     replace the dataset's live source and hub registry (tests, offline replays).
     """
     rejected_output = rejected_path(output)
     for path in (output, rejected_output):
         if path.exists():
             raise FileExistsError(path)
-    payload = torch.load(checkpoint, map_location="cpu", weights_only=True)
+    saved = ModelCheckpoint.of(checkpoint)
     manifest, accounts = load_prepared(dataset)
-    if payload["dataset_manifest_sha256"] != digest(dataset / "manifest.json"):
-        raise ValueError("Checkpoint belongs to a different prepared dataset")
-    if date not in payload["config"]["dates"].get(split, []):
+    saved.check_dataset(dataset)
+    if date not in saved.config["dates"].get(split, []):
         raise ValueError("Requested split/cutoff was not prepared")
-    accounts = accounts[
-        (accounts["split"] == split) & (accounts["first_seen_ts_ms"] < timestamp(date))
-    ]
+    accounts = accounts[eligible_mask(accounts, split, date)]
     if accounts.empty:
         raise ValueError("No eligible accounts at this cutoff")
     registry = hubs if hubs is not None else load_hub_registry(dataset, manifest)
     store = (
-        contexts
-        if contexts is not None
-        else open_context_source(dataset, manifest, payload["config"])
+        contexts if contexts is not None else open_context_source(dataset, manifest, saved.config)
     )
-    frames: list[pd.DataFrame] = []
-    rejected: list[str] = []
     failed = True
     try:
-        predictor = TemporalPredictor(checkpoint, store, hubs=registry)
+        predictor = TemporalPredictor(saved, store, hubs=registry)
         size = predictor.batch_size
-        batches = (
+        frames, rejected = predictor.score_keys(
             sample_keys(accounts.iloc[start : start + size], date, manifest)
             for start in range(0, len(accounts), size)
         )
-        for frame, bad in predictor.stream(batches):
-            frames.append(frame)
-            rejected.extend(key.node_id for key in bad)
         failed = False
     finally:
         close_source(store, failed=failed)
@@ -75,7 +64,7 @@ def score(
     output.parent.mkdir(parents=True, exist_ok=True)
     result.to_parquet(output, index=False)
     if rejected:
-        rejected_output.write_text("".join(value + "\n" for value in rejected))
+        write_rejected(rejected_output, rejected)
     return {
         "accounts": len(result),
         **rejection_summary(store, len(rejected), predictor.totals),

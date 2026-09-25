@@ -158,7 +158,9 @@ those records in a `finally` block:
 .venv/bin/python scripts/temporal/verify_time_encoding.py
 ```
 
-Verification evidence is recorded in `temporal_encoding_deployment.json`.
+The script writes its verification record to
+`artifacts/temporal/reports/temporal_encoding_deployment.json` (git-ignored; pass
+`--output` to choose another path).
 The live graph's application data is not bulk materialized by installation or
 verification. Save mode is available when running the pair queries.
 

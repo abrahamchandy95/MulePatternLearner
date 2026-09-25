@@ -13,3 +13,15 @@ def validate_protocol(config: dict[str, Any]) -> str:
     if protocol == "strict_inductive" and not config.get("scope_id"):
         raise ValueError("Strict inductive sampling requires a frozen TigerGraph scope_id")
     return protocol
+
+
+def context_scope(config: dict[str, Any]) -> str:
+    """The scope_id of every context of a preparation: the scope for strict_inductive."""
+    if config.get("evaluation_protocol") != "strict_inductive":
+        return ""
+    return str(config.get("scope_id") or "")
+
+
+def exceeds_rejection_limit(rejected: int, positives: int, total: int, limit: float) -> bool:
+    """Whether rejected roots censor a set: any observed positive, or over limit * total."""
+    return bool(positives) or rejected > limit * total

@@ -7,21 +7,19 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 
-from mule_pattern_learner.temporal.common import timestamp
+from mule_pattern_learner.temporal.live.context_query import validate_context
 from mule_pattern_learner.temporal.live.contract import ContextKey
-from mule_pattern_learner.temporal.live.dataset import query_hashes
+from mule_pattern_learner.temporal.live.dataset import query_hashes, resolve_cutoff
+from mule_pattern_learner.temporal.live.executor import TigerGraphExecutor, checked_rows
 from mule_pattern_learner.temporal.live.installation import verify_sources
-from mule_pattern_learner.temporal.live.source import (
-    TigerGraphExecutor,
-    checked_rows,
-    validate_context,
-)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--output", type=Path, default=Path("docs/experiments/live_training_readiness.json")
+        "--output",
+        type=Path,
+        default=Path("artifacts/temporal/reports/live_training_readiness.json"),
     )
     parser.add_argument("--account", required=True, help="Account ID to audit; no oracle selection")
     parser.add_argument("--date", required=True, help="Exclusive UTC scoring date")
@@ -36,9 +34,7 @@ def main() -> None:
     assert attrs["Account"]["is_mule"] == "INT"
     matched = verify_sources(executor)
     account = args.account
-    cutoff_ms = timestamp(args.date) - 1
-    clocks = checked_rows(executor.run("temporal_training_cutoffs", {"cutoff_times": [cutoff_ms]}))
-    cutoff_seq = int(clocks[0]["last_visible_seqs"][str(cutoff_ms)]) + 1
+    cutoff_seq, cutoff_ms = resolve_cutoff(executor, args.date)
     key = ContextKey("Account", account, cutoff_seq, cutoff_ms)
     row = checked_rows(
         executor.run(

@@ -1,17 +1,16 @@
 # GSQL feature and query catalog
 
-The [feature-group redesign](feature_redesign.md) documents the window-free feature groups, optional summaries, sampler, and migration. Fixed 83/135 dimensions below describe the legacy control profile. The v5 default profile and its candidate pools are described in [training from the live temporal graph](live_temporal_training.md#candidate-pools-and-resampling).
+The [feature-group redesign](feature_redesign.md) documents the window-free feature groups, optional summaries, sampler, and migration. Fixed 83/135 dimensions below describe the legacy control profile. The built-in v5 run (`DEFAULT_RUN`) and its candidate pools are described in [training from the live temporal graph](live_temporal_training.md#candidate-pools-and-resampling).
 
-This describes `temporal/live`, the live TGAT-style path. The older snapshot
-queries are a separate implementation. The live strict path applies server-side
-ownership-group partitions before sampling and feature aggregation; see
-[leakage and scaling](leakage_and_scaling.md).
+This describes `temporal/live`, the live TGAT-style path. The live strict path
+applies server-side ownership-group partitions before sampling and feature
+aggregation; see [leakage and scaling](leakage_and_scaling.md).
 
 ## Queries used by preparation and training
 
 | Query | Inputs and output | When used |
 |---|---|---|
-| `temporal_create_training_scope` | Creates a frozen, label-blind Account/Party ownership-group partition. `unowned_policy` places Accounts whose ownership component has no Party: `"independent"` (the query's default, the original behaviour) gives each its own hash partition; `"shared"` gives unowned external accounts partition 1 (visible in every phase) and group ID `shared:<component>`, while unowned internal accounts keep their own hash partition; `"linked"` (the client default) is `"shared"` plus: an unowned internal account whose distinct owned internal deposit counterparties (the other endpoint of any Payment_Transaction or Zelle_Transfer, all time) are exactly one account takes that account's component, partition and group ID. Any other value is `invalid_parameters`. Components with a Party keep the same component and hash partition under every policy. Also prints `unowned_policy`, `shared_accounts` and `linked_accounts`. | Once per strict experiment scope, only with `create_scope` or `prepare --create-scope`; writes only experiment membership. |
+| `temporal_create_training_scope` | Creates a frozen, label-blind Account/Party ownership-group partition. `unowned_policy` places Accounts whose ownership component has no Party: `"independent"` (the query's default, the original behaviour) gives each its own hash partition; `"shared"` gives unowned external accounts partition 1 (visible in every phase) and group ID `shared:<component>`, while unowned internal accounts keep their own hash partition; `"linked"` (the client default) is `"shared"` plus: an unowned internal account whose distinct owned internal deposit counterparties (the other endpoint of any Payment_Transaction or Zelle_Transfer, all time) are exactly one account takes that account's component, partition and group ID. Any other value is `invalid_parameters`. Components with a Party keep the same component and hash partition under every policy. Also prints `unowned_policy`, `shared_accounts` and `linked_accounts`. | Once per strict scope, on the first `train` or `prepare` when `scope_id` does not exist (`create_scope = false` forbids it); writes only experiment membership. |
 | `temporal_finalize_training_scope` | Checks committed membership count/attributes and marks the scope ready. | After scope creation; incomplete scopes fail closed. |
 | `temporal_scope_policy` | Read-only. For a ready scope, prints `members` (all member Accounts and Parties), `unowned_accounts` and six counts of unowned member Accounts (no `Account_Owned_By_Party` edge) by class and side: `shared_internal`, `shared_external` (group ID starts with `shared:`), `independent_internal`, `independent_external` (group ID is the account's own component), `linked_internal`, `linked_external` (any other group ID). The client infers the creation policy from them. `scope_not_ready` otherwise. | When a strict preparation reuses or creates a scope, and when every streamed run opens. |
 | `temporal_scope_population` | Pages internal deposit accounts with preassigned partition, first-seen clocks and optional observed supervision (`include_observed`, default FALSE): `observed_positive` is the label contract's revealed positive, and only such an account has a nonzero `known_from_ms`. | Strict preparation; bounded reservoir selection, never model features. |
@@ -21,6 +20,10 @@ ownership-group partitions before sampling and feature aggregation; see
 | `temporal_training_context` | Accepts 1 to 64 entity/time contexts plus scope and phase, and returns one candidate pool per context. Filters excluded Account/Party contributions before rolling features, neighbor selection and pair history. | Every batch in streaming mode (roots, then children); once per context in optional SQLite staging. |
 | `temporal_fourier64_values` | Encodes a nonnegative millisecond delta into 32 sine/cosine pairs. | Called inside temporal queries. |
 | `temporal_fourier64` | Public validation wrapper for the same calculation. | Diagnostics and parity checks. |
+| `temporal_reveal_mule_labels` | Reads ground truth once: simulates each internal mule's discovery (victim reports, network trace, monitoring) and, with `apply = TRUE`, writes the Account label contract with up to `budget` revealed positives per split ([label reveal](label_reveal.md)). A graph with known labels is left alone unless `force = TRUE`. | First strict `train` or `prepare` with `label_policy = "graph_observed"` on a graph without known labels. |
+| `temporal_reveal_uniforms` | The reveal's deterministic uniforms for one key and salt. | Called inside `temporal_reveal_mule_labels`. |
+| `temporal_validate_account_supervision` | Counts label-contract violations, known labels, true mules and revealed positives. | After each reveal check in strict `graph_observed` preparation, also when the labels were already revealed; every violation count must be zero. |
+| `temporal_get_account_supervision` | Pages oracle truth and the label fields per Account. | Only `evaluate` and `evaluate-final` without `--truth`, after checkpoint selection. |
 
 `training_context.gsql` is generated by
 `python scripts/temporal/render_training_queries.py` from the shared Python
@@ -38,9 +41,7 @@ account, including masked mules and labeled non-mules, has `observed_positive`
 FALSE and `known_from_ms` 0, so neither field reveals a withheld label or which
 accounts are labeled. The client fails fast on a nonzero `known_from_ms` without a
 positive, the sign of an older installed query.
-The query never exports raw oracle truth or the synthetic mask. The old
-`temporal_training_accounts` oracle export is local experiment material and is
-not installed or called by the production path.
+The query never exports raw oracle truth or the synthetic mask.
 
 ## Context query contract
 
@@ -209,22 +210,13 @@ These are deterministic time features, not trained account embeddings. The model
 learns how to combine them. Computing them in GSQL works today; sending scalar
 deltas and expanding them on the GPU is also a viable bandwidth optimization.
 
-## Other queries and the main-branch distinction
+## Other queries
 
 `temporal_get_account_supervision` and
-`temporal_validate_account_supervision` are optional synthetic-label audit
-queries. They expose complete supervision and do not belong in feature extraction
-or ordinary production training. The live trainer's normal installer excludes them.
-
-The main snapshot path uses `sample_khop_neighborhood`,
-`fetch_account_features`, `fetch_has_paid_features`, `derive_reference_epoch`
-and `derive_max_bins`. Offline preparation writes account money-flow statistics,
-identity-sharing counts, time bins, PageRank, triangle/clustering statistics and
-FastRP embeddings. Those stored full-snapshot statistics must be recomputed with
-appropriate time and split boundaries before making temporal or strict-inductive
-claims. Merely filtering held-out neighbors at training time does not sanitize
-already-computed features. These legacy stored statistics are not inputs to the
-live temporal model.
+`temporal_validate_account_supervision` expose complete supervision. The installer
+installs them with the training queries for the label reveal's contract check and
+for oracle evaluation, but no feature, population or context query calls them, and
+training never reads their output.
 
 The live context query returns a bounded candidate pool per relation, then Python
 selects the layer fanouts (default 16 and 4 in the v5 profile). A small output is

@@ -4,6 +4,7 @@ Preserves and repairs the two existing positional payment loading definitions
 if the schema change disables them. Never recreates the graph or loads data.
 """
 
+import argparse
 import json
 from pathlib import Path
 import re
@@ -126,4 +127,6 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    # Parse before main() so --help never connects to TigerGraph.
+    argparse.ArgumentParser(description=__doc__).parse_args()
     main()

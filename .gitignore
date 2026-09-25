@@ -1,5 +1,5 @@
 # ============================================================================
-# .gitignore — Mule Pattern Learner
+# .gitignore for Mule Pattern Learner
 # ============================================================================
 
 # ── Secrets / environment ──────────────────────────────────────────────────
@@ -8,9 +8,10 @@
 !.env.example
 *.secret
 secrets/
-cfg.py                  # pyTigerGraph convention sometimes holds a secret
+# The pyTigerGraph convention of a cfg.py sometimes holds a secret.
+cfg.py
 
-# ── Data (large / sensitive — never version-controlled) ─────────────────────
+# ── Data (large or sensitive, never version-controlled) ─────────────────────
 data/*.csv
 data/*.tsv
 data/*.parquet
@@ -55,7 +56,8 @@ env/
 ENV/
 env.bak/
 venv.bak/
-.python-version       # remove this line if you commit a pinned version
+# Remove this line to commit a pinned Python version.
+.python-version
 
 # ── Type checkers / linters / test caches ───────────────────────────────────
 .mypy_cache/
@@ -147,8 +149,6 @@ desktop.ini
 /runs/
 /logs/
 /docs/experiments/
-/local_experiments/
-/configs/local/
 *.sqlite
 *.sqlite-*
 *.db
@@ -162,14 +162,9 @@ desktop.ini
 *.pkl
 *.pickle
 *.ipynb
-# Dataset simulation is local and is not a dependency of production training.
-/src/mule_pattern_learner/data/pu_masking.py
-/scripts/pipeline/after_load/masking.py
-/gsql/masking/get_masking_inputs.gsql
 
 # Generated knowledge-graph output of the local graphify tool.
 /graphify-out/
 
-# Local research attachments and deprecated oracle export.
+# Local research attachments.
 /docs/*.pdf
-/gsql/temporal/training_accounts.gsql

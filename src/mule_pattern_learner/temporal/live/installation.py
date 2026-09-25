@@ -1,4 +1,8 @@
-"""Install and verify only the query definitions used by temporal training."""
+"""Install and verify only the query definitions used by temporal training.
+
+verify_frozen_source also rechecks the live provenance of a prepared dataset (vertex
+counts and, for strict runs, its scope; see scope.py) before a streamed run.
+"""
 
 from __future__ import annotations
 
@@ -7,34 +11,38 @@ from contextlib import nullcontext
 import json
 import re
 import time
-from typing import Any, TypeVar
+from typing import Any
 
-from .config_schema import OPERATIONAL_DEFAULTS
-from .dataset import QUERY_FILES, ROOT
-from .source import AVAILABILITY, SERVER_TIMEOUT, checked_rows, failure_class, run_query
+from mule_pattern_learner.configuration import REPOSITORY_ROOT
 
-T = TypeVar("T")
+from .executor import AVAILABILITY, GRAPH, SERVER_TIMEOUT, connection_call, failure_class
+from .scope import verify_scope
 
-GRAPH = "Mule_Pattern_Learner"
-TRAINING_QUERY_FILES = QUERY_FILES
+# The queries preparation runs; a prepared dataset records their source hashes.
+QUERY_FILES = (
+    "gsql/features/temporal_fourier64.gsql",
+    "gsql/temporal/training_context.gsql",
+    "gsql/temporal/training_population.gsql",
+    "gsql/temporal/training_scope.gsql",
+    "gsql/temporal/training_cutoffs.gsql",
+    "gsql/temporal/hub_registry.gsql",
+)
+# Preparation queries plus the label contract: the oracle audit export/validation and the
+# one-time reveal job (the first run reveals known mules; see labels.py).
+TRAINING_QUERY_FILES = (
+    *QUERY_FILES,
+    "gsql/temporal/account_supervision.gsql",
+    "gsql/temporal/label_reveal.gsql",
+)
 # Parity tools for the persisted pair encodings; training never calls them.
 OPTIONAL_QUERY_FILES = (
     "gsql/features/zelle_pair_time64.gsql",
     "gsql/features/payment_pair_time64.gsql",
 )
-REVIEW_FILES = (*TRAINING_QUERY_FILES, *OPTIONAL_QUERY_FILES)
 # Experiment metadata written by preparation itself; never part of source identity.
 EXPERIMENT_METADATA_TYPES = frozenset({"Temporal_Training_Scope"})
 BUILTIN_ENDPOINT_PARAMETERS = frozenset({"query", "read_committed"})
 INSTALL_DEADLINE_S = 45 * 60.0
-
-
-def _read(executor: Any, what: str, operation: Callable[[Any], T]) -> T:
-    """Retry through the executor when it supports it (test doubles may not)."""
-    call = getattr(executor, "call", None)
-    if call is not None:
-        return call(operation, what=what)
-    return operation(executor.client.conn)
 
 
 def _show_query(executor: Any, name: str) -> str:
@@ -95,7 +103,7 @@ def parameter_names(definition: str) -> set[str]:
 
 def installed_endpoints(executor: Any) -> dict[str, dict[str, Any]]:
     """Installed-query endpoint metadata by query name (includes `enabled`)."""
-    raw = _read(executor, "getInstalledQueries", lambda conn: conn.getInstalledQueries())
+    raw = connection_call(executor, "getInstalledQueries", lambda conn: conn.getInstalledQueries())
     if not isinstance(raw, dict):
         raise ValueError("TigerGraph did not return installed query endpoints")
     prefix = f"GET /query/{GRAPH}/"
@@ -110,7 +118,7 @@ def repository_queries(files: tuple[str, ...]) -> dict[str, tuple[str, str]]:
     """Query name -> (repository file, definition text), in file order."""
     result: dict[str, tuple[str, str]] = {}
     for path in files:
-        for name, text in definitions((ROOT / path).read_text()).items():
+        for name, text in definitions((REPOSITORY_ROOT / path).read_text()).items():
             result[name] = (path, text)
     return result
 
@@ -159,7 +167,9 @@ def verify_sources(executor: Any, files: tuple[str, ...] = TRAINING_QUERY_FILES)
 
 def source_counts(executor: Any) -> dict[str, int]:
     """Live vertex counts by type, excluding experiment metadata vertex types."""
-    raw = _read(executor, "getVertexCount", lambda conn: conn.getVertexCount("*", realtime=True))
+    raw = connection_call(
+        executor, "getVertexCount", lambda conn: conn.getVertexCount("*", realtime=True)
+    )
     if not isinstance(raw, dict):
         raise ValueError("TigerGraph did not return counts by vertex type")
     return {
@@ -167,119 +177,6 @@ def source_counts(executor: Any) -> dict[str, int]:
         for name, count in raw.items()
         if str(name) not in EXPERIMENT_METADATA_TYPES
     }
-
-
-def scope_header(executor: Any, scope_id: str) -> dict[str, Any] | None:
-    """Attributes of the Temporal_Training_Scope vertex, or None when it does not exist."""
-    from pyTigerGraph.common.exception import TigerGraphException
-
-    try:
-        rows = _read(
-            executor,
-            "getVerticesById",
-            lambda conn: conn.getVerticesById("Temporal_Training_Scope", [scope_id]),
-        )
-    except TigerGraphException as error:
-        if str(error.code) != "601":
-            raise
-        return None
-    if not isinstance(rows, list) or len(rows) > 1:
-        raise ValueError("Unexpected scope metadata response")
-    return dict(rows[0]["attributes"]) if rows else None
-
-
-def check_scope(attrs: dict[str, Any] | None, config: dict[str, Any]) -> None:
-    if attrs is None:
-        raise ValueError(f"Prepared experiment scope is missing: {config['scope_id']}")
-    if (
-        not attrs["ready"]
-        or attrs["source_id"] != config["dataset_id"]
-        or attrs["split_seed"] != int(config.get("split_seed", 42))
-    ):
-        raise ValueError("Scope is incomplete or belongs to a different source/partition")
-
-
-SCOPE_POLICY_QUERY = "temporal_scope_policy"
-# Unowned member Accounts by membership class and side, as temporal_scope_policy prints them.
-SCOPE_POLICY_COUNTS = (
-    "shared_internal",
-    "shared_external",
-    "independent_internal",
-    "independent_external",
-    "linked_internal",
-    "linked_external",
-)
-
-
-def scope_policy_counts(executor: Any, scope_id: str) -> dict[str, int]:
-    """Membership classes of the scope's unowned Accounts, plus `members` (read-only)."""
-    rows = checked_rows(
-        run_query(executor, SCOPE_POLICY_QUERY, {"scope_id": scope_id}, timeout_s=900.0)
-    )
-    merged: dict[str, Any] = {}
-    for row in rows:
-        merged.update(row)
-    names = (*SCOPE_POLICY_COUNTS, "members")
-    missing = [name for name in names if name not in merged]
-    if missing:
-        raise ValueError(
-            f"{SCOPE_POLICY_QUERY} response lacks {missing}; install the current queries "
-            "(mule-temporal install)"
-        )
-    return {name: int(merged[name]) for name in names}
-
-
-def inferred_scope_policy(counts: dict[str, int]) -> str | None:
-    """The scope_unowned rule a scope was created with, from its membership classes.
-
-    Under every rule an unowned internal account is never shared and an unowned
-    external account is never linked. "independent": nothing shared or linked
-    (every scope created before the policy existed, such as strict_mule_v1).
-    "shared": every unowned external account shared, nothing linked. "linked":
-    every unowned external account shared (possibly none exist) and at least one
-    internal account linked to its sole owned deposit counterparty. None: no rule
-    produces this membership (for example an early draft that also shared
-    internal accounts). Rules that wrote identical membership read as the
-    simplest of them: "independent" without unowned external accounts or links,
-    "shared" when no internal account was linked.
-    """
-    if counts["shared_internal"] or counts["linked_external"]:
-        return None
-    shared, linked = counts["shared_external"], counts["linked_internal"]
-    if counts["independent_external"] and (shared or linked):
-        return None  # shared and linked scopes share every unowned external account
-    if linked:
-        return "linked"
-    return "shared" if shared else "independent"
-
-
-def check_scope_policy(counts: dict[str, int], config: dict[str, Any]) -> str:
-    """Raise unless the scope was created with the configured scope_unowned rule."""
-    configured = config.get("scope_unowned", OPERATIONAL_DEFAULTS["scope_unowned"])
-    stored = inferred_scope_policy(counts)
-    if stored is not None and stored == configured:
-        return stored
-    scope_id = config["scope_id"]
-    if stored is None:
-        raise ValueError(
-            f"Scope {scope_id!r} matches no scope_unowned rule (unowned member classes "
-            f"{json.dumps(counts, sort_keys=True)}). Create a new scope: set a new scope_id "
-            "and run `mule-temporal prepare --create-scope`."
-        )
-    raise ValueError(
-        f"Scope {scope_id!r} was created with scope_unowned = {stored!r}, but the "
-        f"configuration says {configured!r} (unowned member classes "
-        f"{json.dumps(counts, sort_keys=True)}). Set scope_unowned = {stored!r} to use this "
-        "scope, or set a new scope_id and run `mule-temporal prepare --create-scope`."
-    )
-
-
-def verify_scope(executor: Any, config: dict[str, Any]) -> dict[str, int]:
-    """Header (ready, source, split seed) and scope_unowned rule of an existing scope."""
-    check_scope(scope_header(executor, config["scope_id"]), config)
-    counts = scope_policy_counts(executor, config["scope_id"])
-    check_scope_policy(counts, config)
-    return counts
 
 
 def verify_frozen_source(executor: Any, manifest: dict[str, Any]) -> None:
@@ -372,9 +269,8 @@ def install(
     logs: dict[str, Any] = {}
     schema = conn.getSchema(force=True)
     if "Temporal_Training_Scope" not in {v["Name"] for v in schema["VertexTypes"]}:
-        result = str(
-            conn.gsql((ROOT / "gsql/schema/migrations/temporal_training_scope.gsql").read_text())
-        )
+        migration = REPOSITORY_ROOT / "gsql/schema/migrations/temporal_training_scope.gsql"
+        result = str(conn.gsql(migration.read_text()))
         if "Local schema change succeeded" not in result:
             raise RuntimeError(result)
         logs["scope_schema"] = result
@@ -429,7 +325,7 @@ def install(
             flush=True,
         )
         sleep(poll_s)
-        status = _read(
+        status = connection_call(
             executor,
             "getQueryInstallationStatus",
             lambda conn: conn.getQueryInstallationStatus(str(request_id)),

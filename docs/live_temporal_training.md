@@ -1,11 +1,11 @@
 # Training from the live temporal graph
 
-The [feature-group redesign](feature_redesign.md) documents the window-free feature groups, optional summaries and migration. Fixed 83/135 dimensions below describe the legacy control profile (`configs/temporal/live_tgat_legacy.toml`). The v5 default profile (`configs/temporal/live_tgat.toml`) adds per-hop candidate pools, per-step resampling and a hub registry; see [candidate pools and resampling](#candidate-pools-and-resampling).
+The [feature-group redesign](feature_redesign.md) documents the window-free feature groups, optional summaries and migration. Fixed 83/135 dimensions below describe the legacy control profile (the recent sampler, legacy feature groups and the single architecture). The built-in v5 run (`DEFAULT_RUN` in `config_schema.py`) adds per-hop candidate pools, per-step resampling and a hub registry; see [candidate pools and resampling](#candidate-pools-and-resampling).
 
 The live path is `mule_pattern_learner.temporal.live`: cutoff-aware GSQL features,
-two layers of temporal attention and nnPU learning. Source and generic TOML
-configuration belong in Git. Data, local configuration, masks, checkpoints and
-JSON reports are ignored.
+two layers of temporal attention and nnPU learning. Source belongs in Git, and the
+settings are built into it (`DEFAULT_RUN`). Data, checkpoints and JSON reports are
+ignored.
 
 The default protocol, `strict_inductive`, withholds entire ownership groups from
 training. TigerGraph removes held-out Account/Party contributions **before**
@@ -122,8 +122,8 @@ The trainer depends on `ObservedLabelSource`, not on a masking implementation.
 Its table contains `account_id`, `known_positive`, `known_from_ms`. Unlisted
 accounts are unlabeled; usable positives must be known before the scoring cutoff.
 Oracle `is_mule`, mask and ring columns are rejected from this interface. The
-label source must be configured explicitly; preparation fails before any query
-when it is not.
+built-in run uses `label_policy = "graph_observed"`; an experiment may configure
+a Parquet source instead.
 
 - `observed_labels = "<parquet>"` (relative to the repository root) selects
   `ParquetObservedLabels`, an observed-only table. The population queries then
@@ -139,22 +139,25 @@ when it is not.
   any other row carries `known_from_ms > 0`, which means an older population query
   that also revealed masked labels is still installed. Strict preparation checks
   this on every population page, and there any label information in a page
-  requested without `include_observed` is refused too. Use this policy only when
-  those graph fields represent actual available labels.
+  requested without `include_observed` is refused too. On a fresh load the first
+  run fills those fields with the [label reveal](label_reveal.md), which simulates
+  when a bank would have discovered each mule.
   Datasets prepared with it before the masked-label predicate counted masked mules
   as positives and must be prepared again.
 
 A configured `observed_labels` file that does not exist stops `prepare`, `train`
-and the batch benchmark with "Observed-label source file not found at <path>: copy
-it next to the prepared artifacts or point observed_labels at it". Its content hash
+and the batch benchmark with "Observed-label source file not found at <path>: point
+observed_labels at an existing file (paths are relative to the repository root), or
+remove observed_labels to use the labels revealed in the graph". Its content hash
 is a preparation setting, so the check cannot be skipped.
 
-Simulation masking lives under ignored `local_experiments/`. It may read complete
-synthetic truth during setup to reveal 20 training, 20 validation and 20 test
-positives. The trainer subsequently reads only that observed table. Oracle truth
-is used by the separate evaluator after checkpoint selection, never to select
-an epoch or threshold. Production substitutes its real observed-label provider;
-no masking dependency is required.
+The reveal (`temporal_reveal_mule_labels`) is the only place that reads complete
+synthetic truth before training. It reveals up to 20 positives per split among
+the mules discovered before each split's cutoff (20, 11 and 20 on the 2024
+snapshot) and writes them into the graph's label contract; the trainer reads only
+the revealed positives. Oracle truth is used by the separate evaluator after
+checkpoint selection, never to select an epoch or threshold. Production
+substitutes its real label feed; no masking dependency is required.
 
 `is_mule=0` in production must mean unlabeled unless independently adjudicated
 negative. Full synthetic 0/1 truth has different semantics. Unknown evaluation
@@ -352,8 +355,8 @@ query's USD-only capacity check, so an account whose USD history would fit can
 still be stubbed; that costs history, never leaks it. The manifest records
 `hub_scope_id`, `hub_threshold` and `hub_counts` (`{cutoff_seq: {phase: count}}`),
 and loading checks them against the file and the dataset's scope. A dataset
-prepared before the scoped registry must be prepared again under a new
-`prepared_id`.
+prepared before the scoped registry must be prepared again (train into a new
+output).
 
 A hub child is never fetched: the batch uses a local stub with peer metadata and
 `history_withheld = 1` (the client-only `hub_indicator` group). The lookup
@@ -394,13 +397,14 @@ replaces the former `rejected_by_status`.
 
 Install dependencies with `pip install -e '.[all]'` (Python 3.12 or newer) and
 supply the TigerGraph connection in the repository `.env`; environment variables
-override it. The example is `configs/temporal/live_tgat.toml`. If present, ignored
-`configs/local/live_tgat.toml` is selected automatically; otherwise the example is
-used. Every command validates the configuration and rejects unknown keys by name.
-Set source/scope identity, dates and observed-label source in configuration rather
-than adding training flags.
+override it. That is the only input: the settings are built in (`DEFAULT_RUN` in
+`config_schema.py`), and an optional `--config overrides.toml` changes only the
+keys it sets. Tables merge key by key (`[sampler] backend = "torch"` keeps every
+other sampler setting), lists and scalars replace the default, and a `[sampler]`
+table that names another `policy` replaces the whole sampler table. Every command
+validates the result and rejects unknown keys by name.
 
-After schema/query changes, install the reviewed sources:
+`train` installs stale queries itself. To install them ahead of time:
 
 ```bash
 .venv/bin/python -m mule_pattern_learner.temporal.live.cli install
@@ -423,20 +427,22 @@ command fails and asks you to run `install` again later; the new run installs on
 what is still stale. Success is decided by checking every endpoint against the
 repository text and parameters, not by a status message.
 
-Preparation writes to `artifacts/temporal/<prepared_id or dataset_id>`. A ready
-directory is reused without connecting, but only when its GSQL hashes and its
-preparation settings still match; otherwise set a new `prepared_id`. Preparation
+Preparation writes to `<run>/prepared/` inside the run directory (or to
+`artifacts/temporal/<prepared_id>` when a shared `prepared_id` is set). The dataset
+identity is the scope's recorded source, or for a new scope the graph name plus a
+hash of its vertex counts; a `dataset_id` pinned in an overrides file must match the
+prepared dataset. A ready directory is reused without connecting, but only
+when its GSQL hashes and its preparation settings still match; otherwise train into
+a new output. Preparation
 settings are the dates, seed limits, protocol, scope, split and cohort seeds, label
 source (content hash), storage, sampler pools, extraction groups, `scope_unowned`
 and, for SQLite storage, the fanouts, sampler and architecture that decide what the
 cache holds. Model, optimisation and transport settings may change freely.
 Set `cohort_seed` to train several model `seed` values on one prepared cohort
-(it defaults to `seed`). A missing strict scope is created only on request,
-because creation writes to TigerGraph:
-
-```bash
-.venv/bin/python -m mule_pattern_learner.temporal.live.cli prepare --create-scope
-```
+(it defaults to `seed`). A missing strict scope is created by the first run (set
+`create_scope = false` to forbid that write), and a strict run on a graph without
+known labels gets its one-time [label reveal](label_reveal.md). A `shared_history`
+run has no scope partitions to reveal by and reads whatever labels the graph has.
 
 `scope_unowned` (default `"linked"`) places the accounts without an owning Party
 when the scope is created; see [strict experiment scope](#strict-experiment-scope).
@@ -446,12 +452,12 @@ against the configuration, so a different rule needs a new `scope_id`.
 The ordinary command prepares bounded metadata if necessary, then trains:
 
 ```bash
-.venv/bin/python -m mule_pattern_learner.temporal.live.cli train \
-  --output models/temporal/model.pt
+mule-temporal train
 ```
 
-It writes the checkpoint and a sibling `model_run/` report directory, both ignored.
-It refuses to overwrite an existing run unless `--resume` is given. Old unscoped
+It writes `models/temporal/model.pt` and a sibling `model_run/` directory (with the
+prepared cohort in `model_run/prepared/`), both ignored. Running it again resumes an
+interrupted run; a finished run is refused, so pick another `--output`. Old unscoped
 datasets/checkpoints are not compatible; use fresh artifacts. Do not delete valid
 prepared metadata just to change model hyperparameters in a separate experiment.
 Use the advanced `--dataset` argument to reuse existing metadata with a different
@@ -463,8 +469,8 @@ The run directory holds `config.json` (the validated configuration),
 `progress.jsonl` (start, training intervals, evaluation, epoch and completion
 records with REST calls, rejection, stub and rejected-child counts, sampler
 backend, seconds per step and batch wait time) and `checkpoint_last.pt`, written
-atomically every epoch and every `checkpoint_every_steps` steps. `train --resume`
-continues from it and reproduces the uninterrupted run exactly. It refuses a
+atomically every epoch and every `checkpoint_every_steps` steps. Running `train`
+again continues from it and reproduces the uninterrupted run exactly. It refuses a
 changed result-affecting setting but allows transport (including `max_outage_s`),
 prefetch and logging settings and `max_rejected_root_fraction` to change. REST
 calls, rejections, rejected-root counts and sampler totals are kept in
@@ -476,9 +482,9 @@ early stopping.
 The sampler backend is resolved once per run on the main thread, before batches
 are prefetched, and passed to every batch. It is recorded in `progress.jsonl`,
 `metrics.json`, `checkpoint_last.pt` and `model.pt`. A resume on a host that
-resolves another backend than the checkpoint's is refused, unless `[sampler]
-backend` names the new backend explicitly; the remaining steps then sample a
-different stream, and the run says so.
+resolves another backend than the checkpoint's is refused, unless an overrides
+file names the new backend explicitly (`[sampler] backend = "torch"`, for example);
+the remaining steps then sample a different stream, and the run says so.
 
 Batches are built ahead by `prefetch_batches` daemon worker threads. On an error or
 Ctrl-C the prefetcher cancels queued builds and re-raises at once, without waiting
@@ -518,17 +524,18 @@ queries) and runs one deterministic CUDA training step twice.
 Score IDs absent from training, using an ID text file with one account per line:
 
 ```bash
-.venv/bin/python -m mule_pattern_learner.temporal.live.cli score-new \
+mule-temporal score-new \
   --checkpoint models/temporal/model.pt \
-  --accounts local_experiments/new_accounts.txt \
+  --accounts new_accounts.txt \
   --date 2025-02-01 \
   --output artifacts/new_account_scores.parquet
 ```
 
 This command streams ID batches and writes scores/embeddings incrementally. It
 uses history available before the requested date without the experimental scope,
-as an operational scorer would, and computes the hub registry for that cutoff. It
-needs neither the training cohort nor labels. IDs that TigerGraph rejects
+as an operational scorer would, and computes the hub registry for that cutoff (a
+date before the graph's first visible event is refused). It needs neither the
+training cohort nor labels. IDs that TigerGraph rejects
 (missing, not yet visible, over capacity) are not scored; they go to
 `<output>.rejected.txt`, and the result reports root and child rejections apart
 (see [hub accounts and rejected contexts](#hub-accounts-and-rejected-contexts)).
@@ -539,15 +546,17 @@ such accounts must be measured separately.
 Evaluate frozen predictions separately:
 
 ```bash
-.venv/bin/python -m mule_pattern_learner.temporal.live.cli evaluate \
+mule-temporal evaluate \
   --predictions models/temporal/model_run/test_predictions.parquet \
   --checkpoint models/temporal/model.pt \
-  --truth local_experiments/evaluation_truth.parquet \
   --output artifacts/oracle_evaluation.json
 ```
 
-Truth contains `account_id`, integer `is_mule` and optionally `date`. Duplicate
-keys fail validation. The current evaluator is for bounded experiment prediction
+Truth comes from the graph's label contract (`temporal_get_account_supervision`,
+the oracle endpoint training never calls); an account whose label is not known
+counts as unknown, never as a negative. `--truth <parquet>` supplies it instead,
+with `account_id`, integer `is_mule` and optionally `date`. Duplicate keys fail
+validation. The current evaluator is for bounded experiment prediction
 files; it is not a distributed full-population metrics service.
 
 `evaluate-final` scores all test positives and weighted sampled negatives of the
@@ -567,24 +576,9 @@ censored population. Rejected negatives within the limit are listed in
   `temporal_hub_registry` and the new `temporal_scope_policy`); `install` finds
   them by itself.
 - Prepared datasets without a scoped hub registry (no `hub_scope_id` in the
-  manifest) are refused; prepare them again under a new `prepared_id`.
+  manifest) are refused; prepare them again by training into a new output.
 - Datasets prepared with `label_policy = "graph_observed"` before the masked-label
   predicate count masked mules as positives; prepare them again.
 - Configurations may no longer set `hub_scan_cap`.
 - A scope keeps its unowned rule: set `scope_unowned = "independent"` for scopes
   created before the rule existed, such as `strict_mule_v1`, or create a new scope.
-
-## Difference from the main snapshot path
-
-| Concern | Main snapshot path | Live temporal path |
-|---|---|---|
-| Model | Heterogeneous GATv2 | Recursive event-time temporal attention |
-| History | Stored statistics and HAS_PAID bins | Events, cutoff-specific rolling statistics and Fourier age/gap |
-| Training boundary | Neighbor filtering; stored full-history features remain a concern | Server-side Account/Party scope applied before features and sampling |
-| Supervision | Legacy split/PU flags and local setup | Injected observed-only provider; separate oracle evaluation |
-| Transport | PyG remote sampling and feature queries | Bounded ContextSource and disposable temporal ID mapping |
-| New-ID serving | Legacy backend dependent | Dedicated bounded scorer without training-cohort dependence |
-
-A score difference alone cannot isolate temporal attention: features, losses,
-sampling and validation criteria also differ. Compare matched ablations and
-label budgets on the same frozen scope before drawing conclusions.

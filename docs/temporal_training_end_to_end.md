@@ -105,16 +105,21 @@ stubs](#hubs-and-stubs)).
 
 | Stage | Command | TigerGraph work | Writes to TigerGraph? |
 |---|---|---|---|
-| Install queries | `mule-temporal install` | Creates and compiles the training queries that are stale, plus the queries that call them | Query catalog (and the Temporal_Training_Scope schema if it is missing) |
-| Create the experiment scope | `mule-temporal prepare --create-scope` | Partitions every Account and Party into train, validation or test, then prepares the dataset as below | One scope vertex and one membership edge per Account and Party |
-| Prepare the dataset | `mule-temporal prepare` | Pages the population, resolves cutoffs, builds the hub registry | No |
+| Install queries | first `train` (or `mule-temporal install`) | Creates and compiles the training queries that are stale, plus the queries that call them | Query catalog (and the Temporal_Training_Scope schema if it is missing) |
+| Create the experiment scope | first `train`, when the scope is missing | Partitions every Account and Party into train, validation or test | One scope vertex and one membership edge per Account and Party |
+| Reveal known mules | first strict `train`, when the graph has no known labels | Simulates each mule's discovery and reveals up to 20 per split ([label reveal](label_reveal.md)) | The label-contract attributes of every internal Account |
+| Prepare the dataset | every `train` (or `mule-temporal prepare`) | Pages the population, resolves cutoffs, builds the hub registry | No |
 | Train | `mule-temporal train` | Two rounds of context queries per step | No |
-| Score, evaluate | `score`, `score-new`, `evaluate-final` (and `evaluate`) | Context queries for the scored accounts; `evaluate-final` also pages the test population; `evaluate` reads only saved predictions and a truth file | No |
+| Score, evaluate | `score`, `score-new`, `evaluate-final` (and `evaluate`) | Context queries for the scored accounts; `evaluate-final` also pages the test population; `evaluate` reads saved predictions and the graph's label contract (or a `--truth` file) | No |
 
 `mule-temporal` is `python -m mule_pattern_learner.temporal.live.cli` (the entry point exists
-after `pip install -e .`; the project needs an editable install because it reads `gsql/` and
-`configs/` from the repository). Without `--config`
-it uses `configs/local/live_tgat.toml` when present, else `configs/temporal/live_tgat.toml`.
+after `pip install -e .`; the project needs an editable install because it reads `gsql/`
+from the repository). Every setting is built in (`DEFAULT_RUN` in
+[config_schema.py](../src/mule_pattern_learner/temporal/live/config_schema.py)), so no
+command needs a configuration file; `--config overrides.toml` changes only the keys it
+sets. The dataset identity is the scope's recorded source (or, for a new scope, the graph
+name plus a hash of its vertex counts), and the prepared cohort is written to
+`<run>/prepared/` inside the run directory. Only `.env` is required.
 
 ## The queries and the data they pull
 
@@ -127,8 +132,8 @@ and the Python feature contract drift apart.
 
 ### temporal_create_training_scope (once per experiment)
 
-- **When:** `prepare --create-scope` (or `train --create-scope`), only if the configured
-  `scope_id` does not exist.
+- **When:** the first `train` or `prepare`, only if the configured `scope_id` does not
+  exist (set `create_scope = false` to forbid the write).
 - **Reads:** every Account and Party, all `Party_Owns_Account` tenures (all time), and,
   for the `linked` rule, every Payment_Transaction and Zelle_Transfer of unowned internal
   accounts with their counterparty accounts. Never reads labels.
@@ -438,14 +443,14 @@ treated as negatives.
 - **Determinism:** `deterministic = true` enables deterministic algorithms (warn-only on
   CUDA, `"strict"` to make it fatal); the CLI sets `CUBLAS_WORKSPACE_CONFIG=:4096:8` before
   CUDA starts. The deterministic-algorithm and thread settings are restored afterwards.
-- **Validation and selection:** after each epoch, validation roots (20 observed positives
-  plus a fixed sample of 2,000 unlabeled accounts at 2024-10-01, phase 2) are scored in
+- **Validation and selection:** after each epoch, validation roots (the revealed validation
+  positives, 11 on this graph, plus a fixed sample of 2,000 unlabeled accounts at 2024-10-01, phase 2) are scored in
   evaluation mode. The best epoch by validation average precision is kept; training stops
   after `patience` (6) epochs without improvement. The threshold maximises validation F1.
   These are observed-label proxy metrics, not true detection rates.
 - **Checkpoints:** `<run>/checkpoint_last.pt` after every epoch (and every
   `checkpoint_every_steps`) with model, optimiser, all RNG states, schedule position, best
-  weights, history and counters. `train --resume` continues exactly: a resumed run
+  weights, history and counters. Running `train` again continues exactly: a resumed run
   reproduced the uninterrupted run's epoch-2 loss and validation AP to every digit.
 - **Failures:** availability errors (connection errors, HTTP 408, 429 and 5xx other than a
   bare 500, HTML gateway pages, the Cloud "Starting workspace" page) are retried with
@@ -455,7 +460,8 @@ treated as negatives.
   retried once; a multi-key context request that times out is split in half at once, until
   the slow key is found and named. `max_query_attempts` (6) caps the attempts that count.
 - **Outputs:** `models/temporal/<name>.pt` (selected weights, threshold, contracts and
-  fingerprints) and `<name>_run/` with `config.json`, `observed_labels.parquet`,
+  fingerprints) and `<name>_run/` with `prepared/` (the cohort, labels, cutoffs and hub
+  registry this run was trained on), `config.json`,
   `checkpoint_last.pt`, `progress.jsonl` (start, train records per logging interval,
   evaluate, epoch and complete events), `validation_predictions.parquet`,
   `test_predictions.parquet` and `metrics.json`.
@@ -465,12 +471,16 @@ once with the frozen checkpoint and threshold; they never influence selection.
 
 ## Labels and what the model never sees
 
-- Observed labels come only from `observed_labels` (a Parquet table with `account_id`,
-  `known_positive`, `known_from_ms`) or from `label_policy = "graph_observed"`, which reads
-  the revealed positive `pu_label == 1 AND is_mule == 1 AND mule_label_known AND NOT
-  is_mule_masked` with its discovery time. There is no implicit default.
-- This experiment reveals 20 training, 20 validation and 20 test positives
-  (`local_experiments/strict_mule_v1/observed_labels.parquet`). A positive is usable only
+- Observed labels come from the graph (`label_policy = "graph_observed"`, the default): the
+  revealed positive `pu_label == 1 AND is_mule == 1 AND mule_label_known AND NOT
+  is_mule_masked` with its discovery time `mule_label_available_ts_ms`. An experiment may
+  instead supply a Parquet table (`observed_labels`, with `account_id`, `known_positive`,
+  `known_from_ms`).
+- The first run's [label reveal](label_reveal.md) simulates when a bank would have
+  discovered each mule (victim reports, network tracing, monitoring) and reveals up to 20
+  per split among those discovered before the split's cutoff. On this graph that is 20
+  training, 11 validation and 20 test positives: only 11 validation mules were
+  discoverable by 1 October, and the shortfall is never filled. A positive is usable only
   when known before the scoring cutoff.
 - Labels are never features. The context, cutoff, hub, scope-creation and scope-policy
   queries read no label attribute; the population queries read the revealed positive only
@@ -548,21 +558,16 @@ instance, shrink the child pool, or move to the future work listed below.
    pip install -e '.[model,dev,cuda13]'
    ```
 
-3. **Copy the ignored local files** from this machine, keeping their paths:
-   - `.env` (`HOST`, `GRAPHNAME`, `SECRET`)
-   - `configs/local/live_tgat.toml`
-   - `local_experiments/strict_mule_v1/observed_labels.parquet` (the preparation check
-     hashes it)
-   - `artifacts/temporal/phantomledger_2024_seed42_v5_strict_mule_v2/` (the prepared
-     dataset: `manifest.json`, `accounts.parquet`, `observed_labels.parquet`,
-     `hubs.parquet`)
+3. **Copy `.env`** (`HOST`, `GRAPHNAME`, `SECRET`). Nothing else is copied: settings are
+   built in, the known mules are in TigerGraph, and the run prepares its own cohort.
 4. **Check cuGraph** (exit code 0 means every check passed, 2 means cuGraph cannot run):
 
    ```bash
    python scripts/temporal/verify_cugraph_sampler.py
    ```
 
-   Then build one real batch per backend and run a deterministic CUDA step twice:
+   Then build one real batch per backend and run a deterministic CUDA step twice (this
+   prepares the default run's cohort first, which `train` then reuses):
 
    ```bash
    python scripts/temporal/verify_cugraph_sampler.py --live
@@ -577,36 +582,36 @@ instance, shrink the child pool, or move to the future work listed below.
 6. **Train** (run it in `tmux` or with `nohup`; `progress.jsonl` shows progress):
 
    ```bash
-   python -m mule_pattern_learner.temporal.live.cli train --output models/temporal/v5_strict_mule_v2.pt
+   mule-temporal train
    ```
 
-7. **Resume** after any interruption with the same command plus `--resume`:
-
-   ```bash
-   python -m mule_pattern_learner.temporal.live.cli train --resume --output models/temporal/v5_strict_mule_v2.pt
-   ```
+7. **Resume** after any interruption by running the same command again; it continues
+   from `models/temporal/model_run/checkpoint_last.pt`.
 
 8. **Score new accounts** (one ID per line; rejected IDs go to `<output>.rejected.txt`):
 
    ```bash
-   python -m mule_pattern_learner.temporal.live.cli score-new --checkpoint models/temporal/v5_strict_mule_v2.pt --accounts new_accounts.txt --date 2025-01-01 --output artifacts/new_scores.parquet
+   mule-temporal score-new --checkpoint models/temporal/model.pt --accounts new_accounts.txt --date 2025-01-01 --output artifacts/new_scores.parquet
    ```
 
 Keep the TigerGraph graph frozen during training. Every streamed run rechecks counts,
 query texts and the scope when it starts (and on resume) and refuses to run if they changed;
 changes made while a run is in progress are not detected.
 
-## Configuration reference (v5 run)
+## Configuration reference
 
-`configs/local/live_tgat.toml` (a local, ignored copy of the tracked example) holds the run
-settings;
-[configs/temporal/live_tgat.toml](../configs/temporal/live_tgat.toml) is the tracked
-generic example. Unknown keys are rejected.
+The run settings are `DEFAULT_RUN` in
+[config_schema.py](../src/mule_pattern_learner/temporal/live/config_schema.py) plus the
+operational defaults beside it. An optional `--config` TOML or JSON file overrides keys.
+Tables merge key by key, so `[sampler] backend = "torch"` or `[dates] train = [...]`
+changes only that key; lists and scalars replace the default; a `[sampler]` table that
+names another `policy` replaces the whole sampler table, because pool settings of one
+policy do not apply to another. Unknown keys are rejected.
 
-| Group | Keys (value in the v5 run) |
+| Group | Keys (built-in value) |
 |---|---|
-| Identity | `dataset_id` (phantomledger_2024_seed42_snapshot_20260919), `prepared_id` (phantomledger_2024_seed42_v5_strict_mule_v2), `scope_id` (strict_mule_v2), `scope_unowned` (linked), `create_scope` (false), `evaluation_protocol` (strict_inductive) |
-| Labels | `label_policy` (observed), `observed_labels`, `evaluation_unlabeled_limit` (2000) |
+| Scope | `scope_id` (strict_mule_v2), `scope_unowned` (linked), `create_scope` (true: created on first use), `evaluation_protocol` (strict_inductive); `dataset_id` is derived from the scope or the graph (a pinned value must match the prepared dataset) |
+| Labels | `label_policy` (graph_observed), `reveal_per_split` (20), `reveal_salt` (defaults to `seed`), `evaluation_unlabeled_limit` (2000) |
 | Dates | `[dates]` train 2024-07-01, validation 2024-10-01, test 2025-01-01; `[seed_limits]` 20000 / 2000 / 2000 |
 | Sampler | `[sampler]` policy resample, recent 8, older 4, distinct 4, associations 2, max_history 2048, relation_fanouts [8, 4], association_fanout 1, association_slots 2, backend auto, evaluation_seed 0; `[sampler.children]` 4 / 2 / 2 / 0 / 2048 |
 | Model | `fanouts` [16, 4], `feature_groups`, `architecture` split, `hidden` 64, `heads` 4, `dropout` 0.15 |
@@ -614,21 +619,20 @@ generic example. Unknown keys are rejected.
 | Runtime | `device` auto, `threads` 4, `deterministic` true, `prefetch_batches` 2, `checkpoint_every_steps` 0, `log_every_steps` 10, `max_rejected_root_fraction` 0.0 |
 | Transport | `request_batch_size` 8, `query_concurrency` 16, `context_lru_capacity` 256, `encoding_check_every` 64, `max_query_attempts` 6, `max_outage_s` 900 |
 
-Preparation keys (dataset_id, prepared_id, evaluation_protocol, scope_id, scope_unowned,
-dates, seed_limits, split_seed, cohort_seed, label_policy and the observed-label file hash,
-context_storage, the candidate pools, and the extraction groups derived from
-feature_groups). `cohort_seed` defaults to `seed`, so set `cohort_seed = 42` before training
-other seeds on this prepared dataset. These keys must match between preparation and
-training; other model, optimisation, runtime and transport settings may change between runs
-without preparing again.
+Preparation keys (the derived dataset_id, an optional shared `prepared_id`,
+evaluation_protocol, scope_id, scope_unowned, dates, seed_limits, split_seed, cohort_seed,
+label_policy and any observed-label file hash, context_storage, the candidate pools, and
+the extraction groups derived from feature_groups) must match between preparation and
+training; other settings may change between runs. A new `--output` prepares its own
+cohort; `--dataset <run>_run/prepared` reuses another run's.
 
 ## Troubleshooting
 
 | Message | Meaning and fix |
 |---|---|
 | `Installed query differs from repository source or is not installed` | Run `mule-temporal install`; it recompiles only the stale queries (the context query alone takes most of the roughly 50 minutes a full install needs) |
-| `Prepared dataset ... was built from different GSQL sources` | The GSQL changed after preparation; install the current queries and prepare into a new `prepared_id` |
-| `Observed-label source file not found` | Copy the label Parquet to the configured path (it is hashed as a preparation key) |
+| `Prepared dataset ... was built from different GSQL sources` | The GSQL changed after preparation; train into a new `--output` (the first run installs the current queries) |
+| `Account label contract violated after the reveal` | The label attributes are inconsistent; see [label reveal](label_reveal.md) and run `temporal_validate_account_supervision` |
 | Scope rule mismatch | The scope was created with another `scope_unowned`; use the stored rule or a new `scope_id` |
 | `Live graph counts changed; freeze the source and prepare a new dataset` | The graph was modified after preparation; freeze it and prepare a new dataset |
 | `TigerGraph rejected ... training roots so far` or `validation: TigerGraph rejected ... roots` | Roots failed a per-request check beyond `max_rejected_root_fraction`, or an observed positive was rejected; the statuses name why (for example `history_capacity_exceeded`) |
@@ -648,8 +652,9 @@ without preparing again.
   do not depend on scope or cutoff), would reduce TigerGraph time per step.
 - The legacy profile's pair-window counts scan each sender's full outgoing history; keep
   it as a control, not for large runs.
-- `evaluate-final` needs a complete 0/1 truth table for the test population;
-  `positive_oracle.parquet` lists positives only.
+- `evaluate-final` needs complete 0/1 truth for the test population. The graph's label
+  contract provides it by default; a `--truth` file must list negatives as well as
+  positives.
 - No mule-detection quality has been established. With 20 revealed training positives,
   compare `positive_weight` settings and several seeds on validation before drawing
   conclusions.

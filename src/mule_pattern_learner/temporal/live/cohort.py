@@ -9,11 +9,10 @@ from typing import Any
 import pandas as pd
 
 from ..common import stable_score, timestamp
-from .source import QueryExecutor, checked_rows
-from .supervision import ObservedLabelSource, reads_graph_labels
-
-PARTITIONS = {1: "train", 2: "validation", 3: "test"}
-DEFAULT_SEED_LIMITS = {"train": 20000, "validation": 2000, "test": 2000}
+from .config_schema import DEFAULT_RUN, model_seed
+from .contract import PHASE_SPLIT, SPLITS
+from .executor import QueryExecutor, account_pages
+from .supervision import ORACLE_COLUMNS, ObservedLabelSource, reads_graph_labels
 
 
 def cohort_seed(config: dict[str, Any]) -> int:
@@ -22,7 +21,7 @@ def cohort_seed(config: dict[str, Any]) -> int:
     Pin `cohort_seed` to train several model seeds on one prepared cohort.
     """
     value = config.get("cohort_seed")
-    return int(config.get("seed", 42) if value is None else value)
+    return model_seed(config) if value is None else int(value)
 
 
 def _check_label_fields(row: dict[str, Any], graph_labels: bool) -> None:
@@ -61,8 +60,8 @@ def scoped_cohort(
     if labels is None:
         raise ValueError("An explicit observed-label source is required")
     graph_labels = reads_graph_labels(labels)
-    limits = config.get("seed_limits", DEFAULT_SEED_LIMITS)
-    if set(limits) != set(PARTITIONS.values()) or any(
+    limits = config.get("seed_limits", DEFAULT_RUN["seed_limits"])
+    if set(limits) != set(SPLITS) or any(
         type(n) is not int or not 1 <= n <= 20000 for n in limits.values()
     ):
         raise ValueError("seed_limits needs three integer capacities in [1,20000]")
@@ -71,36 +70,23 @@ def scoped_cohort(
     heaps: dict[str, list[tuple[float, str, dict[str, Any]]]] = {s: [] for s in limits}
     positives: dict[str, dict[str, Any]] = {}
     counts: Counter[str] = Counter()
-    after = ""
-    while True:
-        result = checked_rows(
-            executor.run(
-                "temporal_scope_population",
-                {
-                    "scope_id": config["scope_id"],
-                    "after_id": after,
-                    "batch_size": 10000,
-                    "include_observed": graph_labels,
-                },
-            )
-        )
-        page = next(row["accounts"] for row in result if "accounts" in row)
-        if not page:
-            break
-        if len(page) > 10000:
-            raise ValueError("Population page exceeds transport contract")
-        for item in page:
-            row = dict(item.get("attributes", item))
-            if {"is_mule", "true_label", "is_mule_masked", "ring_id"} & set(row):
+    pages = account_pages(
+        executor,
+        "temporal_scope_population",
+        {"scope_id": config["scope_id"], "include_observed": graph_labels},
+    )
+    for page in pages:
+        for row in page:
+            if ORACLE_COLUMNS & set(row):
                 raise ValueError("Oracle fields cannot enter population metadata")
             _check_label_fields(row, graph_labels)
             account = row["account_id"]
-            if not isinstance(account, str) or account <= after or len(account.encode()) > 1024:
+            if not isinstance(account, str) or len(account.encode()) > 1024:
                 raise ValueError("Account pagination/ID violates the transport contract")
-            after = account
-            if row["partition"] not in PARTITIONS:
+            # Server-assigned scope partitions are the visibility phases of the splits.
+            if row["partition"] not in PHASE_SPLIT:
                 raise ValueError("Unassigned account in frozen scope")
-            split = PARTITIONS[row.pop("partition")]
+            split = PHASE_SPLIT[row.pop("partition")]
             row["split"] = split
             counts[split] += 1
             if row["first_seen_ts_ms"] >= min(timestamp(d) for d in config["dates"][split]):
@@ -117,8 +103,6 @@ def scoped_cohort(
                 if len(positives) >= 40000:
                     raise ValueError("Observed-positive pool exceeds bounded cohort capacity")
                 positives[account] = {**row, "in_marginal": False}
-        if len(page) < 10000:
-            break
     selected = dict(positives)
     selected.update({row["account_id"]: row for heap in heaps.values() for _, _, row in heap})
     if not selected:

@@ -10,14 +10,12 @@ import torch
 from mule_pattern_learner.temporal.encoding import BASIS_ID
 from mule_pattern_learner.temporal.live.batching import make_live_batch, child_key
 from mule_pattern_learner.temporal.live.contract import ContextKey, contract_fingerprint
+from mule_pattern_learner.temporal.live.evaluation import GraphEvaluationTruth
 from mule_pattern_learner.temporal.live.memory import BatchIndex, BatchCapacityError
 from mule_pattern_learner.temporal.live.model import LiveTGAT
-from mule_pattern_learner.temporal.live.contract import SamplerPlan
-from mule_pattern_learner.temporal.live.source import (
-    StreamingContextSource,
-    extraction_plan,
-    validate_context,
-)
+from mule_pattern_learner.temporal.live.contract import SamplerPlan, extraction_plan
+from mule_pattern_learner.temporal.live.context_query import validate_context
+from mule_pattern_learner.temporal.live.source import StreamingContextSource
 from mule_pattern_learner.temporal.live.predictor import score_new_accounts
 from mule_pattern_learner.temporal.live.cohort import scoped_cohort
 from mule_pattern_learner.temporal.live.sampling import pu_batches
@@ -146,7 +144,7 @@ def test_bounded_seed_reservoir_does_not_enrich_the_nnpu_marginal() -> None:
     calls = []
 
     class Executor:
-        def run(self, name: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+        def run(self, name: str, params: dict[str, Any], **_: Any) -> list[dict[str, Any]]:
             assert name == "temporal_scope_population" and not params["include_observed"]
             calls.append(params["after_id"])
             page = [r for r in rows if r["account_id"] > params["after_id"]][:10000]
@@ -174,6 +172,42 @@ def test_bounded_seed_reservoir_does_not_enrich_the_nnpu_marginal() -> None:
     )
     assert sorted(np.concatenate([u for _, u in draws])) == sorted(marginal)
     assert all(observed[p].all() for p, _ in draws)
+
+
+def test_graph_evaluation_truth_pages_the_label_contract() -> None:
+    rows = [
+        {"account_id": f"A{i:05}", "is_mule": i % 2, "mule_label_known": i % 3 != 0}
+        for i in range(10050)
+    ]
+    calls: list[dict[str, Any]] = []
+
+    class Executor:
+        def run(self, name: str, params: dict[str, Any], **_: Any) -> list[dict[str, Any]]:
+            assert name == "temporal_get_account_supervision"
+            calls.append(params)
+            page = [{"attributes": r} for r in rows if r["account_id"] > params["after_id"]]
+            return [{"status": "ok"}, {"accounts": page[: params["batch_size"]]}]
+
+    truth = GraphEvaluationTruth(Executor()).read()
+    assert [(c["after_id"], c["batch_size"]) for c in calls] == [("", 10000), ("A09999", 10000)]
+    assert truth.account_id.tolist() == [r["account_id"] for r in rows]
+    # An account whose label is not known is -1, never a negative.
+    assert truth.is_mule.tolist() == [r["is_mule"] if r["mule_label_known"] else -1 for r in rows]
+
+    class Unordered:
+        def run(self, name: str, params: dict[str, Any], **_: Any) -> list[dict[str, Any]]:
+            page = [{"account_id": a, "is_mule": 0, "mule_label_known": True} for a in "BA"]
+            return [{"status": "ok", "accounts": page}]
+
+    with pytest.raises(ValueError, match="not strictly increasing"):
+        GraphEvaluationTruth(Unordered()).read()
+
+    class Silent:
+        def run(self, name: str, params: dict[str, Any], **_: Any) -> list[dict[str, Any]]:
+            return [{"status": "ok"}]
+
+    with pytest.raises(ValueError, match="accounts missing from response"):
+        GraphEvaluationTruth(Silent()).read()
 
 
 @pytest.mark.parametrize("profile", ["legacy", "v5"])
@@ -226,6 +260,7 @@ def test_strict_preparation_and_nnpu_use_the_correct_phase_end_to_end(
 def test_resumed_stream_checks_live_source_before_fetching(monkeypatch: pytest.MonkeyPatch) -> None:
     from types import SimpleNamespace
     from mule_pattern_learner.temporal.live import installation, source
+    from mule_pattern_learner.temporal.live.executor import transport_settings
 
     counts = {"Account": 10}
     header = {"ready": True, "source_id": "snapshot", "split_seed": 42}
@@ -236,7 +271,7 @@ def test_resumed_stream_checks_live_source_before_fetching(monkeypatch: pytest.M
     )
     policy_calls: list[dict[str, Any]] = []
 
-    def run(name: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+    def run(name: str, params: dict[str, Any], **_: Any) -> list[dict[str, Any]]:
         assert name == "temporal_scope_policy"
         policy_calls.append(params)
         return [{"status": "ok", **scope_counts(policy["scope_unowned"])}]
@@ -247,7 +282,7 @@ def test_resumed_stream_checks_live_source_before_fetching(monkeypatch: pytest.M
     budgets: list[tuple[int, int]] = []
 
     def live_executor(config: dict[str, Any]) -> Any:
-        transport = source.transport_settings(config)
+        transport = transport_settings(config)
         budgets.append((transport["max_query_attempts"], transport["max_outage_s"]))
         return executor
 

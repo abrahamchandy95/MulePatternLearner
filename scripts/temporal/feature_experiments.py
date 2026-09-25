@@ -4,20 +4,19 @@ import argparse
 import json
 from pathlib import Path
 
-from mule_pattern_learner.configuration import load_config
+from mule_pattern_learner.temporal.live.config_schema import run_config
 from mule_pattern_learner.temporal.live.contract import FeaturePlan
 from mule_pattern_learner.temporal.live.experiments import feature_experiments
-from mule_pattern_learner.temporal.live.model import LiveTGAT
-from mule_pattern_learner.temporal.live.pipeline import DEFAULT_CONFIG
+from mule_pattern_learner.temporal.live.model import build_model
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    parser.add_argument("--config", type=Path, help="Optional overrides of the built-in run")
     args = parser.parse_args()
-    for name, config in feature_experiments(load_config(args.config, live=True)).items():
+    for name, config in feature_experiments(run_config(args.config)).items():
         plan = FeaturePlan.from_config(config)
-        model = LiveTGAT(int(config.get("hidden", 64)), int(config.get("heads", 4)), plan=plan)
+        model = build_model(config, plan)
         print(
             json.dumps(
                 {

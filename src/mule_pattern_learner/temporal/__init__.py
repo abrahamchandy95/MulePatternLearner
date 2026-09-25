@@ -1,1 +1,1 @@
-"""Temporal account learning, separate from the legacy snapshot pipeline."""
+"""Temporal account learning from the live TigerGraph graph."""

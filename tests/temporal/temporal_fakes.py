@@ -21,9 +21,9 @@ import zlib
 import numpy as np
 import pandas as pd
 
-from mule_pattern_learner.configuration import load_config
 from mule_pattern_learner.temporal.common import timestamp
 from mule_pattern_learner.temporal.encoding import BASIS_ID, fourier64
+from mule_pattern_learner.temporal.live.config_schema import run_config
 from mule_pattern_learner.temporal.live.contract import CONTRACT_VERSION, RELATIONS, ContextKey
 from mule_pattern_learner.temporal.live.installation import definitions, parameter_names
 
@@ -43,18 +43,54 @@ CONTEXT_PARAMETERS = signature("gsql/temporal/training_context.gsql", CONTEXT_QU
 HUB_PARAMETERS = signature("gsql/temporal/hub_registry.gsql", HUB_QUERY)
 SCOPE_POLICY_QUERY = "temporal_scope_policy"
 SCOPE_POLICY_PARAMETERS = signature("gsql/temporal/training_scope.gsql", SCOPE_POLICY_QUERY)
-# Tracked example profiles; tests never read the gitignored configs/local.
-PROFILES = {
-    "legacy": REPOSITORY / "configs/temporal/live_tgat_legacy.toml",
-    "v5": REPOSITORY / "configs/temporal/live_tgat.toml",
+# The legacy control profile: the recent sampler, legacy feature groups and the single
+# architecture, which components choose when sampler, feature_groups and architecture
+# are absent. Only a raw configuration can omit them; run_config fills them in.
+LEGACY_PROFILE: dict[str, Any] = {
+    "label_policy": "observed",
+    "context_storage": "stream",
+    "evaluation_unlabeled_limit": 2000,
+    "fanouts": [8, 4],
+    "per_relation": 2,
+    "prepare_batch_size": 16,
+    "hidden": 64,
+    "heads": 4,
+    "dropout": 0.15,
+    "variant": "temporal",
+    "epochs": 30,
+    "steps_per_epoch": 100,
+    "patience": 6,
+    "batch_size": 64,
+    "learning_rate": 0.001,
+    "class_prior": 0.001,
+    "seed": 42,
+    "split_seed": 42,
+    "device": "auto",
+    "threads": 4,
+    "evaluation_protocol": "strict_inductive",
+    "scope_id": "example_strict_scope",
+    "dates": {"train": ["2024-07-01"], "validation": ["2024-10-01"], "test": ["2025-01-01"]},
+    "seed_limits": {"train": 20000, "validation": 2000, "test": 2000},
 }
 
 
+def profile_config(profile: str) -> dict[str, Any]:
+    """The legacy control profile, or the built-in v5 run with test-supplied labels."""
+    if profile == "legacy":
+        return deepcopy(LEGACY_PROFILE)
+    if profile != "v5":
+        raise ValueError(f"unknown profile {profile!r}")
+    return {
+        **run_config(),
+        "label_policy": "observed",
+        "scope_id": "example_strict_scope",
+        "create_scope": False,
+    }
+
+
 def live_config(profile: str = "v5", **changes: Any) -> dict[str, Any]:
-    """A small, explicit unit run on top of one tracked example profile."""
-    value = load_config(PROFILES[profile])
-    for key in ("prepared_id", "observed_labels"):
-        value.pop(key, None)
+    """A small, explicit unit run on top of one example profile."""
+    value = profile_config(profile)
     value.update(
         dataset_id="unit_fixture",
         epochs=2,
@@ -421,3 +457,36 @@ def scope_counts(policy: str) -> dict[str, int]:
     if policy == "linked":
         counts.update(linked_internal=1, independent_internal=1)
     return counts
+
+
+def reveal_inputs() -> list[dict[str, Any]]:
+    """What the reveal's INPUTS_QUERY prints for five mules and one Zelle link.
+
+    A (train) and D (test) received five fraud-labelled inflows about eight years
+    before their split's cutoff; B (train) exchanged money with A before A could be
+    discovered; C (validation) has no evidence; E has no split.
+    """
+    day = 86_400_000
+    cutoffs = {1: "2024-07-01", 2: "2024-10-01", 3: "2025-01-01"}
+
+    def mule(name: str, part: int, key: int, inflows: int) -> dict[str, Any]:
+        start = timestamp(cutoffs.get(part, "2024-07-01")) - 3000 * day
+        return {
+            "v_id": name,
+            "attributes": {
+                "M.id": name,
+                "M.first_seen_ts_ms": start,
+                "M.@part": part,
+                "M.@key": key,
+                "M.@inflows": [f"{key * 10 + i}:{start + 100 * day + i}" for i in range(inflows)],
+            },
+        }
+
+    mules = [mule("A", 1, 101, 5), mule("B", 1, 102, 0), mule("C", 2, 103, 0)]
+    mules += [mule("D", 3, 104, 5), mule("E", 0, 105, 5)]
+    link = {
+        "LZ.event_seq": 2001,
+        "LZ.event_ts_ms": timestamp(cutoffs[1]) - 2950 * day,
+        "LZ.@ends": ["B", "A"],
+    }
+    return [{"M": mules}, {"zelle_links": [{"attributes": link}]}, {"payment_links": []}]

@@ -14,24 +14,21 @@ from typing import Any
 
 import numpy as np
 
-from mule_pattern_learner.temporal.common import timestamp
+from mule_pattern_learner.temporal.live.context_query import validate_context
 from mule_pattern_learner.temporal.live.contract import (
     ContextKey,
     FeaturePlan,
     FEATURE_GROUPS,
     SamplerPlan,
 )
+from mule_pattern_learner.temporal.live.dataset import resolve_cutoff
+from mule_pattern_learner.temporal.live.executor import TigerGraphExecutor, checked_rows
 from mule_pattern_learner.temporal.live.history_reference import (
     payment_features,
     stratify,
     visible_history,
 )
 from mule_pattern_learner.temporal.live.queries import as_interpreted
-from mule_pattern_learner.temporal.live.source import (
-    TigerGraphExecutor,
-    checked_rows,
-    validate_context,
-)
 
 
 def audit_history(executor: TigerGraphExecutor, key: ContextKey) -> list[dict[str, Any]]:
@@ -101,9 +98,7 @@ def main() -> None:
     )
     args = parser.parse_args()
     executor = TigerGraphExecutor()
-    ms = timestamp(args.date) - 1
-    clocks = checked_rows(executor.run("temporal_training_cutoffs", {"cutoff_times": [ms]}))
-    seq = int(clocks[0]["last_visible_seqs"][str(ms)]) + 1
+    seq, ms = resolve_cutoff(executor, args.date)
     groups = tuple(
         g
         for g in FEATURE_GROUPS

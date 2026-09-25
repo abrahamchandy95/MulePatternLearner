@@ -29,14 +29,16 @@ from collections.abc import Iterable
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+import warnings
 
 import pandas as pd
 
 from ..common import digest
-from .source import CONVERSION_ERRORS, QueryExecutor, checked_rows, run_query
+from .executor import CONVERSION_ERRORS, QueryExecutor, checked_rows
+from .policy import context_scope
 
 if TYPE_CHECKING:
-    from .contract import SamplerPlan
+    from .contract import FeaturePlan, SamplerPlan
 
 HUB_FILE = "hubs.parquet"
 HUB_QUERY = "temporal_hub_registry"
@@ -259,8 +261,7 @@ def query_hub_registry(
         raise ValueError(f"Hub registry needs 1..{MAX_CUTOFFS} positive cutoff sequences")
     if threshold < 1:
         raise ValueError("Hub threshold must be positive")
-    rows = run_query(
-        executor,
+    rows = executor.run(
         HUB_QUERY,
         {"cutoff_seqs": cutoffs, "threshold": threshold, "scope_id": scope_id},
         timeout_s=timeout_s,
@@ -294,8 +295,7 @@ def load_hub_registry(dataset: Path, manifest: dict[str, Any]) -> HubRegistry:
         raise ValueError(f"Prepared hub registry changed or is missing: {path}")
     config = manifest.get("config")
     if isinstance(config, dict):
-        strict = config.get("evaluation_protocol") == "strict_inductive"
-        expected = str(config.get("scope_id") or "") if strict else ""
+        expected = context_scope(config)
         if manifest["hub_scope_id"] != expected:
             raise ValueError(
                 f"Prepared hub registry was computed for scope {manifest['hub_scope_id']!r}, "
@@ -313,3 +313,16 @@ def load_hub_registry(dataset: Path, manifest: dict[str, Any]) -> HubRegistry:
             + json.dumps({"file": registry.counts(), "manifest": manifest.get("hub_counts")})
         )
     return registry
+
+
+def warn_hub_stubs(hubs: HubRegistry, plan: FeaturePlan) -> None:
+    """Warn once when hub children become stubs the model cannot recognise as hubs."""
+    if len(hubs) and "hub_indicator" not in plan.groups:
+        warnings.warn(
+            f"The hub registry lists {len(hubs)} hub rows but the feature plan has no "
+            "hub_indicator group: hub children are replaced by stubs without history, which "
+            "this model cannot tell apart from dormant accounts. Add hub_indicator to "
+            "feature_groups to give stubs their history_withheld flag.",
+            UserWarning,
+            stacklevel=2,
+        )

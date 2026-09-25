@@ -4,12 +4,9 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Iterable, Iterator
-from dataclasses import dataclass, field
-import inspect
 from itertools import islice
 from pathlib import Path
 from typing import Any
-import warnings
 
 import numpy as np
 import pandas as pd
@@ -19,23 +16,22 @@ import torch
 
 from mule_pattern_learner.device import choose_device
 
-from ..common import timestamp
-from ..encoding import BASIS_ID
-from .batching import make_live_batch
-from .config_schema import validate_config
-from .contract import ContextKey, FeaturePlan, SamplerPlan, contract_fingerprint
-from .hubs import HubRegistry, hub_threshold, query_hub_registry
+from .batching import RootBatch, build_root_batch
+from .checkpoint import ModelCheckpoint
+from .config_schema import fanouts, setting
+from .contract import ContextKey, FeaturePlan, SamplerPlan
+from .dataset import resolve_cutoff
+from .executor import QueryExecutor, live_executor
+from .hubs import HubRegistry, hub_threshold, query_hub_registry, warn_hub_stubs
 from .memory import BatchLimits
-from .model import LiveTGAT
+from .model import build_model
 from .sampling import BatchPrefetcher
 from .source import (
     ContextSource,
-    QueryExecutor,
-    StreamingContextSource,
-    checked_rows,
-    live_executor,
-    run_query,
-    transport_settings,
+    check_coverage,
+    close_source,
+    rejection_summary,
+    streaming_source,
 )
 
 SCORE_SCHEMA = pa.schema(
@@ -50,11 +46,6 @@ SCORE_SCHEMA = pa.schema(
 )
 
 
-def _setting(config: dict[str, Any], key: str, default: Any) -> Any:
-    value = config.get(key)
-    return default if value is None else value
-
-
 def query_hubs(
     executor: QueryExecutor, cutoff_seqs: list[int], sampler: SamplerPlan
 ) -> HubRegistry:
@@ -63,169 +54,6 @@ def query_hubs(
     Score-new runs unscoped, so its rows carry visibility phase 3.
     """
     return query_hub_registry(executor, cutoff_seqs, threshold=hub_threshold(sampler))
-
-
-def warn_hub_stubs(hubs: HubRegistry, plan: FeaturePlan) -> None:
-    """Warn once when hub children become stubs the model cannot recognise as hubs."""
-    if len(hubs) and "hub_indicator" not in plan.groups:
-        warnings.warn(
-            f"The hub registry lists {len(hubs)} hub rows but the feature plan has no "
-            "hub_indicator group: hub children are replaced by stubs without history, which "
-            "this model cannot tell apart from dormant accounts. Add hub_indicator to "
-            "feature_groups to give stubs their history_withheld flag.",
-            UserWarning,
-            stacklevel=2,
-        )
-
-
-def close_source(store: ContextSource, *, failed: bool) -> None:
-    """Close a context source; after a failure, do not wait for its in-flight requests.
-
-    Sources whose ``close`` accepts ``wait`` are closed with ``wait=False`` after an
-    error or KeyboardInterrupt, so the error surfaces without waiting for REST retries.
-    """
-    close = store.close
-    if failed and "wait" in inspect.signature(close).parameters:
-        close(wait=False)  # pyright: ignore[reportCallIssue]
-    else:
-        close()
-
-
-def rejection_summary(
-    source: ContextSource, rejected_roots: int, totals: Counter[str]
-) -> dict[str, Any]:
-    """Root and child rejections reported separately.
-
-    ``rejected`` counts the roots that were not scored. ``rejected_children`` counts
-    the child contexts masked out of scored batches. ``rejection_events_by_status``
-    is the source's raw counter: every rejected row served by a fetch at either hop,
-    cache replays included, so it is not a count of accounts. Sources that count per
-    hop (``rejections_by_hop``) also give the root and child statuses.
-    """
-    by_hop = getattr(source, "rejections_by_hop", None)
-    return {
-        "rejected": rejected_roots,
-        "rejected_roots_by_status": None if by_hop is None else dict(by_hop.get(1, {})),
-        "rejected_children": int(totals["rejected_children"]),
-        "rejected_children_by_status": None if by_hop is None else dict(by_hop.get(2, {})),
-        "stub_children": int(totals["stub_children"]),
-        "rejection_events_by_status": dict(getattr(source, "rejections", {}) or {}),
-    }
-
-
-def streaming_source(
-    executor: QueryExecutor, plan: FeaturePlan, sampler: SamplerPlan, config: dict[str, Any]
-) -> ContextSource:
-    """Live source with the transport settings of a training configuration."""
-    transport = transport_settings(config)
-    return StreamingContextSource(
-        executor,
-        plan=plan,
-        sampler=sampler,
-        capacity=transport["context_lru_capacity"],
-        request_batch_size=transport["request_batch_size"],
-        concurrency=transport["query_concurrency"],
-        encoding_check_every=transport["encoding_check_every"],
-    )
-
-
-def check_coverage(store: ContextSource, plan: FeaturePlan, sampler: SamplerPlan) -> None:
-    """The source must request every input the model reads, with the model's pools."""
-    source_plan = getattr(store, "plan", None)
-    source_sampler = getattr(store, "sampler", None)
-    if not isinstance(source_plan, FeaturePlan) or not isinstance(source_sampler, SamplerPlan):
-        raise ValueError("Context source must expose its FeaturePlan and SamplerPlan")
-    # A summary model never fetches children, so only its first hop matters.
-    for hop in (1,) if plan.architecture == "summary" else (1, 2):
-        have = source_plan.query_flags(hop)
-        missing = sorted(k for k, v in plan.query_flags(hop).items() if v and not have.get(k))
-        if missing:
-            raise ValueError(f"Context source does not request {missing} at hop {hop}")
-    if (source_sampler.roots, source_sampler.children) != (sampler.roots, sampler.children):
-        raise ValueError("Context source candidate pools differ from the model sampler")
-
-
-class PinnedRoots:
-    """Serve already fetched root rows to make_live_batch without a second request.
-
-    Anything else (children, other keys) goes to the wrapped source, so concurrent
-    batch builders cannot evict a batch's roots between filtering and assembly.
-    """
-
-    def __init__(
-        self, store: ContextSource, keys: list[ContextKey], rows: list[dict[str, Any]]
-    ) -> None:
-        self.store = store
-        self.rows = dict(zip(keys, rows, strict=True))
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self.store, name)
-
-    def fetch(self, keys: list[ContextKey], *, hop: int = 1) -> list[dict[str, Any] | None]:
-        if hop == 1 and all(key in self.rows for key in keys):
-            return [self.rows[key] for key in keys]
-        return self.store.fetch(keys, hop=hop)
-
-
-@dataclass
-class RootBatch:
-    """One assembled batch for the accepted roots; rejected roots are reported, not scored."""
-
-    requested: list[ContextKey]
-    accepted: np.ndarray
-    batch: dict[str, torch.Tensor] | None
-    stats: dict[str, Any] = field(default_factory=dict)
-
-    @property
-    def keys(self) -> list[ContextKey]:
-        return [k for k, ok in zip(self.requested, self.accepted, strict=True) if ok]
-
-    @property
-    def rejected(self) -> list[ContextKey]:
-        return [k for k, ok in zip(self.requested, self.accepted, strict=True) if not ok]
-
-
-def build_root_batch(
-    store: ContextSource,
-    keys: list[ContextKey],
-    *,
-    fanouts: tuple[int, int],
-    device: str | torch.device,
-    plan: FeaturePlan,
-    sampler: SamplerPlan,
-    hubs: HubRegistry,
-    mode: str,
-    step_seed: int = 0,
-    sampler_backend: str | None = None,
-) -> RootBatch:
-    """Drop roots TigerGraph rejected (per-request status), then assemble the rest.
-
-    Rejections are counted by status on ``store.rejections``; the batch statistics
-    carry ``rejected_roots``. A batch with no accepted root has ``batch=None``.
-    ``sampler_backend`` is the backend resolved once per run (``resolve_backend``);
-    None lets make_live_batch resolve it.
-    """
-    rows = store.fetch(keys, hop=1)
-    accepted = np.fromiter((row is not None for row in rows), dtype=bool, count=len(keys))
-    stats: dict[str, Any] = {"rejected_roots": int(len(keys) - accepted.sum())}
-    kept = [k for k, ok in zip(keys, accepted, strict=True) if ok]
-    if not kept:
-        return RootBatch(keys, accepted, None, stats)
-    pinned = PinnedRoots(store, kept, [row for row in rows if row is not None])
-    batch = make_live_batch(
-        pinned,  # type: ignore[arg-type]
-        kept,
-        fanouts=fanouts,
-        device=device,
-        plan=plan,
-        sampler=sampler,
-        hubs=hubs,
-        mode=mode,
-        step_seed=step_seed,
-        stats=stats,
-        sampler_backend=sampler_backend,
-    )
-    return RootBatch(keys, accepted, batch, stats)
 
 
 class TemporalPredictor:
@@ -238,22 +66,20 @@ class TemporalPredictor:
 
     def __init__(
         self,
-        checkpoint: Path,
+        checkpoint: Path | ModelCheckpoint,
         contexts: ContextSource | None = None,
         device: str = "auto",
         *,
         executor: QueryExecutor | None = None,
         hubs: HubRegistry | None = None,
     ) -> None:
-        payload = torch.load(checkpoint, map_location="cpu", weights_only=True)
-        if payload["contract"] != contract_fingerprint() or payload["basis_id"] != BASIS_ID:
-            raise ValueError("Checkpoint feature/time contract differs from this sampler")
-        self.config: dict[str, Any] = validate_config(payload["config"])
+        saved = ModelCheckpoint.of(checkpoint)
+        saved.check_contract()
+        self.config: dict[str, Any] = saved.validated_config()
         self.plan = FeaturePlan.from_config(self.config)
         self.sampler = SamplerPlan.from_config(self.config)
-        if payload.get("input_fingerprint", self.plan.fingerprint()) != self.plan.fingerprint():
-            raise ValueError("Checkpoint input groups differ from its configuration")
-        self.threshold = float(payload["threshold"])
+        saved.check_inputs(self.plan)
+        self.threshold = saved.threshold
         created = contexts is None
         if contexts is None:
             if executor is None:
@@ -269,26 +95,18 @@ class TemporalPredictor:
             self.device = choose_device(device)
             # CUDA batches are assembled on the device by the prefetch workers.
             self.batch_device = self.device if self.device.type == "cuda" else torch.device("cpu")
-            self.fanouts: tuple[int, int] = tuple(self.config.get("fanouts", [8, 4]))  # type: ignore[assignment]
-            self.batch_size = min(int(_setting(self.config, "batch_size", 64)), 128)
+            # Read like RunSettings reads them, so scoring samples training's neighbourhoods.
+            self.fanouts = fanouts(self.config)
+            self.hidden = int(setting(self.config, "hidden"))
+            self.batch_size = min(int(setting(self.config, "batch_size")), 128)
             BatchLimits().validate_model(
-                self.batch_size,
-                self.fanouts,
-                int(_setting(self.config, "hidden", 64)),
-                self.plan,
-                self.sampler,
+                self.batch_size, self.fanouts, self.hidden, self.plan, self.sampler
             )
-            self.prefetch = int(_setting(self.config, "prefetch_batches", 2))
-            self.model = LiveTGAT(
-                int(_setting(self.config, "hidden", 64)),
-                int(_setting(self.config, "heads", 4)),
-                float(_setting(self.config, "dropout", 0.15)),
-                _setting(self.config, "variant", "temporal"),
-                plan=self.plan,
-            ).to(self.device)
-            self.model.load_state_dict(payload["state_dict"])
+            self.prefetch = int(setting(self.config, "prefetch_batches"))
+            self.model = build_model(self.config, self.plan).to(self.device)
+            self.model.load_state_dict(saved.state_dict)
             self.model.eval()
-            torch.set_num_threads(int(_setting(self.config, "threads", 4)))
+            torch.set_num_threads(int(setting(self.config, "threads")))
         except BaseException:
             if created:
                 contexts.close()
@@ -296,13 +114,7 @@ class TemporalPredictor:
 
     def prepare(self, keys: list[ContextKey]) -> RootBatch:
         """Fetch and assemble one batch; safe to call from prefetch worker threads."""
-        BatchLimits().validate_model(
-            len(keys),
-            self.fanouts,
-            int(_setting(self.config, "hidden", 64)),
-            self.plan,
-            self.sampler,
-        )
+        BatchLimits().validate_model(len(keys), self.fanouts, self.hidden, self.plan, self.sampler)
         return build_root_batch(
             self.contexts,
             keys,
@@ -362,6 +174,17 @@ class TemporalPredictor:
                 )
                 yield self.infer(item), item.rejected
 
+    def score_keys(
+        self, batches: Iterable[list[ContextKey]]
+    ) -> tuple[list[pd.DataFrame], list[str]]:
+        """Frames of the accepted roots and the node IDs of the rejected ones, in order."""
+        frames: list[pd.DataFrame] = []
+        rejected: list[str] = []
+        for frame, bad in self.stream(batches):
+            frames.append(frame)
+            rejected.extend(key.node_id for key in bad)
+        return frames, rejected
+
 
 def id_batches(ids: Iterable[str], size: int) -> Iterator[list[str]]:
     """Consume input IDs lazily; never allocate a database-wide ID map."""
@@ -382,8 +205,13 @@ def rejected_path(output: Path) -> Path:
     return output.with_name(output.name + ".rejected.txt")
 
 
+def write_rejected(path: Path, ids: list[str]) -> None:
+    """One rejected root ID per line."""
+    path.write_text("".join(value + "\n" for value in ids))
+
+
 def score_new_accounts(
-    checkpoint: Path,
+    checkpoint: Path | ModelCheckpoint,
     account_ids: Iterable[str],
     date: str,
     output: Path,
@@ -398,7 +226,8 @@ def score_new_accounts(
     scoring uses scoped ContextKeys through TemporalPredictor instead. IDs that
     TigerGraph rejects (missing, not yet visible, over capacity) are not scored:
     they are listed in ``<output>.rejected.txt``. The result reports rejected roots and
-    masked child contexts separately (see ``rejection_summary``).
+    masked child contexts separately (see ``rejection_summary``). A date before the
+    first visible event is refused, since no account could be scored at it.
     """
     rejected_output = rejected_path(output)
     pending = output.with_name(output.name + ".pending")
@@ -406,21 +235,16 @@ def score_new_accounts(
     for path in (output, rejected_output, pending, rejected_pending):
         if path.exists():
             raise FileExistsError(path)
+    saved = ModelCheckpoint.of(checkpoint)
     if executor is None:
         from .installation import verify_sources
 
         # The checkpoint's retry budgets (max_query_attempts, max_outage_s).
-        payload = torch.load(checkpoint, map_location="cpu", weights_only=True)
-        live = live_executor(validate_config(payload["config"]))
+        live = live_executor(saved.validated_config())
         verify_sources(live)
         executor = live
-    ms = timestamp(date) - 1
-    result = checked_rows(
-        run_query(executor, "temporal_training_cutoffs", {"cutoff_times": [ms]}, timeout_s=900.0)
-    )
-    clocks = next(row["last_visible_seqs"] for row in result if "last_visible_seqs" in row)
-    seq = int(clocks[str(ms)]) + 1
-    predictor = TemporalPredictor(checkpoint, contexts, executor=executor, hubs=hubs)
+    seq, ms = resolve_cutoff(executor, date)
+    predictor = TemporalPredictor(saved, contexts, executor=executor, hubs=hubs)
     source = predictor.contexts
     output.parent.mkdir(parents=True, exist_ok=True)
     writer: pq.ParquetWriter | None = None

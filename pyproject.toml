@@ -17,17 +17,15 @@ dependencies = [
     "pyarrow>=18.0",
     "pydantic>=2.10",
     "pydantic-settings>=2.7",
-    "tqdm>=4.67",
-    "matplotlib>=3.10.9",
+    "requests>=2.31",
     "scikit-learn>=1.6",
+    # Not imported here: pyTigerGraph parses query responses with orjson when it is
+    # installed, which is faster than the standard json module on every batch.
     "orjson>=3.10",
 ]
 
 [project.optional-dependencies]
 model = ["torch>=2.9"]
-# The original static-snapshot PyG path (mule-train); the live temporal path needs only torch.
-legacy = ["torch-geometric>=2.7"]
-baseline = ["xgboost>=3.0"]
 # GPU neighbor resampling for the live temporal trainer (Linux x86_64 with CUDA). Pick the
 # extra that matches the CUDA major version of the installed torch wheel: cu12 wheels are on
 # pypi.nvidia.com (use with torch cu129), cu13 wheels are on pypi.org (torch>=2.13 cu130/cu132).
@@ -44,13 +42,10 @@ dev = [
     "pytest>=8.3",
     "basedpyright>=1.21",
     "ruff>=0.9",
-    "notebook>=7.0",
-    "ipykernel>=6.29",
 ]
-all = ["mule-pattern-learner[model,legacy,baseline,dev]"]
+all = ["mule-pattern-learner[model,dev]"]
 
 [project.scripts]
-mule-train = "mule_pattern_learner.training.train:main"
 mule-temporal = "mule_pattern_learner.temporal.live.cli:main"
 
 [tool.hatch.build.targets.wheel]
@@ -62,7 +57,7 @@ pythonpath = ["src"]
 
 [tool.basedpyright]
 include = ["src", "tests", "scripts"]
-exclude = ["**/__pycache__", ".venv", "local_experiments"]
+exclude = ["**/__pycache__", ".venv"]
 extraPaths = ["src"]
 venvPath = "."
 venv = ".venv"

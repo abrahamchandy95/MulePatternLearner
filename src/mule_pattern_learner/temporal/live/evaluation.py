@@ -4,13 +4,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 import pandas as pd
-import torch
 
-from ..common import digest, timestamp
+from ..common import cutoff_ms
 from ..metrics import evaluate
+from .checkpoint import ModelCheckpoint
+
+if TYPE_CHECKING:
+    from .executor import QueryExecutor
 
 
 class EvaluationTruthSource(Protocol):
@@ -25,11 +28,40 @@ class ParquetEvaluationTruth:
         return pd.read_parquet(self.path)
 
 
+@dataclass
+class GraphEvaluationTruth:
+    """Oracle truth paged from the graph's label contract, for evaluation only.
+
+    temporal_get_account_supervision is the oracle endpoint; training never calls
+    it. An account whose label is not known (mule_label_known false) reports
+    is_mule = -1, which the evaluators treat as unknown, never as a negative.
+    """
+
+    executor: QueryExecutor | None = None
+
+    def read(self) -> pd.DataFrame:
+        from .executor import TigerGraphExecutor, account_pages
+
+        executor = self.executor if self.executor is not None else TigerGraphExecutor()
+        rows: list[dict[str, Any]] = []
+        pages = account_pages(executor, "temporal_get_account_supervision", {}, timeout_s=900.0)
+        for page in pages:
+            for row in page:
+                known = bool(row["mule_label_known"])
+                rows.append(
+                    {
+                        "account_id": str(row["account_id"]),
+                        "is_mule": int(row["is_mule"]) if known else -1,
+                    }
+                )
+        return pd.DataFrame(rows, columns=["account_id", "is_mule"])
+
+
 def evaluate_predictions(
-    predictions: Path, checkpoint: Path, truth: EvaluationTruthSource
+    predictions: Path, checkpoint: Path | ModelCheckpoint, truth: EvaluationTruthSource
 ) -> dict[str, Any]:
     """Apply the frozen checkpoint threshold; never choose an epoch or threshold."""
-    payload = torch.load(checkpoint, map_location="cpu", weights_only=True)
+    saved = ModelCheckpoint.of(checkpoint)
     frame = pd.read_parquet(predictions)
     answer = truth.read()
     if "is_mule" not in answer or not answer.is_mule.isin([-1, 0, 1]).all():
@@ -39,13 +71,13 @@ def evaluate_predictions(
         raise ValueError("Duplicate evaluation truth keys")
     frame = frame.merge(answer[keys + ["is_mule"]], on=keys, how="left", validate="many_to_one")
     observed = frame[frame.is_mule.isin([0, 1])]
-    threshold = float(payload["threshold"])
+    threshold = saved.threshold
     result: dict[str, Any] = {
         "evaluated": len(observed),
         "evaluation_cohort": "supplied_prediction_rows_unweighted",
         "population_performance_claim": False,
         "unknown_or_missing_truth": len(frame) - len(observed),
-        "selection": payload.get("selected_on"),
+        "selection": saved.selected_on,
         "all": evaluate(
             observed.is_mule.to_numpy(dtype="int64"), observed.score.to_numpy(), threshold
         ),
@@ -131,7 +163,7 @@ def evaluate_weighted(frame: pd.DataFrame, threshold: float) -> dict[str, Any]:
 
 
 def evaluate_final_population(
-    checkpoint: Path,
+    checkpoint: Path | ModelCheckpoint,
     truth: EvaluationTruthSource,
     output: Path,
     *,
@@ -157,72 +189,54 @@ def evaluate_final_population(
     """
     import json
 
-    from .config_schema import validate_config
-    from .contract import ContextKey
-    from .dataset import load_prepared
+    from .config_schema import setting, split_seed
+    from .contract import SPLIT_PHASE
+    from .dataset import MANIFEST, load_prepared, sample_keys
+    from .executor import account_pages, live_executor
     from .hubs import load_hub_registry
-    from .predictor import TemporalPredictor, close_source, rejection_summary
-    from .source import checked_rows, live_executor
+    from .policy import exceeds_rejection_limit
+    from .predictor import TemporalPredictor, write_rejected
+    from .source import close_source, rejection_summary
 
     if output.suffix != ".json":
         raise ValueError("Final audit output must be a .json report path")
     rejected_output = output.with_suffix(".rejected.txt")
     if output.exists() or output.with_suffix(".parquet").exists() or rejected_output.exists():
         raise FileExistsError(output)
-    payload = torch.load(checkpoint, map_location="cpu", weights_only=True)
-    config = validate_config(payload["config"])
+    saved = ModelCheckpoint.of(checkpoint)
+    config = saved.validated_config()
     if config.get("evaluation_protocol") != "strict_inductive" or len(config["dates"]["test"]) != 1:
         raise ValueError("Final population audit requires a frozen scope and one test cutoff")
     date = config["dates"]["test"][0]
-    cutoff_ms = timestamp(date) - 1
-    if dataset is None and payload.get("dataset"):
-        dataset = Path(payload["dataset"])
-    if dataset is None or not (dataset / "manifest.json").exists():
+    last_ms = cutoff_ms(date)
+    if dataset is None:
+        dataset = saved.dataset
+    if dataset is None or not (dataset / MANIFEST).exists():
         raise ValueError(
             "Final audit needs the prepared dataset of this checkpoint for its cutoff clock "
             "and hub registry; pass --dataset"
         )
     manifest, _ = load_prepared(dataset)
-    if payload["dataset_manifest_sha256"] != digest(dataset / "manifest.json"):
-        raise ValueError("Checkpoint belongs to a different prepared dataset")
-    seq = int(manifest["cutoff_seqs"][date])
+    saved.check_dataset(dataset)
     if executor is None:
         from .installation import verify_frozen_source
 
         # The checkpoint's retry budgets (max_query_attempts, max_outage_s).
         executor = live_executor(config)
         verify_frozen_source(executor, manifest)
-    population, after = [], ""
-    while True:
-        result = checked_rows(
-            executor.run(
-                "temporal_scope_population",
-                {
-                    "scope_id": config["scope_id"],
-                    "after_id": after,
-                    "batch_size": 10000,
-                    "include_observed": False,
-                },
-            )
-        )
-        page = next(r["accounts"] for r in result if "accounts" in r)
-        if len(page) > 10000:
-            raise ValueError("Population page exceeds transport contract")
-        if not page:
-            break
-        for item in page:
-            row = dict(item.get("attributes", item))
-            if row["account_id"] <= after:
-                raise ValueError("Population pagination is not increasing")
-            after = row["account_id"]
-            if row["partition"] == 3 and row["first_seen_ts_ms"] <= cutoff_ms:
-                population.append({"account_id": after, "split": "test"})
+    population: list[dict[str, Any]] = []
+    for page in account_pages(
+        executor,
+        "temporal_scope_population",
+        {"scope_id": config["scope_id"], "include_observed": False},
+    ):
+        for row in page:
+            if row["partition"] == SPLIT_PHASE["test"] and row["first_seen_ts_ms"] <= last_ms:
+                population.append({"account_id": row["account_id"], "split": "test"})
                 if len(population) > 1_000_000:
                     raise ValueError(
                         "Final audit metadata budget exceeded; use a streamed truth provider"
                     )
-        if len(page) < 10000:
-            break
     if not population:
         raise ValueError("No eligible accounts in final test population")
     answer = truth.read()
@@ -232,36 +246,32 @@ def evaluate_final_population(
         pd.DataFrame(population),
         answer,
         negative_limit=negative_limit,
-        seed=int(config.get("split_seed", 42)),
+        seed=split_seed(config),
     )
     if len(selected) > 100_000:
         raise ValueError("Final scoring sample exceeds audit budget")
     registry = hubs if hubs is not None else load_hub_registry(dataset, manifest)
-    predictor = TemporalPredictor(checkpoint, contexts, executor=executor, hubs=registry)
-    scores: dict[str, float] = {}
-    rejected: list[str] = []
+    predictor = TemporalPredictor(saved, contexts, executor=executor, hubs=registry)
     failed = True
     try:
         size = predictor.batch_size
-        batches = (
-            [
-                ContextKey("Account", str(a), seq, cutoff_ms, config["scope_id"], 3)
-                for a in selected.account_id.iloc[start : start + size]
-            ]
+        # The prepared test keys: the dataset's cutoff clock, scope and phase 3.
+        frames, rejected = predictor.score_keys(
+            sample_keys(selected.iloc[start : start + size], date, manifest)
             for start in range(0, len(selected), size)
         )
-        for frame, bad in predictor.stream(batches):
-            scores.update(zip(frame.account_id, frame.score.astype(float), strict=True))
-            rejected.extend(key.node_id for key in bad)
         failed = False
     finally:
         close_source(predictor.contexts, failed=failed)
+    scores: dict[str, float] = {}
+    for frame in frames:
+        scores.update(zip(frame.account_id, frame.score.astype(float), strict=True))
     selected["score"] = selected.account_id.astype(str).map(scores)
     unscored = selected[selected.score.isna()]
     scored = selected[selected.score.notna()].reset_index(drop=True)
     rejected_positives = int(unscored.is_mule.sum())
-    limit = float(config.get("max_rejected_root_fraction") or 0.0)
-    if rejected_positives or len(unscored) > limit * len(selected):
+    limit = float(setting(config, "max_rejected_root_fraction"))
+    if exceeds_rejection_limit(len(unscored), rejected_positives, len(selected), limit):
         examples = unscored.account_id.astype(str).head(20).tolist()
         raise ValueError(
             f"TigerGraph rejected {len(unscored)} of {len(selected)} final audit accounts "
@@ -270,11 +280,11 @@ def evaluate_final_population(
             f"first {examples}. Weighted metrics over the remaining accounts would describe "
             "a censored population, so no report was written"
         )
-    metrics = evaluate_weighted(scored, float(payload["threshold"]))
+    metrics = evaluate_weighted(scored, saved.threshold)
     if len(unscored):
         metrics["evaluation_cohort"] += "_minus_rejected_negatives"
     result = {
-        "selection": payload.get("selected_on"),
+        "selection": saved.selected_on,
         "test_date": date,
         "test_population_accounts": len(population),
         "metrics": metrics,
@@ -289,5 +299,5 @@ def evaluate_final_population(
     output.write_text(json.dumps(result, indent=2, allow_nan=False) + "\n")
     scored.to_parquet(output.with_suffix(".parquet"), index=False)
     if rejected:
-        rejected_output.write_text("".join(value + "\n" for value in rejected))
+        write_rejected(rejected_output, rejected)
     return result

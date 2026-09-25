@@ -90,12 +90,13 @@ flag and discovery timestamp to this contract. If production uses a different
 label table or only an `is_mule` field, implement an adapter and supply the
 availability semantics there; the model and loss need no rewrite.
 
-Complete simulation `is_mule` values are oracle truth. A local simulation utility
-may read them once to create the desired observed-label budget. That utility is
-outside the production dependency tree and ignored by Git. It emits an
-observed-label file and a separate evaluation-truth file. The trainer rejects
-oracle columns and does not load the latter. When an external observed-label
-provider is used, the population query skips reading graph label attributes.
+Complete simulation `is_mule` values are oracle truth. Only the one-time
+[label reveal](label_reveal.md) reads them before training: it writes the observed
+positives and their discovery clocks into the graph's label contract, which the
+trainer reads through `GraphObservedLabels`. Evaluation reads truth separately,
+through `GraphEvaluationTruth`, after checkpoint selection. The trainer rejects
+oracle columns. When an external observed-label provider is used, the population
+query skips reading graph label attributes.
 
 A separate `evaluate` command joins truth with saved predictions and applies the
 checkpoint's already selected threshold. Do not interpret an unknown production

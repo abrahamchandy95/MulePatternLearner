@@ -3,8 +3,7 @@
 from copy import deepcopy
 from typing import Any
 
-from .contract import DEFAULT_GROUPS, LEGACY_GROUPS, FeaturePlan
-from .source import extraction_plan
+from .contract import DEFAULT_GROUPS, LEGACY_GROUPS, FeaturePlan, extraction_plan
 
 
 def feature_experiments(base: dict[str, Any]) -> dict[str, dict[str, Any]]:
