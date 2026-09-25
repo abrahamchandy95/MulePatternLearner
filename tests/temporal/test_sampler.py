@@ -1005,6 +1005,9 @@ def test_summary_models_fetch_only_roots() -> None:
 class MockPLC:
     """Emulates the pylibcugraph calls CuGraphSampler makes, with their dtype rules.
 
+    Batch ids are numbered as pylibcugraph 26.08 numbers them: by rank among the
+    labels that got at least one edge. `seed_labels` returns the label itself.
+
     Faults: `leak` returns future edges, `drop` applies an off-by-one hop-0 time
     filter (drops same-cutoff associations), `jitter` ignores random_state and
     `broken` fails in SGGraph like a GPU without kernels for its architecture.
@@ -1019,9 +1022,10 @@ class MockPLC:
         drop: bool = False,
         jitter: bool = False,
         broken: bool = False,
+        seed_labels: bool = False,
     ) -> None:
         self.__version__, self.leak, self.drop = version, leak, drop
-        self.jitter, self.broken = jitter, broken
+        self.jitter, self.broken, self.seed_labels = jitter, broken, seed_labels
         self.calls: list[dict[str, Any]] = []
         if unified:
             self.neighbor_sample = self._unified
@@ -1086,6 +1090,8 @@ class MockPLC:
                     out["edge_type"].append(t)
                     out["edge_start_time"].append(etime[e] + (2 if self.leak else 0))
                     out["batch_id"].append(label)
+        if not self.seed_labels:
+            out["batch_id"] = np.unique(out["batch_id"], return_inverse=True)[1].tolist()
         dtypes = {"edge_type": np.int32, "edge_start_time": np.int64, "batch_id": np.int32}
         return {k: np.asarray(v, dtype=dtypes.get(k, graph.src.dtype)) for k, v in out.items()}
 
@@ -1426,7 +1432,31 @@ def test_real_cugraph_matches_torch_caps_on_gpu() -> None:
             device="cuda",
         )
         assert np.array_equal(a, b)
-        assert ((a >= 0).sum(1) == 8).all()
+        torch_slots = select_resampled(
+            table, hop=1, sampler=sampler, fanout=8, mode="train", step_seed=seed
+        )
+        # Both backends fill 3 + 3 payment slots and 1 association (the fan-out of 1).
+        assert np.array_equal((a >= 0).sum(1), (torch_slots >= 0).sum(1))
+        assert ((a >= 0).sum(1) == 7).all()
+
+
+@pytest.mark.skipif(not _gpu_ready(), reason="needs CUDA, cupy and pylibcugraph>=26.4")
+def test_real_cugraph_handles_seeds_without_edges_on_gpu() -> None:
+    # The shape of a hop-2 table: empty and association-only contexts between others.
+    keys, rows = _table({"zelle_out": 5, "payment_in": 1, "Account_Uses_Device": 2}, contexts=40)
+    for c in range(0, 40, 3):
+        rows[c] = {"messages": []}
+    for c in range(1, 40, 7):
+        rows[c] = {
+            "messages": [m for m in rows[c]["messages"] if m["relation"] == "Account_Uses_Device"]
+        }
+    table = CandidateTable.build(keys, rows)
+    engine = CuGraphSampler()
+    for hop in (1, 2):
+        quotas = sampling.relation_quotas(RESAMPLE, hop)
+        keep = engine.subset(table, quotas, random_state=hop, device="cuda")
+        expected = sampling.expected_counts(table, quotas)
+        assert np.array_equal(sampling.group_counts(table, keep), expected)
 
 
 def test_gpu_self_test_script_runs_its_synthetic_checks_on_the_mock(
@@ -1482,3 +1512,44 @@ def test_sampled_rows_rejects_inconsistent_results() -> None:
             sampling.sampled_rows(broken, arrays, torch.device("cpu"))
     with pytest.raises(RuntimeError, match="lacks edge_start_time"):
         sampling.sampled_rows(dict(good, edge_start_time=None), arrays, torch.device("cpu"))
+
+
+def test_sampled_rows_accepts_batch_ids_ranked_over_seeds_with_edges() -> None:
+    # Seed 1 has no candidates, so pylibcugraph 26.08 numbers seed 2's batch 1, not 2.
+    keys, rows = _table({"zelle_out": 2}, contexts=3)
+    rows[1] = {"messages": []}
+    arrays = graph_arrays(CandidateTable.build(keys, rows))
+    result = {
+        "edge_id": np.asarray([0, 1, 2], dtype=np.int32),
+        "majors": np.asarray([0, 0, 2], dtype=np.int32),
+        "minors": np.asarray([3, 4, 5], dtype=np.int32),
+        "edge_start_time": arrays.edge_time[:3],
+    }
+    cpu = torch.device("cpu")
+    for batch in ([0, 0, 1], [0, 0, 2]):
+        ranked = dict(result, batch_id=np.asarray(batch, dtype=np.int32))
+        assert sampling.sampled_rows(ranked, arrays, cpu).tolist() == [0, 1, 2]
+    for batch in ([0, 1, 1], [1, 1, 2], [0, 0, 0]):
+        with pytest.raises(RuntimeError, match=r"\(batch_id\)"):
+            sampling.sampled_rows(
+                dict(result, batch_id=np.asarray(batch, dtype=np.int32)), arrays, cpu
+            )
+
+
+@pytest.mark.parametrize("unified", [False, True], ids=["26.08", "26.10"])
+@pytest.mark.parametrize("seed_labels", [False, True], ids=["ranked", "seed"])
+def test_cugraph_subset_handles_seeds_without_edges(unified: bool, seed_labels: bool) -> None:
+    # Hop 2 of a batch holds stubbed hubs and association-only contexts between others.
+    keys, rows = _table({"zelle_out": 5, "payment_in": 1, "Account_Uses_Device": 2}, contexts=5)
+    rows[0] = rows[3] = {"messages": []}
+    rows[1] = {
+        "messages": [m for m in rows[1]["messages"] if m["relation"] == "Account_Uses_Device"]
+    }
+    table = CandidateTable.build(keys, rows)
+    plc = MockPLC("26.10.00" if unified else "26.08.00", unified=unified, seed_labels=seed_labels)
+    engine = CuGraphSampler(plc, to_device=host)
+    for hop in (1, 2):
+        quotas = sampling.relation_quotas(RESAMPLE, hop)
+        keep = engine.subset(table, quotas, random_state=5, device="cpu")
+        expected = sampling.expected_counts(table, quotas)
+        assert np.array_equal(sampling.group_counts(table, keep), expected)

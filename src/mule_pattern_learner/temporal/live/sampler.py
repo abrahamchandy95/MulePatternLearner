@@ -370,6 +370,20 @@ def graph_arrays(table: CandidateTable) -> GraphArrays:
     )
 
 
+def batch_ids_match(batch: torch.Tensor, major: torch.Tensor) -> bool:
+    """Whether cuGraph's per-edge batch ids fit the seeds the edges came from.
+
+    Label i is seed i, the major of its edges. pylibcugraph 26.08 and later do not
+    return that label: they expand label offsets built over the labels that got at
+    least one edge, so an id is the label's rank among those, and every seed without
+    sampled edges shifts the ids after it. Either numbering is accepted.
+    """
+    if bool((batch == major).all()):
+        return True
+    rank = torch.unique(major, sorted=True, return_inverse=True)[1]
+    return bool((batch == rank).all())
+
+
 def sampled_rows(result: dict[str, Any], arrays: GraphArrays, device: torch.device) -> np.ndarray:
     """Candidate rows of a sampler result after on-device consistency checks."""
     for name in ("edge_id", "majors", "minors", "edge_start_time"):
@@ -393,13 +407,17 @@ def sampled_rows(result: dict[str, Any], arrays: GraphArrays, device: torch.devi
     if not bool((time < seed_time[major]).all()):
         raise RuntimeError("cuGraph returned an edge at or after its seed time (temporal leakage)")
     source = torch.from_numpy(arrays.src).to(device).long()
-    ok = (minor == edge_id + num) & (major == source[edge_id])
-    if result.get("batch_id") is not None:
-        ok &= tensor("batch_id") == major
+    checks = {"minors": minor == edge_id + num, "majors": major == source[edge_id]}
     if result.get("edge_type") is not None:
-        ok &= tensor("edge_type") == torch.from_numpy(arrays.edge_type).to(device).long()[edge_id]
-    if not bool(ok.all()):
-        raise RuntimeError("cuGraph result does not match the batch-local graph")
+        edge_type = torch.from_numpy(arrays.edge_type).to(device).long()
+        checks["edge_type"] = tensor("edge_type") == edge_type[edge_id]
+    wrong = [name for name, ok in checks.items() if not bool(ok.all())]
+    if result.get("batch_id") is not None and not batch_ids_match(tensor("batch_id"), major):
+        wrong.append("batch_id")
+    if wrong:
+        raise RuntimeError(
+            f"cuGraph result does not match the batch-local graph ({', '.join(wrong)})"
+        )
     rows = edge_id.cpu().numpy()
     if len(np.unique(rows)) != len(rows):
         raise RuntimeError("cuGraph sampled a candidate twice without replacement")
@@ -472,7 +490,10 @@ def cugraph_import_error() -> tuple[bool, str | None]:
 
 def _probe_table() -> CandidateTable:
     """Three contexts: payments over the fan-out in two relations plus associations,
-    associations only, and no candidates at all (a seed without edges)."""
+    no candidates at all (a seed without edges), and associations only.
+
+    The empty seed sits between two with edges, so cuGraph's batch ids, which skip
+    seeds without sampled edges, differ from the seed index at hop 1 (`sampled_rows`)."""
     cutoff = 100
     keys = [ContextKey("Account", f"cugraph-probe-{c}", cutoff, cutoff * 1000) for c in range(3)]
 
@@ -489,8 +510,8 @@ def _probe_table() -> CandidateTable:
             + [payment("payment_in", s) for s in range(30, 39)]
             + [association("Account_Uses_Device", n) for n in range(2)]
         },
-        {"messages": [association("Account_Owned_By_Party", n) for n in range(3)]},
         {"messages": []},
+        {"messages": [association("Account_Owned_By_Party", n) for n in range(3)]},
     ]
     return CandidateTable.build(keys, rows)
 
