@@ -129,6 +129,9 @@ def _result_view(config: dict[str, Any]) -> dict[str, Any]:
     # An empty [sampler] table means the defaults, like an absent one.
     if sampler:
         view["sampler"] = sampler
+    # No weight average (0) is what configurations from before the key meant.
+    if not view.get("weight_average_decay"):
+        view.pop("weight_average_decay", None)
     return view
 
 

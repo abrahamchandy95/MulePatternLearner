@@ -470,10 +470,20 @@ the kept checkpoint is still the best validation epoch.
   positives, 11 on this graph, plus a fixed sample of 2,000 unlabeled accounts at 2024-10-01, phase 2) are scored in
   evaluation mode. The best epoch by validation average precision is kept; training stops
   after `patience` (6) epochs without improvement. The threshold maximises validation F1.
-  These are observed-label proxy metrics, not true detection rates.
+  These are observed-label proxy metrics, not true detection rates. Validation scores
+  an exponential moving average of the weights, and the selected epoch's average is
+  what is saved and scored on test; training itself follows the raw weights. The decay
+  is `weight_average_decay = 0.99` per step, warmed up as `min(0.99, (1 + n) / (10 + n))`
+  after n steps, so the average spans about the last n / 10 steps until it reaches 0.99
+  at step 890 (about 10, 30 and 50 steps at the end of epochs 1, 3 and 5), then about one
+  epoch. 0, or a configuration without the key, validates the raw weights. In the
+  reference run the raw weights' AP swung between 0.011 and 0.096 from epoch to epoch.
+  AP on 11 positives is a coarse estimate: across random draws of 11 positives, a
+  simulated model of constant quality (ROC AUC 0.89) spans 0.04 to 0.35. The epoch
+  history records the validation ROC AUC beside the AP.
 - **Checkpoints:** `<run>/checkpoint_last.pt` after every epoch (and every
-  `checkpoint_every_steps`) with model, optimiser, all RNG states, schedule position, best
-  weights, history and counters. Running `train` again continues exactly: a resumed run
+  `checkpoint_every_steps`) with model, optimiser, weight average, all RNG states,
+  schedule position, best weights, history and counters. Running `train` again continues exactly: a resumed run
   reproduced the uninterrupted run's epoch-2 loss and validation AP to every digit.
 - **Failures:** availability errors (connection errors, HTTP 408, 429 and 5xx other than a
   bare 500, HTML gateway pages, the Cloud "Starting workspace" page) are retried with
@@ -638,7 +648,7 @@ policy do not apply to another. Unknown keys are rejected.
 | Dates | `[dates]` train 2024-07-01, validation 2024-10-01, test 2025-01-01; `[seed_limits]` 20000 / 2000 / 2000 |
 | Sampler | `[sampler]` policy resample, recent 8, older 4, distinct 4, associations 2, max_history 2048, relation_fanouts [8, 4], association_fanout 1, association_slots 2, backend auto, evaluation_seed 0; `[sampler.children]` 4 / 2 / 2 / 0 / 2048 |
 | Model | `fanouts` [16, 4], `feature_groups`, `architecture` split, `hidden` 64, `heads` 4, `dropout` 0.15 |
-| Optimisation | `batch_size` 64, `epochs` 30, `steps_per_epoch` 100, `patience` 6, `learning_rate` 0.001, `weight_decay` 0.0001, `class_prior` 0.001, `positive_weight` balanced, `seed` 42 |
+| Optimisation | `batch_size` 64, `epochs` 30, `steps_per_epoch` 100, `patience` 6, `learning_rate` 0.001, `weight_decay` 0.0001, `class_prior` 0.001, `positive_weight` balanced, `weight_average_decay` 0.99, `seed` 42 |
 | Runtime | `device` auto, `threads` 4, `deterministic` true, `prefetch_batches` 2, `checkpoint_every_steps` 0, `log_every_steps` 10, `max_rejected_root_fraction` 0.0 |
 | Transport | `request_batch_size` 8, `query_concurrency` 16, `context_lru_capacity` 256, `encoding_check_every` 64, `max_query_attempts` 6, `max_outage_s` 900 |
 
@@ -661,7 +671,7 @@ cohort; `--dataset <run>_run/prepared` reuses another run's.
 | `TigerGraph rejected ... training roots so far` or `validation: TigerGraph rejected ... roots` | Roots failed a per-request check beyond `max_rejected_root_fraction`, or an observed positive was rejected; the statuses name why (for example `history_capacity_exceeded`) |
 | cuGraph probe warning | pylibcugraph or the GPU failed the probe; training continues with the torch sampler; run `verify_cugraph_sampler.py` |
 | Retries in the log | TigerGraph was briefly unavailable or resuming; the run waits up to `max_outage_s` |
-| `Resumed configuration differs from the run: ['positive_weight']` | The run started before the built-in `positive_weight` became `"balanced"`; finish it with `--config` setting `positive_weight = "prior"`, or train into a new `--output` |
+| `Resumed configuration differs from the run: ['positive_weight']` (or `['weight_average_decay']`) | The run started before the built-in `positive_weight` became `"balanced"` and `weight_average_decay` became 0.99; finish it with `--config` setting `positive_weight = "prior"` and `weight_average_decay = 0`, or train into a new `--output` |
 
 ## Limitations and future work
 

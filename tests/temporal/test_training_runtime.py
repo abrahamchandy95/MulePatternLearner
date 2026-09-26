@@ -36,6 +36,7 @@ from mule_pattern_learner.temporal.live import (
     training,
 )
 from mule_pattern_learner.temporal.live import dataset as dataset_module
+from mule_pattern_learner.temporal.live import checkpoint as checkpoint_module
 from mule_pattern_learner.temporal.live.checkpoint import restore_cuda_rng
 from mule_pattern_learner.temporal.live.config_schema import validate_config
 from mule_pattern_learner.temporal.live.contract import (
@@ -712,10 +713,11 @@ def after_validation(nth: int) -> Callable[[list[ContextKey], int, Counter[str]]
 # Training end to end ------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("average", [0.0, 0.9], ids=["raw", "averaged"])
 def test_two_epochs_equal_one_epoch_plus_resume(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, average: float
 ) -> None:
-    config = base_config()
+    config = base_config(weight_average_decay=average)
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     fit(tmp_path, "straight", config)
     with pytest.raises(RuntimeError, match="injected"):
@@ -741,10 +743,11 @@ def test_two_epochs_equal_one_epoch_plus_resume(
         fit(tmp_path, "resumed", config, resume=True)
 
 
+@pytest.mark.parametrize("average", [0.0, 0.9], ids=["raw", "averaged"])
 def test_mid_epoch_step_checkpoint_resumes_exactly(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, average: float
 ) -> None:
-    config = base_config(checkpoint_every_steps=1, steps_per_epoch=4)
+    config = base_config(checkpoint_every_steps=1, steps_per_epoch=4, weight_average_decay=average)
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     fit(tmp_path, "straight", config)
     with pytest.raises(RuntimeError, match="injected"):
@@ -1407,3 +1410,45 @@ def test_nnpu_objective_resolves_the_named_positive_weights() -> None:
         prior, value = training.nnpu_objective({"class_prior": 0.001, "positive_weight": weight})
         assert (prior, value) == (0.001, pytest.approx(resolved))
         assert training.objective_name(prior, value) == name
+
+
+def test_weight_average_warms_up_and_restores_the_raw_weights() -> None:
+    model = torch.nn.Linear(2, 1, bias=False)
+    with torch.no_grad():
+        model.weight.fill_(0.0)
+    average = training.WeightAverage(model, 0.99)
+    with torch.no_grad():
+        model.weight.fill_(1.0)
+    average.update(model)  # warm-up decay min(0.99, 2 / 11)
+    expected = 1 - 2 / 11
+    assert average.state["weight"].flatten().tolist() == pytest.approx([expected] * 2)
+    with average.applied(model):
+        assert model.weight.flatten().tolist() == pytest.approx([expected] * 2)
+    assert model.weight.flatten().tolist() == [1.0, 1.0]
+    restored = training.WeightAverage(model, 0.99)
+    restored.load(average.saved())
+    assert restored.updates == 1 and torch.equal(restored.state["weight"], average.state["weight"])
+
+
+def test_averaged_run_validates_and_saves_the_average(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # One epoch, so the selected state is the average at its end.
+    config = base_config(weight_average_decay=0.9, epochs=1)
+    prepared_dataset(tmp_path / "dataset", config, monkeypatch)
+    result = fit(tmp_path, "averaged", config)
+    assert result["best_epoch"] == 1
+    assert 0.0 <= result["history"][0]["validation_proxy_roc_auc"] <= 1.0
+    state = torch.load(tmp_path / "averaged_run/checkpoint_last.pt", weights_only=True)
+    averaged, raw = state["weight_average"]["state"], state["model"]
+    saved = saved_model(tmp_path / "averaged.pt")
+    assert all(torch.equal(saved[k], averaged[k]) for k in saved)
+    assert all(torch.equal(state["best_state"][k], averaged[k]) for k in saved)
+    assert any(not torch.equal(averaged[k], raw[k]) for k in raw)
+
+
+def test_runs_from_before_the_weight_average_resume_with_it_off() -> None:
+    old = {"epochs": 2, "positive_weight": "prior"}
+    view = checkpoint_module._result_view
+    assert view({**old, "weight_average_decay": 0.0}) == view(old)
+    assert view({**old, "weight_average_decay": 0.99}) != view(old)

@@ -1,7 +1,7 @@
 """nnPU with observed-label selection over an injected temporal context source.
 
 A run is resumable. ``run_dir/checkpoint_last.pt`` holds the model, optimizer,
-RNG and schedule position plus the selection state, written every epoch and every
+weight average, RNG and schedule position plus the selection state, written every epoch and every
 ``checkpoint_every_steps`` steps. ``train(..., resume=True)`` continues from it and
 reproduces the uninterrupted run exactly: every epoch schedule is drawn up front
 from the saved generator state, and every step reseeds torch from a stable hash
@@ -20,7 +20,8 @@ both observed classes after its rejections.
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Iterator, Mapping
+from collections.abc import Generator, Iterator, Mapping
+import contextlib
 from dataclasses import dataclass
 import json
 import math
@@ -111,6 +112,8 @@ class RunSettings:
     log_every_steps: int
     # Largest fraction of an epoch's (or evaluation split's) roots TigerGraph may reject.
     max_rejected_root_fraction: float = 0.0
+    # 0 validates and saves the raw weights; d in (0, 1) their moving average (WeightAverage).
+    weight_average_decay: float = 0.0
 
     def __post_init__(self) -> None:
         # patience = 0 disables early stopping; n > 0 stops after n epochs without a
@@ -123,6 +126,8 @@ class RunSettings:
             raise ValueError(f"prefetch_batches must be in [0,{MAX_PREFETCH}]")
         if self.checkpoint_every_steps < 0 or self.log_every_steps < 1:
             raise ValueError("checkpoint_every_steps must be >= 0 and log_every_steps >= 1")
+        if not 0.0 <= self.weight_average_decay < 1.0:
+            raise ValueError("weight_average_decay must be in [0,1)")
 
     @classmethod
     def from_config(cls, config: dict[str, Any]) -> RunSettings:
@@ -143,6 +148,7 @@ class RunSettings:
             checkpoint_every_steps=int(setting(config, "checkpoint_every_steps")),
             log_every_steps=int(setting(config, "log_every_steps")),
             max_rejected_root_fraction=float(setting(config, "max_rejected_root_fraction")),
+            weight_average_decay=float(setting(config, "weight_average_decay")),
         )
 
     def check_limits(self, plan: FeaturePlan, sampler: SamplerPlan) -> None:
@@ -216,6 +222,56 @@ def build_optimizer(model: nn.Module, config: dict[str, Any]) -> torch.optim.Ada
         lr=float(setting(config, "learning_rate")),
         weight_decay=float(setting(config, "weight_decay")),
     )
+
+
+class WeightAverage:
+    """Exponential moving average of a model's weights (Polyak averaging).
+
+    With few revealed positives, resampled neighbourhoods and a constant learning
+    rate, the raw weights keep moving around a region of similar loss; their average
+    is a steadier model to validate, select and save. After n updates the decay is
+    min(decay, (1 + n) / (10 + n)), as in TensorFlow's ExponentialMovingAverage, so
+    early averages are not dominated by the initial weights. Training never reads it.
+    """
+
+    def __init__(self, model: nn.Module, decay: float) -> None:
+        self.decay = decay
+        self.updates = 0
+        self.state = {k: v.detach().clone() for k, v in model.state_dict().items()}
+
+    @torch.no_grad()
+    def update(self, model: nn.Module) -> None:
+        self.updates += 1
+        decay = min(self.decay, (1 + self.updates) / (10 + self.updates))
+        for key, value in model.state_dict().items():
+            average = self.state[key]
+            if average.is_floating_point():
+                average.lerp_(value, 1 - decay)
+            else:
+                average.copy_(value)
+
+    @contextlib.contextmanager
+    def applied(self, model: nn.Module) -> Generator[None]:
+        """Load the average into ``model`` for the block, then restore its own weights."""
+        raw = {k: v.detach().clone() for k, v in model.state_dict().items()}
+        model.load_state_dict(self.state)
+        try:
+            yield
+        finally:
+            model.load_state_dict(raw)
+
+    def saved(self) -> dict[str, Any]:
+        return {
+            "state": {k: v.detach().cpu().clone() for k, v in self.state.items()},
+            "updates": self.updates,
+        }
+
+    def load(self, saved: dict[str, Any]) -> None:
+        if set(saved["state"]) != set(self.state):
+            raise ValueError("Saved weight average does not match the model's parameters")
+        for key, value in saved["state"].items():
+            self.state[key].copy_(value)
+        self.updates = int(saved["updates"])
 
 
 class StepLoss(NamedTuple):
@@ -469,6 +525,8 @@ class _TrainingRun:
         torch.manual_seed(settings.seed)
         self.model = build_model(config, plan).to(device)
         self.optimizer = build_optimizer(self.model, config)
+        decay = settings.weight_average_decay
+        self.average = WeightAverage(self.model, decay) if decay > 0 else None
         self.rng = np.random.default_rng(settings.seed)
         self.epoch, self.step, self.stopped = 0, 0, False
         self.best_ap, self.best_epoch = -1.0, 0
@@ -486,6 +544,12 @@ class _TrainingRun:
 
     def _state_copy(self) -> dict[str, torch.Tensor]:
         return {k: v.detach().cpu().clone() for k, v in self.model.state_dict().items()}
+
+    def _evaluated(self) -> contextlib.AbstractContextManager[None]:
+        """The weights validation scores and selection keeps: the average, if any."""
+        if self.average is None:
+            return contextlib.nullcontext()
+        return self.average.applied(self.model)
 
     # Batches -----------------------------------------------------------------
 
@@ -533,6 +597,7 @@ class _TrainingRun:
             "loss_sum": self.loss_sum.detach().cpu(),
             "loss_steps": self.loss_steps,
             "best_state": self.best_state,
+            "weight_average": None if self.average is None else self.average.saved(),
             "best_ap": self.best_ap,
             "best_epoch": self.best_epoch,
             "best_scores": None if self.best_scores is None else torch.from_numpy(self.best_scores),
@@ -570,6 +635,12 @@ class _TrainingRun:
             )
         self.model.load_state_dict(state["model"])
         self.optimizer.load_state_dict(state["optimizer"])
+        if self.average is not None:
+            if state.get("weight_average") is None:
+                raise ValueError(
+                    "Checkpoint holds no weight average; resume with its configuration"
+                )
+            self.average.load(state["weight_average"])
         self.epoch_rng_state = state["numpy_rng"]
         self.rng.bit_generator.state = state["numpy_rng"]
         torch.set_rng_state(state["torch_rng"])
@@ -673,6 +744,8 @@ class _TrainingRun:
                     # Rejected roots were dropped; the leading accepted rows are positives.
                     positives = int(prepared.accepted[: len(step.positives)].sum())
                     value, risk = self.train_step(step, positives, self.to_device(prepared.batch))
+                    if self.average is not None:
+                        self.average.update(self.model)
                     # Losses stay on the device; the host reads them once per log interval.
                     self.loss_sum += value
                     interval += value
@@ -727,21 +800,25 @@ class _TrainingRun:
 
     def _select_epoch(self, epoch: int) -> None:
         """Score validation, keep the best state, apply patience and checkpoint the epoch."""
-        scores, accepted = self.score("validation")
+        with self._evaluated():
+            scores, accepted = self.score("validation")
+            selected = self._state_copy()
         labels = self.labels("validation")
         self.check_rejections("validation", labels, accepted)
-        ap = evaluate(labels[accepted].astype(np.int64), scores[accepted], 0.5)["average_precision"]
+        metrics = evaluate(labels[accepted].astype(np.int64), scores[accepted], 0.5)
+        ap = metrics["average_precision"]
         self.history.append(
             {
                 "epoch": epoch + 1,
                 "loss": float(self.loss_sum.item() / self.loss_steps),
                 "steps": self.loss_steps,
                 "validation_proxy_ap": ap,
+                "validation_proxy_roc_auc": metrics["roc_auc"],
             }
         )
         if ap is not None and ap > self.best_ap:
             self.best_ap, self.best_epoch = ap, epoch + 1
-            self.best_state, self.best_scores = self._state_copy(), scores
+            self.best_state, self.best_scores = selected, scores
             self.best_accepted = accepted
         # patience = 0 disables early stopping.
         patience = self.settings.patience
