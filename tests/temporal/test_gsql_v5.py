@@ -406,13 +406,15 @@ def test_scope_unowned_policy_keeps_party_partitions() -> None:
     assert create.count(rule) == 2 and hashed.count(rule) == 2
     assert "< 7000 THEN 1" in hashed and "< 8500 THEN 2" in hashed
     assert "to_string(s.@component))" in hashed
-    # Only unowned EXTERNAL accounts are shared, and never under "independent".
+    # Only unowned EXTERNAL accounts and unowned bank ledger ("gl") accounts are shared,
+    # and never under "independent".
     assert create.count("@shared +=") == 1
     policy = create.split('IF unowned_policy != "independent" THEN', 1)[1].split("\n  END;", 1)[0]
     assert "SELECT p FROM Parties:p ACCUM @@party_components += p.@component" in policy
     assert (
         "SELECT a FROM Accounts:a\n"
-        "      WHERE a.is_external AND NOT @@party_components.contains(a.@component)\n"
+        '      WHERE (a.is_external OR a.account_type == "gl")\n'
+        "        AND NOT @@party_components.contains(a.@component)\n"
         "      ACCUM a.@shared += TRUE"
     ) in policy
     # Components are final before any policy runs; only three statements ever write them.
@@ -430,7 +432,11 @@ def test_scope_linked_policy_attaches_only_single_counterparty_internal_accounts
     create = scope_queries()["temporal_create_training_scope"]
     linked = create.split('IF unowned_policy == "linked" THEN', 1)[1].split("\n  END;", 1)[0]
     assert create.index("WHILE @@changed") < create.index('IF unowned_policy == "linked"')
-    unowned_internal = "NOT a.is_external AND NOT @@party_components.contains(a.@component)"
+    # Ledger accounts are shared, so only unowned internal customer accounts can be linked.
+    unowned_internal = (
+        'NOT a.is_external AND a.account_type != "gl"\n'
+        "        AND NOT @@party_components.contains(a.@component)"
+    )
     assert unowned_internal in select_block(linked, "Linkable")
     holder = (
         'd.account_type == "deposit" AND NOT d.is_external\n'

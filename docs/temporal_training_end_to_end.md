@@ -142,8 +142,9 @@ and the Python feature contract drift apart.
   15%) or 3 (test, 15%) from a seeded hash of the component ID.
 - **Unowned accounts** (`unowned_policy`, config `scope_unowned`):
   - `independent`: each unowned account is its own component (the old rule; `strict_mule_v1`).
-  - `shared`: unowned external accounts get partition 1 (visible in every phase), like
-    tokens and devices.
+  - `shared`: unowned external accounts and unowned bank ledger accounts
+    (`account_type = "gl"`, the bank's income books for fees and interest) get partition 1
+    (visible in every phase), like tokens and devices.
   - `linked` (the config default; the query parameter defaults to `independent`; used by
     `strict_mule_v2`): as `shared`, and an unowned internal account
     whose only owned internal deposit counterparty is one account D joins D's component

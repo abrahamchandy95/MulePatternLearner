@@ -1145,6 +1145,8 @@ LINKED_COUNTS = {
     "independent_external": 0,
     "linked_internal": 90,
     "linked_external": 0,
+    "shared_ledger": 4,
+    "ledger_accounts": 4,
     "members": 500,
 }
 
@@ -1162,6 +1164,7 @@ def policy_counts(policy: str) -> dict[str, int]:
             "independent_external": 40,
             "independent_internal": 97,
             "linked_internal": 0,
+            "shared_ledger": 0,
         }
     return {**LINKED_COUNTS, "shared_internal": 97, "linked_internal": 0}  # a retired draft
 
@@ -1260,7 +1263,13 @@ def test_existing_scope_must_have_the_configured_unowned_policy(tmp_path: Path) 
     # Without unowned external accounts a linked scope is still recognised by its links.
     no_external = {**policy_counts("linked"), "shared_external": 0, "independent_external": 0}
     assert scope.inferred_scope_policy(no_external) == "linked"
-    assert scope.inferred_scope_policy({**no_external, "linked_internal": 0}) == "independent"
+    alone = {**no_external, "linked_internal": 0, "shared_ledger": 0}
+    assert scope.inferred_scope_policy(alone) == "independent"
+    # Bank ledger accounts are shared exactly when external accounts are: all or none.
+    assert scope.inferred_scope_policy({**alone, "shared_ledger": 4}) == "shared"
+    for ledger_shared in (0, 3):  # a linked scope that left some ledger books partitioned
+        mixed = {**policy_counts("linked"), "shared_ledger": ledger_shared}
+        assert scope.inferred_scope_policy(mixed) is None
     # Linking without sharing the external accounts is no rule.
     unshared = {**policy_counts("linked"), "shared_external": 0, "independent_external": 3}
     assert scope.inferred_scope_policy(unshared) is None

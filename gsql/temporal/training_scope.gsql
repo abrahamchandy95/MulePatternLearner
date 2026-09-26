@@ -9,11 +9,13 @@ USE GRAPH Mule_Pattern_Learner
    - "independent": every component, owned or not, gets its own hash partition and
      group_id to_string(component). It reproduces scopes built by the original query,
      which had no unowned rule.
-   - "shared": unowned EXTERNAL accounts (counterparties outside the bank) are shared
-     infrastructure: partition 1 (visible in every phase) and group_id
-     "shared:<component>". Unowned INTERNAL accounts keep their independent hash
-     partition and are never shared.
-   - "linked": external as in "shared". An unowned internal account whose distinct
+   - "shared": unowned EXTERNAL accounts (counterparties outside the bank) and unowned
+     bank ledger accounts (internal, account_type "gl": the bank's own income books that
+     fee and interest postings credit) are shared infrastructure: partition 1 (visible in
+     every phase) and group_id "shared:<component>". Other unowned INTERNAL accounts keep
+     their independent hash partition and are never shared.
+   - "linked": external and ledger accounts as in "shared". An unowned internal
+     (non-ledger) account whose distinct
      counterparties among OWNED internal deposit accounts (the other Account endpoint of
      any Payment_Transaction or Zelle_Transfer, all time, label blind) are exactly one
      account D takes D's ownership component, so it gets D's partition and group_id.
@@ -64,12 +66,14 @@ CREATE OR REPLACE QUERY temporal_create_training_scope(
     Parties = {Party.*};
     PartyComponents = SELECT p FROM Parties:p ACCUM @@party_components += p.@component;
     SharedAccounts = SELECT a FROM Accounts:a
-      WHERE a.is_external AND NOT @@party_components.contains(a.@component)
+      WHERE (a.is_external OR a.account_type == "gl")
+        AND NOT @@party_components.contains(a.@component)
       ACCUM a.@shared += TRUE, @@shared_accounts += 1;
   END;
   IF unowned_policy == "linked" THEN
     Linkable = SELECT a FROM Accounts:a
-      WHERE NOT a.is_external AND NOT @@party_components.contains(a.@component);
+      WHERE NOT a.is_external AND a.account_type != "gl"
+        AND NOT @@party_components.contains(a.@component);
     LinkPayments = SELECT t FROM Linkable:a
       -((Account_Initiated_Transaction>|Account_Received_Transaction>):e)- Payment_Transaction:t;
     LinkTransfers = SELECT t FROM Linkable:a
@@ -88,12 +92,14 @@ CREATE OR REPLACE QUERY temporal_create_training_scope(
         t.@link_component += d.@component;
     PaymentLinks = SELECT a FROM PaymentHolders:t
       -((Transaction_From_Account>|Transaction_To_Account>):role)- Account:a
-      WHERE NOT a.is_external AND NOT @@party_components.contains(a.@component)
+      WHERE NOT a.is_external AND a.account_type != "gl"
+        AND NOT @@party_components.contains(a.@component)
       ACCUM a.@link_found += TRUE, a.@link_min += t.@link_min, a.@link_max += t.@link_max,
         a.@link_component += t.@link_component;
     TransferLinks = SELECT a FROM TransferHolders:t
       -((Transfer_From_Account>|Transfer_To_Account>):role)- Account:a
-      WHERE NOT a.is_external AND NOT @@party_components.contains(a.@component)
+      WHERE NOT a.is_external AND a.account_type != "gl"
+        AND NOT @@party_components.contains(a.@component)
       ACCUM a.@link_found += TRUE, a.@link_min += t.@link_min, a.@link_max += t.@link_max,
         a.@link_component += t.@link_component;
     Linked = SELECT a FROM Linkable:a
@@ -192,6 +198,7 @@ FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
   SumAccum<INT> @@members, @@unowned;
   SumAccum<INT> @@shared_internal, @@shared_external, @@independent_internal,
     @@independent_external, @@linked_internal, @@linked_external;
+  SumAccum<INT> @@shared_ledger, @@ledger_accounts;
   Scopes = {Temporal_Training_Scope.*};
   ReadyScope = SELECT r FROM Scopes:r WHERE r.scope_id == scope_id AND r.ready;
   IF ReadyScope.size() != 1 THEN PRINT "scope_not_ready" AS status; RETURN; END;
@@ -199,11 +206,14 @@ FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
     ACCUM @@members += 1;
   Unowned = SELECT a FROM ReadyScope:r -(Training_Scope_Has_Entity>:e)- Account:a
     WHERE a.outdegree("Account_Owned_By_Party") == 0
-    ACCUM a.@group += e.group_id, @@unowned += 1;
+    ACCUM a.@group += e.group_id, @@unowned += 1,
+      IF a.account_type == "gl" AND NOT a.is_external THEN @@ledger_accounts += 1 END;
   Shared = SELECT a FROM Unowned:a
     WHERE a.@group LIKE "shared:%"
     ACCUM a.@classified += TRUE,
-      IF a.is_external THEN @@shared_external += 1 ELSE @@shared_internal += 1 END;
+      IF a.is_external THEN @@shared_external += 1
+      ELSE IF a.account_type == "gl" THEN @@shared_ledger += 1
+      ELSE @@shared_internal += 1 END;
   Independent = SELECT a FROM Unowned:a
     WHERE a.@group == to_string(getvid(a))
     ACCUM a.@classified += TRUE,
@@ -216,5 +226,6 @@ FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
     @@shared_internal AS shared_internal, @@shared_external AS shared_external,
     @@independent_internal AS independent_internal,
     @@independent_external AS independent_external,
-    @@linked_internal AS linked_internal, @@linked_external AS linked_external;
+    @@linked_internal AS linked_internal, @@linked_external AS linked_external,
+    @@shared_ledger AS shared_ledger, @@ledger_accounts AS ledger_accounts;
 }
