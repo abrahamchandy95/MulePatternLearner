@@ -105,7 +105,11 @@ DEFAULT_RUN: dict[str, Any] = {
     "learning_rate": 0.001,
     "weight_decay": 0.0001,
     "class_prior": 0.001,
-    "positive_weight": "prior",
+    # Imbalanced nnPU (Su, Chen and Xu, IJCAI 2021): weigh the revealed positives as a
+    # balanced problem would. With "prior" (textbook nnPU) the positives carry 0.001 of
+    # the loss, and the reference run collapsed to scoring every account near zero.
+    # Provisional: not yet compared with other weights over several seeds.
+    "positive_weight": "balanced",
     "seed": 42,
     "split_seed": 42,
     # CUDA when available, then Apple MPS, then CPU.
@@ -249,7 +253,9 @@ class LiveConfig(_Strict):
     learning_rate: Annotated[float, Field(gt=0)] | None = None
     weight_decay: Annotated[float, Field(ge=0)] | None = None
     class_prior: Annotated[float, Field(gt=0, lt=1)] | None = None
-    positive_weight: Literal["prior"] | Annotated[float, Field(gt=0)] | None = None
+    positive_weight: Literal["prior", "balanced"] | Annotated[float, Field(gt=0, lt=1)] | None = (
+        None
+    )
     device: str | None = None
     threads: Positive | None = None
     deterministic: bool | Literal["strict"] = OPERATIONAL_DEFAULTS["deterministic"]

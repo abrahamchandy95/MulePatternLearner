@@ -188,7 +188,7 @@ def train_step(
         positives,
         step.seed,
     )
-    value = float(loss.cpu())  # waits for the accelerator
+    value = float(loss.value.cpu())  # waits for the accelerator
     if not np.isfinite(value):
         raise ValueError("Non-finite training loss in the benchmark step")
     return {

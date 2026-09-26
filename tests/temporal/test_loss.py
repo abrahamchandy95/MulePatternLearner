@@ -92,3 +92,44 @@ def test_grouped_ap_interval_bootstraps_whole_groups() -> None:
     assert grouped_ap_interval(y, scores, groups, seed=7, draws=100) == [low, high]
     assert grouped_ap_interval(y, scores, np.zeros(8, dtype=np.int64)) is None
     assert grouped_ap_interval(np.zeros(8, dtype=np.int64), scores, groups) is None
+
+
+def test_textbook_weight_drives_every_score_down_and_balanced_does_not() -> None:
+    # 16 revealed positives and 48 unlabeled accounts (a training batch), float64 so the
+    # tiny gradients are exact. Logit -15.6 is a score of about 1.7e-7: the state the
+    # reference run with prior 0.001 settled in.
+    prior = 0.001
+    targets = torch.tensor([1.0] * 16 + [0.0] * 48, dtype=torch.float64)
+    textbook = NonNegativePULoss(prior=prior)
+    balanced = NonNegativePULoss(prior=prior, positive_weight=1 - prior)
+    collapsed = torch.full((64,), -15.6, dtype=torch.float64, requires_grad=True)
+    slope = _sigmoid(-15.6) * (1 - _sigmoid(-15.6))
+    # Scoring everything near zero costs only the prior under the textbook weight, and
+    # the summed gradient still points down (the unlabeled push beats the positives'
+    # pull); under the balanced weight the same state costs 1 - prior and the pushes
+    # cancel, so nothing draws the scores there.
+    loss, _ = _call(textbook, collapsed, targets)
+    assert loss.item() == pytest.approx(prior, rel=1e-3)
+    (grad,) = torch.autograd.grad(loss, collapsed)
+    assert grad.sum().item() == pytest.approx((1 - 2 * prior) * slope, rel=1e-6)
+    loss, _ = _call(balanced, collapsed, targets)
+    assert loss.item() == pytest.approx(1 - prior, rel=1e-3)
+    (grad,) = torch.autograd.grad(loss, collapsed)
+    assert abs(grad.sum().item()) < 1e-6 * slope
+    # From an untrained start (logits 0) the positives' pull is 1 / (2 * prior) = 500
+    # times larger, because the -prior * R_p^- term pulls them up under both weights.
+    start = torch.zeros(64, dtype=torch.float64, requires_grad=True)
+    pulls = []
+    for loss_fn in (textbook, balanced):
+        (grad,) = torch.autograd.grad(_call(loss_fn, start, targets)[0], start)
+        pulls.append(-grad[:16].sum().item())
+    assert pulls[1] / pulls[0] == pytest.approx(1 / (2 * prior), rel=1e-6)
+
+
+def test_badly_scored_positives_keep_their_gradient_in_float32() -> None:
+    # sigmoid(-f) rounds to 1 in float32 below f of about -17, which zeroed the gradient.
+    targets = torch.tensor([1.0, 0.0])
+    logits = torch.tensor([-20.0, 0.0], requires_grad=True)
+    loss, _ = _call(NonNegativePULoss(prior=0.001, positive_weight=0.999), logits, targets)
+    (grad,) = torch.autograd.grad(loss, logits)
+    assert grad[0].item() == pytest.approx(-(0.999 + 0.001) * _sigmoid(-20.0), rel=1e-4)

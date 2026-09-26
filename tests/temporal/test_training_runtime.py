@@ -9,6 +9,7 @@ from dataclasses import asdict
 import hashlib
 import inspect
 import json
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -81,12 +82,15 @@ def reference_nnpu(
     beta: float,
     gamma: float,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """The former NonNegativePULoss.forward, with its host-side branch."""
+    """The former NonNegativePULoss.forward, with its host-side branch.
+
+    l_pos is 1 - sigmoid(f), as the loss now computes it (the float32 gradient fix).
+    """
     positive = (targets == 1).to(logits.dtype)
     unlabeled = (targets == 0).to(logits.dtype)
     n_positive = torch.clamp(positive.sum(), min=1.0)
     n_unlabeled = torch.clamp(unlabeled.sum(), min=1.0)
-    l_pos, l_neg = torch.sigmoid(-logits), torch.sigmoid(logits)
+    l_pos, l_neg = 1 - torch.sigmoid(logits), torch.sigmoid(logits)
     positive_risk = positive_weight * torch.sum(positive * l_pos) / n_positive
     negative_risk = (
         torch.sum(unlabeled * l_neg) / n_unlabeled
@@ -836,6 +840,11 @@ def test_batches_use_train_mode_step_seeds_and_the_hub_registry(
         <= set(r)
         for r in train_records
     )
+    # The unclamped risk is logged beside the loss; they agree on steps without a correction.
+    for record in train_records:
+        assert 0 <= record["corrected_steps"] <= 2 and math.isfinite(record["objective"])
+        if record["corrected_steps"] == 0:
+            assert record["objective"] == pytest.approx(record["loss"])
     assert {r["event"] for r in records} >= {"start", "train", "evaluate", "epoch", "complete"}
 
 
@@ -1387,3 +1396,14 @@ def test_feature_arms_keep_the_base_extraction() -> None:
         feature_experiments(
             base_config(extraction_groups=[g for g in groups if g != "device_ip_context"])
         )
+
+
+def test_nnpu_objective_resolves_the_named_positive_weights() -> None:
+    for weight, resolved, name in (
+        ("prior", 0.001, "nnPU"),
+        ("balanced", 0.999, "imbalanced_nnPU"),
+        (0.5, 0.5, "positive_reweighted_nnPU"),
+    ):
+        prior, value = training.nnpu_objective({"class_prior": 0.001, "positive_weight": weight})
+        assert (prior, value) == (0.001, pytest.approx(resolved))
+        assert training.objective_name(prior, value) == name
