@@ -1434,7 +1434,11 @@ def test_config_schema_rejects_unknown_keys_and_applies_operational_defaults(
     # Checkpoint configurations used for scoring need not carry preparation keys.
     assert validate_config({"hidden": 16})["query_concurrency"] == 16
     assert validate_config({**base, "deterministic": "strict"})["deterministic"] == "strict"
-    assert validate_config({**base, "positive_weight": "prior"})["positive_weight"] == "prior"
+    for weight in ("prior", "balanced", 0.5):
+        assert validate_config({**base, "positive_weight": weight})["positive_weight"] == weight
+    for weight in ("equal", 1.0, 0.0):
+        with pytest.raises(ValueError, match="positive_weight"):
+            validate_config({**base, "positive_weight": weight})
 
 
 def test_built_in_run_validates_and_only_run_config_applies_the_schema(tmp_path: Path) -> None:

@@ -92,7 +92,8 @@ Checkpoints store the selected input fingerprint and sampler. Old query response
 and old checkpoints fail the new contract check. New batches use current registry
 widths for admission. Existing trained weights cannot be reused with changed inputs.
 
-`positive_weight = "prior"` preserves textbook nnPU; 0.1 and 0.5 are explicit
+`positive_weight = "prior"` preserves textbook nnPU; `"balanced"` (the built-in
+run) is imbalanced nnPU (Su, Chen and Xu, 2021); 0.1 and 0.5 are explicit
 cost-sensitive alternatives. A higher weight is not assumed to fix rankings.
 Compare them using the same revealed labels, dates, prior and observed validation
 proxy, then freeze this setting before feature comparisons. Hidden truth is never

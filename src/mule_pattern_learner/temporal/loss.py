@@ -37,7 +37,8 @@ class NonNegativePULoss(Module):
                        i.e. push the negative risk back up toward 0.
 
     The loss returned for backprop follows the nnPU rule; the always-unclamped
-    value is also reported for monitoring.
+    value is returned beside it for monitoring (the live trainer logs its mean and
+    the steps where the correction fired).
 
     Args:
         prior: pi = P(y = 1), the assumed TRUE fraction of positives in the
@@ -49,12 +50,18 @@ class NonNegativePULoss(Module):
             The paper fixes gamma = 1.
         positive_weight: weight on the positive_risk term ONLY. Defaults to
             prior, which reproduces the textbook nnPU objective exactly. Under
-            extreme imbalance, optimization may underweight positive examples.
-            A larger value is a cost-sensitive experimental objective, not the
-            textbook nnPU risk and not a guaranteed fix for ranking quality.
-            The negative-risk correction still uses prior. Select this setting
-            on observed validation labels and keep hidden truth sealed.
-            Must be in (0, 1).
+            extreme imbalance, optimization may underweight positive examples:
+            with prior 0.001 the unlabeled push on the scores is 1 / (2 * prior)
+            times the positives' pull, and the cheapest constant scorer, every
+            account near zero, costs only the prior, so descent drives all
+            scores there. Weight w is imbalanced nnPU (Su, Chen and Xu, IJCAI
+            2021) with target prior w / (w + 1 - prior), up to a constant factor
+            (exactly, for beta = 0 and gamma = 1): 1 - prior is its balanced
+            target prior of 0.5, under which every constant scorer costs
+            1 - prior. The scores are then ranking scores, not P(y = 1). No
+            weight guarantees ranking quality. The negative-risk correction
+            still uses prior. Select this setting on observed validation labels
+            and keep hidden truth sealed. Must be in (0, 1).
 
     Convention: targets t use +1 for revealed positives and 0 for unlabeled
     (matching pu_label in this project). f are raw logits, shape [N].
@@ -89,8 +96,11 @@ class NonNegativePULoss(Module):
 
     @staticmethod
     def _surrogate_pos(logits: Tensor) -> Tensor:
-        # l(+f) = sigmoid(-f): small when f is large/positive (confident positive)
-        return torch.sigmoid(-logits)
+        # l(+f) = sigmoid(-f) = 1 - sigmoid(f): small when f is large (confident positive).
+        # Computed from sigmoid(f) so that a badly scored positive (very negative f) keeps
+        # its gradient: in float32 sigmoid(-f) rounds to 1 below f of about -17, and its
+        # gradient becomes exactly 0. The rounding moves to confident positives instead.
+        return 1 - torch.sigmoid(logits)
 
     @staticmethod
     def _surrogate_neg(logits: Tensor) -> Tensor:

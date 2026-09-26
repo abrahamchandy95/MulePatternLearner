@@ -421,11 +421,33 @@ parameters in the v5 profile, hidden 64, 4 heads, dropout 0.15):
    block-1 outputs plus the hop-1 message embeddings).
 5. An MLP head gives one logit per root.
 
-Loss: nnPU ([Kiryo et al., 2017](https://arxiv.org/abs/1703.00593)) with the class prior
-`class_prior = 0.001` as an explicit prevalence assumption and `positive_weight = "prior"`
-(the textbook objective). Each step uses 16 observed training positives (with replacement)
-and 48 accounts from the label-blind training marginal. Unlabeled accounts are never
-treated as negatives.
+Loss: imbalanced nnPU ([Su, Chen and Xu, 2021](https://www.ijcai.org/proceedings/2021/0412.pdf)),
+the nnPU risk of [Kiryo et al., 2017](https://arxiv.org/abs/1703.00593) reweighted as if
+positives and negatives were balanced. The class prior `class_prior = 0.001` is an
+explicit prevalence assumption (the simulated cohort holds 233 mules in 317,840 accounts,
+about 0.00073) and `positive_weight = "balanced"` sets the weight on the positive risk to
+`1 - class_prior`, which is that paper's objective with a balanced prior of 0.5 up to a
+constant factor (exactly, with the loss's beta = 0 and gamma = 1). Each step uses 16
+observed training positives (with replacement) and 48 accounts from the label-blind
+training marginal. Unlabeled accounts are never treated as negatives. Under this weight
+the scores rank accounts; they are not probabilities, and only the validation-selected
+threshold gives them a cut-off.
+
+`positive_weight = "prior"` is textbook nnPU. On this graph it collapsed. With a prior of
+0.001 the unlabeled accounts push the scores down 500 times harder than the revealed
+positives pull them up, and scoring every account near zero costs only the prior, so
+within the first epoch every score went there: the loss settled at the prior (0.0010)
+and the selected threshold was about 1.7e-7. After 30 epochs its observed validation
+proxy was an average precision of 0.017 against a prevalence of 0.0055. Under the
+balanced weight that state costs `1 - class_prior`, so nothing draws the model to it.
+
+The balanced weight is provisional: it has not yet been compared with other weights over
+several seeds. With 20 revealed positives drawn about 80 times each per epoch, its main
+risk is memorising them. Watch the `train` records in `progress.jsonl`: `objective` is
+the unclamped risk and `corrected_steps` counts the steps whose non-negative correction
+fired. A training loss far below the first epoch's, a rising `corrected_steps`, a
+validation AP that peaks early and falls, and an early stop all point to memorisation;
+the kept checkpoint is still the best validation epoch.
 
 ## The training loop
 
@@ -616,7 +638,7 @@ policy do not apply to another. Unknown keys are rejected.
 | Dates | `[dates]` train 2024-07-01, validation 2024-10-01, test 2025-01-01; `[seed_limits]` 20000 / 2000 / 2000 |
 | Sampler | `[sampler]` policy resample, recent 8, older 4, distinct 4, associations 2, max_history 2048, relation_fanouts [8, 4], association_fanout 1, association_slots 2, backend auto, evaluation_seed 0; `[sampler.children]` 4 / 2 / 2 / 0 / 2048 |
 | Model | `fanouts` [16, 4], `feature_groups`, `architecture` split, `hidden` 64, `heads` 4, `dropout` 0.15 |
-| Optimisation | `batch_size` 64, `epochs` 30, `steps_per_epoch` 100, `patience` 6, `learning_rate` 0.001, `weight_decay` 0.0001, `class_prior` 0.001, `positive_weight` prior, `seed` 42 |
+| Optimisation | `batch_size` 64, `epochs` 30, `steps_per_epoch` 100, `patience` 6, `learning_rate` 0.001, `weight_decay` 0.0001, `class_prior` 0.001, `positive_weight` balanced, `seed` 42 |
 | Runtime | `device` auto, `threads` 4, `deterministic` true, `prefetch_batches` 2, `checkpoint_every_steps` 0, `log_every_steps` 10, `max_rejected_root_fraction` 0.0 |
 | Transport | `request_batch_size` 8, `query_concurrency` 16, `context_lru_capacity` 256, `encoding_check_every` 64, `max_query_attempts` 6, `max_outage_s` 900 |
 
@@ -639,6 +661,7 @@ cohort; `--dataset <run>_run/prepared` reuses another run's.
 | `TigerGraph rejected ... training roots so far` or `validation: TigerGraph rejected ... roots` | Roots failed a per-request check beyond `max_rejected_root_fraction`, or an observed positive was rejected; the statuses name why (for example `history_capacity_exceeded`) |
 | cuGraph probe warning | pylibcugraph or the GPU failed the probe; training continues with the torch sampler; run `verify_cugraph_sampler.py` |
 | Retries in the log | TigerGraph was briefly unavailable or resuming; the run waits up to `max_outage_s` |
+| `Resumed configuration differs from the run: ['positive_weight']` | The run started before the built-in `positive_weight` became `"balanced"`; finish it with `--config` setting `positive_weight = "prior"`, or train into a new `--output` |
 
 ## Limitations and future work
 

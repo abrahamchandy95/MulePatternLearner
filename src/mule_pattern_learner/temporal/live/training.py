@@ -23,9 +23,10 @@ from collections import Counter
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 import json
+import math
 from pathlib import Path
 import time
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -185,10 +186,28 @@ def check_source(
 
 
 def nnpu_objective(config: dict[str, Any]) -> tuple[float, float]:
-    """The class prior and the positive-risk weight ("prior" means the prior itself)."""
+    """The class prior and the positive-risk weight.
+
+    "prior" is textbook nnPU (the weight is the prior). "balanced" is imbalanced nnPU
+    (Su, Chen and Xu, IJCAI 2021) with a balanced target prior of 0.5: its risk
+    0.5 * R_p^+ + 0.5 / (1 - prior) * (R_u^- - prior * R_p^-) is this loss with weight
+    1 - prior, scaled by a constant (exactly so for the loss's beta = 0, gamma = 1).
+    """
     prior = float(config["class_prior"])
     weight = setting(config, "positive_weight")
-    return prior, prior if weight == "prior" else float(weight)
+    if weight == "prior":
+        return prior, prior
+    if weight == "balanced":
+        return prior, 1.0 - prior
+    return prior, float(weight)
+
+
+def objective_name(prior: float, positive_weight: float) -> str:
+    if positive_weight == prior:
+        return "nnPU"
+    if math.isclose(positive_weight, 1.0 - prior):
+        return "imbalanced_nnPU"
+    return "positive_reweighted_nnPU"
 
 
 def build_optimizer(model: nn.Module, config: dict[str, Any]) -> torch.optim.AdamW:
@@ -199,6 +218,17 @@ def build_optimizer(model: nn.Module, config: dict[str, Any]) -> torch.optim.Ada
     )
 
 
+class StepLoss(NamedTuple):
+    """One step's backpropagated nnPU loss and its unclamped risk estimate (detached).
+
+    They differ exactly when the non-negative correction fired, which a model that
+    memorises its few revealed positives makes frequent.
+    """
+
+    value: torch.Tensor
+    objective: torch.Tensor
+
+
 def nnpu_step(
     model: nn.Module,
     optimizer: torch.optim.Optimizer,
@@ -206,7 +236,7 @@ def nnpu_step(
     batch: Batch,
     positives: int,
     seed: int,
-) -> torch.Tensor:
+) -> StepLoss:
     """One optimizer step; the batch's leading ``positives`` rows are observed positives.
 
     Dropout masks depend only on ``seed`` (the step seed), never on earlier history.
@@ -215,12 +245,12 @@ def nnpu_step(
     logits = model(batch)
     targets = torch.zeros_like(logits)
     targets[:positives] = 1
-    value, _ = loss(logits, targets)
+    value, objective = loss(logits, targets)
     optimizer.zero_grad(set_to_none=True)
     value.backward()
     nn.utils.clip_grad_norm_(model.parameters(), 5)
     optimizer.step()
-    return value.detach()
+    return StepLoss(value.detach(), objective.detach())
 
 
 def train(
@@ -621,6 +651,8 @@ class _TrainingRun:
         self.model.train()
         requests = ((self.keys(s.indices, s.date), "train", s.seed) for s in remaining)
         interval = torch.zeros((), device=self.device)
+        objective = torch.zeros((), device=self.device)
+        corrected = torch.zeros((), device=self.device)
         finite = torch.ones((), dtype=torch.bool, device=self.device)
         every = self.settings.checkpoint_every_steps
         clock = mark = time.perf_counter()
@@ -640,10 +672,12 @@ class _TrainingRun:
                 if prepared.batch is not None:
                     # Rejected roots were dropped; the leading accepted rows are positives.
                     positives = int(prepared.accepted[: len(step.positives)].sum())
-                    value = self.train_step(step, positives, self.to_device(prepared.batch))
+                    value, risk = self.train_step(step, positives, self.to_device(prepared.batch))
                     # Losses stay on the device; the host reads them once per log interval.
                     self.loss_sum += value
                     interval += value
+                    objective += risk
+                    corrected += (value != risk).to(corrected.dtype)
                     finite &= torch.isfinite(value)
                     self.loss_steps += 1
                     count += 1
@@ -653,7 +687,9 @@ class _TrainingRun:
                 )
                 saved = bool(every) and self.step % every == 0
                 if logged or saved:
-                    loss, ok = torch.stack((interval, finite.to(interval.dtype))).tolist()
+                    loss, risk, corrections, ok = torch.stack(
+                        (interval, objective, corrected, finite.to(interval.dtype))
+                    ).tolist()
                     if not ok:
                         # Raised before any checkpoint can persist non-finite weights.
                         raise ValueError(
@@ -670,6 +706,9 @@ class _TrainingRun:
                             "steps": len(schedule),
                             "date": step.date,
                             "loss": loss / trained,
+                            # The unclamped risk and the steps whose nnPU correction fired.
+                            "objective": risk / trained,
+                            "corrected_steps": int(corrections),
                             "seconds_per_step": (now - clock) / trained,
                             "batch_wait_seconds": waited / trained,
                             "batch": {
@@ -679,6 +718,8 @@ class _TrainingRun:
                         echo=logged,
                     )
                     interval = torch.zeros((), device=self.device)
+                    objective = torch.zeros((), device=self.device)
+                    corrected = torch.zeros((), device=self.device)
                     clock, waited, count = now, 0.0, 0
                     if saved:
                         self.save_last()
@@ -755,7 +796,7 @@ class _TrainingRun:
                 f"statuses {self.progress.rejections()}"
             )
 
-    def train_step(self, step: TrainingStep, positives: int, batch: Batch) -> torch.Tensor:
+    def train_step(self, step: TrainingStep, positives: int, batch: Batch) -> StepLoss:
         return nnpu_step(self.model, self.optimizer, self.loss, batch, positives, step.seed)
 
     def score(self, split: str) -> tuple[np.ndarray, np.ndarray]:
@@ -899,7 +940,7 @@ class _TrainingRun:
             "loss": "nnPU",
             "class_prior": prior,
             "positive_weight": positive_weight,
-            "objective": "nnPU" if positive_weight == prior else "positive_reweighted_nnPU",
+            "objective": objective_name(prior, positive_weight),
             "input_fingerprint": self.plan.fingerprint(),
             "parameter_count": sum(p.numel() for p in self.model.parameters()),
             "revealed_training_accounts": label_summary(self.mask)["train"],
