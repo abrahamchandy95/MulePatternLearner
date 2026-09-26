@@ -451,6 +451,8 @@ def scope_counts(policy: str) -> dict[str, int]:
         "independent_external": 2,
         "linked_internal": 0,
         "linked_external": 0,
+        "shared_ledger": 0,
+        "ledger_accounts": 0,
     }
     if policy in ("shared", "linked"):
         counts.update(shared_external=2, independent_external=0)

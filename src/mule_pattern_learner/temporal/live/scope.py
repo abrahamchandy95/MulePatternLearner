@@ -53,6 +53,9 @@ SCOPE_POLICY_COUNTS = (
     "independent_external",
     "linked_internal",
     "linked_external",
+    # Unowned bank ledger accounts (account_type "gl"), and how many of them are shared.
+    "shared_ledger",
+    "ledger_accounts",
 )
 
 
@@ -74,8 +77,10 @@ def scope_policy_counts(executor: Any, scope_id: str) -> dict[str, int]:
 def inferred_scope_policy(counts: dict[str, int]) -> str | None:
     """The scope_unowned rule a scope was created with, from its membership classes.
 
-    Under every rule an unowned internal account is never shared and an unowned
-    external account is never linked. "independent": nothing shared or linked
+    Under every rule an unowned internal customer account is never shared and an
+    unowned external account is never linked. Unowned bank ledger accounts (the
+    bank's own "gl" books) are shared exactly when external accounts are: all of them
+    under "shared" and "linked", none under "independent". "independent": nothing shared or linked
     (every scope created before the policy existed, such as strict_mule_v1).
     "shared": every unowned external account shared, nothing linked. "linked":
     every unowned external account shared (possibly none exist) and at least one
@@ -88,11 +93,14 @@ def inferred_scope_policy(counts: dict[str, int]) -> str | None:
     if counts["shared_internal"] or counts["linked_external"]:
         return None
     shared, linked = counts["shared_external"], counts["linked_internal"]
-    if counts["independent_external"] and (shared or linked):
+    ledger, shared_ledger = counts["ledger_accounts"], counts["shared_ledger"]
+    if counts["independent_external"] and (shared or linked or shared_ledger):
         return None  # shared and linked scopes share every unowned external account
+    if (shared or linked or shared_ledger) and shared_ledger != ledger:
+        return None  # ... and every unowned ledger account
     if linked:
         return "linked"
-    return "shared" if shared else "independent"
+    return "shared" if shared or shared_ledger else "independent"
 
 
 def check_scope_policy(counts: dict[str, int], config: dict[str, Any]) -> str:
@@ -132,8 +140,9 @@ def ensure_scope(executor: QueryExecutor, config: dict[str, Any]) -> None:
     Creation writes a Temporal_Training_Scope vertex and one membership edge per
     Account and Party. scope_unowned decides the accounts without an owning Party:
     - "independent": each is its own ownership group with a hashed partition.
-    - "shared": unowned external accounts are visible in every phase (partition
-      1, group "shared:<component>"); unowned internal accounts stay independent.
+    - "shared": unowned external accounts and unowned bank ledger ("gl") accounts
+      are visible in every phase (partition 1, group "shared:<component>"); other
+      unowned internal accounts stay independent.
     - "linked" (the default): as "shared", and an unowned internal account whose
       only owned internal deposit counterparty is one account joins that
       account's ownership group and partition.

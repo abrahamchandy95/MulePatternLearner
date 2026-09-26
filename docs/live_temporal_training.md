@@ -79,10 +79,19 @@ starts with `shared:`, independent when its group ID is its own component, and
 linked otherwise. The counts map to a rule as follows:
 
 - `"independent"`: nothing shared and nothing linked.
-- `"shared"`: every unowned external account shared, nothing linked.
-- `"linked"`: every unowned external account shared (if there are any), at least
-  one internal account linked.
-- No rule: anything else, such as shared internal accounts (an early draft rule).
+- `"shared"`: every unowned external account and every unowned bank ledger account
+  (`account_type = "gl"`) shared, nothing linked.
+- `"linked"`: every unowned external and ledger account shared (if there are any),
+  at least one internal account linked.
+- No rule: anything else, such as shared internal customer accounts (an early draft
+  rule) or ledger accounts left in hashed partitions.
+
+Bank ledger accounts are the bank's own income books that fee and interest postings
+credit (PhantomLedger exports four: card interest, card fees, deposit fees and
+credit-line interest). They are internal but belong to no customer, so they are
+shared like external counterparties; a hashed partition would hide every fee posting
+to a held-out ledger account from training. The policy query reports them as
+`shared_ledger` out of `ledger_accounts`.
 
 Preparation checks the inferred rule against `scope_unowned` when it reuses a
 scope and right after it creates one. Every streamed run checks it again, and a
