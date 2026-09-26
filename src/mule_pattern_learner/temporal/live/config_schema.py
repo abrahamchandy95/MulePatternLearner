@@ -63,6 +63,7 @@ FALLBACKS: dict[str, Any] = {
     "max_rejected_root_fraction": 0.0,
     "learning_rate": 0.001,
     "weight_decay": 0.0001,
+    "weight_average_decay": 0.0,
     "positive_weight": "prior",
     "device": "auto",
     "threads": 4,
@@ -104,6 +105,10 @@ DEFAULT_RUN: dict[str, Any] = {
     ],
     "learning_rate": 0.001,
     "weight_decay": 0.0001,
+    # Validate, select and save an exponential moving average of the weights (decay per
+    # step, warmed up); training itself is unchanged. With 11 validation positives the
+    # raw weights' AP swung 0.011 to 0.096 between epochs of the reference run.
+    "weight_average_decay": 0.99,
     "class_prior": 0.001,
     # Imbalanced nnPU (Su, Chen and Xu, IJCAI 2021): weigh the revealed positives as a
     # balanced problem would. With "prior" (textbook nnPU) the positives carry 0.001 of
@@ -252,6 +257,7 @@ class LiveConfig(_Strict):
     batch_size: Annotated[int, Field(ge=1, le=128)] | None = None
     learning_rate: Annotated[float, Field(gt=0)] | None = None
     weight_decay: Annotated[float, Field(ge=0)] | None = None
+    weight_average_decay: Annotated[float, Field(ge=0, lt=1)] | None = None
     class_prior: Annotated[float, Field(gt=0, lt=1)] | None = None
     positive_weight: Literal["prior", "balanced"] | Annotated[float, Field(gt=0, lt=1)] | None = (
         None
