@@ -5,9 +5,10 @@ the graph as the built-in run reads them, then trains 2 epochs of 4 steps on the
 with the built-in feature groups, slot sum, balanced positive weight and weight
 average. The literals at the end record its first training batch, every step's loss
 and objective, each epoch's validation AP, the selected epoch, the threshold picked on
-validation, the test AP and the sha256 of the rendered context query. A refactoring
-leaves every one of them unchanged. A commit that changes one on purpose says so and
-pastes the new values, which the failing assertion prints as Python source.
+validation, the test AP, the sha256 of the rendered context query and the rows of the
+prepared accounts and observed labels. A refactoring leaves every one of them
+unchanged. A commit that changes one on purpose says so and pastes the new values,
+which the failing assertion prints as Python source.
 
 The literals hold on macOS arm64 and on Linux x86_64:
 - Integer and boolean tensors come from integer arithmetic and hash-seeded draws, so
@@ -41,6 +42,7 @@ import threading
 from typing import Any
 from unittest.mock import patch
 
+import pandas as pd
 import pytest
 
 from mule_pattern_learner.batching.assemble import RootBatch, tensor_digests
@@ -279,6 +281,20 @@ def test_built_in_run_reproduces_the_golden_numbers(tmp_path: Path) -> None:
     assert not problems, "\n".join([*problems, "", "Observed:", literals(observed)])
 
 
+def frame_digest(frame: pd.DataFrame) -> str:
+    """The sha256 of a frame's rows as CSV: its values, whatever the parquet writer."""
+    return hashlib.sha256(frame.to_csv(index=False).encode()).hexdigest()
+
+
+def test_the_golden_settings_select_the_accounts_the_tag_selected(tmp_path: Path) -> None:
+    # The dataset's accounts and observed labels feed every other literal. They were
+    # recorded with the code at the tag pre-restructure, which prepared the same rows.
+    _, dataset, _ = prepare_golden(tmp_path)
+    for name, (rows, digest) in GOLDEN_DATASET.items():
+        frame = pd.read_parquet(dataset / f"{name}.parquet")
+        assert (len(frame), frame_digest(frame)) == (rows, digest), name
+
+
 def load_benchmark() -> Any:
     path = REPOSITORY_ROOT / "scripts/benchmark_batch.py"
     spec = importlib.util.spec_from_file_location("script_benchmark_batch", path)
@@ -434,3 +450,8 @@ GOLDEN_VALIDATION_AP = 0.47692307692307695
 GOLDEN_THRESHOLD = 0.5102718956479596
 GOLDEN_TEST_AP = 0.3216137566137566
 GOLDEN_QUERY_SHA256 = "16647ae2e7f8728cc92fbe678b8e3be78158a3f8fe17f261e4e0a8a4d9f994a8"
+# Rows and frame_digest of the prepared accounts.parquet and observed_labels.parquet.
+GOLDEN_DATASET = {
+    "accounts": (123, "bdfe8b31ed8e0561638d9459c87b9e4dddc2a0cf09d3aad971a25fa2a0650062"),
+    "observed_labels": (123, "ceda44c0fbb4040d251dc1832061724f9b4a335006b6e94f1ec0c4ddabe0f118"),
+}
