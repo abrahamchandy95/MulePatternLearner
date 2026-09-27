@@ -144,7 +144,7 @@ Training never calls the pair queries, so the training installer adds them only
 on request. Installation uses the project's `.env`, without printing credentials:
 
 ```sh
-.venv/bin/python -m mule_pattern_learner.temporal.live.cli install --include-optional
+.venv/bin/python -m mule_pattern_learner install --include-optional
 ```
 
 This installs the shared encoder, its public wrapper and the training queries as

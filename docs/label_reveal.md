@@ -2,7 +2,7 @@
 
 A fresh PhantomLedger load masks every mule, so training would have no positives.
 The first `mule-temporal train` therefore runs `temporal_reveal_mule_labels`
-([`gsql/temporal/label_reveal.gsql`](../gsql/temporal/label_reveal.gsql)) once. It
+([`gsql/queries/label_reveal.gsql`](../gsql/queries/label_reveal.gsql)) once. It
 decides which mules a bank would realistically have confirmed, and when, and writes
 that into the existing [Account label contract](account_mule_labels.md). Training
 reads only the revealed positives and their discovery clocks; ground truth stays in
@@ -79,18 +79,18 @@ every mule once per round. The job
 itself, with the configured salt 42, found 27, 11 and 23 mules (train, validation,
 test) discovered before the cutoffs and revealed 20, 11 and 20.
 
-`scripts/temporal/simulate_label_reveal.py` reproduces the method with the job's own
+`scripts/simulate_label_reveal.py` reproduces the method with the job's own
 hash. It reads the job's inputs once (read-only, the same query as the check below),
 then runs `plan` from
-[`reveal_model.py`](../src/mule_pattern_learner/temporal/live/reveal_model.py), the
+[`label_reveal.py`](../src/mule_pattern_learner/reference/label_reveal.py), the
 Python mirror of `temporal_reveal_mule_labels`, for many salts and prints the median and 5th to 95th percentile of the mules
 discovered before each cutoff and of those revealed:
 
 ```bash
-python scripts/temporal/simulate_label_reveal.py --runs 1000
+python scripts/simulate_label_reveal.py --runs 1000
 ```
 
-`scripts/temporal/verify_label_reveal.py` checks the installed job against the same
+`scripts/verify_label_reveal.py` checks the installed job against the same
 mirror: it runs the job with `apply = FALSE` and compares the revealed set, the
 channel and availability clock of every revealed mule, and the eligible count per
 split. It passes `force = TRUE` so the check also

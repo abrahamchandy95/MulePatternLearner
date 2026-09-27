@@ -1,6 +1,6 @@
 # Temporal payment schema: valid-time associations and Zelle
 
-The current schema is [temporal_schema.gsql](../gsql/schema/temporal_schema.gsql).
+The current schema is [schema.gsql](../gsql/schema/schema.gsql).
 The schema defines eight vertex types, nineteen forward relationships and
 nineteen reverse types, with seven valid-time discriminators. Connect using the
 project's local `.env`; deployment reports and source data remain local artifacts.
@@ -190,8 +190,8 @@ features, not learned model embeddings.
 
 ## Deployment artifacts
 
-- [Canonical fresh-graph DDL](../gsql/schema/temporal_schema.gsql).
-- [Training scope schema change](../gsql/schema/migrations/temporal_training_scope.gsql),
+- [Canonical fresh-graph DDL](../gsql/schema/schema.gsql).
+- [Training scope schema change](../gsql/schema/scope_vertex.gsql),
   which the query installer applies when the graph has no `Temporal_Training_Scope`.
 
 The populated graph reached this schema through three one-off migrations: the

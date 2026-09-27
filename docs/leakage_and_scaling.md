@@ -9,7 +9,7 @@ experiment, the only protocol, withholds existing ownership groups from training
 Shared auxiliary entities are allowed, with held-out account/party contributions
 removed.
 
-The live fixture in `scripts/temporal/verify_strict_isolation.py` adds and changes
+The live fixture in `scripts/verify_strict_isolation.py` adds and changes
 held-out payments and shared-identifier associations, then compares complete
 training contexts. It also checks future-event exclusion, an accelerator update,
 and inference for an account inserted after that update. Fixture vertices are
