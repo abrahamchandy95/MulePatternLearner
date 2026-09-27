@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 from typing import Any
 
@@ -94,6 +95,33 @@ def recorded_settings(manifest: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(settings, dict):
         raise ValueError("The dataset records no dataset settings; prepare a new one")
     return settings
+
+
+@dataclass(frozen=True)
+class PreparedSource:
+    """The graph a dataset was prepared from, as its manifest records it.
+
+    The vertex counts and the scope: its id, its rule for accounts no party owns, the
+    source id it names and the split seed of its partitions.
+    """
+
+    counts: dict[str, int]
+    scope_id: str
+    unowned: str
+    source_id: str
+    split_seed: int
+
+
+def prepared_source(manifest: dict[str, Any]) -> PreparedSource:
+    """The graph a dataset was prepared from; a ValueError without its settings."""
+    settings = recorded_settings(manifest)
+    return PreparedSource(
+        counts=dict(manifest["source"]["source_counts"]),
+        scope_id=settings["scope"]["id"],
+        unowned=settings["scope"]["unowned"],
+        source_id=settings["source_id"],
+        split_seed=settings["dataset"]["split_seed"],
+    )
 
 
 def dataset_mismatches(config: RunConfig, manifest: dict[str, Any]) -> list[str]:

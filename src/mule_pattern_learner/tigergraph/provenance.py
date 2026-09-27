@@ -1,5 +1,6 @@
-"""The live provenance of a prepared dataset: vertex counts, queries and its scope.
+"""The live provenance of a prepared dataset: vertex counts, source id, queries and scope.
 
+source_counts and resolve_source_id name the loaded snapshot before preparation;
 verify_frozen_source rechecks it before a streamed run (see scope.py for the scope
 checks).
 """
@@ -8,11 +9,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..contract.server import SCOPE_VERTEX
-from ..data.manifest import recorded_settings
+from ..contract.fingerprints import fingerprint
+from ..contract.server import GRAPH_NAME, SCOPE_VERTEX
+from ..data.manifest import prepared_source
 from .executor import ConnectionExecutor
 from .installer import verify_sources
-from .scope import verify_scope
+from .scope import scope_header, verify_scope
 
 # Experiment metadata written by preparation itself; never part of source identity.
 EXPERIMENT_METADATA_TYPES = frozenset({SCOPE_VERTEX})
@@ -30,6 +32,19 @@ def source_counts(executor: ConnectionExecutor) -> dict[str, int]:
     }
 
 
+def derived_source_id(counts: dict[str, int]) -> str:
+    """A stable name for the loaded snapshot: the graph name plus a hash of its vertex counts."""
+    return f"{GRAPH_NAME}_{fingerprint(counts)[:12]}"
+
+
+def resolve_source_id(executor: ConnectionExecutor, scope_id: str, counts: dict[str, int]) -> str:
+    """The source id: an existing scope's source, else a name derived from the graph."""
+    attrs = scope_header(executor, scope_id)
+    if attrs is not None:
+        return str(attrs["source_id"])
+    return derived_source_id(counts)
+
+
 def verify_frozen_source(executor: ConnectionExecutor, manifest: dict[str, Any]) -> None:
     """Recheck live provenance on every streamed run, including prepared-data reuse.
 
@@ -38,21 +53,21 @@ def verify_frozen_source(executor: ConnectionExecutor, manifest: dict[str, Any])
     are experiment metadata, so creating another scope does not invalidate data.
     """
     verify_sources(executor)
+    source = prepared_source(manifest)
     recorded = {
         name: count
-        for name, count in manifest["source"]["source_counts"].items()
+        for name, count in source.counts.items()
         if name not in EXPERIMENT_METADATA_TYPES
     }
     if source_counts(executor) != recorded:
         raise ValueError("Live graph counts changed; freeze the source and prepare a new dataset")
-    settings = recorded_settings(manifest)
     try:
         verify_scope(
             executor,
-            settings["scope"]["id"],
-            unowned=settings["scope"]["unowned"],
-            source_id=settings["source_id"],
-            split_seed=settings["dataset"]["split_seed"],
+            source.scope_id,
+            unowned=source.unowned,
+            source_id=source.source_id,
+            split_seed=source.split_seed,
         )
     except ValueError as error:
         raise ValueError(f"Prepared experiment scope is no longer valid: {error}") from None
