@@ -283,7 +283,7 @@ MulePatternLearner/
 | `config.json` | train | `{"config": …, "fingerprint": …, "provenance": {git commit, dirty flag, versions of the package, torch, numpy, scikit-learn and pyTigerGraph, device, threads, determinism, sampler backend, dataset id, started}}` |
 | `model.pt` | train | selected weights, RunConfig, feature plan, threshold, dataset id, `SavedModel.FORMAT` |
 | `resume.pt` | train | optimizer, weight average, RNG, epoch, step, selection state, dataset id and manifest sha256 |
-| `history.csv` | train | `epoch, step, date, loss, objective, corrected_steps, steps, seconds_per_step, batch_wait_seconds, database_calls, contexts_requested, contexts_distinct, cache_hits, rejected_roots, stub_children` |
+| `history.csv` | train | `epoch, step, date, loss, objective, corrected_steps, steps, seconds_per_step, batch_wait_seconds, database_calls, contexts_requested, contexts_distinct, memory_hits, rejected_roots, stub_children` (the context cache step adds its disk tier's hits beside memory_hits) |
 | `epochs.csv` | train | `epoch, loss, steps, validation_ap, validation_roc_auc, weights, selected, stopped` |
 | `events.jsonl` | every command | resume (with the segment's device, threads and determinism, and any change of them), backend choice, warnings, rejections (the lines `emit()` prints) |
 | `predictions/validation.parquet`, `predictions/test.parquet` | train | proxy scores on observed labels |

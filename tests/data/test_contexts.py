@@ -102,7 +102,7 @@ def test_sources_count_requested_distinct_and_cached_contexts() -> None:
     store.fetch(keys[:2])
     store.fetch(keys[:1], hop=2)
     counts = store.counts
-    assert (counts.requested, counts.cache_hits, counts.distinct) == (7, 2, 5)
+    assert (counts.requested, counts.memory_hits, counts.distinct) == (7, 2, 5)
     assert counts.seen == {context_hash(key, 1) for key in keys} | {context_hash(keys[0], 2)}
     store.close()
     # The hash is the same in every process, so a resumed run can restore it.

@@ -29,7 +29,7 @@ def test_log_interval_counts_corrections_and_non_finite_losses() -> None:
 
 
 def test_progress_sums_integer_statistics_across_segments() -> None:
-    counts = ContextCounts(requested=7, cache_hits=2, seen={1, 2, 3})
+    counts = ContextCounts(requested=7, memory_hits=2, seen={1, 2, 3})
     rejections = Counter({"missing_entity": 1})
     source = SimpleNamespace(database_calls=3, rejections=rejections, counts=counts)
     progress = RunTotals(0.0, cast(Any, source), "torch")
@@ -39,7 +39,7 @@ def test_progress_sums_integer_statistics_across_segments() -> None:
         "totals": {},
         "database_calls": 2,
         "rejections": {"missing_entity": 4},
-        "contexts": {"requested": 10, "cache_hits": 1},
+        "contexts": {"requested": 10, "memory_hits": 1},
         "context_keys": torch.tensor([2, 3], dtype=torch.int64),
     }
     progress.restore(earlier)
@@ -49,8 +49,8 @@ def test_progress_sums_integer_statistics_across_segments() -> None:
     assert progress.totals == Counter({"roots": 6, "stub_children": 1})
     assert progress.calls() == 5 and progress.rejections() == {"missing_entity": 5}
     # A resumed source holds every segment's distinct contexts itself.
-    assert progress.context_counts() == {"requested": 17, "distinct": 3, "cache_hits": 3}
+    assert progress.context_counts() == {"requested": 17, "distinct": 3, "memory_hits": 3}
     saved = progress.saved()
     assert saved["totals"] == {"roots": 6, "stub_children": 1}
-    assert (saved["database_calls"], saved["contexts"]) == (5, {"requested": 17, "cache_hits": 3})
+    assert (saved["database_calls"], saved["contexts"]) == (5, {"requested": 17, "memory_hits": 3})
     assert saved["context_keys"].tolist() == [1, 2, 3]
