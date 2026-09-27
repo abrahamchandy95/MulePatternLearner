@@ -587,7 +587,6 @@ the part of its weight inside it. Tied scores form one block, as they form one
 threshold of the average precision: a budget that ends inside the block takes the same
 share of each of its accounts, the expected result of ordering them at random, so
 neither account IDs nor row order matter. Precision divides the weighted mules inside
-the budget by the budget, recall by all weighted mules. With unit weights, no ties and
-a whole number of accounts in the budget this is the definition of the unweighted
-metrics of the same names in `metrics.json` (which reports 1 and 5% only).
+the budget by the budget, recall by all weighted mules. The metrics of the same names in
+`metrics.json` are these budgets with unit weights, over the observed labels.
 `<output>.parquet` keeps the scored sample with its float64 scores.
