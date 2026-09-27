@@ -109,7 +109,7 @@ SCORE_SCHEMA = pa.schema(
 def query_hubs(reader: HubReader, cutoff_seqs: list[int], sampler: SamplerPlan) -> HubRegistry:
     """Unscoped hub registry for arbitrary cutoffs, with the checkpoint's threshold.
 
-    Score-new runs unscoped, so its rows carry visibility phase 3.
+    Scoring arbitrary accounts runs unscoped, so its rows carry visibility phase 3.
     """
     return reader.hub_registry(cutoff_seqs, threshold=hub_threshold(sampler))
 

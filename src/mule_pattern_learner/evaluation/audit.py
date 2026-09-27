@@ -107,8 +107,8 @@ def audit_inputs(
         dataset = saved.dataset(data)
     if dataset is None or not dataset.manifest.exists():
         raise ValueError(
-            "Final audit needs the prepared dataset of this model for its cutoff clock "
-            "and hub registry; pass --dataset"
+            f"The audit needs the prepared dataset of this model in {data} for its cutoff "
+            "clock and hub registry; `mule train` prepares it"
         )
     manifest, _ = load_prepared(dataset)
     saved.check_dataset(dataset)

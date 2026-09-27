@@ -13,7 +13,7 @@ Leakage:
   rule of temporal_training_context), and a hub must itself be allowed in the
   phase. Held-out partitions therefore cannot change a phase-1 stub decision.
   Rows carry their phase and `is_stub` is keyed by (root cutoff, phase).
-  Without a scope_id (score-new) counts are unscoped and
+  Without a scope_id (`mule score`) counts are unscoped and
   every row has phase 3. Counts cover all currencies, an upper bound of the
   context query's USD capacity count.
 

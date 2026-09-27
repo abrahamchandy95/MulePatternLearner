@@ -22,7 +22,7 @@ compiled queries and positional loading jobs; verify and restore both afterwards
 The pair queries default to `persist=false`. Their `max_events` limit bounds
 pair results and sorting, but still requires traversing the sender's candidate
 history. They are POC extraction queries for analysis, not a batched temporal
-training sampler, and are installed only with `install --include-optional`. The
+training sampler, and are installed only by `install(executor, analytics=True)`. The
 live trainer uses the separate context sampler described below.
 
 See [encoding semantics](../docs/temporal_encoding.md) and
@@ -35,7 +35,7 @@ The training path installs `queries/fourier64.gsql`,
 `queries/split_cutoffs.gsql`, `queries/hub_accounts.gsql`,
 `evaluation/ground_truth.gsql`, `queries/label_contract.gsql` and
 `queries/label_reveal.gsql` (`TRAINING_QUERY_FILES` in
-`src/mule_pattern_learner/tigergraph/installer.py`). `mule-temporal train`
+`src/mule_pattern_learner/tigergraph/installer.py`). `mule train`
 installs whatever is stale; to install ahead of time:
 
 ```bash

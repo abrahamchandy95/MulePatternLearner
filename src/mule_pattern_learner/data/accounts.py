@@ -42,13 +42,13 @@ def _check_label_fields(row: dict[str, Any], graph_labels: bool) -> None:
     if not graph_labels and (positive or known):
         raise ValueError(
             "temporal_scope_population returned observed labels although include_observed "
-            "is false; install the current query (mule-temporal install)"
+            "is false; install the current query (mule install)"
         )
     if graph_labels and known > 0 and not positive:
         raise ValueError(
             f"Account {row.get('account_id')!r} has known_from_ms > 0 but observed_positive "
             "false: the installed temporal_scope_population predates the masked-label "
-            "predicate. Run `mule-temporal install` and prepare again."
+            "predicate. Run `mule install` and prepare again."
         )
 
 

@@ -22,8 +22,8 @@ TRAINING_QUERY_FILES = (
     "queries/label_reveal.gsql",
 )
 # Analytics queries: parity tools for the persisted pair encodings. Training never calls
-# them, so they are installed only when asked for (install --include-optional).
-OPTIONAL_QUERY_FILES = (
+# them, so only the code that uses them installs them (install with analytics=True).
+ANALYTICS_QUERY_FILES = (
     "analytics/zelle_pair_gaps.gsql",
     "analytics/payment_pair_gaps.gsql",
 )
@@ -33,6 +33,15 @@ INSTALL_DEADLINE_S = 45 * 60.0
 
 def _show_query(executor: ConnectionExecutor, name: str) -> str:
     return str(executor.gsql(f"USE GRAPH {GRAPH}\nSHOW QUERY {name}", what="SHOW QUERY " + name))
+
+
+def undefined_queries(executor: ConnectionExecutor) -> list[str]:
+    """Installed queries that no GSQL file of the repository defines (read-only).
+
+    `mule install` lists them and drops nothing: the server step retires them.
+    """
+    defined = repository_queries((*TRAINING_QUERY_FILES, *ANALYTICS_QUERY_FILES))
+    return sorted(set(installed_endpoints(executor)) - set(defined))
 
 
 def installed_endpoints(executor: ConnectionExecutor) -> dict[str, dict[str, Any]]:
@@ -87,7 +96,7 @@ def verify_sources(
         raise ValueError(
             "Installed query differs from repository source or is not installed: "
             + "; ".join(f"{name} {issue}" for name, issues in problems.items() for issue in issues)
-            + ". Run `mule-temporal install`."
+            + ". Run `mule install`."
         )
     return list(repository_queries(files))
 
@@ -137,8 +146,7 @@ def _created(output: str) -> bool:
 def install(
     executor: ConnectionExecutor,
     *,
-    force: bool = False,
-    include_optional: bool = False,
+    analytics: bool = False,
     deadline_s: float = INSTALL_DEADLINE_S,
     poll_s: float = 30.0,
     sleep: Callable[[float], None] = time.sleep,
@@ -148,7 +156,7 @@ def install(
 
     A query is stale when SHOW QUERY differs from the repository, its endpoint is
     missing or disabled, or its endpoint parameters differ (see query_problems);
-    `force=True` treats every query as stale. Queries that call a stale query
+    ``analytics`` also installs the analytics queries. Queries that call a stale query
     (temporal_training_context calls temporal_fourier64_values) are installed
     with it. Only stale definitions are re-created, because CREATE OR REPLACE
     disables an installed endpoint until the query is installed again.
@@ -169,9 +177,9 @@ def install(
         if "Local schema change succeeded" not in result:
             raise RuntimeError(result)
         logs["scope_schema"] = result
-    files = (*TRAINING_QUERY_FILES, *(OPTIONAL_QUERY_FILES if include_optional else ()))
+    files = (*TRAINING_QUERY_FILES, *(ANALYTICS_QUERY_FILES if analytics else ()))
     queries = repository_queries(files)
-    stale = set(queries) if force else _with_callers(set(query_problems(executor, files)), queries)
+    stale = _with_callers(set(query_problems(executor, files)), queries)
     names = [name for name in queries if name in stale]
     logs["installed"] = names
     logs["up_to_date"] = [name for name in queries if name not in stale]
@@ -244,7 +252,7 @@ def _await_enabled(
         if elapsed > deadline_s:
             raise TimeoutError(
                 f"Queries {pending} are still not installed after {elapsed:.0f}s. The server "
-                "may still be compiling: re-run `mule-temporal install` later, which installs "
+                "may still be compiling: re-run `mule install` later, which installs "
                 "only what is still stale."
             )
         emit({"awaiting": pending, "elapsed_s": round(elapsed)})

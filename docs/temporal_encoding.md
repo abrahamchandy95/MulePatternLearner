@@ -140,12 +140,9 @@ returns no rows and performs no writes; the query never silently truncates away
 the predecessor. High-degree or long-lived accounts need staged temporal indexes
 and a batch pipeline; do not call this once per pair per training epoch at scale.
 
-Training never calls the pair queries, so the training installer adds them only
-on request. Installation uses the project's `.env`, without printing credentials:
-
-```sh
-.venv/bin/python -m mule_pattern_learner install --include-optional
-```
+Training never calls the pair queries, so neither `mule install` nor `mule train`
+installs them; `tigergraph.installer.install(executor, analytics=True)` does, on a
+connection built from the project's `.env`.
 
 This installs the shared encoder, its public wrapper and the training queries as
 usual, plus the two pair queries. The fresh schema file includes the pair-gap

@@ -473,7 +473,7 @@ class ScoringExecutor:
             return [{"status": "ok", "last_visible_seqs": {str(params["cutoff_times"][0]): 29_999}}]
         if name == HUB_QUERY:
             (cutoff,) = params["cutoff_seqs"]
-            # Score-new is unscoped: phase-3 rows over all visible history.
+            # Scoring arbitrary accounts is unscoped: phase-3 rows over all visible history.
             assert not params.get("scope_id")
             echo = {k: params[k] for k in ("threshold", "cutoff_seqs", "scope_id") if k in params}
             return [

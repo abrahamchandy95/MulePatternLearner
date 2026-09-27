@@ -13,6 +13,7 @@ from mule_pattern_learner.artifacts import read_epochs, read_events, read_histor
 from mule_pattern_learner.cli import build_parser
 from mule_pattern_learner.config import DEFAULT_CONFIG, TransportConfig
 from mule_pattern_learner.data.manifest import dataset_id
+from mule_pattern_learner.evaluation.truth import ParquetTruth
 from mule_pattern_learner.inference.saved_model import SavedModel
 from mule_pattern_learner.paths import BASELINE_VARIANT, RESULTS_DIR, DatasetPaths, RunPaths
 from mule_pattern_learner.pipeline import connect as pipeline_connect
@@ -26,7 +27,7 @@ from mule_pattern_learner.testing.fake_graph import FakeExecutor
 
 
 def test_minimal_command_and_run_defaults(tmp_path: Path) -> None:
-    # `mule-temporal train` needs no flag, file or identifier.
+    # `mule train` needs no flag, file or identifier.
     args = build_parser().parse_args(["train"])
     assert vars(args) == {"command": "train"}
     # The built-in run goes to results/baseline/seed-42/.
@@ -155,7 +156,7 @@ def test_train_then_audit_write_exactly_the_files_of_the_run_and_dataset_tables(
     truth["is_mule"] = (truth.index % 3 == 0).astype(int)
     truth_path = tmp_path / "truth.parquet"
     truth.to_parquet(truth_path, index=False)
-    audit = evaluate_run(output, truth_path, data=data)
+    audit = evaluate_run(output, truth=ParquetTruth(truth_path), data=data)
     assert audit["rejected_accounts"] == 0
     assert files(output.root) == trained | {"audit/test.json", "audit/test.parquet"}
     assert files(data) == prepared

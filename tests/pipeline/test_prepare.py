@@ -75,7 +75,7 @@ def test_prepare_dataset_checks_query_hashes_before_reusing_a_ready_dataset(
     split_seed = config.with_changes({"dataset": {"split_seed": 7}})
     assert pipeline_prepare.find_datasets(split_seed, data) == []
     fixed_hashes["queries/hub_accounts.gsql"] = "changed"
-    with pytest.raises(ValueError, match=r"hub_accounts\.gsql.*mule-temporal install.*aside"):
+    with pytest.raises(ValueError, match=r"hub_accounts\.gsql.*mule install.*aside"):
         pipeline_prepare.prepare_dataset(config, data)
     with pytest.raises(ValueError, match="different GSQL sources"):
         data_manifest.load_prepared(dataset)

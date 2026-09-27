@@ -150,10 +150,6 @@ def test_install_creates_and_installs_only_stale_queries(monkeypatch: pytest.Mon
     assert len(server.created) == 1 and "temporal_training_cutoffs" not in server.created[0]
     assert server.created[0].startswith("USE GRAPH Mule_Pattern_Learner\n")
     assert logs["verified"] == names
-    # force reinstalls every query.
-    server = InstallServer()
-    logs = installer.install(executor(server), force=True)
-    assert server.installs == [(names, False)] and len(server.created) == 2
     # A disabled endpoint is stale even when the text matches.
     server = InstallServer()
     server.enabled["temporal_training_cutoffs"] = False
@@ -182,7 +178,7 @@ def test_install_polls_endpoints_when_the_install_request_times_out(
     # only what is still stale.
     server = InstallServer(stale=("temporal_training_cutoffs",), mode="timeout", ready_after=99)
     tg = executor(server)
-    with pytest.raises(TimeoutError, match="still not installed.*re-run `mule-temporal install`"):
+    with pytest.raises(TimeoutError, match="still not installed.*re-run `mule install`"):
         installer.install(tg, sleep=tg.clock.sleep, clock=tg.clock.time, poll_s=30, deadline_s=100)
     # Other failures of the install request propagate.
     server = InstallServer(stale=("temporal_training_cutoffs",))
@@ -215,3 +211,13 @@ def test_install_follows_an_asynchronous_request(monkeypatch: pytest.MonkeyPatch
     )
     with pytest.raises(RuntimeError, match="Semantic Check"):
         installer.install(executor(server))
+
+
+def test_installed_queries_that_no_file_defines_are_listed_not_dropped() -> None:
+    files = (*installer.TRAINING_QUERY_FILES, *installer.ANALYTICS_QUERY_FILES)
+    names = [*gsql_text.repository_queries(files), "temporal_training_population"]
+    listed = {f"GET /query/Mule_Pattern_Learner/{name}": endpoint(set()) for name in names}
+    gsql: list[str] = []
+    conn = SimpleNamespace(getInstalledQueries=lambda: listed, gsql=gsql.append)
+    assert installer.undefined_queries(executor(conn)) == ["temporal_training_population"]
+    assert gsql == []

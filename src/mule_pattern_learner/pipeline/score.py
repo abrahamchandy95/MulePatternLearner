@@ -1,13 +1,15 @@
-"""Scoring arbitrary accounts at a date on the graph, with its installed queries checked."""
+"""Scoring the accounts listed in a file with a run's model, which `mule score` runs."""
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from ..contract.clock import timestamp
 from ..inference.saved_model import SavedModel
-from ..inference.score_accounts import check_new_outputs, score_new_accounts
+from ..inference.score_accounts import check_new_outputs, read_account_ids, score_new_accounts
+from ..paths import RunPaths
 from ..tigergraph.context_query import TigerGraphContextFetcher
 from ..tigergraph.cutoffs import TigerGraphCutoffs
 from ..tigergraph.hubs import TigerGraphHubs
@@ -15,21 +17,31 @@ from ..tigergraph.installer import verify_sources
 from .connect import connect
 
 
-def score_new(
-    checkpoint: Path, account_ids: Iterable[str], date: str, output: Path
-) -> dict[str, Any]:
-    """Score the accounts at a date on a connection with the checkpoint's retry budgets.
+def score_accounts(run: RunPaths, accounts: Path, date: str | None = None) -> dict[str, Any]:
+    """Score the accounts of a file (one id per line) with the run's model at a date.
 
-    Existing outputs are refused before connecting, and the installed queries must be
-    the repository's before any account is scored.
+    The date defaults to the model's test cutoff, its last test date. The scores go to
+    the run's scores/<file stem>_<date>.parquet and the ids TigerGraph rejects beside
+    them. Existing outputs are refused before connecting; the connection has the
+    model's retry budgets, and its installed queries must be the repository's before
+    any account is scored.
     """
+    if not accounts.is_file():
+        raise FileNotFoundError(f"No account file {accounts}")
+    saved = SavedModel.load(run.model)
+    if date is None:
+        date = max(saved.config.dataset.dates.test, key=timestamp)
+    try:
+        datetime.fromisoformat(date)
+    except ValueError:
+        raise ValueError(f"DATE must be an ISO date, got {date!r}") from None
+    output = run.scores(accounts.stem, date)
     check_new_outputs(output)
-    saved = SavedModel.of(checkpoint)
     executor = connect(saved.config.transport)
     verify_sources(executor)
     return score_new_accounts(
         saved,
-        account_ids,
+        read_account_ids(accounts),
         date,
         output,
         cutoffs=TigerGraphCutoffs(executor),

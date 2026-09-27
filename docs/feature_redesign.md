@@ -97,7 +97,7 @@ Compare them using the same revealed labels, dates, prior and observed validatio
 proxy, then freeze this setting before feature comparisons. Hidden truth is never
 read by preparation, training, early stopping or threshold selection.
 
-The separate `evaluate-final` command enumerates the whole frozen test partition,
+The separate `mule evaluate` command enumerates the whole frozen test partition,
 includes every truth-positive test account and a uniform sample of truth-negative
 accounts, then computes inverse-inclusion-probability-weighted metrics at the
 frozen checkpoint threshold, and weighted precision and recall in the top 1, 5 and
@@ -131,7 +131,7 @@ of the same dataset settings.
 .venv/bin/python scripts/verify_feature_redesign.py --account ACCOUNT_ID --date 2025-01-01
 
 # Final-only; do not run during feature selection. Truth comes from the graph.
-.venv/bin/python -m mule_pattern_learner evaluate-final results/<name>/seed-<seed>
+.venv/bin/python -m mule_pattern_learner evaluate results/<name>/seed-<seed>
 ```
 
 Run parity and cost qualification first, then nnPU/noise-floor comparisons, then
