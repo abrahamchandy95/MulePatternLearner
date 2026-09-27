@@ -20,6 +20,7 @@ from ..data.manifest import load_prepared
 from ..data.ports import ContextFetcher, CutoffReader, HubReader
 from ..data.splits import eligible_mask, resolve_cutoff, sample_keys
 from ..paths import DatasetPaths
+from ..runtime.progress import emit
 from .predictor import Predictor
 from .rejections import rejection_summary
 from .saved_model import SavedModel
@@ -213,6 +214,15 @@ def score_new_accounts(
         failed = False
     finally:
         close_source(contexts, failed=failed)
+    emit(
+        {
+            "event": "score",
+            "date": date,
+            "accounts": count,
+            "rejected": rejected,
+            "output": str(output),
+        }
+    )
     return {
         "accounts": count,
         **rejection_summary(contexts, rejected, predictor.totals),

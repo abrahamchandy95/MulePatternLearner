@@ -10,6 +10,7 @@ from ..contract.clock import timestamp
 from ..inference.saved_model import SavedModel
 from ..inference.score_accounts import check_new_outputs, read_account_ids, score_new_accounts
 from ..paths import RunPaths
+from ..runtime.progress import recording
 from ..tigergraph.context_query import TigerGraphContextFetcher
 from ..tigergraph.cutoffs import TigerGraphCutoffs
 from ..tigergraph.hubs import TigerGraphHubs
@@ -22,9 +23,10 @@ def score_accounts(run: RunPaths, accounts: Path, date: str | None = None) -> di
 
     The date defaults to the model's test cutoff, its last test date. The scores go to
     the run's scores/<file stem>_<date>.parquet and the ids TigerGraph rejects beside
-    them. Existing outputs are refused before connecting; the connection has the
-    model's retry budgets, and its installed queries must be the repository's before
-    any account is scored.
+    them, and the lines scoring prints are appended to the run's events.jsonl. Existing
+    outputs are refused before connecting; the connection has the model's retry
+    budgets, and its installed queries must be the repository's before any account is
+    scored.
     """
     if not accounts.is_file():
         raise FileNotFoundError(f"No account file {accounts}")
@@ -37,14 +39,15 @@ def score_accounts(run: RunPaths, accounts: Path, date: str | None = None) -> di
         raise ValueError(f"DATE must be an ISO date, got {date!r}") from None
     output = run.scores(accounts.stem, date)
     check_new_outputs(output)
-    executor = connect(saved.config.transport)
-    verify_sources(executor)
-    return score_new_accounts(
-        saved,
-        read_account_ids(accounts),
-        date,
-        output,
-        cutoffs=TigerGraphCutoffs(executor),
-        hub_reader=TigerGraphHubs(executor),
-        fetcher=TigerGraphContextFetcher(executor),
-    )
+    with recording(run.events):
+        executor = connect(saved.config.transport)
+        verify_sources(executor)
+        return score_new_accounts(
+            saved,
+            read_account_ids(accounts),
+            date,
+            output,
+            cutoffs=TigerGraphCutoffs(executor),
+            hub_reader=TigerGraphHubs(executor),
+            fetcher=TigerGraphContextFetcher(executor),
+        )

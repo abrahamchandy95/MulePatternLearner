@@ -8,10 +8,12 @@ from typing import Any
 
 import pytest
 
+from mule_pattern_learner.artifacts import read_events
 from mule_pattern_learner.config import TransportConfig
 from mule_pattern_learner.evaluation.truth import ParquetTruth
 from mule_pattern_learner.paths import RunPaths
 from mule_pattern_learner.pipeline import evaluate as pipeline_evaluate
+from mule_pattern_learner.runtime.progress import emit
 from mule_pattern_learner.testing.builders import base_config, checkpoint, prepared_dataset
 from mule_pattern_learner.tigergraph.oracle import TigerGraphTruth
 
@@ -32,6 +34,7 @@ def test_evaluate_run_connects_after_its_checks_and_reads_truth_on_that_connecti
         return executor
 
     def audit(audited: RunPaths, truth: Any, **options: Any) -> dict[str, Any]:
+        emit({"event": "audit"})
         return {"run": audited, "truth": truth, **options}
 
     monkeypatch.setattr(pipeline_evaluate, "connect", connect)
@@ -53,5 +56,7 @@ def test_evaluate_run_connects_after_its_checks_and_reads_truth_on_that_connecti
     truth = result["truth"]
     assert isinstance(truth, TigerGraphTruth) and truth.executor is executor
     assert result["dataset"] == dataset and result["run"] == run
+    # The lines the audit prints go to the run's events.jsonl.
+    assert read_events(run.events) == [{"event": "audit"}]
     reader = ParquetTruth(tmp_path / "t.parquet")
     assert pipeline_evaluate.evaluate_run(run, truth=reader, data=tmp_path)["truth"] is reader

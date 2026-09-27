@@ -8,10 +8,11 @@ from typing import Any
 
 import pytest
 
-from mule_pattern_learner.artifacts import pending_path
+from mule_pattern_learner.artifacts import pending_path, read_events
 from mule_pattern_learner.inference.saved_model import SavedModel
 from mule_pattern_learner.paths import RunPaths
 from mule_pattern_learner.pipeline import score as pipeline_score
+from mule_pattern_learner.runtime.progress import emit
 from mule_pattern_learner.testing.builders import base_config, checkpoint
 
 
@@ -34,6 +35,7 @@ def test_scoring_checks_inputs_and_outputs_then_verifies_the_installed_queries(
     def score(saved: SavedModel, ids: Any, date: str, path: Path, **options: Any) -> dict[str, Any]:
         steps.append("score")
         scored.append((date, list(ids), path))
+        emit({"event": "score", "date": date})
         return options
 
     monkeypatch.setattr(pipeline_score, "connect", connect)
@@ -55,6 +57,8 @@ def test_scoring_checks_inputs_and_outputs_then_verifies_the_installed_queries(
     result = pipeline_score.score_accounts(run, accounts)
     assert steps == ["connect", "verify", "score"]
     assert scored == [("2025-01-01", ["A1", "A2"], output)]
+    # The lines scoring prints go to the run's events.jsonl.
+    assert read_events(run.events) == [{"event": "score", "date": "2025-01-01"}]
     # The cutoff clock, the hub registry and the contexts are read on that connection.
     assert {name: port.executor for name, port in result.items()} == {
         "cutoffs": executor,

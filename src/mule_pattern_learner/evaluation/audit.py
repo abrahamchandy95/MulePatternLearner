@@ -17,6 +17,7 @@ from ..contract.clock import cutoff_ms
 from ..inference.saved_model import SavedModel
 from ..metrics import evaluate, weighted_metrics
 from ..paths import DATA_DIR, DatasetPaths, RunPaths
+from ..runtime.progress import emit
 from .sample import audit_sample
 from .truth import TruthReader
 
@@ -228,4 +229,14 @@ def audit(
     write_audit_scores(run.audit_scores(split), scored)
     if rejected:
         write_rejected(run.audit_rejected(split), rejected)
+    emit(
+        {
+            "event": "audit",
+            "split": split,
+            "date": date,
+            "accounts": len(scored),
+            "rejected_accounts": len(unscored),
+            "output": str(run.audit_metrics(split)),
+        }
+    )
     return result

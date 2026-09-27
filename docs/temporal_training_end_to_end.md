@@ -537,7 +537,8 @@ the kept checkpoint is still the best validation epoch.
   `config.json` (configuration, fingerprint and provenance), `model.pt` (selected
   weights, threshold, contracts, fingerprints and the dataset id), `resume.pt`,
   `history.csv` (one row per logging interval), `epochs.csv`, `events.jsonl` (start,
-  train records per logging interval, evaluate, epoch and complete events),
+  train records per logging interval, evaluate, epoch and complete events, then the
+  audit and score events of later commands),
   `predictions/validation.parquet`, `predictions/test.parquet` and `metrics.json`.
   Scores in every output are float64 probabilities computed from the logit; in float32
   every logit above about 17 scored exactly 1, so the highest-scored accounts tied.

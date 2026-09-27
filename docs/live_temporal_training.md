@@ -474,7 +474,9 @@ The run directory holds:
   start time);
 - `events.jsonl`: the structured lines the run printed (start or resume, training
   intervals, evaluation, epochs and completion, with database calls, rejections, stub
-  and rejected-child counts, the sampler backend, seconds per step and batch wait);
+  and rejected-child counts, the sampler backend, seconds per step and batch wait),
+  followed by one line for each audit `mule evaluate` writes and each file of
+  accounts `mule score` scores;
 - `history.csv`: one row per training log interval (loss, unclamped objective,
   corrected steps, timing, and the run's totals of database calls, contexts
   requested, distinct and cached, rejected training roots and stub children);
