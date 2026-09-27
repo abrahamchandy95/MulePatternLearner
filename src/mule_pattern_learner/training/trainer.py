@@ -24,7 +24,6 @@ average (averaging), the progress records (history) and what a finished run writ
 
 from __future__ import annotations
 
-from collections import Counter
 from collections.abc import Iterator, Mapping
 import contextlib
 import time
@@ -56,7 +55,11 @@ from ..data.manifest import dataset_id, dataset_mismatches, load_prepared
 from ..data.observed_labels import label_summary, load_observed_labels, visible_labels
 from ..data.splits import eligible_mask, marginal_mask, sample_keys
 from ..inference.predictor import accepted_scores, score_batches
-from ..inference.rejections import exceeds_rejection_limit
+from ..inference.rejections import (
+    TrainingRejections,
+    check_split_rejections,
+    rejection_counts,
+)
 from ..inference.saved_model import SavedModel
 from ..metrics import evaluate, select_threshold
 from ..model.build import build_model
@@ -92,19 +95,6 @@ def check_limits(config: RunConfig, plan: FeaturePlan) -> None:
         plan,
         config.sampler,
     )
-
-
-def rejection_counts(labels: np.ndarray, accepted: np.ndarray) -> dict[str, int]:
-    """Requested and rejected roots, split into observed positives and unlabeled."""
-    lost = ~accepted
-    positives = int(labels[lost].astype(bool).sum())
-    rejected = int(lost.sum())
-    return {
-        "requested": len(labels),
-        "rejected": rejected,
-        "positive": positives,
-        "unlabeled": rejected - positives,
-    }
 
 
 def check_source(
@@ -293,9 +283,7 @@ class _TrainingRun:
         self.loss_sum = torch.zeros((), device=device)
         self.loss_steps = 0
         self.rejected_rows: dict[str, int] = {}
-        # Rejected training roots of the whole run and of the current epoch.
-        self.train_rejections: Counter[str] = Counter()
-        self.epoch_rejections: Counter[str] = Counter()
+        self.rejections = TrainingRejections(self.limit)
         self.epoch_rng_state: Mapping[str, Any] = self.rng.bit_generator.state
 
     def _state_copy(self) -> dict[str, torch.Tensor]:
@@ -332,47 +320,35 @@ class _TrainingRun:
 
     def save_last(self) -> None:
         """Write resume.pt: everything a resumed run needs to continue exactly."""
-        state: dict[str, Any] = {
-            "model": self._state_copy(),
-            "optimizer": self.optimizer.state_dict(),
-            "numpy_rng": self.epoch_rng_state,
-            "torch_rng": torch.get_rng_state(),
-            "epoch": self.epoch,
-            "step": self.step,
-            "stopped": self.stopped,
-            "loss_sum": self.loss_sum.detach().cpu(),
-            "loss_steps": self.loss_steps,
-            "best_state": self.best_state,
-            "weight_average": None if self.average is None else self.average.saved(),
-            "best_ap": self.best_ap,
-            "best_epoch": self.best_epoch,
-            "best_scores": None if self.best_scores is None else torch.from_numpy(self.best_scores),
-            "best_accepted": (
-                None if self.best_accepted is None else torch.from_numpy(self.best_accepted)
-            ),
-            "epoch_rows": self.epoch_rows,
-            "elapsed_seconds": time.perf_counter() - self.progress.started,
-            # Plain dicts and ints: torch.load(weights_only=True) refuses a Counter.
-            "sampler_backend": self.backend,
-            "progress_totals": dict(self.progress.totals),
-            "database_calls": self.progress.calls(),
-            "rejections": self.progress.rejections(),
-            "context_counts": {
-                k: v for k, v in self.progress.context_counts().items() if k != "distinct"
-            },
-            # The distinct contexts asked for, as their context_hash values.
-            "context_keys": torch.tensor(sorted(self.contexts.counts.seen), dtype=torch.int64),
-            "train_rejections": dict(self.train_rejections),
-            "epoch_rejections": dict(self.epoch_rejections),
-        }
-        if self.device.type == "cuda":
+        best_scores, best_accepted = self.best_scores, self.best_accepted
+        ResumeState(
+            model=self._state_copy(),
+            optimizer=self.optimizer.state_dict(),
+            weight_average=None if self.average is None else self.average.saved(),
+            numpy_rng=self.epoch_rng_state,
+            torch_rng=torch.get_rng_state(),
             # The training device only: a resume may see a different number of GPUs.
-            state["cuda_rng"] = torch.cuda.get_rng_state(self.device)
-        ResumeState(state).save(self.run.resume, self.config)
+            cuda_rng=(
+                torch.cuda.get_rng_state(self.device) if self.device.type == "cuda" else None
+            ),
+            epoch=self.epoch,
+            step=self.step,
+            stopped=self.stopped,
+            loss_sum=self.loss_sum.detach().cpu(),
+            loss_steps=self.loss_steps,
+            best_state=self.best_state,
+            best_ap=self.best_ap,
+            best_epoch=self.best_epoch,
+            best_scores=None if best_scores is None else torch.from_numpy(best_scores),
+            best_accepted=None if best_accepted is None else torch.from_numpy(best_accepted),
+            epoch_rows=self.epoch_rows,
+            sampler_backend=self.backend,
+            progress=self.progress.saved(),
+            rejections=self.rejections.saved(),
+        ).save(self.run.resume, self.config)
 
-    def restore(self, resumed: ResumeState) -> None:
-        state = resumed.values
-        saved = state["sampler_backend"]
+    def restore(self, state: ResumeState) -> None:
+        saved = state.sampler_backend
         if saved != self.backend:
             if self.sampler.backend != self.backend:
                 raise ValueError(
@@ -388,30 +364,26 @@ class _TrainingRun:
                     "note": "the remaining steps sample a different stream",
                 }
             )
-        self.model.load_state_dict(state["model"])
-        self.optimizer.load_state_dict(state["optimizer"])
+        self.model.load_state_dict(state.model)
+        self.optimizer.load_state_dict(state.optimizer)
         if self.average is not None:
-            self.average.load(state["weight_average"])
-        self.epoch_rng_state = state["numpy_rng"]
-        self.rng.bit_generator.state = state["numpy_rng"]
-        torch.set_rng_state(state["torch_rng"])
-        restore_cuda_rng(state.get("cuda_rng"), self.device)
-        self.epoch, self.step, self.stopped = state["epoch"], state["step"], state["stopped"]
-        self.loss_sum = state["loss_sum"].to(self.device)
-        self.loss_steps = state["loss_steps"]
-        self.best_state, self.best_ap = state["best_state"], state["best_ap"]
-        self.best_epoch, self.epoch_rows = state["best_epoch"], state["epoch_rows"]
-        scores, accepted = state["best_scores"], state["best_accepted"]
+            if state.weight_average is None:
+                raise ValueError("The resume state holds no weight average")
+            self.average.load(state.weight_average)
+        self.epoch_rng_state = state.numpy_rng
+        self.rng.bit_generator.state = state.numpy_rng
+        torch.set_rng_state(state.torch_rng)
+        restore_cuda_rng(state.cuda_rng, self.device)
+        self.epoch, self.step, self.stopped = state.epoch, state.step, state.stopped
+        self.loss_sum = state.loss_sum.to(self.device)
+        self.loss_steps = state.loss_steps
+        self.best_state, self.best_ap = state.best_state, state.best_ap
+        self.best_epoch, self.epoch_rows = state.best_epoch, state.epoch_rows
+        scores, accepted = state.best_scores, state.best_accepted
         self.best_scores = None if scores is None else scores.numpy()
         self.best_accepted = None if accepted is None else accepted.numpy()
-        self.progress.started -= float(state["elapsed_seconds"])
-        self.progress.totals = Counter(state["progress_totals"])
-        self.progress.base_calls = int(state["database_calls"])
-        self.progress.base_rejections = Counter(state["rejections"])
-        self.progress.base_contexts = Counter(state["context_counts"])
-        self.contexts.counts.seen.update(state["context_keys"].tolist())
-        self.train_rejections = Counter(state["train_rejections"])
-        self.epoch_rejections = Counter(state["epoch_rejections"])
+        self.progress.restore(state.progress)
+        self.rejections.restore(state.rejections)
 
     # Phases ------------------------------------------------------------------
 
@@ -467,7 +439,7 @@ class _TrainingRun:
         if self.step == 0:
             self.loss_sum = torch.zeros((), device=self.device)
             self.loss_steps = 0
-            self.epoch_rejections = Counter()
+            self.rejections.start_epoch()
         self._train_steps(epoch, schedule)
         if not self.loss_steps:
             raise ValueError(f"Every training batch of epoch {epoch + 1} was rejected")
@@ -493,7 +465,13 @@ class _TrainingRun:
                         f"resolved {self.backend}"
                     )
                 self.progress.add(stats)
-                self.count_training_rejections(step, prepared.accepted, requested)
+                self.rejections.count(
+                    epoch,
+                    self.observed[step.date][step.indices],
+                    prepared.accepted,
+                    requested,
+                    self.progress.rejections,
+                )
                 if prepared.batch is not None:
                     # Rejected roots were dropped; the leading accepted rows are positives.
                     positives = int(prepared.accepted[: len(step.positives)].sum())
@@ -526,7 +504,7 @@ class _TrainingRun:
                             "steps": len(schedule),
                             "date": step.date,
                             **interval.record(loss, risk, corrections, now),
-                            "rejected_roots": int(self.train_rejections["rejected"]),
+                            "rejected_roots": int(self.rejections.run["rejected"]),
                             "batch": {
                                 k: v for k, v in plain(stats).items() if k != "sampler_backend"
                             },
@@ -547,7 +525,9 @@ class _TrainingRun:
             scores, accepted = self.score("validation")
             selected = self._state_copy()
         labels = self.labels("validation")
-        self.check_rejections("validation", labels, accepted)
+        check_split_rejections(
+            "validation", labels, accepted, self.limit, self.progress.rejections()
+        )
         metrics = evaluate(labels[accepted].astype(np.int64), scores[accepted], 0.5)
         ap = metrics["average_precision"]
         if ap is not None and ap > self.best_ap:
@@ -579,50 +559,8 @@ class _TrainingRun:
         write_epochs(self.run.epochs, rows)
         return rows
 
-    def count_training_rejections(
-        self, step: TrainingStep, accepted: np.ndarray, requested: int
-    ) -> None:
-        """Count a step's rejected roots; fail past the limit or on an observed positive.
-
-        The limit applies to the whole epoch (``requested`` roots). The count only
-        grows, so failing as soon as it is crossed equals failing at the epoch end.
-        """
-        self.train_rejections["requested"] += len(accepted)
-        if accepted.all():
-            return
-        counts = rejection_counts(self.observed[step.date][step.indices], accepted)
-        del counts["requested"]
-        self.epoch_rejections.update(counts)
-        self.train_rejections.update(counts)
-        rejected, positives = self.epoch_rejections["rejected"], self.epoch_rejections["positive"]
-        if exceeds_rejection_limit(rejected, positives, requested, self.limit):
-            raise ValueError(
-                f"Epoch {step.epoch + 1}: TigerGraph rejected {rejected} of {requested} training "
-                f"roots so far ({positives} observed positives; max_rejected_root_fraction="
-                f"{self.limit}); statuses {self.progress.rejections()}"
-            )
-
     def labels(self, split: str) -> np.ndarray:
         return np.concatenate([s.labels for s in self.evaluation[split]])
-
-    def check_rejections(self, split: str, labels: np.ndarray, accepted: np.ndarray) -> None:
-        """Fail an evaluation whose rejected roots would censor its metrics."""
-        counts = rejection_counts(labels, accepted)
-        rejected, positives = counts["rejected"], counts["positive"]
-        problem = None
-        if exceeds_rejection_limit(rejected, positives, len(labels), self.limit):
-            problem = (
-                f"{positives} observed positives among them"
-                if positives
-                else f"above max_rejected_root_fraction={self.limit}"
-            )
-        elif split == "validation" and len(np.unique(labels[accepted])) != 2:
-            problem = "validation no longer has both observed classes"
-        if problem is not None:
-            raise ValueError(
-                f"{split}: TigerGraph rejected {rejected} of {len(labels)} roots ({problem}); "
-                f"statuses {self.progress.rejections()}"
-            )
 
     def train_step(self, step: TrainingStep, positives: int, batch: Batch) -> StepLoss:
         return nnpu_step(self.model, self.optimizer, self.loss, batch, positives, step.seed)
@@ -672,10 +610,7 @@ class _TrainingRun:
         self.model.load_state_dict(self.best_state)
         validation = self.frame("validation", self.best_scores, self.best_accepted)
         rejected_roots = {
-            "train": {
-                key: int(self.train_rejections[key])
-                for key in ("requested", "rejected", "positive", "unlabeled")
-            },
+            "train": self.rejections.totals(),
             "validation": rejection_counts(self.labels("validation"), self.best_accepted),
         }
         labels = validation["observed_label"].to_numpy()
@@ -729,6 +664,6 @@ class _TrainingRun:
         """Test predictions of the accepted roots, and the test split's rejection counts."""
         scores, accepted = self.score("test")
         labels = self.labels("test")
-        self.check_rejections("test", labels, accepted)
+        check_split_rejections("test", labels, accepted, self.limit, self.progress.rejections())
         counts = rejection_counts(labels, accepted)
         return self.frame("test", scores, accepted), counts

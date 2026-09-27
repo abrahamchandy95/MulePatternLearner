@@ -292,7 +292,7 @@ def test_batches_use_train_mode_step_seeds_and_the_hub_registry(
     # One resolution per run, on the main thread; every batch gets its result.
     assert resolved == [threading.main_thread()] and backends == {"torch"}
     state = torch.load(RunPaths(tmp_path / "run").resume, weights_only=True)
-    assert state["sampler_backend"] == "torch" and "cuda_rng" not in state
+    assert state["sampler_backend"] == "torch" and state["cuda_rng"] is None
     model = torch.load(RunPaths(tmp_path / "run").model, weights_only=True)
     assert model["sampler_backend"] == "torch"
     train_calls = [c for c in calls if c[0] == "train"]
