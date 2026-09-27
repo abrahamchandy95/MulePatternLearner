@@ -83,6 +83,24 @@ Where the owner decisions below differ from the proposal that follows, the decis
    `pre-restructure` tag is deleted after the live parity and server steps unless the owner keeps
    it.
 
+Decided on 2026-09-28, on questions the mid-migration review raised:
+
+10. **Every run reads the graph's labels.** Every run reads the labels revealed in the graph
+    (`pu_label`), and the model trains only on them, so there is no table label reader.
+    `data.ports.ObservedLabelReader` has no `from_graph` flag and no `positive_ids()`, and
+    `data.accounts.select_accounts` always reads the scope population with its observed labels.
+    Tests serve their observed positives through the fake graph's population, so
+    `testing.builders.FrameObservedLabels` is deleted. `metrics.json` drops its constant
+    `label_policy`, and `gsql/README.md` its external label providers. The golden literals and
+    the saved-model scores stay identical.
+11. **The old saved-settings conversion stays until the new baseline run has a ground-truth
+    audit**, so the owner's current best model can still be compared, and the replace-main step
+    deletes it. Until then it lives in a module of its own, `inference/saved_settings.py`
+    (`SAVED_SETTINGS`, the `variant`, `tabular` and `cohort_seed` values), so `SavedModel`
+    stays small.
+12. **The dataset id's scope settings are `scope.id` and `scope.unowned` only**, as implemented
+    (see Configuration).
+
 ## Cost correction
 
 Measured on the CUDA host, a graph run takes about 3 s per step and about 1 hour with early
@@ -99,7 +117,7 @@ stopping (the reference run stopped at epoch 11), not the 11 s per step and 12.5
 
 **One model, `TGAT`.**
 - `SummaryMLP` exists only for the controls.
-- These are deleted: the `variant` axis, the `single` architecture, the `LEGACY_GROUPS` constant, the `recent`/`stratified` samplers, SQLite storage, `shared_history`, and the parquet label policy.
+- These are deleted: the `variant` axis, the `single` architecture, the `LEGACY_GROUPS` constant, the `recent`/`stratified` samplers, SQLite storage, `shared_history`, the parquet label policy and the table label reader.
 - All 20 feature groups stay in the registry and in the query.
 
 **Two roots, both gitignored.** Prepared datasets go under `data/<dataset id>/`, and everything the commands write goes under `results/`. `mule train` writes `results/baseline/seed-42/`.
@@ -200,7 +218,8 @@ MulePatternLearner/
 │   │   ├── pool_counts.py      pool counts over the root's candidate pool
 │   │   ├── limits.py           BatchLimits, BatchIndex (bounds from contract.bounds)
 │   │   └── assemble.py         RootBatch, build_batch(), to_device() (the one device rule)
-│   ├── inference/          saved_model.py, predictor.py (the one scoring loop), rejections.py, score_accounts.py
+│   ├── inference/          saved_model.py, predictor.py (the one scoring loop), rejections.py, score_accounts.py,
+│   │                       saved_settings.py (configurations saved before RunConfig; until main is replaced)
 │   ├── training/           trainer.py, objective.py, averaging.py, schedule.py, checkpoint.py, history.py, summary.py
 │   ├── evaluation/
 │   │   ├── truth.py            TruthReader protocol, ParquetTruth
@@ -226,7 +245,7 @@ MulePatternLearner/
 │   └── testing/            fakes and builders (the PyG testing/ pattern)
 │       ├── fake_graph.py       FakeTigerGraph: a QueryExecutor answering every repository query, asserting GSQL signatures
 │       ├── fake_connection.py  fake pyTigerGraph connections for client and executor tests
-│       └── builders.py         accounts, messages, payments, associations, contexts, test RunConfig, FrameObservedLabels
+│       └── builders.py         accounts with their revealed labels, messages, payments, associations, contexts, test RunConfig
 ├── gsql/
 │   ├── README.md
 │   ├── queries/            the training pipeline's queries; reinstalled when their text changes
@@ -448,7 +467,7 @@ DEFAULT_CONFIG = RunConfig()
 ```
 
 - **The dataset id** is the fingerprint of the source id, `scope`, `dataset` and the sampler's pool parameters. It is exactly today's `PREPARATION_KEYS` minus the deleted ones.
-  - Awaiting the owner's confirmation (the implementation's reading, not an approved decision): of `scope`, that means `scope.id` and `scope.unowned`, as in `PREPARATION_KEYS` (`scope_id`, `scope_unowned`). `scope.create`, `scope.reveal_per_split` and `scope.reveal_salt` act once on the graph (whether a missing scope is created, and the one-time reveal), so changing them later names no other dataset.
+  - Decided by the owner (see Owner decisions): of `scope`, that means only `scope.id` and `scope.unowned`, as in `PREPARATION_KEYS` (`scope_id`, `scope_unowned`). `scope.create`, `scope.reveal_per_split` and `scope.reveal_salt` act once on the graph (whether a missing scope is created, and the one-time reveal), so changing them later names no other dataset.
 - **Audit constants are not run configuration.** `AUDIT_NEGATIVES = 2000` (`evaluation/sample.py`), `REVIEW_BUDGETS = (0.01, 0.05, 0.10)`, `BOOTSTRAP_REPLICATES = 1000` and `INTERVAL = 0.90` (`metrics.py`) are recorded in each audit JSON.
 - **Component selection.** One `match` per real choice: `model.build.build_model` (tgat or summary), `sampling.backend.choose_sampler` (auto, torch or cugraph) and `training.objective` (positive weight).
   - The only registries are two plain tables: feature groups and variants.
@@ -725,7 +744,7 @@ No experiment writes to `/tmp`.
 | `L/policy.py` | `context_scope` to `contract/graph_schema.py`; rejection limit to `inference/rejections.py`; protocol validation deleted |
 | `L/labels.py` | `tigergraph/reveal.py`, `tigergraph/labels.py`; `ACCOUNT_LOAD_COLUMNS` to `contract/graph_schema.py` |
 | `L/reveal_model.py` | `reference/label_reveal.py` |
-| `L/supervision.py` | `data/observed_labels.py`; graph source to `tigergraph/labels.py`; `FrameObservedLabels` to `testing/builders.py`; parquet policy deleted |
+| `L/supervision.py` | `data/observed_labels.py`; graph source to `tigergraph/labels.py`; `FrameObservedLabels` and the parquet policy deleted (every run reads the graph's labels) |
 | `L/hubs.py` | `data/hub_registry.py`, `tigergraph/hubs.py`; `HUB_COLUMNS` once in contract; `scan_cap` guard deleted |
 | `L/dataset.py` | `data/manifest.py`, `preparation.py`, `splits.py`; legacy export, union-find split, SQLite fill and `preparation_fingerprint` deleted |
 | `L/batching.py` | `batching/features.py`, `pool_counts.py`, `assemble.py`; backend policy to `sampling/backend.py`; scalar features to `reference/batch_features.py`; legacy selection deleted; `PinnedRoots.__getattr__` replaced by fields |
@@ -942,6 +961,7 @@ The steps, in order:
 16. **Docs.** The Diataxis tree and `architecture.md`. Gate: `test_doc_links.py` and the naming test.
     - From the mid-migration review: tell users that a dataset prepared before the restructure records no dataset settings, so training refuses it and it is prepared again; and choose one adapter naming rule in `architecture.md` (the naming table asks for `<Technology><Port>`, for example `TigerGraphScopeReader`, while the tree and the code use `TigerGraphScope` and `ParquetTruth`).
 17. **Replace main.** Gate: the full offline gate, `pytest -m cuda` on the CUDA host, and read-only `pytest -m graph`. No push until the owner confirms.
+    - First delete the old saved-settings conversion (owner decision), once the new baseline run has a ground-truth audit: `inference/saved_settings.py` and its test file, and the conversion in `SavedModel.config`, which then reads `RunConfig.from_dict` alone. The models saved before the restructure no longer load, so their `.pt` fixtures go too, with the saved-model test's cases that load them (the scores of the three models, the old dataset's scores, and the format and directory check); the case that prepares the old dataset's accounts and labels needs no model and can stay. Drop the module from `architecture.md` in the same commit.
 
 ```
 git fetch origin && git fetch learner
@@ -963,7 +983,9 @@ git push origin pre-restructure  # optional: keeps the parity reference reachabl
 
 ### Decisions for the owner to approve
 
-All five were decided on 2026-09-27; see Owner decisions.
+All five were decided on 2026-09-27, and the three the mid-migration review raised later (the
+table label reader, the old saved-settings conversion and the dataset id's scope settings) on
+2026-09-28; see Owner decisions.
 
 
 1. **The server rename** (the server-rename step: about an hour of installing and re-preparing, done once), or keep the query names as allow-listed data.
@@ -971,9 +993,3 @@ All five were decided on 2026-09-27; see Owner decisions.
 3. **Validation audits for decisions**, with the test audit for reporting only.
 4. **Commit the `/tmp` scripts and notes to `archive/diagnostic-study` now.**
 5. **Push the fast-forwarded `main`** to `origin` and `learner`.
-
-Raised by the mid-migration review, not decided yet:
-
-6. **The table label reader.** `data.ports.ObservedLabelReader` keeps a `from_graph` flag and `positive_ids()`, and `data.accounts.select_accounts` branches on them, only for `testing.builders.FrameObservedLabels`: every run reads the graph's labels. Keep it as the tree lists it, or always read the graph's labels and turn `FrameObservedLabels` into a fake scope reader that returns the observed positives (and drop `metrics.json`'s constant `label_policy` and the external label providers in `gsql/README.md`).
-7. **The old saved-settings conversion** in `inference/saved_model.py` (`SAVED_SETTINGS`, the `variant`, `tabular` and `cohort_seed` values): keep it after live parity, so models trained on `temporal` keep loading, or delete it then. If it stays, a module of its own would keep `SavedModel` small.
-8. **The dataset id's scope settings** (under Configuration): only `scope.id` and `scope.unowned`, as implemented.
