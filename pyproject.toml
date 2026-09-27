@@ -22,10 +22,11 @@ dependencies = [
     # Not imported here: pyTigerGraph parses query responses with orjson when it is
     # installed, which is faster than the standard json module on every batch.
     "orjson>=3.10",
+    "torch>=2.9",
+    "matplotlib>=3.10",
 ]
 
 [project.optional-dependencies]
-model = ["torch>=2.9"]
 # GPU neighbor resampling for the live temporal trainer (Linux x86_64 with CUDA). Pick the
 # extra that matches the CUDA major version of the installed torch wheel: cu12 wheels are on
 # pypi.nvidia.com (use with torch cu129), cu13 wheels are on pypi.org (torch>=2.13 cu130/cu132).
@@ -42,10 +43,11 @@ dev = [
     "pytest>=8.3",
     "basedpyright>=1.21",
     "ruff>=0.9",
+    "import-linter>=2.15",
 ]
-all = ["mule-pattern-learner[model,dev]"]
 
 [project.scripts]
+mule = "mule_pattern_learner.temporal.live.cli:main"
 mule-temporal = "mule_pattern_learner.temporal.live.cli:main"
 
 [tool.hatch.build.targets.wheel]
@@ -53,15 +55,20 @@ packages = ["src/mule_pattern_learner"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+# Tests import the installed package (pip install -e), never src/ through sys.path. Tests
+# marked graph, graph_write or cuda need a live graph or a GPU, so they are deselected
+# unless -m names them: a -m on the command line replaces this one, and -m "" runs all.
+addopts = ["--import-mode=importlib", "-m", "not graph and not graph_write and not cuda"]
 markers = [
+    "graph: reads from the live TigerGraph named in .env; excluded by default (-m graph)",
+    "graph_write: writes to the live TigerGraph named in .env; excluded by default (-m graph_write)",
+    "cuda: needs a CUDA device; excluded by default (-m cuda)",
     "legacy: exercises a path the layered restructure removes (SQLite storage, shared_history, the parquet label policy, the recent and stratified samplers, the single architecture, model variants, legacy feature groups, extraction_groups, FALLBACKS and back-compat guards); runs by default",
 ]
 
 [tool.basedpyright]
 include = ["src", "tests", "scripts"]
 exclude = ["**/__pycache__", ".venv"]
-extraPaths = ["src"]
 venvPath = "."
 venv = ".venv"
 typeCheckingMode = "strict"

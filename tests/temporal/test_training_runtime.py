@@ -1119,6 +1119,7 @@ def test_fake_end_to_end_training_on_mps(tmp_path: Path, monkeypatch: pytest.Mon
     assert all(v.device.type == "cpu" for v in saved_model(tmp_path / "mps.pt").values())
 
 
+@pytest.mark.cuda
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA unavailable")
 def test_fake_end_to_end_training_on_cuda(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = base_config(device="cuda", deterministic="strict")
