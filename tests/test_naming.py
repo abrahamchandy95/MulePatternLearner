@@ -70,7 +70,8 @@ ALLOWED = {
     "temporal_sampling_comparison": "a parameter of pylibcugraph's samplers",
 }
 # The queries installed on the server, which keep their names until the server step
-# renames them once (owner decision 4) to the name given, or retires them (None).
+# renames them once (the owner decision on query names) to the name given, or retires
+# them (None).
 INSTALLED_QUERIES: dict[str, str | None] = {
     "temporal_training_context": "fetch_training_context",
     "temporal_fourier64_values": "encode_fourier64",
