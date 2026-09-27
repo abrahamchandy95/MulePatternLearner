@@ -147,6 +147,7 @@ desktop.ini
 /artifacts/
 /outputs/
 /runs/
+/results/
 /logs/
 /docs/experiments/
 *.sqlite
