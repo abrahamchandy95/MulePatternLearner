@@ -5,7 +5,6 @@ from __future__ import annotations
 import ast
 import importlib.util
 import json
-import math
 import os
 from pathlib import Path
 import subprocess
@@ -15,32 +14,20 @@ from typing import Any
 
 import pytest
 
-from mule_pattern_learner.config import RunConfig
-from mule_pattern_learner.contract.feature_groups import FeaturePlan, extraction_plan
+from mule_pattern_learner.contract.feature_groups import FeaturePlan
 from mule_pattern_learner.data.contexts import ContextSource, check_coverage
-from mule_pattern_learner.data.preparation import prepare
-from mule_pattern_learner.paths import REPOSITORY_ROOT, DatasetPaths
+from mule_pattern_learner.paths import REPOSITORY_ROOT
 from mule_pattern_learner.reference import label_reveal
 from mule_pattern_learner.testing.builders import (
-    UNIT_SOURCE,
-    FrameObservedLabels,
-    example_config,
-    neighbourhood,
     reveal_inputs,
-    scoped_accounts,
-    supplied_labels,
 )
 from mule_pattern_learner.testing.fake_graph import FakeExecutor
 from mule_pattern_learner.tigergraph import reveal
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
-from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffs
-from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
-from mule_pattern_learner.tigergraph.scope import TigerGraphScope
 
 SCRIPTS = REPOSITORY_ROOT / "scripts"
 # Every script that talks to the live path; each must parse --help before connecting.
 LIVE_SCRIPTS = (
-    "benchmark_batch",
     "render_queries",
     "simulate_label_reveal",
     "verify_cugraph_sampler",
@@ -61,7 +48,6 @@ def load(name: str) -> ModuleType:
 
 # The scripts that load torch; each reserves the cuBLAS workspace before anything else.
 TORCH_SCRIPTS = (
-    "benchmark_batch",
     "verify_cugraph_sampler",
     "verify_strict_isolation",
 )
@@ -186,50 +172,6 @@ def test_strict_isolation_source_requests_what_the_fixture_checks_and_the_model_
     config = module.model_config()
     with ContextSource(TigerGraphContextFetcher(FakeExecutor()), **options) as source:
         check_coverage(source, config.feature_plan(), config.sampler)
-
-
-def test_benchmark_builds_one_training_batch_and_step(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    config = example_config(training={"batch_size": 32}, sampler={"fanouts": [8, 2]})
-    dataset = DatasetPaths(tmp_path / "dataset")
-    executor = FakeExecutor(factory=neighbourhood, hubs=[("N3", 101)], population=scoped_accounts())
-    prepare(
-        config,
-        UNIT_SOURCE,
-        dataset,
-        {"Account": 1000},
-        FrameObservedLabels(supplied_labels()),
-        scope=TigerGraphScope(executor),
-        cutoffs=TigerGraphCutoffs(executor),
-        hubs=TigerGraphHubs(executor),
-    )
-    module = load("benchmark_batch")
-
-    def open_source(path: DatasetPaths, manifest: dict[str, Any], training: RunConfig) -> Any:
-        assert path == dataset and training == config
-        return ContextSource(
-            TigerGraphContextFetcher(executor),
-            plan=extraction_plan(training.feature_plan()),
-            sampler=training.sampler,
-        )
-
-    monkeypatch.setattr(module, "open_context_source", open_source)
-    output = tmp_path / "report.json"
-    argv = ["benchmark_batch", "--dataset", str(dataset.root), "--output", str(output)]
-    monkeypatch.setattr(sys, "argv", [*argv, "--train-step"])
-    module.main(config)
-    report = json.loads(output.read_text())
-    assert report["status"] == "passed" and report["mode"] == "train"
-    assert report["roots"] == report["accepted_roots"] == 32
-    assert report["batch"]["sampler_backend"] == "torch"
-    assert report["batch"]["stub_children"] > 0 and report["batch"]["first_edges"] > 0
-    assert report["context_requests"] > 0 and report["rest_calls"] == 0  # fakes count none
-    assert report["loss"] > 0 and report["train_step_seconds"] > 0
-    assert math.isfinite(report["objective"])
-    # Digests of every batch tensor (test_golden_run pins their values).
-    digests = report["tensor_digests"]
-    assert digests["root_positions"]["shape"] == [32] and len(digests["x"]["sha256"]) == 64
 
 
 class RevealGraph:

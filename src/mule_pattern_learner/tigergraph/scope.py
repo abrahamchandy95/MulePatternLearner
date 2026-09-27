@@ -12,6 +12,7 @@ import json
 from typing import Any
 
 from ..config import ScopeConfig
+from ..contract.server import SCOPE_VERTEX
 from ..runtime.progress import emit
 from .executor import (
     ConnectionExecutor,
@@ -45,7 +46,7 @@ def scope_header(executor: ConnectionExecutor, scope_id: str) -> dict[str, Any] 
 
     try:
         rows = executor.call(
-            lambda conn: conn.getVerticesById("Temporal_Training_Scope", [scope_id]),
+            lambda conn: conn.getVerticesById(SCOPE_VERTEX, [scope_id]),
             what="getVerticesById",
         )
     except TigerGraphException as error:

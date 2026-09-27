@@ -23,8 +23,8 @@ The literals hold on macOS arm64 and on Linux x86_64:
   from the next one, far above that rounding, so the APs and the selected epoch do not
   flip between hosts.
 
-`benchmark_batch.py` prints the same digests and first loss for the live parity
-check; the second test pins it to these literals.
+`mule check` prints the same digests and first loss for the live parity check
+(pipeline.check.first_step); a test pins it to these literals.
 """
 
 from __future__ import annotations
@@ -33,17 +33,13 @@ from collections.abc import Generator
 import contextlib
 from dataclasses import dataclass
 import hashlib
-import importlib.util
-import json
 import math
 from pathlib import Path
-import sys
 import threading
 from typing import Any
 from unittest.mock import patch
 
 import pandas as pd
-import pytest
 
 from mule_pattern_learner.artifacts import read_epochs, read_history
 from mule_pattern_learner.batching.assemble import RootBatch, tensor_digests
@@ -51,7 +47,8 @@ from mule_pattern_learner.config import DEFAULT_CONFIG, RunConfig
 from mule_pattern_learner.contract.feature_groups import extraction_plan
 from mule_pattern_learner.data.contexts import ContextSource, build_context_source
 from mule_pattern_learner.data.preparation import prepare
-from mule_pattern_learner.paths import REPOSITORY_ROOT, DatasetPaths, RunPaths
+from mule_pattern_learner.paths import DatasetPaths, RunPaths
+from mule_pattern_learner.pipeline.check import first_step
 from mule_pattern_learner.testing.builders import neighbourhood, scope_population
 from mule_pattern_learner.testing.fake_graph import FakeExecutor
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
@@ -289,31 +286,10 @@ def test_the_golden_settings_select_the_accounts_the_tag_selected(tmp_path: Path
         assert (len(frame), frame_digest(frame)) == (rows, digest), name
 
 
-def load_benchmark() -> Any:
-    path = REPOSITORY_ROOT / "scripts/benchmark_batch.py"
-    spec = importlib.util.spec_from_file_location("script_benchmark_batch", path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def test_benchmark_reports_the_golden_first_batch_and_loss(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_mule_check_reports_the_golden_first_batch_and_loss(tmp_path: Path) -> None:
     config, dataset, executor = prepare_golden(tmp_path)
-    module = load_benchmark()
-
-    def open_source(path: DatasetPaths, manifest: dict[str, Any], settings: RunConfig) -> Any:
-        assert path == dataset and settings == config
-        return golden_source(executor, settings)
-
-    monkeypatch.setattr(module, "open_context_source", open_source)
-    report_path = tmp_path / "report.json"
-    argv = ["benchmark_batch", "--dataset", str(dataset.root)]
-    monkeypatch.setattr(sys, "argv", [*argv, "--output", str(report_path), "--train-step"])
-    module.main(config)
-    report = json.loads(report_path.read_text())
+    with golden_source(executor, config) as contexts:
+        report = first_step(config, dataset, contexts)
     assert digest_differences(report["tensor_digests"], GOLDEN_BATCH) == []
     assert {k: v for k, v in report["batch"].items() if k != "sampler_backend"} == (
         GOLDEN_BATCH_STATS

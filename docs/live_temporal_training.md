@@ -506,14 +506,17 @@ requests in flight. `deterministic = true` enables deterministic algorithms
 the CLI sets `CUBLAS_WORKSPACE_CONFIG=:4096:8` when it starts, before any CUDA work,
 unless it is already set.
 
-Qualify one configured batch without saving a model. The report has REST calls,
-retries, seconds, stub and rejected counts, the sampler backend and a digest of every
-batch tensor; `--train-step` adds one optimizer step on the chosen device, with its
-loss and objective. Two code versions that print the same digests and loss on one
-machine and device built the same first batch and step:
+Qualify the graph and one configured batch without saving a model or writing to the
+graph. `mule check` reports the graph name, the scope vertex type, the installed query
+text and, on a CUDA host, the cuGraph probe; with the run's dataset prepared it then
+builds the first training batch and runs one optimizer step on the configured device.
+The report has REST calls, retries, seconds, stub and rejected counts, the sampler
+backend, a digest of every batch tensor and the step's loss and objective. Two code
+versions that print the same digests and loss on one machine and device built the same
+first batch and step:
 
 ```bash
-.venv/bin/python scripts/benchmark_batch.py --train-step
+mule check
 ```
 
 On a CUDA host, install the GPU sampler with the extra that matches the CUDA major
