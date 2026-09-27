@@ -59,7 +59,9 @@ def test_the_transport_section_sets_the_source_and_the_retry_budgets(
     assert seen == {}
 
 
-def test_resumed_stream_checks_live_source_before_fetching(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_resumed_stream_checks_the_frozen_source_before_fetching(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     counts = {"Account": 10}
     header = {"ready": True, "source_id": "snapshot", "split_seed": 42}
     policy = {"scope_unowned": "linked"}

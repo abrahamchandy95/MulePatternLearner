@@ -11,7 +11,7 @@ from mule_pattern_learner.runtime.workers import BatchPrefetcher, DaemonPool
 
 
 def _prefetch_threads() -> int:
-    return sum(t.name.startswith("temporal-batch") for t in threading.enumerate())
+    return sum(t.name.startswith("batch-prefetch") for t in threading.enumerate())
 
 
 def _wait_for_no_prefetch_threads(timeout: float = 5.0) -> int:

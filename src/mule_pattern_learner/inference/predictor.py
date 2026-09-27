@@ -1,7 +1,7 @@
 """Inductive prediction from bounded contexts, independent of training account IDs.
 
 score_batches is the one scoring loop: training scores validation and test with it,
-and TemporalPredictor scores prepared splits, audit samples and arbitrary accounts.
+and Predictor scores prepared splits, audit samples and arbitrary accounts.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from ..batching.assemble import (
 from ..batching.limits import BatchLimits
 from ..contract.bounds import BATCH_ROOTS
 from ..contract.graph_schema import ContextKey
-from ..data.contexts import ContextSource, check_coverage, streaming_source
+from ..data.contexts import ContextReader, check_coverage, build_context_source
 from ..data.hub_registry import HubRegistry, warn_hub_stubs
 from ..data.ports import ContextFetcher
 from ..model.build import Model, build_model, probabilities_from_logits
@@ -108,7 +108,7 @@ def accepted_scores(
     return scores, mask
 
 
-class TemporalPredictor:
+class Predictor:
     """The same feature/weight contract for old and newly arriving accounts.
 
     Scoring uses the deterministic evaluation sampler. ``hubs`` must be the registry
@@ -121,7 +121,7 @@ class TemporalPredictor:
     def __init__(
         self,
         checkpoint: Path | SavedModel,
-        contexts: ContextSource | None = None,
+        contexts: ContextReader | None = None,
         device: str = "auto",
         *,
         fetcher: ContextFetcher | None = None,
@@ -138,7 +138,7 @@ class TemporalPredictor:
         if contexts is None:
             if fetcher is None:
                 raise ValueError("Provide a context source or a context fetcher")
-            contexts = streaming_source(fetcher, self.plan, self.sampler, config.transport)
+            contexts = build_context_source(fetcher, self.plan, self.sampler, config.transport)
         try:
             check_coverage(contexts, self.plan, self.sampler)
             self.contexts = contexts

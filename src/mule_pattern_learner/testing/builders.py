@@ -60,7 +60,7 @@ SNAPSHOT_SOURCE = "unit_snapshot"
 RUNTIME_SOURCE = "unit_runtime"
 
 
-def live_config(**sections: Any) -> RunConfig:
+def example_config(**sections: Any) -> RunConfig:
     """A small, explicit unit run of the built-in settings in an example scope.
 
     Each keyword names a section and a table of the fields it changes, as in

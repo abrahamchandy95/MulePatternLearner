@@ -9,7 +9,7 @@ import warnings
 import pytest
 import torch
 
-from mule_pattern_learner.batching.assemble import make_live_batch
+from mule_pattern_learner.batching.assemble import build_batch
 from mule_pattern_learner.contract.feature_groups import DEFAULT_GROUPS, FeaturePlan
 from mule_pattern_learner.sampling import backend, cugraph_sampler
 from mule_pattern_learner.sampling.backend import resolve_backend
@@ -60,11 +60,11 @@ def test_backend_resolution_without_cuda() -> None:
         resolve_backend(replace(RESAMPLE, backend="cugraph"), "cpu")
 
 
-def test_make_live_batch_uses_the_run_backend_without_resolving(
+def test_build_batch_uses_the_run_backend_without_resolving(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def unexpected(*args: Any) -> str:
-        raise AssertionError("make_live_batch resolved the backend again")
+        raise AssertionError("build_batch resolved the backend again")
 
     monkeypatch.setattr(backend, "resolve_backend", unexpected)
     plan = FeaturePlan(DEFAULT_GROUPS, "tgat")
@@ -77,17 +77,17 @@ def test_make_live_batch_uses_the_run_backend_without_resolving(
         ("eval", "cugraph", "torch"),  # evaluation is hash-keyed on the torch path
     ):
         stats: dict[str, Any] = {}
-        make_live_batch(store, keys, mode=mode, sampler_backend=given, stats=stats, **options)
+        build_batch(store, keys, mode=mode, sampler_backend=given, stats=stats, **options)
         assert stats["sampler_backend"] == used
     with pytest.raises(ValueError, match="cugraph needs a CUDA batch device"):
-        make_live_batch(store, keys, mode="train", sampler_backend="cugraph", **options)
+        build_batch(store, keys, mode="train", sampler_backend="cugraph", **options)
     with pytest.raises(ValueError, match="does not fit"):
-        make_live_batch(store, keys, mode="train", sampler_backend="numpy", **options)
+        build_batch(store, keys, mode="train", sampler_backend="numpy", **options)
     pinned: dict[str, Any] = options | {"sampler": replace(RESAMPLE, backend="torch")}
     with pytest.raises(ValueError, match="does not fit"):
-        make_live_batch(store, keys, mode="eval", sampler_backend="cugraph", **pinned)
+        build_batch(store, keys, mode="eval", sampler_backend="cugraph", **pinned)
     # The resolved backend gives the same batch as resolving per call.
     monkeypatch.undo()
-    a = make_live_batch(store, keys, mode="train", **options)
-    b = make_live_batch(store, keys, mode="train", sampler_backend="torch", **options)
+    a = build_batch(store, keys, mode="train", **options)
+    b = build_batch(store, keys, mode="train", sampler_backend="torch", **options)
     assert all(torch.equal(a[n], b[n]) for n in a)

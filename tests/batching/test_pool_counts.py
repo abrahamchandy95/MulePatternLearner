@@ -12,7 +12,7 @@ import pytest
 import torch
 
 from mule_pattern_learner.batching import assemble, features
-from mule_pattern_learner.batching.assemble import child_key, make_live_batch
+from mule_pattern_learner.batching.assemble import child_key, build_batch
 from mule_pattern_learner.batching.features import node_matrix
 from mule_pattern_learner.batching.pool_counts import pool_activity
 from mule_pattern_learner.config import DEFAULT_CONFIG
@@ -27,7 +27,7 @@ from mule_pattern_learner.contract.feature_groups import (
     extraction_plan,
 )
 from mule_pattern_learner.contract.graph_schema import ContextKey
-from mule_pattern_learner.data.contexts import ContextCounts, StreamingContextSource
+from mule_pattern_learner.data.contexts import ContextCounts, ContextSource
 from mule_pattern_learner.data.manifest import dataset_mismatches, dataset_settings
 from mule_pattern_learner.inference.saved_model import SavedModel
 from mule_pattern_learner.model.build import build_model
@@ -183,11 +183,11 @@ def test_built_in_batches_feed_root_pool_counts_to_the_summary_branch() -> None:
     }
     roots = [ROOT, other, ROOT]
     executor = FakeExecutor(rows)
-    with StreamingContextSource(
+    with ContextSource(
         TigerGraphContextFetcher(executor), plan=extraction_plan(PLAN), sampler=SAMPLER
     ) as source:
         for _ in range(2):  # the second batch is served from the source's cache
-            batch = make_live_batch(
+            batch = build_batch(
                 source, roots, fanouts=(16, 4), plan=PLAN, sampler=SAMPLER, hubs=Hubs({"F"})
             )
     x = batch["x"]
@@ -222,10 +222,10 @@ def test_pool_groups_feed_models_that_read_them_for_roots_only() -> None:
     plan = tabular.feature_plan()
     assert plan.architecture == "summary" and plan.names("summary") == POOL_NAMES
     executor = FakeExecutor({ROOT: context(ROOT, POOL)})
-    with StreamingContextSource(
+    with ContextSource(
         TigerGraphContextFetcher(executor), plan=extraction_plan(plan), sampler=SAMPLER
     ) as source:
-        batch = make_live_batch(source, [ROOT, ROOT], plan=plan, sampler=SAMPLER)
+        batch = build_batch(source, [ROOT, ROOT], plan=plan, sampler=SAMPLER)
     expected = node_matrix([context(ROOT, POOL)], plan)
     np.testing.assert_allclose(batch["x"].numpy(), np.repeat(expected, 2, axis=0))
     assert build_model(tabular.model, plan, SAMPLER.fanouts[0])(batch).shape == (2,)
@@ -246,14 +246,14 @@ def test_tigergraph_cannot_supply_pool_counts() -> None:
     with pytest.raises(ValueError, match="Unknown node feature"):
         validate_context(ROOT, bad, extraction_plan(PLAN), SAMPLER)
     with pytest.raises(ValueError, match=r"client-only feature \['pool_first_in'\]"):
-        make_live_batch(RawRows({(1, ROOT): bad}), [ROOT], plan=PLAN, sampler=SAMPLER)
+        build_batch(RawRows({(1, ROOT): bad}), [ROOT], plan=PLAN, sampler=SAMPLER)
     link = message(80, 800_000, ROOT, node_id="N")
     child = child_key(link, ROOT)
     bad_child = context(child)
     bad_child["features"]["pool_first_in_internal"] = 1
     rows = {(1, ROOT): context(ROOT, [link]), (2, child): bad_child}
     with pytest.raises(ValueError, match="client-only feature"):
-        make_live_batch(RawRows(rows), [ROOT], plan=PLAN, sampler=SAMPLER)
+        build_batch(RawRows(rows), [ROOT], plan=PLAN, sampler=SAMPLER)
 
 
 def test_client_groups_leave_the_wire_and_the_preparation_unchanged() -> None:

@@ -40,4 +40,4 @@ def test_progress_sums_integer_statistics_across_segments() -> None:
     assert progress.totals == Counter({"roots": 6, "stub_children": 1})
     assert progress.calls() == 5 and progress.rejections() == {"missing_entity": 5}
     # A resumed source holds every segment's distinct contexts itself.
-    assert progress.contexts() == {"requested": 17, "distinct": 3, "cache_hits": 3}
+    assert progress.context_counts() == {"requested": 17, "distinct": 3, "cache_hits": 3}

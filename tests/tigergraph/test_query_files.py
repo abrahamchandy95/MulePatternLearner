@@ -7,7 +7,7 @@ import re
 import pytest
 
 from mule_pattern_learner.contract.feature_groups import ARCHITECTURES, FeaturePlan
-from mule_pattern_learner.data.contexts import StreamingContextSource
+from mule_pattern_learner.data.contexts import ContextSource
 from mule_pattern_learner.paths import GSQL_DIR
 from mule_pattern_learner.testing.builders import PLAN, SAMPLER, hub_rows, root
 from mule_pattern_learner.testing.fake_graph import ContextServer, Runner
@@ -70,7 +70,7 @@ def test_sent_parameters_match_the_repository_query_signatures() -> None:
     windows = (FeaturePlan(DEFAULT_FLAG_GROUPS, a) for a in ARCHITECTURES)
     for plan in (PLAN, *windows):
         server = ContextServer()
-        store = StreamingContextSource(TigerGraphContextFetcher(server), plan=plan, sampler=SAMPLER)
+        store = ContextSource(TigerGraphContextFetcher(server), plan=plan, sampler=SAMPLER)
         store.fetch([root(0)], hop=1)
         store.fetch([root(0)], hop=2)
         store.close()

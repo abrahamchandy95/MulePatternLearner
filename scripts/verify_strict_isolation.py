@@ -21,14 +21,14 @@ from uuid import uuid4
 from pyTigerGraph.common.exception import TigerGraphException
 import torch
 
-from mule_pattern_learner.batching.assemble import make_live_batch
+from mule_pattern_learner.batching.assemble import build_batch
 from mule_pattern_learner.config import DEFAULT_CONFIG, RunConfig
 from mule_pattern_learner.contract.feature_groups import FeaturePlan, contract_fingerprint
 from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
 from mule_pattern_learner.contract.time_basis import BASIS_ID
-from mule_pattern_learner.data.contexts import StreamingContextSource
-from mule_pattern_learner.inference.predictor import TemporalPredictor
+from mule_pattern_learner.data.contexts import ContextSource
+from mule_pattern_learner.inference.predictor import Predictor
 from mule_pattern_learner.model.build import build_model
 from mule_pattern_learner.pipeline.connect import connect
 from mule_pattern_learner.runtime.device import choose_device, reserve_deterministic_cublas
@@ -140,7 +140,7 @@ def main() -> None:
     config = model_config()
     plan, sampler = config.feature_plan(), config.sampler
     # The predictor below reads from this source, so it requests the model's inputs too.
-    source = StreamingContextSource(
+    source = ContextSource(
         TigerGraphContextFetcher(executor), plan=source_plan(plan), sampler=sampler, capacity=0
     )
 
@@ -247,7 +247,7 @@ def main() -> None:
         device = choose_device()
         model = build_model(config.model, plan, sampler.fanouts[0]).to(device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=0.001)
-        batch = make_live_batch(
+        batch = build_batch(
             source, keys[:1], fanouts=sampler.fanouts, device=device, plan=plan, sampler=sampler
         )
         loss = torch.nn.functional.binary_cross_entropy_with_logits(
@@ -269,7 +269,7 @@ def main() -> None:
                 },
                 checkpoint,
             )
-            predictor = TemporalPredictor(checkpoint, source)
+            predictor = Predictor(checkpoint, source)
             result = predictor.predict([ContextKey("Account", b, 1000, base + 100000)])
             assert len(result) == 1 and 0 <= result.score.iloc[0] <= 1
             arrival = put(

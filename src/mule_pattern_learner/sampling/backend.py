@@ -101,7 +101,7 @@ def resolve_backend(sampler: SamplerPlan, device: str | torch.device) -> str:
     installed but failed the probe. Explicit `cugraph` raises with the probe's
     reason. The backends draw different (equally distributed) subsets for one step
     seed, so resolve once per run on the main thread and pass the result to every
-    `make_live_batch(sampler_backend=...)` call.
+    `build_batch(sampler_backend=...)` call.
     """
     if sampler.backend == "torch":
         return "torch"

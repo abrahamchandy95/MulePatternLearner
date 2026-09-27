@@ -18,7 +18,7 @@ from mule_pattern_learner.pipeline import prepare as pipeline_prepare
 from mule_pattern_learner.testing.builders import (
     SNAPSHOT_SOURCE,
     UNIT_SOURCE,
-    live_config,
+    example_config,
     unit_config,
 )
 from mule_pattern_learner.testing.fake_graph import ScopeServer
@@ -53,7 +53,7 @@ def write_manifest(
     return dataset, manifest
 
 
-def test_prepare_live_checks_query_hashes_before_reusing_a_ready_dataset(
+def test_prepare_dataset_checks_query_hashes_before_reusing_a_ready_dataset(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fixed_hashes: dict[str, str]
 ) -> None:
     config = unit_config()
@@ -61,22 +61,22 @@ def test_prepare_live_checks_query_hashes_before_reusing_a_ready_dataset(
     dataset, _ = write_manifest(data, config, fixed_hashes)
 
     def no_connection(transport: Any) -> None:
-        raise AssertionError("prepare_live must not connect for a ready dataset")
+        raise AssertionError("prepare_dataset must not connect for a ready dataset")
 
     monkeypatch.setattr(pipeline_prepare, "connect", no_connection)
-    assert pipeline_prepare.prepare_live(config, data) == dataset
+    assert pipeline_prepare.prepare_dataset(config, data) == dataset
     # A query file preparation no longer uses cannot change the dataset.
     write_manifest(data, config, {**fixed_hashes, "queries/retired_query.gsql": "old"})
-    assert pipeline_prepare.prepare_live(config, data) == dataset
+    assert pipeline_prepare.prepare_dataset(config, data) == dataset
     # Model and transport settings are not dataset settings.
     changes = {"training": {"learning_rate": 0.1}, "transport": {"query_concurrency": 2}}
-    assert pipeline_prepare.prepare_live(config.with_changes(changes), data) == dataset
+    assert pipeline_prepare.prepare_dataset(config.with_changes(changes), data) == dataset
     # Other dataset settings name another dataset, which is prepared beside this one.
     split_seed = config.with_changes({"dataset": {"split_seed": 7}})
     assert pipeline_prepare.find_datasets(split_seed, data) == []
     fixed_hashes["queries/hub_accounts.gsql"] = "changed"
     with pytest.raises(ValueError, match=r"hub_accounts\.gsql.*mule-temporal install.*aside"):
-        pipeline_prepare.prepare_live(config, data)
+        pipeline_prepare.prepare_dataset(config, data)
     with pytest.raises(ValueError, match="different GSQL sources"):
         data_manifest.load_prepared(dataset)
 
@@ -97,7 +97,7 @@ def test_the_source_id_comes_from_the_scope_or_the_graph() -> None:
 
 
 def record_graph_steps(monkeypatch: pytest.MonkeyPatch, steps: list[str]) -> None:
-    """Replace the graph steps of prepare_live by entries in steps."""
+    """Replace the graph steps of prepare_dataset by entries in steps."""
 
     def connect(transport: TransportConfig) -> Any:
         return SimpleNamespace()
@@ -144,7 +144,7 @@ def test_first_preparation_creates_the_scope_and_reveals_labels(
     config = unit_config()
     data = tmp_path / "data"
     identity = dataset_id(UNIT_SOURCE, config)
-    assert pipeline_prepare.prepare_live(config, data) == DatasetPaths.of(identity, data)
+    assert pipeline_prepare.prepare_dataset(config, data) == DatasetPaths.of(identity, data)
     # The reveal draws its splits from the scope partitions, so the scope comes first.
     assert steps == [
         "install",
@@ -163,7 +163,7 @@ def test_a_dataset_being_prepared_keeps_its_source_id(
     dataset, _ = write_manifest(data, config, fixed_hashes, status="preparing")
     steps: list[str] = []
     record_graph_steps(monkeypatch, steps)
-    assert pipeline_prepare.prepare_live(config, data) == dataset
+    assert pipeline_prepare.prepare_dataset(config, data) == dataset
     assert steps == [
         "install",
         f"scope unit_scope {SNAPSHOT_SOURCE} 42",
@@ -183,20 +183,20 @@ def test_datasets_of_several_sources_read_the_source_id_from_the_graph(
     assert len(pipeline_prepare.find_datasets(config, data)) == 2
     steps: list[str] = []
     record_graph_steps(monkeypatch, steps)
-    assert pipeline_prepare.prepare_live(config, data) == current
+    assert pipeline_prepare.prepare_dataset(config, data) == current
     assert steps[:2] == ["install", "resolve unit_scope"]
 
 
 def test_ready_pipeline_reuses_cache_without_connecting(tmp_path: Path) -> None:
-    from mule_pattern_learner.pipeline.prepare import find_datasets, prepare_live
+    from mule_pattern_learner.pipeline.prepare import find_datasets, prepare_dataset
 
-    c = live_config()
+    c = example_config()
     dataset, _ = write_manifest(tmp_path, c, query_hashes(), source_id=UNIT_SOURCE)
     with patch("mule_pattern_learner.pipeline.prepare.connect") as client:
-        assert prepare_live(c, tmp_path) == dataset
+        assert prepare_dataset(c, tmp_path) == dataset
         # Model settings may change; dataset settings may not, and nothing connects.
         changes = {"model": {"hidden": 32}, "training": {"learning_rate": 0.01}}
-        assert prepare_live(c.with_changes(changes), tmp_path) == dataset
+        assert prepare_dataset(c.with_changes(changes), tmp_path) == dataset
         assert (
             find_datasets(c.with_changes({"dataset": {"seed_limits": {"test": 10}}}), tmp_path)
             == []

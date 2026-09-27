@@ -11,13 +11,13 @@ from mule_pattern_learner.experiments.variants import feature_experiments
 from mule_pattern_learner.inference.saved_model import saved_run_config
 from mule_pattern_learner.model.build import build_model
 from mule_pattern_learner.model.tgat import TGAT
-from mule_pattern_learner.testing.builders import live_config
+from mule_pattern_learner.testing.builders import example_config
 
 CONFIG = DEFAULT_CONFIG
 
 
 def test_feature_variants_and_model_seeds_share_one_dataset() -> None:
-    base = live_config()
+    base = example_config()
     ids = {dataset_id("source", variant) for variant in feature_experiments(base).values()}
     assert ids == {dataset_id("source", base)}  # any groups and architecture fit one dataset
     # So do models saved with a variant, and ones that named extraction groups.

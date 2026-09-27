@@ -10,11 +10,11 @@ import pandas as pd
 import pytest
 import torch
 
-from mule_pattern_learner.batching.assemble import build_root_batch, child_key, make_live_batch
+from mule_pattern_learner.batching.assemble import build_root_batch, child_key, build_batch
 from mule_pattern_learner.contract.feature_groups import DEFAULT_GROUPS, FeaturePlan
 from mule_pattern_learner.contract.graph_schema import HUB_COLUMNS, RELATIONS, ContextKey
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
-from mule_pattern_learner.data.contexts import StreamingContextSource
+from mule_pattern_learner.data.contexts import ContextSource
 from mule_pattern_learner.data.hub_registry import HubRegistry
 from mule_pattern_learner.model.tgat import TGAT
 from mule_pattern_learner.testing.builders import (
@@ -51,16 +51,14 @@ def test_fourier_columns_come_from_scalar_deltas_on_every_device() -> None:
     sampler = POOLED
     plan = FeaturePlan(DEFAULT_GROUPS, "tgat")
     store = FakeStore(sampler, encodings=True)
-    cpu = make_live_batch(store, roots(4), fanouts=(8, 4), plan=plan, sampler=sampler)
+    cpu = build_batch(store, roots(4), fanouts=(8, 4), plan=plan, sampler=sampler)
     start = plan.edge_names.index("age_fourier_0")
     for prefix in ("first_", "second_"):
         edge, mask = cpu[prefix + "edge"], cpu[prefix + "mask"]
         assert torch.all(edge[~mask] == 0)
         assert torch.count_nonzero(edge[mask][:, start : start + 128]) > 0
     if MPS:
-        mps = make_live_batch(
-            store, roots(4), fanouts=(8, 4), plan=plan, sampler=sampler, device="mps"
-        )
+        mps = build_batch(store, roots(4), fanouts=(8, 4), plan=plan, sampler=sampler, device="mps")
         for name, value in cpu.items():
             atol = 1e-5 if name.endswith("edge") else 0
             torch.testing.assert_close(mps[name].cpu(), value, atol=atol, rtol=0)
@@ -72,7 +70,7 @@ def test_resampled_batches_respect_caps_hops_and_time_in_both_modes() -> None:
     keys = roots(16)
     for mode in ("train", "eval"):
         stats: dict[str, Any] = {}
-        batch = make_live_batch(
+        batch = build_batch(
             store,
             keys,
             fanouts=(8, 4),
@@ -122,7 +120,7 @@ def test_hub_children_become_local_stubs_and_mark_outer_peers() -> None:
     hub = sorted(hub_ids)[0]
     hubs = Hubs({hub})
     stats: dict[str, Any] = {}
-    batch = make_live_batch(
+    batch = build_batch(
         store, keys, fanouts=(8, 4), plan=plan, sampler=sampler, hubs=hubs, stats=stats
     )
     fetched = {k for hop, ks in store.calls if hop == 2 for k in ks}
@@ -166,7 +164,7 @@ def test_hub_children_become_local_stubs_and_mark_outer_peers() -> None:
     rows = [store.row(k, 2 if k not in keys else 1) for k in outer]
     peers = [m for msgs in slots(outer, rows, sampler, 4, hop=2) for m in msgs]
     assert int(flagged.sum()) == sum(m["node_id"] == hub for m in peers) > 0
-    reference = make_live_batch(store, keys, fanouts=(8, 4), plan=plan, sampler=sampler)
+    reference = build_batch(store, keys, fanouts=(8, 4), plan=plan, sampler=sampler)
     assert torch.equal(reference["first_mask"], batch["first_mask"])
     assert int(reference["x"][:, column].sum()) == 0
 
@@ -182,7 +180,7 @@ def test_hub_lookups_use_the_batch_visibility_phase(scope: str, phase: int, expe
     store = FakeStore(sampler)
     keys = roots(4, scope=scope, phase=phase)
     hubs = Hubs()
-    make_live_batch(store, keys, fanouts=(8, 4), plan=plan, sampler=sampler, hubs=hubs)
+    build_batch(store, keys, fanouts=(8, 4), plan=plan, sampler=sampler, hubs=hubs)
     # Children (stub decision) and outer peers (history_withheld) are both looked up.
     assert len(hubs.calls) > len(_first_children(store, keys, sampler))
     assert {p for *_, p in hubs.calls} == {expected}
@@ -198,8 +196,8 @@ def test_rejected_children_are_masked_and_rejected_roots_raise() -> None:
     bad = set(sorted(bad)[:3])
     store = FakeStore(sampler, reject=bad)
     stats: dict[str, Any] = {}
-    batch = make_live_batch(store, keys, fanouts=(8, 4), plan=plan, sampler=sampler, stats=stats)
-    good = make_live_batch(clean, keys, fanouts=(8, 4), plan=plan, sampler=sampler)
+    batch = build_batch(store, keys, fanouts=(8, 4), plan=plan, sampler=sampler, stats=stats)
+    good = build_batch(clean, keys, fanouts=(8, 4), plan=plan, sampler=sampler)
     assert stats["rejected_children"] == len(bad)
     assert stats["contexts"] == good["x"].shape[0] - len(bad) == batch["x"].shape[0]
     first = slots(keys, [clean.row(k) for k in keys], sampler, 8)
@@ -213,7 +211,7 @@ def test_rejected_children_are_masked_and_rejected_roots_raise() -> None:
     kept = batch["first_mask"]
     assert torch.equal(batch["first_edge"][kept], good["first_edge"][kept])
     with pytest.raises(ValueError, match="rejected 1 of 6 root.*history_capacity_exceeded"):
-        make_live_batch(FakeStore(sampler, reject={keys[2]}), keys, plan=plan, sampler=sampler)
+        build_batch(FakeStore(sampler, reject={keys[2]}), keys, plan=plan, sampler=sampler)
 
 
 def test_tigergraph_cannot_supply_client_features() -> None:
@@ -223,19 +221,19 @@ def test_tigergraph_cannot_supply_client_features() -> None:
     store = FakeStore(sampler)
     store.row(keys[1])["features"]["history_withheld"] = 1.0
     with pytest.raises(ValueError, match="client-only"):
-        make_live_batch(store, keys, plan=plan, sampler=sampler)
+        build_batch(store, keys, plan=plan, sampler=sampler)
     store = FakeStore(sampler)
     child = sorted(_first_children(store, keys, sampler, fanout=8))[0]
     store.row(child, 2)["features"]["history_withheld"] = 0.0
     with pytest.raises(ValueError, match="client-only"):
-        make_live_batch(store, keys, plan=plan, sampler=sampler)
+        build_batch(store, keys, plan=plan, sampler=sampler)
 
 
 def test_summary_models_fetch_only_roots() -> None:
     plan = FeaturePlan(("decayed_activity",), "summary")
     store = FakeStore(RESAMPLE)
     stats: dict[str, Any] = {}
-    batch = make_live_batch(store, roots(3), plan=plan, sampler=RESAMPLE, stats=stats)
+    batch = build_batch(store, roots(3), plan=plan, sampler=RESAMPLE, stats=stats)
     assert set(batch) == {"root_positions", "x"} and len(store.calls) == 1
     assert stats["contexts"] == 3
 
@@ -244,8 +242,8 @@ def test_recursive_context_keeps_same_neighbor_at_two_different_event_times() ->
     root = ContextKey("Account", "root", 100, 1000)
     messages = [message(90, 900, root), message(80, 800, root)]
     source = FakeExecutor({root: context(root, messages)})
-    store = StreamingContextSource(TigerGraphContextFetcher(source))
-    batch = make_live_batch(store, [root], fanouts=(2, 2))
+    store = ContextSource(TigerGraphContextFetcher(source))
+    batch = build_batch(store, [root], fanouts=(2, 2))
     assert child_key(messages[0]) in source.requested
     assert child_key(messages[1]) in source.requested
     assert len(set(batch["neighbor_positions"][0].tolist())) == 2
@@ -284,10 +282,10 @@ def test_one_hub_or_rejected_child_no_longer_aborts_the_batch() -> None:
         {root: context(root, messages)}, statuses={"busy": "history_capacity_exceeded"}
     )
     stats: dict[str, Any] = {}
-    with StreamingContextSource(
+    with ContextSource(
         TigerGraphContextFetcher(executor), plan=DEFAULT_TGAT_PLAN, sampler=SMALL_SAMPLER
     ) as source:
-        batch = make_live_batch(
+        batch = build_batch(
             source,
             [root],
             fanouts=(8, 2),
@@ -315,14 +313,14 @@ def test_one_hub_or_rejected_child_no_longer_aborts_the_batch() -> None:
 def test_rejected_roots_raise_in_batches_and_are_dropped_by_root_batches() -> None:
     roots = [ContextKey("Account", f"R{i:02}", 100, 1000) for i in range(64)]
     executor = FakeExecutor(statuses={"R07": "missing_entity"})
-    with StreamingContextSource(
+    with ContextSource(
         TigerGraphContextFetcher(executor),
         plan=DEFAULT_TGAT_PLAN,
         sampler=SMALL_SAMPLER,
         request_batch_size=64,
     ) as source:
         with pytest.raises(ValueError, match="rejected 1 of 64 root contexts"):
-            make_live_batch(source, roots, plan=DEFAULT_TGAT_PLAN, sampler=SMALL_SAMPLER)
+            build_batch(source, roots, plan=DEFAULT_TGAT_PLAN, sampler=SMALL_SAMPLER)
         assert executor.names().count("temporal_training_context") == 1  # one 64-key request
         prepared = build_root_batch(
             source,

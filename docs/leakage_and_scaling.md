@@ -108,8 +108,8 @@ truth file is appropriate only when that is the declared target definition.
 
 ## Bounded transport rather than full feature replication
 
-`ContextSource` is the model-facing interface. Its implementation,
-`StreamingContextSource`, requests the current batch from TigerGraph, retains 64
+`ContextReader` is the model-facing interface. Its implementation,
+`ContextSource`, requests the current batch from TigerGraph, retains 64
 contexts in memory by default (hard maximum 256), and writes no disk context cache.
 Each HTTP request is capped at 16 contexts; query concurrency and queued results are
 bounded to two by default, with a configurable maximum of four.

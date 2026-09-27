@@ -369,7 +369,7 @@ class ScopeServer:
 
 
 class FakeStore:
-    """`ContextSource` with `fetch(keys, *, hop)`; None marks a rejected context."""
+    """`ContextReader` with `fetch(keys, *, hop)`; None marks a rejected context."""
 
     plan: FeaturePlan
     sampler: SamplerPlan
@@ -419,7 +419,7 @@ class FakeStore:
 
 
 class FakeSource:
-    """Thread-safe in-memory ContextSource with optional rejections and failures."""
+    """Thread-safe in-memory ContextReader with optional rejections and failures."""
 
     def __init__(
         self,

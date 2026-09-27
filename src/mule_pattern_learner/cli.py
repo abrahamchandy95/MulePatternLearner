@@ -19,9 +19,9 @@ from .inference.score_accounts import read_account_ids, score
 from .paths import DatasetPaths, RunPaths
 from .pipeline.connect import connect, open_context_source
 from .pipeline.evaluate import evaluate, final_audit
-from .pipeline.prepare import prepare_live
+from .pipeline.prepare import prepare_dataset
 from .pipeline.score import score_new
-from .pipeline.train import BASELINE_RUN, run
+from .pipeline.train import BASELINE_RUN, train_run
 from .runtime.device import reserve_deterministic_cublas
 from .tigergraph.installer import install
 
@@ -105,7 +105,7 @@ def model_dataset(model: SavedModel) -> DatasetPaths:
 def train_command() -> dict[str, Any]:
     """Prepare the dataset as needed, then train (or resume) the built-in run."""
     # An interrupted run continues from its resume.pt; a finished one is an error.
-    return run(resume=True)
+    return train_run(resume=True)
 
 
 def main() -> None:
@@ -142,7 +142,7 @@ def main() -> None:
             open_contexts=open_context_source,
         )
     elif args.command == "prepare":
-        result = read_manifest(prepare_live(DEFAULT_CONFIG))
+        result = read_manifest(prepare_dataset(DEFAULT_CONFIG))
     else:
         result = train_command()
     print(json.dumps(result, indent=2, allow_nan=False))

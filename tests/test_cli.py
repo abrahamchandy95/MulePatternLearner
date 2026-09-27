@@ -119,7 +119,7 @@ def test_train_command_prepares_then_trains_or_resumes(
         return dataset
 
     # `mule-temporal train` is pipeline.run with resume: patch the pipeline's steps.
-    monkeypatch.setattr(pipeline_train, "prepare_live", prepare)
+    monkeypatch.setattr(pipeline_train, "prepare_dataset", prepare)
 
     def train(c: RunConfig, d: DatasetPaths, o: RunPaths, **kwargs: Any) -> dict[str, Any]:
         trained.append((c, d, o, kwargs))

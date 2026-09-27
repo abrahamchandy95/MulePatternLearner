@@ -50,13 +50,13 @@ def test_final_population_audit_scores_through_the_dataset_clock_and_hubs(
     truth["is_mule"] = truth.is_mule.astype(int)
     source = FakeSource(config, reject=frozenset({test_accounts.account_id.iloc[1]}))
     seen: list[int] = []
-    real = assemble.make_live_batch
+    real = assemble.build_batch
 
     def record(store: Any, roots: list[ContextKey], **kwargs: Any) -> dict[str, torch.Tensor]:
         seen.extend(k.cutoff_seq for k in roots)
         return real(store, roots, **kwargs)
 
-    monkeypatch.setattr(assemble, "make_live_batch", record)
+    monkeypatch.setattr(assemble, "build_batch", record)
 
     class Truth:
         def read(self) -> pd.DataFrame:

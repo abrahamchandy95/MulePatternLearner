@@ -125,7 +125,7 @@ class BatchPrefetcher(Generic[T, R]):
         items: Iterable[T],
         *,
         depth: int = 2,
-        name: str = "temporal-batch",
+        name: str = "batch-prefetch",
     ) -> None:
         if not PREFETCH_BATCHES.holds(depth):
             raise ValueError(

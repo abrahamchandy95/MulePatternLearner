@@ -189,7 +189,7 @@ population claims, including when using complete synthetic truth.
 ## Memory, IDs and transport
 
 Contexts are streamed: bounded installed-query HTTPS/REST requests, and no feature
-cache on disk. `ContextSource` separates transport
+cache on disk. `ContextReader` separates transport
 from batching/model/loss: `fetch(keys, hop=1|2)` returns rows in key order, `None`
 where TigerGraph rejected a request, and counts rejections by status
 (`rejections`, once per rejected key and fetch) and per hop (`rejections_by_hop`,

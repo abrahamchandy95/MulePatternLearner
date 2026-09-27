@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from mule_pattern_learner.batching.assemble import make_live_batch
+from mule_pattern_learner.batching.assemble import build_batch
 from mule_pattern_learner.contract.feature_groups import (
     BUILT_IN_GROUPS,
     CLIENT_GROUPS,
@@ -16,7 +16,7 @@ from mule_pattern_learner.contract.feature_groups import (
 )
 from mule_pattern_learner.contract.graph_schema import CHANNELS, ContextKey
 from mule_pattern_learner.contract.server import CONTRACT_VERSION
-from mule_pattern_learner.data.contexts import StreamingContextSource
+from mule_pattern_learner.data.contexts import ContextSource
 from mule_pattern_learner.model.tgat import TGAT
 from mule_pattern_learner.reference.batch_features import node_features
 from mule_pattern_learner.testing.builders import context, message
@@ -104,9 +104,9 @@ def test_each_group_has_consistent_transport_batch_and_model_width(group: str) -
         stratum="recent",
     )
     executor = FakeExecutor({root: context(root, [msg])})
-    source = StreamingContextSource(TigerGraphContextFetcher(executor), plan=plan)
+    source = ContextSource(TigerGraphContextFetcher(executor), plan=plan)
     try:
-        batch = make_live_batch(source, [root], fanouts=(2, 2), plan=plan)
+        batch = build_batch(source, [root], fanouts=(2, 2), plan=plan)
         assert batch["x"].shape[1] == len(plan.node_names)
         assert batch["first_edge"].shape[-1] == len(plan.edge_names)
         model = TGAT(16, 4, 0, plan=plan, slot_sum=False, first_fanout=8)

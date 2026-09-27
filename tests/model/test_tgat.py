@@ -10,7 +10,7 @@ import pytest
 import torch
 from torch import nn
 
-from mule_pattern_learner.batching.assemble import make_live_batch
+from mule_pattern_learner.batching.assemble import build_batch
 from mule_pattern_learner.config import DEFAULT_CONFIG, ModelConfig, RunConfig
 from mule_pattern_learner.contract.feature_groups import (
     DEFAULT_GROUPS,
@@ -20,8 +20,8 @@ from mule_pattern_learner.contract.feature_groups import (
 )
 from mule_pattern_learner.contract.graph_schema import RAILS, RELATIONS, ContextKey
 from mule_pattern_learner.contract.time_basis import BASIS_ID
-from mule_pattern_learner.data.contexts import StreamingContextSource
-from mule_pattern_learner.inference.predictor import TemporalPredictor
+from mule_pattern_learner.data.contexts import ContextSource
+from mule_pattern_learner.inference.predictor import Predictor
 from mule_pattern_learner.inference.saved_model import SavedModel
 from mule_pattern_learner.model.build import build_model
 from mule_pattern_learner.model.summary import SummaryMLP
@@ -45,8 +45,8 @@ PAYMENTS = [
 
 def test_isolated_entities_score_under_both_architectures() -> None:
     key = ContextKey("Token", "alone", 100, 1000)
-    store = StreamingContextSource(TigerGraphContextFetcher(FakeExecutor({})))
-    batch = make_live_batch(store, [key])
+    store = ContextSource(TigerGraphContextFetcher(FakeExecutor({})))
+    batch = build_batch(store, [key])
     assert not batch["first_mask"].any()
     tgat = TGAT(16, 4, 0, plan=FeaturePlan(), slot_sum=False, first_fanout=8)
     summary = SummaryMLP(16, 0, plan=FeaturePlan(architecture="summary"))
@@ -62,7 +62,7 @@ def slot_batch(
 
     Contexts are the roots, then the children. Every hop-1 slot carries the same
     message, so two slots on one child are the same token. Other columns are padding,
-    pointing at context 0 like make_live_batch's.
+    pointing at context 0 like build_batch's.
     """
     generator = torch.Generator().manual_seed(0)
     roots, children = len(slots), 1 + max(max(s, default=0) for s in slots)
@@ -139,10 +139,10 @@ def test_output_shapes(groups: tuple[str, ...]) -> None:
 
 def test_built_in_batches_fit_the_slot_sum_and_train_it() -> None:
     executor = FakeExecutor({ROOT: context(ROOT, PAYMENTS)})
-    with StreamingContextSource(
+    with ContextSource(
         TigerGraphContextFetcher(executor), plan=extraction_plan(PLAN), sampler=SAMPLER
     ) as source:
-        batch = make_live_batch(
+        batch = build_batch(
             source, [ROOT], fanouts=(FANOUT, 4), plan=PLAN, sampler=SAMPLER, mode="train"
         )
     model = built(CONFIG)
@@ -240,10 +240,10 @@ def test_saved_models_with_the_slot_sum_score_like_the_trained_model(tmp_path: P
         payload(CONFIG, new, contract_fingerprint(), PLAN.fingerprint()), tmp_path / "new.pt"
     )
     executor = FakeExecutor({ROOT: context(ROOT, PAYMENTS)})
-    with StreamingContextSource(
+    with ContextSource(
         TigerGraphContextFetcher(executor), plan=extraction_plan(PLAN), sampler=SAMPLER
     ) as source:
-        predictor = TemporalPredictor(SavedModel.load(tmp_path / "new.pt"), source, "cpu")
+        predictor = Predictor(SavedModel.load(tmp_path / "new.pt"), source, "cpu")
         assert predictor.model.slot_sum is not None
         prepared = predictor.prepare([ROOT])
         frame = predictor.infer(prepared)
@@ -283,8 +283,8 @@ def test_nonsense_options_are_rejected() -> None:
 def test_zero_node_features_have_no_unused_projection() -> None:
     root = ContextKey("Account", "root", 100, 1000)
     zero = FeaturePlan(("message_core", "time_encoding"), "tgat")
-    source = StreamingContextSource(TigerGraphContextFetcher(FakeExecutor({})), plan=zero)
-    batch = make_live_batch(source, [root], plan=zero)
+    source = ContextSource(TigerGraphContextFetcher(FakeExecutor({})), plan=zero)
+    batch = build_batch(source, [root], plan=zero)
     assert batch["x"].shape[-1] == batch["second_x"].shape[-1] == 0
     model = TGAT(16, 4, 0, plan=zero, slot_sum=False, first_fanout=8)
     assert model.node is None and model.base is None
