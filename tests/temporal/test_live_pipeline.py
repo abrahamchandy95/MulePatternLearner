@@ -29,7 +29,7 @@ from mule_pattern_learner.temporal.live.contract import (
     PoolPlan,
     SamplerPlan,
 )
-from mule_pattern_learner.temporal.live.dataset import assign_groups, validate_dates
+from mule_pattern_learner.temporal.live.dataset import validate_dates
 from mule_pattern_learner.temporal.live.hubs import HUB_COLUMNS, HubRegistry
 from mule_pattern_learner.temporal.live.model import LiveTGAT
 from mule_pattern_learner.temporal.live.queries import render_context_query
@@ -124,16 +124,6 @@ def test_isolated_entities_and_model_ablations() -> None:
     for variant in ("temporal", "no_fourier", "tabular"):
         assert torch.isfinite(LiveTGAT(16, 4, 0, variant)(batch)).all()
     store.close()
-
-
-@pytest.mark.legacy
-def test_coowners_share_split_even_through_another_account() -> None:
-    accounts = pd.DataFrame(
-        {"account_id": ["a", "b", "c", "d"], "owner_ids": [["x"], ["x", "y"], ["y"], ["z"]]}
-    )
-    assigned = assign_groups(accounts, 42)
-    assert assigned.iloc[:3]["group_id"].nunique() == 1
-    assert assigned.iloc[:3]["split"].nunique() == 1
 
 
 def test_query_renderer_matches_reviewed_source_and_uses_no_labels() -> None:

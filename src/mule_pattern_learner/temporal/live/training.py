@@ -69,7 +69,7 @@ from .dataset import (
 from .hubs import HubRegistry, load_hub_registry, warn_hub_stubs
 from .memory import BatchLimits
 from .model import build_model, probabilities_from_logits
-from .policy import exceeds_rejection_limit, validate_protocol
+from .policy import EVALUATION_PROTOCOL, context_scope, exceeds_rejection_limit
 from .sampler import resolve_backend
 from .sampling import (
     MAX_PREFETCH,
@@ -325,7 +325,7 @@ def train(
     from its last checkpoint; without it an existing run is an error.
     """
     config = validate_config(config)
-    validate_protocol(config)
+    context_scope(config)
     plan = FeaturePlan.from_config(config)
     sampler = SamplerPlan.from_config(config)
     settings = RunSettings.from_config(config)
@@ -985,7 +985,7 @@ class _TrainingRun:
             "sampler_fingerprint": self.sampler.fingerprint(),
             "selected_on": "validation_observed_label_proxy_ap",
             "training_protocol": TRAINING_PROTOCOL,
-            "evaluation_protocol": self.config["evaluation_protocol"],
+            "evaluation_protocol": EVALUATION_PROTOCOL,
             "known_mules": label_summary(self.mask),
             "training_device": str(self.device),
             "sampler_backend": self.backend,
@@ -1025,7 +1025,7 @@ class _TrainingRun:
             "best_epoch": self.best_epoch,
             "history": self.history,
             "observed_label_proxy": results,
-            "evaluation_protocol": self.config["evaluation_protocol"],
+            "evaluation_protocol": EVALUATION_PROTOCOL,
             "validation_proxy": selection,
             "checkpoint": str(self.checkpoint_path),
             "database_calls_during_training": self.progress.calls(),
@@ -1035,7 +1035,7 @@ class _TrainingRun:
             "rejected_evaluation_rows": self.rejected_rows,
             "rejected_roots": rejected_roots,
             "max_rejected_root_fraction": self.limit,
-            "performance_claim": self.config["evaluation_protocol"] + "_observed_label_proxy_only",
+            "performance_claim": EVALUATION_PROTOCOL + "_observed_label_proxy_only",
             "evaluation_unlabeled_limit": self.config.get("evaluation_unlabeled_limit"),
             "training_protocol": TRAINING_PROTOCOL,
         }

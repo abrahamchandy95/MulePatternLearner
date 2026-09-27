@@ -110,8 +110,6 @@ def ensure_revealed_labels(executor: QueryExecutor, config: dict[str, Any]) -> d
     Prints the reveal plan (mules, eligible and revealed per split, and channels) or
     the existing label counts, then checks the label contract.
     """
-    if config.get("evaluation_protocol") != "strict_inductive":
-        raise ValueError("Revealing labels needs the strict_inductive scope partitions")
     result = merged_rows(
         executor.run(
             REVEAL_QUERY, reveal_parameters(config, apply=True), timeout_s=3600.0, attempts=1

@@ -220,7 +220,6 @@ def test_strict_preparation_and_nnpu_use_the_correct_phase_end_to_end(
 
     cfg = live_config(
         profile,
-        evaluation_protocol="strict_inductive",
         scope_id="unit_strict",
         seed_limits={"train": 10, "validation": 10, "test": 10},
     )
@@ -288,11 +287,7 @@ def test_resumed_stream_checks_live_source_before_fetching(monkeypatch: pytest.M
 
     monkeypatch.setattr(source, "live_executor", live_executor)
     manifest = {
-        "config": {
-            "dataset_id": "snapshot",
-            "scope_id": "scope",
-            "evaluation_protocol": "strict_inductive",
-        },
+        "config": {"dataset_id": "snapshot", "scope_id": "scope"},
         "source": {"source_counts": dict(counts)},
     }
     backend = source.open_context_source(

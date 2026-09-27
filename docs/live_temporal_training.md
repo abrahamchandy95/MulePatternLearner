@@ -362,7 +362,7 @@ and has rows per visibility phase 1, 2 and 3. A phase counts only the events who
 Account endpoints are all allowed in that phase, the endpoint rule of the context
 query, and the hub itself must be allowed in the phase. A held-out partition
 therefore cannot change a training-phase stub decision. Without a scope
-(`shared_history` preparations and `score-new`) the counts are unscoped and every
+(`score-new`) the counts are unscoped and every
 row has phase 3. Counts cover all currencies, an upper bound of the context
 query's USD-only capacity check, so an account whose USD history would fit can
 still be stubbed; that costs history, never leaks it. The manifest records
@@ -452,14 +452,13 @@ hash of its vertex counts; a `dataset_id` pinned in an overrides file must match
 prepared dataset. A ready directory is reused without connecting, but only
 when its GSQL hashes and its preparation settings still match; otherwise train into
 a new output. Preparation
-settings are the dates, seed limits, protocol, scope, split and cohort seeds, label
+settings are the dates, seed limits, scope, split and cohort seeds, label
 source (content hash), sampler pools, extraction groups and `scope_unowned`. Model,
 optimisation and transport settings may change freely.
 Set `cohort_seed` to train several model `seed` values on one prepared cohort
-(it defaults to `seed`). A missing strict scope is created by the first run (set
-`create_scope = false` to forbid that write), and a strict run on a graph without
-known labels gets its one-time [label reveal](label_reveal.md). A `shared_history`
-run has no scope partitions to reveal by and reads whatever labels the graph has.
+(it defaults to `seed`). A missing scope is created by the first run (set
+`create_scope = false` to forbid that write), and a run on a graph without known
+labels gets its one-time [label reveal](label_reveal.md).
 
 `scope_unowned` (default `"linked"`) places the accounts without an owning Party
 when the scope is created; see [strict experiment scope](#strict-experiment-scope).
@@ -606,10 +605,9 @@ metrics of the same names in `metrics.json` (which reports 1 and 5% only).
 
 ### Upgrading earlier preparations
 
-- Install the changed and new queries first (`temporal_training_population`,
-  `temporal_scope_population`, `temporal_create_training_scope`,
-  `temporal_hub_registry` and the new `temporal_scope_policy`); `install` finds
-  them by itself.
+- Install the changed and new queries first (`temporal_scope_population`,
+  `temporal_create_training_scope`, `temporal_hub_registry` and the new
+  `temporal_scope_policy`); `install` finds them by itself.
 - Prepared datasets without a scoped hub registry (no `hub_scope_id` in the
   manifest) are refused; prepare them again by training into a new output.
 - Datasets prepared with `label_policy = "graph_observed"` before the masked-label

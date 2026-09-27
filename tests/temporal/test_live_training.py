@@ -37,7 +37,7 @@ from mule_pattern_learner.temporal.live.hubs import load_hub_registry
 from mule_pattern_learner.temporal.live.model import LiveTGAT
 from mule_pattern_learner.temporal.live.config_schema import DEFAULT_RUN
 from mule_pattern_learner.temporal.live.pipeline import DEFAULT_MODEL, run
-from mule_pattern_learner.temporal.live.policy import validate_protocol
+from mule_pattern_learner.temporal.live.policy import context_scope
 from mule_pattern_learner.temporal.live.sampling import pu_batches
 from mule_pattern_learner.temporal.live.source import StreamingContextSource
 from mule_pattern_learner.temporal.live.supervision import (
@@ -50,7 +50,6 @@ from mule_pattern_learner.temporal.loss import NonNegativePULoss
 from temporal_fakes import (
     FakeExecutor,
     assigned_accounts,
-    fixture_accounts,
     live_config,
     neighbourhood,
     scoped_accounts,
@@ -96,12 +95,10 @@ def test_observed_labels_have_no_oracle_and_preserve_split_isolation() -> None:
         align_observed_labels(a, supplied_labels().assign(known_from_ms=0))
 
 
-@pytest.mark.legacy
 def test_strict_claim_fails_before_preparation_or_training() -> None:
     with pytest.raises(ValueError, match="frozen TigerGraph scope_id"):
-        validate_protocol({"evaluation_protocol": "strict_inductive"})
-    with pytest.raises(ValueError, match="explicitly"):
-        validate_protocol({})
+        context_scope({})
+    assert context_scope({"scope_id": "scope"}) == "scope"
 
 
 def test_nnpu_draws_only_known_positives_and_covers_the_label_blind_marginal() -> None:
@@ -115,10 +112,9 @@ def test_nnpu_draws_only_known_positives_and_covers_the_label_blind_marginal() -
 
 
 class PreparedExecutor(FakeExecutor):
-    """Both population queries plus the context, cutoff and hub queries.
+    """The scope population, context, cutoff and hub queries.
 
-    The scope population (strict_inductive) holds the fixture accounts with their splits
-    as partitions; temporal_training_population serves the legacy shared_history cohort.
+    The scope population holds the fixture accounts with their splits as partitions.
     """
 
     def __init__(self, directory: Path, **kwargs: Any) -> None:
@@ -126,9 +122,6 @@ class PreparedExecutor(FakeExecutor):
         self.directory = directory
 
     def run(self, name: str, params: dict[str, Any], **kwargs: Any) -> list[dict[str, Any]]:
-        if name == "temporal_training_population":
-            assert params["include_observed"] is False
-            return [{"status": "ok", "accounts": fixture_accounts().to_dict("records")}]
         if name == "temporal_training_context":
             # A label mask must already be frozen when the first feature query starts.
             frozen = pd.read_parquet(self.directory / "observed_labels.parquet")

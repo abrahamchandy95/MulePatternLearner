@@ -1,7 +1,7 @@
 """Install and verify only the query definitions used by temporal training.
 
 verify_frozen_source also rechecks the live provenance of a prepared dataset (vertex
-counts and, for strict runs, its scope; see scope.py) before a streamed run.
+counts and its scope; see scope.py) before a streamed run.
 """
 
 from __future__ import annotations
@@ -22,7 +22,6 @@ from .scope import verify_scope
 QUERY_FILES = (
     "gsql/features/temporal_fourier64.gsql",
     "gsql/temporal/training_context.gsql",
-    "gsql/temporal/training_population.gsql",
     "gsql/temporal/training_scope.gsql",
     "gsql/temporal/training_cutoffs.gsql",
     "gsql/temporal/hub_registry.gsql",
@@ -194,12 +193,10 @@ def verify_frozen_source(executor: Any, manifest: dict[str, Any]) -> None:
     }
     if source_counts(executor) != recorded:
         raise ValueError("Live graph counts changed; freeze the source and prepare a new dataset")
-    config = manifest["config"]
-    if config["evaluation_protocol"] == "strict_inductive":
-        try:
-            verify_scope(executor, config)
-        except ValueError as error:
-            raise ValueError(f"Prepared experiment scope is no longer valid: {error}") from None
+    try:
+        verify_scope(executor, manifest["config"])
+    except ValueError as error:
+        raise ValueError(f"Prepared experiment scope is no longer valid: {error}") from None
 
 
 def _installation_state(status: Any) -> str:
