@@ -136,7 +136,7 @@ def train(
 ) -> dict[str, Any]:
     """Train, select on observed validation labels, save the model, then score test.
 
-    The run's files go into its directory, run. Without ``contexts``,
+    Every file of the run goes into the directory ``run`` names. Without ``contexts``,
     ``open_contexts`` opens the dataset's live source once the settings and the
     prepared dataset passed their checks (the pipeline passes
     pipeline.connect.open_context_source). ``contexts`` and ``hubs`` replace the
