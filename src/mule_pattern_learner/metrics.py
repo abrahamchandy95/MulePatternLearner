@@ -3,7 +3,8 @@
 Everything here is pure numpy and scikit-learn: arrays in, numbers out. The proxy
 metrics (proxy_metrics) score observed labels as they are; the weighted metrics estimate population
 values from a sample in which each account stands for ``weight`` accounts. Both share
-the thresholded precision, recall and F1 (threshold_metrics).
+the thresholded precision, recall and F1 (threshold_metrics) and the tie-aware review
+budgets (capture_at_budgets).
 """
 
 from __future__ import annotations
@@ -40,28 +41,27 @@ def threshold_metrics(
 def proxy_metrics(
     y: NDArray[np.int64], score: NDArray[np.float64], threshold: float
 ) -> dict[str, Any]:
-    """AP, ROC AUC and the thresholded and top-fraction metrics of observed labels."""
+    """AP, ROC AUC and the thresholded and review-budget metrics of observed labels.
+
+    The review budgets are the audit's (capture_at_budgets with unit weights), so tied
+    scores share a budget that ends among them.
+    """
     if not len(y):
         return {"n": 0, "positives": 0, "average_precision": None, "roc_auc": None}
-    order = np.argsort(-score, kind="stable")
-    result: dict[str, Any] = {
+    unit = np.ones(len(y))
+    return {
         "n": len(y),
         "positives": int(y.sum()),
         "prevalence": float(y.mean()),
         "average_precision": float(average_precision_score(y, score)) if y.sum() else None,
         "roc_auc": float(roc_auc_score(y, score)) if len(np.unique(y)) == 2 else None,
         "threshold": threshold,
-        **threshold_metrics(y, score, np.ones(len(y)), threshold),
+        **threshold_metrics(y, score, unit, threshold),
+        **capture_at_budgets(y, score, unit),
     }
-    for fraction in (0.01, 0.05):
-        k = max(1, int(np.ceil(fraction * len(y))))
-        hits = int(y[order[:k]].sum())
-        result[f"precision_at_{int(fraction * 100)}pct"] = hits / k
-        result[f"recall_at_{int(fraction * 100)}pct"] = hits / max(int(y.sum()), 1)
-    return result
 
 
-# Review budgets of the weighted audit: the top 1, 5 and 10% of the estimated population.
+# The review budgets: the top 1, 5 and 10% of the (estimated) population.
 REVIEW_BUDGETS = (0.01, 0.05, 0.10)
 
 
@@ -99,8 +99,8 @@ def capture_at_budgets(
     that straddles the boundary counts only for the part inside it: a sampled negative
     stands for many accounts. Precision is the weighted positives inside over f * W,
     recall the same over all weighted positives. With unit weights, no ties and a whole
-    f * n these are the unweighted ``precision_at_1pct`` and ``recall_at_1pct`` (5, 10)
-    of the same ranking.
+    f * n these are the precision and recall of the top f * n accounts; proxy_metrics
+    reports them for observed labels.
     """
     reviewed, found = capture_curve(y, score, weight)
     result: dict[str, float] = {}

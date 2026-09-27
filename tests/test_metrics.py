@@ -38,3 +38,22 @@ def test_unit_weights_give_the_unweighted_top_fraction_metrics() -> None:
     top = np.argsort(-score)[:20]
     assert weighted["precision_at_10pct"] == pytest.approx(y[top].sum() / 20)
     assert weighted["recall_at_10pct"] == pytest.approx(y[top].sum() / y.sum())
+
+
+def test_the_proxy_budgets_share_tied_scores_whatever_the_row_order() -> None:
+    # 20 accounts, 4 mules; the top two tie, one of them a mule. The budgets are 0.2, 1
+    # and 2 accounts: the first two lie inside the tied block and take half a mule per
+    # account, the third holds the block.
+    y = np.array([1, 0, 1, 1, 1] + [0] * 15)
+    score = np.array([0.9, 0.9, 0.5, 0.4, 0.3] + [0.1] * 15)
+    expected = {
+        "precision_at_1pct": 0.1 / 0.2,
+        "recall_at_1pct": 0.1 / 4,
+        "precision_at_5pct": 0.5 / 1,
+        "recall_at_5pct": 0.5 / 4,
+        "precision_at_10pct": 1 / 2,
+        "recall_at_10pct": 1 / 4,
+    }
+    for order in (np.arange(20), np.r_[1, 0, 2:20]):
+        metrics = proxy_metrics(y[order], score[order], 0.5)
+        assert {k: metrics[k] for k in expected} == pytest.approx(expected)
