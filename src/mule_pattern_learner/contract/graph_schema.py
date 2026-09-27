@@ -2,7 +2,7 @@
 
 Nothing here reads the graph. The values name vertex and edge types, the rails and
 channels of payment messages, the sampling strata, the split phases of the frozen
-scope, and the Account columns of the loading contract.
+scope, the columns of a hub row and the Account columns of the loading contract.
 """
 
 from __future__ import annotations
@@ -100,6 +100,19 @@ def context_scope(config: dict[str, Any]) -> str:
     if not scope:
         raise ValueError("Strict inductive sampling requires a frozen TigerGraph scope_id")
     return str(scope)
+
+
+# The columns of a hub row, in order, as the hub query prints them and the prepared hub
+# registry stores them, each with its type. A hub is listed for one reason only.
+HUB_COLUMNS: dict[str, type[int] | type[str]] = {
+    "account_id": str,
+    "cutoff_seq": int,
+    "visibility_phase": int,
+    "max_visible": int,
+    "max_degree": int,
+    "reason": str,
+}
+HUB_REASONS = ("visible_history",)
 
 
 # Account CSV/PSV input columns (gsql/schema/account_loading.gsql): five

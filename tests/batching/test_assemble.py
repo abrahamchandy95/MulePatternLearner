@@ -15,7 +15,8 @@ from mule_pattern_learner.contract.feature_groups import DEFAULT_GROUPS, Feature
 from mule_pattern_learner.contract.graph_schema import RELATIONS, ContextKey
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
 from mule_pattern_learner.data.contexts import StreamingContextSource
-from mule_pattern_learner.data.hub_registry import HUB_COLUMNS, HubRegistry
+from mule_pattern_learner.contract.graph_schema import HUB_COLUMNS
+from mule_pattern_learner.data.hub_registry import HubRegistry
 from mule_pattern_learner.model.tgat import LiveTGAT
 from mule_pattern_learner.testing.builders import (
     DEFAULT_SPLIT_PLAN,

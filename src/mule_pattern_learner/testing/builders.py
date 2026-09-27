@@ -41,7 +41,8 @@ from mule_pattern_learner.contract.sampler_plan import PoolPlan, SamplerPlan
 from mule_pattern_learner.contract.server import CONTRACT_VERSION
 from mule_pattern_learner.contract.time_basis import BASIS_ID, fourier64
 from mule_pattern_learner.data import manifest as data_manifest
-from mule_pattern_learner.data.hub_registry import HUB_COLUMNS, HubRegistry
+from mule_pattern_learner.contract.graph_schema import HUB_COLUMNS
+from mule_pattern_learner.data.hub_registry import HubRegistry
 from mule_pattern_learner.data.manifest import preparation_view
 from mule_pattern_learner.data.observed_labels import align_observed_labels, validate_label_table
 from mule_pattern_learner.inference import score_accounts
