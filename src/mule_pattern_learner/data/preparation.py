@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-import json
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +11,7 @@ import pandas as pd
 from ..artifacts import atomic_write, file_digest
 from ..config import RunConfig
 from ..paths import DatasetPaths
+from ..runtime.progress import emit
 from .accounts import scoped_cohort
 from .hub_registry import hub_manifest, hub_threshold
 from .manifest import (
@@ -102,7 +102,7 @@ def _stage_hubs(
         registry.save(hubs_path)
         manifest.update(hub_manifest(registry, hubs_path))
         write_manifest(dataset, manifest)
-        print(json.dumps({"hub_counts": manifest["hub_counts"]}), flush=True)
+        emit({"hub_counts": manifest["hub_counts"]})
 
 
 def prepare(

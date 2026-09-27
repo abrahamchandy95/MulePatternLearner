@@ -63,6 +63,7 @@ from ..model.build import build_model
 from ..model.loss import NonNegativePULoss
 from ..paths import DatasetPaths, RunPaths
 from ..runtime.device import choose_device, torch_runtime
+from ..runtime.progress import emit, recording
 from ..runtime.workers import BatchPrefetcher
 from ..sampling.backend import resolve_backend
 from .averaging import WeightAverage, evaluated_weights
@@ -380,10 +381,13 @@ class _TrainingRun:
                     f"{self.backend}; resume on a matching host, or set sampler.backend = "
                     f'"{self.backend}" to accept a different sampling stream from here on'
                 )
-            print(
-                f"Resuming a {saved} checkpoint with the explicitly configured {self.backend} "
-                "sampler backend: the remaining steps sample a different stream",
-                flush=True,
+            emit(
+                {
+                    "event": "sampler_backend",
+                    "saved": saved,
+                    "resumed": self.backend,
+                    "note": "the remaining steps sample a different stream",
+                }
             )
         self.model.load_state_dict(state["model"])
         self.optimizer.load_state_dict(state["optimizer"])
@@ -413,33 +417,39 @@ class _TrainingRun:
     # Phases ------------------------------------------------------------------
 
     def execute(self, state: dict[str, Any] | None) -> dict[str, Any]:
-        if state is not None:
-            self.restore(state)
         self.run.root.mkdir(parents=True, exist_ok=True)
-        if not self.run.config.exists():
-            run_provenance = provenance(self.device, self.backend, self.dataset_id)
-            write_run_config(self.run.config, self.config, run_provenance)
-        # The intervals after the resume position are logged again.
-        keep_history(self.run.history, self.epoch, self.step)
-        if self.epoch_rows:
-            self.record_epochs()
-        self.progress.path = self.run.events
-        self.progress.emit(
-            {
-                "event": "resume" if state is not None else "start",
-                "device": str(self.device),
-                "known_mules": label_summary(self.mask),
-                "loss": "nnPU",
-                "run": str(self.run.root),
-                "epoch": self.epoch,
-                "step": self.step,
-                "prefetch_batches": self.prefetch,
-                "max_rejected_root_fraction": self.limit,
-            }
-        )
-        while self.epoch < self.training_config.epochs and not self.stopped:
-            self.run_epoch()
-        return self.finish()
+        with recording(self.run.events):
+            if state is not None:
+                self.restore(state)
+            if not self.run.config.exists():
+                run_provenance = provenance(self.device, self.backend, self.dataset_id)
+                write_run_config(self.run.config, self.config, run_provenance)
+            # The intervals after the resume position are logged again.
+            keep_history(self.run.history, self.epoch, self.step)
+            if self.epoch_rows:
+                self.record_epochs()
+            self.emit_event(
+                {
+                    "event": "resume" if state is not None else "start",
+                    "device": str(self.device),
+                    "known_mules": label_summary(self.mask),
+                    "loss": "nnPU",
+                    "run": str(self.run.root),
+                    "epoch": self.epoch,
+                    "step": self.step,
+                    "prefetch_batches": self.prefetch,
+                    "max_rejected_root_fraction": self.limit,
+                }
+            )
+            while self.epoch < self.training_config.epochs and not self.stopped:
+                self.run_epoch()
+            return self.finish()
+
+    def emit_event(self, record: dict[str, Any]) -> dict[str, Any]:
+        """Print record with the run's totals, recording it in events.jsonl; return it."""
+        record = self.progress.record(record)
+        emit(record)
+        return record
 
     def run_epoch(self) -> None:
         """Train the current epoch's remaining steps, then select on validation."""
@@ -509,7 +519,7 @@ class _TrainingRun:
                             f"step {self.step}"
                         )
                     now = time.perf_counter()
-                    record = self.progress.emit(
+                    record = self.progress.record(
                         {
                             "event": "train",
                             "epoch": epoch + 1,
@@ -521,11 +531,12 @@ class _TrainingRun:
                             "batch": {
                                 k: v for k, v in plain(stats).items() if k != "sampler_backend"
                             },
-                        },
-                        echo=logged,
+                        }
                     )
-                    row = {name: record[name] for name in HISTORY_COLUMNS}
-                    append_history(self.run.history, row)
+                    # Every interval is a row of history.csv; logged ones are printed too.
+                    append_history(self.run.history, {k: record[k] for k in HISTORY_COLUMNS})
+                    if logged:
+                        emit(record)
                     interval.start(now)
                     if saved:
                         self.save_last()
@@ -561,7 +572,7 @@ class _TrainingRun:
         self.save_last()
         # After the resume state, so epochs.csv never holds an epoch that resume.pt lacks.
         rows = self.record_epochs()
-        self.progress.emit({"event": "epoch", **rows[-1]})
+        self.emit_event({"event": "epoch", **rows[-1]})
 
     def record_epochs(self) -> list[dict[str, Any]]:
         """Replace epochs.csv with the epochs so far, the selected one marked; return them."""
@@ -643,7 +654,7 @@ class _TrainingRun:
                     logits.append(item.logits)
                 done += min(size, len(sample.indices) - start)
                 if number % self.runtime.log_every_steps == 0 or number == len(chunks):
-                    self.progress.emit(
+                    self.emit_event(
                         {"event": "evaluate", "split": split, "accounts": done, "total": total}
                     )
         return accepted_scores(logits, accepted, split)
@@ -711,7 +722,7 @@ class _TrainingRun:
             rejected_roots=rejected_roots,
             limit=self.limit,
         )
-        self.progress.emit({"event": "complete", "best_epoch": self.best_epoch}, echo=False)
+        self.emit_event({"event": "complete", "best_epoch": self.best_epoch})
         write_json(self.run.metrics, result)
         return result
 

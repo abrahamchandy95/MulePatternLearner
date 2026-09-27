@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-import json
 import re
 import time
 from typing import Any
 
 from ..contract.server import QUERY_FILES
 from ..paths import GSQL_DIR
+from ..runtime.progress import emit
 from .executor import AVAILABILITY, GRAPH, SERVER_TIMEOUT, ConnectionExecutor, failure_class
 from .gsql_text import definitions, normalized, parameter_names, repository_queries
 
@@ -170,7 +170,7 @@ def install(
     names = [name for name in queries if name in stale]
     logs["installed"] = names
     logs["up_to_date"] = [name for name in queries if name not in stale]
-    print(json.dumps({"install": names, "up_to_date": logs["up_to_date"]}), flush=True)
+    emit({"install": names, "up_to_date": logs["up_to_date"]})
     if not names:
         logs["verified"] = verify_sources(executor, files)
         return logs
@@ -190,14 +190,11 @@ def install(
     except Exception as error:
         if failure_class(error) not in (AVAILABILITY, SERVER_TIMEOUT):
             raise
-        print(
-            json.dumps(
-                {
-                    "install_request": "no answer; polling the endpoint listing",
-                    "error": type(error).__name__,
-                }
-            ),
-            flush=True,
+        emit(
+            {
+                "install_request": "no answer; polling the endpoint listing",
+                "error": type(error).__name__,
+            }
         )
     request_id = status.get("requestId") if isinstance(status, dict) else None
     while request_id and _installation_state(status) == "running":
@@ -207,12 +204,7 @@ def install(
                 f"Query installation {request_id} still running after {elapsed:.0f}s; "
                 "check it with getQueryInstallationStatus before retrying"
             )
-        print(
-            json.dumps(
-                {"installing": len(names), "request_id": request_id, "elapsed_s": round(elapsed)}
-            ),
-            flush=True,
-        )
+        emit({"installing": len(names), "request_id": request_id, "elapsed_s": round(elapsed)})
         sleep(poll_s)
         status = executor.call(
             lambda conn: conn.getQueryInstallationStatus(str(request_id)),
@@ -250,5 +242,5 @@ def _await_enabled(
                 "may still be compiling: re-run `mule-temporal install` later, which installs "
                 "only what is still stale."
             )
-        print(json.dumps({"awaiting": pending, "elapsed_s": round(elapsed)}), flush=True)
+        emit({"awaiting": pending, "elapsed_s": round(elapsed)})
         sleep(poll_s)

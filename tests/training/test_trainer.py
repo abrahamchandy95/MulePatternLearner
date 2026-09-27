@@ -18,7 +18,12 @@ import pyarrow.parquet as pq
 import pytest
 import torch
 
-from mule_pattern_learner.artifacts import read_epochs, read_history, read_run_config
+from mule_pattern_learner.artifacts import (
+    read_epochs,
+    read_events,
+    read_history,
+    read_run_config,
+)
 from mule_pattern_learner.batching import assemble
 from mule_pattern_learner.batching.assemble import make_live_batch
 from mule_pattern_learner.config import RunConfig
@@ -481,6 +486,11 @@ def test_resume_refuses_a_different_sampler_backend_unless_configured(
     explicit = base_config(sampler={"backend": "torch"})
     result = fit(tmp_path, "run", explicit, resume=True)
     assert result["status"] == "complete" and result["sampler_backend"] == "torch"
+    # The change of stream is recorded with the run's events.
+    changes = [e for e in read_events(RunPaths(tmp_path / "run").events) if "saved" in e]
+    assert [(e["event"], e["saved"], e["resumed"]) for e in changes] == [
+        ("sampler_backend", "cugraph", "torch")
+    ]
     assert_same_run(tmp_path, "straight", "run")
 
 

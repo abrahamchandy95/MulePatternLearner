@@ -12,6 +12,7 @@ import json
 from typing import Any
 
 from ..config import ScopeConfig
+from ..runtime.progress import emit
 from .executor import (
     ConnectionExecutor,
     QueryExecutor,
@@ -189,14 +190,14 @@ def ensure_scope(
     attrs = scope_header(executor, scope_id)
     if attrs is not None:
         counts = verified()
-        print(json.dumps({"scope": scope_id, "unowned_members": counts}), flush=True)
+        emit({"scope": scope_id, "unowned_members": counts})
         return
     if not scope.create:
         raise ValueError(
             f"Scope {scope_id!r} does not exist on TigerGraph and scope.create is false; "
             "set it to true to let the first run create it"
         )
-    print(json.dumps({"scope": scope_id, "creating": True}), flush=True)
+    emit({"scope": scope_id, "creating": True})
     created = checked_rows(
         executor.run(
             "temporal_create_training_scope",
@@ -220,4 +221,4 @@ def ensure_scope(
         )
     )
     counts = verified()
-    print(json.dumps({"scope": scope_id, "created": True, "unowned_members": counts}), flush=True)
+    emit({"scope": scope_id, "created": True, "unowned_members": counts})
