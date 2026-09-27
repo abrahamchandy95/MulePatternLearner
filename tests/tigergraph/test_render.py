@@ -11,10 +11,10 @@ from mule_pattern_learner.contract.feature_groups import (
     FEATURE_GROUPS,
     FeaturePlan,
 )
+from mule_pattern_learner.paths import REPOSITORY_ROOT
 from mule_pattern_learner.tigergraph.render import as_interpreted, render_context_query
 
-ROOT = Path(__file__).resolve().parents[2]
-GSQL = ROOT / "gsql/queries"
+GSQL = REPOSITORY_ROOT / "gsql/queries"
 
 
 def test_query_renderer_matches_reviewed_source_and_uses_no_labels() -> None:
