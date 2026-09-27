@@ -41,7 +41,7 @@ from mule_pattern_learner.data.preparation import prepare
 from mule_pattern_learner.inference.predictor import TemporalPredictor
 from mule_pattern_learner.inference.saved_model import ModelCheckpoint, saved_run_config
 from mule_pattern_learner.inference.score_accounts import score
-from mule_pattern_learner.paths import DatasetPaths
+from mule_pattern_learner.paths import DatasetPaths, RunPaths
 from mule_pattern_learner.testing.builders import neighbourhood, scope_population
 from mule_pattern_learner.testing.fake_graph import FakeExecutor
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
@@ -207,7 +207,7 @@ def test_the_same_settings_prepare_the_dataset_of_the_old_code(tmp_path: Path) -
     ):
         pd.testing.assert_frame_equal(pd.read_parquet(have), pd.read_parquet(want))
     # And a new model trains on it.
-    result = train(config, dataset, tmp_path / "model.pt", contexts=fixture_source(config))
+    result = train(config, dataset, RunPaths(tmp_path / "run"), contexts=fixture_source(config))
     assert result["status"] == "complete"
 
 

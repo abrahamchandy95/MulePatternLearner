@@ -50,7 +50,7 @@ from mule_pattern_learner.config import DEFAULT_CONFIG, RunConfig
 from mule_pattern_learner.contract.feature_groups import extraction_plan
 from mule_pattern_learner.data.contexts import StreamingContextSource, streaming_source
 from mule_pattern_learner.data.preparation import prepare
-from mule_pattern_learner.paths import REPOSITORY_ROOT, DatasetPaths
+from mule_pattern_learner.paths import REPOSITORY_ROOT, DatasetPaths, RunPaths
 from mule_pattern_learner.testing.builders import neighbourhood, scope_population
 from mule_pattern_learner.testing.fake_graph import FakeExecutor
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
@@ -154,14 +154,12 @@ def first_training_batch(config: RunConfig) -> Generator[list[RootBatch]]:
 
 def golden_run(directory: Path) -> Observed:
     config, dataset, executor = prepare_golden(directory)
+    run = RunPaths(directory / "run")
     with first_training_batch(config) as found:
-        result = trainer.train(
-            config, dataset, directory / "model.pt", contexts=golden_source(executor, config)
-        )
+        result = trainer.train(config, dataset, run, contexts=golden_source(executor, config))
     (first,) = found
     assert first.batch is not None
-    progress = (directory / "model_run/progress.jsonl").read_text().splitlines()
-    events = [json.loads(line) for line in progress]
+    events = [json.loads(line) for line in run.events.read_text().splitlines()]
     return Observed(
         batch=tensor_digests(first.batch),
         batch_stats={k: v for k, v in first.stats.items() if k != "sampler_backend"},

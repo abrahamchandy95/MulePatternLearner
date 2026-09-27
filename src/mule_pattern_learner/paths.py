@@ -1,7 +1,11 @@
-"""Repository paths, and the run and dataset path policy.
+"""Repository paths, and where prepared datasets and the commands' outputs live.
 
-Prepared datasets live in data/<dataset id>/ (DATA_DIR). DatasetPaths names each file
-of one; nothing else joins a dataset file name onto a directory.
+Prepared datasets live in data/<dataset id>/ (DATA_DIR), and everything the commands
+write lives under results/ (RESULTS_DIR): one training run in
+results/<variant>/seed-<n>/, a control-experiment suite in results/experiments/<suite>/,
+the diagnostics of a dataset in results/diagnostics/<dataset id>/, and runs moved aside
+because their settings changed in results/archive/. DatasetPaths and RunPaths name each
+file; nothing else joins a file name onto one of these directories.
 """
 
 from __future__ import annotations
@@ -14,7 +18,10 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 GSQL_DIR = REPOSITORY_ROOT / "gsql"
 # Prepared datasets, the inputs to training (gitignored).
 DATA_DIR = REPOSITORY_ROOT / "data"
-DEFAULT_MODEL = REPOSITORY_ROOT / "models/temporal/model.pt"
+# Everything the commands write (gitignored).
+RESULTS_DIR = REPOSITORY_ROOT / "results"
+# The variant name of the built-in run, which `mule train` writes.
+BASELINE_VARIANT = "baseline"
 
 
 @dataclass(frozen=True)
@@ -53,8 +60,93 @@ def datasets(data: Path = DATA_DIR) -> list[DatasetPaths]:
     return [dataset for dataset in found if dataset.manifest.exists()]
 
 
-def output_paths(output: Path) -> tuple[Path, Path]:
-    """A .pt output names the model; directory outputs retain the experiment API."""
-    if output.suffix == ".pt":
-        return output, output.with_name(output.stem + "_run")
-    return output / "model.pt", output
+@dataclass(frozen=True)
+class RunPaths:
+    """The files of one training run, in its own directory."""
+
+    root: Path
+
+    @classmethod
+    def of(cls, variant: str, seed: int, results: Path = RESULTS_DIR) -> RunPaths:
+        """The directory of one run: <results>/<variant>/seed-<seed>/."""
+        return cls(results / variant / f"seed-{seed}")
+
+    @property
+    def config(self) -> Path:
+        """The configuration, its fingerprint and the run's provenance."""
+        return self.root / "config.json"
+
+    @property
+    def model(self) -> Path:
+        """The selected model (inference.saved_model.SavedModel)."""
+        return self.root / "model.pt"
+
+    @property
+    def resume(self) -> Path:
+        """What an interrupted run continues from (training.checkpoint.ResumeState)."""
+        return self.root / "resume.pt"
+
+    @property
+    def history(self) -> Path:
+        """One row per training log interval."""
+        return self.root / "history.csv"
+
+    @property
+    def epochs(self) -> Path:
+        """One row per epoch, with its validation."""
+        return self.root / "epochs.csv"
+
+    @property
+    def events(self) -> Path:
+        """The structured lines the commands printed for this run, one JSON object each."""
+        return self.root / "events.jsonl"
+
+    @property
+    def metrics(self) -> Path:
+        """The proxy metrics and totals of a complete run."""
+        return self.root / "metrics.json"
+
+    def predictions(self, split: str) -> Path:
+        """The proxy scores of a split's observed-label rows."""
+        return self.root / "predictions" / f"{split}.parquet"
+
+    def audit_metrics(self, split: str) -> Path:
+        """The ground-truth audit of a split: its metrics and constants."""
+        return self.root / "audit" / f"{split}.json"
+
+    def audit_scores(self, split: str) -> Path:
+        """The scored accounts of a split's audit sample."""
+        return self.root / "audit" / f"{split}.parquet"
+
+    def audit_rejected(self, split: str) -> Path:
+        """The accounts of a split's audit sample that TigerGraph rejected, one per line."""
+        return self.root / "audit" / f"{split}_rejected.txt"
+
+    def scores(self, accounts: str, date: str) -> Path:
+        """Scores of the accounts listed in a file with this stem, at a date."""
+        return self.root / "scores" / f"{accounts}_{date}.parquet"
+
+    @property
+    def plots(self) -> Path:
+        """The directory of the run's figures."""
+        return self.root / "plots"
+
+    @property
+    def report(self) -> Path:
+        """The run's tables, with links to its figures."""
+        return self.root / "report.md"
+
+
+def suite_dir(suite: str, results: Path = RESULTS_DIR) -> Path:
+    """The comparison tables and figures of a control-experiment suite."""
+    return results / "experiments" / suite
+
+
+def diagnostics_dir(dataset_id: str, results: Path = RESULTS_DIR) -> Path:
+    """The diagnostic study of a prepared dataset."""
+    return results / "diagnostics" / dataset_id
+
+
+def archive_dir(results: Path = RESULTS_DIR) -> Path:
+    """Where results whose settings changed are moved; nothing there is deleted."""
+    return results / "archive"

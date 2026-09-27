@@ -1,8 +1,8 @@
 """Train from TigerGraph with graph-revealed labels, bounded contexts and CUDA by default.
 
 `mule-temporal train` needs nothing but the TigerGraph credentials in .env: settings
-are built in (config.DEFAULT_CONFIG), and the first run installs the queries,
-creates the scope and reveals the known mules. Every flag is optional.
+are built in (config.DEFAULT_CONFIG), the run goes to results/baseline/seed-42/, and
+the first run installs the queries, creates the scope and reveals the known mules.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from .config import DEFAULT_CONFIG
 from .data.manifest import read_manifest
 from .inference.saved_model import ModelCheckpoint
 from .inference.score_accounts import read_account_ids, score
-from .paths import DEFAULT_MODEL, DatasetPaths
+from .paths import DatasetPaths
 from .pipeline.connect import connect, open_context_source
 from .pipeline.evaluate import evaluate, final_audit
 from .pipeline.prepare import prepare_live
@@ -46,10 +46,11 @@ def build_parser() -> argparse.ArgumentParser:
     commands.add_parser(
         "prepare", help="Optionally stage the built-in run's dataset in data/ ahead of training"
     )
-    training = commands.add_parser(
-        "train", help="Prepare as needed, train with nnPU and save (resumes an interrupted run)"
+    commands.add_parser(
+        "train",
+        help="Prepare as needed, then train with nnPU into results/baseline/seed-42/ "
+        "(resumes an interrupted run)",
     )
-    training.add_argument("--output", type=Path, default=DEFAULT_MODEL, help="Model .pt path")
     scoring = commands.add_parser("score")
     scoring.add_argument("--checkpoint", type=Path, required=True)
     scoring.add_argument("--dataset", type=Path, help="Default: the checkpoint's prepared data")
@@ -94,10 +95,10 @@ def checkpoint_dataset(checkpoint: ModelCheckpoint) -> DatasetPaths:
     return checkpoint.dataset
 
 
-def train_command(args: argparse.Namespace) -> dict[str, Any]:
-    """Prepare the dataset as needed, then train (or resume) and save the model."""
-    # An interrupted run continues from its checkpoint; a finished one is an error.
-    return run(args.output, resume=True)
+def train_command() -> dict[str, Any]:
+    """Prepare the dataset as needed, then train (or resume) the built-in run."""
+    # An interrupted run continues from its resume.pt; a finished one is an error.
+    return run(resume=True)
 
 
 def main() -> None:
@@ -138,7 +139,7 @@ def main() -> None:
     elif args.command == "prepare":
         result = read_manifest(prepare_live(DEFAULT_CONFIG))
     else:
-        result = train_command(args)
+        result = train_command()
     print(json.dumps(result, indent=2, allow_nan=False))
 
 
