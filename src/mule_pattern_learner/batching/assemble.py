@@ -384,6 +384,15 @@ def build_root_batch(
     return RootBatch(keys, accepted, batch, stats)
 
 
+def batch_counts(stats: Mapping[str, Any]) -> dict[str, int]:
+    """The counts among a batch's statistics, as ints; the sampler backend is a name."""
+    return {
+        k: int(v)
+        for k, v in stats.items()
+        if isinstance(v, (int, np.integer)) and not isinstance(v, bool)
+    }
+
+
 def batch_device(device: torch.device) -> torch.device:
     """Where the batches of a model on ``device`` are assembled.
 

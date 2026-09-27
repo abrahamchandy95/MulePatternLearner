@@ -16,7 +16,13 @@ import numpy as np
 import pandas as pd
 import torch
 
-from ..batching.assemble import RootBatch, batch_device, build_root_batch, to_device
+from ..batching.assemble import (
+    RootBatch,
+    batch_counts,
+    batch_device,
+    build_root_batch,
+    to_device,
+)
 from ..batching.limits import BatchLimits
 from ..config import fanouts
 from ..contract.feature_groups import FeaturePlan
@@ -220,13 +226,7 @@ class TemporalPredictor:
         )
         with contextlib.closing(scored):
             for item in scored:
-                self.totals.update(
-                    {
-                        k: int(v)
-                        for k, v in item.prepared.stats.items()
-                        if isinstance(v, (int, np.integer)) and not isinstance(v, bool)
-                    }
-                )
+                self.totals.update(batch_counts(item.prepared.stats))
                 yield self.frame(item), item.prepared.rejected
 
     def score_keys(
