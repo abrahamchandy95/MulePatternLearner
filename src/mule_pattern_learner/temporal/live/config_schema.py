@@ -3,7 +3,7 @@
 `validate_config` rejects unknown or mistyped keys before any database work.
 Operational keys (transport, runtime and preparation switches) receive their
 documented defaults. Modelling keys whose absence has a meaning downstream
-(feature_groups, extraction_groups, sampler, observed_labels, fanouts, ...) are
+(feature_groups, extraction_groups, sampler, fanouts, ...) are
 kept absent so the owning component applies its own default (FALLBACKS and
 `setting` for the scalar ones); saved checkpoint configurations rely on that.
 `run_config` starts from DEFAULT_RUN, so a training run always has the modelling keys
@@ -44,13 +44,12 @@ OPERATIONAL_DEFAULTS: dict[str, Any] = {
 # What a modelling key means when a configuration leaves it absent (or null). Unlike
 # OPERATIONAL_DEFAULTS these never enter a validated configuration, so config.json and
 # resume fingerprints record only what was written (preparation views resolve
-# split_seed and label_policy through them). Configs from
+# split_seed through them). Configs from
 # run_config set every one of them (DEFAULT_RUN); the fallbacks decide saved and
 # hand-written configurations, so they must not change (fanouts stays (8, 4)).
 FALLBACKS: dict[str, Any] = {
     "seed": 42,
     "split_seed": 42,
-    "label_policy": "observed",
     "fanouts": (8, 4),
     "batch_size": 64,
     "hidden": 64,
@@ -76,7 +75,6 @@ FALLBACKS: dict[str, Any] = {
 # prepared cache lives inside the run directory, so none of it is configured.
 DEFAULT_RUN: dict[str, Any] = {
     "scope_id": "strict_mule_v2",
-    "label_policy": "graph_observed",
     # Known mules the first run reveals per split, among those a bank would have
     # discovered before the split's cutoff (gsql/temporal/label_reveal.gsql).
     "reveal_per_split": 20,
@@ -168,6 +166,8 @@ DEFAULT_RUN: dict[str, Any] = {
 RETIRED_KEYS: dict[str, Any] = {
     "context_storage": "stream",
     "evaluation_protocol": "strict_inductive",
+    "label_policy": "graph_observed",
+    "observed_labels": None,
 }
 # Identifiers that become directory names or server-side scope metadata.
 IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -241,8 +241,6 @@ class LiveConfig(_Strict):
         "scope_unowned"
     ]
     create_scope: bool = OPERATIONAL_DEFAULTS["create_scope"]
-    label_policy: Literal["observed", "graph_observed"] | None = None
-    observed_labels: str | None = None
     # First-run label reveal (graph_observed): at most this many known mules per split.
     reveal_per_split: Annotated[int, Field(ge=0, le=1000)] | None = None
     # Seed of the reveal's deterministic draws; defaults to `seed`.
@@ -339,9 +337,8 @@ def without_retired_keys(config: dict[str, Any]) -> dict[str, Any]:
     """config without RETIRED_KEYS; a retired key with another value is refused."""
     for key, value in RETIRED_KEYS.items():
         if key in config and config[key] != value:
-            raise ValueError(
-                f"{key} = {config[key]!r} is no longer supported: only {value!r} remains"
-            )
+            remains = "" if value is None else f": only {value!r} remains"
+            raise ValueError(f"{key} = {config[key]!r} is no longer supported{remains}")
     return {key: value for key, value in config.items() if key not in RETIRED_KEYS}
 
 
@@ -420,9 +417,6 @@ def run_config(path: Path | None = None) -> dict[str, Any]:
         from mule_pattern_learner.configuration import load_config
 
         overrides = load_config(path)
-        if overrides.get("observed_labels") and "label_policy" not in overrides:
-            # A label file is the "observed" policy; the default reads the graph.
-            overrides["label_policy"] = "observed"
         sampler = overrides.get("sampler")
         if isinstance(sampler, dict):
             policy = cast(dict[str, Any], sampler).get("policy", config["sampler"]["policy"])

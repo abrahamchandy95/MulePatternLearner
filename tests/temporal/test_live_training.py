@@ -40,15 +40,12 @@ from mule_pattern_learner.temporal.live.pipeline import DEFAULT_MODEL, run
 from mule_pattern_learner.temporal.live.policy import context_scope
 from mule_pattern_learner.temporal.live.sampling import pu_batches
 from mule_pattern_learner.temporal.live.source import StreamingContextSource
-from mule_pattern_learner.temporal.live.supervision import (
-    FrameObservedLabels,
-    align_observed_labels,
-    label_summary,
-)
+from mule_pattern_learner.temporal.live.supervision import align_observed_labels, label_summary
 from mule_pattern_learner.temporal.live.training import train
 from mule_pattern_learner.temporal.loss import NonNegativePULoss
 from temporal_fakes import (
     FakeExecutor,
+    FrameObservedLabels,
     assigned_accounts,
     live_config,
     neighbourhood,
@@ -204,7 +201,7 @@ def test_minimal_command_and_run_defaults(tmp_path: Path) -> None:
         config, dataset, output = fit.call_args.args
         assert output == tmp_path / "model.pt" and dataset == tmp_path / "model_run" / "prepared"
         assert config["dataset_id"] == "graph_snapshot"
-        assert config["label_policy"] == "graph_observed" and config["device"] == "auto"
+        assert config["device"] == "auto"
         assert config["scope_id"] == DEFAULT_RUN["scope_id"]
 
 

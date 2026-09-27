@@ -173,7 +173,7 @@ and the Python feature contract drift apart.
 
 - **Reads:** the scope's membership edges (partition, group_id) and, for each internal
   deposit Account, `id`, `first_seen_seq`, `first_seen_ts_ms`. With
-  `include_observed = TRUE` (only for `label_policy = "graph_observed"`) it also reads the
+  `include_observed = TRUE` (graph labels, as every run reads them) it also reads the
   revealed-positive label (see [labels](#labels-and-what-the-model-never-sees)).
 - **Returns:** pages of at most 10,000 rows ordered by account ID:
   `account_id, first_seen_seq, first_seen_ts_ms, partition, group_id, observed_positive,
@@ -547,11 +547,9 @@ once with the frozen checkpoint and threshold; they never influence selection.
 
 ## Labels and what the model never sees
 
-- Observed labels come from the graph (`label_policy = "graph_observed"`, the default): the
-  revealed positive `pu_label == 1 AND is_mule == 1 AND mule_label_known AND NOT
-  is_mule_masked` with its discovery time `mule_label_available_ts_ms`. An experiment may
-  instead supply a Parquet table (`observed_labels`, with `account_id`, `known_positive`,
-  `known_from_ms`).
+- Observed labels come from the graph: the revealed positive `pu_label == 1 AND
+  is_mule == 1 AND mule_label_known AND NOT is_mule_masked` with its discovery time
+  `mule_label_available_ts_ms`.
 - The first run's [label reveal](label_reveal.md) simulates when a bank would have
   discovered each mule (victim reports, network tracing, monitoring) and reveals up to 20
   per split among those discovered before the split's cutoff. On this graph that is 20
@@ -687,7 +685,7 @@ policy do not apply to another. Unknown keys are rejected.
 | Group | Keys (built-in value) |
 |---|---|
 | Scope | `scope_id` (strict_mule_v2), `scope_unowned` (linked), `create_scope` (true: created on first use); `dataset_id` is derived from the scope or the graph (a pinned value must match the prepared dataset) |
-| Labels | `label_policy` (graph_observed), `reveal_per_split` (20), `reveal_salt` (defaults to `seed`), `evaluation_unlabeled_limit` (2000) |
+| Labels | `reveal_per_split` (20), `reveal_salt` (defaults to `seed`), `evaluation_unlabeled_limit` (2000) |
 | Dates | `[dates]` train 2024-07-01, validation 2024-10-01, test 2025-01-01; `[seed_limits]` 20000 / 2000 / 2000 |
 | Sampler | `[sampler]` policy resample, recent 8, older 4, distinct 4, associations 2, max_history 2048, relation_fanouts [8, 4], association_fanout 1, association_slots 2, backend auto, evaluation_seed 0; `[sampler.children]` 4 / 2 / 2 / 0 / 2048 |
 | Model | `fanouts` [16, 4], `feature_groups`, `architecture` split, `slot_sum` true, `hidden` 64, `heads` 4, `dropout` 0.15 |
@@ -695,10 +693,9 @@ policy do not apply to another. Unknown keys are rejected.
 | Runtime | `device` auto, `threads` 4, `deterministic` true, `prefetch_batches` 2, `checkpoint_every_steps` 0, `log_every_steps` 10, `max_rejected_root_fraction` 0.0 |
 | Transport | `request_batch_size` 8, `query_concurrency` 16, `context_lru_capacity` 256, `encoding_check_every` 64, `max_query_attempts` 6, `max_outage_s` 900 |
 
-Preparation keys (the derived dataset_id, an optional shared `prepared_id`,
-scope_id, scope_unowned, dates, seed_limits, split_seed, cohort_seed,
-label_policy and any observed-label file hash, the candidate pools, and
-the extraction groups derived from feature_groups) must match between preparation and
+Preparation keys (the derived dataset_id, an optional shared `prepared_id`, scope_id,
+scope_unowned, dates, seed_limits, split_seed, cohort_seed, the candidate pools, and the
+extraction groups derived from feature_groups) must match between preparation and
 training; other settings may change between runs. A new `--output` prepares its own
 cohort; `--dataset <run>_run/prepared` reuses another run's.
 

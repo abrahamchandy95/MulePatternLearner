@@ -5,9 +5,8 @@ The first `mule-temporal train` therefore runs `temporal_reveal_mule_labels`
 ([`gsql/temporal/label_reveal.gsql`](../gsql/temporal/label_reveal.gsql)) once. It
 decides which mules a bank would realistically have confirmed, and when, and writes
 that into the existing [Account label contract](account_mule_labels.md). Training
-reads only the revealed positives and their discovery clocks
-(`label_policy = "graph_observed"`); ground truth stays in the graph for the oracle
-audit. No file is involved.
+reads only the revealed positives and their discovery clocks; ground truth stays in
+the graph for the oracle audit. No file is involved.
 
 ## Why not reveal 20 at random
 

@@ -21,7 +21,7 @@ import pytest
 import requests
 from pyTigerGraph.common.exception import TigerGraphException
 
-from mule_pattern_learner.configuration import REPOSITORY_ROOT, load_config, resolve_path
+from mule_pattern_learner.configuration import REPOSITORY_ROOT, load_config
 from mule_pattern_learner.temporal.encoding import BASIS_ID
 from mule_pattern_learner.temporal.live import dataset, installation, pipeline, scope, source
 from mule_pattern_learner.temporal.live.config_schema import (
@@ -64,13 +64,9 @@ from mule_pattern_learner.temporal.live.hubs import (
     query_hub_registry,
 )
 from mule_pattern_learner.temporal.live.source import StreamingContextSource
-from mule_pattern_learner.temporal.live.supervision import (
-    GraphObservedLabels,
-    ParquetObservedLabels,
-    label_source,
-)
+from mule_pattern_learner.temporal.live.supervision import GraphObservedLabels
 from mule_pattern_learner.tigergraph.client import Client, _status_error, _TimeoutConnection
-from temporal_fakes import encode, request_keys
+from temporal_fakes import FrameObservedLabels, encode, request_keys
 
 PLAN = FeaturePlan(("entity_meta", "message_core", "time_encoding"), "split")
 SAMPLER = SamplerPlan(
@@ -954,21 +950,10 @@ def live_config(tmp_path: Path, **changes: Any) -> dict[str, Any]:
     config = {
         "dataset_id": "unit_snapshot",
         "scope_id": "unit_scope",
-        "label_policy": "graph_observed",
         "dates": {"train": ["2024-07-01"], "validation": ["2024-10-01"], "test": ["2025-01-01"]},
         "sampler": deepcopy(DEFAULT_RUN["sampler"]),
     }
     return {**config, **changes}
-
-
-def parquet_labels(tmp_path: Path) -> dict[str, Any]:
-    """The parquet label policy (legacy) with a one-row label file under tmp_path."""
-    labels = tmp_path / "labels.parquet"
-    if not labels.exists():
-        pd.DataFrame(
-            {"account_id": ["A1"], "known_positive": [True], "known_from_ms": [5]}
-        ).to_parquet(labels)
-    return {"label_policy": "observed", "observed_labels": str(labels)}
 
 
 @pytest.fixture
@@ -1071,7 +1056,7 @@ def test_first_preparation_creates_the_scope_and_reveals_labels(
 
 @pytest.mark.legacy
 def test_preparation_keys_fingerprint_only_preparation_settings(tmp_path: Path) -> None:
-    base = live_config(tmp_path, **parquet_labels(tmp_path))
+    base = live_config(tmp_path)
     view = dataset.preparation_view(base)
     assert tuple(view) == dataset.PREPARATION_KEYS and "hub_scan_cap" not in view
     same = [
@@ -1100,17 +1085,8 @@ def test_preparation_keys_fingerprint_only_preparation_settings(tmp_path: Path) 
         assert dataset.preparation_fingerprint(
             {**base, **change}
         ) != dataset.preparation_fingerprint(base), change
-    before = dataset.preparation_fingerprint(base)
-    pd.DataFrame({"account_id": ["A2"], "known_positive": [True], "known_from_ms": [9]}).to_parquet(
-        base["observed_labels"]
-    )
-    assert dataset.preparation_fingerprint(base) != before
     manifest = {"source": {"preparation": view}}
-    assert dataset.preparation_mismatches(base, manifest) == ["observed_labels"]
-    # A missing label source is reported as missing, not as a changed setting.
-    Path(base["observed_labels"]).unlink()
-    with pytest.raises(ValueError, match="Observed-label source file not found at .*labels"):
-        dataset.preparation_mismatches(base, manifest)
+    assert dataset.preparation_mismatches({**base, "split_seed": 1}, manifest) == ["split_seed"]
 
 
 LINKED_COUNTS = {
@@ -1273,24 +1249,8 @@ def test_scope_policy_query_prints_what_the_client_reads() -> None:
 # --- labels ----------------------------------------------------------------------------------
 
 
-@pytest.mark.legacy
-def test_label_source_must_be_explicit(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="No observed-label source"):
-        label_source({})
-    with pytest.raises(ValueError, match="No observed-label source"):
-        label_source({"label_policy": "observed"})
-    assert isinstance(label_source({"label_policy": "graph_observed"}), GraphObservedLabels)
-    with pytest.raises(ValueError, match="conflicts"):
-        label_source({"label_policy": "graph_observed", "observed_labels": "x.parquet"})
-    with pytest.raises(ValueError, match="source file not found at .*absent.*observed_labels"):
-        label_source({"observed_labels": str(tmp_path / "absent.parquet")})
-    config = live_config(tmp_path, **parquet_labels(tmp_path))
-    labels = label_source(config)
-    assert isinstance(labels, ParquetObservedLabels) and labels.path == Path(
-        config["observed_labels"]
-    )
-    assert resolve_path("configs/x.toml") == REPOSITORY_ROOT / "configs/x.toml"
-    assert resolve_path(tmp_path) == tmp_path
+# A table source with no labels: population queries then run without include_observed.
+NO_LABELS = pd.DataFrame(columns=["account_id", "known_positive", "known_from_ms"])
 
 
 def population_row(account: str, positive: bool, known: int) -> dict[str, Any]:
@@ -1305,7 +1265,7 @@ def population_row(account: str, positive: bool, known: int) -> dict[str, Any]:
 
 
 @pytest.mark.legacy
-def test_only_graph_label_policy_reads_graph_labels(tmp_path: Path) -> None:
+def test_only_graph_labels_read_labels_from_the_graph(tmp_path: Path) -> None:
     from mule_pattern_learner.temporal.live.cohort import scoped_cohort
 
     seen = []
@@ -1317,27 +1277,19 @@ def test_only_graph_label_policy_reads_graph_labels(tmp_path: Path) -> None:
         return [{"status": "ok", "accounts": [row]}]
 
     fake = Runner(run)
-    config = live_config(tmp_path, **parquet_labels(tmp_path))
-    scoped_cohort(fake, config, label_source(config))
+    config = live_config(tmp_path)
+    scoped_cohort(fake, config, FrameObservedLabels(NO_LABELS))
     frame, _ = scoped_cohort(fake, config, GraphObservedLabels())
     assert seen == [False, True] and frame.in_marginal.tolist() == [True]
     with pytest.raises(ValueError, match="explicit"):
         scoped_cohort(fake, config, None)
-    with pytest.raises(ValueError, match="No observed-label source"):
-        dataset.prepare(
-            {k: v for k, v in config.items() if k != "observed_labels"},
-            tmp_path / "out",
-            fake,
-            {"Account": 1},
-        )
-    assert seen == [False, True]  # failed before any query
 
 
 @pytest.mark.legacy
 def test_stale_population_queries_fail_fast(tmp_path: Path) -> None:
     from mule_pattern_learner.temporal.live.cohort import scoped_cohort
 
-    config = live_config(tmp_path, **parquet_labels(tmp_path))
+    config = live_config(tmp_path)
     # An old query emits the discovery time of hidden or negative labels.
     stale = Runner(lambda n, p: [{"status": "ok", "accounts": [population_row("A1", False, 5)]}])
     with pytest.raises(ValueError, match="predates the masked-label predicate"):
@@ -1345,7 +1297,7 @@ def test_stale_population_queries_fail_fast(tmp_path: Path) -> None:
     # Without include_observed the query must return no label information.
     leaky = Runner(lambda n, p: [{"status": "ok", "accounts": [population_row("A1", True, 5)]}])
     with pytest.raises(ValueError, match="include_observed is false"):
-        scoped_cohort(leaky, config, label_source(config))
+        scoped_cohort(leaky, config, FrameObservedLabels(NO_LABELS))
     metadata = pd.DataFrame(
         {
             "account_id": ["A1", "A2", "A3"],
@@ -1384,7 +1336,6 @@ def test_config_schema_rejects_unknown_keys_and_applies_operational_defaults(
         ({"query_concurrency": 17}, "query_concurrency"),
         ({"request_batch_size": 65}, "request_batch_size"),
         ({"deterministic": "yes"}, "deterministic"),
-        ({"label_policy": "oracle"}, "label_policy"),
         ({"prepared_id": "../escape"}, "prepared_id"),
         ({"sampler": {"recnt": 2}}, "sampler.recnt"),
         ({"sampler": {"children": {"older": 99}}}, "sampler.children.older"),
@@ -1419,12 +1370,21 @@ def test_config_schema_rejects_unknown_keys_and_applies_operational_defaults(
 def test_configurations_saved_before_the_restructure_still_validate() -> None:
     # Saved models and prepared cohorts hold keys of removed paths, with the one value
     # that remains; validation drops them. Another value names a removed path.
-    saved = {**run_config(), "context_storage": "stream", "evaluation_protocol": "strict_inductive"}
+    saved = {
+        **run_config(),
+        "context_storage": "stream",
+        "evaluation_protocol": "strict_inductive",
+        "label_policy": "graph_observed",
+    }
     assert validate_config(saved) == run_config()
     with pytest.raises(ValueError, match="context_storage = 'sqlite' is no longer supported"):
         validate_config({**saved, "context_storage": "sqlite"})
     with pytest.raises(ValueError, match="evaluation_protocol = 'shared_history'"):
         validate_config({**saved, "evaluation_protocol": "shared_history"})
+    with pytest.raises(ValueError, match="label_policy = 'observed' is no longer supported"):
+        validate_config({**saved, "label_policy": "observed"})
+    with pytest.raises(ValueError, match="observed_labels = 'x.parquet' is no longer supported$"):
+        validate_config({**saved, "observed_labels": "x.parquet"})
 
 
 def test_built_in_run_validates_and_only_run_config_applies_the_schema(tmp_path: Path) -> None:
@@ -1465,7 +1425,6 @@ def test_override_tables_merge_into_the_built_in_run(tmp_path: Path) -> None:
     assert dates["dates"] == {**DEFAULT_RUN["dates"], "train": ["2024-05-01", "2024-07-01"]}
     # Lists and scalars replace the default.
     assert overridden("fanouts = [8, 2]\nepochs = 3\n")["fanouts"] == [8, 2]
-    assert overridden('observed_labels = "x.parquet"\n')["label_policy"] == "observed"
     assert run_config() == default
 
 

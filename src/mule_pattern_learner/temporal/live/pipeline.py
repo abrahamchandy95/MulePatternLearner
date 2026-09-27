@@ -28,7 +28,6 @@ from .installation import install, source_counts
 from .labels import ensure_revealed_labels
 from .policy import context_scope
 from .scope import ensure_scope, scope_header
-from .supervision import label_source
 from .training import output_paths, train
 
 DEFAULT_MODEL = ROOT / "models/temporal/model.pt"
@@ -70,10 +69,9 @@ def prepare_live(config: dict[str, Any], output: Path) -> dict[str, Any]:
     hashes and preparation settings (PREPARATION_KEYS) match the current ones.
     Otherwise the graph is brought to a trainable state first: stale queries are
     installed, the scope is created if missing, and known mules are revealed if the
-    graph has none (label_policy = "graph_observed").
+    graph has none.
     """
     context_scope(config)
-    labels = label_source(config)
     if (output / MANIFEST).exists():
         manifest = read_manifest(output)
         if not config.get("dataset_id"):
@@ -94,10 +92,9 @@ def prepare_live(config: dict[str, Any], output: Path) -> dict[str, Any]:
     config = resolve_identity(executor, config, counts)
     ensure_scope(executor, config)
     # The reveal draws its splits from the scope partitions.
-    if config.get("label_policy") == "graph_observed":
-        ensure_revealed_labels(executor, config)
+    ensure_revealed_labels(executor, config)
     counts = source_counts(executor)
-    result = prepare(config, output, executor, counts, labels=labels)
+    result = prepare(config, output, executor, counts)
     if source_counts(executor) != counts:
         result["status"] = "source_changed"
         write_manifest(output, result)

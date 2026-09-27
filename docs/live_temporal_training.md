@@ -130,16 +130,13 @@ experiment.
 The trainer depends on `ObservedLabelSource`, not on a masking implementation.
 Its table contains `account_id`, `known_positive`, `known_from_ms`. Unlisted
 accounts are unlabeled; usable positives must be known before the scoring cutoff.
-Oracle `is_mule`, mask and ring columns are rejected from this interface. The
-built-in run uses `label_policy = "graph_observed"`; an experiment may configure
-a Parquet source instead.
+Oracle `is_mule`, mask and ring columns are rejected from this interface. Every
+run reads its labels from the graph through `GraphObservedLabels`, the only source
+that runs the population queries with `include_observed = TRUE`; tests may hand
+preparation a table of labels instead, and the population queries then skip graph
+label reads completely.
 
-- `observed_labels = "<parquet>"` (relative to the repository root) selects
-  `ParquetObservedLabels`, an observed-only table. The population queries then
-  skip graph label reads completely.
-- `label_policy = "graph_observed"` selects `GraphObservedLabels`. It is the only
-  source that runs the population queries with `include_observed = TRUE`. An
-  observed positive is then the revealed positive of the
+- An observed positive is the revealed positive of the
   [account label contract](account_mule_labels.md):
   `pu_label == 1 AND is_mule == 1 AND mule_label_known AND NOT is_mule_masked`.
   Only those accounts carry a discovery time (`known_from_ms`, from
@@ -151,14 +148,8 @@ a Parquet source instead.
   requested without `include_observed` is refused too. On a fresh load the first
   run fills those fields with the [label reveal](label_reveal.md), which simulates
   when a bank would have discovered each mule.
-  Datasets prepared with it before the masked-label predicate counted masked mules
-  as positives and must be prepared again.
-
-A configured `observed_labels` file that does not exist stops `prepare`, `train`
-and the batch benchmark with "Observed-label source file not found at <path>: point
-observed_labels at an existing file (paths are relative to the repository root), or
-remove observed_labels to use the labels revealed in the graph". Its content hash
-is a preparation setting, so the check cannot be skipped.
+  Datasets prepared before the masked-label predicate counted masked mules as
+  positives and must be prepared again.
 
 The reveal (`temporal_reveal_mule_labels`) is the only place that reads complete
 synthetic truth before training. It reveals up to 20 positives per split among
@@ -610,8 +601,8 @@ metrics of the same names in `metrics.json` (which reports 1 and 5% only).
   `temporal_scope_policy`); `install` finds them by itself.
 - Prepared datasets without a scoped hub registry (no `hub_scope_id` in the
   manifest) are refused; prepare them again by training into a new output.
-- Datasets prepared with `label_policy = "graph_observed"` before the masked-label
-  predicate count masked mules as positives; prepare them again.
+- Datasets prepared with graph labels before the masked-label predicate count masked
+  mules as positives; prepare them again.
 - Configurations may no longer set `hub_scan_cap`.
 - A scope keeps its unowned rule: set `scope_unowned = "independent"` for scopes
   created before the rule existed, such as `strict_mule_v1`, or create a new scope.

@@ -10,14 +10,13 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from mule_pattern_learner.configuration import REPOSITORY_ROOT, resolve_path
+from mule_pattern_learner.configuration import REPOSITORY_ROOT
 
 from ..common import cutoff_ms, digest, timestamp
 from .cohort import cohort_seed, scoped_cohort
 from .config_schema import (
     DEFAULT_RUN,
     OPERATIONAL_DEFAULTS,
-    setting,
     split_seed,
     without_retired_keys,
 )
@@ -35,10 +34,9 @@ from .installation import QUERY_FILES
 from .policy import context_scope
 from .supervision import (
     ORACLE_COLUMNS,
+    GraphObservedLabels,
     ObservedLabelSource,
-    label_source,
     label_summary,
-    missing_label_source,
     read_bounded_parquet,
 )
 
@@ -54,8 +52,6 @@ PREPARATION_KEYS = (
     "scope_id",
     "split_seed",
     "cohort_seed",
-    "label_policy",
-    "observed_labels",
     "sampler_pools",
     "extraction_groups",
     "scope_unowned",
@@ -105,22 +101,12 @@ def check_query_hashes(manifest: dict[str, Any], dataset: Path) -> None:
 def preparation_view(config: dict[str, Any]) -> dict[str, Any]:
     """Normalized values of PREPARATION_KEYS, with defaults resolved.
 
-    observed_labels is the label file's content hash; a configured file that is
-    missing raises, because the hash check cannot be skipped. sampler_pools is what
-    TigerGraph returns per hop. extraction_groups are the groups TigerGraph is
+    sampler_pools is what TigerGraph returns per hop. extraction_groups are the groups TigerGraph is
     asked for; the source derives the hop-2 flags from each training model, so
     arms of any architecture can share one preparation.
     """
     sampler = SamplerPlan.from_config(config)
     plan = extraction_plan(config)
-    labels = config.get("observed_labels")
-    if labels:
-        path = resolve_path(labels)
-        if not path.is_file():
-            raise ValueError(missing_label_source(path))
-        label_hash = digest(path)
-    else:
-        label_hash = None
     view = {
         "dataset_id": config.get("dataset_id"),
         "prepared_id": config.get("prepared_id"),
@@ -129,8 +115,6 @@ def preparation_view(config: dict[str, Any]) -> dict[str, Any]:
         "scope_id": config.get("scope_id", ""),
         "split_seed": split_seed(config),
         "cohort_seed": cohort_seed(config),
-        "label_policy": setting(config, "label_policy"),
-        "observed_labels": label_hash,
         "sampler_pools": sampler_pools(sampler),
         "extraction_groups": sorted(plan.groups),
         "scope_unowned": config.get("scope_unowned", OPERATIONAL_DEFAULTS["scope_unowned"]),
@@ -331,16 +315,15 @@ def prepare(
     """Resumable preparation: cohort, observed labels, cutoffs and hub registry.
 
     Contexts are not stored: training requests them from TigerGraph. `labels`
-    defaults to the source configured by label_source(config); there is no implicit
-    graph-label fallback. Each stage writes the manifest when it is done, and a
-    resumed preparation skips the stages the manifest records.
+    defaults to the labels revealed in the graph. Each stage writes the manifest when
+    it is done, and a resumed preparation skips the stages the manifest records.
     """
     sampler = SamplerPlan.from_config(config)
     context_scope(config)
     validate_dates(config)
     if not config.get("dataset_id"):
         raise ValueError("A new immutable dataset_id is required after each graph reload/backfill")
-    labels = label_source(config) if labels is None else labels
+    labels = GraphObservedLabels() if labels is None else labels
     output.mkdir(parents=True, exist_ok=True)
     preparation = preparation_view(config)
     metadata = {

@@ -5,7 +5,7 @@ The first run calls temporal_reveal_mule_labels (gsql/temporal/label_reveal.gsql
 which simulates when a bank would have discovered each mule (victim reports, network
 tracing, monitoring; see docs/label_reveal.md) and reveals up to `reveal_per_split`
 discovered mules per split. Training then reads only the revealed positives and
-their discovery clocks (label_policy = "graph_observed"); ground truth stays in the
+their discovery clocks; ground truth stays in the
 graph for the oracle audit.
 """
 

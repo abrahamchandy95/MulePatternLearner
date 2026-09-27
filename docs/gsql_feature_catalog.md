@@ -31,7 +31,7 @@ feature contract. Preparation fingerprints the query sources and feature contrac
 old prepared datasets cannot silently reuse changed definitions.
 
 The population queries default to `include_observed = FALSE`, which reads no
-graph label attribute. Only `label_policy = "graph_observed"` turns it on; then a
+graph label attribute. Preparation turns it on to read the graph's labels; then a
 positive is the revealed positive of the
 [account label contract](account_mule_labels.md),
 `pu_label == 1 AND is_mule == 1 AND mule_label_known AND NOT is_mule_masked`,

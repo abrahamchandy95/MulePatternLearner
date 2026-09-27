@@ -19,9 +19,9 @@ from mule_pattern_learner.temporal.live.source import StreamingContextSource
 from mule_pattern_learner.temporal.live.predictor import score_new_accounts
 from mule_pattern_learner.temporal.live.cohort import scoped_cohort
 from mule_pattern_learner.temporal.live.sampling import pu_batches
-from mule_pattern_learner.temporal.live.supervision import FrameObservedLabels
 from temporal_fakes import (
     FakeExecutor,
+    FrameObservedLabels,
     assigned_accounts,
     context,
     live_config,
