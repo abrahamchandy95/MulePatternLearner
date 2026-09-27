@@ -140,14 +140,21 @@ def test_train_prepares_then_trains_or_resumes_the_baseline_run(
         return dataset
 
     # `mule train` is pipeline.train.train_run with resume: patch the pipeline's steps,
-    # and the reader of a complete run, so a local results/baseline/seed-42 is not read.
+    # and its checks of a complete or interrupted run, so a local results/baseline/seed-42
+    # is not read.
     recorded: list[dict[str, Any] | None] = [None]
+    checked: list[RunPaths] = []
 
     def completed_run(c: RunConfig, run: RunPaths) -> dict[str, Any] | None:
         assert c is DEFAULT_CONFIG and run == pipeline_train.BASELINE_RUN
         return recorded[0]
 
+    def check_resumable(c: RunConfig, run: RunPaths) -> None:
+        assert c is DEFAULT_CONFIG
+        checked.append(run)
+
     monkeypatch.setattr(pipeline_train, "completed_run", completed_run)
+    monkeypatch.setattr(pipeline_train, "check_resumable", check_resumable)
     monkeypatch.setattr(pipeline_train, "prepare_dataset", prepare)
 
     def train(c: RunConfig, d: DatasetPaths, o: RunPaths, **kwargs: Any) -> dict[str, Any]:
@@ -158,8 +165,10 @@ def test_train_prepares_then_trains_or_resumes_the_baseline_run(
     monkeypatch.setattr(sys, "argv", ["mule", "train"])
     cli.main()
     assert json.loads(capsys.readouterr().out) == {"status": "complete"}
-    # One command prepares the built-in run's dataset in data/, then trains it into
-    # results/baseline/seed-42/ (resuming if interrupted).
+    # One command checks that an interrupted run has the built-in settings, prepares the
+    # built-in run's dataset in data/, then trains it into results/baseline/seed-42/
+    # (resuming if interrupted).
+    assert checked == [pipeline_train.BASELINE_RUN]
     assert prepared[-1] == (DEFAULT_CONFIG, DATA_DIR)
     c, d, o, kwargs = trained[-1]
     assert c is DEFAULT_CONFIG and d == dataset and o == pipeline_train.BASELINE_RUN
@@ -169,4 +178,4 @@ def test_train_prepares_then_trains_or_resumes_the_baseline_run(
     recorded[0] = {"status": "complete", "best_epoch": 3}
     cli.main()
     assert json.loads(capsys.readouterr().out) == recorded[0]
-    assert len(prepared) == len(trained) == 1
+    assert len(checked) == len(prepared) == len(trained) == 1
