@@ -3,22 +3,15 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import pandas as pd
 
 from ..contract.clock import cutoff_ms
 from ..inference.saved_model import ModelCheckpoint
-from ..metrics import evaluate
+from ..metrics import evaluate, weighted_metrics
 from .sample import final_evaluation_sample
 from .truth import EvaluationTruthSource
-
-if TYPE_CHECKING:
-    from numpy.typing import NDArray
-
-
-# Review budgets of the weighted audit: the top 1, 5 and 10% of the estimated population.
-TOP_FRACTIONS = (0.01, 0.05, 0.10)
 
 
 def evaluate_predictions(
@@ -54,50 +47,13 @@ def evaluate_predictions(
     return result
 
 
-def weighted_top_fractions(
-    y: NDArray[Any], score: NDArray[Any], weight: NDArray[Any]
-) -> dict[str, float]:
-    """Weighted precision and recall in the top 1, 5 and 10% of the estimated population.
-
-    Accounts rank by score, highest first. Each sampled account stands for ``weight``
-    (1 / inclusion probability) population accounts, so the top fraction f is the
-    ranked prefix whose weights add up to f times the estimated population W. Accounts
-    with tied scores form one block, as one threshold of sklearn's average precision:
-    a budget that ends inside the block takes the same share of each of its accounts,
-    the expected result of ordering the tied population accounts at random. The block
-    that straddles the boundary counts only for the part inside it: a sampled negative
-    stands for many accounts. Precision is the weighted positives inside over f * W,
-    recall the same over all weighted positives. With unit weights, no ties and a whole
-    f * n these are the unweighted ``precision_at_1pct`` and ``recall_at_1pct`` (5, 10)
-    of the same ranking.
-    """
-    import numpy as np
-
-    order = np.argsort(-score, kind="stable")
-    ranked = score[order]
-    # The last rank of each block of tied scores.
-    ends = np.flatnonzero(np.append(ranked[1:] != ranked[:-1], True))
-    # Population accounts and weighted positives above each block end, starting at zero.
-    reviewed = np.concatenate(([0.0], np.cumsum(weight[order])[ends]))
-    found = np.concatenate(([0.0], np.cumsum(np.where(y == 1, weight, 0.0)[order])[ends]))
-    result: dict[str, float] = {}
-    for fraction in TOP_FRACTIONS:
-        size = fraction * float(reviewed[-1])
-        hits = float(np.interp(size, reviewed, found))
-        name = f"{round(fraction * 100)}pct"
-        result[f"precision_at_{name}"] = hits / size
-        result[f"recall_at_{name}"] = hits / max(float(found[-1]), 1)
-    return result
-
-
 def evaluate_weighted(frame: pd.DataFrame, threshold: float) -> dict[str, Any]:
-    """Weighted AP/ROC/threshold and top-fraction metrics; estimates, not census measurements.
+    """The weighted metrics (``metrics.weighted_metrics``) of an audit sample.
 
-    The top-fraction metrics (``weighted_top_fractions``) share a budget that ends among
-    tied scores evenly across them, so neither account IDs nor row order matter.
+    Each account is weighted by 1 / its inclusion probability. Account IDs are not
+    read, so they cannot break ties.
     """
     import numpy as np
-    from sklearn.metrics import average_precision_score, roc_auc_score
 
     if not len(frame) or not frame.is_mule.isin([0, 1]).all():
         raise ValueError("Weighted evaluation needs binary truth and nonempty predictions")
@@ -107,26 +63,8 @@ def evaluate_weighted(frame: pd.DataFrame, threshold: float) -> dict[str, Any]:
     y, score = frame.is_mule.to_numpy(int), frame.score.to_numpy(float)
     if not np.isfinite(score).all() or ((score < 0) | (score > 1)).any():
         raise ValueError("Invalid prediction probabilities")
-    w = 1 / p
-    predicted = score >= threshold
-    positives, tp = float(w[y == 1].sum()), float(w[(y == 1) & predicted].sum())
-    precision, recall = tp / max(float(w[predicted].sum()), 1), tp / max(positives, 1)
     return {
-        "sample_accounts": len(frame),
-        "sample_positives": int(y.sum()),
-        "estimated_population": float(w.sum()),
-        "weighted_prevalence": positives / float(w.sum()),
-        "average_precision": float(average_precision_score(y, score, sample_weight=w))
-        if y.any()
-        else None,
-        "roc_auc": float(roc_auc_score(y, score, sample_weight=w))
-        if len(np.unique(y)) == 2
-        else None,
-        "threshold": threshold,
-        "precision": precision,
-        "recall": recall,
-        "f1": 2 * precision * recall / max(precision + recall, 1e-12),
-        **weighted_top_fractions(y, score, w),
+        **weighted_metrics(y, score, 1 / p, threshold),
         "evaluation_cohort": "all_test_positives_plus_uniform_negatives_inverse_probability_weighted",
     }
 
