@@ -18,6 +18,7 @@ import pyarrow.parquet as pq
 import pytest
 import torch
 
+from mule_pattern_learner.artifacts import read_epochs, read_history, read_run_config
 from mule_pattern_learner.batching import assemble
 from mule_pattern_learner.batching.assemble import make_live_batch
 from mule_pattern_learner.config import RunConfig
@@ -26,7 +27,7 @@ from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
 from mule_pattern_learner.data.contexts import StreamingContextSource
 from mule_pattern_learner.data.hub_registry import HubRegistry, load_hub_registry, warn_hub_stubs
-from mule_pattern_learner.data.manifest import load_prepared
+from mule_pattern_learner.data.manifest import dataset_id, load_prepared
 from mule_pattern_learner.data.observed_labels import label_summary
 from mule_pattern_learner.data.preparation import prepare
 from mule_pattern_learner.data.splits import sample_keys
@@ -36,6 +37,7 @@ from mule_pattern_learner.model.loss import NonNegativePULoss
 from mule_pattern_learner.model.tgat import LiveTGAT
 from mule_pattern_learner.paths import DatasetPaths, RunPaths
 from mule_pattern_learner.testing.builders import (
+    RUNTIME_SOURCE,
     UNIT_SOURCE,
     FrameObservedLabels,
     assigned_accounts,
@@ -54,6 +56,7 @@ from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
 from mule_pattern_learner.tigergraph.scope import TigerGraphScope
 from mule_pattern_learner.training import trainer
 from mule_pattern_learner.training.schedule import step_seed
+from mule_pattern_learner.training.summary import PACKAGES
 from mule_pattern_learner.training.trainer import train
 
 
@@ -85,8 +88,9 @@ def assert_same_run(tmp_path: Path, left: str, right: str) -> None:
         torch.testing.assert_close(value, saved_model(other.model)[name], rtol=0, atol=0)
     a = json.loads(one.metrics.read_text())
     b = json.loads(other.metrics.read_text())
-    for key in ("history", "best_epoch", "validation_proxy", "observed_label_proxy"):
+    for key in ("best_epoch", "validation_proxy", "observed_label_proxy"):
         assert a[key] == b[key], key
+    pd.testing.assert_frame_equal(read_epochs(one.epochs), read_epochs(other.epochs))
     for split in ("validation", "test"):
         pd.testing.assert_frame_equal(
             pd.read_parquet(one.predictions(split)), pd.read_parquet(other.predictions(split))
@@ -159,6 +163,68 @@ def test_mid_epoch_step_checkpoint_resumes_exactly(
     assert resumed["rejected_roots"] == straight["rejected_roots"]
     # Contexts prefetched before the step checkpoint are requested again, but not new.
     assert resumed["contexts"]["distinct"] == straight["contexts"]["distinct"] > 0
+
+
+def test_a_resumed_run_logs_each_interval_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Every step is logged but only epochs are checkpointed, so the failed segment logs
+    # two steps of epoch 2 that the resumed run trains, and logs, again.
+    config = base_config(
+        training={"steps_per_epoch": 4}, runtime={"log_every_steps": 1, "prefetch_batches": 0}
+    )
+    prepared_dataset(tmp_path / "dataset", config, monkeypatch)
+    fit(tmp_path, "straight", config)
+    with pytest.raises(RuntimeError, match="injected"):
+        fit(tmp_path, "resumed", config, source=FakeSource(config, fail=after_validation(3)))
+    resumed = RunPaths(tmp_path / "resumed")
+    assert read_history(resumed.history)[["epoch", "step"]].to_numpy().tolist()[-2:] == [
+        [2, 1],
+        [2, 2],
+    ]
+    fit(tmp_path, "resumed", config, resume=True)
+    trained = ["epoch", "step", "date", "loss", "objective", "corrected_steps", "steps"]
+    straight = read_history(RunPaths(tmp_path / "straight").history)
+    assert len(straight) == 8
+    pd.testing.assert_frame_equal(read_history(resumed.history)[trained], straight[trained])
+    assert_same_run(tmp_path, "straight", "resumed")
+
+
+def test_the_run_records_its_settings_provenance_and_epochs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = base_config()
+    prepared_dataset(tmp_path / "dataset", config, monkeypatch)
+    result = fit(tmp_path, "run", config)
+    run = RunPaths(tmp_path / "run")
+    record = json.loads(run.config.read_text())
+    assert set(record) == {"config", "fingerprint", "provenance"}
+    assert record["config"] == config.to_dict() and record["fingerprint"] == config.fingerprint()
+    assert read_run_config(run.config) == config
+    provenance = record["provenance"]
+    assert set(provenance) == {
+        "git_commit",
+        "git_dirty",
+        "versions",
+        "device",
+        "sampler_backend",
+        "dataset_id",
+        "started",
+    }
+    assert set(provenance["versions"]) == set(PACKAGES) and provenance["versions"]["torch"]
+    assert (provenance["device"], provenance["sampler_backend"]) == ("cpu", "torch")
+    assert provenance["dataset_id"] == dataset_id(RUNTIME_SOURCE, config) == result["dataset_id"]
+    # The metrics hold no history: its intervals and epochs have their own files.
+    assert "history" not in json.loads(run.metrics.read_text())
+    assert result["proxy_unlabeled_limit"] == config.training.proxy_unlabeled_limit
+    epochs = read_epochs(run.epochs)
+    assert epochs.epoch.tolist() == [1, 2] and epochs.selected.sum() == 1
+    assert epochs.selected.tolist()[result["best_epoch"] - 1]
+    assert (epochs.weights == "raw").all() and (epochs.steps == 3).all()
+    history = read_history(run.history)
+    # log_every_steps = 2 over 3 steps: an interval of 2 steps and one of 1, per epoch.
+    assert history[["epoch", "step"]].to_numpy().tolist() == [[1, 2], [1, 3], [2, 2], [2, 3]]
+    assert history.database_calls.is_monotonic_increasing and history.rejected_roots.eq(0).all()
 
 
 def test_prefetch_depth_and_resample_policy_do_not_break_determinism(
@@ -235,7 +301,7 @@ def test_batches_use_train_mode_step_seeds_and_the_hub_registry(
         json.loads(line) for line in RunPaths(tmp_path / "run").events.read_text().splitlines()
     ]
     train_records = [r for r in records if r["event"] == "train"]
-    counters = {"query_calls", "rejections", "stub_children", "seconds_per_step", "cache_hits"}
+    counters = {"database_calls", "rejections", "stub_children", "seconds_per_step", "cache_hits"}
     counters |= {"contexts_requested", "contexts_distinct", "sampler_backend"}
     assert train_records and all(counters <= set(r) for r in train_records)
     assert 0 < train_records[-1]["contexts_distinct"] <= train_records[-1]["contexts_requested"]
@@ -393,7 +459,9 @@ def test_patience_zero_disables_early_stopping(
 
     monkeypatch.setattr(trainer, "evaluate", falling)
     result = fit(tmp_path, "run", config)
-    assert [h["epoch"] for h in result["history"]] == [1, 2, 3] and result["best_epoch"] == 1
+    epochs = read_epochs(RunPaths(tmp_path / "run").epochs)
+    assert epochs.epoch.tolist() == [1, 2, 3] and result["best_epoch"] == 1
+    assert epochs.selected.tolist() == [True, False, False] and not epochs.stopped.any()
 
 
 def test_resume_refuses_a_different_sampler_backend_unless_configured(
@@ -518,7 +586,9 @@ def test_averaged_run_validates_and_saves_the_average(
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     result = fit(tmp_path, "averaged", config)
     assert result["best_epoch"] == 1
-    assert 0.0 <= result["history"][0]["validation_proxy_roc_auc"] <= 1.0
+    epochs = read_epochs(RunPaths(tmp_path / "averaged").epochs)
+    assert epochs.weights.tolist() == ["averaged"]
+    assert 0.0 <= float(epochs.validation_roc_auc.iloc[0]) <= 1.0
     state = torch.load(RunPaths(tmp_path / "averaged").resume, weights_only=True)
     averaged, raw = state["weight_average"]["state"], state["model"]
     saved = saved_model(RunPaths(tmp_path / "averaged").model)
@@ -600,7 +670,10 @@ def test_hidden_truth_cannot_change_updates_or_checkpoint_selection(tmp_path: Pa
         c, dataset, RunPaths(tmp_path / "second"), contexts=streaming_source(executor, c)
     )
     saved_second = torch.load(RunPaths(tmp_path / "second").model, weights_only=True)
-    assert first["history"] == second["history"]
+    pd.testing.assert_frame_equal(
+        read_epochs(RunPaths(tmp_path / "first").epochs),
+        read_epochs(RunPaths(tmp_path / "second").epochs),
+    )
     assert first["best_epoch"] == second["best_epoch"]
     assert first["validation_proxy"] == second["validation_proxy"]
     assert saved_first["threshold"] == saved_second["threshold"]
@@ -669,7 +742,7 @@ def test_training_end_to_end_with_v5_neighbour_messages(tmp_path: Path) -> None:
     source = streaming_source(executor, c, capacity=64)
     result = train(c, dataset, RunPaths(tmp_path / "model"), contexts=source)
     assert result["status"] == "complete"
-    assert all(math.isfinite(epoch["loss"]) for epoch in result["history"])
+    assert np.isfinite(read_epochs(RunPaths(tmp_path / "model").epochs).loss).all()
     assert result["sampler_backend"] == "torch"
     assert result["sampler_totals"]["stub_children"] > 0
     assert result["sampler_totals"]["rejected_children"] > 0

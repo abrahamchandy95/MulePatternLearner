@@ -27,7 +27,6 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Iterator, Mapping
 import contextlib
-import json
 import time
 from typing import Any
 
@@ -36,7 +35,16 @@ import pandas as pd
 import torch
 from torch import nn
 
-from ..artifacts import atomic_write
+from ..artifacts import (
+    HISTORY_COLUMNS,
+    append_history,
+    atomic_write,
+    keep_history,
+    write_epochs,
+    write_json,
+    write_predictions,
+    write_run_config,
+)
 from ..batching.assemble import RootBatch, batch_device, build_root_batch, to_device
 from ..batching.limits import BatchLimits
 from ..config import RunConfig, SplitDates, TrainingConfig
@@ -45,7 +53,7 @@ from ..contract.graph_schema import ContextKey
 from ..contract.sampler_plan import SamplerPlan
 from ..data.contexts import ContextOpener, ContextSource, check_coverage, close_source
 from ..data.hub_registry import HubRegistry, load_hub_registry, warn_hub_stubs
-from ..data.manifest import dataset_mismatches, load_prepared
+from ..data.manifest import dataset_id, dataset_mismatches, load_prepared
 from ..data.observed_labels import label_summary, load_observed_labels, visible_labels
 from ..data.splits import eligible_mask, marginal_mask, sample_keys
 from ..inference.predictor import accepted_scores, score_batches
@@ -68,7 +76,7 @@ from .schedule import (
     epoch_schedule,
     evaluation_indices,
 )
-from .summary import model_payload, prediction_frame, run_summary
+from .summary import model_payload, prediction_frame, provenance, run_summary
 
 Batch = dict[str, torch.Tensor]
 BatchRequest = tuple[list[ContextKey], str, int]
@@ -251,6 +259,7 @@ class _TrainingRun:
         run: RunPaths,
     ) -> None:
         self.config, self.dataset = config, dataset
+        self.dataset_id = dataset_id(manifest["source"]["source_id"], config)
         self.training_config, self.runtime = config.training, config.runtime
         self.manifest, self.accounts, self.mask = manifest, accounts, mask
         self.plan, self.sampler, self.store, self.hubs = plan, config.sampler, store, hubs
@@ -278,7 +287,8 @@ class _TrainingRun:
         self.best_state = self._state_copy()
         self.best_scores: np.ndarray | None = None
         self.best_accepted: np.ndarray | None = None
-        self.history: list[dict[str, Any]] = []
+        # One epochs.csv row per finished epoch, without its selected flag.
+        self.epoch_rows: list[dict[str, Any]] = []
         self.loss_sum = torch.zeros((), device=device)
         self.loss_steps = 0
         self.rejected_rows: dict[str, int] = {}
@@ -340,7 +350,7 @@ class _TrainingRun:
             "best_accepted": (
                 None if self.best_accepted is None else torch.from_numpy(self.best_accepted)
             ),
-            "history": self.history,
+            "epoch_rows": self.epoch_rows,
             "elapsed_seconds": time.perf_counter() - self.progress.started,
             # Plain dicts and ints: torch.load(weights_only=True) refuses a Counter.
             "sampler_backend": self.backend,
@@ -387,7 +397,7 @@ class _TrainingRun:
         self.loss_sum = state["loss_sum"].to(self.device)
         self.loss_steps = state["loss_steps"]
         self.best_state, self.best_ap = state["best_state"], state["best_ap"]
-        self.best_epoch, self.history = state["best_epoch"], state["history"]
+        self.best_epoch, self.epoch_rows = state["best_epoch"], state["epoch_rows"]
         scores, accepted = state["best_scores"], state["best_accepted"]
         self.best_scores = None if scores is None else scores.numpy()
         self.best_accepted = None if accepted is None else accepted.numpy()
@@ -407,7 +417,12 @@ class _TrainingRun:
             self.restore(state)
         self.run.root.mkdir(parents=True, exist_ok=True)
         if not self.run.config.exists():
-            self.run.config.write_text(json.dumps(self.config.to_dict(), indent=2) + "\n")
+            run_provenance = provenance(self.device, self.backend, self.dataset_id)
+            write_run_config(self.run.config, self.config, run_provenance)
+        # The intervals after the resume position are logged again.
+        keep_history(self.run.history, self.epoch, self.step)
+        if self.epoch_rows:
+            self.record_epochs()
         self.progress.path = self.run.events
         self.progress.emit(
             {
@@ -494,7 +509,7 @@ class _TrainingRun:
                             f"step {self.step}"
                         )
                     now = time.perf_counter()
-                    self.progress.emit(
+                    record = self.progress.emit(
                         {
                             "event": "train",
                             "epoch": epoch + 1,
@@ -502,12 +517,15 @@ class _TrainingRun:
                             "steps": len(schedule),
                             "date": step.date,
                             **interval.record(loss, risk, corrections, now),
+                            "rejected_roots": int(self.train_rejections["rejected"]),
                             "batch": {
                                 k: v for k, v in plain(stats).items() if k != "sampler_backend"
                             },
                         },
                         echo=logged,
                     )
+                    row = {name: record[name] for name in HISTORY_COLUMNS}
+                    append_history(self.run.history, row)
                     interval.start(now)
                     if saved:
                         self.save_last()
@@ -522,7 +540,6 @@ class _TrainingRun:
         self.check_rejections("validation", labels, accepted)
         metrics = evaluate(labels[accepted].astype(np.int64), scores[accepted], 0.5)
         ap = metrics["average_precision"]
-        self.history.append(epoch_record(epoch + 1, self.loss_sum, self.loss_steps, metrics))
         if ap is not None and ap > self.best_ap:
             self.best_ap, self.best_epoch = ap, epoch + 1
             self.best_state, self.best_scores = selected, scores
@@ -530,10 +547,27 @@ class _TrainingRun:
         # patience = 0 disables early stopping.
         patience = self.training_config.patience
         self.stopped = patience > 0 and epoch + 1 - self.best_epoch >= patience
+        record = epoch_record(
+            epoch + 1,
+            self.loss_sum,
+            self.loss_steps,
+            metrics,
+            averaged=self.average is not None,
+            stopped=self.stopped,
+        )
+        self.epoch_rows.append(record)
         self.epoch, self.step = epoch + 1, 0
         self.epoch_rng_state = self.rng.bit_generator.state
         self.save_last()
-        self.progress.emit({"event": "epoch", **self.history[-1], "stopped": self.stopped})
+        # After the resume state, so epochs.csv never holds an epoch that resume.pt lacks.
+        rows = self.record_epochs()
+        self.progress.emit({"event": "epoch", **rows[-1]})
+
+    def record_epochs(self) -> list[dict[str, Any]]:
+        """Replace epochs.csv with the epochs so far, the selected one marked; return them."""
+        rows = [{**row, "selected": row["epoch"] == self.best_epoch} for row in self.epoch_rows]
+        write_epochs(self.run.epochs, rows)
+        return rows
 
     def count_training_rejections(
         self, step: TrainingStep, accepted: np.ndarray, requested: int
@@ -655,15 +689,13 @@ class _TrainingRun:
         test, rejected_roots["test"] = self._score_test()
         results = {}
         for split, frame in (("validation", validation), ("test", test)):
-            path = self.run.predictions(split)
-            path.parent.mkdir(exist_ok=True)
-            frame.to_parquet(path, index=False)
+            write_predictions(self.run.predictions(split), frame)
             results[split] = evaluate(
                 frame["observed_label"].to_numpy(), frame["score"].to_numpy(), threshold
             )
         result = run_summary(
             config=self.config,
-            manifest=self.manifest,
+            dataset_id=self.dataset_id,
             seed=self.training_config.seed,
             known_mules=known_mules,
             device=self.device,
@@ -672,17 +704,15 @@ class _TrainingRun:
             plan=self.plan,
             parameter_count=sum(p.numel() for p in self.model.parameters()),
             best_epoch=self.best_epoch,
-            history=self.history,
             results=results,
             selection=selection,
-            checkpoint=self.run.model,
             progress=self.progress,
             rejected_rows=self.rejected_rows,
             rejected_roots=rejected_roots,
             limit=self.limit,
         )
         self.progress.emit({"event": "complete", "best_epoch": self.best_epoch}, echo=False)
-        self.run.metrics.write_text(json.dumps(result, indent=2, allow_nan=False) + "\n")
+        write_json(self.run.metrics, result)
         return result
 
     def _score_test(self) -> tuple[pd.DataFrame, dict[str, int]]:
