@@ -139,7 +139,15 @@ def test_train_prepares_then_trains_or_resumes_the_baseline_run(
         prepared.append((c, data))
         return dataset
 
-    # `mule train` is pipeline.train.train_run with resume: patch the pipeline's steps.
+    # `mule train` is pipeline.train.train_run with resume: patch the pipeline's steps,
+    # and the reader of a complete run, so a local results/baseline/seed-42 is not read.
+    recorded: list[dict[str, Any] | None] = [None]
+
+    def completed_run(c: RunConfig, run: RunPaths) -> dict[str, Any] | None:
+        assert c is DEFAULT_CONFIG and run == pipeline_train.BASELINE_RUN
+        return recorded[0]
+
+    monkeypatch.setattr(pipeline_train, "completed_run", completed_run)
     monkeypatch.setattr(pipeline_train, "prepare_dataset", prepare)
 
     def train(c: RunConfig, d: DatasetPaths, o: RunPaths, **kwargs: Any) -> dict[str, Any]:
@@ -157,3 +165,8 @@ def test_train_prepares_then_trains_or_resumes_the_baseline_run(
     assert c is DEFAULT_CONFIG and d == dataset and o == pipeline_train.BASELINE_RUN
     # The trainer opens the source through the pipeline once its checks passed.
     assert kwargs == {"open_contexts": open_context_source, "resume": True}
+    # A complete run prints its recorded result, and nothing is prepared or trained.
+    recorded[0] = {"status": "complete", "best_epoch": 3}
+    cli.main()
+    assert json.loads(capsys.readouterr().out) == recorded[0]
+    assert len(prepared) == len(trained) == 1

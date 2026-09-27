@@ -710,7 +710,7 @@ dataset; different dataset settings name another dataset, prepared beside it.
 | `TigerGraph rejected ... training roots so far` or `validation: TigerGraph rejected ... roots` | Roots failed a per-request check beyond `max_rejected_root_fraction`, or an observed positive was rejected; the statuses name why (for example `history_capacity_exceeded`) |
 | cuGraph probe warning | pylibcugraph or the GPU failed the probe; training continues with the torch sampler; run `mule check` and `pytest -m cuda tests/integration/test_cugraph_sampler.py` |
 | Retries in the log | TigerGraph was briefly unavailable or resuming; the run waits up to `max_outage_s` |
-| `Run is already complete` | The run directory holds a finished run; its `metrics.json` is the result. Move the directory aside to train it again |
+| `The run in ... is complete with other settings` | The run directory holds a finished run whose settings differ from the built-in ones in the settings the message names. Move the directory aside to train the new settings (`mule train` on a finished run of the same settings prints its `metrics.json` instead) |
 | `The model's input groups or pool definitions differ from its configuration` | The model was trained with a pool group whose definition (amount bands, pass-through thresholds, `POOL_ACTIVITY_VERSION`) has changed since; score with a model trained under the current definition |
 
 ## Limitations and future work

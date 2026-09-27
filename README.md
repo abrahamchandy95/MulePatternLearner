@@ -67,7 +67,8 @@ It uses CUDA when available (then Apple MPS, then CPU) and writes the run to
 `events.jsonl` and the other files of the run directory. On a fresh graph the first run
 installs the training queries, creates the frozen scope and reveals the known mules in
 the graph ([label reveal](docs/label_reveal.md)); every run then prepares its dataset in
-`data/<dataset id>/`. Run the same command again to resume an interrupted run. The
+`data/<dataset id>/`. Run the same command again to resume an interrupted run; on a
+complete run it prints the run's `metrics.json` and changes nothing. The
 settings are built in:
 `DEFAULT_CONFIG` in `src/mule_pattern_learner/config.py`, frozen dataclasses with one
 section per concern. No command reads a configuration file, and no command takes an
@@ -75,7 +76,7 @@ option besides `--help`.
 
 | Command | What it does |
 |---|---|
-| `mule train` | Prepares as needed (install, scope, reveal, dataset), then trains the built-in run into `results/baseline/seed-42/`, or resumes it |
+| `mule train` | Prepares as needed (install, scope, reveal, dataset), then trains the built-in run into `results/baseline/seed-42/`, resumes it, or reports it when it is complete |
 | `mule evaluate [RUN]` | Ground-truth audit of the run's model on the frozen test partition, written to the run's `audit/`; `RUN` defaults to `results/baseline/seed-42` |
 | `mule score ACCOUNTS [DATE]` | Scores the accounts listed in a file (one id per line) with the built-in run's model; `DATE` defaults to the test cutoff. Writes `scores/<file stem>_<date>.parquet` in the run |
 | `mule check` | Read-only readiness: the graph, its installed queries and the cuGraph probe, then one training batch with its tensor digests and the first loss |

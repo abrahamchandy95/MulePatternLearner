@@ -458,8 +458,10 @@ mule train
 ```
 
 It writes the run directory `results/baseline/seed-42/` and prepares the dataset in
-`data/<dataset id>/`, both ignored. Running it again resumes an interrupted run; a
-finished run is refused. Old unscoped datasets and models are not compatible; use
+`data/<dataset id>/`, both ignored. Running it again resumes an interrupted run. A
+finished run is reported from its `metrics.json` and left as it is, before anything
+connects; if a setting that changes results differs from the run's, the command fails
+and names the settings. Old unscoped datasets and models are not compatible; use
 fresh ones. Do not delete a valid prepared dataset just to change model
 hyperparameters in a separate experiment: a run whose dataset settings match reuses
 it. The trainer still checks the dataset settings, that the source requests every

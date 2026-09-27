@@ -9,7 +9,7 @@ from unittest.mock import patch
 import pandas as pd
 import pytest
 
-from mule_pattern_learner.artifacts import read_epochs, read_events, read_history
+from mule_pattern_learner.artifacts import read_epochs, read_events, read_history, read_json
 from mule_pattern_learner.cli import build_parser
 from mule_pattern_learner.config import DEFAULT_CONFIG, TransportConfig
 from mule_pattern_learner.data.manifest import dataset_id
@@ -146,10 +146,18 @@ def test_train_then_audit_write_exactly_the_files_of_the_run_and_dataset_tables(
     # log_every_steps is above the 3 steps of an epoch: one interval per epoch.
     assert read_history(output.history)[["epoch", "step"]].to_numpy().tolist() == [[1, 3], [2, 3]]
     assert read_epochs(output.epochs).epoch.tolist() == [1, 2]
-    # A complete run is reported, and left as it was.
+    # `mule train` reports a complete run with the result it printed, before anything
+    # is prepared or connected, and leaves the run as it was. Changed settings are named.
     written = {name: (output.root / name).stat().st_mtime_ns for name in trained}
-    with pytest.raises(FileExistsError, match="already complete"):
-        train_run(output, config=config, data=data, resume=True)
+    with patch(
+        "mule_pattern_learner.pipeline.train.prepare_dataset", side_effect=AssertionError
+    ) as prep:
+        report = train_run(output, config=config, data=data, resume=True)
+        assert report == result == read_json(output.metrics)
+        changed = config.with_changes({"training": {"patience": 1}})
+        with pytest.raises(ValueError, match=r"other settings: \['training.patience'\]"):
+            train_run(output, config=changed, data=data, resume=True)
+        prep.assert_not_called()
     assert {name: (output.root / name).stat().st_mtime_ns for name in trained} == written
     # The audit adds its files to the run's audit/ and reads the model's own dataset.
     truth = pd.DataFrame(scope_population(POPULATION))[["account_id"]]

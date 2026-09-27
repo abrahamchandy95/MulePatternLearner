@@ -9,11 +9,13 @@ from typing import Any
 import pytest
 import torch
 
+from mule_pattern_learner.artifacts import write_json, write_run_config
 from mule_pattern_learner.config import DEFAULT_CONFIG
 from mule_pattern_learner.paths import RunPaths
 from mule_pattern_learner.training import trainer
 from mule_pattern_learner.training.checkpoint import (
     ResumeState,
+    completed_run,
     load_resume_state,
     restore_cuda_rng,
     run_started,
@@ -62,3 +64,23 @@ def test_a_resume_state_loads_only_in_its_format_and_configuration(tmp_path: Pat
     run.metrics.write_text("{}")
     with pytest.raises(FileExistsError, match="already complete"):
         load_resume_state(DEFAULT_CONFIG, run)
+
+
+def test_a_complete_run_is_reported_only_for_its_own_settings(tmp_path: Path) -> None:
+    run = RunPaths(tmp_path / "run")
+    run.root.mkdir()
+    write_run_config(run.config, DEFAULT_CONFIG, {})
+    assert completed_run(DEFAULT_CONFIG, run) is None
+    record = {"status": "complete", "best_epoch": 2}
+    write_json(run.metrics, record)
+    written = {path: path.stat().st_mtime_ns for path in (run.config, run.metrics)}
+    assert completed_run(DEFAULT_CONFIG, run) == record
+    # Runtime settings do not make it another run; results settings do, and are named.
+    assert completed_run(DEFAULT_CONFIG.with_changes({"runtime": {"threads": 8}}), run) == record
+    changed = DEFAULT_CONFIG.with_changes({"training": {"learning_rate": 0.5, "epochs": 3}})
+    with pytest.raises(ValueError, match=r"\['training.epochs', 'training.learning_rate'\]"):
+        completed_run(changed, run)
+    # Resuming it names the changed settings before it says the run is complete.
+    with pytest.raises(ValueError, match="training.learning_rate"):
+        load_resume_state(changed, run)
+    assert {path: path.stat().st_mtime_ns for path in written} == written

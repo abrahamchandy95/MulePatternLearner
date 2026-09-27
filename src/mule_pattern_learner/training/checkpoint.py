@@ -4,7 +4,8 @@
 every setting that can change results matches (config.RunConfig.fingerprint); the
 transport and runtime sections, and the sampler backend, may change between segments
 (for example a lower query concurrency after server trouble, or a higher rejection
-limit to resume a run that stopped on rejected roots).
+limit to resume a run that stopped on rejected roots). A complete run is reported
+from its metrics.json under the same check (completed_run).
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from typing import Any, ClassVar
 
 import torch
 
-from ..artifacts import atomic_write, read_run_config
+from ..artifacts import atomic_write, read_json, read_run_config
 from ..config import RunConfig, differing_settings
 from ..paths import RunPaths
 
@@ -69,24 +70,46 @@ def restore_cuda_rng(saved: torch.Tensor | None, device: torch.device) -> None:
     torch.cuda.set_rng_state(saved, device)
 
 
+def changed_settings(config: RunConfig, run: RunPaths) -> list[str]:
+    """The dotted names of the results-relevant settings config changes from the run's."""
+    try:
+        previous = read_run_config(run.config)
+    except (KeyError, ValueError) as error:
+        raise ValueError(
+            f"Cannot read the configuration of the run in {run.root}: {error}"
+        ) from None
+    return differing_settings(config.results_view(), previous.results_view())
+
+
+def completed_run(config: RunConfig, run: RunPaths) -> dict[str, Any] | None:
+    """The metrics.json record of a complete run of config, or None if the run is not complete.
+
+    Nothing is written. A complete run whose results-relevant settings differ from
+    config is an error that names the settings that changed.
+    """
+    if not run.metrics.exists():
+        return None
+    changed = changed_settings(config, run)
+    if changed:
+        raise ValueError(
+            f"The run in {run.root} is complete with other settings: {changed}; "
+            "move it aside to train these"
+        )
+    return read_json(run.metrics)
+
+
 def load_resume_state(config: RunConfig, run: RunPaths) -> ResumeState | None:
     """The saved state of an interrupted run, or None before its first checkpoint.
 
-    A finished run and a configuration whose results-relevant settings changed
-    are refused; the error names the settings that changed.
+    A configuration whose results-relevant settings changed is refused, and the error
+    names the settings that changed; a finished run is refused after that check.
     """
-    if run.metrics.exists():
-        raise FileExistsError(f"Run is already complete: {run.root}")
     if run.config.exists():
-        try:
-            previous = read_run_config(run.config)
-        except (KeyError, ValueError) as error:
-            raise ValueError(
-                f"Cannot read the configuration of the run in {run.root}: {error}"
-            ) from None
-        changed = differing_settings(config.results_view(), previous.results_view())
+        changed = changed_settings(config, run)
         if changed:
             raise ValueError(f"Resumed configuration differs from the run: {changed}")
+    if run.metrics.exists():
+        raise FileExistsError(f"Run is already complete: {run.root}")
     if not run.resume.exists():
         return None
     return ResumeState.load(run.resume, config)

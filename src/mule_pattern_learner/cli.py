@@ -37,7 +37,7 @@ def build_parser() -> argparse.ArgumentParser:
     commands.add_parser(
         "train",
         help=f"Prepare the dataset as needed, then train the built-in run into {baseline}/; "
-        "an interrupted run resumes",
+        "an interrupted run resumes, and a complete one is reported from its metrics.json",
     )
     evaluating = commands.add_parser(
         "evaluate", help="Ground-truth audit of a run's model, written to the run's audit/"
@@ -71,7 +71,7 @@ def run_command(args: argparse.Namespace) -> dict[str, Any]:
         case "install":
             return install_queries()
         case "train":
-            # An interrupted run continues from its resume.pt; a complete one is refused.
+            # An interrupted run continues from its resume.pt; a complete one is reported.
             return train_run(resume=True)
         case "evaluate":
             return evaluate_run(args.run)
