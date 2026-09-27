@@ -31,7 +31,7 @@ def test_the_dataset_id_covers_only_the_dataset_settings() -> None:
     same: list[dict[str, Any]] = [
         {"training": {"learning_rate": 0.5, "epochs": 3, "seed": 1}, "model": {"hidden": 8}},
         {"transport": {"request_batch_size": 4, "max_outage_s": 60}},
-        {"scope": {"unowned": "linked", "create": False, "reveal_salt": 7}},
+        {"scope": {"unowned": "linked", "create": False, "reveal_per_split": 5, "reveal_salt": 7}},
         {"sampler": {"association_slots": 1, "fanouts": [8, 2]}},  # selection, not pools
         # A dataset stores no contexts, so feature groups and architecture do not count.
         {"features": list(CORE_GROUPS), "model": {"architecture": "summary"}},
