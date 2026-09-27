@@ -1,3 +1,5 @@
+"""The non-negative PU loss that training minimises."""
+
 from typing import override
 
 import torch

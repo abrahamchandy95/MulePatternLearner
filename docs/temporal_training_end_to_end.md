@@ -401,7 +401,7 @@ amounts, durations and the flow amount ratio get `log1p`; flags and Fourier coor
 through. Batch-local
 positions come from `BatchIndex`: the same account at two cutoffs is two contexts, and no
 global ID table exists. The v5 profile of the
-[live training guide](live_temporal_training.md), the six `DEFAULT_GROUPS`, gives the same
+[live training guide](live_temporal_training.md), the six `CORE_GROUPS`, gives the same
 tensors without the pool columns (`x` is N x 9).
 
 The pool columns are counts over the root's own candidate pool (at most 16 payments per
@@ -457,7 +457,7 @@ through the pool groups. Only the hop-1 slots get a sum: block 1 feeds block 2, 
 hop-2 sum would need its own merge back into the 64-wide tokens, over a fan-out of only 4.
 `slot_sum = false` builds the model without the branch, and the summary architecture
 ignores it. The branch is provisional: it has not yet been measured in a training run on
-the live graph (the `built_in_no_slot_sum` arm of `feature_experiments` measures it).
+the live graph (the experiments step's `no_slot_sum` variant measures it).
 
 Loss: imbalanced nnPU ([Su, Chen and Xu, 2021](https://www.ijcai.org/proceedings/2021/0412.pdf)),
 the nnPU risk of [Kiryo et al., 2017](https://arxiv.org/abs/1703.00593) reweighted as if

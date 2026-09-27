@@ -2,7 +2,7 @@
 
 The [feature-group redesign](feature_redesign.md) documents the window-free feature groups, optional summaries, sampler, and migration. Fixed 83/135 dimensions below describe the window groups as the query returns them (the `include_*` defaults). The built-in v5 run (`DEFAULT_CONFIG`) and its candidate pools are described in [training from the live temporal graph](live_temporal_training.md#candidate-pools-and-resampling).
 
-This describes `temporal/live`, the live TGAT-style path. The live strict path
+This describes the package's TGAT-style path. The live strict path
 applies server-side ownership-group partitions before sampling and feature
 aggregation; see [leakage and scaling](leakage_and_scaling.md).
 
@@ -90,7 +90,7 @@ dataset stays valid.
   [hub accounts](live_temporal_training.md#hub-accounts-and-rejected-contexts)).
 - The pool groups `pool_activity` and `pool_internal_inflows` (both in the built-in
   run): counts over the payment messages of the root's own candidate pool, computed by
-  `batching.pool_activity`. The TGAT model reads them for the roots only, in its
+  `batching.pool_counts.pool_activity`. The TGAT model reads them for the roots only, in its
   summary branch, so batches compute them for the roots only (children and stubs keep
   zeros there). Every count gets `log1p`.
 

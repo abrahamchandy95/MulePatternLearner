@@ -1,3 +1,5 @@
+"""The TigerGraph connection settings, read from the repository .env when called."""
+
 from typing import ClassVar
 
 from pydantic import Field, SecretStr, ValidationInfo, field_validator

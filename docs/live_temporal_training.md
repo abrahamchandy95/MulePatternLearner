@@ -229,7 +229,7 @@ has finite timeouts (30 s connect, 600 s read).
 A context request that TigerGraph times out on is not repeated as a whole. A block
 of several keys is split in half at once (without a timeout retry) and each half is
 requested on its own, which isolates a slow key in a logarithmic number of extra
-calls; `diagnostics["timeout_splits"]` counts the splits and `query_calls` counts
+calls; `diagnostics["timeout_splits"]` counts the splits and `database_calls` counts
 successful REST calls. A single key gets one retry and then raises
 `ContextTimeoutError`, which names the context key and hop. It is fatal on purpose:
 which keys time out depends on server load, so dropping one would make the
@@ -327,7 +327,7 @@ and associations up to `K`. The second hop is payments only: `chosen = P[:K]`.
 changed with the v5 contract, so checkpoints trained with that group under the v4
 contract are incompatible (the contract fingerprint refuses them).
 
-The built-in run adds two groups that `DEFAULT_GROUPS` lacks, `pool_activity` and
+The built-in run adds two groups that `CORE_GROUPS` lacks, `pool_activity` and
 `pool_internal_inflows`: counts over the root's candidate pool (distinct counterparties,
 first-time inflows, rapid pass-throughs and more; see the
 [catalog](gsql_feature_catalog.md#client-computed-groups)), fed to the TGAT model's

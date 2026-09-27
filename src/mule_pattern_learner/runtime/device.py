@@ -1,3 +1,5 @@
+"""The torch device, determinism and CPU threads of a command, restored when it ends."""
+
 from collections.abc import Generator
 from contextlib import contextmanager
 import os
