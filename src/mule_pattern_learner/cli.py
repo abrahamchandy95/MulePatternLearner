@@ -1,7 +1,7 @@
 """Train from TigerGraph with graph-revealed labels, bounded contexts and CUDA by default.
 
 `mule-temporal train` needs nothing but the TigerGraph credentials in .env: settings
-are built in (config_schema.DEFAULT_RUN), and the first run installs the queries,
+are built in (config.DEFAULT_RUN), and the first run installs the queries,
 creates the scope and reveals the known mules. Every flag is optional.
 """
 
@@ -18,19 +18,17 @@ import json  # noqa: E402
 from pathlib import Path  # noqa: E402
 from typing import Any  # noqa: E402
 
-from ...config import run_config  # noqa: E402
-from ...tigergraph.executor import TigerGraphExecutor  # noqa: E402
-from ...tigergraph.installer import install  # noqa: E402
-from .checkpoint import ModelCheckpoint  # noqa: E402
-from .evaluation import (  # noqa: E402
-    GraphEvaluationTruth,
-    ParquetEvaluationTruth,
-    evaluate_final_population,
-    evaluate_predictions,
-)
-from .inference import score  # noqa: E402
-from .pipeline import DEFAULT_MODEL, dataset_path, prepare_live, run  # noqa: E402
-from .predictor import read_account_ids, score_new_accounts  # noqa: E402
+from .config import run_config  # noqa: E402
+from .evaluation.audit import evaluate_final_population, evaluate_predictions  # noqa: E402
+from .evaluation.truth import ParquetEvaluationTruth  # noqa: E402
+from .inference.saved_model import ModelCheckpoint  # noqa: E402
+from .inference.score_accounts import read_account_ids, score, score_new_accounts  # noqa: E402
+from .paths import DEFAULT_MODEL, dataset_path  # noqa: E402
+from .pipeline.prepare import prepare_live  # noqa: E402
+from .pipeline.train import run  # noqa: E402
+from .tigergraph.executor import TigerGraphExecutor  # noqa: E402
+from .tigergraph.installer import install  # noqa: E402
+from .tigergraph.oracle import GraphEvaluationTruth  # noqa: E402
 
 CONFIG_HELP = "Optional TOML/JSON file whose keys override the built-in settings"
 

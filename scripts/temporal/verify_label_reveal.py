@@ -19,7 +19,7 @@ import json
 import sys
 
 from mule_pattern_learner.config import run_config
-from mule_pattern_learner.temporal.live.reveal_model import (
+from mule_pattern_learner.reference.label_reveal import (
     INPUTS_QUERY,
     available_ms,
     counts_by_split,

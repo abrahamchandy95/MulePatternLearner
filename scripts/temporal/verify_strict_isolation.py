@@ -28,9 +28,9 @@ from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
 from mule_pattern_learner.contract.time_basis import BASIS_ID
 from mule_pattern_learner.data.contexts import StreamingContextSource
+from mule_pattern_learner.inference.predictor import TemporalPredictor
 from mule_pattern_learner.model.build import build_model
 from mule_pattern_learner.runtime.device import choose_device
-from mule_pattern_learner.temporal.live.predictor import TemporalPredictor
 from mule_pattern_learner.tigergraph.executor import TigerGraphExecutor
 
 # The fixture's own checks read the window counts and amounts, their ratios and the pair

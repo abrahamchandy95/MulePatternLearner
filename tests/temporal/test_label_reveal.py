@@ -11,7 +11,7 @@ from temporal_fakes import reveal_inputs
 from mule_pattern_learner.config import DEFAULT_RUN, run_config, validate_config
 from mule_pattern_learner.contract import graph_schema
 from mule_pattern_learner.contract.clock import timestamp
-from mule_pattern_learner.temporal.live import reveal_model
+from mule_pattern_learner.reference import label_reveal as reveal_model
 from mule_pattern_learner.tigergraph import labels as tigergraph_labels
 from mule_pattern_learner.tigergraph import reveal as tigergraph_reveal
 from mule_pattern_learner.tigergraph.gsql_text import definitions, repository_queries

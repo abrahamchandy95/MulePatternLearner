@@ -1,4 +1,4 @@
-"""Repository paths and the raw TOML/JSON reader behind run_config."""
+"""Repository paths, the run and dataset path policy, and the TOML/JSON reader of run_config."""
 
 from __future__ import annotations
 
@@ -27,3 +27,24 @@ def load_config(path: Path) -> dict[str, Any]:
         raise ValueError("Configuration must be a TOML table or a local JSON object")
     config: dict[str, Any] = value
     return config
+
+
+DEFAULT_MODEL = REPOSITORY_ROOT / "models/temporal/model.pt"
+
+
+def dataset_path(config: dict[str, Any], output: Path = DEFAULT_MODEL) -> Path:
+    """The prepared cache of a run: <run directory>/prepared.
+
+    An explicit prepared_id instead names a shared cache under artifacts/temporal,
+    for experiments that train several models on one preparation.
+    """
+    if config.get("prepared_id"):
+        return REPOSITORY_ROOT / "artifacts/temporal" / config["prepared_id"]
+    return output_paths(output)[1] / "prepared"
+
+
+def output_paths(output: Path) -> tuple[Path, Path]:
+    """A .pt output names the model; directory outputs retain the experiment API."""
+    if output.suffix == ".pt":
+        return output, output.with_name(output.stem + "_run")
+    return output / "model.pt", output

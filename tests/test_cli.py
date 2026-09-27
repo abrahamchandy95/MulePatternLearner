@@ -24,6 +24,4 @@ def test_mule_and_mule_temporal_run_the_same_main() -> None:
         if e.group == "console_scripts"
     }
     # A missing name means the installed metadata is stale: rerun pip install -e '.[dev]'.
-    assert (
-        scripts["mule"] == scripts["mule-temporal"] == "mule_pattern_learner.temporal.live.cli:main"
-    )
+    assert scripts["mule"] == scripts["mule-temporal"] == "mule_pattern_learner.cli:main"

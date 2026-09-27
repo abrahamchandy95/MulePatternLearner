@@ -23,6 +23,7 @@ from temporal_fakes import (
 import torch
 
 from mule_pattern_learner.batching.assemble import make_live_batch
+from mule_pattern_learner.cli import build_parser
 from mule_pattern_learner.config import DEFAULT_RUN
 from mule_pattern_learner.contract.feature_groups import FeaturePlan, extraction_plan
 from mule_pattern_learner.contract.graph_schema import ContextKey, context_scope
@@ -33,17 +34,15 @@ from mule_pattern_learner.data.manifest import load_prepared, preparation_view, 
 from mule_pattern_learner.data.observed_labels import align_observed_labels, label_summary
 from mule_pattern_learner.data.preparation import prepare
 from mule_pattern_learner.data.splits import sample_keys
+from mule_pattern_learner.evaluation.audit import evaluate_predictions
+from mule_pattern_learner.evaluation.truth import ParquetEvaluationTruth
 from mule_pattern_learner.model.loss import NonNegativePULoss
 from mule_pattern_learner.model.tgat import LiveTGAT
+from mule_pattern_learner.paths import DEFAULT_MODEL
+from mule_pattern_learner.pipeline.train import run
 from mule_pattern_learner.runtime.device import choose_device
-from mule_pattern_learner.temporal.live.cli import build_parser
-from mule_pattern_learner.temporal.live.evaluation import (
-    ParquetEvaluationTruth,
-    evaluate_predictions,
-)
-from mule_pattern_learner.temporal.live.pipeline import DEFAULT_MODEL, run
-from mule_pattern_learner.temporal.live.sampling import pu_batches
-from mule_pattern_learner.temporal.live.training import train
+from mule_pattern_learner.training.schedule import pu_batches
+from mule_pattern_learner.training.trainer import train
 
 
 def streaming_source(executor: FakeExecutor, config: dict[str, Any], **kwargs: Any):
@@ -173,11 +172,9 @@ def test_minimal_command_and_run_defaults(tmp_path: Path) -> None:
     assert args.config is None and args.dataset is None and args.output == DEFAULT_MODEL
     manifest = {"source": {"dataset_id": "graph_snapshot"}}
     with (
+        patch("mule_pattern_learner.pipeline.train.prepare_live", return_value=manifest) as prep,
         patch(
-            "mule_pattern_learner.temporal.live.pipeline.prepare_live", return_value=manifest
-        ) as prep,
-        patch(
-            "mule_pattern_learner.temporal.live.pipeline.train", return_value={"status": "complete"}
+            "mule_pattern_learner.pipeline.train.train", return_value={"status": "complete"}
         ) as fit,
     ):
         assert run(tmp_path / "model.pt")["status"] == "complete"
@@ -193,7 +190,7 @@ def test_minimal_command_and_run_defaults(tmp_path: Path) -> None:
 
 
 def test_ready_pipeline_reuses_cache_without_connecting(tmp_path: Path) -> None:
-    from mule_pattern_learner.temporal.live.pipeline import prepare_live
+    from mule_pattern_learner.pipeline.prepare import prepare_live
 
     c = live_config()
     manifest = {
@@ -201,7 +198,7 @@ def test_ready_pipeline_reuses_cache_without_connecting(tmp_path: Path) -> None:
         "source": {"query_hashes": query_hashes(), "preparation": preparation_view(c)},
     }
     (tmp_path / "manifest.json").write_text(json.dumps(manifest))
-    with patch("mule_pattern_learner.temporal.live.pipeline.live_executor") as client:
+    with patch("mule_pattern_learner.pipeline.prepare.live_executor") as client:
         assert prepare_live(c, tmp_path) == manifest
         # Model settings may change; preparation settings may not, and nothing connects.
         assert prepare_live({**c, "hidden": 32, "learning_rate": 0.01}, tmp_path) == manifest

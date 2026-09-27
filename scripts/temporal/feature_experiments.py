@@ -6,8 +6,8 @@ from pathlib import Path
 
 from mule_pattern_learner.config import run_config
 from mule_pattern_learner.contract.feature_groups import FeaturePlan
+from mule_pattern_learner.experiments.variants import feature_experiments
 from mule_pattern_learner.model.build import build_model
-from mule_pattern_learner.temporal.live.experiments import feature_experiments
 
 
 def main():

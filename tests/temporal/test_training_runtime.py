@@ -26,6 +26,7 @@ import pyarrow.parquet as pq
 import pytest
 import torch
 
+from mule_pattern_learner import cli
 from mule_pattern_learner.batching import assemble
 from mule_pattern_learner.config import validate_config
 from mule_pattern_learner.contract.clock import timestamp
@@ -43,16 +44,19 @@ from mule_pattern_learner.data import manifest as data_manifest
 from mule_pattern_learner.data.hub_registry import HUB_COLUMNS, HubRegistry, warn_hub_stubs
 from mule_pattern_learner.data.manifest import preparation_view
 from mule_pattern_learner.data.observed_labels import align_observed_labels
+from mule_pattern_learner.evaluation.audit import evaluate_final_population
+from mule_pattern_learner.inference import score_accounts
 from mule_pattern_learner.inference.rejections import rejection_summary
 from mule_pattern_learner.model.build import build_model
 from mule_pattern_learner.model.loss import NonNegativePULoss
 from mule_pattern_learner.model.tgat import LiveTGAT
+from mule_pattern_learner.pipeline import train as pipeline_train
 from mule_pattern_learner.runtime.device import torch_runtime
-from mule_pattern_learner.temporal.live import cli, inference, pipeline, predictor, training
-from mule_pattern_learner.temporal.live.checkpoint import restore_cuda_rng
-from mule_pattern_learner.temporal.live.evaluation import evaluate_final_population
-from mule_pattern_learner.temporal.live.sampling import (
-    BatchPrefetcher,
+from mule_pattern_learner.runtime.workers import BatchPrefetcher
+from mule_pattern_learner.training import averaging, trainer
+from mule_pattern_learner.training import objective as training_objective
+from mule_pattern_learner.training.checkpoint import restore_cuda_rng
+from mule_pattern_learner.training.schedule import (
     PUSample,
     epoch_schedule,
     evaluation_indices,
@@ -382,7 +386,7 @@ def test_torch_runtime_applies_modes_and_restores_global_state(
 def test_cli_sets_the_cublas_workspace_at_import_and_keeps_user_values() -> None:
     code = (
         "import os, sys\n"
-        "import mule_pattern_learner.temporal.live.cli\n"
+        "import mule_pattern_learner.cli\n"
         "print(os.environ['CUBLAS_WORKSPACE_CONFIG'])\n"
     )
     env = {k: v for k, v in os.environ.items() if k != "CUBLAS_WORKSPACE_CONFIG"}
@@ -400,7 +404,7 @@ def test_cli_sets_the_cublas_workspace_at_import_and_keeps_user_values() -> None
     )
     assert result.stdout.strip() == ":16:8"
     # The assignment precedes every import that can load torch.
-    source = (ROOT / "src/mule_pattern_learner/temporal/live/cli.py").read_text()
+    source = (ROOT / "src/mule_pattern_learner/cli.py").read_text()
     assert source.index("CUBLAS_WORKSPACE_CONFIG") < source.index("\nimport argparse")
 
 
@@ -649,7 +653,7 @@ def prepared_dataset(
         assert dataset == path
         return deepcopy(manifest), accounts.copy()
 
-    for module in (training, inference, data_manifest):
+    for module in (trainer, score_accounts, data_manifest):
         monkeypatch.setattr(module, "load_prepared", load)
     return path, manifest, accounts
 
@@ -662,7 +666,7 @@ def fit(
     source: FakeSource | None = None,
     resume: bool = False,
 ) -> dict[str, Any]:
-    return training.train(
+    return trainer.train(
         config,
         tmp_path / "dataset",
         tmp_path / f"{name}.pt",
@@ -790,7 +794,7 @@ def test_batches_use_train_mode_step_seeds_and_the_hub_registry(
     resolved: list[threading.Thread] = []
     lock = threading.Lock()
     real = assemble.make_live_batch
-    real_resolve = training.resolve_backend
+    real_resolve = trainer.resolve_backend
 
     def resolve(sampler: SamplerPlan, device: torch.device) -> str:
         resolved.append(threading.current_thread())
@@ -813,7 +817,7 @@ def test_batches_use_train_mode_step_seeds_and_the_hub_registry(
         return batch
 
     monkeypatch.setattr(assemble, "make_live_batch", record)
-    monkeypatch.setattr(training, "resolve_backend", resolve)
+    monkeypatch.setattr(trainer, "resolve_backend", resolve)
     result = fit(tmp_path, "run", config)
     # One resolution per run, on the main thread; every batch gets its result.
     assert resolved == [threading.main_thread()] and backends == {"torch"}
@@ -918,12 +922,12 @@ def test_no_finite_validation_ap_refuses_to_save(
 ) -> None:
     config = base_config()
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
-    real = training.evaluate
+    real = trainer.evaluate
 
     def no_ap(*args: Any, **kwargs: Any) -> dict[str, Any]:
         return {**real(*args, **kwargs), "average_precision": None}
 
-    monkeypatch.setattr(training, "evaluate", no_ap)
+    monkeypatch.setattr(trainer, "evaluate", no_ap)
     with pytest.raises(ValueError, match="refusing to save untrained weights"):
         fit(tmp_path, "run", config)
     assert not (tmp_path / "run.pt").exists()
@@ -976,7 +980,7 @@ def test_patience_zero_disables_early_stopping(
     config = base_config(epochs=3, patience=0, steps_per_epoch=1)
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     ap = iter([0.5, 0.4, 0.3])  # validation never improves after epoch 1
-    real = training.evaluate
+    real = trainer.evaluate
 
     def falling(*args: Any, **kwargs: Any) -> dict[str, Any]:
         result = real(*args, **kwargs)
@@ -984,7 +988,7 @@ def test_patience_zero_disables_early_stopping(
             result["average_precision"] = next(ap, result["average_precision"])
         return result
 
-    monkeypatch.setattr(training, "evaluate", falling)
+    monkeypatch.setattr(trainer, "evaluate", falling)
     result = fit(tmp_path, "run", config)
     assert [h["epoch"] for h in result["history"]] == [1, 2, 3] and result["best_epoch"] == 1
 
@@ -1004,7 +1008,7 @@ def test_cuda_rng_restore_sets_the_training_device_only(
     restore_cuda_rng(state, torch.device("cpu"))
     restore_cuda_rng(None, torch.device("cuda"))
     assert len(restored) == 1
-    assert "get_rng_state_all" not in inspect.getsource(training)
+    assert "get_rng_state_all" not in inspect.getsource(trainer)
 
 
 def test_resume_refuses_a_different_sampler_backend_unless_configured(
@@ -1052,9 +1056,9 @@ def test_run_directory_is_created_only_after_the_source_opens(
     def refuse(*_: object) -> None:
         raise ValueError("Live graph counts changed")
 
-    monkeypatch.setattr(training, "open_context_source", refuse)
+    monkeypatch.setattr(trainer, "open_context_source", refuse)
     with pytest.raises(ValueError, match="counts changed"):
-        training.train(config, tmp_path / "dataset", tmp_path / "m.pt", hubs=hub_registry())
+        trainer.train(config, tmp_path / "dataset", tmp_path / "m.pt", hubs=hub_registry())
     assert not (tmp_path / "m_run").exists() and not (tmp_path / "m.pt").exists()
     # A source built with another sampler is rejected before anything is written.
     other = base_config(sampler={**config["sampler"], "relation_fanouts": [3, 2]})
@@ -1195,7 +1199,7 @@ def test_score_new_writes_only_ok_rows_and_lists_rejected_ids(tmp_path: Path) ->
     ids[1:1], ids[9:9] = ["ghost_1"], ["ghost_2"]
     rejected_ids = ["ghost_1", "ghost_2"]
     output = tmp_path / "scores.parquet"
-    result = predictor.score_new_accounts(
+    result = score_accounts.score_new_accounts(
         model, iter(ids), "2025-01-01", output, executor=executor, contexts=source
     )
     frame = pd.read_parquet(output)
@@ -1217,7 +1221,7 @@ def test_score_new_keeps_float64_resolution_near_one(tmp_path: Path) -> None:
     # Logits near 20, where a float32 probability is exactly 1 for every account.
     model = checkpoint(tmp_path / "model.pt", config, logit_shift=20.0)
     output = tmp_path / "scores.parquet"
-    predictor.score_new_accounts(
+    score_accounts.score_new_accounts(
         model,
         iter([f"new_{i}" for i in range(12)]),
         "2025-01-01",
@@ -1237,7 +1241,7 @@ def test_score_new_reports_root_and_child_rejections_separately(tmp_path: Path) 
     # P5 and P7 are peers (children) of the scored accounts, never roots.
     source = FakeSource(config, reject=frozenset({"ghost", "P5", "P7"}))
     ids = ["ghost", *(f"new_{i}" for i in range(12))]
-    result = predictor.score_new_accounts(
+    result = score_accounts.score_new_accounts(
         model,
         iter(ids),
         "2025-01-01",
@@ -1268,10 +1272,10 @@ def test_inference_score_uses_the_dataset_hub_registry(
         loaded.append(path)
         return hub_registry()
 
-    monkeypatch.setattr(inference, "load_hub_registry", registry)
+    monkeypatch.setattr(score_accounts, "load_hub_registry", registry)
     source = FakeSource(config, reject=frozenset({"A002"}))
     output = tmp_path / "test.parquet"
-    result = inference.score(model, dataset, "2025-01-01", "test", output, contexts=source)
+    result = score_accounts.score(model, dataset, "2025-01-01", "test", output, contexts=source)
     frame = pd.read_parquet(output)
     assert loaded == [dataset]
     assert len(frame) == 23 and "A002" not in set(frame.account_id)
@@ -1406,10 +1410,10 @@ def test_train_command_prepares_then_trains_or_resumes(
         return {"source": {"dataset_id": "derived"}}
 
     # `mule-temporal train` is pipeline.run with resume: patch the pipeline's steps.
-    monkeypatch.setattr(pipeline, "run_config", lambda path: dict(config))
-    monkeypatch.setattr(pipeline, "prepare_live", prepare)
+    monkeypatch.setattr(pipeline_train, "run_config", lambda path: dict(config))
+    monkeypatch.setattr(pipeline_train, "prepare_live", prepare)
     monkeypatch.setattr(
-        pipeline, "train", lambda c, d, o, *, resume: trained.append((c, d, o, resume)) or {}
+        pipeline_train, "train", lambda c, d, o, *, resume: trained.append((c, d, o, resume)) or {}
     )
     output = tmp_path / "model.pt"
     cli.train_command(cli.build_parser().parse_args(["train", "--output", str(output)]))
@@ -1425,16 +1429,18 @@ def test_nnpu_objective_resolves_the_named_positive_weights() -> None:
         ("balanced", 0.999, "imbalanced_nnPU"),
         (0.5, 0.5, "positive_reweighted_nnPU"),
     ):
-        prior, value = training.nnpu_objective({"class_prior": 0.001, "positive_weight": weight})
+        prior, value = training_objective.nnpu_objective(
+            {"class_prior": 0.001, "positive_weight": weight}
+        )
         assert (prior, value) == (0.001, pytest.approx(resolved))
-        assert training.objective_name(prior, value) == name
+        assert training_objective.objective_name(prior, value) == name
 
 
 def test_weight_average_warms_up_and_restores_the_raw_weights() -> None:
     model = torch.nn.Linear(2, 1, bias=False)
     with torch.no_grad():
         model.weight.fill_(0.0)
-    average = training.WeightAverage(model, 0.99)
+    average = averaging.WeightAverage(model, 0.99)
     with torch.no_grad():
         model.weight.fill_(1.0)
     average.update(model)  # warm-up decay min(0.99, 2 / 11)
@@ -1443,7 +1449,7 @@ def test_weight_average_warms_up_and_restores_the_raw_weights() -> None:
     with average.applied(model):
         assert model.weight.flatten().tolist() == pytest.approx([expected] * 2)
     assert model.weight.flatten().tolist() == [1.0, 1.0]
-    restored = training.WeightAverage(model, 0.99)
+    restored = averaging.WeightAverage(model, 0.99)
     restored.load(average.saved())
     assert restored.updates == 1 and torch.equal(restored.state["weight"], average.state["weight"])
 

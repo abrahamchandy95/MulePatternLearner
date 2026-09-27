@@ -1,8 +1,8 @@
 """Scalar node, base and edge features: the per-item reference of batching's matrices.
 
-Tests compare `batching.node_matrix`, `base_matrix` and `edge_block` against these
-functions, one context or message at a time. Nothing in training, preparation or
-scoring imports this module; the restructure places it under `reference/`.
+Tests compare `batching.features.node_matrix`, `base_matrix` and `edge_block` against
+these functions, one context or message at a time. Nothing in training, preparation or
+scoring imports this module.
 """
 
 from __future__ import annotations
@@ -11,11 +11,11 @@ from typing import Any
 
 import numpy as np
 
-from ...batching.assemble import child_key
-from ...batching.features import DAY_MS
-from ...batching.pool_counts import pool_activity
-from ...contract.feature_groups import FEATURE_GROUPS, POOL_GROUPS, FeaturePlan
-from ...contract.time_basis import fourier64
+from ..batching.assemble import child_key
+from ..batching.features import DAY_MS
+from ..batching.pool_counts import pool_activity
+from ..contract.feature_groups import FEATURE_GROUPS, POOL_GROUPS, FeaturePlan
+from ..contract.time_basis import fourier64
 
 # Columns kept as they are; every other column gets log1p.
 IDENTITY = frozenset(

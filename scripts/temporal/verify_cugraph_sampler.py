@@ -297,12 +297,10 @@ def live(config_path: Path | None, roots: int) -> None:
     from mule_pattern_learner.data.manifest import load_prepared
     from mule_pattern_learner.data.splits import sample_keys
     from mule_pattern_learner.model.build import build_model
+    from mule_pattern_learner.paths import dataset_path
+    from mule_pattern_learner.pipeline.prepare import prepare_live
+    from mule_pattern_learner.pipeline.train import prepared_config
     from mule_pattern_learner.runtime.device import torch_runtime
-    from mule_pattern_learner.temporal.live.pipeline import (
-        dataset_path,
-        prepare_live,
-        prepared_config,
-    )
 
     def make_live_batch(store: Any, keys: Any, **options: Any) -> dict[str, torch.Tensor]:
         stats = options.pop("stats", None)

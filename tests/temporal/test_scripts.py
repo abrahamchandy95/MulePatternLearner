@@ -27,8 +27,8 @@ from mule_pattern_learner.contract.feature_groups import FeaturePlan, extraction
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
 from mule_pattern_learner.data.contexts import StreamingContextSource, check_coverage
 from mule_pattern_learner.data.preparation import prepare
-from mule_pattern_learner.temporal.live import reveal_model
-from mule_pattern_learner.temporal.live.experiments import feature_experiments
+from mule_pattern_learner.experiments.variants import feature_experiments
+from mule_pattern_learner.reference import label_reveal as reveal_model
 from mule_pattern_learner.tigergraph import reveal
 
 SCRIPTS = REPOSITORY / "scripts/temporal"

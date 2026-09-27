@@ -43,6 +43,11 @@ from mule_pattern_learner.contract.sampler_plan import SELECTION_KEYS_VERSION, P
 from mule_pattern_learner.contract.server import CONTRACT_VERSION
 from mule_pattern_learner.contract.time_basis import fourier64
 from mule_pattern_learner.model.tgat import LiveTGAT
+from mule_pattern_learner.reference.batch_features import (
+    base_features,
+    edge_features,
+    node_features,
+)
 from mule_pattern_learner.sampling import backend, candidates, cugraph_sampler, torch_sampler
 from mule_pattern_learner.sampling.backend import resolve_backend, select_resampled
 from mule_pattern_learner.sampling.candidates import CandidateTable, selection_keys, splitmix64
@@ -52,11 +57,6 @@ from mule_pattern_learner.sampling.cugraph_sampler import (
     fanout_array,
     graph_arrays,
     probe_cugraph,
-)
-from mule_pattern_learner.temporal.live.batch_reference import (
-    base_features,
-    edge_features,
-    node_features,
 )
 
 MPS = torch.backends.mps.is_available()
