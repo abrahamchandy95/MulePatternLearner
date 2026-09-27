@@ -85,6 +85,8 @@ nosetests.xml
 
 # ── ML / experiment artifacts ───────────────────────────────────────────────
 *.pt
+# Small saved models the tests load (tests/temporal/test_saved_models.py).
+!tests/temporal/fixtures/saved_models/*.pt
 *.pth
 *.ckpt
 *.onnx
