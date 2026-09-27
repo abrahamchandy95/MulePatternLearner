@@ -46,6 +46,7 @@ from mule_pattern_learner.data.hub_registry import HubRegistry
 from mule_pattern_learner.data.manifest import dataset_settings
 from mule_pattern_learner.data.observed_labels import align_observed_labels, validate_label_table
 from mule_pattern_learner.inference import score_accounts
+from mule_pattern_learner.inference.saved_model import SavedModel
 from mule_pattern_learner.model.build import build_model
 from mule_pattern_learner.paths import DatasetPaths
 from mule_pattern_learner.sampling import candidates
@@ -893,6 +894,7 @@ def checkpoint(
         assert isinstance(bias, torch.Tensor)
         bias += logit_shift
     payload = {
+        "format": SavedModel.FORMAT,
         "state_dict": model.state_dict(),
         "config": config.to_dict(),
         "contract": contract_fingerprint(),
@@ -902,8 +904,9 @@ def checkpoint(
         "selected_on": "validation_observed_label_proxy_ap",
     }
     if dataset is not None:
+        # A dataset's directory is named by its dataset id.
         payload["dataset_manifest_sha256"] = file_digest(dataset.manifest)
-        payload["dataset"] = str(dataset.root)
+        payload["dataset_id"] = dataset.root.name
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(payload, path)
     return path

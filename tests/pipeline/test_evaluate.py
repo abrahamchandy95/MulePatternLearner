@@ -41,10 +41,11 @@ def test_final_audit_connects_after_its_checks_and_reads_truth_on_that_connectio
     existing.parent.mkdir()
     existing.write_text("{}")
     with pytest.raises(FileExistsError):
-        pipeline_evaluate.final_audit(run, None)
+        pipeline_evaluate.final_audit(run, None, data=tmp_path)
     assert connected == [] and verified == []
     existing.unlink()
-    result = pipeline_evaluate.final_audit(run, None)
+    # The dataset is the model's own: its dataset id's directory in data.
+    result = pipeline_evaluate.final_audit(run, None, data=tmp_path)
     # The checkpoint's retry budgets, the frozen source checked, the graph's truth on it.
     assert connected == [config.transport]
     assert verified == [executor]
@@ -52,5 +53,5 @@ def test_final_audit_connects_after_its_checks_and_reads_truth_on_that_connectio
     truth = result["truth"]
     assert isinstance(truth, GraphEvaluationTruth) and truth.executor is executor
     assert result["dataset"] == dataset and result["run"] == run
-    supplied = pipeline_evaluate.final_audit(run, tmp_path / "t.parquet")
+    supplied = pipeline_evaluate.final_audit(run, tmp_path / "t.parquet", dataset=dataset)
     assert isinstance(supplied["truth"], ParquetEvaluationTruth)

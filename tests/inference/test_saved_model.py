@@ -24,6 +24,7 @@ from typing import Any
 
 import pandas as pd
 import pytest
+import torch
 
 from mule_pattern_learner.config import BUILT_IN_SAMPLER, DEFAULT_CONFIG, RunConfig
 from mule_pattern_learner.contract.clock import cutoff_ms
@@ -37,11 +38,12 @@ from mule_pattern_learner.contract.fingerprints import fingerprint
 from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.contract.sampler_plan import PoolPlan
 from mule_pattern_learner.data.contexts import StreamingContextSource, streaming_source
+from mule_pattern_learner.data.manifest import dataset_id, read_manifest
 from mule_pattern_learner.data.preparation import prepare
 from mule_pattern_learner.inference.predictor import TemporalPredictor
-from mule_pattern_learner.inference.saved_model import ModelCheckpoint, saved_run_config
+from mule_pattern_learner.inference.saved_model import SavedModel, saved_run_config
 from mule_pattern_learner.inference.score_accounts import score
-from mule_pattern_learner.paths import DatasetPaths, RunPaths
+from mule_pattern_learner.paths import DATA_DIR, DatasetPaths, RunPaths
 from mule_pattern_learner.testing.builders import neighbourhood, scope_population
 from mule_pattern_learner.testing.fake_graph import FakeExecutor
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
@@ -123,7 +125,7 @@ COHORT_SCORES = {
 
 @pytest.mark.parametrize("name", sorted(SCORES))
 def test_models_saved_before_the_restructure_score_as_they_did(name: str) -> None:
-    saved = ModelCheckpoint.load(FIXTURES / f"{name}.pt")
+    saved = SavedModel.load(FIXTURES / f"{name}.pt")
     keys = [
         ContextKey("Account", account, 103, cutoff_ms("2025-01-01"), saved.config.scope.id, 3)
         for account in ACCOUNTS
@@ -157,7 +159,7 @@ def test_models_whose_columns_moved_are_refused(tmp_path: Path) -> None:
     recorded = fingerprint(
         {"contract": contract_fingerprint(), "groups": sorted(plan.groups), "architecture": "split"}
     )
-    saved = ModelCheckpoint(tmp_path / "model.pt", {"input_fingerprint": recorded})
+    saved = SavedModel(tmp_path / "model.pt", {"input_fingerprint": recorded})
     with pytest.raises(ValueError, match="input groups"):
         saved.check_inputs(plan)
 
@@ -175,7 +177,7 @@ def fixture_source(config: RunConfig) -> StreamingContextSource:
 def test_the_dataset_prepared_before_the_restructure_scores_as_it_did(tmp_path: Path) -> None:
     dataset = DatasetPaths(tmp_path / "prepared")
     shutil.copytree(FIXTURES / "dataset", dataset.root)
-    saved = ModelCheckpoint.load(FIXTURES / "built_in.pt")
+    saved = SavedModel.load(FIXTURES / "built_in.pt")
     assert saved.config == DEFAULT_CONFIG.with_changes(CHANGES)
     output = tmp_path / "scores.parquet"
     contexts = fixture_source(saved.config)
@@ -206,9 +208,31 @@ def test_the_same_settings_prepare_the_dataset_of_the_old_code(tmp_path: Path) -
         (dataset.observed_labels, fixture.observed_labels),
     ):
         pd.testing.assert_frame_equal(pd.read_parquet(have), pd.read_parquet(want))
-    # And a new model trains on it.
-    result = train(config, dataset, RunPaths(tmp_path / "run"), contexts=fixture_source(config))
+    # And a new model trains on it, which names the dataset by its dataset id.
+    run = RunPaths(tmp_path / "run")
+    result = train(config, dataset, run, contexts=fixture_source(config))
     assert result["status"] == "complete"
+    saved = SavedModel.load(run.model)
+    assert saved.payload["format"] == SavedModel.FORMAT == 1
+    recorded = read_manifest(dataset)["source"]["dataset_id"]
+    assert saved.dataset_id == recorded == dataset_id(SOURCE, config) == result["dataset_id"]
+    assert saved.dataset(tmp_path) == DatasetPaths.of(recorded, tmp_path)
+    assert saved.dataset() == DatasetPaths.of(recorded, DATA_DIR)
+    assert "dataset" not in saved.payload and "training_protocol" not in saved.payload
+
+
+def test_a_model_of_another_format_is_refused_and_old_ones_keep_their_directory(
+    tmp_path: Path,
+) -> None:
+    old = SavedModel.load(FIXTURES / "built_in.pt")
+    assert "format" not in old.payload and old.dataset_id is None
+    # A model saved before FORMAT 1 recorded its dataset's directory.
+    recorded = old.payload["dataset"]
+    assert old.dataset(tmp_path) == DatasetPaths(Path(recorded))
+    newer = tmp_path / "newer.pt"
+    torch.save({**old.payload, "format": SavedModel.FORMAT + 1}, newer)
+    with pytest.raises(ValueError, match="format 2; this code reads 1"):
+        SavedModel.load(newer)
 
 
 def test_old_configurations_convert_through_the_key_table() -> None:

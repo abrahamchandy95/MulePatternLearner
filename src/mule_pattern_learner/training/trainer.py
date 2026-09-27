@@ -7,10 +7,10 @@ selection state, written every epoch and every ``runtime.checkpoint_every_steps`
 exactly: every epoch schedule is drawn up front from the saved generator state, and
 every step reseeds torch from a stable hash of (seed, epoch, step), so dropout and
 sampler draws never depend on history.
-The sampler backend is resolved once per run and stored in the checkpoint; a
-resume that would sample with another backend is refused unless the sampler section
-names that backend explicitly. Reported REST calls, rejections and batch totals are
-checkpointed too, so they cover every segment of a resumed run.
+The sampler backend is resolved once per run and stored in resume.pt; a resume that
+would sample with another backend is refused unless the sampler section names that
+backend explicitly. Reported database calls, rejections and batch totals are saved
+there too, so they cover every segment of a resumed run.
 
 Roots that TigerGraph rejects are dropped from a batch, but only within
 ``runtime.max_rejected_root_fraction`` (default 0: any rejection fails). A rejected
@@ -38,7 +38,6 @@ from torch import nn
 from ..artifacts import (
     HISTORY_COLUMNS,
     append_history,
-    atomic_write,
     keep_history,
     write_epochs,
     write_json,
@@ -58,6 +57,7 @@ from ..data.observed_labels import label_summary, load_observed_labels, visible_
 from ..data.splits import eligible_mask, marginal_mask, sample_keys
 from ..inference.predictor import accepted_scores, score_batches
 from ..inference.rejections import exceeds_rejection_limit
+from ..inference.saved_model import SavedModel
 from ..metrics import evaluate, select_threshold
 from ..model.build import build_model
 from ..model.loss import NonNegativePULoss
@@ -67,7 +67,7 @@ from ..runtime.progress import emit, recording
 from ..runtime.workers import BatchPrefetcher
 from ..sampling.backend import resolve_backend
 from .averaging import WeightAverage, evaluated_weights
-from .checkpoint import CHECKPOINT_FORMAT, load_resume_state, restore_cuda_rng, run_started
+from .checkpoint import ResumeState, load_resume_state, restore_cuda_rng, run_started
 from .history import LogInterval, Progress, epoch_record, plain
 from .objective import StepLoss, nnpu_objective, nnpu_step
 from .schedule import (
@@ -331,9 +331,8 @@ class _TrainingRun:
     # Checkpoints -------------------------------------------------------------
 
     def save_last(self) -> None:
+        """Write resume.pt: everything a resumed run needs to continue exactly."""
         state: dict[str, Any] = {
-            "format": CHECKPOINT_FORMAT,
-            "config_fingerprint": self.config.fingerprint(),
             "model": self._state_copy(),
             "optimizer": self.optimizer.state_dict(),
             "numpy_rng": self.epoch_rng_state,
@@ -356,7 +355,7 @@ class _TrainingRun:
             # Plain dicts and ints: torch.load(weights_only=True) refuses a Counter.
             "sampler_backend": self.backend,
             "progress_totals": dict(self.progress.totals),
-            "query_calls": self.progress.calls(),
+            "database_calls": self.progress.calls(),
             "rejections": self.progress.rejections(),
             "context_counts": {
                 k: v for k, v in self.progress.contexts().items() if k != "distinct"
@@ -369,15 +368,15 @@ class _TrainingRun:
         if self.device.type == "cuda":
             # The training device only: a resume may see a different number of GPUs.
             state["cuda_rng"] = torch.cuda.get_rng_state(self.device)
-        with atomic_write(self.run.resume) as pending:
-            torch.save(state, pending)
+        ResumeState(state).save(self.run.resume, self.config)
 
-    def restore(self, state: dict[str, Any]) -> None:
+    def restore(self, resumed: ResumeState) -> None:
+        state = resumed.values
         saved = state["sampler_backend"]
         if saved != self.backend:
             if self.sampler.backend != self.backend:
                 raise ValueError(
-                    f"Checkpoint was sampled with the {saved} backend but this host resolves "
+                    f"The run was sampled with the {saved} backend but this host resolves "
                     f"{self.backend}; resume on a matching host, or set sampler.backend = "
                     f'"{self.backend}" to accept a different sampling stream from here on'
                 )
@@ -407,7 +406,7 @@ class _TrainingRun:
         self.best_accepted = None if accepted is None else accepted.numpy()
         self.progress.started -= float(state["elapsed_seconds"])
         self.progress.totals = Counter(state["progress_totals"])
-        self.progress.base_calls = int(state["query_calls"])
+        self.progress.base_calls = int(state["database_calls"])
         self.progress.base_rejections = Counter(state["rejections"])
         self.progress.base_contexts = Counter(state["context_counts"])
         self.store.counts.seen.update(state["context_keys"].tolist())
@@ -416,7 +415,7 @@ class _TrainingRun:
 
     # Phases ------------------------------------------------------------------
 
-    def execute(self, state: dict[str, Any] | None) -> dict[str, Any]:
+    def execute(self, state: ResumeState | None) -> dict[str, Any]:
         self.run.root.mkdir(parents=True, exist_ok=True)
         with recording(self.run.events):
             if state is not None:
@@ -464,7 +463,7 @@ class _TrainingRun:
             max_steps=self.training_config.steps_per_epoch,
         )
         if self.step > len(schedule):
-            raise ValueError("Checkpoint step lies beyond the epoch schedule")
+            raise ValueError("The resume state's step lies beyond the epoch schedule")
         if self.step == 0:
             self.loss_sum = torch.zeros((), device=self.device)
             self.loss_steps = 0
@@ -687,6 +686,7 @@ class _TrainingRun:
             state=self.best_state,
             config=self.config,
             dataset=self.dataset,
+            dataset_id=self.dataset_id,
             threshold=threshold,
             plan=self.plan,
             sampler=self.sampler,
@@ -695,8 +695,7 @@ class _TrainingRun:
             backend=self.backend,
         )
         # Save the selected model before any test context is requested.
-        with atomic_write(self.run.model) as pending:
-            torch.save(payload, pending)
+        SavedModel(self.run.model, payload).save()
         test, rejected_roots["test"] = self._score_test()
         results = {}
         for split, frame in (("validation", validation), ("test", test)):

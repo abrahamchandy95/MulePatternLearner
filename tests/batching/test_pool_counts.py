@@ -29,7 +29,7 @@ from mule_pattern_learner.contract.feature_groups import (
 from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.data.contexts import ContextCounts, StreamingContextSource
 from mule_pattern_learner.data.manifest import dataset_mismatches, dataset_settings
-from mule_pattern_learner.inference.saved_model import ModelCheckpoint
+from mule_pattern_learner.inference.saved_model import SavedModel
 from mule_pattern_learner.model.build import build_model
 from mule_pattern_learner.model.tgat import LiveTGAT
 from mule_pattern_learner.reference import batch_features
@@ -302,7 +302,7 @@ def test_pool_definitions_are_part_of_the_input_fingerprint_only(
             # A model trained with the pool groups is refused once their meaning changes.
             assert PLAN.fingerprint() != plan, name
             assert internal.fingerprint() != first, name
-    saved = ModelCheckpoint(Path("model.pt"), {"input_fingerprint": plan})
+    saved = SavedModel(Path("model.pt"), {"input_fingerprint": plan})
     saved.check_inputs(PLAN)
     monkeypatch.setattr(feature_groups, "PASS_THROUGH_RATIO", (0.8, 1.0))
     with pytest.raises(ValueError, match="pool definitions differ"):

@@ -2,8 +2,8 @@
 
 paths.DatasetPaths and paths.RunPaths say where each file lives; this module says what
 the tables and JSON files of a run hold, and holds the one atomic write and the one
-file digest. model.pt and resume.pt are torch payloads, which the inference and
-training packages define.
+file digest. model.pt and resume.pt are torch payloads, which
+inference.saved_model.SavedModel and training.checkpoint.ResumeState define.
 """
 
 from __future__ import annotations

@@ -14,9 +14,9 @@ import pandas as pd
 from ..artifacts import write_audit_scores, write_json, write_rejected
 from ..contract.bounds import AUDIT_POPULATION, AUDIT_SAMPLE
 from ..contract.clock import cutoff_ms
-from ..inference.saved_model import ModelCheckpoint
+from ..inference.saved_model import SavedModel
 from ..metrics import evaluate, weighted_metrics
-from ..paths import DatasetPaths, RunPaths
+from ..paths import DATA_DIR, DatasetPaths, RunPaths
 from .sample import final_evaluation_sample
 from .truth import TruthReader
 
@@ -27,10 +27,10 @@ if TYPE_CHECKING:
 
 
 def evaluate_predictions(
-    predictions: Path, checkpoint: Path | ModelCheckpoint, truth: TruthReader
+    predictions: Path, checkpoint: Path | SavedModel, truth: TruthReader
 ) -> dict[str, Any]:
     """Apply the frozen checkpoint threshold; never choose an epoch or threshold."""
-    saved = ModelCheckpoint.of(checkpoint)
+    saved = SavedModel.of(checkpoint)
     frame = pd.read_parquet(predictions)
     answer = truth.read()
     if "is_mule" not in answer or not answer.is_mule.isin([-1, 0, 1]).all():
@@ -86,13 +86,13 @@ AUDITED_SPLIT = "test"
 
 
 def audit_inputs(
-    run: RunPaths, dataset: DatasetPaths | None = None
-) -> tuple[ModelCheckpoint, DatasetPaths, dict[str, Any]]:
+    run: RunPaths, dataset: DatasetPaths | None = None, data: Path = DATA_DIR
+) -> tuple[SavedModel, DatasetPaths, dict[str, Any]]:
     """The run's frozen model, its prepared dataset and the dataset's manifest, all checked.
 
     The final audit reads nothing from the graph before these checks pass: an audit
     the run already has, a model with more than one test cutoff and a missing or
-    changed dataset are refused. ``dataset`` defaults to the one the model records.
+    changed dataset are refused. ``dataset`` defaults to the model's own in data.
     """
     from ..data.manifest import load_prepared
 
@@ -100,14 +100,14 @@ def audit_inputs(
     for path in (run.audit_metrics(split), run.audit_scores(split), run.audit_rejected(split)):
         if path.exists():
             raise FileExistsError(path)
-    saved = ModelCheckpoint.load(run.model)
+    saved = SavedModel.load(run.model)
     if len(saved.config.dataset.dates.test) != 1:
         raise ValueError("Final population audit requires one test cutoff")
     if dataset is None:
-        dataset = saved.dataset
+        dataset = saved.dataset(data)
     if dataset is None or not dataset.manifest.exists():
         raise ValueError(
-            "Final audit needs the prepared dataset of this checkpoint for its cutoff clock "
+            "Final audit needs the prepared dataset of this model for its cutoff clock "
             "and hub registry; pass --dataset"
         )
     manifest, _ = load_prepared(dataset)
@@ -138,7 +138,7 @@ def evaluate_final_population(
     (pipeline.evaluate.final_audit).
 
     Accounts TigerGraph rejects are not scored. A rejected test positive, or a
-    rejected fraction of the sample above the checkpoint's
+    rejected fraction of the sample above the model's
     ``runtime.max_rejected_root_fraction`` (default 0), fails the audit before anything is
     written: the weighted metrics would silently describe a censored population.
     Rejected negatives within the limit are listed in audit/test_rejected.txt and
