@@ -7,8 +7,9 @@ printed only when `emit_encodings` is set, every request index gets exactly one 
 per-request failures are status rows, account queries page by account id, and the
 queries that write run with one attempt. `call` and `gsql` run on its connection
 (FakeConnection), which answers SHOW QUERY with the installed text, lists the installed
-endpoints and reports the schema, the vertex counts and the scope headers. The smaller
-fakes answer one query each, as the tests that use them need.
+endpoints and reports the schema, the vertex counts and the scope headers. It is the
+one fake executor. FakeStore and FakeSource stand in for context sources, for the tests
+that need no graph behind them.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from collections.abc import Callable, Iterable, Mapping
 from copy import deepcopy
 import threading
 import time
-from typing import Any
+from typing import Any, Literal
 
 from pyTigerGraph.common.exception import TigerGraphException
 
@@ -46,9 +47,7 @@ from mule_pattern_learner.data.contexts import ContextCounts
 from mule_pattern_learner.paths import GSQL_DIR
 from mule_pattern_learner.testing.builders import (
     context,
-    context_row,
     encode,
-    event,
     fake_context,
     synthetic_row,
 )
@@ -89,6 +88,13 @@ def pooled(messages: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[
     ]
 
 
+def pool_of(params: dict[str, Any]) -> tuple[int, ...]:
+    """The candidate pool a context request asks for: one per hop."""
+    return tuple(
+        int(params[k]) for k in ("per_relation", "k_old", "k_div", "k_assoc", "max_history")
+    )
+
+
 def request_keys(params: dict[str, Any]) -> list[ContextKey]:
     return [
         ContextKey(*args, params["scope_id"], params["visibility_phase"])
@@ -123,6 +129,9 @@ class FakeTigerGraph:
     repository's, except those `stale` names, whose installed text differs; and
     `scope_vertex` says whether the schema has the scope vertex type.
 
+    A context request waits `delay` seconds before it is answered, and `encodings`
+    injects the Fourier faults of context_rows.
+
     Tests change what a query does with two hooks. `before(name, params)` runs before
     each query is answered: it may check the parameters, wait or raise. `answers` maps a
     query name to a function of its parameters that answers it instead, for scripted or
@@ -146,6 +155,8 @@ class FakeTigerGraph:
         counts: dict[str, int] | None = None,
         stale: Iterable[str] = (),
         scope_vertex: bool = True,
+        delay: float = 0.0,
+        encodings: Literal["exact", "perturbed", "omitted"] = "exact",
         before: Callable[[str, dict[str, Any]], None] | None = None,
         answers: Mapping[str, Callable[[dict[str, Any]], list[dict[str, Any]]]] | None = None,
     ) -> None:
@@ -161,6 +172,7 @@ class FakeTigerGraph:
         self.counts = dict(counts) if counts is not None else {"Account": len(self.population)}
         self.stale = frozenset(stale)
         self.scope_vertex = scope_vertex
+        self.delay, self.encodings = delay, encodings
         self.before = before
         self.answers = dict(answers or {})
         self.client = FakeClient(FakeConnection(self))
@@ -168,6 +180,8 @@ class FakeTigerGraph:
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.pools: Counter[tuple[int, ...]] = Counter()
         self.encoded_requests = 0
+        # Context requests being answered now, and the most at once.
+        self.active = self.peak = 0
         self.lock = threading.Lock()
 
     def run(self, name: str, params: dict[str, Any], **options: Any) -> list[dict[str, Any]]:
@@ -219,31 +233,42 @@ class FakeTigerGraph:
         return self.statuses.get(key) or self.statuses.get(key.node_id)
 
     def context_rows(self, params: dict[str, Any]) -> list[dict[str, Any]]:
+        """One row per requested key, answered after `delay` seconds.
+
+        `encodings` "perturbed" shifts one printed Fourier value and "omitted" prints
+        none although they were asked for: the faults the spot checks catch.
+        """
         assert set(params) == CONTEXT_PARAMETERS, set(params) ^ CONTEXT_PARAMETERS
         keys = request_keys(params)
         assert REQUEST_KEYS.holds(len(keys))
-        pool = tuple(
-            int(params[k]) for k in ("per_relation", "k_old", "k_div", "k_assoc", "max_history")
-        )
         emit = bool(params["emit_encodings"] and params["include_time_encoding"])
         with self.lock:
             self.requested.extend(keys)
-            self.pools[pool] += 1
+            self.pools[pool_of(params)] += 1
             self.encoded_requests += int(params["emit_encodings"])
-        rows = []
-        for index, key in enumerate(keys):
-            status = self.status(key)
-            if status is not None:
-                rows.append({"status": status, "request_index": index})
-                continue
-            row = deepcopy(self.rows[key]) if key in self.rows else self.factory(key)
-            row["messages"] = pooled(row["messages"], params)
-            if emit:
-                encode(row)
-            else:
+            self.active += 1
+            self.peak = max(self.peak, self.active)
+        try:
+            time.sleep(self.delay)
+            rows = []
+            for index, key in enumerate(keys):
+                status = self.status(key)
+                if status is not None:
+                    rows.append({"status": status, "request_index": index})
+                    continue
+                row = deepcopy(self.rows[key]) if key in self.rows else self.factory(key)
+                row["messages"] = pooled(row["messages"], params)
                 row["age_encoding"], row["gap_encoding"] = {}, {}
-            rows.append({**row, "request_index": index})
-        return rows
+                if emit and self.encodings != "omitted":
+                    encode(row)
+                if emit and self.encodings == "perturbed" and row["age_encoding"]:
+                    first = next(iter(row["age_encoding"]))
+                    row["age_encoding"][first][3] += 0.01
+                rows.append({**row, "request_index": index})
+            return rows
+        finally:
+            with self.lock:
+                self.active -= 1
 
     def hub_rows(self, params: dict[str, Any]) -> list[dict[str, Any]]:
         assert set(params) == HUB_PARAMETERS, set(params) ^ HUB_PARAMETERS
@@ -366,53 +391,6 @@ class FakeConnection:
     def gsql(self, text: str) -> str:
         assert "SHOW QUERY" in text, "the fake graph runs no GSQL that writes"
         return self.installed().get(text.rsplit(" ", 1)[1], "Query not found")
-
-
-class ContextServer:
-    """Fake context query endpoint with per-request statuses."""
-
-    def __init__(
-        self,
-        statuses: dict[ContextKey, str] | None = None,
-        *,
-        delay: float = 0.0,
-        corrupt: bool = False,
-        omit_encodings: bool = False,
-    ) -> None:
-        self.statuses = statuses or {}
-        self.delay, self.corrupt, self.omit_encodings = delay, corrupt, omit_encodings
-        self.calls: list[dict[str, Any]] = []
-        self.requested: Counter[tuple[int, ContextKey]] = Counter()
-        self.lock = threading.Lock()
-        self.active = self.peak = 0
-
-    def run(self, name: str, params: dict[str, Any], **_: Any) -> list[dict[str, Any]]:
-        assert name == CONTEXT_QUERY
-        hop = 1 if params["k_assoc"] else 2
-        keys = request_keys(params)
-        with self.lock:
-            self.calls.append(params)
-            self.requested.update((hop, key) for key in keys)
-            self.active += 1
-            self.peak = max(self.peak, self.active)
-        try:
-            time.sleep(self.delay)
-            emit = params["emit_encodings"] and params["include_time_encoding"]
-            rows = []
-            for index, key in enumerate(keys):
-                if key in self.statuses:
-                    rows.append({"status": self.statuses[key], "request_index": index})
-                    continue
-                messages = [event(key.cutoff_seq - 1, key), event(key.cutoff_seq - 3, key, gap=0)]
-                row = context_row(key, messages, encodings=emit and not self.omit_encodings)
-                if emit and self.corrupt:
-                    first = next(iter(row["age_encoding"]))
-                    row["age_encoding"][first][3] += 0.01
-                rows.append({**row, "request_index": index})
-            return rows
-        finally:
-            with self.lock:
-                self.active -= 1
 
 
 LINKED_COUNTS = {
