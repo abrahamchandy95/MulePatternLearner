@@ -9,12 +9,12 @@ import numpy as np
 import pytest
 import torch
 
-from mule_pattern_learner.temporal.live import batching
+from mule_pattern_learner.temporal.live import batch_reference, batching
 from mule_pattern_learner.temporal.live import contract as contract_module
+from mule_pattern_learner.temporal.live.batch_reference import node_features
 from mule_pattern_learner.temporal.live.batching import (
     child_key,
     make_live_batch,
-    node_features,
     node_matrix,
     pool_activity,
 )
@@ -314,6 +314,7 @@ def test_plans_without_pool_groups_are_unaffected(
         raise AssertionError("pool counts computed for a plan without a pool group")
 
     monkeypatch.setattr(batching, "pool_activity", refuse)
+    monkeypatch.setattr(batch_reference, "pool_activity", refuse)
     row = context(ROOT, POOL)
     np.testing.assert_allclose(node_features(row, plan), node_matrix([row], plan)[0])
     if architecture == "split":

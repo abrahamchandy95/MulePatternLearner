@@ -18,13 +18,12 @@ import torch
 
 from mule_pattern_learner.temporal.encoding import fourier64, fourier64_torch
 from mule_pattern_learner.temporal.live import batching
-from mule_pattern_learner.temporal.live.batching import (
+from mule_pattern_learner.temporal.live.batch_reference import (
     base_features,
-    child_key,
     edge_features,
-    make_live_batch,
     node_features,
 )
+from mule_pattern_learner.temporal.live.batching import child_key, make_live_batch
 from mule_pattern_learner.temporal.live.contract import (
     ASSOCIATIONS,
     CHANNELS,

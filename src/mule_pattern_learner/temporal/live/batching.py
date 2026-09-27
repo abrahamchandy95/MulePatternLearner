@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 import numpy as np
 import torch
 
-from ..encoding import fourier64, fourier64_torch
+from ..encoding import fourier64_torch
 from .contract import (
     CHANNELS,
     CLIENT_GROUPS,
@@ -81,12 +81,6 @@ def child_key(message: dict[str, Any], parent: ContextKey | None = None) -> Cont
         parent.scope_id if parent else "",
         parent.visibility_phase if parent else 3,
     )
-
-
-def _transform(name: str, value: float) -> float:
-    if name in _IDENTITY or "_fourier_" in name:
-        return value
-    return float(np.log1p(value))
 
 
 def _log_columns(names: Sequence[str]) -> np.ndarray:
@@ -155,51 +149,6 @@ def _pooled(plan: FeaturePlan) -> bool:
     return any(group in plan.groups for group in POOL_GROUPS)
 
 
-def node_features(context: dict[str, Any], plan: FeaturePlan = FeaturePlan()) -> np.ndarray:
-    values = {**context["features"], "type_" + context["node_type"]: 1.0}
-    unexpected = set(values) - _NODE_NAMES
-    if unexpected:
-        raise ValueError(f"Unrecognized feature fields: {sorted(unexpected)}")
-    if _pooled(plan):
-        values |= pool_activity(context)
-    return np.asarray([_transform(n, values.get(n, 0)) for n in plan.node_names], dtype=np.float32)
-
-
-def base_features(
-    message: dict[str, Any], plan: FeaturePlan = FeaturePlan(), *, history_withheld: bool = False
-) -> np.ndarray:
-    """Outermost peer features known from the message alone (scalar reference)."""
-    key = child_key(message)
-    first_ms = int(message["peer_first_ms"])
-    if first_ms <= 0 or first_ms > key.cutoff_ms:
-        raise ValueError("Peer metadata is not visible at its historical cutoff")
-    values = {
-        "type_" + key.node_type: 1,
-        "is_external": message["peer_external"],
-        "is_deposit": message["peer_deposit"],
-        "age_days": (key.cutoff_ms - first_ms) / DAY_MS,
-        "history_withheld": int(history_withheld),
-    }
-    return np.asarray(
-        [_transform(n, values.get(n, 0)) for n in plan.names("node")], dtype=np.float32
-    )
-
-
-def edge_features(message: dict[str, Any], plan: FeaturePlan = FeaturePlan()) -> np.ndarray:
-    """Scalar reference for one message; Fourier features come from age_ms/gap_ms."""
-    values = {**message, "is_event": bool(message["event_id"])}
-    if values["is_event"] and "time_encoding" in plan.groups:
-        age = fourier64(np.array([message["age_ms"]], dtype=np.int64))[0]
-        values.update({f"age_fourier_{i}": v for i, v in enumerate(age)})
-        if message["gap_present"]:
-            gap = fourier64(np.array([message["gap_ms"]], dtype=np.int64))[0]
-            values.update({f"gap_fourier_{i}": v for i, v in enumerate(gap)})
-    missing = [n for n in plan.edge_names if n not in values and "_fourier_" not in n]
-    if missing:
-        raise ValueError(f"Message lacks required fields: {missing}")
-    return np.asarray([_transform(n, values.get(n, 0)) for n in plan.edge_names], dtype=np.float32)
-
-
 # Vectorized assembly -------------------------------------------------------------
 
 
@@ -215,7 +164,7 @@ def _column(items: Sequence[dict[str, Any]], name: str, dtype: Any = np.float64)
 def node_matrix(
     rows: Sequence[dict[str, Any]], plan: FeaturePlan, *, pooled: int | None = None
 ) -> np.ndarray:
-    """`node_features` for many contexts, by column.
+    """The node and summary columns of many contexts (batch_reference.node_features).
 
     Only the first ``pooled`` rows (all when None) get the client-computed pool counts;
     the rest keep zeros there. Split batches pass their roots, which lead the rows,
@@ -248,7 +197,7 @@ def node_matrix(
 def base_matrix(
     messages: Sequence[dict[str, Any]], withheld: np.ndarray, plan: FeaturePlan
 ) -> np.ndarray:
-    """`base_features` for many second-hop messages, by column."""
+    """The base columns of many second-hop messages (batch_reference.base_features)."""
     names = plan.names("node")
     cutoff = _column(messages, "event_ts_ms", np.int64)
     first = _column(messages, "peer_first_ms", np.int64)
