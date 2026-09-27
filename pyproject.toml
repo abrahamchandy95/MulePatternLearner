@@ -96,11 +96,9 @@ force-sort-within-sections = true
 root_package = "mule_pattern_learner"
 include_external_packages = true
 
-# The contracts of the Layering rules in docs/restructure-plan.md. Each ignored import is
-# one the layered tree still has, and its comment names the later step that removes it; an
-# ignored import that no longer exists fails the check, so each removal deletes its line.
-# Packages that do not exist yet (reporting, diagnostics) are optional layers, or match no
-# module, until they are created.
+# The contracts of the Layering rules in docs/restructure-plan.md. Every contract holds
+# without exceptions: none of them ignores an import. Packages that do not exist yet
+# (reporting, diagnostics) are optional layers, or match no module, until they are created.
 
 [[tool.importlinter.contracts]]
 name = "Layers run one way"
@@ -118,11 +116,6 @@ layers = [
     "artifacts | metrics",
     "config | paths",
     "contract",
-]
-ignore_imports = [
-    # run_config reads an overrides file with paths.load_config; removed with run_config and the
-    # loaders in the typed configuration step
-    "mule_pattern_learner.config -> mule_pattern_learner.paths",
 ]
 
 [[tool.importlinter.contracts]]
