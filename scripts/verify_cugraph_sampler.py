@@ -28,11 +28,6 @@ reported, like training does.
 
 from __future__ import annotations
 
-import os
-
-# cuBLAS needs a fixed workspace for deterministic algorithms; set before CUDA starts.
-os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
-
 import argparse
 from collections.abc import Callable
 from dataclasses import replace
@@ -47,6 +42,7 @@ import torch
 
 from mule_pattern_learner.contract.graph_schema import RELATIONS, ContextKey
 from mule_pattern_learner.contract.sampler_plan import PoolPlan, SamplerPlan
+from mule_pattern_learner.runtime.device import reserve_deterministic_cublas
 from mule_pattern_learner.sampling.backend import select_resampled
 from mule_pattern_learner.sampling.candidates import (
     NUM_RELATIONS,
@@ -388,6 +384,8 @@ def live(config_path: Path | None, roots: int) -> None:
 
 
 def main() -> int:
+    # Before any CUDA work: deterministic cuBLAS GEMMs need a fixed workspace.
+    reserve_deterministic_cublas()
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )

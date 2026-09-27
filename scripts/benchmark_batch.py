@@ -15,47 +15,46 @@ verify_frozen_source first.
 
 from __future__ import annotations
 
-import os
+import argparse
+import json
+from pathlib import Path
+import resource
+import sys
+import time
+from typing import Any
 
-# Deterministic cuBLAS GEMMs need this before CUDA initializes; a user value wins.
-os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+import numpy as np
+import torch
 
-import argparse  # noqa: E402
-import json  # noqa: E402
-from pathlib import Path  # noqa: E402
-import resource  # noqa: E402
-import sys  # noqa: E402
-import time  # noqa: E402
-from typing import Any  # noqa: E402
-
-import numpy as np  # noqa: E402
-import torch  # noqa: E402
-
-from mule_pattern_learner.batching.assemble import (  # noqa: E402
+from mule_pattern_learner.batching.assemble import (
     batch_device,
     build_root_batch,
     tensor_digests,
     to_device,
 )
-from mule_pattern_learner.config import run_config  # noqa: E402
-from mule_pattern_learner.contract.feature_groups import FeaturePlan  # noqa: E402
-from mule_pattern_learner.contract.sampler_plan import SamplerPlan  # noqa: E402
-from mule_pattern_learner.data.contexts import StreamingContextSource  # noqa: E402
-from mule_pattern_learner.data.hub_registry import load_hub_registry  # noqa: E402
-from mule_pattern_learner.data.manifest import load_prepared, preparation_mismatches  # noqa: E402
-from mule_pattern_learner.data.observed_labels import load_observed_labels  # noqa: E402
-from mule_pattern_learner.data.splits import sample_keys  # noqa: E402
-from mule_pattern_learner.model.build import build_model  # noqa: E402
-from mule_pattern_learner.model.loss import NonNegativePULoss  # noqa: E402
-from mule_pattern_learner.paths import dataset_path  # noqa: E402
-from mule_pattern_learner.pipeline.connect import open_context_source  # noqa: E402
-from mule_pattern_learner.pipeline.train import prepared_config  # noqa: E402
-from mule_pattern_learner.runtime.device import choose_device, torch_runtime  # noqa: E402
-from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher  # noqa: E402
-from mule_pattern_learner.tigergraph.executor import TigerGraphExecutor  # noqa: E402
-from mule_pattern_learner.training.objective import nnpu_objective, nnpu_step  # noqa: E402
-from mule_pattern_learner.training.schedule import epoch_schedule  # noqa: E402
-from mule_pattern_learner.training.trainer import (  # noqa: E402
+from mule_pattern_learner.config import run_config
+from mule_pattern_learner.contract.feature_groups import FeaturePlan
+from mule_pattern_learner.contract.sampler_plan import SamplerPlan
+from mule_pattern_learner.data.contexts import StreamingContextSource
+from mule_pattern_learner.data.hub_registry import load_hub_registry
+from mule_pattern_learner.data.manifest import load_prepared, preparation_mismatches
+from mule_pattern_learner.data.observed_labels import load_observed_labels
+from mule_pattern_learner.data.splits import sample_keys
+from mule_pattern_learner.model.build import build_model
+from mule_pattern_learner.model.loss import NonNegativePULoss
+from mule_pattern_learner.paths import dataset_path
+from mule_pattern_learner.pipeline.connect import open_context_source
+from mule_pattern_learner.pipeline.train import prepared_config
+from mule_pattern_learner.runtime.device import (
+    choose_device,
+    reserve_deterministic_cublas,
+    torch_runtime,
+)
+from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
+from mule_pattern_learner.tigergraph.executor import TigerGraphExecutor
+from mule_pattern_learner.training.objective import nnpu_objective, nnpu_step
+from mule_pattern_learner.training.schedule import epoch_schedule
+from mule_pattern_learner.training.trainer import (
     RunSettings,
     build_optimizer,
     training_samples,
@@ -72,6 +71,8 @@ def rest_calls(source: Any) -> tuple[int, dict[str, int]]:
 
 
 def main() -> None:
+    # Before any CUDA work: deterministic cuBLAS GEMMs need a fixed workspace.
+    reserve_deterministic_cublas()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, help="Optional overrides of the built-in run")
     parser.add_argument("--dataset", type=Path, help="prepared dataset (default: from config)")

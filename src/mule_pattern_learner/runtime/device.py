@@ -5,7 +5,8 @@ import os
 import torch
 
 # cuBLAS needs a fixed workspace for deterministic GEMMs. CUDA reads it when the
-# runtime initializes, so entry points set it before any CUDA work starts.
+# runtime initializes, so every entry point (the CLI and each script that loads torch)
+# calls reserve_deterministic_cublas first; importing a module never sets it.
 CUBLAS_WORKSPACE = ":4096:8"
 
 

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import math
+import os
 from pathlib import Path
+import subprocess
 import sys
 from types import ModuleType, SimpleNamespace
 from typing import Any
@@ -57,6 +60,66 @@ def load(name: str) -> ModuleType:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+# The scripts that load torch; each reserves the cuBLAS workspace before anything else.
+TORCH_SCRIPTS = (
+    "benchmark_batch",
+    "feature_experiments",
+    "run_experiments",
+    "verify_cugraph_sampler",
+    "verify_strict_isolation",
+)
+
+
+def environment_at_import(path: Path) -> list[int]:
+    """Lines outside every function and class that read or change os.environ."""
+    body = ast.parse(path.read_text()).body
+    return [
+        node.lineno
+        for statement in body
+        if not isinstance(statement, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)
+        for node in ast.walk(statement)
+        if isinstance(node, ast.Attribute)
+        and node.attr == "environ"
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "os"
+    ]
+
+
+def test_no_module_or_script_reads_the_environment_when_imported() -> None:
+    package = REPOSITORY_ROOT / "src/mule_pattern_learner"
+    modules = [*package.rglob("*.py"), *SCRIPTS.glob("*.py")]
+    assert {str(path): environment_at_import(path) for path in modules} == {
+        str(path): [] for path in modules
+    }
+
+
+def test_entry_points_reserve_the_cublas_workspace_first() -> None:
+    cli = REPOSITORY_ROOT / "src/mule_pattern_learner/cli.py"
+    for path in (cli, *(SCRIPTS / f"{name}.py" for name in TORCH_SCRIPTS)):
+        (main,) = (
+            node
+            for node in ast.parse(path.read_text()).body
+            if isinstance(node, ast.FunctionDef) and node.name == "main"
+        )
+        first = main.body[0]
+        assert isinstance(first, ast.Expr) and isinstance(first.value, ast.Call), path.name
+        assert ast.unparse(first.value.func) == "reserve_deterministic_cublas", path.name
+    # The other scripts never load torch, so they have no CUDA work to prepare for.
+    others = [str(SCRIPTS / f"{name}.py") for name in LIVE_SCRIPTS if name not in TORCH_SCRIPTS]
+    code = (
+        "import importlib.util, sys\n"
+        f"for path in {others!r}:\n"
+        "    spec = importlib.util.spec_from_file_location('script', path)\n"
+        "    spec.loader.exec_module(importlib.util.module_from_spec(spec))\n"
+        "print('torch' in sys.modules)\n"
+    )
+    env = {**os.environ, "PYTHONPATH": str(REPOSITORY_ROOT / "src")}
+    result = subprocess.run(
+        [sys.executable, "-c", code], env=env, capture_output=True, text=True, check=True
+    )
+    assert result.stdout.strip() == "False"
 
 
 @pytest.mark.parametrize("name", LIVE_SCRIPTS)
