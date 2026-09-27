@@ -29,7 +29,7 @@ from ..contract.graph_schema import ContextKey
 from ..data.contexts import ContextReader, check_coverage
 from ..data.hub_registry import HubRegistry, warn_hub_stubs
 from ..model.build import Model, build_model, probabilities_from_logits
-from ..runtime.device import choose_device
+from ..runtime.device import choose_device, torch_runtime
 from ..runtime.workers import BatchPrefetcher
 from .saved_model import SavedModel
 
@@ -114,14 +114,16 @@ class Predictor:
     saved model's inputs with its candidate pools (the pipeline opens it for the model's
     configuration). ``hubs`` must be the registry for the scored cutoff (training's
     dataset registry or ``query_hubs``); without it no child is stubbed and hub children
-    are masked out when TigerGraph rejects them. The caller closes ``contexts``.
+    are masked out when TigerGraph rejects them. The caller closes ``contexts``. The
+    device is the saved configuration's ``runtime.device`` unless ``device`` names one,
+    and scoring runs inside ``runtime()``, the saved determinism and CPU threads.
     """
 
     def __init__(
         self,
         model: Path | SavedModel,
         contexts: ContextReader,
-        device: str = "auto",
+        device: str | None = None,
         *,
         hubs: HubRegistry | None = None,
     ) -> None:
@@ -138,7 +140,7 @@ class Predictor:
         warn_hub_stubs(self.hubs, self.plan)
         # Batch statistics of everything streamed (stub and rejected children).
         self.totals: Counter[str] = Counter()
-        self.device = choose_device(device)
+        self.device = choose_device(config.runtime.device if device is None else device)
         self.batch_device = batch_device(self.device)
         # The fan-outs training sampled, so scoring samples training's neighbourhoods.
         self.fanouts = self.sampler.fanouts
@@ -151,7 +153,13 @@ class Predictor:
         self.model = build_model(config.model, self.plan, self.fanouts[0]).to(self.device)
         self.model.load_state_dict(saved.state_dict)
         self.model.eval()
-        torch.set_num_threads(config.runtime.threads)
+
+    def runtime(self) -> contextlib.AbstractContextManager[None]:
+        """The saved determinism and CPU threads for the block that scores, then restored."""
+        runtime = self.config.runtime
+        return torch_runtime(
+            self.device, deterministic=runtime.deterministic, threads=runtime.threads
+        )
 
     def prepare(self, keys: list[ContextKey]) -> RootBatch:
         """Fetch and assemble one batch; safe to call from prefetch worker threads."""

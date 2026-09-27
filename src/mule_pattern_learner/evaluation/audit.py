@@ -151,10 +151,11 @@ def audit(
         predictor = Predictor(saved, contexts, hubs=registry)
         size = predictor.batch_size
         # The prepared test keys: the dataset's cutoff clock, scope and phase 3.
-        frames, rejected = predictor.score_keys(
-            sample_keys(selected.iloc[start : start + size], date, manifest)
-            for start in range(0, len(selected), size)
-        )
+        with predictor.runtime():
+            frames, rejected = predictor.score_keys(
+                sample_keys(selected.iloc[start : start + size], date, manifest)
+                for start in range(0, len(selected), size)
+            )
         failed = False
     finally:
         close_source(contexts, failed=failed)

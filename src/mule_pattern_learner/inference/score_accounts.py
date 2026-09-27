@@ -104,7 +104,7 @@ def score_new_accounts(
             predictor.hubs = query_hubs(hub_reader, [seq], predictor.sampler)
             warn_hub_stubs(predictor.hubs, predictor.plan)
         # The scores replace output first, then the rejected IDs (if any) their file.
-        with atomic_write(rejected_output) as rejected_pending:
+        with predictor.runtime(), atomic_write(rejected_output) as rejected_pending:
             with (
                 atomic_write(output) as pending,
                 pq.ParquetWriter(pending, SCORE_SCHEMA) as writer,

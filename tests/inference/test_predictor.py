@@ -44,6 +44,30 @@ def test_embeddings_leave_the_logits_unchanged_and_rejected_roots_are_listed(
     assert [f.account_id.tolist() for f in frames] == [["A0000", "A0001"], ["A0003", "A0004"]]
 
 
+def test_scoring_uses_the_saved_runtime_and_restores_the_global_torch_state(
+    tmp_path: Path,
+) -> None:
+    config = example_config(runtime={"device": "cpu", "threads": 1, "deterministic": True})
+    path = saved_model(tmp_path / "model.pt", config)
+    contexts = context_source(FakeTigerGraph(factory=neighbourhood), config)
+    original, threads = torch.get_num_threads(), 3
+    torch.set_num_threads(threads)
+    torch.use_deterministic_algorithms(False)
+    try:
+        predictor = Predictor(path, contexts)
+        assert predictor.device == torch.device("cpu")
+        # Building the predictor changes nothing; scoring runs with the saved settings.
+        assert torch.get_num_threads() == threads
+        with predictor.runtime():
+            assert torch.get_num_threads() == 1 and torch.are_deterministic_algorithms_enabled()
+        assert torch.get_num_threads() == threads
+        assert not torch.are_deterministic_algorithms_enabled()
+    finally:
+        contexts.close()
+        torch.set_num_threads(original)
+        torch.use_deterministic_algorithms(False)
+
+
 def test_accepted_scores_leave_rejected_roots_empty_and_refuse_non_finite_ones() -> None:
     scores, mask = accepted_scores(
         [torch.tensor([0.0]), torch.tensor([2.0])],
