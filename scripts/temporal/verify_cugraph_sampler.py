@@ -407,7 +407,6 @@ def main() -> int:
             devices=torch.cuda.current_device(),
         )
     sampler = SamplerPlan(
-        "resample",
         roots=PoolPlan(recent=8, older=4, distinct=4, associations=2),
         relation_fanouts=(8, 4),
         association_fanout=1,
