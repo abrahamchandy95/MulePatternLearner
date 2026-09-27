@@ -705,8 +705,7 @@ cohort; `--dataset <run>_run/prepared` reuses another run's.
 | `TigerGraph rejected ... training roots so far` or `validation: TigerGraph rejected ... roots` | Roots failed a per-request check beyond `max_rejected_root_fraction`, or an observed positive was rejected; the statuses name why (for example `history_capacity_exceeded`) |
 | cuGraph probe warning | pylibcugraph or the GPU failed the probe; training continues with the torch sampler; run `verify_cugraph_sampler.py` |
 | Retries in the log | TigerGraph was briefly unavailable or resuming; the run waits up to `max_outage_s` |
-| `Resumed configuration differs from the run: ['positive_weight']` (or `['weight_average_decay']`) | The run started before the built-in `positive_weight` became `"balanced"` and `weight_average_decay` became 0.99; finish it with `--config` setting `positive_weight = "prior"` and `weight_average_decay = 0`, or train into a new `--output` |
-| `Resumed configuration differs from the run: ['feature_groups', 'slot_sum']` (or one of them) | The run started before the pool groups joined the built-in `feature_groups` and `slot_sum` became true; finish it with `--config` restoring each named key (the six earlier groups, `slot_sum = false`), or train into a new `--output` |
+| `Resumed configuration differs from the run: ['context_storage', 'evaluation_protocol', 'label_policy', 'sampler', 'variant']` (possibly with more keys) | The run started before the layered restructure, and its saved configuration holds keys that no longer exist, so it cannot resume; train into a new `--output` |
 | `Checkpoint input groups or pool definitions differ from its configuration` | The checkpoint was trained with a pool group whose definition (amount bands, pass-through thresholds, `POOL_ACTIVITY_VERSION`) has changed since; score with a model trained under the current definition |
 
 ## Limitations and future work
