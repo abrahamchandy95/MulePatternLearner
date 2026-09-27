@@ -8,6 +8,7 @@ from typing import Any
 from ..evaluation.audit import audit, audit_inputs
 from ..evaluation.truth import TruthReader
 from ..paths import DATA_DIR, RunPaths
+from ..runtime.progress import recording
 from ..tigergraph.context_query import TigerGraphContextFetcher
 from ..tigergraph.oracle import TigerGraphTruth
 from ..tigergraph.provenance import verify_frozen_source
@@ -23,15 +24,17 @@ def evaluate_run(
     The dataset is the model's own in data. The connection has the model's retry
     budgets, and its source must still be the frozen one the dataset was prepared from.
     Truth is the graph's oracle truth unless ``truth`` supplies another reader (the
-    tests' ParquetTruth). The audit goes into the run's audit/ files.
+    tests' ParquetTruth). The audit goes into the run's audit/ files, and the lines it
+    prints are appended to the run's events.jsonl.
     """
     saved, dataset, manifest = audit_inputs(run, None, data)
-    executor = connect(saved.config.transport)
-    verify_frozen_source(executor, manifest)
-    return audit(
-        run,
-        truth if truth is not None else TigerGraphTruth(executor),
-        scope=TigerGraphScope(executor),
-        fetcher=TigerGraphContextFetcher(executor),
-        dataset=dataset,
-    )
+    with recording(run.events):
+        executor = connect(saved.config.transport)
+        verify_frozen_source(executor, manifest)
+        return audit(
+            run,
+            truth if truth is not None else TigerGraphTruth(executor),
+            scope=TigerGraphScope(executor),
+            fetcher=TigerGraphContextFetcher(executor),
+            dataset=dataset,
+        )

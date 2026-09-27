@@ -168,3 +168,7 @@ def test_train_then_audit_write_exactly_the_files_of_the_run_and_dataset_tables(
     assert audit["rejected_accounts"] == 0
     assert files(output.root) == trained | {"audit/test.json", "audit/test.parquet"}
     assert files(data) == prepared
+    # The audit appends its line to the run's events.jsonl, after training's.
+    recorded = read_events(output.events)
+    assert [event["event"] for event in recorded] == [*events, "audit"]
+    assert recorded[-1]["split"] == "test" and recorded[-1]["rejected_accounts"] == 0
