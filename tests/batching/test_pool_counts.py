@@ -12,7 +12,7 @@ import pytest
 import torch
 
 from mule_pattern_learner.batching import assemble, features
-from mule_pattern_learner.batching.assemble import child_key, build_batch
+from mule_pattern_learner.batching.assemble import build_batch, child_key
 from mule_pattern_learner.batching.features import node_matrix
 from mule_pattern_learner.batching.pool_counts import pool_activity
 from mule_pattern_learner.config import DEFAULT_CONFIG

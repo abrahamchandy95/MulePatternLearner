@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from ..evaluation.audit import audit_inputs, audit, evaluate_predictions
+from ..evaluation.audit import audit, audit_inputs, evaluate_predictions
 from ..evaluation.truth import ParquetTruth, TruthReader
 from ..inference.saved_model import SavedModel
 from ..paths import DATA_DIR, DatasetPaths, RunPaths

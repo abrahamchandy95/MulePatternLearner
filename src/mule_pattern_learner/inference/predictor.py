@@ -26,7 +26,7 @@ from ..batching.assemble import (
 from ..batching.limits import BatchLimits
 from ..contract.bounds import BATCH_ROOTS
 from ..contract.graph_schema import ContextKey
-from ..data.contexts import ContextReader, check_coverage, build_context_source
+from ..data.contexts import ContextReader, build_context_source, check_coverage
 from ..data.hub_registry import HubRegistry, warn_hub_stubs
 from ..data.ports import ContextFetcher
 from ..model.build import Model, build_model, probabilities_from_logits

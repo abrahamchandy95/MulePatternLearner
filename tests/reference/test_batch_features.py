@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 import torch
 
-from mule_pattern_learner.batching.assemble import child_key, build_batch
+from mule_pattern_learner.batching.assemble import build_batch, child_key
 from mule_pattern_learner.batching.limits import BatchIndex
 from mule_pattern_learner.contract.feature_groups import (
     DEFAULT_GROUPS,
