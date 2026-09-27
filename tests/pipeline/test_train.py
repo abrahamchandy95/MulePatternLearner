@@ -68,6 +68,10 @@ def test_minimal_command_and_run_defaults(tmp_path: Path) -> None:
         assert prep.call_count == 1
         train_run(output, data=tmp_path / "data", resume=True)
         assert fit.call_args.kwargs["resume"] is True
+        # Only the built-in run's settings may default to its directory.
+        with pytest.raises(ValueError, match="Only the built-in run trains into"):
+            train_run(config=changed, data=tmp_path / "data")
+        assert prep.call_count == 2
 
 
 # The source id of the fake graph's data, and its accounts.
