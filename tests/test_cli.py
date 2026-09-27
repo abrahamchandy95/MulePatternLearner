@@ -38,29 +38,29 @@ def test_mule_and_mule_temporal_run_the_same_main() -> None:
     assert scripts["mule"] == scripts["mule-temporal"] == "mule_pattern_learner.cli:main"
 
 
-def test_cli_sets_the_cublas_workspace_at_import_and_keeps_user_values() -> None:
+def test_cli_reserves_the_cublas_workspace_first_and_keeps_user_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Importing the command line leaves the environment alone.
     code = (
-        "import os, sys\n"
-        "import mule_pattern_learner.cli\n"
-        "print(os.environ['CUBLAS_WORKSPACE_CONFIG'])\n"
+        "import os\nimport mule_pattern_learner.cli\nprint('CUBLAS_WORKSPACE_CONFIG' in os.environ)"
     )
     env = {k: v for k, v in os.environ.items() if k != "CUBLAS_WORKSPACE_CONFIG"}
     env["PYTHONPATH"] = str(REPOSITORY_ROOT / "src")
     result = subprocess.run(
         [sys.executable, "-c", code], env=env, capture_output=True, text=True, check=True
     )
-    assert result.stdout.strip() == ":4096:8"
-    result = subprocess.run(
-        [sys.executable, "-c", code],
-        env={**env, "CUBLAS_WORKSPACE_CONFIG": ":16:8"},
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    assert result.stdout.strip() == ":16:8"
-    # The assignment precedes every import that can load torch.
-    source = (REPOSITORY_ROOT / "src/mule_pattern_learner/cli.py").read_text()
-    assert source.index("CUBLAS_WORKSPACE_CONFIG") < source.index("\nimport argparse")
+    assert result.stdout.strip() == "False"
+    # main reserves it before it parses anything, and an explicit user value wins.
+    monkeypatch.setattr(sys, "argv", ["mule", "--help"])
+    for value, expected in ((None, ":4096:8"), (":16:8", ":16:8")):
+        if value is None:
+            monkeypatch.delenv("CUBLAS_WORKSPACE_CONFIG", raising=False)
+        else:
+            monkeypatch.setenv("CUBLAS_WORKSPACE_CONFIG", value)
+        with pytest.raises(SystemExit):
+            cli.main()
+        assert os.environ["CUBLAS_WORKSPACE_CONFIG"] == expected
 
 
 def test_cli_needs_no_config_truth_or_dataset() -> None:

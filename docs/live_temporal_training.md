@@ -494,8 +494,8 @@ Ctrl-C the prefetcher cancels queued builds and re-raises at once, without waiti
 for builds in progress, and the context source is closed without waiting for
 requests in flight. `deterministic = true` enables deterministic algorithms
 (warn-only on CUDA), `"strict"` makes CUDA gaps fail, and `false` turns them off;
-the CLI sets `CUBLAS_WORKSPACE_CONFIG=:4096:8` before torch loads unless it is
-already set.
+the CLI sets `CUBLAS_WORKSPACE_CONFIG=:4096:8` when it starts, before any CUDA work,
+unless it is already set.
 
 Qualify one configured batch without saving a model. The report has REST calls,
 retries, seconds, stub and rejected counts, the sampler backend and a digest of every

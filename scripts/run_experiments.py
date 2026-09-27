@@ -20,6 +20,7 @@ from mule_pattern_learner.data.manifest import read_manifest
 from mule_pattern_learner.inference.saved_model import ModelCheckpoint
 from mule_pattern_learner.pipeline.connect import open_context_source
 from mule_pattern_learner.pipeline.train import prepared_config
+from mule_pattern_learner.runtime.device import reserve_deterministic_cublas
 from mule_pattern_learner.training.summary import TRAINING_PROTOCOL
 from mule_pattern_learner.training.trainer import train
 
@@ -36,6 +37,8 @@ def variant_changes(base: dict[str, Any], variant: str) -> dict[str, Any]:
 
 
 def main() -> None:
+    # Before any CUDA work: deterministic cuBLAS GEMMs need a fixed workspace.
+    reserve_deterministic_cublas()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, help="Optional overrides of the built-in run")
     parser.add_argument("--dataset", type=Path, required=True)

@@ -7,27 +7,22 @@ creates the scope and reveals the known mules. Every flag is optional.
 
 from __future__ import annotations
 
-import os
+import argparse
+import json
+from pathlib import Path
+from typing import Any
 
-# Deterministic cuBLAS GEMMs need a fixed workspace, read once when CUDA initializes,
-# so it is set before anything imports torch. An explicit user value wins.
-os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
-
-import argparse  # noqa: E402
-import json  # noqa: E402
-from pathlib import Path  # noqa: E402
-from typing import Any  # noqa: E402
-
-from .config import run_config  # noqa: E402
-from .inference.saved_model import ModelCheckpoint  # noqa: E402
-from .inference.score_accounts import read_account_ids, score  # noqa: E402
-from .paths import DEFAULT_MODEL, dataset_path  # noqa: E402
-from .pipeline.connect import connect, open_context_source  # noqa: E402
-from .pipeline.evaluate import evaluate, final_audit  # noqa: E402
-from .pipeline.prepare import prepare_live  # noqa: E402
-from .pipeline.score import score_new  # noqa: E402
-from .pipeline.train import run  # noqa: E402
-from .tigergraph.installer import install  # noqa: E402
+from .config import run_config
+from .inference.saved_model import ModelCheckpoint
+from .inference.score_accounts import read_account_ids, score
+from .paths import DEFAULT_MODEL, dataset_path
+from .pipeline.connect import connect, open_context_source
+from .pipeline.evaluate import evaluate, final_audit
+from .pipeline.prepare import prepare_live
+from .pipeline.score import score_new
+from .pipeline.train import run
+from .runtime.device import reserve_deterministic_cublas
+from .tigergraph.installer import install
 
 CONFIG_HELP = "Optional TOML/JSON file whose keys override the built-in settings"
 
@@ -112,6 +107,8 @@ def train_command(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def main() -> None:
+    # Before any CUDA work: deterministic cuBLAS GEMMs need a fixed workspace.
+    reserve_deterministic_cublas()
     args = build_parser().parse_args()
     if args.command == "install":
         # The built-in run's retry budgets.

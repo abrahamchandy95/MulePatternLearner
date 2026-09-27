@@ -31,7 +31,7 @@ from mule_pattern_learner.data.contexts import StreamingContextSource
 from mule_pattern_learner.inference.predictor import TemporalPredictor
 from mule_pattern_learner.model.build import build_model
 from mule_pattern_learner.pipeline.connect import connect
-from mule_pattern_learner.runtime.device import choose_device
+from mule_pattern_learner.runtime.device import choose_device, reserve_deterministic_cublas
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
 
 # The fixture's own checks read the window counts and amounts, their ratios and the pair
@@ -67,6 +67,8 @@ def source_plan(model: FeaturePlan) -> FeaturePlan:
 
 
 def main() -> None:
+    # Before any CUDA work: deterministic cuBLAS GEMMs need a fixed workspace.
+    reserve_deterministic_cublas()
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
