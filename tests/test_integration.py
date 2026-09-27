@@ -1,9 +1,16 @@
-"""The integration tests collect cleanly, and none of them runs by default."""
+"""The integration tests collect cleanly, and none of them runs by default.
+
+The tests that write to the graph are skipped even when -m selects them, unless
+--allow-graph-writes gives consent.
+"""
 
 from __future__ import annotations
 
 import ast
 import importlib.util
+import json
+import os
+from pathlib import Path
 import subprocess
 import sys
 from types import ModuleType
@@ -22,6 +29,21 @@ MARKERS = {
     "test_label_reveal.py": "graph",
     "test_scope_isolation.py": "graph_write",
 }
+# A plugin that writes the skip reasons of every test a run would run, after the conftest
+# hooks have marked them, to the file named in SKIP_REPORT. It never runs a test.
+SKIP_REPORT = """
+import json
+import os
+
+
+def pytest_collection_finish(session):
+    reasons = {
+        item.nodeid: [mark.kwargs.get("reason", "") for mark in item.iter_markers("skip")]
+        for item in session.items
+    }
+    with open(os.environ["SKIP_REPORT"], "w") as report:
+        json.dump(reasons, report)
+"""
 
 
 def collect(*options: str) -> list[str]:
@@ -56,6 +78,33 @@ def test_integration_tests_collect_and_are_deselected_by_default() -> None:
     assert collect() == []
     selected = collect("-m", "graph or graph_write or cuda")
     assert {node.split("::")[0].rsplit("/", 1)[1] for node in selected} == set(MARKERS)
+
+
+def graph_write_skips(folder: Path, *options: str) -> dict[str, list[str]]:
+    """The skip reasons of each test that -m graph_write selects, collected without running."""
+    (folder / "skip_report.py").write_text(SKIP_REPORT)
+    report = folder / "skips.json"
+    path = os.pathsep.join(filter(None, (str(folder), os.environ.get("PYTHONPATH"))))
+    result = subprocess.run(
+        [sys.executable, "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider"]
+        + ["-p", "skip_report", "-m", "graph_write", *options, "tests"],
+        cwd=REPOSITORY_ROOT,
+        env={**os.environ, "PYTHONPATH": path, "SKIP_REPORT": str(report)},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    return json.loads(report.read_text())
+
+
+def test_graph_write_tests_are_skipped_without_explicit_consent(tmp_path: Path) -> None:
+    # Selecting graph_write is not consent: without the option every such test is skipped.
+    refused = graph_write_skips(tmp_path)
+    assert refused
+    for node, reasons in refused.items():
+        assert any("--allow-graph-writes" in reason for reason in reasons), node
+    allowed = graph_write_skips(tmp_path, "--allow-graph-writes")
+    assert allowed == {node: [] for node in refused}
 
 
 def load(name: str) -> ModuleType:
