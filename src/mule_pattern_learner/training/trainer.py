@@ -64,7 +64,7 @@ from ..inference.rejections import (
     rejection_counts,
 )
 from ..inference.saved_model import SavedModel
-from ..metrics import evaluate, select_threshold
+from ..metrics import proxy_metrics, select_threshold
 from ..model.build import build_model
 from ..model.loss import NonNegativePULoss
 from ..paths import DatasetPaths, RunPaths
@@ -568,7 +568,7 @@ class _TrainingRun:
         check_split_rejections(
             "validation", labels, accepted, self.limit, self.progress.rejections()
         )
-        metrics = evaluate(labels[accepted].astype(np.int64), scores[accepted], 0.5)
+        metrics = proxy_metrics(labels[accepted].astype(np.int64), scores[accepted], 0.5)
         ap = metrics["average_precision"]
         if ap is not None and ap > self.best_ap:
             self.best_ap, self.best_epoch = ap, epoch + 1
@@ -632,7 +632,7 @@ class _TrainingRun:
                 done += min(size, len(sample.indices) - start)
                 if number % self.runtime.log_every_steps == 0 or number == len(chunks):
                     self.emit_event(
-                        {"event": "evaluate", "split": split, "accounts": done, "total": total}
+                        {"event": "score", "split": split, "accounts": done, "total": total}
                     )
         return accepted_scores(logits, accepted, split)
 
@@ -655,7 +655,7 @@ class _TrainingRun:
         }
         labels = validation["observed_label"].to_numpy()
         threshold = select_threshold(labels, validation["score"].to_numpy())
-        selection = evaluate(labels, validation["score"].to_numpy(), threshold)
+        selection = proxy_metrics(labels, validation["score"].to_numpy(), threshold)
         known_mules = label_summary(self.mask)
         payload = model_payload(
             state=self.best_state,
@@ -675,7 +675,7 @@ class _TrainingRun:
         results = {}
         for split, frame in (("validation", validation), ("test", test)):
             write_predictions(self.run.predictions(split), frame)
-            results[split] = evaluate(
+            results[split] = proxy_metrics(
                 frame["observed_label"].to_numpy(), frame["score"].to_numpy(), threshold
             )
         result = run_summary(

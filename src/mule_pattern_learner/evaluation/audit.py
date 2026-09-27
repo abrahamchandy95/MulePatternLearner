@@ -65,7 +65,7 @@ def audit_inputs(
     from ..data.manifest import load_prepared
 
     split = AUDITED_SPLIT
-    for path in (run.audit_metrics(split), run.audit_scores(split), run.audit_rejected(split)):
+    for path in (run.audit_report(split), run.audit_scores(split), run.audit_rejected(split)):
         if path.exists():
             raise FileExistsError(path)
     saved = SavedModel.load(run.model)
@@ -191,8 +191,8 @@ def audit(
         "scope": config.scope.id,
         "model_changed": False,
     }
-    run.audit_metrics(split).parent.mkdir(parents=True, exist_ok=True)
-    write_json(run.audit_metrics(split), result)
+    run.audit_report(split).parent.mkdir(parents=True, exist_ok=True)
+    write_json(run.audit_report(split), result)
     write_audit_scores(run.audit_scores(split), scored)
     if rejected:
         write_rejected(run.audit_rejected(split), rejected)
@@ -203,7 +203,7 @@ def audit(
             "date": date,
             "accounts": len(scored),
             "rejected_accounts": len(unscored),
-            "output": str(run.audit_metrics(split)),
+            "output": str(run.audit_report(split)),
         }
     )
     return result

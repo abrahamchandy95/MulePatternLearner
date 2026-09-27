@@ -7,7 +7,7 @@ import pytest
 
 from mule_pattern_learner.metrics import (
     capture_curve,
-    evaluate,
+    proxy_metrics,
     weighted_metrics,
 )
 
@@ -26,7 +26,7 @@ def test_unit_weights_give_the_unweighted_top_fraction_metrics() -> None:
     y = (rng.random(200) < 0.1).astype(np.int64)
     score = rng.random(200)
     weighted = weighted_metrics(y, score, np.ones(200), 0.5)
-    unweighted = evaluate(y, score, 0.5)
+    unweighted = proxy_metrics(y, score, 0.5)
     for key in ("precision_at_1pct", "recall_at_1pct", "precision_at_5pct", "recall_at_5pct"):
         assert weighted[key] == pytest.approx(unweighted[key])
     for key in ("average_precision", "roc_auc", "precision", "recall", "f1"):

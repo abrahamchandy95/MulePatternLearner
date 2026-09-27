@@ -375,7 +375,7 @@ def test_batches_use_train_mode_step_seeds_and_the_hub_registry(
         assert 0 <= logged["corrected_steps"] <= 2 and math.isfinite(logged["objective"])
         if logged["corrected_steps"] == 0:
             assert logged["objective"] == pytest.approx(logged["loss"])
-    assert {r["event"] for r in records} >= {"start", "train", "evaluate", "epoch", "complete"}
+    assert {r["event"] for r in records} >= {"start", "train", "score", "epoch", "complete"}
 
 
 def test_rejected_roots_are_dropped_and_reported(
@@ -456,12 +456,12 @@ def test_no_finite_validation_ap_refuses_to_save(
 ) -> None:
     config = base_config()
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
-    real = trainer.evaluate
+    real = trainer.proxy_metrics
 
     def no_ap(*args: Any, **kwargs: Any) -> dict[str, Any]:
         return {**real(*args, **kwargs), "average_precision": None}
 
-    monkeypatch.setattr(trainer, "evaluate", no_ap)
+    monkeypatch.setattr(trainer, "proxy_metrics", no_ap)
     with pytest.raises(ValueError, match="refusing to save untrained weights"):
         fit(tmp_path, "run", config)
     assert not RunPaths(tmp_path / "run").model.exists()
@@ -514,7 +514,7 @@ def test_patience_zero_disables_early_stopping(
     config = base_config(training={"epochs": 3, "patience": 0, "steps_per_epoch": 1})
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     ap = iter([0.5, 0.4, 0.3])  # validation never improves after epoch 1
-    real = trainer.evaluate
+    real = trainer.proxy_metrics
 
     def falling(*args: Any, **kwargs: Any) -> dict[str, Any]:
         result = real(*args, **kwargs)
@@ -522,7 +522,7 @@ def test_patience_zero_disables_early_stopping(
             result["average_precision"] = next(ap, result["average_precision"])
         return result
 
-    monkeypatch.setattr(trainer, "evaluate", falling)
+    monkeypatch.setattr(trainer, "proxy_metrics", falling)
     result = fit(tmp_path, "run", config)
     epochs = read_epochs(RunPaths(tmp_path / "run").epochs)
     assert epochs.epoch.tolist() == [1, 2, 3] and result["best_epoch"] == 1

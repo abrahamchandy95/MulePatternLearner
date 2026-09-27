@@ -266,7 +266,7 @@ def test_outputs_go_under_results_and_datasets_under_data() -> None:
         run.events,
         run.metrics,
         run.predictions("test"),
-        run.audit_metrics("test"),
+        run.audit_report("test"),
         run.audit_scores("test"),
         run.audit_rejected("test"),
         run.scores("accounts", "2025-01-01"),

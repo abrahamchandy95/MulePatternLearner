@@ -50,7 +50,7 @@ def test_a_run_directory_names_every_file_of_the_run_directory_table(tmp_path: P
         run.events,
         run.metrics,
         run.predictions("validation"),
-        run.audit_metrics("test"),
+        run.audit_report("test"),
         run.audit_scores("test"),
         run.audit_rejected("test"),
         run.scores("new_accounts", "2025-01-01"),
