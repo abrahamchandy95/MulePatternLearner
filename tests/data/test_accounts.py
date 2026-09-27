@@ -7,8 +7,9 @@ from typing import Any
 import pandas as pd
 import pytest
 
+from mule_pattern_learner.contract.server import POPULATION_QUERY
 from mule_pattern_learner.testing.builders import unit_config
-from mule_pattern_learner.testing.fake_graph import Runner
+from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
 from mule_pattern_learner.tigergraph.labels import TigerGraphObservedLabels
 from mule_pattern_learner.tigergraph.scope import TigerGraphScope
 
@@ -27,15 +28,12 @@ def population_row(account: str, positive: bool, known: int) -> dict[str, Any]:
 def test_the_population_is_read_with_the_labels_revealed_in_the_graph() -> None:
     from mule_pattern_learner.data.accounts import select_accounts
 
-    seen = []
-
-    def run(name: str, params: dict[str, Any]) -> list[dict[str, Any]]:
-        seen.append(params["include_observed"])
-        return [{"status": "ok", "accounts": [population_row("A1", True, 5)]}]
-
+    graph = FakeTigerGraph(population=[population_row("A1", True, 5)])
     config = unit_config()
-    frame, _ = select_accounts(TigerGraphScope(Runner(run)), config.scope.id, config.dataset)
-    assert seen == [True] and frame.in_marginal.tolist() == [True]
+    frame, _ = select_accounts(TigerGraphScope(graph), config.scope.id, config.dataset)
+    seen = [params["include_observed"] for _, params in graph.calls]
+    assert graph.names() == [POPULATION_QUERY] and seen == [True]
+    assert frame.in_marginal.tolist() == [True]
     assert frame.observed_positive.tolist() == [True] and frame.known_from_ms.tolist() == [5]
 
 
@@ -44,7 +42,7 @@ def test_stale_population_queries_fail_fast() -> None:
 
     config = unit_config()
     # An old query emits the discovery time of hidden or negative labels.
-    stale = Runner(lambda n, p: [{"status": "ok", "accounts": [population_row("A1", False, 5)]}])
+    stale = FakeTigerGraph(population=[population_row("A1", False, 5)])
     with pytest.raises(ValueError, match="predates the masked-label predicate"):
         select_accounts(TigerGraphScope(stale), config.scope.id, config.dataset)
     metadata = pd.DataFrame(

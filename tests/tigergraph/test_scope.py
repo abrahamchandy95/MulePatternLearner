@@ -15,7 +15,7 @@ from mule_pattern_learner.contract.server import (
 )
 from mule_pattern_learner.paths import GSQL_DIR
 from mule_pattern_learner.testing.builders import SNAPSHOT_SOURCE, scope_population, unit_config
-from mule_pattern_learner.testing.fake_graph import FakeTigerGraph, Runner, policy_counts
+from mule_pattern_learner.testing.fake_graph import FakeTigerGraph, policy_counts
 from mule_pattern_learner.tigergraph import gsql_text, scope
 
 
@@ -89,7 +89,10 @@ def test_existing_scope_must_have_the_configured_unowned_policy() -> None:
     with pytest.raises(ValueError, match="different source"):
         ensure(existing({**header, "source_id": "another"}, "linked"), config)
     with pytest.raises(ValueError, match="lacks"):
-        scope.scope_policy_counts(Runner(lambda n, p: [{"status": "ok", "members": 3}]), "s")
+        lacking = FakeTigerGraph(
+            answers={SCOPE_POLICY_QUERY: lambda p: [{"status": "ok", "members": 3}]}
+        )
+        scope.scope_policy_counts(lacking, "s")
 
 
 def test_scope_policy_query_prints_what_the_client_reads() -> None:

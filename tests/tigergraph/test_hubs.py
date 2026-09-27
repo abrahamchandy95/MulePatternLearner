@@ -18,21 +18,15 @@ from mule_pattern_learner.data.hub_registry import (
 )
 from mule_pattern_learner.paths import DatasetPaths
 from mule_pattern_learner.testing.builders import SAMPLER, hub_rows
-from mule_pattern_learner.testing.fake_graph import Runner
+from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
 from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
 
 
 def test_hub_registry_parse_save_load_and_stub_semantics(tmp_path: Path) -> None:
     cutoffs = [1000, 2000]
-    calls = []
-
-    def run(name: str, params: dict[str, Any]) -> list[dict[str, Any]]:
-        calls.append((name, params))
-        return hub_rows(cutoffs, params["scope_id"])
-
-    fake = Runner(run)
+    fake = FakeTigerGraph(answers={HUB_QUERY: lambda params: hub_rows(cutoffs, params["scope_id"])})
     registry = TigerGraphHubs(fake).hub_registry([2000, 1000], threshold=1024)
-    assert calls == [(HUB_QUERY, {"cutoff_seqs": cutoffs, "threshold": 1024, "scope_id": ""})]
+    assert fake.calls == [(HUB_QUERY, {"cutoff_seqs": cutoffs, "threshold": 1024, "scope_id": ""})]
     assert registry.is_stub("Account", "H1", 1000) and not registry.is_stub("Account", "H1", 2000)
     assert registry.is_stub("Account", "H2", 2000, 3)
     assert not registry.is_stub("Token", "H1", 1000)
@@ -43,7 +37,7 @@ def test_hub_registry_parse_save_load_and_stub_semantics(tmp_path: Path) -> None
     assert registry.counts() == {"1000": {"3": 1}, "2000": {"3": 1}}
     # A scoped registry is keyed by phase: held-out events can only add later-phase rows.
     scoped = TigerGraphHubs(fake).hub_registry(cutoffs, threshold=1024, scope_id="scope")
-    assert calls[-1][1]["scope_id"] == "scope"
+    assert fake.calls[-1][1]["scope_id"] == "scope"
     assert [scoped.is_stub("Account", "H1", 1000, phase) for phase in (1, 2, 3)] == [
         False,
         True,
@@ -97,7 +91,7 @@ def test_hub_registry_rejects_contract_violations(scope_id: str, change: dict[st
     rows = hub_rows([1000, 2000], scope_id)
     rows[0]["hubs"][0].update(change)
     with pytest.raises(ValueError, match="contract"):
-        TigerGraphHubs(Runner(lambda n, p: rows)).hub_registry(
+        TigerGraphHubs(FakeTigerGraph(answers={HUB_QUERY: lambda params: rows})).hub_registry(
             [1000, 2000], threshold=1024, scope_id=scope_id
         )
 
@@ -105,7 +99,7 @@ def test_hub_registry_rejects_contract_violations(scope_id: str, change: dict[st
 def test_hub_registry_rejects_stale_or_mismatched_responses() -> None:
     def check(rows: list[dict[str, Any]], message: str, scope_id: str = "") -> None:
         with pytest.raises(ValueError, match=message):
-            TigerGraphHubs(Runner(lambda n, p: rows)).hub_registry(
+            TigerGraphHubs(FakeTigerGraph(answers={HUB_QUERY: lambda params: rows})).hub_registry(
                 [1000, 2000], threshold=1024, scope_id=scope_id
             )
 

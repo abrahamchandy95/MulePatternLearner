@@ -11,6 +11,7 @@ import pytest
 from mule_pattern_learner.contract.feature_groups import FeaturePlan
 from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
+from mule_pattern_learner.contract.server import CONTEXT_QUERY
 from mule_pattern_learner.reference.batch_features import node_features
 from mule_pattern_learner.testing.builders import (
     PLAN,
@@ -23,7 +24,7 @@ from mule_pattern_learner.testing.builders import (
     root,
 )
 from mule_pattern_learner.testing.fake_connection import FakeConn, executor
-from mule_pattern_learner.testing.fake_graph import Runner
+from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
 from mule_pattern_learner.tigergraph.context_query import validate_context
 
 
@@ -48,7 +49,7 @@ def test_validation_errors_from_a_response_are_never_retried() -> None:
 def test_call_level_errors_and_malformed_responses_raise(
     rows: list[dict[str, Any]], message: str
 ) -> None:
-    fake = Runner(lambda name, params: rows)
+    fake = FakeTigerGraph(answers={CONTEXT_QUERY: lambda params: rows})
     with pytest.raises(ValueError, match=message):
         query_context_batch(fake, [root(0)], plan=PLAN, sampler=SAMPLER)
 

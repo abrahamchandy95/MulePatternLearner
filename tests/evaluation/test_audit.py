@@ -22,8 +22,14 @@ from mule_pattern_learner.testing.builders import (
     prepared_dataset,
     saved_model,
 )
-from mule_pattern_learner.testing.fake_graph import FakeSource, ScoringExecutor
+from mule_pattern_learner.testing.fake_graph import FakeSource, FakeTigerGraph
 from mule_pattern_learner.tigergraph.scope import TigerGraphScope
+
+
+def split_graph(accounts: pd.DataFrame) -> FakeTigerGraph:
+    """A graph whose scope population is these accounts, all in the test partition."""
+    rows = [{"account_id": a, "partition": 3, "first_seen_ts_ms": 1} for a in accounts.account_id]
+    return FakeTigerGraph(population=rows)
 
 
 def test_the_audit_scores_through_the_dataset_clock_and_hubs(
@@ -54,7 +60,7 @@ def test_the_audit_scores_through_the_dataset_clock_and_hubs(
         run,
         Truth(),
         dataset=dataset,
-        scope=TigerGraphScope(ScoringExecutor(test_accounts)),
+        scope=TigerGraphScope(split_graph(test_accounts)),
         contexts=source,
         hubs=hub_registry(),
     )
@@ -76,7 +82,7 @@ def test_the_audit_scores_through_the_dataset_clock_and_hubs(
             run,
             Truth(),
             dataset=dataset,
-            scope=TigerGraphScope(ScoringExecutor(test_accounts)),
+            scope=TigerGraphScope(split_graph(test_accounts)),
             contexts=source,
             hubs=hub_registry(),
         )
@@ -107,7 +113,7 @@ def test_the_audit_fails_on_censored_rejections(
             run,
             Truth(),
             dataset=dataset,
-            scope=TigerGraphScope(ScoringExecutor(test_accounts)),
+            scope=TigerGraphScope(split_graph(test_accounts)),
             contexts=source,
             hubs=hub_registry(),
         )

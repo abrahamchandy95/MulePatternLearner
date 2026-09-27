@@ -18,7 +18,7 @@ from mule_pattern_learner.contract.server import (
 from mule_pattern_learner.data.contexts import ContextSource
 from mule_pattern_learner.paths import GSQL_DIR
 from mule_pattern_learner.testing.builders import PLAN, SAMPLER, hub_rows, root
-from mule_pattern_learner.testing.fake_graph import ContextServer, Runner
+from mule_pattern_learner.testing.fake_graph import ContextServer, FakeTigerGraph
 from mule_pattern_learner.tigergraph import gsql_text
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
 from mule_pattern_learner.tigergraph.gsql_text import definitions, parameter_names
@@ -83,11 +83,9 @@ def test_sent_parameters_match_the_repository_query_signatures() -> None:
         store.fetch([root(0)], hop=2)
         store.close()
         assert all(set(call) == context for call in server.calls)
-    calls = []
-    TigerGraphHubs(Runner(lambda n, p: calls.append(p) or hub_rows([1000, 2000]))).hub_registry(
-        [1000, 2000], threshold=1024
-    )
-    assert set(calls[0]) == signature("queries/hub_accounts.gsql", HUB_QUERY)
+    hubs = FakeTigerGraph(answers={HUB_QUERY: lambda params: hub_rows([1000, 2000])})
+    TigerGraphHubs(hubs).hub_registry([1000, 2000], threshold=1024)
+    assert set(hubs.calls[0][1]) == signature("queries/hub_accounts.gsql", HUB_QUERY)
     creation = signature("queries/training_scope.gsql", CREATE_SCOPE_QUERY)
     assert {"scope_id", "source_id", "split_seed", "unowned_policy"} <= creation
     policy = signature("queries/training_scope.gsql", SCOPE_POLICY_QUERY)

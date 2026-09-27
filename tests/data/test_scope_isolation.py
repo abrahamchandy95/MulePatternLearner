@@ -140,13 +140,7 @@ def test_new_account_scoring_needs_neither_training_dataset_nor_labels(tmp_path:
         model_file,
     )
 
-    class Executor(FakeTigerGraph):
-        def run(self, name: str, params: dict[str, Any], **kwargs: Any) -> list[dict[str, Any]]:
-            if name == CONTEXT_QUERY:
-                assert params["scope_id"] == "" and params["per_relation"] == 1
-            return super().run(name, params, **kwargs)
-
-    executor = Executor({}, last_visible=lambda index, ms: 99)
+    executor = FakeTigerGraph(last_visible=lambda index, ms: 99)
     output = tmp_path / "new.parquet"
     result = score_new_accounts(
         model_file,
@@ -166,6 +160,9 @@ def test_new_account_scoring_needs_neither_training_dataset_nor_labels(tmp_path:
     assert all(len(v) == 48 for v in frame.embedding)
     assert not (tmp_path / "new.parquet.pending").exists()
     assert not {"is_mule", "known_positive", "pu_label"} & set(frame.columns)
+    # Unscoped context requests with the model's pools.
+    requests = [params for name, params in executor.calls if name == CONTEXT_QUERY]
+    assert requests and all(p["scope_id"] == "" and p["per_relation"] == 1 for p in requests)
     # The hub registry was computed for the requested cutoff only (one past the last event).
     hubs = [params for name, params in executor.calls if name == HUB_QUERY]
     assert [params["cutoff_seqs"] for params in hubs] == [[100]]
@@ -187,22 +184,19 @@ def test_bounded_seed_reservoir_does_not_enrich_the_nnpu_marginal() -> None:
         }
         for i in range(10050)
     ]
-    calls = []
-
-    class Executor:
-        def run(self, name: str, params: dict[str, Any], **_: Any) -> list[dict[str, Any]]:
-            assert name == POPULATION_QUERY and params["include_observed"]
-            calls.append(params["after_id"])
-            page = [r for r in rows if r["account_id"] > params["after_id"]][:10000]
-            return [{"status": "ok", "accounts": page}]
-
+    graph = FakeTigerGraph(population=rows)
     dataset = DatasetConfig(
         dates=SplitDates(("2024-01-01",), ("2024-01-02",), ("2024-01-03",)),
         seed_limits=SeedLimits(10, 10, 10),
         seed=42,
     )
-    selected, counts = select_accounts(TigerGraphScope(Executor()), "strict", dataset)
-    assert len(calls) == 2 and sum(counts.values()) == len(rows)
+    selected, counts = select_accounts(TigerGraphScope(graph), "strict", dataset)
+    # Two pages of 10,000 accounts, with the labels revealed in the graph.
+    assert [(name, p["after_id"], p["include_observed"]) for name, p in graph.calls] == [
+        (POPULATION_QUERY, "", True),
+        (POPULATION_QUERY, "A09999", True),
+    ]
+    assert sum(counts.values()) == len(rows)
     assert len(selected) <= 33 and selected.in_marginal.sum() == 30
     assert set(known) <= set(selected.account_id)
     observed = selected.account_id.isin(known).to_numpy()
@@ -231,20 +225,15 @@ def test_the_graph_truth_pages_the_label_contract() -> None:
     # An account whose label is not known is -1, never a negative.
     assert truth.is_mule.tolist() == [r["is_mule"] if r["mule_label_known"] else -1 for r in rows]
 
-    class Unordered:
-        def run(self, name: str, params: dict[str, Any], **_: Any) -> list[dict[str, Any]]:
-            page = [{"account_id": a, "is_mule": 0, "mule_label_known": True} for a in "BA"]
-            return [{"status": "ok", "accounts": page}]
-
+    unordered = [{"account_id": a, "is_mule": 0, "mule_label_known": True} for a in "BA"]
+    graph = FakeTigerGraph(
+        answers={TRUTH_QUERY: lambda p: [{"status": "ok", "accounts": unordered}]}
+    )
     with pytest.raises(ValueError, match="not strictly increasing"):
-        TigerGraphTruth(Unordered()).read()
-
-    class Silent:
-        def run(self, name: str, params: dict[str, Any], **_: Any) -> list[dict[str, Any]]:
-            return [{"status": "ok"}]
-
+        TigerGraphTruth(graph).read()
+    silent = FakeTigerGraph(answers={TRUTH_QUERY: lambda p: [{"status": "ok"}]})
     with pytest.raises(ValueError, match="accounts missing from response"):
-        TigerGraphTruth(Silent()).read()
+        TigerGraphTruth(silent).read()
 
 
 def test_strict_preparation_and_nnpu_use_the_correct_phase_end_to_end(tmp_path: Path) -> None:
@@ -259,16 +248,14 @@ def test_strict_preparation_and_nnpu_use_the_correct_phase_end_to_end(tmp_path: 
     run = RunPaths(tmp_path / "run")
     phases = []
 
-    class Executor(FakeTigerGraph):
-        def run(self, name: str, params: dict[str, Any], **kwargs: Any) -> list[dict[str, Any]]:
-            if name == CONTEXT_QUERY:
-                assert params["scope_id"] == "unit_strict"
-                phases.append(params["visibility_phase"])
-                if params["visibility_phase"] == 3:
-                    assert run.model.exists(), "Test evaluation happened before the model froze"
-            return super().run(name, params, **kwargs)
+    def strict(name: str, params: dict[str, Any]) -> None:
+        if name == CONTEXT_QUERY:
+            assert params["scope_id"] == "unit_strict"
+            phases.append(params["visibility_phase"])
+            if params["visibility_phase"] == 3:
+                assert run.model.exists(), "Test evaluation happened before the model froze"
 
-    executor = Executor({}, last_visible=lambda index, ms: 100, population=rows)
+    executor = FakeTigerGraph(last_visible=lambda index, ms: 100, population=rows, before=strict)
     dataset = DatasetPaths(tmp_path / "dataset")
     manifest = prepare(
         cfg,

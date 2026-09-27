@@ -13,19 +13,21 @@ import pyarrow.parquet as pq
 from mule_pattern_learner.contract.server import HUB_QUERY
 from mule_pattern_learner.inference import score_accounts
 from mule_pattern_learner.inference.rejections import rejection_summary
-from mule_pattern_learner.testing.builders import (
-    base_config,
-    saved_model,
-)
-from mule_pattern_learner.testing.fake_graph import FakeSource, ScoringExecutor
+from mule_pattern_learner.testing.builders import HUB, base_config, saved_model
+from mule_pattern_learner.testing.fake_graph import FakeSource, FakeTigerGraph
 from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffs
 from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
+
+
+def scoring_graph() -> FakeTigerGraph:
+    """The graph at the test cutoff: its last event is 29,999, and HUB is a hub then."""
+    return FakeTigerGraph(last_visible=lambda index, ms: 29_999, hubs=[(HUB, 30_000)])
 
 
 def test_score_new_writes_only_ok_rows_and_lists_rejected_ids(tmp_path: Path) -> None:
     config = base_config()
     model = saved_model(tmp_path / "model.pt", config)
-    executor = ScoringExecutor()
+    executor = scoring_graph()
     source = FakeSource(config, reject=frozenset({"ghost_1", "ghost_2"}))
     ids = [f"new_{i}" for i in range(14)]
     ids[1:1], ids[9:9] = ["ghost_1"], ["ghost_2"]
@@ -52,6 +54,8 @@ def test_score_new_writes_only_ok_rows_and_lists_rejected_ids(tmp_path: Path) ->
     assert result["rejection_events_by_status"] == {"missing_entity": len(rejected_ids)}
     hub_call = next(p for name, p in executor.calls if name == HUB_QUERY)
     assert hub_call["cutoff_seqs"] == [30_000] and hub_call["threshold"] == 2048
+    # Scoring arbitrary accounts is unscoped: phase-3 rows over all visible history.
+    assert hub_call["scope_id"] == ""
     assert source.closed and not (tmp_path / "scores.parquet.pending").exists()
 
 
@@ -66,8 +70,8 @@ def test_score_new_keeps_float64_resolution_near_one(tmp_path: Path) -> None:
         "2025-01-01",
         output,
         rejected_output=tmp_path / "scores_rejected.txt",
-        cutoffs=TigerGraphCutoffs(ScoringExecutor()),
-        hub_reader=TigerGraphHubs(ScoringExecutor()),
+        cutoffs=TigerGraphCutoffs(scoring_graph()),
+        hub_reader=TigerGraphHubs(scoring_graph()),
         contexts=FakeSource(config),
     )
     assert pq.read_schema(output).field("score").type == pa.float64()
@@ -88,8 +92,8 @@ def test_score_new_reports_root_and_child_rejections_separately(tmp_path: Path) 
         "2025-01-01",
         tmp_path / "scores.parquet",
         rejected_output=tmp_path / "scores_rejected.txt",
-        cutoffs=TigerGraphCutoffs(ScoringExecutor()),
-        hub_reader=TigerGraphHubs(ScoringExecutor()),
+        cutoffs=TigerGraphCutoffs(scoring_graph()),
+        hub_reader=TigerGraphHubs(scoring_graph()),
         contexts=source,
     )
     assert result["accounts"] == 12 and result["rejected"] == 1

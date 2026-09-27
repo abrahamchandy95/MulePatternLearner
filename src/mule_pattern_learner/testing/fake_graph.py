@@ -14,13 +14,12 @@ fakes answer one query each, as the tests that use them need.
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from copy import deepcopy
 import threading
 import time
 from typing import Any
 
-import pandas as pd
 from pyTigerGraph.common.exception import TigerGraphException
 
 from mule_pattern_learner.config import RunConfig
@@ -46,7 +45,6 @@ from mule_pattern_learner.contract.server import (
 from mule_pattern_learner.data.contexts import ContextCounts
 from mule_pattern_learner.paths import GSQL_DIR
 from mule_pattern_learner.testing.builders import (
-    HUB,
     context,
     context_row,
     encode,
@@ -124,6 +122,11 @@ class FakeTigerGraph:
     type (default: the population's accounts); the installed queries are the
     repository's, except those `stale` names, whose installed text differs; and
     `scope_vertex` says whether the schema has the scope vertex type.
+
+    Tests change what a query does with two hooks. `before(name, params)` runs before
+    each query is answered: it may check the parameters, wait or raise. `answers` maps a
+    query name to a function of its parameters that answers it instead, for scripted or
+    malformed responses. Every call is recorded in `calls` either way.
     """
 
     graph_name = GRAPH_NAME
@@ -143,6 +146,8 @@ class FakeTigerGraph:
         counts: dict[str, int] | None = None,
         stale: Iterable[str] = (),
         scope_vertex: bool = True,
+        before: Callable[[str, dict[str, Any]], None] | None = None,
+        answers: Mapping[str, Callable[[dict[str, Any]], list[dict[str, Any]]]] | None = None,
     ) -> None:
         self.rows = rows or {}
         self.scope_policy = scope_policy
@@ -156,6 +161,8 @@ class FakeTigerGraph:
         self.counts = dict(counts) if counts is not None else {"Account": len(self.population)}
         self.stale = frozenset(stale)
         self.scope_vertex = scope_vertex
+        self.before = before
+        self.answers = dict(answers or {})
         self.client = FakeClient(FakeConnection(self))
         self.requested: list[ContextKey] = []
         self.calls: list[tuple[str, dict[str, Any]]] = []
@@ -166,6 +173,10 @@ class FakeTigerGraph:
     def run(self, name: str, params: dict[str, Any], **options: Any) -> list[dict[str, Any]]:
         with self.lock:
             self.calls.append((name, deepcopy(params)))
+        if self.before is not None:
+            self.before(name, params)
+        if name in self.answers:
+            return self.answers[name](params)
         if name in WRITE_QUERIES:
             assert options.get("attempts") == 1, f"{name} writes, so it must run once"
         if name == CONTEXT_QUERY:
@@ -404,16 +415,6 @@ class ContextServer:
                 self.active -= 1
 
 
-class Runner:
-    """A QueryExecutor backed by a function."""
-
-    def __init__(self, respond: Callable[[str, dict[str, Any]], list[dict[str, Any]]]) -> None:
-        self.respond = respond
-
-    def run(self, name: str, params: dict[str, Any], **_: Any) -> list[dict[str, Any]]:
-        return self.respond(name, params)
-
-
 LINKED_COUNTS = {
     "shared_internal": 0,
     "shared_external": 40,
@@ -537,44 +538,3 @@ class FakeSource:
 
     def close(self, *, wait: bool = True) -> None:
         self.closed = True
-
-
-class ScoringExecutor:
-    def __init__(self, accounts: pd.DataFrame | None = None) -> None:
-        self.calls: list[tuple[str, dict[str, Any]]] = []
-        self.accounts = accounts
-
-    def run(self, name: str, params: dict[str, Any], **_: Any) -> list[dict[str, Any]]:
-        self.calls.append((name, params))
-        if name == CUTOFF_QUERY:
-            return [{"status": "ok", "last_visible_seqs": {str(params["cutoff_times"][0]): 29_999}}]
-        if name == HUB_QUERY:
-            (cutoff,) = params["cutoff_seqs"]
-            # Scoring arbitrary accounts is unscoped: phase-3 rows over all visible history.
-            assert not params.get("scope_id")
-            echo = {k: params[k] for k in ("threshold", "cutoff_seqs", "scope_id") if k in params}
-            return [
-                {
-                    "status": "ok",
-                    **echo,
-                    "hubs": [
-                        {
-                            "account_id": HUB,
-                            "cutoff_seq": cutoff,
-                            "visibility_phase": 3,
-                            "max_visible": 9000,
-                            "max_degree": 9000,
-                            "reason": "visible_history",
-                        }
-                    ],
-                }
-            ]
-        if name == POPULATION_QUERY:
-            assert params["include_observed"] is False and self.accounts is not None
-            page = [
-                {"account_id": a, "partition": 3, "first_seen_ts_ms": 1}
-                for a in self.accounts.account_id
-                if a > params["after_id"]
-            ]
-            return [{"status": "ok", "accounts": page}]
-        raise AssertionError(name)
