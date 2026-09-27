@@ -366,7 +366,7 @@ def test_batches_use_train_mode_step_seeds_and_the_hub_registry(
         json.loads(line) for line in RunPaths(tmp_path / "run").events.read_text().splitlines()
     ]
     train_records = [r for r in records if r["event"] == "train"]
-    counters = {"database_calls", "rejections", "stub_children", "seconds_per_step", "cache_hits"}
+    counters = {"database_calls", "rejections", "stub_children", "seconds_per_step", "memory_hits"}
     counters |= {"contexts_requested", "contexts_distinct", "sampler_backend"}
     assert train_records and all(counters <= set(r) for r in train_records)
     assert 0 < train_records[-1]["contexts_distinct"] <= train_records[-1]["contexts_requested"]

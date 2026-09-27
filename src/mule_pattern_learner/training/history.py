@@ -57,7 +57,7 @@ class RunTotals:
         return {
             "requested": self.base_contexts["requested"] + counts.requested,
             "distinct": counts.distinct,
-            "cache_hits": self.base_contexts["cache_hits"] + counts.cache_hits,
+            "memory_hits": self.base_contexts["memory_hits"] + counts.memory_hits,
         }
 
     def saved(self) -> dict[str, Any]:
@@ -71,7 +71,7 @@ class RunTotals:
             "totals": dict(self.totals),
             "database_calls": self.calls(),
             "rejections": self.rejections(),
-            "contexts": {"requested": counts["requested"], "cache_hits": counts["cache_hits"]},
+            "contexts": {"requested": counts["requested"], "memory_hits": counts["memory_hits"]},
             # The distinct contexts asked for, as their context_hash values.
             "context_keys": torch.tensor(sorted(self.contexts.counts.seen), dtype=torch.int64),
         }
@@ -93,7 +93,7 @@ class RunTotals:
             "database_calls": self.calls(),
             "contexts_requested": contexts["requested"],
             "contexts_distinct": contexts["distinct"],
-            "cache_hits": contexts["cache_hits"],
+            "memory_hits": contexts["memory_hits"],
             "rejections": self.rejections(),
             "stub_children": int(self.totals["stub_children"]),
             "rejected_children": int(self.totals["rejected_children"]),

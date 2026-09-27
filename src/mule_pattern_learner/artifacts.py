@@ -37,7 +37,7 @@ HISTORY_COLUMNS: tuple[str, ...] = (
     "database_calls",
     "contexts_requested",
     "contexts_distinct",
-    "cache_hits",
+    "memory_hits",  # contexts served from the source's in-memory cache
     "rejected_roots",  # training roots TigerGraph rejected
     "stub_children",
 )

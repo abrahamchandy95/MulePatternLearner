@@ -97,16 +97,16 @@ def context_hash(key: ContextKey, hop: int) -> int:
 
 @dataclass
 class ContextCounts:
-    """What a context source was asked for: every context, the distinct ones, cache hits.
+    """What a context source was asked for: every context, the distinct ones, memory hits.
 
     requested counts the contexts fetches asked for (a key repeated within one fetch
-    once) and cache_hits those served from memory without a request. seen holds the
+    once) and memory_hits those served from memory without a request. seen holds the
     context_hash of every distinct (hop, key) asked for; a resumed run restores it,
     so distinct counts every segment of the run.
     """
 
     requested: int = 0
-    cache_hits: int = 0
+    memory_hits: int = 0
     seen: set[int] = field(default_factory=set[int])
 
     def ask(self, keys: Iterable[ContextKey], hop: int) -> None:
@@ -220,7 +220,7 @@ class ContextSource:
                 else:
                     missing.append(key)
             self.counts.ask(unique, hop)
-            self.counts.cache_hits += len(rows)
+            self.counts.memory_hits += len(rows)
             self.diagnostics["shared_inflight"] += len(shared)
             for start in range(0, len(missing), self.request_batch_size):
                 block = missing[start : start + self.request_batch_size]
