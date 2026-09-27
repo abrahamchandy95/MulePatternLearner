@@ -119,8 +119,9 @@ source identity, scope and revealed labels; do not reveal labels again between
 feature variants. The settings are the built-in run; a variant is a `RunConfig` that
 changes only its own settings (`dataclasses.replace` or `RunConfig.with_changes`).
 After scoped isolation and batch-cost qualification, train one from Python with
-`pipeline.train.run(output, config=variant, dataset=...)`; an existing `dataset`
-(`<run>_run/prepared`) serves every variant of the same dataset settings.
+`pipeline.train.run(RunPaths.of(name, seed), config=variant)`, which writes
+`results/<name>/seed-<seed>/`; one dataset in `data/<dataset id>/` serves every variant
+of the same dataset settings.
 
 ```sh
 # Install only after query parity/validation is satisfactory.
@@ -130,7 +131,7 @@ After scoped isolation and batch-cost qualification, train one from Python with
 .venv/bin/python scripts/verify_feature_redesign.py --account ACCOUNT_ID --date 2025-01-01
 
 # Final-only; do not run during feature selection. Truth comes from the graph.
-.venv/bin/python -m mule_pattern_learner evaluate-final --checkpoint models/temporal/feature_v4.pt --output artifacts/temporal/final_audit.json
+.venv/bin/python -m mule_pattern_learner evaluate-final results/<name>/seed-<seed>
 ```
 
 Run parity and cost qualification first, then nnPU/noise-floor comparisons, then

@@ -455,36 +455,48 @@ The ordinary command prepares bounded metadata if necessary, then trains:
 mule-temporal train
 ```
 
-It writes `models/temporal/model.pt` and a sibling `model_run/` directory (with the
-prepared cohort in `model_run/prepared/`), both ignored. Running it again resumes an
-interrupted run; a finished run is refused, so pick another `--output`. Old unscoped
-datasets/checkpoints are not compatible; use fresh artifacts. Do not delete valid
-prepared metadata just to change model hyperparameters in a separate experiment.
-Use the advanced `--dataset` argument to reuse existing metadata with a different
-model configuration. The trainer still checks the preparation settings, that the
-source requests every input the model reads at both hops, and that it uses the
-training sampler.
+It writes the run directory `results/baseline/seed-42/` and prepares the dataset in
+`data/<dataset id>/`, both ignored. Running it again resumes an interrupted run; a
+finished run is refused. Old unscoped datasets and models are not compatible; use
+fresh ones. Do not delete a valid prepared dataset just to change model
+hyperparameters in a separate experiment: a run whose dataset settings match reuses
+it. The trainer still checks the dataset settings, that the source requests every
+input the model reads at both hops, and that it uses the training sampler.
 
-The run directory holds `config.json` (the validated configuration),
-`progress.jsonl` (start, training intervals, evaluation, epoch and completion
-records with REST calls, rejection, stub and rejected-child counts, sampler
-backend, seconds per step and batch wait time) and `checkpoint_last.pt`, written
-atomically every epoch and every `checkpoint_every_steps` steps. Running `train`
-again continues from it and reproduces the uninterrupted run exactly. It refuses a
-changed result-affecting setting but allows transport (including `max_outage_s`),
-prefetch and logging settings and `max_rejected_root_fraction` to change. REST
-calls, rejections, rejected-root counts and sampler totals are kept in
-`checkpoint_last.pt`, so `progress.jsonl` and `metrics.json`
-(`database_calls_during_training`, `rejections`, `sampler_totals`,
-`rejected_roots`) cover every segment of a resumed run. `patience = 0` disables
-early stopping.
+The run directory holds:
+
+- `config.json`: the configuration, its fingerprint and the run's provenance (git
+  commit and dirty flag, package versions, device, sampler backend, dataset id and
+  start time);
+- `events.jsonl`: the structured lines the run printed (start or resume, training
+  intervals, evaluation, epochs and completion, with database calls, rejections, stub
+  and rejected-child counts, the sampler backend, seconds per step and batch wait);
+- `history.csv`: one row per training log interval (loss, unclamped objective,
+  corrected steps, timing, and the run's totals of database calls, contexts
+  requested, distinct and cached, rejected training roots and stub children);
+- `epochs.csv`: one row per epoch (loss, proxy validation AP and ROC AUC, which
+  weights were validated, the selected epoch and early stopping);
+- `resume.pt`, written atomically every epoch and every `checkpoint_every_steps` steps;
+- `model.pt`, `predictions/validation.parquet`, `predictions/test.parquet` and
+  `metrics.json` once the run is complete.
+
+Running `train` again continues from `resume.pt` and reproduces the uninterrupted run
+exactly. It refuses a changed result-affecting setting but allows transport
+(including `max_outage_s`), prefetch and logging settings and
+`max_rejected_root_fraction` to change. Database calls, rejections, rejected-root
+counts and sampler totals are kept in `resume.pt`, so `history.csv` and
+`metrics.json` (`database_calls_during_training`, `rejections`, `sampler_totals`,
+`rejected_roots`) cover every segment of a resumed run, and a resumed run drops the
+`history.csv` rows logged after its resume position before it logs them again.
+`patience = 0` disables early stopping.
 
 The sampler backend is resolved once per run on the main thread, before batches
-are prefetched, and passed to every batch. It is recorded in `progress.jsonl`,
-`metrics.json`, `checkpoint_last.pt` and `model.pt`. A resume on a host that
-resolves another backend than the checkpoint's is refused, unless the configuration
+are prefetched, and passed to every batch. It is recorded in `config.json`,
+`events.jsonl`, `metrics.json`, `resume.pt` and `model.pt`. A resume on a host that
+resolves another backend than the run's is refused, unless the configuration
 names the new backend explicitly (`sampler.backend = "torch"`, for example); the
-remaining steps then sample a different stream, and the run says so.
+remaining steps then sample a different stream, and the run records a
+`sampler_backend` event saying so.
 
 Batches are built ahead by `prefetch_batches` daemon worker threads. On an error or
 Ctrl-C the prefetcher cancels queued builds and re-raises at once, without waiting
@@ -527,7 +539,7 @@ Score IDs absent from training, using an ID text file with one account per line:
 
 ```bash
 mule-temporal score-new \
-  --checkpoint models/temporal/model.pt \
+  --checkpoint results/baseline/seed-42/model.pt \
   --accounts new_accounts.txt \
   --date 2025-02-01 \
   --output artifacts/new_account_scores.parquet
@@ -549,8 +561,8 @@ Evaluate frozen predictions separately:
 
 ```bash
 mule-temporal evaluate \
-  --predictions models/temporal/model_run/test_predictions.parquet \
-  --checkpoint models/temporal/model.pt \
+  --predictions results/baseline/seed-42/predictions/test.parquet \
+  --checkpoint results/baseline/seed-42/model.pt \
   --output artifacts/oracle_evaluation.json
 ```
 
@@ -561,14 +573,16 @@ with `account_id`, integer `is_mule` and optionally `date`. Duplicate keys fail
 validation. The current evaluator is for bounded experiment prediction
 files; it is not a distributed full-population metrics service.
 
-`evaluate-final` scores all test positives and weighted sampled negatives of the
-frozen test partition. It takes the test cutoff and hub registry from the
-checkpoint's prepared dataset (`--dataset`, or the path recorded in `model.pt`),
-and the retry budgets from the checkpoint. It fails before writing anything when a
-test positive is rejected or the rejected fraction exceeds the checkpoint's
-`max_rejected_root_fraction`, because weighted metrics would then describe a
-censored population. Rejected negatives within the limit are listed in
-`<output>.rejected.txt`, and the metrics' `evaluation_cohort` ends in
+`evaluate-final [RUN]` scores all test positives and weighted sampled negatives of the
+frozen test partition with the model of a run directory (`results/baseline/seed-42/`
+by default). It takes the test cutoff and hub registry from the model's prepared
+dataset (`--dataset`, or the dataset id recorded in `model.pt`), and the retry budgets
+from the model. It writes `audit/test.json` (the report) and `audit/test.parquet` (the
+scored sample) into the run directory, and refuses a run that already has them. It
+fails before writing anything when a test positive is rejected or the rejected
+fraction exceeds the model's `max_rejected_root_fraction`, because weighted metrics
+would then describe a censored population. Rejected negatives within the limit are
+listed in `audit/test_rejected.txt`, and the metrics' `evaluation_cohort` ends in
 `_minus_rejected_negatives`.
 
 The report's `metrics` estimate the whole test population, each sampled account
