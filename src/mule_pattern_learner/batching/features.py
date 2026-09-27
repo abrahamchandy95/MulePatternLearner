@@ -22,10 +22,12 @@ from ..contract.graph_schema import CHANNELS, RAILS, RELATION_INDEX, STRATA
 from .pool_counts import pool_activity
 
 DAY_MS = 86_400_000
-_IDENTITY = frozenset(
+# Columns kept as they are; every other column gets log1p.
+IDENTITY = frozenset(
     {"gap_present"} | {n for spec in FEATURE_GROUPS.values() for n in spec.identity}
 )
-_NODE_NAMES = frozenset(
+# Every column a context's node and summary features may carry.
+NODE_NAMES = frozenset(
     n for spec in FEATURE_GROUPS.values() if spec.path in ("node", "summary") for n in spec.names
 )
 _POOL_NAMES = frozenset(POOL_ACTIVITY_FEATURES + POOL_INTERNAL_FEATURES)
@@ -35,7 +37,7 @@ _STRATUM = {name: i for i, name in enumerate(STRATA)}
 
 
 def _log_columns(names: Sequence[str]) -> np.ndarray:
-    return np.asarray([n not in _IDENTITY and "_fourier_" not in n for n in names], dtype=bool)
+    return np.asarray([n not in IDENTITY and "_fourier_" not in n for n in names], dtype=bool)
 
 
 def _pooled(plan: FeaturePlan) -> bool:
@@ -62,7 +64,7 @@ def node_matrix(
     """
     names = plan.node_names
     for row in rows:
-        unexpected = set(row["features"]) - _NODE_NAMES
+        unexpected = set(row["features"]) - NODE_NAMES
         if unexpected:
             raise ValueError(f"Unrecognized feature fields: {sorted(unexpected)}")
     pools = [pool_activity(row) for row in rows[:pooled]] if _pooled(plan) else []

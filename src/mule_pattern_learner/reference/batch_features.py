@@ -12,18 +12,10 @@ from typing import Any
 import numpy as np
 
 from ..batching.assemble import child_key
-from ..batching.features import DAY_MS
+from ..batching.features import DAY_MS, IDENTITY, NODE_NAMES
 from ..batching.pool_counts import pool_activity
-from ..contract.feature_groups import FEATURE_GROUPS, POOL_GROUPS, FeaturePlan
+from ..contract.feature_groups import POOL_GROUPS, FeaturePlan
 from ..contract.time_basis import fourier64
-
-# Columns kept as they are; every other column gets log1p.
-IDENTITY = frozenset(
-    {"gap_present"} | {n for spec in FEATURE_GROUPS.values() for n in spec.identity}
-)
-NODE_NAMES = frozenset(
-    n for spec in FEATURE_GROUPS.values() if spec.path in ("node", "summary") for n in spec.names
-)
 
 
 def transform(name: str, value: float) -> float:
