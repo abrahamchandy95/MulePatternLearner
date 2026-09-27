@@ -480,7 +480,7 @@ balanced weight that state costs `1 - class_prior`, so nothing draws the model t
 
 The balanced weight is provisional: it has not yet been compared with other weights over
 several seeds. With 20 revealed positives drawn about 80 times each per epoch, its main
-risk is memorising them. Watch the `train` records in `progress.jsonl`: `objective` is
+risk is memorising them. Watch the rows of `history.csv`: `objective` is
 the unclamped risk and `corrected_steps` counts the steps whose non-negative correction
 fired. A training loss far below the first epoch's, a rising `corrected_steps`, a
 validation AP that peaks early and falls, and an early stop all point to memorisation;
@@ -518,10 +518,11 @@ the kept checkpoint is still the best validation epoch.
   AP on 11 positives is a coarse estimate: across random draws of 11 positives, a
   simulated model of constant quality (ROC AUC 0.89) spans 0.04 to 0.35. The epoch
   history records the validation ROC AUC beside the AP.
-- **Checkpoints:** `<run>/checkpoint_last.pt` after every epoch (and every
+- **Checkpoints:** `<run>/resume.pt` after every epoch (and every
   `checkpoint_every_steps`) with model, optimiser, weight average, all RNG states,
-  schedule position, best weights, history and counters. Running `train` again continues exactly: a resumed run
-  reproduced the uninterrupted run's epoch-2 loss and validation AP to every digit.
+  schedule position, best weights, epochs and counters. Running `train` again continues
+  exactly: a resumed run reproduced the uninterrupted run's epoch-2 loss and validation
+  AP to every digit.
 - **Failures:** availability errors (connection errors, HTTP 408, 429 and 5xx other than a
   bare 500, HTML gateway pages, the Cloud "Starting workspace" page) are retried with
   jittered backoff for up to `max_outage_s` (900 s), with a shared pause across threads.
@@ -529,14 +530,16 @@ the kept checkpoint is still the best validation epoch.
   HTML, query out of memory) are retried once. A server timeout on a single-key request is
   retried once; a multi-key context request that times out is split in half at once, until
   the slow key is found and named. `max_query_attempts` (6) caps the attempts that count.
-- **Outputs:** `models/temporal/<name>.pt` (selected weights, threshold, contracts and
-  fingerprints) and `<name>_run/` with `prepared/` (the cohort, labels, cutoffs and hub
-  registry this run was trained on), `config.json`,
-  `checkpoint_last.pt`, `progress.jsonl` (start, train records per logging interval,
-  evaluate, epoch and complete events), `validation_predictions.parquet`,
-  `test_predictions.parquet` and `metrics.json`. Scores in every output are float64
-  probabilities computed from the logit; in float32 every logit above about 17 scored
-  exactly 1, so the highest-scored accounts tied.
+- **Outputs:** the dataset in `data/<dataset id>/` (`manifest.json`, `accounts.parquet`,
+  `observed_labels.parquet` and `hubs.parquet`: the accounts, labels, cutoffs and hub
+  registry the run was trained on) and the run directory `results/baseline/seed-42/`:
+  `config.json` (configuration, fingerprint and provenance), `model.pt` (selected
+  weights, threshold, contracts, fingerprints and the dataset id), `resume.pt`,
+  `history.csv` (one row per logging interval), `epochs.csv`, `events.jsonl` (start,
+  train records per logging interval, evaluate, epoch and complete events),
+  `predictions/validation.parquet`, `predictions/test.parquet` and `metrics.json`.
+  Scores in every output are float64 probabilities computed from the logit; in float32
+  every logit above about 17 scored exactly 1, so the highest-scored accounts tied.
 
 Test roots (the 2025-01-01 cutoff, that is 2024-12-31 23:59:59.999 UTC, phase 3) are scored
 once with the frozen checkpoint and threshold; they never influence selection.
@@ -649,19 +652,20 @@ instance, shrink the child pool, or move to the future work listed below.
    python scripts/benchmark_batch.py --train-step --device cuda
    ```
 
-6. **Train** (run it in `tmux` or with `nohup`; `progress.jsonl` shows progress):
+6. **Train** (run it in `tmux` or with `nohup`; `events.jsonl` in the run directory and
+   stdout show progress):
 
    ```bash
    mule-temporal train
    ```
 
 7. **Resume** after any interruption by running the same command again; it continues
-   from `models/temporal/model_run/checkpoint_last.pt`.
+   from `results/baseline/seed-42/resume.pt`.
 
 8. **Score new accounts** (one ID per line; rejected IDs go to `<output>.rejected.txt`):
 
    ```bash
-   mule-temporal score-new --checkpoint models/temporal/model.pt --accounts new_accounts.txt --date 2025-01-01 --output artifacts/new_scores.parquet
+   mule-temporal score-new --checkpoint results/baseline/seed-42/model.pt --accounts new_accounts.txt --date 2025-01-01 --output artifacts/new_scores.parquet
    ```
 
 Keep the TigerGraph graph frozen during training. Every streamed run rechecks counts,
@@ -692,23 +696,23 @@ The source id is derived from the scope or the graph, never configured. The data
 settings (the source id, `scope.id`, `scope.unowned`, the `dataset` section and the
 sampler's candidate pools) must match between preparation and training; their
 fingerprint is the dataset id. Other settings, feature groups and the training seed
-included, may change between runs. A new `--output` prepares its own dataset;
-`--dataset <run>_run/prepared` reuses another run's.
+included, may change between runs. Runs with the same dataset settings share one
+dataset; different dataset settings name another dataset, prepared beside it.
 
 ## Troubleshooting
 
 | Message | Meaning and fix |
 |---|---|
 | `Installed query differs from repository source or is not installed` | Run `mule-temporal install`; it recompiles only the stale queries (the context query alone takes most of the roughly 50 minutes a full install needs) |
-| `Prepared dataset ... was built from different GSQL sources` | The GSQL changed after preparation; train into a new `--output` (the first run installs the current queries) |
+| `Prepared dataset ... was built from different GSQL sources` | The GSQL changed after preparation; install the current queries, then move the dataset aside so the next run prepares it again |
 | `Account label contract violated after the reveal` | The label attributes are inconsistent; see [label reveal](label_reveal.md) and run `temporal_validate_account_supervision` |
 | Scope rule mismatch | The scope was created with another `scope.unowned`; use the stored rule or a new `scope.id` |
 | `Live graph counts changed; freeze the source and prepare a new dataset` | The graph was modified after preparation; freeze it and prepare a new dataset |
 | `TigerGraph rejected ... training roots so far` or `validation: TigerGraph rejected ... roots` | Roots failed a per-request check beyond `max_rejected_root_fraction`, or an observed positive was rejected; the statuses name why (for example `history_capacity_exceeded`) |
 | cuGraph probe warning | pylibcugraph or the GPU failed the probe; training continues with the torch sampler; run `verify_cugraph_sampler.py` |
 | Retries in the log | TigerGraph was briefly unavailable or resuming; the run waits up to `max_outage_s` |
-| `Resumed configuration differs from the run: ['context_storage', 'evaluation_protocol', 'label_policy', 'sampler', 'variant']` (possibly with more keys) | The run started before the layered restructure, and its saved configuration holds keys that no longer exist, so it cannot resume; train into a new `--output` |
-| `Checkpoint input groups or pool definitions differ from its configuration` | The checkpoint was trained with a pool group whose definition (amount bands, pass-through thresholds, `POOL_ACTIVITY_VERSION`) has changed since; score with a model trained under the current definition |
+| `Run is already complete` | The run directory holds a finished run; its `metrics.json` is the result. Move the directory aside to train it again |
+| `The model's input groups or pool definitions differ from its configuration` | The model was trained with a pool group whose definition (amount bands, pass-through thresholds, `POOL_ACTIVITY_VERSION`) has changed since; score with a model trained under the current definition |
 
 ## Limitations and future work
 

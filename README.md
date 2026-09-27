@@ -62,11 +62,13 @@ and no prepared artifacts to copy.
 mule-temporal train
 ```
 
-It uses CUDA when available (then Apple MPS, then CPU) and writes `models/temporal/model.pt`.
-On a fresh graph the first run installs the training queries, creates the frozen
-scope and reveals the known mules in the graph ([label reveal](docs/label_reveal.md));
-every run then prepares its cohort inside `models/temporal/model_run/`. Run the same
-command again to resume an interrupted run. The settings are built in:
+It uses CUDA when available (then Apple MPS, then CPU) and writes the run to
+`results/baseline/seed-42/`: `model.pt`, `metrics.json`, `history.csv`, `epochs.csv`,
+`events.jsonl` and the other files of the run directory. On a fresh graph the first run
+installs the training queries, creates the frozen scope and reveals the known mules in
+the graph ([label reveal](docs/label_reveal.md)); every run then prepares its dataset in
+`data/<dataset id>/`. Run the same command again to resume an interrupted run. The
+settings are built in:
 `DEFAULT_CONFIG` in `src/mule_pattern_learner/config.py`, frozen dataclasses with one
 section per concern. No command reads a configuration file.
 
