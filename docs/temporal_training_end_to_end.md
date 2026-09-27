@@ -49,7 +49,7 @@ flowchart LR
 ## The data in TigerGraph
 
 Graph `Mule_Pattern_Learner` on TigerGraph 4.2.5, built from
-[temporal_schema.gsql](../gsql/schema/temporal_schema.gsql). Counts measured on 24
+[schema.gsql](../gsql/schema/schema.gsql). Counts measured on 24
 September 2026:
 
 | Vertex type | Count | Role |
@@ -112,10 +112,10 @@ stubs](#hubs-and-stubs)).
 | Train | `mule-temporal train` | Two rounds of context queries per step | No |
 | Score, evaluate | `score`, `score-new`, `evaluate-final` (and `evaluate`) | Context queries for the scored accounts; `evaluate-final` also pages the test population; `evaluate` reads saved predictions and the graph's label contract (or a `--truth` file) | No |
 
-`mule-temporal` is `python -m mule_pattern_learner.temporal.live.cli` (the entry point exists
+`mule-temporal` is `python -m mule_pattern_learner` (the entry point exists
 after `pip install -e .`; the project needs an editable install because it reads `gsql/`
 from the repository). Every setting is built in (`DEFAULT_RUN` in
-[config_schema.py](../src/mule_pattern_learner/temporal/live/config_schema.py)), so no
+[config.py](../src/mule_pattern_learner/config.py)), so no
 command needs a configuration file; `--config overrides.toml` changes only the keys it
 sets. The dataset identity is the scope's recorded source (or, for a new scope, the graph
 name plus a hash of its vertex counts), and the prepared cohort is written to
@@ -123,12 +123,12 @@ name plus a hash of its vertex counts), and the prepared cohort is written to
 
 ## The queries and the data they pull
 
-All training queries live in `gsql/temporal/` and `gsql/features/`. Installation checks
-the server text against the repository and refuses to train if they differ or if an
-endpoint is not enabled. The context query is generated from
-[queries.py](../src/mule_pattern_learner/temporal/live/queries.py) by
-`scripts/temporal/render_training_queries.py`; `--check` and the test suite fail if the file
-and the Python feature contract drift apart.
+All training queries live in `gsql/queries/`, and the oracle export in
+`gsql/evaluation/`. Installation checks the server text against the repository and
+refuses to train if they differ or if an endpoint is not enabled. The context query is
+generated from [render.py](../src/mule_pattern_learner/tigergraph/render.py) by
+`scripts/render_queries.py`; `--check` and the test suite fail if the file and the Python
+feature contract drift apart.
 
 ### temporal_create_training_scope (once per experiment)
 
@@ -296,7 +296,7 @@ measured: 3.7e-7).
 
 ## Building one training batch
 
-`make_live_batch` in [batching.py](../src/mule_pattern_learner/temporal/live/batching.py)
+`make_live_batch` in [assemble.py](../src/mule_pattern_learner/batching/assemble.py)
 builds a two-hop computation tree for the batch's roots (64 in the v5 configuration, at most
 128; internal deposit accounts at the
 split's cutoff, all in one scope phase).
@@ -337,8 +337,8 @@ and the candidate), so every machine produces the same scores.
 ### cuGraph on CUDA
 
 With `backend = "auto"` on a CUDA device, the training sampler is `CuGraphSampler` in
-[sampler.py](../src/mule_pattern_learner/temporal/live/sampler.py), built on pylibcugraph
-26.8 (26.10 is also supported):
+[cugraph_sampler.py](../src/mule_pattern_learner/sampling/cugraph_sampler.py), built on
+pylibcugraph 26.8 (26.10 is also supported):
 
 - The candidate table becomes a batch-local graph: one vertex per context, one vertex per
   candidate, one edge per candidate, edge type = relation (int32), edge time key (int64) =
@@ -423,7 +423,7 @@ still serves the built-in run.
 
 ## The model and the loss
 
-`LiveTGAT` ([model.py](../src/mule_pattern_learner/temporal/live/model.py), 101,121
+`LiveTGAT` ([tgat.py](../src/mule_pattern_learner/model/tgat.py), 101,121
 parameters in the built-in run, hidden 64, 4 heads, dropout 0.15; 88,705 with
 `slot_sum = false`, and 83,457 without the pool groups as well, the v5 profile):
 
@@ -488,7 +488,7 @@ the kept checkpoint is still the best validation epoch.
 
 ## The training loop
 
-`train()` in [training.py](../src/mule_pattern_learner/temporal/live/training.py):
+`train()` in [trainer.py](../src/mule_pattern_learner/training/trainer.py):
 
 - **Checks before anything runs:** the prepared manifest, the query hashes, the
   preparation keys, the installed query texts and endpoints, live vertex counts (excluding
@@ -633,20 +633,20 @@ instance, shrink the child pool, or move to the future work listed below.
 4. **Check cuGraph** (exit code 0 means every check passed, 2 means cuGraph cannot run):
 
    ```bash
-   python scripts/temporal/verify_cugraph_sampler.py
+   python scripts/verify_cugraph_sampler.py
    ```
 
    Then build one real batch per backend and run a deterministic CUDA step twice (this
    prepares the default run's cohort first, which `train` then reuses):
 
    ```bash
-   python scripts/temporal/verify_cugraph_sampler.py --live
+   python scripts/verify_cugraph_sampler.py --live
    ```
 
 5. **Qualify one real batch** with the configured transport:
 
    ```bash
-   python scripts/temporal/benchmark_live_batch.py --train-step --device cuda
+   python scripts/benchmark_batch.py --train-step --device cuda
    ```
 
 6. **Train** (run it in `tmux` or with `nohup`; `progress.jsonl` shows progress):
@@ -671,7 +671,7 @@ changes made while a run is in progress are not detected.
 ## Configuration reference
 
 The run settings are `DEFAULT_RUN` in
-[config_schema.py](../src/mule_pattern_learner/temporal/live/config_schema.py) plus the
+[config.py](../src/mule_pattern_learner/config.py) plus the
 operational defaults beside it. An optional `--config` TOML or JSON file overrides keys.
 Tables merge key by key, so `[sampler] backend = "torch"` or `[dates] train = [...]`
 changes only that key; lists and scalars replace the default. Unknown keys are rejected.

@@ -2,7 +2,7 @@
 
 The [feature-group redesign](feature_redesign.md) documents the window-free feature groups, optional summaries and migration. Fixed 83/135 dimensions below describe the window groups (the query's `include_*` defaults). The built-in v5 run (`DEFAULT_RUN` in `config_schema.py`) adds per-hop candidate pools, per-step resampling and a hub registry; see [candidate pools and resampling](#candidate-pools-and-resampling).
 
-The live path is `mule_pattern_learner.temporal.live`: cutoff-aware GSQL features,
+The live path is the `mule_pattern_learner` package: cutoff-aware GSQL features,
 two layers of temporal attention and nnPU learning. Source belongs in Git, and the
 settings are built into it (`DEFAULT_RUN`). Data, checkpoints and JSON reports are
 ignored.
@@ -412,7 +412,7 @@ validates the result and rejects unknown keys by name.
 `train` installs stale queries itself. To install them ahead of time:
 
 ```bash
-.venv/bin/python -m mule_pattern_learner.temporal.live.cli install
+.venv/bin/python -m mule_pattern_learner install
 ```
 
 Installation is incremental. A query is stale when its `SHOW QUERY` text differs
@@ -504,7 +504,7 @@ loss and objective. Two code versions that print the same digests and loss on on
 machine and device built the same first batch and step:
 
 ```bash
-.venv/bin/python scripts/temporal/benchmark_live_batch.py --train-step
+.venv/bin/python scripts/benchmark_batch.py --train-step
 ```
 
 On a CUDA host, install the GPU sampler with the extra that matches the CUDA major
@@ -515,8 +515,8 @@ torch cu129) or `pip install -e '.[dev,cuda13]'`
 check it before relying on `backend = "auto"`:
 
 ```bash
-.venv/bin/python scripts/temporal/verify_cugraph_sampler.py
-.venv/bin/python scripts/temporal/verify_cugraph_sampler.py --live
+.venv/bin/python scripts/verify_cugraph_sampler.py
+.venv/bin/python scripts/verify_cugraph_sampler.py --live
 ```
 
 The script starts with the functional probe that `backend = "auto"` runs, then

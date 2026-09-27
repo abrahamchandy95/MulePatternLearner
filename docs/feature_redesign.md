@@ -122,19 +122,19 @@ sets only the keys it changes (tables such as `[sampler]` merge key by key).
 
 ```sh
 # Review dimensions and parameter counts; does not train or open truth.
-.venv/bin/python scripts/temporal/feature_experiments.py
+.venv/bin/python scripts/feature_experiments.py
 
 # Install only after query parity/validation is satisfactory.
-.venv/bin/python -m mule_pattern_learner.temporal.live.cli install
+.venv/bin/python -m mule_pattern_learner install
 
 # A label-blind account audit; choose the account without consulting truth.
-.venv/bin/python scripts/temporal/verify_feature_redesign.py --account ACCOUNT_ID --date 2025-01-01
+.venv/bin/python scripts/verify_feature_redesign.py --account ACCOUNT_ID --date 2025-01-01
 
 # After scoped isolation and batch-cost qualification, train an arm.
-.venv/bin/python -m mule_pattern_learner.temporal.live.cli train --config overrides.toml --output models/temporal/feature_v4.pt
+.venv/bin/python -m mule_pattern_learner train --config overrides.toml --output models/temporal/feature_v4.pt
 
 # Final-only; do not run during feature selection. Truth comes from the graph.
-.venv/bin/python -m mule_pattern_learner.temporal.live.cli evaluate-final --checkpoint models/temporal/feature_v4.pt --output artifacts/temporal/final_audit.json
+.venv/bin/python -m mule_pattern_learner evaluate-final --checkpoint models/temporal/feature_v4.pt --output artifacts/temporal/final_audit.json
 ```
 
 Run parity and cost qualification first, then nnPU/noise-floor comparisons, then

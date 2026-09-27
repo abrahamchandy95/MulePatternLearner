@@ -17,7 +17,7 @@ The project contains:
 1. **A GSQL layer** (`gsql/`): the temporal payment schema and Account label contract,
    the cutoff-aware training queries, the experiment scope, the hub registry, the Fourier
    time encoding and the one-time label reveal.
-2. **A Python layer** (`src/mule_pattern_learner/temporal/live/`, command `mule-temporal`)
+2. **A Python layer** (`src/mule_pattern_learner/`, command `mule-temporal`)
    that installs those queries, prepares a bounded cohort, streams batches from
    TigerGraph, trains, scores and evaluates.
 
@@ -46,8 +46,8 @@ GRAPHNAME=Mule_Pattern_Learner
 SECRET=your_restpp_secret
 ```
 
-The graph is created from `gsql/schema/temporal_schema.gsql`. This repository ships
-only the Account loading contract (`gsql/schema/temporal_account_loading.gsql`); the
+The graph is created from `gsql/schema/schema.gsql`. This repository ships
+only the Account loading contract (`gsql/schema/account_loading.gsql`); the
 payment events, associations, tokens and other entities are loaded by the external
 data producer (for the reference snapshot, an export of the PhantomLedger
 simulator).
@@ -67,7 +67,7 @@ On a fresh graph the first run installs the training queries, creates the frozen
 scope and reveals the known mules in the graph ([label reveal](docs/label_reveal.md));
 every run then prepares its cohort inside `models/temporal/model_run/`. Run the same
 command again to resume an interrupted run. The settings are built in
-(`DEFAULT_RUN` in `src/mule_pattern_learner/temporal/live/config_schema.py`); an
+(`DEFAULT_RUN` in `src/mule_pattern_learner/config.py`); an
 optional `--config overrides.toml` changes only the keys it sets (tables such as
 `[sampler]` merge key by key).
 
@@ -102,13 +102,13 @@ The other commands (`install`, `prepare`, `score`, `score-new`, `evaluate` and
 .venv/bin/ruff check src tests scripts
 .venv/bin/ruff format --check src tests scripts
 .venv/bin/basedpyright src
-.venv/bin/python scripts/temporal/render_training_queries.py --check
+.venv/bin/python scripts/render_queries.py --check
 ```
 
 The tests never connect to TigerGraph. Tests marked `cuda` need a GPU and are deselected
 by default; run them on a CUDA host with `.venv/bin/python -m pytest tests -m cuda`.
 
-The scripts in `scripts/temporal/` run experiments and live checks against the graph;
+The scripts in `scripts/` run experiments and live checks against the graph;
 each prints its purpose with `--help` without connecting. The verification scripts that
 record a report write it under `artifacts/temporal/` (git-ignored); `--output` chooses
 another path. The one-time schema installer scripts, already run against the live graph,

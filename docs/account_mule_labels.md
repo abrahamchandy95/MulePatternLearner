@@ -116,9 +116,10 @@ actually populate them.
 
 ## Files
 
-- [Canonical schema](../gsql/schema/temporal_schema.gsql)
-- [Account loading job](../gsql/schema/temporal_account_loading.gsql)
-- [Supervision export and validation queries](../gsql/temporal/account_supervision.gsql)
+- [Canonical schema](../gsql/schema/schema.gsql)
+- [Account loading job](../gsql/schema/account_loading.gsql)
+- [Supervision export](../gsql/evaluation/ground_truth.gsql) and
+  [validation](../gsql/queries/label_contract.gsql) queries
 
 
 ## Production training and the label reveal
