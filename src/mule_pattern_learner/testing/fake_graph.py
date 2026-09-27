@@ -24,6 +24,7 @@ from pyTigerGraph.common.exception import TigerGraphException
 from mule_pattern_learner.contract.feature_groups import FeaturePlan, extraction_plan
 from mule_pattern_learner.contract.graph_schema import RELATIONS, ContextKey
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
+from mule_pattern_learner.data.accounts import POPULATION_QUERY
 from mule_pattern_learner.paths import REPOSITORY_ROOT
 from mule_pattern_learner.testing.builders import (
     HUB,
@@ -51,8 +52,7 @@ def signature(path: str, name: str) -> frozenset[str]:
 CONTEXT_PARAMETERS = signature("gsql/queries/training_context.gsql", CONTEXT_QUERY)
 HUB_PARAMETERS = signature("gsql/queries/hub_accounts.gsql", HUB_QUERY)
 SCOPE_POLICY_PARAMETERS = signature("gsql/queries/training_scope.gsql", SCOPE_POLICY_QUERY)
-SCOPE_POPULATION_QUERY = "temporal_scope_population"
-SCOPE_POPULATION_PARAMETERS = signature("gsql/queries/training_scope.gsql", SCOPE_POPULATION_QUERY)
+POPULATION_PARAMETERS = signature("gsql/queries/training_scope.gsql", POPULATION_QUERY)
 
 
 def pooled(messages: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
@@ -130,7 +130,7 @@ class FakeExecutor:
             return self.hub_rows(params)
         if name == SCOPE_POLICY_QUERY:
             return self.scope_policy_rows(params)
-        if name == SCOPE_POPULATION_QUERY:
+        if name == POPULATION_QUERY:
             return self.population_rows(params)
         if name == "temporal_training_cutoffs":
             return [
@@ -214,7 +214,7 @@ class FakeExecutor:
 
     def population_rows(self, params: dict[str, Any]) -> list[dict[str, Any]]:
         """One page of `population` after after_id; labels only with include_observed."""
-        assert set(params) == SCOPE_POPULATION_PARAMETERS, set(params) ^ SCOPE_POPULATION_PARAMETERS
+        assert set(params) == POPULATION_PARAMETERS, set(params) ^ POPULATION_PARAMETERS
         labels = bool(params["include_observed"])
         withheld = {} if labels else {"observed_positive": False, "known_from_ms": 0}
         page = [
@@ -475,7 +475,7 @@ class ScoringExecutor:
                     ],
                 }
             ]
-        if name == "temporal_scope_population":
+        if name == POPULATION_QUERY:
             assert params["include_observed"] is False and self.accounts is not None
             page = [
                 {"account_id": a, "partition": 3, "first_seen_ts_ms": 1}
