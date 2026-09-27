@@ -31,9 +31,10 @@ ASSOCIATION_TARGETS = (
     ("IP", "Party"),
     ("Address", "Party"),
 )
-RELATIONS = ("zelle_out", "zelle_in", "payment_out", "payment_in") + tuple(
-    name for pair in ASSOCIATIONS for name in pair
-)
+# The relations whose neighbours are payment messages; they come first in RELATIONS.
+PAYMENT_RELATIONS = ("zelle_out", "zelle_in", "payment_out", "payment_in")
+ASSOCIATION_RELATIONS = tuple(name for pair in ASSOCIATIONS for name in pair)
+RELATIONS = PAYMENT_RELATIONS + ASSOCIATION_RELATIONS
 # The position of each relation in RELATIONS: its code in candidate tables and batches.
 RELATION_INDEX = {name: i for i, name in enumerate(RELATIONS)}
 RAILS = ("unknown", "zelle", "ach", "card", "cash", "check", "internal")

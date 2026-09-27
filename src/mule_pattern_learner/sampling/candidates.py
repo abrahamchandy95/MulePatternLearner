@@ -16,10 +16,11 @@ import numpy as np
 import torch
 
 from ..contract.fingerprints import stable_hash
-from ..contract.graph_schema import RELATION_INDEX, RELATIONS, ContextKey
+from ..contract.graph_schema import PAYMENT_RELATIONS, RELATION_INDEX, RELATIONS, ContextKey
 from ..contract.sampler_plan import SamplerPlan
 
-PAYMENT_RELATIONS = 4
+# Relations whose code (their position in RELATIONS) is below PAYMENT_COUNT are payments.
+PAYMENT_COUNT = len(PAYMENT_RELATIONS)
 NUM_RELATIONS = len(RELATIONS)
 _MASK64 = (1 << 64) - 1
 
@@ -77,7 +78,7 @@ class CandidateTable:
         return np.asarray(
             [
                 stable_hash(
-                    m["relation"] + ":" + (m["event_id"] if r < PAYMENT_RELATIONS else m["node_id"])
+                    m["relation"] + ":" + (m["event_id"] if r < PAYMENT_COUNT else m["node_id"])
                 )
                 for m, r in zip(self.messages, self.relation.tolist(), strict=True)
             ],
@@ -96,7 +97,7 @@ class CandidateTable:
             )
             for m in ordered:
                 r = _relation(m)
-                payment = r < PAYMENT_RELATIONS
+                payment = r < PAYMENT_COUNT
                 if payment and not m["event_id"]:
                     raise ValueError("Payment candidate without an event ID")
                 context.append(c)
@@ -126,9 +127,9 @@ def _relation(message: dict[str, Any]) -> int:
 def relation_quotas(sampler: SamplerPlan, hop: int) -> np.ndarray:
     """Maximum sampled candidates per (context, relation); hop 2 is payments-only."""
     quotas = np.zeros(NUM_RELATIONS, dtype=np.int64)
-    quotas[:PAYMENT_RELATIONS] = sampler.relation_fanouts[hop - 1]
+    quotas[:PAYMENT_COUNT] = sampler.relation_fanouts[hop - 1]
     if hop == 1:
-        quotas[PAYMENT_RELATIONS:] = sampler.association_fanout
+        quotas[PAYMENT_COUNT:] = sampler.association_fanout
     return quotas
 
 
@@ -175,8 +176,8 @@ def merge_slots(
 ) -> np.ndarray:
     """Merge kept candidates into [C, fanout] row indices (-1 is padding).
 
-    Payments interleave by position across RELATIONS[:4] and associations across
-    RELATIONS[4:], positions ordered by the selection keys. With
+    Payments interleave by position across PAYMENT_RELATIONS and associations across
+    ASSOCIATION_RELATIONS, positions ordered by the selection keys. With
     `reserve = min(association_slots, n_assoc, fanout // 4)` the slots hold
     `P[:K-reserve] + A[:reserve]`, then `P[K-reserve:] + A[reserve:]` up to K.
     Hop 2 keeps payments only: `P[:K]`.
@@ -187,7 +188,7 @@ def merge_slots(
     out = torch.full((num, fanout), -1, dtype=torch.int64, device=device)
     context = torch.from_numpy(table.context).to(device)[rows]
     relation = torch.from_numpy(table.relation).to(device)[rows]
-    payment = relation < PAYMENT_RELATIONS
+    payment = relation < PAYMENT_COUNT
     if hop == 2:
         rows, context, relation, payment = (
             rows[payment],
@@ -200,11 +201,11 @@ def merge_slots(
     position = group_ranks(
         context * NUM_RELATIONS + relation, keys.to(device)[rows], num * NUM_RELATIONS
     )
-    associations = NUM_RELATIONS - PAYMENT_RELATIONS
+    associations = NUM_RELATIONS - PAYMENT_COUNT
     order = torch.where(
         payment,
-        position * PAYMENT_RELATIONS + relation,
-        position * associations + relation - PAYMENT_RELATIONS,
+        position * PAYMENT_COUNT + relation,
+        position * associations + relation - PAYMENT_COUNT,
     )
     rank = group_ranks(context * 2 + (~payment).long(), order, 2 * num)
     n_pay = torch.bincount(context[payment], minlength=num)

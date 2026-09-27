@@ -14,12 +14,15 @@ import torch
 from mule_pattern_learner.batching import assemble
 from mule_pattern_learner.batching.assemble import build_batch
 from mule_pattern_learner.contract.feature_groups import CORE_GROUPS, FeaturePlan
-from mule_pattern_learner.contract.graph_schema import RELATIONS, ContextKey
+from mule_pattern_learner.contract.graph_schema import (
+    ASSOCIATION_RELATIONS,
+    PAYMENT_RELATIONS,
+    ContextKey,
+)
 from mule_pattern_learner.contract.sampler_plan import PoolPlan, SamplerPlan
 from mule_pattern_learner.sampling.backend import select_resampled
 from mule_pattern_learner.sampling.candidates import CandidateTable, selection_keys, splitmix64
 from mule_pattern_learner.testing.builders import (
-    PAYMENTS,
     RESAMPLE,
     candidate_table,
     context_rng,
@@ -50,10 +53,10 @@ def test_resample_caps_reserve_and_backfill_follow_the_stratified_merge() -> Non
         )
         chosen = [table.messages[j] for j in slots[0] if j >= 0]
         relations = Counter(m["relation"] for m in chosen)
-        assert all(relations[r] <= 3 for r in PAYMENTS)
-        assert all(relations[r] <= 1 for r in RELATIONS[4:])
+        assert all(relations[r] <= 3 for r in PAYMENT_RELATIONS)
+        assert all(relations[r] <= 1 for r in ASSOCIATION_RELATIONS)
         # 7 payments (3+3+1) fill K - reserve = 6 slots, then 2 reserved associations.
-        assert [m["relation"] in PAYMENTS for m in chosen] == [True] * 6 + [False] * 2
+        assert [m["relation"] in PAYMENT_RELATIONS for m in chosen] == [True] * 6 + [False] * 2
         assert [m["relation"] for m in chosen[:3]] == ["zelle_out", "zelle_in", "payment_out"]
         assert [m["relation"] for m in chosen[3:6]] == ["zelle_out", "zelle_in", "zelle_out"]
         assert [m["relation"] for m in chosen[6:]] == [
@@ -61,7 +64,9 @@ def test_resample_caps_reserve_and_backfill_follow_the_stratified_merge() -> Non
             "Account_Bound_From_Token",
         ]
     # Few payments: associations backfill the free slots after the reserve.
-    keys, rows = candidate_table({"zelle_out": 1} | {r: 2 for r in counts if r not in PAYMENTS})
+    keys, rows = candidate_table(
+        {"zelle_out": 1} | {r: 2 for r in counts if r not in PAYMENT_RELATIONS}
+    )
     table = CandidateTable.build(keys, rows)
     slots = select_resampled(table, hop=1, sampler=sampler, fanout=8, mode="eval")
     chosen = [table.messages[j]["relation"] for j in slots[0] if j >= 0]

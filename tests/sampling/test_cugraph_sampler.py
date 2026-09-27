@@ -11,7 +11,12 @@ import numpy as np
 import pytest
 import torch
 
-from mule_pattern_learner.contract.graph_schema import RELATIONS, ContextKey
+from mule_pattern_learner.contract.graph_schema import (
+    ASSOCIATION_RELATIONS,
+    PAYMENT_RELATIONS,
+    RELATIONS,
+    ContextKey,
+)
 from mule_pattern_learner.sampling import candidates, cugraph_sampler, torch_sampler
 from mule_pattern_learner.sampling.backend import select_resampled
 from mule_pattern_learner.sampling.candidates import CandidateTable, selection_keys
@@ -22,7 +27,7 @@ from mule_pattern_learner.sampling.cugraph_sampler import (
     probe_cugraph,
 )
 from mule_pattern_learner.testing import sampler_checks
-from mule_pattern_learner.testing.builders import PAYMENTS, RESAMPLE, candidate_table
+from mule_pattern_learner.testing.builders import RESAMPLE, candidate_table
 
 
 class MockPLC:
@@ -199,9 +204,9 @@ def test_cugraph_sampler_maps_results_to_slots_with_the_torch_merge(unified: boo
             chosen = [table.messages[j] for j in row if j >= 0]
             assert all(table.context[j] == c for j in row if j >= 0)
             relations = Counter(m["relation"] for m in chosen)
-            assert all(relations[r] <= 3 for r in PAYMENTS)
-            assert all(relations[r] <= 1 for r in RELATIONS[4:])
-            assert [m["relation"] in PAYMENTS for m in chosen] == [True] * 6 + [False] * 2
+            assert all(relations[r] <= 3 for r in PAYMENT_RELATIONS)
+            assert all(relations[r] <= 1 for r in ASSOCIATION_RELATIONS)
+            assert [m["relation"] in PAYMENT_RELATIONS for m in chosen] == [True] * 6 + [False] * 2
     assert [call["random_state"] for call in plc.calls] == [0, 1, 2, 3, 4]
     assert all(call["num_edge_types"] == len(RELATIONS) for call in plc.calls)
     hop2 = select_resampled(

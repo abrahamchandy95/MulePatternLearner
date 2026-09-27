@@ -26,7 +26,7 @@ from mule_pattern_learner.model.build import build_model
 from mule_pattern_learner.pipeline.connect import open_context_source
 from mule_pattern_learner.pipeline.prepare import find_datasets
 from mule_pattern_learner.runtime.device import reserve_deterministic_cublas, torch_runtime
-from mule_pattern_learner.sampling.candidates import PAYMENT_RELATIONS
+from mule_pattern_learner.sampling.candidates import PAYMENT_COUNT
 from mule_pattern_learner.sampling.cugraph_sampler import (
     CuGraphSampler,
     cugraph_import_error,
@@ -119,10 +119,10 @@ def test_real_batches_per_backend_and_a_deterministic_cuda_step(engine: CuGraphS
             assert stats["sampler_backend"] == backend
         for backend, sampled in batches.items():
             codes = sampled["first_relation"].masked_fill(~sampled["first_mask"], -1)
-            caps = [int((codes == r).sum(1).max()) for r in range(PAYMENT_RELATIONS)]
+            caps = [int((codes == r).sum(1).max()) for r in range(PAYMENT_COUNT)]
             assert max(caps) <= sampler.relation_fanouts[0], (backend, caps)
             second = sampled["second_relation"][sampled["second_mask"]]
-            assert bool((second < PAYMENT_RELATIONS).all()), backend
+            assert bool((second < PAYMENT_COUNT).all()), backend
         evaluation = [batch(backend, "eval", {}) for backend in ("torch", "cugraph")]
         assert all(torch.equal(evaluation[0][k], evaluation[1][k]) for k in evaluation[0])
         # One deterministic CUDA training step, twice from the same state.

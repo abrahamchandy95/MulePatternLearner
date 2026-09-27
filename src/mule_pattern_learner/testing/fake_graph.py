@@ -24,7 +24,7 @@ from pyTigerGraph.common.exception import TigerGraphException
 from mule_pattern_learner.config import RunConfig
 from mule_pattern_learner.contract.bounds import REQUEST_KEYS
 from mule_pattern_learner.contract.feature_groups import FeaturePlan, extraction_plan
-from mule_pattern_learner.contract.graph_schema import RELATIONS, ContextKey
+from mule_pattern_learner.contract.graph_schema import PAYMENT_RELATIONS, ContextKey
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
 from mule_pattern_learner.contract.server import (
     CONTEXT_QUERY,
@@ -49,8 +49,6 @@ from mule_pattern_learner.testing.builders import (
     synthetic_row,
 )
 from mule_pattern_learner.tigergraph.gsql_text import definitions, parameter_names
-
-PAYMENT_RELATIONS = frozenset(RELATIONS[:4])
 
 
 def signature(path: str, name: str) -> frozenset[str]:

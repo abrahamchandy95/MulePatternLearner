@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..contract.feature_groups import FIRST_INFLOW_BANDS, PASS_THROUGH_RATIO, PASS_THROUGH_SECONDS
-from ..contract.graph_schema import RELATIONS
+from ..contract.graph_schema import PAYMENT_RELATIONS
 
 _INCOMING = frozenset({"zelle_in", "payment_in"})
 _OUTGOING = frozenset({"zelle_out", "payment_out"})
@@ -26,8 +26,8 @@ def pool_activity(context: dict[str, Any]) -> dict[str, float]:
     never paired here) follows within PASS_THROUGH_SECONDS and moves PASS_THROUGH_RATIO
     of the inflow amount. Stubs and contexts without payments get zeros.
     """
-    peers: dict[str, set[tuple[str, str]]] = {r: set() for r in RELATIONS[:4]}
-    counts = dict.fromkeys(RELATIONS[:4], 0)
+    peers: dict[str, set[tuple[str, str]]] = {r: set() for r in PAYMENT_RELATIONS}
+    counts = dict.fromkeys(PAYMENT_RELATIONS, 0)
     bands = dict.fromkeys(FIRST_INFLOW_BANDS, 0)
     first_in = first_internal = pass_through = 0
     low, high = PASS_THROUGH_RATIO
@@ -55,7 +55,7 @@ def pool_activity(context: dict[str, Any]) -> dict[str, float]:
     except KeyError as error:
         raise ValueError(f"Message lacks required field {error.args[0]!r}") from None
     values: dict[str, float] = {}
-    for relation in RELATIONS[:4]:
+    for relation in PAYMENT_RELATIONS:
         values[f"pool_{relation}_count"] = counts[relation]
         values[f"pool_{relation}_unique"] = len(peers[relation])
     values |= {

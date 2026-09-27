@@ -30,11 +30,12 @@ from mule_pattern_learner.contract.feature_groups import (
 )
 from mule_pattern_learner.contract.fingerprints import hash64, stable_score
 from mule_pattern_learner.contract.graph_schema import (
+    ASSOCIATION_RELATIONS,
     ASSOCIATION_TARGETS,
     ASSOCIATIONS,
     HUB_COLUMNS,
+    PAYMENT_RELATIONS,
     RAILS,
-    RELATIONS,
     SPLIT_PHASE,
     ContextKey,
 )
@@ -294,7 +295,7 @@ def neighbourhood(key: ContextKey) -> dict[str, Any]:
         seq, ts = key.cutoff_seq - 1 - 3 * j, key.cutoff_ms - (j + 1) * 3_600_000
         if seq <= 0 or ts <= 1:
             break
-        relation = RELATIONS[(h + j) % 4]
+        relation = PAYMENT_RELATIONS[(h + j) % len(PAYMENT_RELATIONS)]
         messages.append(
             message(
                 seq,
@@ -476,7 +477,6 @@ ASSOCIATION_TARGET = {
     for pair, types in zip(ASSOCIATIONS, ASSOCIATION_TARGETS)
     for rel, typ in zip(pair, types)
 }
-PAYMENTS = RELATIONS[:4]
 RESAMPLE = SamplerPlan(
     roots=PoolPlan(recent=4, older=3, distinct=2, associations=2),
     relation_fanouts=(3, 2),
@@ -574,7 +574,7 @@ def synthetic_row(
     rng = context_rng(key)
     messages: list[dict[str, Any]] = []
     if key.node_type == "Account":
-        for relation in PAYMENTS:
+        for relation in PAYMENT_RELATIONS:
             count = int(rng.integers(0, pool.recent + pool.older + pool.distinct + 1))
             count = pool.recent + pool.older + pool.distinct if full else count
             count = min(count, key.cutoff_seq - 1)
@@ -583,7 +583,7 @@ def synthetic_row(
             for seq, stratum in zip(seqs, strata):
                 peer = f"a{int(rng.integers(0, 12))}"
                 messages.append(payment(key, relation, int(seq), peer, stratum, rng))
-    for relation in RELATIONS[4:]:
+    for relation in ASSOCIATION_RELATIONS:
         if relation.split("_")[0] != key.node_type:
             continue
         for n in range(pool.associations if full else int(rng.integers(0, pool.associations + 1))):
@@ -654,7 +654,7 @@ def candidate_table(
         messages = []
         for relation, count in counts.items():
             for n in range(count):
-                if relation in PAYMENTS:
+                if relation in PAYMENT_RELATIONS:
                     m = payment(key, relation, cutoff - 1 - n, f"p{n}", "recent", rng)
                 else:
                     m = synthetic_association(key, relation, f"n{n}", rng)
@@ -671,7 +671,7 @@ HUB = "P3"
 
 def _message(parent: ContextKey, j: int) -> dict[str, Any]:
     h = hash64(parent.node_type, parent.node_id, parent.cutoff_seq, j)
-    relation = RELATIONS[h % 4]
+    relation = PAYMENT_RELATIONS[h % len(PAYMENT_RELATIONS)]
     seq = parent.cutoff_seq - 1 - 5 * j - h % 5
     ts = parent.cutoff_ms - (j + 1) * 3_600_000 - h % 997
     gap = j % 3 != 0
