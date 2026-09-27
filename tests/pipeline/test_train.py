@@ -9,7 +9,13 @@ from unittest.mock import patch
 import pandas as pd
 import pytest
 
-from mule_pattern_learner.artifacts import read_epochs, read_events, read_history, read_json
+from mule_pattern_learner.artifacts import (
+    read_epochs,
+    read_events,
+    read_history,
+    read_json,
+    write_run_config,
+)
 from mule_pattern_learner.cli import build_parser
 from mule_pattern_learner.config import DEFAULT_CONFIG, TransportConfig
 from mule_pattern_learner.data.manifest import dataset_id
@@ -51,9 +57,14 @@ def test_minimal_command_and_run_defaults(tmp_path: Path) -> None:
         assert config is DEFAULT_CONFIG
         # A started run is refused before anything is prepared, unless it is resumed.
         output.root.mkdir()
-        output.config.write_text("{}")
+        write_run_config(output.config, DEFAULT_CONFIG, {})
         with pytest.raises(FileExistsError, match="Run already exists"):
             train_run(output, data=tmp_path / "data")
+        assert prep.call_count == 1
+        # So is resuming it with other settings, and the error names them.
+        changed = DEFAULT_CONFIG.with_changes({"training": {"epochs": 3}})
+        with pytest.raises(ValueError, match=r"differs from the run: \['training.epochs'\]"):
+            train_run(output, config=changed, data=tmp_path / "data", resume=True)
         assert prep.call_count == 1
         train_run(output, data=tmp_path / "data", resume=True)
         assert fit.call_args.kwargs["resume"] is True

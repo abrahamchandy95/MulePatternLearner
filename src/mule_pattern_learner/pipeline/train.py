@@ -7,7 +7,7 @@ from typing import Any
 
 from ..config import DEFAULT_CONFIG, RunConfig
 from ..paths import BASELINE_VARIANT, DATA_DIR, RunPaths
-from ..training.checkpoint import completed_run, run_started
+from ..training.checkpoint import check_resumable, completed_run, run_started
 from ..training.trainer import train
 from .connect import open_context_source
 from .prepare import prepare_dataset
@@ -28,8 +28,9 @@ def train_run(
     `mule train` runs DEFAULT_CONFIG into BASELINE_RUN. The dataset is
     config's in data (pipeline.prepare.prepare_dataset). With ``resume`` (what the command
     passes) an interrupted run continues from its resume.pt, and a complete run of the
-    same settings is reported from its metrics.json before anything connects or is
-    written; a complete run of other settings is an error that names them.
+    same settings is reported from its metrics.json. Both are checked before anything
+    connects or is written: a run of other settings, complete or not, is an error that
+    names them.
     """
     if not resume and run_started(output):
         raise FileExistsError(f"Run already exists: {output.root}; pass resume=True")
@@ -37,5 +38,6 @@ def train_run(
         recorded = completed_run(config, output)
         if recorded is not None:
             return recorded
+        check_resumable(config, output)
     dataset = prepare_dataset(config, data)
     return train(config, dataset, output, open_contexts=open_context_source, resume=resume)
