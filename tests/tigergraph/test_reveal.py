@@ -1,6 +1,5 @@
 """The one-time label reveal: its parameters, defaults and first-run behaviour."""
 
-from pathlib import Path
 import re
 from typing import Any
 
@@ -9,13 +8,13 @@ import pytest
 
 from mule_pattern_learner.config import DEFAULT_RUN, run_config, validate_config
 from mule_pattern_learner.contract.clock import timestamp
+from mule_pattern_learner.paths import REPOSITORY_ROOT
 from mule_pattern_learner.tigergraph import labels as tigergraph_labels
 from mule_pattern_learner.tigergraph import reveal as tigergraph_reveal
 from mule_pattern_learner.tigergraph.gsql_text import definitions, repository_queries
 from mule_pattern_learner.tigergraph.installer import TRAINING_QUERY_FILES
 
-ROOT = Path(__file__).resolve().parents[2]
-REVEAL_FILE = ROOT / "gsql/queries/label_reveal.gsql"
+REVEAL_FILE = REPOSITORY_ROOT / "gsql/queries/label_reveal.gsql"
 CLEAN = {
     "known_labels": 752623,
     "true_mules": 233,
@@ -147,4 +146,4 @@ def test_reveal_queries_are_installed_with_training_and_read_truth_only_there() 
         "gsql/queries/hub_accounts.gsql",
         "gsql/queries/split_cutoffs.gsql",
     ):
-        assert "is_mule" not in (ROOT / relative).read_text()
+        assert "is_mule" not in (REPOSITORY_ROOT / relative).read_text()

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import re
 
 import pytest
@@ -17,8 +16,7 @@ from mule_pattern_learner.tigergraph.gsql_text import definitions, parameter_nam
 from mule_pattern_learner.tigergraph.hubs import query_hub_registry
 from mule_pattern_learner.tigergraph.render import DEFAULT_FLAG_GROUPS
 
-ROOT = Path(__file__).resolve().parents[2]
-GSQL = ROOT / "gsql/queries"
+GSQL = REPOSITORY_ROOT / "gsql/queries"
 ORACLE = (
     "is_mule",
     "is_mule_masked",

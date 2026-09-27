@@ -12,10 +12,9 @@ from typing import Any
 import pytest
 
 from mule_pattern_learner import cli
+from mule_pattern_learner.paths import REPOSITORY_ROOT
 from mule_pattern_learner.pipeline import train as pipeline_train
 from mule_pattern_learner.testing.builders import base_config
-
-ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_python_m_runs_the_command_line() -> None:
@@ -45,7 +44,7 @@ def test_cli_sets_the_cublas_workspace_at_import_and_keeps_user_values() -> None
         "print(os.environ['CUBLAS_WORKSPACE_CONFIG'])\n"
     )
     env = {k: v for k, v in os.environ.items() if k != "CUBLAS_WORKSPACE_CONFIG"}
-    env["PYTHONPATH"] = str(ROOT / "src")
+    env["PYTHONPATH"] = str(REPOSITORY_ROOT / "src")
     result = subprocess.run(
         [sys.executable, "-c", code], env=env, capture_output=True, text=True, check=True
     )
@@ -59,7 +58,7 @@ def test_cli_sets_the_cublas_workspace_at_import_and_keeps_user_values() -> None
     )
     assert result.stdout.strip() == ":16:8"
     # The assignment precedes every import that can load torch.
-    source = (ROOT / "src/mule_pattern_learner/cli.py").read_text()
+    source = (REPOSITORY_ROOT / "src/mule_pattern_learner/cli.py").read_text()
     assert source.index("CUBLAS_WORKSPACE_CONFIG") < source.index("\nimport argparse")
 
 
