@@ -16,7 +16,6 @@ same settings.
 
 from __future__ import annotations
 
-from dataclasses import asdict, replace
 import math
 from pathlib import Path
 import shutil
@@ -26,7 +25,7 @@ import pandas as pd
 import pytest
 import torch
 
-from mule_pattern_learner.config import BUILT_IN_SAMPLER, DEFAULT_CONFIG, RunConfig
+from mule_pattern_learner.config import DEFAULT_CONFIG, RunConfig
 from mule_pattern_learner.contract.clock import cutoff_ms
 from mule_pattern_learner.contract.feature_groups import (
     CORE_GROUPS,
@@ -36,18 +35,13 @@ from mule_pattern_learner.contract.feature_groups import (
 )
 from mule_pattern_learner.contract.fingerprints import fingerprint
 from mule_pattern_learner.contract.graph_schema import ContextKey
-from mule_pattern_learner.contract.sampler_plan import PoolPlan
 from mule_pattern_learner.data.contexts import ContextSource, build_context_source
 from mule_pattern_learner.data.hub_registry import load_hub_registry
 from mule_pattern_learner.data.manifest import dataset_id, load_prepared, read_manifest
 from mule_pattern_learner.data.preparation import prepare
 from mule_pattern_learner.data.splits import eligible_mask, sample_keys
 from mule_pattern_learner.inference.predictor import Predictor
-from mule_pattern_learner.inference.saved_model import (
-    REQUIRED_SETTINGS,
-    SavedModel,
-    saved_run_config,
-)
+from mule_pattern_learner.inference.saved_model import SavedModel
 from mule_pattern_learner.paths import DATA_DIR, DatasetPaths, RunPaths
 from mule_pattern_learner.testing.builders import neighbourhood, scope_population
 from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
@@ -253,80 +247,9 @@ def test_a_model_of_another_format_is_refused_and_old_ones_keep_their_directory(
         SavedModel.load(newer)
 
 
-# The fan-outs and sampler table every configuration the old code saved holds, here the
-# built-in run's.
-OLD_SAMPLING: dict[str, Any] = {
-    "fanouts": [16, 4],
-    "sampler": {**asdict(BUILT_IN_SAMPLER.roots), "children": asdict(BUILT_IN_SAMPLER.children)},
-}
-
-
-def old(**settings: Any) -> dict[str, Any]:
-    """An old flat configuration: OLD_SAMPLING with settings."""
-    return {**OLD_SAMPLING, **settings}
-
-
-def test_old_configurations_convert_through_the_key_table() -> None:
-    built_in = saved_run_config(old())
-    assert built_in == DEFAULT_CONFIG
-    # Settings of removed paths were saved with the one value that remains.
-    retired = {
-        "context_storage": "stream",
-        "evaluation_protocol": "strict_inductive",
-        "label_policy": "graph_observed",
-        "observed_labels": None,
-        "extraction_groups": ["entity_meta", "rolling_windows"],
-        "fanouts": [16, 4],
-        "sampler": {**asdict(BUILT_IN_SAMPLER.roots), "policy": "resample"},
-        "dataset_id": "load_fixture",
-        "prepared_id": None,
-        "prepare_batch_size": 16,
-    }
-    converted = saved_run_config(retired)
-    assert converted.sampler.roots == BUILT_IN_SAMPLER.roots
-    assert converted.sampler.children == replace(BUILT_IN_SAMPLER.roots, associations=0)
-    assert replace(converted, sampler=DEFAULT_CONFIG.sampler) == DEFAULT_CONFIG
-    for key, value, message in (
-        ("context_storage", "sqlite", "context_storage = 'sqlite' is no longer supported"),
-        ("evaluation_protocol", "shared_history", "evaluation_protocol = 'shared_history'"),
-        ("label_policy", "observed", "label_policy = 'observed' is no longer supported"),
-        ("observed_labels", "x.parquet", "observed_labels = 'x.parquet' is no longer supported$"),
-        ("variant", "wide", "variant = 'wide' is no longer supported"),
-        ("stage", "offline", "Unknown saved configuration key"),
-    ):
-        with pytest.raises(ValueError, match=message):
-            saved_run_config(old(**{key: value}))
-    with pytest.raises(ValueError, match="sampler.policy = 'recent' is no longer supported"):
-        saved_run_config(old(sampler={"policy": "recent"}))
-    # The old code gave absent fan-outs and sampler pools values of its own, which
-    # nothing else would catch, so a table without them is refused.
-    for missing in REQUIRED_SETTINGS:
-        partial = {k: v for k, v in old().items() if k != missing}
-        with pytest.raises(ValueError, match=f"names no {missing}; the code that saved it"):
-            saved_run_config(partial)
-    with pytest.raises(ValueError, match="names no fanouts or sampler"):
-        saved_run_config({"fanouts": None})
-    # The model variants became settings.
-    assert saved_run_config(old(variant="temporal")) == built_in
-    tabular = saved_run_config(old(variant="tabular"))
-    assert tabular == replace(built_in, model=replace(built_in.model, architecture="summary"))
-    no_fourier = saved_run_config(old(variant="no_fourier")).features
-    assert no_fourier == tuple(g for g in built_in.features if g != "time_encoding")
-    # A [sampler] table's absent pool keys were those of PoolPlan(), and its children
-    # pool the roots pool without associations, changed by [sampler.children].
-    partial = saved_run_config(old(sampler={"recent": 4, "children": {"older": 1}})).sampler
-    assert partial.roots == PoolPlan(recent=4)
-    assert partial.children == PoolPlan(recent=4, older=1, associations=0)
-    assert partial.relation_fanouts == BUILT_IN_SAMPLER.relation_fanouts
-    # The reservoir seed and the reveal salt defaulted to the training seed.
-    seeded = saved_run_config(old(seed=7, reveal_salt=None, reveal_per_split=None))
-    assert (seeded.training.seed, seeded.dataset.seed, seeded.scope.reveal_salt) == (7, 7, 7)
-    assert seeded.scope.reveal_per_split == built_in.scope.reveal_per_split
-    pinned = saved_run_config(old(seed=7, cohort_seed=3, reveal_salt=5))
-    assert (pinned.dataset.seed, pinned.scope.reveal_salt) == (3, 5)
-    # A null limit saved on purpose stays null.
-    unlimited = saved_run_config(old(steps_per_epoch=None, evaluation_unlabeled_limit=None))
-    assert unlimited.training.steps_per_epoch is None
-    assert unlimited.training.proxy_unlabeled_limit is None
-    # A model saved since the typed configuration holds RunConfig.to_dict().
-    assert saved_run_config(tabular.to_dict()) == tabular
+def test_a_model_saved_since_the_typed_configuration_holds_its_run_config(
+    tmp_path: Path,
+) -> None:
+    config = DEFAULT_CONFIG.with_changes({"model": {"architecture": "summary"}})
+    saved = SavedModel(tmp_path / "model.pt", {"config": config.to_dict()})
+    assert saved.config == config
