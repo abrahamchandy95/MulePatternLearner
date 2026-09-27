@@ -11,11 +11,10 @@ from ..inference.saved_model import SavedModel
 from ..inference.score_accounts import check_new_outputs, read_account_ids, score_new_accounts
 from ..paths import RunPaths
 from ..runtime.progress import recording
-from ..tigergraph.context_query import TigerGraphContextFetcher
 from ..tigergraph.cutoffs import TigerGraphCutoffs
 from ..tigergraph.hubs import TigerGraphHubs
 from ..tigergraph.installer import verify_sources
-from .connect import connect
+from .connect import connect, context_source
 
 
 def score_accounts(run: RunPaths, accounts: Path, date: str | None = None) -> dict[str, Any]:
@@ -49,7 +48,7 @@ def score_accounts(run: RunPaths, accounts: Path, date: str | None = None) -> di
             date,
             output,
             rejected_output=rejected_output,
+            contexts=context_source(executor, saved.config),
             cutoffs=TigerGraphCutoffs(executor),
             hub_reader=TigerGraphHubs(executor),
-            fetcher=TigerGraphContextFetcher(executor),
         )

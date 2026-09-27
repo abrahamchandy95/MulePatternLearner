@@ -24,7 +24,7 @@ from .truth import TruthReader
 if TYPE_CHECKING:
     from ..data.contexts import ContextReader
     from ..data.hub_registry import HubRegistry
-    from ..data.ports import ContextFetcher, ScopeReader
+    from ..data.ports import ScopeReader
 
 
 def evaluate_predictions(
@@ -121,10 +121,9 @@ def audit(
     truth: TruthReader,
     *,
     scope: ScopeReader,
-    fetcher: ContextFetcher | None = None,
+    contexts: ContextReader,
     negative_limit: int = 2000,
     dataset: DatasetPaths | None = None,
-    contexts: ContextReader | None = None,
     hubs: HubRegistry | None = None,
 ) -> dict[str, Any]:
     """Score a fresh final-only sample from the entire frozen test partition.
@@ -134,8 +133,8 @@ def audit(
     changes a model and refuses to overwrite an existing audit. The
     prepared dataset (``dataset`` or the one recorded in the model) supplies
     the test cutoff clock and the hub registry, so scoring matches training. The test
-    population comes from ``scope`` and the contexts from ``fetcher`` (``contexts``
-    replaces them); the pipeline builds both on a frozen source it has verified
+    population comes from ``scope`` and the contexts from ``contexts``, which the audit
+    closes; the pipeline opens both on a frozen source it has verified
     (pipeline.evaluate.evaluate_run).
 
     Accounts TigerGraph rejects are not scored. A rejected test positive, or a
@@ -180,9 +179,9 @@ def audit(
     if len(selected) > AUDIT_SAMPLE:
         raise ValueError("Final scoring sample exceeds audit budget")
     registry = hubs if hubs is not None else load_hub_registry(dataset, manifest)
-    predictor = Predictor(saved, contexts, fetcher=fetcher, hubs=registry)
     failed = True
     try:
+        predictor = Predictor(saved, contexts, hubs=registry)
         size = predictor.batch_size
         # The prepared test keys: the dataset's cutoff clock, scope and phase 3.
         frames, rejected = predictor.score_keys(
@@ -191,7 +190,7 @@ def audit(
         )
         failed = False
     finally:
-        close_source(predictor.contexts, failed=failed)
+        close_source(contexts, failed=failed)
     scores: dict[str, float] = {}
     for frame in frames:
         scores.update(zip(frame.account_id, frame.score.astype(float), strict=True))

@@ -62,10 +62,12 @@ def test_scoring_checks_inputs_and_outputs_then_verifies_the_installed_queries(
     # The lines scoring prints go to the run's events.jsonl.
     assert read_events(run.events) == [{"event": "score", "date": "2025-01-01"}]
     # The cutoff clock, the hub registry and the contexts are read on that connection.
+    contexts = result.pop("contexts")
+    contexts.close()
+    assert contexts.fetcher.executor is executor and contexts.sampler == config.sampler
     assert {name: port.executor for name, port in result.items()} == {
         "cutoffs": executor,
         "hub_reader": executor,
-        "fetcher": executor,
     }
-    pipeline_score.score_accounts(run, accounts, "2025-02-01")
+    pipeline_score.score_accounts(run, accounts, "2025-02-01")["contexts"].close()
     assert scored[-1][0] == "2025-02-01" and scored[-1][2].name == "new_accounts_2025-02-01.parquet"
