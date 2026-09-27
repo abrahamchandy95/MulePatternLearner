@@ -21,6 +21,7 @@ from mule_pattern_learner.sampling.cugraph_sampler import (
     graph_arrays,
     probe_cugraph,
 )
+from mule_pattern_learner.testing import sampler_checks
 from mule_pattern_learner.testing.builders import PAYMENTS, RESAMPLE, candidate_table
 
 
@@ -391,32 +392,22 @@ def test_real_cugraph_handles_seeds_without_edges_on_gpu() -> None:
         assert np.array_equal(candidates.group_counts(table, keep), expected)
 
 
-def test_gpu_self_test_script_runs_its_synthetic_checks_on_the_mock(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    import importlib.util
-    from pathlib import Path
-
-    path = Path(__file__).resolve().parents[2] / "scripts/verify_cugraph_sampler.py"
-    spec = importlib.util.spec_from_file_location("verify_cugraph_sampler", path)
-    assert spec is not None and spec.loader is not None
-    script = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(script)
+def test_the_gpu_checks_pass_on_the_mock_and_catch_its_faults() -> None:
+    # tests/integration/test_cugraph_sampler.py runs the same checks on a GPU.
     engine = CuGraphSampler(MockPLC(), to_device=host)
     sampler = replace(RESAMPLE, relation_fanouts=(8, 4))
-    table = script.synthetic_table(24, np.random.default_rng(0))
-    script.probe(engine, "cpu")
-    script.subset_checks(engine, table, sampler, "cpu")
-    script.temporal_boundary(engine, "cpu")
-    script.merged_slots(engine, sampler, "cpu")
-    script.uniformity(engine, 150, "cpu")
-    assert not script.FAILURES, capsys.readouterr().out
+    assert probe_cugraph("cpu", engine) is None
+    sampler_checks.check_subsets(
+        engine, sampler_checks.synthetic_table(24, np.random.default_rng(0)), sampler, "cpu"
+    )
+    sampler_checks.check_cutoff_boundary(engine, "cpu")
+    sampler_checks.check_merged_slots(engine, sampler, "cpu")
+    sampler_checks.check_uniform_inclusion(engine, 150, "cpu")
     leaky = CuGraphSampler(MockPLC(leak=True), to_device=host)
-    script.temporal_boundary(leaky, "cpu")
-    assert script.FAILURES
-    script.FAILURES.clear()
-    script.probe(CuGraphSampler(MockPLC(drop=True), to_device=host), "cpu")
-    assert len(script.FAILURES) == 1 and "under-sampled" in script.FAILURES[0]
+    with pytest.raises((AssertionError, RuntimeError)):
+        sampler_checks.check_cutoff_boundary(leaky, "cpu")
+    reason = probe_cugraph("cpu", CuGraphSampler(MockPLC(drop=True), to_device=host))
+    assert reason is not None and "under-sampled" in reason
 
 
 def test_sampled_rows_rejects_inconsistent_results() -> None:

@@ -142,7 +142,8 @@ and a batch pipeline; do not call this once per pair per training epoch at scale
 
 Training never calls the pair queries, so neither `mule install` nor `mule train`
 installs them; `tigergraph.installer.install(executor, analytics=True)` does, on a
-connection built from the project's `.env`.
+connection built from the project's `.env`. The pair-gap check of
+`tests/integration/test_context_query.py` skips until they are installed.
 
 This installs the shared encoder, its public wrapper and the training queries as
 usual, plus the two pair queries. The fresh schema file includes the pair-gap

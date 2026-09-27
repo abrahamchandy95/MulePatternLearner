@@ -127,8 +127,8 @@ of the same dataset settings.
 # Install only after query parity/validation is satisfactory.
 .venv/bin/python -m mule_pattern_learner install
 
-# A label-blind account audit; choose the account without consulting truth.
-.venv/bin/python scripts/verify_feature_redesign.py --account ACCOUNT_ID --date 2025-01-01
+# A label-blind audit of the first scope accounts against the Python reference (read-only).
+.venv/bin/python -m pytest -m graph tests/integration/test_feature_parity.py
 
 # Final-only; do not run during feature selection. Truth comes from the graph.
 .venv/bin/python -m mule_pattern_learner evaluate results/<name>/seed-<seed>

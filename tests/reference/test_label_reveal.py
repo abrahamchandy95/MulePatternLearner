@@ -1,5 +1,7 @@
 """The CPU mirror of the label reveal job."""
 
+from typing import Any
+
 import pytest
 
 from mule_pattern_learner.config import DEFAULT_CONFIG
@@ -60,3 +62,39 @@ def test_reveal_model_uses_the_query_defaults_and_monitoring() -> None:
     assert label_reveal.available_ms(mule, 10 * day) == 6 * day - 1
     assert label_reveal.available_ms(mule, 5 * day + 7) == 5 * day + 7
     assert label_reveal.available_ms({**mule, "first": 8 * day}, 10 * day) == 8 * day
+
+
+def dry_run_of(result: dict[str, Any], data_end: int = 10**13) -> dict[str, Any]:
+    """What the installed job prints with apply = FALSE when it agrees with the mirror."""
+    mules = result["mules"]
+    eligible = label_reveal.counts_by_split(result, "eligible")
+    return {
+        "status": "dry_run",
+        "data_end_ts_ms": data_end,
+        "eligible": {str(part): n for part, n in eligible.items() if n},
+        "revealed_mules": [
+            {
+                "account_id": k,
+                "channel": mules[k]["channel"],
+                "known_ts_ms": label_reveal.available_ms(mules[k], data_end),
+            }
+            for k in sorted(result["revealed"])
+        ],
+    }
+
+
+def test_a_dry_run_is_compared_with_the_mirror_mule_by_mule() -> None:
+    params = tigergraph_reveal.reveal_parameters(*BUILT_IN, apply=False)
+    expected = label_reveal.plan(reveal_inputs(), params)
+    agreeing = dry_run_of(expected)
+    assert expected["revealed"] and label_reveal.dry_run_differences(expected, agreeing) == []
+    first, *rest = agreeing["revealed_mules"]
+    missing = {**agreeing, "revealed_mules": rest}
+    assert label_reveal.dry_run_differences(expected, missing)[0].startswith("revealed sets")
+    moved = {**agreeing, "revealed_mules": [{**first, "known_ts_ms": 1}, *rest]}
+    assert label_reveal.dry_run_differences(expected, moved) == [
+        f"{first['account_id']}: GSQL {first['channel']} 1, Python {first['channel']} "
+        f"{first['known_ts_ms']}"
+    ]
+    counted = {**agreeing, "eligible": {}}
+    assert label_reveal.dry_run_differences(expected, counted)[0].startswith("eligible counts")

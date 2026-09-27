@@ -123,8 +123,8 @@ def resolve_backend(sampler: SamplerPlan, device: str | torch.device) -> str:
     if sampler.backend == "cugraph":
         raise RuntimeError(
             f"Sampler backend cugraph cannot run on cuda:{index}: {probe.reason}. "
-            f"Install {PYLIBCUGRAPH_PIN} and cupy, run "
-            "scripts/verify_cugraph_sampler.py on the GPU host, "
+            f"Install {PYLIBCUGRAPH_PIN} and cupy, run `mule check` and "
+            "`pytest -m cuda tests/integration/test_cugraph_sampler.py` on the GPU host, "
             'or set sampler.backend = "torch"'
         )
     if probe.installed:
