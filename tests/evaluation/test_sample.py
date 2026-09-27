@@ -8,7 +8,7 @@ from mule_pattern_learner.evaluation.audit import audit_metrics
 from mule_pattern_learner.evaluation.sample import audit_sample
 
 
-def test_final_evaluation_covers_rare_positives_and_recovers_population_prevalence():
+def test_the_audit_sample_covers_rare_positives_and_recovers_population_prevalence():
     population = pd.DataFrame({"account_id": [str(i) for i in range(10000)], "split": "test"})
     truth = population[["account_id"]].assign(is_mule=np.r_[np.ones(40, int), np.zeros(9960, int)])
     sample = audit_sample(population, truth, negative_limit=100, seed=7)

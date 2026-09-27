@@ -1,4 +1,4 @@
-"""The final population audit and its weighted review-budget metrics."""
+"""The ground-truth audit and its weighted review-budget metrics."""
 
 from __future__ import annotations
 
