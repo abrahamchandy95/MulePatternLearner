@@ -9,19 +9,12 @@ import re
 import time
 from typing import Any
 
+from ..contract.server import QUERY_FILES
 from ..paths import REPOSITORY_ROOT
 from .executor import AVAILABILITY, GRAPH, SERVER_TIMEOUT, connection_call, failure_class
 from .gsql_text import definitions, normalized, parameter_names, repository_queries
 
-# The queries preparation runs; a prepared dataset records their source hashes.
-QUERY_FILES = (
-    "gsql/queries/fourier64.gsql",
-    "gsql/queries/training_context.gsql",
-    "gsql/queries/training_scope.gsql",
-    "gsql/queries/split_cutoffs.gsql",
-    "gsql/queries/hub_accounts.gsql",
-)
-# Preparation queries plus the oracle export for audits, the label-contract validation
+# Preparation queries (contract.server.QUERY_FILES) plus the oracle export for audits, the label-contract validation
 # and the one-time reveal job (the first run reveals known mules; see reveal.py).
 TRAINING_QUERY_FILES = (
     *QUERY_FILES,

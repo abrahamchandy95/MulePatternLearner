@@ -22,11 +22,13 @@ from ..data.manifest import (
     write_manifest,
 )
 from ..data.preparation import prepare
-from ..tigergraph.executor import TigerGraphExecutor, live_executor
+from ..tigergraph.executor import TigerGraphExecutor
 from ..tigergraph.installer import install
+from ..tigergraph.labels import GraphObservedLabels
 from ..tigergraph.provenance import source_counts
 from ..tigergraph.reveal import ensure_revealed_labels
 from ..tigergraph.scope import ensure_scope, scope_header
+from .connect import connect
 
 
 def derived_dataset_id(graph: str, counts: dict[str, int]) -> str:
@@ -71,7 +73,7 @@ def prepare_live(config: dict[str, Any], output: Path) -> dict[str, Any]:
         if manifest["status"] == "ready":
             # The trainer re-verifies artifacts before use. No database connection is needed.
             return manifest
-    executor = live_executor(config)
+    executor = connect(config)
     install(executor)
     counts = source_counts(executor)
     config = resolve_identity(executor, config, counts)
@@ -79,7 +81,7 @@ def prepare_live(config: dict[str, Any], output: Path) -> dict[str, Any]:
     # The reveal draws its splits from the scope partitions.
     ensure_revealed_labels(executor, config)
     counts = source_counts(executor)
-    result = prepare(config, output, executor, counts)
+    result = prepare(config, output, executor, counts, GraphObservedLabels())
     if source_counts(executor) != counts:
         result["status"] = "source_changed"
         write_manifest(output, result)

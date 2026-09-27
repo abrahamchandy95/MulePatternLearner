@@ -70,13 +70,45 @@ def evaluate_weighted(frame: pd.DataFrame, threshold: float) -> dict[str, Any]:
     }
 
 
+def audit_inputs(
+    checkpoint: Path | ModelCheckpoint, output: Path, dataset: Path | None = None
+) -> tuple[ModelCheckpoint, Path, dict[str, Any]]:
+    """The frozen model, its prepared dataset and the dataset's manifest, all checked.
+
+    The final audit reads nothing from the graph before these checks pass: a report
+    that exists, a model with more than one test cutoff and a missing or changed
+    dataset are refused. ``dataset`` defaults to the path recorded in the checkpoint.
+    """
+    from ..data.manifest import MANIFEST, load_prepared
+
+    if output.suffix != ".json":
+        raise ValueError("Final audit output must be a .json report path")
+    rejected_output = output.with_suffix(".rejected.txt")
+    if output.exists() or output.with_suffix(".parquet").exists() or rejected_output.exists():
+        raise FileExistsError(output)
+    saved = ModelCheckpoint.of(checkpoint)
+    config = saved.validated_config()
+    if len(config["dates"]["test"]) != 1:
+        raise ValueError("Final population audit requires one test cutoff")
+    if dataset is None:
+        dataset = saved.dataset
+    if dataset is None or not (dataset / MANIFEST).exists():
+        raise ValueError(
+            "Final audit needs the prepared dataset of this checkpoint for its cutoff clock "
+            "and hub registry; pass --dataset"
+        )
+    manifest, _ = load_prepared(dataset)
+    saved.check_dataset(dataset)
+    return saved, dataset, manifest
+
+
 def evaluate_final_population(
     checkpoint: Path | ModelCheckpoint,
     truth: EvaluationTruthSource,
     output: Path,
     *,
+    executor: Any,
     negative_limit: int = 2000,
-    executor: Any = None,
     dataset: Path | None = None,
     contexts: Any = None,
     hubs: Any = None,
@@ -87,6 +119,8 @@ def evaluate_final_population(
     changes a checkpoint and refuses to overwrite an existing final report. The
     prepared dataset (``dataset`` or the path recorded in the checkpoint) supplies
     the test cutoff clock and the hub registry, so scoring matches training.
+    ``executor`` is the pipeline's, on a frozen source it has verified
+    (pipeline.evaluate.final_audit).
 
     Accounts TigerGraph rejects are not scored. A rejected test positive, or a
     rejected fraction of the sample above the checkpoint's
@@ -101,39 +135,16 @@ def evaluate_final_population(
     from ..data.accounts import scope_accounts
     from ..data.contexts import close_source
     from ..data.hub_registry import load_hub_registry
-    from ..data.manifest import MANIFEST, load_prepared
     from ..data.splits import sample_keys
     from ..inference.predictor import TemporalPredictor
     from ..inference.rejections import exceeds_rejection_limit, rejection_summary
     from ..inference.score_accounts import write_rejected
-    from ..tigergraph.executor import live_executor
 
-    if output.suffix != ".json":
-        raise ValueError("Final audit output must be a .json report path")
+    saved, dataset, manifest = audit_inputs(checkpoint, output, dataset)
     rejected_output = output.with_suffix(".rejected.txt")
-    if output.exists() or output.with_suffix(".parquet").exists() or rejected_output.exists():
-        raise FileExistsError(output)
-    saved = ModelCheckpoint.of(checkpoint)
     config = saved.validated_config()
-    if len(config["dates"]["test"]) != 1:
-        raise ValueError("Final population audit requires one test cutoff")
     date = config["dates"]["test"][0]
     last_ms = cutoff_ms(date)
-    if dataset is None:
-        dataset = saved.dataset
-    if dataset is None or not (dataset / MANIFEST).exists():
-        raise ValueError(
-            "Final audit needs the prepared dataset of this checkpoint for its cutoff clock "
-            "and hub registry; pass --dataset"
-        )
-    manifest, _ = load_prepared(dataset)
-    saved.check_dataset(dataset)
-    if executor is None:
-        from ..tigergraph.provenance import verify_frozen_source
-
-        # The checkpoint's retry budgets (max_query_attempts, max_outage_s).
-        executor = live_executor(config)
-        verify_frozen_source(executor, manifest)
     population: list[dict[str, Any]] = []
     for row in scope_accounts(executor, config["scope_id"], include_observed=False):
         if row["partition"] == SPLIT_PHASE["test"] and row["first_seen_ts_ms"] <= last_ms:

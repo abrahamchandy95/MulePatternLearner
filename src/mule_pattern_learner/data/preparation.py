@@ -16,7 +16,6 @@ from ..contract.graph_schema import context_scope
 from ..contract.sampler_plan import SamplerPlan
 from ..tigergraph.executor import QueryExecutor
 from ..tigergraph.hubs import query_hub_registry
-from ..tigergraph.labels import GraphObservedLabels
 from .accounts import scoped_cohort
 from .hub_registry import HUB_FILE, hub_manifest, hub_threshold
 from .manifest import MANIFEST, preparation_view, query_hashes, read_manifest, write_manifest
@@ -109,13 +108,14 @@ def prepare(
     output: Path,
     executor: QueryExecutor,
     source_counts: dict[str, int],
-    labels: ObservedLabelSource | None = None,
+    labels: ObservedLabelSource,
 ) -> dict[str, Any]:
     """Resumable preparation: cohort, observed labels, cutoffs and hub registry.
 
-    Contexts are not stored: training requests them from TigerGraph. `labels`
-    defaults to the labels revealed in the graph. Each stage writes the manifest when
-    it is done, and a resumed preparation skips the stages the manifest records.
+    Contexts are not stored: training requests them from TigerGraph. `labels` is the
+    pipeline's label source, the labels revealed in the graph for every run. Each
+    stage writes the manifest when it is done, and a resumed preparation skips the
+    stages the manifest records.
     """
     config = validate_config(config)
     sampler = SamplerPlan.from_config(config)
@@ -123,7 +123,6 @@ def prepare(
     validate_dates(config)
     if not config.get("dataset_id"):
         raise ValueError("A new immutable dataset_id is required after each graph reload/backfill")
-    labels = GraphObservedLabels() if labels is None else labels
     output.mkdir(parents=True, exist_ok=True)
     preparation = preparation_view(config)
     metadata = {

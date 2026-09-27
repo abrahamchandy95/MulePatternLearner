@@ -40,7 +40,6 @@ from mule_pattern_learner.batching.assemble import (  # noqa: E402
 from mule_pattern_learner.config import run_config  # noqa: E402
 from mule_pattern_learner.contract.feature_groups import FeaturePlan  # noqa: E402
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan  # noqa: E402
-from mule_pattern_learner.data.contexts import open_context_source  # noqa: E402
 from mule_pattern_learner.data.hub_registry import load_hub_registry  # noqa: E402
 from mule_pattern_learner.data.manifest import load_prepared, preparation_mismatches  # noqa: E402
 from mule_pattern_learner.data.observed_labels import load_observed_labels  # noqa: E402
@@ -48,6 +47,7 @@ from mule_pattern_learner.data.splits import sample_keys  # noqa: E402
 from mule_pattern_learner.model.build import build_model  # noqa: E402
 from mule_pattern_learner.model.loss import NonNegativePULoss  # noqa: E402
 from mule_pattern_learner.paths import dataset_path  # noqa: E402
+from mule_pattern_learner.pipeline.connect import open_context_source  # noqa: E402
 from mule_pattern_learner.pipeline.train import prepared_config  # noqa: E402
 from mule_pattern_learner.runtime.device import choose_device, torch_runtime  # noqa: E402
 from mule_pattern_learner.tigergraph.executor import TigerGraphExecutor  # noqa: E402

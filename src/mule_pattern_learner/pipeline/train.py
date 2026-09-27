@@ -9,6 +9,7 @@ from ..config import run_config
 from ..data.manifest import read_manifest
 from ..paths import DEFAULT_MODEL, dataset_path, output_paths
 from ..training.trainer import train
+from .connect import open_context_source
 from .prepare import prepare_live
 
 
@@ -43,4 +44,10 @@ def run(
     else:
         # Explicit datasets are immutable pre-existing caches, useful for experiments.
         manifest = read_manifest(dataset)
-    return train(prepared_config(config, manifest), dataset, output, resume=resume)
+    return train(
+        prepared_config(config, manifest),
+        dataset,
+        output,
+        open_contexts=open_context_source,
+        resume=resume,
+    )

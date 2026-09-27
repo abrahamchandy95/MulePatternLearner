@@ -18,6 +18,8 @@ from ..contract.bounds import OUTAGE_SECONDS, QUERY_ATTEMPTS
 if TYPE_CHECKING:
     from pyTigerGraph import TigerGraphConnection
 
+    from .connection import Settings
+
 LOGGER = logging.getLogger(__name__)
 T = TypeVar("T")
 
@@ -161,7 +163,8 @@ class QueryExecutor(Protocol):
 class TigerGraphExecutor:
     """Installed-query access with per-class retry budgets (see failure_class).
 
-    Credentials come from the repository .env and never enter cache metadata.
+    It runs on a connected `client`, or connects with `settings` (read from the
+    repository .env by pipeline.connect); credentials never enter cache metadata.
     - Availability failures are retried with capped, jittered exponential backoff
       until `max_outage_s` seconds have passed since the operation's first such
       failure. Worker threads share one "backoff until" time, so they pause
@@ -190,6 +193,7 @@ class TigerGraphExecutor:
         slow_attempt_s: float = 30.0,
         size_limit: int = 64_000_000,
         client: Any = None,
+        settings: Settings | None = None,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
         rng: random.Random | None = None,
@@ -213,11 +217,10 @@ class TigerGraphExecutor:
         self.calls = 0
         self.retries: Counter[str] = Counter()
         if client is None:
-            from mule_pattern_learner.tigergraph.client import Client
+            if settings is None:
+                raise ValueError("TigerGraphExecutor needs a connected client or its settings")
+            from .client import Client
 
-            from .connection import Settings
-
-            settings = Settings()
             client = self._retry(lambda: Client(settings), what="connect", attempts=None)
         self.client = client
         if self.client.graphname != GRAPH:
@@ -453,22 +456,3 @@ def account_pages(
         yield page
         if len(page) < page_size:
             return
-
-
-def transport_settings(config: dict[str, Any]) -> dict[str, int]:
-    """Transport knobs from a training config, with documented defaults."""
-    result = {}
-    for name, default in TRANSPORT_DEFAULTS.items():
-        value = config.get(name, default)
-        if type(value) is not int:
-            raise ValueError(f"{name} must be an integer")
-        result[name] = value
-    return result
-
-
-def live_executor(config: dict[str, Any]) -> TigerGraphExecutor:
-    """A connected executor with the retry budgets of a training or preparation config."""
-    transport = transport_settings(config)
-    return TigerGraphExecutor(
-        max_attempts=transport["max_query_attempts"], max_outage_s=transport["max_outage_s"]
-    )

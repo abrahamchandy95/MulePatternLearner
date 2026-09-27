@@ -18,6 +18,7 @@ from mule_pattern_learner.config import run_config, validate_config
 from mule_pattern_learner.data.accounts import cohort_seed
 from mule_pattern_learner.data.manifest import read_manifest
 from mule_pattern_learner.inference.saved_model import ModelCheckpoint
+from mule_pattern_learner.pipeline.connect import open_context_source
 from mule_pattern_learner.pipeline.train import prepared_config
 from mule_pattern_learner.training.summary import TRAINING_PROTOCOL
 from mule_pattern_learner.training.trainer import train
@@ -78,7 +79,7 @@ def main() -> None:
             result = json.loads((output / "metrics.json").read_text())
         else:
             try:
-                result = train(config, args.dataset, output)
+                result = train(config, args.dataset, output, open_contexts=open_context_source)
             except ValueError as error:
                 if "Training needs revealed positives" not in str(error):
                     raise

@@ -53,6 +53,7 @@ from mule_pattern_learner.paths import REPOSITORY_ROOT
 from mule_pattern_learner.testing.builders import neighbourhood, scope_population
 from mule_pattern_learner.testing.fake_graph import FakeExecutor
 from mule_pattern_learner.tigergraph.render import render_context_query
+from mule_pattern_learner.tigergraph.labels import GraphObservedLabels
 from mule_pattern_learner.training import trainer
 from mule_pattern_learner.training.schedule import step_seed
 
@@ -101,7 +102,7 @@ def prepare_golden(directory: Path) -> tuple[dict[str, Any], Path, FakeExecutor]
     config = golden_config()
     executor = golden_executor()
     dataset = directory / "dataset"
-    prepare(config, dataset, executor, {"Account": POPULATION})
+    prepare(config, dataset, executor, {"Account": POPULATION}, GraphObservedLabels())
     return config, dataset, executor
 
 

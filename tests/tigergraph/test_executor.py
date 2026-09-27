@@ -19,6 +19,7 @@ from mule_pattern_learner.tigergraph.executor import (
     DETERMINISTIC,
     SERVER_TIMEOUT,
     ServerTimeoutError,
+    TigerGraphExecutor,
     TransientQueryError,
     failure_class,
     is_transient,
@@ -221,3 +222,9 @@ def test_resume_page_in_gsql_output_is_transient() -> None:
     assert len(tg.sleeps) == 1
     assert is_transient(json.JSONDecodeError("x", "<html>", 0))
     assert not is_transient(ValueError("Returned context differs"))
+
+
+def test_executor_connects_only_with_the_settings_it_is_given() -> None:
+    # The pipeline reads .env (pipeline.connect.connect); the executor never does.
+    with pytest.raises(ValueError, match="connected client or its settings"):
+        TigerGraphExecutor()

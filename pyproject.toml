@@ -131,34 +131,20 @@ ignore_imports = [
     "mule_pattern_learner.data.accounts -> mule_pattern_learner.tigergraph.labels",
     # the streaming source runs the context query itself; removed by consumer-owned ports
     "mule_pattern_learner.data.contexts -> mule_pattern_learner.tigergraph.context_query",
-    # open_context_source builds an executor; removed by adapters built only in pipeline
+    # the streaming source takes an executor; removed by consumer-owned ports
     "mule_pattern_learner.data.contexts -> mule_pattern_learner.tigergraph.executor",
-    # open_context_source rechecks the frozen source; removed by adapters built only in pipeline
-    "mule_pattern_learner.data.contexts -> mule_pattern_learner.tigergraph.provenance",
-    # the manifest records the installer's query files; removed by adapters built only in
-    # pipeline
-    "mule_pattern_learner.data.manifest -> mule_pattern_learner.tigergraph.installer",
     # preparation takes the executor; removed by consumer-owned ports
     "mule_pattern_learner.data.preparation -> mule_pattern_learner.tigergraph.executor",
     # preparation runs the hub query; removed by consumer-owned ports
     "mule_pattern_learner.data.preparation -> mule_pattern_learner.tigergraph.hubs",
-    # preparation defaults to the graph's labels; removed by adapters built only in pipeline
-    "mule_pattern_learner.data.preparation -> mule_pattern_learner.tigergraph.labels",
     # resolve_cutoffs runs the cutoff query; removed by consumer-owned ports
     "mule_pattern_learner.data.splits -> mule_pattern_learner.tigergraph.executor",
-    # the audit builds an executor; removed by adapters built only in pipeline
-    "mule_pattern_learner.evaluation.audit -> mule_pattern_learner.tigergraph.executor",
-    # the audit rechecks the frozen source; removed by adapters built only in pipeline
-    "mule_pattern_learner.evaluation.audit -> mule_pattern_learner.tigergraph.provenance",
     # the predictor opens a source from an executor; removed by consumer-owned ports
     "mule_pattern_learner.inference.predictor -> mule_pattern_learner.tigergraph.executor",
-    # scoring new accounts builds an executor; removed by adapters built only in pipeline
+    # scoring new accounts takes an executor; removed by consumer-owned ports
     "mule_pattern_learner.inference.score_accounts -> mule_pattern_learner.tigergraph.executor",
     # scoring new accounts runs the hub query; removed by consumer-owned ports
     "mule_pattern_learner.inference.score_accounts -> mule_pattern_learner.tigergraph.hubs",
-    # scoring new accounts verifies the installed queries; removed by adapters built only in
-    # pipeline
-    "mule_pattern_learner.inference.score_accounts -> mule_pattern_learner.tigergraph.installer",
 ]
 
 [[tool.importlinter.contracts]]
@@ -185,34 +171,20 @@ ignore_imports = [
     "mule_pattern_learner.data.accounts -> mule_pattern_learner.tigergraph.labels",
     # the streaming source runs the context query itself; removed by consumer-owned ports
     "mule_pattern_learner.data.contexts -> mule_pattern_learner.tigergraph.context_query",
-    # open_context_source builds an executor; removed by adapters built only in pipeline
+    # the streaming source takes an executor; removed by consumer-owned ports
     "mule_pattern_learner.data.contexts -> mule_pattern_learner.tigergraph.executor",
-    # open_context_source rechecks the frozen source; removed by adapters built only in pipeline
-    "mule_pattern_learner.data.contexts -> mule_pattern_learner.tigergraph.provenance",
-    # the manifest records the installer's query files; removed by adapters built only in
-    # pipeline
-    "mule_pattern_learner.data.manifest -> mule_pattern_learner.tigergraph.installer",
     # preparation takes the executor; removed by consumer-owned ports
     "mule_pattern_learner.data.preparation -> mule_pattern_learner.tigergraph.executor",
     # preparation runs the hub query; removed by consumer-owned ports
     "mule_pattern_learner.data.preparation -> mule_pattern_learner.tigergraph.hubs",
-    # preparation defaults to the graph's labels; removed by adapters built only in pipeline
-    "mule_pattern_learner.data.preparation -> mule_pattern_learner.tigergraph.labels",
     # resolve_cutoffs runs the cutoff query; removed by consumer-owned ports
     "mule_pattern_learner.data.splits -> mule_pattern_learner.tigergraph.executor",
-    # the audit builds an executor; removed by adapters built only in pipeline
-    "mule_pattern_learner.evaluation.audit -> mule_pattern_learner.tigergraph.executor",
-    # the audit rechecks the frozen source; removed by adapters built only in pipeline
-    "mule_pattern_learner.evaluation.audit -> mule_pattern_learner.tigergraph.provenance",
     # the predictor opens a source from an executor; removed by consumer-owned ports
     "mule_pattern_learner.inference.predictor -> mule_pattern_learner.tigergraph.executor",
-    # scoring new accounts builds an executor; removed by adapters built only in pipeline
+    # scoring new accounts takes an executor; removed by consumer-owned ports
     "mule_pattern_learner.inference.score_accounts -> mule_pattern_learner.tigergraph.executor",
     # scoring new accounts runs the hub query; removed by consumer-owned ports
     "mule_pattern_learner.inference.score_accounts -> mule_pattern_learner.tigergraph.hubs",
-    # scoring new accounts verifies the installed queries; removed by adapters built only in
-    # pipeline
-    "mule_pattern_learner.inference.score_accounts -> mule_pattern_learner.tigergraph.installer",
 ]
 
 [[tool.importlinter.contracts]]

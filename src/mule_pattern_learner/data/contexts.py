@@ -1,9 +1,10 @@
-"""Context sources: the model-facing port, its streaming adapter, and factories.
+"""Context sources: the model-facing port, its streaming adapter, and its opener.
 
 StreamingContextSource requests each batch's contexts from TigerGraph through
 context_query and keeps a bounded LRU. It returns rows in key order, with None where
 TigerGraph rejected a request. check_coverage and close_source work with any
-ContextSource.
+ContextSource. A ContextOpener opens the source of a prepared dataset; the pipeline
+passes pipeline.connect.open_context_source to the use cases that need one.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from pathlib import Path
 import threading
 from typing import Any, Protocol
 
-from ..config import TRANSPORT_DEFAULTS
+from ..config import TRANSPORT_DEFAULTS, transport_settings
 from ..contract.bounds import (
     BATCH_CONTEXTS,
     CONTEXT_LRU_CAPACITY,
@@ -23,13 +24,12 @@ from ..contract.bounds import (
     QUERY_CONCURRENCY,
     REQUEST_KEYS,
 )
-from ..contract.feature_groups import FeaturePlan, extraction_plan
+from ..contract.feature_groups import FeaturePlan
 from ..contract.graph_schema import ContextKey
-from ..contract.sampler_plan import SamplerPlan, sampler_pools
+from ..contract.sampler_plan import SamplerPlan
 from ..runtime.workers import DaemonPool
 from ..tigergraph.context_query import query_context_split
-from ..tigergraph.executor import QueryExecutor, live_executor, transport_settings
-from ..tigergraph.provenance import verify_frozen_source
+from ..tigergraph.executor import QueryExecutor
 
 
 def _canonical(row: dict[str, Any]) -> dict[str, Any]:
@@ -296,26 +296,15 @@ def streaming_source(
     )
 
 
-def open_context_source(
-    dataset: Path, manifest: dict[str, Any], config: dict[str, Any] | None = None
-) -> ContextSource:
-    """Open the live source of a prepared dataset; `config` is the training config.
+class ContextOpener(Protocol):
+    """Opens the source of a prepared dataset for a training or scoring configuration.
 
-    It requests the training model's groups and hop-2 flags (extraction_plan) with the
-    prepared candidate pools. `config` defaults to the prepared configuration.
+    Use cases call it once their own checks passed, so a refused run never connects.
     """
-    prepared: dict[str, Any] = manifest["config"]
-    training = prepared if config is None else config
-    plan = extraction_plan(training)
-    sampler = SamplerPlan.from_config(training)
-    if sampler_pools(sampler) != sampler_pools(SamplerPlan.from_config(prepared)):
-        raise ValueError(
-            f"Sampler candidate pools differ from the preparation in {dataset}; prepare a "
-            "new dataset (set prepared_id) or restore the prepared [sampler] pools"
-        )
-    executor = live_executor(training)
-    verify_frozen_source(executor, manifest)
-    return streaming_source(executor, plan, sampler, training)
+
+    def __call__(
+        self, dataset: Path, manifest: dict[str, Any], config: dict[str, Any] | None = None
+    ) -> ContextSource: ...
 
 
 def check_coverage(store: ContextSource, plan: FeaturePlan, sampler: SamplerPlan) -> None:

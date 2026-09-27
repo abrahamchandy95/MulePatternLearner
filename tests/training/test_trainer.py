@@ -8,7 +8,7 @@ import json
 import math
 from pathlib import Path
 import threading
-from typing import Any
+from typing import Any, NoReturn
 import warnings
 
 import numpy as np
@@ -428,12 +428,19 @@ def test_run_directory_is_created_only_after_the_source_opens(
     config = base_config()
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
 
-    def refuse(*_: object) -> None:
+    def refuse(
+        dataset: Path, manifest: dict[str, Any], config: dict[str, Any] | None = None
+    ) -> NoReturn:
         raise ValueError("Live graph counts changed")
 
-    monkeypatch.setattr(trainer, "open_context_source", refuse)
     with pytest.raises(ValueError, match="counts changed"):
-        trainer.train(config, tmp_path / "dataset", tmp_path / "m.pt", hubs=hub_registry())
+        trainer.train(
+            config,
+            tmp_path / "dataset",
+            tmp_path / "m.pt",
+            open_contexts=refuse,
+            hubs=hub_registry(),
+        )
     assert not (tmp_path / "m_run").exists() and not (tmp_path / "m.pt").exists()
     # A source built with another sampler is rejected before anything is written.
     other = base_config(sampler={**config["sampler"], "relation_fanouts": [3, 2]})

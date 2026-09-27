@@ -14,11 +14,11 @@ import pyarrow.parquet as pq
 from ..artifacts import atomic_write, pending_path
 from ..contract.graph_schema import ContextKey
 from ..contract.sampler_plan import SamplerPlan
-from ..data.contexts import ContextSource, close_source, open_context_source
+from ..data.contexts import ContextOpener, ContextSource, close_source
 from ..data.hub_registry import HubRegistry, hub_threshold, load_hub_registry, warn_hub_stubs
 from ..data.manifest import load_prepared
 from ..data.splits import eligible_mask, resolve_cutoff, sample_keys
-from ..tigergraph.executor import QueryExecutor, live_executor
+from ..tigergraph.executor import QueryExecutor
 from ..tigergraph.hubs import query_hub_registry
 from .predictor import TemporalPredictor
 from .rejections import rejection_summary
@@ -33,14 +33,17 @@ def score(
     output: Path,
     *,
     contexts: ContextSource | None = None,
+    open_contexts: ContextOpener | None = None,
     hubs: HubRegistry | None = None,
 ) -> dict[str, Any]:
     """Score every eligible account of one prepared split and cutoff.
 
     Roots that TigerGraph rejects are not scored; their IDs go to
     ``<output>.rejected.txt``. Rejected roots and masked child contexts are
-    reported separately (see ``rejections.rejection_summary``). ``contexts``/``hubs``
-    replace the dataset's live source and hub registry (tests, offline replays).
+    reported separately (see ``rejections.rejection_summary``). Without ``contexts``,
+    ``open_contexts`` opens the dataset's live source once the inputs passed their
+    checks (pipeline.connect.open_context_source). ``contexts``/``hubs`` replace the
+    dataset's source and hub registry (tests, offline replays).
     """
     rejected_output = rejected_path(output)
     for path in (output, rejected_output):
@@ -55,11 +58,12 @@ def score(
     if accounts.empty:
         raise ValueError("No eligible accounts at this cutoff")
     registry = hubs if hubs is not None else load_hub_registry(dataset, manifest)
-    store = (
-        contexts
-        if contexts is not None
-        else open_context_source(dataset, manifest, saved.validated_config())
-    )
+    if contexts is not None:
+        store = contexts
+    elif open_contexts is not None:
+        store = open_contexts(dataset, manifest, saved.validated_config())
+    else:
+        raise ValueError("Scoring needs contexts, or open_contexts to open the dataset's source")
     failed = True
     try:
         predictor = TemporalPredictor(saved, store, hubs=registry)
@@ -136,13 +140,22 @@ def write_rejected(path: Path, ids: list[str]) -> None:
     path.write_text("".join(value + "\n" for value in ids))
 
 
+def check_new_outputs(output: Path) -> None:
+    """Refuse scores of new accounts that exist, or that another run is writing."""
+    rejected_output = rejected_path(output)
+    # A pending file is another scoring run's output in the making.
+    for path in (output, rejected_output, pending_path(output), pending_path(rejected_output)):
+        if path.exists():
+            raise FileExistsError(path)
+
+
 def score_new_accounts(
     checkpoint: Path | ModelCheckpoint,
     account_ids: Iterable[str],
     date: str,
     output: Path,
     *,
-    executor: QueryExecutor | None = None,
+    executor: QueryExecutor,
     contexts: ContextSource | None = None,
     hubs: HubRegistry | None = None,
 ) -> dict[str, Any]:
@@ -154,20 +167,11 @@ def score_new_accounts(
     they are listed in ``<output>.rejected.txt``. The result reports rejected roots and
     masked child contexts separately (see ``rejection_summary``). A date before the
     first visible event is refused, since no account could be scored at it.
+    ``executor`` is the pipeline's, whose installed queries it has verified.
     """
+    check_new_outputs(output)
     rejected_output = rejected_path(output)
-    # A pending file is another scoring run's output in the making.
-    for path in (output, rejected_output, pending_path(output), pending_path(rejected_output)):
-        if path.exists():
-            raise FileExistsError(path)
     saved = ModelCheckpoint.of(checkpoint)
-    if executor is None:
-        from ..tigergraph.installer import verify_sources
-
-        # The checkpoint's retry budgets (max_query_attempts, max_outage_s).
-        live = live_executor(saved.validated_config())
-        verify_sources(live)
-        executor = live
     seq, ms = resolve_cutoff(executor, date)
     predictor = TemporalPredictor(saved, contexts, executor=executor, hubs=hubs)
     source = predictor.contexts

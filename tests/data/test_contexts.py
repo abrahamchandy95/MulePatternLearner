@@ -8,10 +8,9 @@ from __future__ import annotations
 from collections import Counter
 from copy import deepcopy
 from dataclasses import replace
-from pathlib import Path
 import threading
 import time
-from typing import Any, cast
+from typing import Any
 
 import numpy as np
 import pytest
@@ -20,7 +19,6 @@ from pyTigerGraph.common.exception import TigerGraphException
 from mule_pattern_learner.batching.assemble import make_live_batch
 from mule_pattern_learner.contract.feature_groups import FeaturePlan
 from mule_pattern_learner.contract.graph_schema import ContextKey
-from mule_pattern_learner.data import contexts
 from mule_pattern_learner.data.contexts import StreamingContextSource
 from mule_pattern_learner.reference.batch_features import node_features
 from mule_pattern_learner.testing.builders import (
@@ -284,38 +282,6 @@ def test_corrupted_or_missing_spot_check_vectors_fail() -> None:
     row["gap_encoding"]["payment_out:E990"][0] += 0.5
     with pytest.raises(ValueError, match="encoding"):
         validate_context(key, row, PLAN, SAMPLER)
-
-
-def test_transport_settings_come_from_the_training_config(monkeypatch: pytest.MonkeyPatch) -> None:
-    seen = {}
-    monkeypatch.setattr(contexts, "verify_frozen_source", lambda executor, manifest: None)
-
-    class Executor:
-        def __init__(self, **kwargs: Any) -> None:
-            seen.update(kwargs)
-
-    monkeypatch.setattr("mule_pattern_learner.tigergraph.executor.TigerGraphExecutor", Executor)
-    prepared = {"dataset_id": "d", "scope_id": "scope"}
-    manifest = {"config": prepared, "source": {}}
-    training = {
-        **prepared,
-        "request_batch_size": 32,
-        "query_concurrency": 4,
-        "context_lru_capacity": 1024,
-        "encoding_check_every": 8,
-        "max_query_attempts": 3,
-        "max_outage_s": 120,
-    }
-    store = cast(
-        StreamingContextSource, contexts.open_context_source(Path("unused"), manifest, training)
-    )
-    assert seen == {"max_attempts": 3, "max_outage_s": 120}
-    assert (store.request_batch_size, store.concurrency, store.capacity) == (32, 4, 1024)
-    assert store._cadence.every == 8
-    store.close()
-    changed = {**training, "sampler": {"recent": 5}}
-    with pytest.raises(ValueError, match="pools differ"):
-        contexts.open_context_source(Path("unused"), manifest, changed)
 
 
 def test_streaming_source_serves_repeats_from_its_bounded_lru() -> None:

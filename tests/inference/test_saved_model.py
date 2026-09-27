@@ -166,7 +166,7 @@ def test_a_cohort_prepared_before_the_restructure_is_reused(
     def refuse(config: dict[str, Any]) -> None:
         raise AssertionError("a ready dataset is reused without connecting")
 
-    monkeypatch.setattr(prepare, "live_executor", refuse)
+    monkeypatch.setattr(prepare, "connect", refuse)
     assert prepare.prepare_live(config, dataset)["status"] == "ready"
 
     def source() -> Any:

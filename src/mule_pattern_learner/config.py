@@ -390,6 +390,17 @@ def fanouts(config: dict[str, Any]) -> tuple[int, int]:
     return tuple(int(v) for v in config["fanouts"])  # type: ignore[return-value]
 
 
+def transport_settings(config: dict[str, Any]) -> dict[str, int]:
+    """Transport knobs from a training config, with documented defaults."""
+    result = {}
+    for name, default in TRANSPORT_DEFAULTS.items():
+        value = config.get(name, default)
+        if type(value) is not int:
+            raise ValueError(f"{name} must be an integer")
+        result[name] = value
+    return result
+
+
 def merged(base: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
     """base with overrides applied: tables merge key by key, lists and scalars replace."""
     result = dict(base)

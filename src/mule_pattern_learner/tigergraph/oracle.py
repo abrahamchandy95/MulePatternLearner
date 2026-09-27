@@ -20,14 +20,15 @@ class GraphEvaluationTruth:
     is_mule = -1, which the evaluators treat as unknown, never as a negative.
     """
 
-    executor: QueryExecutor | None = None
+    executor: QueryExecutor
 
     def read(self) -> pd.DataFrame:
-        from .executor import TigerGraphExecutor, account_pages
+        from .executor import account_pages
 
-        executor = self.executor if self.executor is not None else TigerGraphExecutor()
         rows: list[dict[str, Any]] = []
-        pages = account_pages(executor, "temporal_get_account_supervision", {}, timeout_s=900.0)
+        pages = account_pages(
+            self.executor, "temporal_get_account_supervision", {}, timeout_s=900.0
+        )
         for page in pages:
             for row in page:
                 known = bool(row["mule_label_known"])
