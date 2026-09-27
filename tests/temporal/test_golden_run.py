@@ -4,10 +4,10 @@ The run prepares a strict-inductive cohort from the fake scope, with labels reve
 the graph as the built-in run reads them, then trains 2 epochs of 4 steps on the CPU
 with the built-in feature groups, slot sum, balanced positive weight and weight
 average. The literals at the end record its first training batch, every step's loss
-and objective, each epoch's validation AP, the selected epoch and the sha256 of the
-rendered context query. A refactoring leaves every one of them unchanged. A commit
-that changes one on purpose says so and pastes the new values, which the failing
-assertion prints as Python source.
+and objective, each epoch's validation AP, the selected epoch, the threshold picked on
+validation, the test AP and the sha256 of the rendered context query. A refactoring
+leaves every one of them unchanged. A commit that changes one on purpose says so and
+pastes the new values, which the failing assertion prints as Python source.
 
 The literals hold on macOS arm64 and on Linux x86_64:
 - Integer and boolean tensors come from integer arithmetic and hash-seeded draws, so
@@ -110,6 +110,8 @@ class Observed:
     epoch_ap: list[float]
     selected_epoch: int
     validation_ap: float
+    threshold: float
+    test_ap: float
     query_sha256: str
 
 
@@ -153,6 +155,8 @@ def golden_run(directory: Path) -> Observed:
         epoch_ap=[epoch["validation_proxy_ap"] for epoch in result["history"]],
         selected_epoch=result["best_epoch"],
         validation_ap=result["validation_proxy"]["average_precision"],
+        threshold=result["validation_proxy"]["threshold"],
+        test_ap=result["observed_label_proxy"]["test"]["average_precision"],
         query_sha256=hashlib.sha256(render_context_query().encode()).hexdigest(),
     )
 
@@ -212,6 +216,8 @@ def literals(observed: Observed) -> str:
             f"GOLDEN_EPOCH_AP = {observed.epoch_ap!r}",
             f"GOLDEN_SELECTED_EPOCH = {observed.selected_epoch!r}",
             f"GOLDEN_VALIDATION_AP = {observed.validation_ap!r}",
+            f"GOLDEN_THRESHOLD = {observed.threshold!r}",
+            f"GOLDEN_TEST_AP = {observed.test_ap!r}",
             f"GOLDEN_QUERY_SHA256 = {observed.query_sha256!r}",
         ]
     )
@@ -239,6 +245,10 @@ def run_differences(observed: Observed) -> list[str]:
         problems.append(f"selected epoch {observed.selected_epoch}")
     if not close(observed.validation_ap, GOLDEN_VALIDATION_AP):
         problems.append(f"validation AP {observed.validation_ap}")
+    if not close(observed.threshold, GOLDEN_THRESHOLD):
+        problems.append(f"threshold {observed.threshold}")
+    if not close(observed.test_ap, GOLDEN_TEST_AP):
+        problems.append(f"test AP {observed.test_ap}")
     if observed.query_sha256 != GOLDEN_QUERY_SHA256:
         problems.append(f"rendered context query sha256 {observed.query_sha256}")
     return problems
@@ -402,4 +412,6 @@ GOLDEN_STEPS = [
 GOLDEN_EPOCH_AP = [0.47464285714285714, 0.47692307692307695]
 GOLDEN_SELECTED_EPOCH = 2
 GOLDEN_VALIDATION_AP = 0.47692307692307695
+GOLDEN_THRESHOLD = 0.5102718956479596
+GOLDEN_TEST_AP = 0.3216137566137566
 GOLDEN_QUERY_SHA256 = "16647ae2e7f8728cc92fbe678b8e3be78158a3f8fe17f261e4e0a8a4d9f994a8"
