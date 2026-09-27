@@ -1,6 +1,6 @@
 # GSQL feature and query catalog
 
-The [feature-group redesign](feature_redesign.md) documents the window-free feature groups, optional summaries, sampler, and migration. Fixed 83/135 dimensions below describe the window groups as the query returns them (the `include_*` defaults). The built-in v5 run (`DEFAULT_RUN`) and its candidate pools are described in [training from the live temporal graph](live_temporal_training.md#candidate-pools-and-resampling).
+The [feature-group redesign](feature_redesign.md) documents the window-free feature groups, optional summaries, sampler, and migration. Fixed 83/135 dimensions below describe the window groups as the query returns them (the `include_*` defaults). The built-in v5 run (`DEFAULT_CONFIG`) and its candidate pools are described in [training from the live temporal graph](live_temporal_training.md#candidate-pools-and-resampling).
 
 This describes `temporal/live`, the live TGAT-style path. The live strict path
 applies server-side ownership-group partitions before sampling and feature
@@ -10,7 +10,7 @@ aggregation; see [leakage and scaling](leakage_and_scaling.md).
 
 | Query | Inputs and output | When used |
 |---|---|---|
-| `temporal_create_training_scope` | Creates a frozen, label-blind Account/Party ownership-group partition. `unowned_policy` places Accounts whose ownership component has no Party: `"independent"` (the query's default, the original behaviour) gives each its own hash partition; `"shared"` gives unowned external accounts and unowned bank ledger accounts (`account_type = "gl"`) partition 1 (visible in every phase) and group ID `shared:<component>`, while other unowned internal accounts keep their own hash partition; `"linked"` (the client default) is `"shared"` plus: an unowned internal account whose distinct owned internal deposit counterparties (the other endpoint of any Payment_Transaction or Zelle_Transfer, all time) are exactly one account takes that account's component, partition and group ID. Any other value is `invalid_parameters`. Components with a Party keep the same component and hash partition under every policy. Also prints `unowned_policy`, `shared_accounts` and `linked_accounts`. | Once per strict scope, on the first `train` or `prepare` when `scope_id` does not exist (`create_scope = false` forbids it); writes only experiment membership. |
+| `temporal_create_training_scope` | Creates a frozen, label-blind Account/Party ownership-group partition. `unowned_policy` places Accounts whose ownership component has no Party: `"independent"` (the query's default, the original behaviour) gives each its own hash partition; `"shared"` gives unowned external accounts and unowned bank ledger accounts (`account_type = "gl"`) partition 1 (visible in every phase) and group ID `shared:<component>`, while other unowned internal accounts keep their own hash partition; `"linked"` (the client default) is `"shared"` plus: an unowned internal account whose distinct owned internal deposit counterparties (the other endpoint of any Payment_Transaction or Zelle_Transfer, all time) are exactly one account takes that account's component, partition and group ID. Any other value is `invalid_parameters`. Components with a Party keep the same component and hash partition under every policy. Also prints `unowned_policy`, `shared_accounts` and `linked_accounts`. | Once per strict scope, on the first `train` or `prepare` when `scope.id` does not exist (`scope.create = False` forbids it); writes only experiment membership. |
 | `temporal_finalize_training_scope` | Checks committed membership count/attributes and marks the scope ready. | After scope creation; incomplete scopes fail closed. |
 | `temporal_scope_policy` | Read-only. For a ready scope, prints `members` (all member Accounts and Parties), `unowned_accounts` and six counts of unowned member Accounts (no `Account_Owned_By_Party` edge) by class and side: `shared_internal`, `shared_external` (group ID starts with `shared:`), `independent_internal`, `independent_external` (group ID is the account's own component), `linked_internal`, `linked_external` (any other group ID), plus `shared_ledger` of `ledger_accounts` (unowned bank ledger accounts, counted apart from `shared_internal`). The client infers the creation policy from them. `scope_not_ready` otherwise. | When a strict preparation reuses or creates a scope, and when every streamed run opens. |
 | `temporal_scope_population` | Pages internal deposit accounts with preassigned partition, first-seen clocks and optional observed supervision (`include_observed`, default FALSE): `observed_positive` is the label contract's revealed positive, and only such an account has a nonzero `known_from_ms`. | Strict preparation; bounded reservoir selection, never model features. |
@@ -110,9 +110,9 @@ events within the pool. So `pool_activity` requires `pair_history` and `flow_tim
 context cutoff, so the counts are cutoff-safe. Stubs and contexts without payments get
 zeros.
 
-The counts are over the candidate pool (`[sampler]` `recent`, `older`, `distinct` per
-relation: 8, 4 and 4 for roots in the built-in run), not over the account's history, and
-changing those keys changes what they mean. Most accounts have more visible payments than
+The counts are over the candidate pool (`sampler.roots` `recent`, `older`, `distinct` per
+relation: 8, 4 and 4 in the built-in run), not over the account's history, and
+changing those settings changes what they mean. Most accounts have more visible payments than
 the pool holds, so `pool_payment_out_count` is at its cap of 16 for most roots, and the
 `distinct` stratum, which picks events with new counterparties, supplies many of the
 first-time inflows. The cap bounds drift between cutoffs, though Zelle counts still

@@ -1,11 +1,11 @@
 # Temporal feature redesign
 
 This implements the first feature experiment stage of the feature plan v4 draft
-(retired; the draft is in git history). The built-in run (`DEFAULT_RUN` in
-`config_schema.py`) keeps memoryless TGAT and removes every hard-window input.
+(retired; the draft is in git history). The built-in run (`DEFAULT_CONFIG` in
+`config.py`) keeps memoryless TGAT and removes every hard-window input.
 Features are hypotheses; no mule-detection lift has been established. Every group
-stays in the registry and the query, so an overrides file can select any of them to
-compare against the built-in groups.
+stays in the registry and the query, so a variant of the built-in run can select any
+of them to compare against the built-in groups.
 
 ## Implemented inputs
 
@@ -116,9 +116,11 @@ for feature selection. Which mules are observed is decided once in the graph by 
 
 Use a fresh prepared-data directory for the new contract. Keep the immutable
 source identity, scope and revealed labels; do not reveal labels again between
-feature arms. The settings are the built-in run; an arm's `--config overrides.toml`
-sets only the keys it changes (tables such as `[sampler]` merge key by key).
-`--dataset <run>_run/prepared` trains another arm on an existing preparation.
+feature variants. The settings are the built-in run; a variant is a `RunConfig` that
+changes only its own settings (`dataclasses.replace` or `RunConfig.with_changes`).
+After scoped isolation and batch-cost qualification, train one from Python with
+`pipeline.train.run(output, config=variant, dataset=...)`; an existing `dataset`
+(`<run>_run/prepared`) serves every variant of the same dataset settings.
 
 ```sh
 # Install only after query parity/validation is satisfactory.
@@ -126,9 +128,6 @@ sets only the keys it changes (tables such as `[sampler]` merge key by key).
 
 # A label-blind account audit; choose the account without consulting truth.
 .venv/bin/python scripts/verify_feature_redesign.py --account ACCOUNT_ID --date 2025-01-01
-
-# After scoped isolation and batch-cost qualification, train an arm.
-.venv/bin/python -m mule_pattern_learner train --config overrides.toml --output models/temporal/feature_v4.pt
 
 # Final-only; do not run during feature selection. Truth comes from the graph.
 .venv/bin/python -m mule_pattern_learner evaluate-final --checkpoint models/temporal/feature_v4.pt --output artifacts/temporal/final_audit.json

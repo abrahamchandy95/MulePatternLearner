@@ -1,10 +1,10 @@
 # Training from the live temporal graph
 
-The [feature-group redesign](feature_redesign.md) documents the window-free feature groups, optional summaries and migration. Fixed 83/135 dimensions below describe the window groups (the query's `include_*` defaults). The built-in v5 run (`DEFAULT_RUN` in `config_schema.py`) adds per-hop candidate pools, per-step resampling and a hub registry; see [candidate pools and resampling](#candidate-pools-and-resampling).
+The [feature-group redesign](feature_redesign.md) documents the window-free feature groups, optional summaries and migration. Fixed 83/135 dimensions below describe the window groups (the query's `include_*` defaults). The built-in v5 run (`DEFAULT_CONFIG` in `config.py`) adds per-hop candidate pools, per-step resampling and a hub registry; see [candidate pools and resampling](#candidate-pools-and-resampling).
 
 The live path is the `mule_pattern_learner` package: cutoff-aware GSQL features,
 two layers of temporal attention and nnPU learning. Source belongs in Git, and the
-settings are built into it (`DEFAULT_RUN`). Data, checkpoints and JSON reports are
+settings are built into it (`DEFAULT_CONFIG`). Data, checkpoints and JSON reports are
 ignored.
 
 The default protocol, `strict_inductive`, withholds entire ownership groups from
@@ -55,9 +55,9 @@ history is used conservatively for grouping, not as a model feature. Membership
 is frozen and verified before the scope becomes ready.
 
 An Account without an ownership edge has no Party in its component. Where such
-unowned accounts go is decided by `scope_unowned` when the scope is created:
+unowned accounts go is decided by `scope.unowned` when the scope is created:
 
-| `scope_unowned` | Unowned external accounts | Unowned internal accounts |
+| `scope.unowned` | Unowned external accounts | Unowned internal accounts |
 |---|---|---|
 | `"independent"` | Own hash partition, like any component | Own hash partition |
 | `"shared"` | Partition 1 (visible in every phase), group ID `shared:<component>` | Own hash partition |
@@ -93,14 +93,14 @@ shared like external counterparties; a hashed partition would hide every fee pos
 to a held-out ledger account from training. The policy query reports them as
 `shared_ledger` out of `ledger_accounts`.
 
-Preparation checks the inferred rule against `scope_unowned` when it reuses a
+Preparation checks the inferred rule against `scope.unowned` when it reuses a
 scope and right after it creates one. Every streamed run checks it again, and a
-mismatch names the stored rule and asks for either that `scope_unowned` value or a
-new `scope_id`. Scopes created before the rule existed, such as `strict_mule_v1`,
+mismatch names the stored rule and asks for either that `scope.unowned` value or a
+new `scope.id`. Scopes created before the rule existed, such as `strict_mule_v1`,
 read as `"independent"`. Rules that write identical membership cannot be told
 apart and read as the simplest of them: a `"linked"` scope in which no internal
 account qualified reads as `"shared"`, and a scope with neither unowned external
-accounts nor links reads as `"independent"`. Set `scope_unowned` to the inferred
+accounts nor links reads as `"independent"`. Set `scope.unowned` to the inferred
 value to use such a scope; its membership is the same.
 
 Visibility is cumulative:
@@ -280,10 +280,10 @@ see [leakage and scaling](leakage_and_scaling.md).
 ## Candidate pools and resampling
 
 TigerGraph returns a bounded, cutoff-safe candidate pool per context and hop, and
-the client selects the fanout from it. `[sampler]` pool keys (`recent`, `older`,
-`distinct`, `associations`, `max_history`) describe the roots pool (hop 1);
-`[sampler.children]` describes the children pool (hop 2). A context returns at
-most `4*(recent+older+distinct) + 14*associations` messages.
+the client selects the fanout from it. The pool settings (`recent`, `older`,
+`distinct`, `associations`, `max_history`) of `sampler.roots` describe the roots
+pool (hop 1), and those of `sampler.children` the children pool (hop 2). A context
+returns at most `4*(recent+older+distinct) + 14*associations` messages.
 
 The client resamples: per context and payment relation it draws at most
 `relation_fanouts[0]` candidates (hop 1) or `relation_fanouts[1]` (hop 2) uniformly
@@ -403,11 +403,10 @@ replaces the former `rejected_by_status`.
 
 Install dependencies with `pip install -e '.[dev]'` (Python 3.12 or newer) and
 supply the TigerGraph connection in the repository `.env`; environment variables
-override it. That is the only input: the settings are built in (`DEFAULT_RUN` in
-`config_schema.py`), and an optional `--config overrides.toml` changes only the
-keys it sets. Tables merge key by key (`[sampler] backend = "torch"` keeps every
-other sampler setting), and lists and scalars replace the default. Every command
-validates the result and rejects unknown keys by name.
+override it. That is the only input: the settings are built in (`DEFAULT_CONFIG` in
+`config.py`). Each section of `RunConfig` checks its values when it is built; another
+run is built in Python with `dataclasses.replace` or `RunConfig.with_changes`, which
+changes only the settings it names and refuses unknown ones by name.
 
 `train` installs stale queries itself. To install them ahead of time:
 
@@ -432,25 +431,23 @@ command fails and asks you to run `install` again later; the new run installs on
 what is still stale. Success is decided by checking every endpoint against the
 repository text and parameters, not by a status message.
 
-Preparation writes to `<run>/prepared/` inside the run directory (or to
-`artifacts/temporal/<prepared_id>` when a shared `prepared_id` is set). The dataset
-identity is the scope's recorded source, or for a new scope the graph name plus a
-hash of its vertex counts; a `dataset_id` pinned in an overrides file must match the
-prepared dataset. A ready directory is reused without connecting, but only
-when its GSQL hashes and its preparation settings still match; otherwise train into
-a new output. Preparation
-settings are the dates, seed limits, scope, split and cohort seeds, sampler pools and
-`scope_unowned`. Feature groups, model, optimisation and transport settings may change
-freely.
-Set `cohort_seed` to train several model `seed` values on one prepared cohort
-(it defaults to `seed`). A missing scope is created by the first run (set
-`create_scope = false` to forbid that write), and a run on a graph without known
-labels gets its one-time [label reveal](label_reveal.md).
+Preparation writes to `<run>/prepared/` inside the run directory. The source id, the
+identity of the data loaded into the graph, is the scope's recorded source, or for a
+new scope the graph name plus a hash of its vertex counts. The dataset id is the
+fingerprint of the dataset settings: the source id, `scope.id` and `scope.unowned`,
+the `dataset` section (dates, seed limits, the reservoir seed `dataset.seed` and
+`dataset.split_seed`) and the sampler's candidate pools. A ready directory is reused
+without connecting, but only when its GSQL hashes and its dataset settings still
+match; otherwise train into a new output. Feature groups, model, optimisation,
+transport and runtime settings may change freely, and so may the training seed:
+several model seeds train on one prepared dataset. A missing scope is created by the
+first run (`scope.create = False` forbids that write), and a run on a graph without
+known labels gets its one-time [label reveal](label_reveal.md).
 
-`scope_unowned` (default `"linked"`) places the accounts without an owning Party
+`scope.unowned` (default `"linked"`) places the accounts without an owning Party
 when the scope is created; see [strict experiment scope](#strict-experiment-scope).
 An existing scope keeps the rule it was created with, and preparation checks it
-against the configuration, so a different rule needs a new `scope_id`.
+against the configuration, so a different rule needs a new `scope.id`.
 
 The ordinary command prepares bounded metadata if necessary, then trains:
 
@@ -485,9 +482,9 @@ early stopping.
 The sampler backend is resolved once per run on the main thread, before batches
 are prefetched, and passed to every batch. It is recorded in `progress.jsonl`,
 `metrics.json`, `checkpoint_last.pt` and `model.pt`. A resume on a host that
-resolves another backend than the checkpoint's is refused, unless an overrides
-file names the new backend explicitly (`[sampler] backend = "torch"`, for example);
-the remaining steps then sample a different stream, and the run says so.
+resolves another backend than the checkpoint's is refused, unless the configuration
+names the new backend explicitly (`sampler.backend = "torch"`, for example); the
+remaining steps then sample a different stream, and the run says so.
 
 Batches are built ahead by `prefetch_batches` daemon worker threads. On an error or
 Ctrl-C the prefetcher cancels queued builds and re-raises at once, without waiting
