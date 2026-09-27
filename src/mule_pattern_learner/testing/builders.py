@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import asdict, dataclass, replace
-import hashlib
 import json
 from pathlib import Path
 from typing import Any, cast
@@ -29,7 +28,7 @@ from mule_pattern_learner.contract.feature_groups import (
     FeaturePlan,
     contract_fingerprint,
 )
-from mule_pattern_learner.contract.fingerprints import stable_score
+from mule_pattern_learner.contract.fingerprints import hash64, stable_score
 from mule_pattern_learner.contract.graph_schema import (
     ASSOCIATIONS,
     RAILS,
@@ -673,13 +672,8 @@ CUTOFFS = {"2024-07-01": 10_000, "2024-10-01": 20_000, "2025-01-01": 30_000}
 HUB = "P3"
 
 
-def _hash(*parts: object) -> int:
-    value = hashlib.sha256(":".join(map(str, parts)).encode()).digest()
-    return int.from_bytes(value[:8], "big")
-
-
 def _message(parent: ContextKey, j: int) -> dict[str, Any]:
-    h = _hash(parent.node_type, parent.node_id, parent.cutoff_seq, j)
+    h = hash64(parent.node_type, parent.node_id, parent.cutoff_seq, j)
     relation = RELATIONS[h % 4]
     seq = parent.cutoff_seq - 1 - 5 * j - h % 5
     ts = parent.cutoff_ms - (j + 1) * 3_600_000 - h % 997
@@ -728,7 +722,7 @@ def _association(parent: ContextKey, j: int) -> dict[str, Any]:
     return {
         **zero,
         "node_type": "Party",
-        "node_id": f"Q{_hash(parent.node_id, j) % 5}",
+        "node_id": f"Q{hash64(parent.node_id, j) % 5}",
         "relation": "Account_Owned_By_Party",
         "rail": "unknown",
         "channel": "unknown",
@@ -754,9 +748,9 @@ def _association(parent: ContextKey, j: int) -> dict[str, Any]:
 def fake_context(key: ContextKey) -> dict[str, Any]:
     messages: list[dict[str, Any]] = []
     if key.node_type == "Account":
-        count = 3 + _hash(key.node_id, key.cutoff_seq) % 6
+        count = 3 + hash64(key.node_id, key.cutoff_seq) % 6
         messages = [_message(key, j) for j in range(count) if key.cutoff_seq - 5 * j > 10]
-        messages += [_association(key, j) for j in range(_hash(key.node_id) % 2)]
+        messages += [_association(key, j) for j in range(hash64(key.node_id) % 2)]
     return {
         **asdict(key),
         "status": "ok",
