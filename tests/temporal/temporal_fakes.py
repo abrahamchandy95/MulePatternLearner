@@ -27,11 +27,8 @@ from mule_pattern_learner.contract.fingerprints import stable_score
 from mule_pattern_learner.contract.graph_schema import RELATIONS, SPLIT_PHASE, ContextKey
 from mule_pattern_learner.contract.server import CONTRACT_VERSION
 from mule_pattern_learner.contract.time_basis import BASIS_ID, fourier64
-from mule_pattern_learner.temporal.live.installation import definitions, parameter_names
-from mule_pattern_learner.temporal.live.supervision import (
-    align_observed_labels,
-    validate_label_table,
-)
+from mule_pattern_learner.data.observed_labels import align_observed_labels, validate_label_table
+from mule_pattern_learner.tigergraph.gsql_text import definitions, parameter_names
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 CONTEXT_QUERY = "temporal_training_context"

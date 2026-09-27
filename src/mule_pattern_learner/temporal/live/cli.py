@@ -19,6 +19,8 @@ from pathlib import Path  # noqa: E402
 from typing import Any  # noqa: E402
 
 from ...config import run_config  # noqa: E402
+from ...tigergraph.executor import TigerGraphExecutor  # noqa: E402
+from ...tigergraph.installer import install  # noqa: E402
 from .checkpoint import ModelCheckpoint  # noqa: E402
 from .evaluation import (  # noqa: E402
     GraphEvaluationTruth,
@@ -26,9 +28,7 @@ from .evaluation import (  # noqa: E402
     evaluate_final_population,
     evaluate_predictions,
 )
-from .executor import TigerGraphExecutor  # noqa: E402
 from .inference import score  # noqa: E402
-from .installation import install  # noqa: E402
 from .pipeline import DEFAULT_MODEL, dataset_path, prepare_live, run  # noqa: E402
 from .predictor import read_account_ids, score_new_accounts  # noqa: E402
 

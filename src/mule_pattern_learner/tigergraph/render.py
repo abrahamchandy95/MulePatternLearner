@@ -15,7 +15,7 @@ row and the call continues) and `missing_entity` for unknown IDs.
 
 import re
 
-from ...contract.feature_groups import (
+from ..contract.feature_groups import (
     AMOUNT_RATIO_CAP,
     AMOUNT_RATIO_FLOOR,
     AMOUNT_RATIO_WINDOWS,
@@ -23,8 +23,8 @@ from ...contract.feature_groups import (
     WINDOWS,
     FeaturePlan,
 )
-from ...contract.graph_schema import ASSOCIATIONS, NODE_TYPES
-from ...contract.server import CONTRACT_VERSION
+from ..contract.graph_schema import ASSOCIATIONS, NODE_TYPES
+from ..contract.server import CONTRACT_VERSION
 
 MAX_REQUESTS = 64
 # The groups whose include_* parameter defaults to TRUE in the rendered query. Callers

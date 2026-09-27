@@ -2,11 +2,12 @@
 
 Roots are fetched with the roots pool (hop 1) and first-hop children with the
 children pool (hop 2). Neighbors are resampled from those pools per step
-(`sampler.select_resampled`). Hub children become local stubs instead of fetches, and a child that TigerGraph
-rejects is masked out of the first hop. Tensors are assembled by column gathers;
-Fourier time features are computed on the target device from `age_ms` and
-`gap_ms` and never read from TigerGraph. `build_root_batch`, which training,
-preparation and scoring share, drops the roots TigerGraph rejected first.
+(`sampling.backend.select_resampled`). Hub children become local stubs instead of
+fetches, and a child that TigerGraph rejects is masked out of the first hop. Tensors
+are assembled by column gathers; Fourier time features are computed on the target
+device from `age_ms` and `gap_ms` and never read from TigerGraph. `build_root_batch`,
+which training, preparation and scoring share, drops the roots TigerGraph rejected
+first.
 """
 
 from __future__ import annotations
@@ -19,45 +20,24 @@ from typing import TYPE_CHECKING, Any, Protocol
 import numpy as np
 import torch
 
-from ...batching.time_encoding import fourier64_torch
-from ...contract.feature_groups import (
-    CLIENT_GROUPS,
-    FEATURE_GROUPS,
-    FIRST_INFLOW_BANDS,
-    PASS_THROUGH_RATIO,
-    PASS_THROUGH_SECONDS,
-    POOL_ACTIVITY_FEATURES,
-    POOL_GROUPS,
-    POOL_INTERNAL_FEATURES,
-    FeaturePlan,
-)
-from ...contract.graph_schema import CHANNELS, RAILS, RELATIONS, STRATA, ContextKey
-from ...contract.sampler_plan import SamplerPlan
-from .memory import BatchIndex, BatchLimits
-from .sampler import CandidateTable, resolve_backend, select_resampled
+from ..contract.feature_groups import CLIENT_GROUPS, FEATURE_GROUPS, FeaturePlan
+from ..contract.graph_schema import ContextKey
+from ..contract.sampler_plan import SamplerPlan
+from ..sampling.backend import batch_backend, select_resampled
+from ..sampling.candidates import CandidateTable
+from .features import DAY_MS, base_matrix, edge_block, node_matrix
+from .limits import BatchIndex, BatchLimits
+from .time_encoding import fourier64_torch
 
 if TYPE_CHECKING:
-    from .source import ContextSource
+    from ..data.contexts import ContextSource
 
-DAY_MS = 86_400_000
-_IDENTITY = frozenset(
-    {"gap_present"} | {n for spec in FEATURE_GROUPS.values() for n in spec.identity}
-)
-_NODE_NAMES = frozenset(
-    n for spec in FEATURE_GROUPS.values() if spec.path in ("node", "summary") for n in spec.names
-)
+
 _CLIENT_NAMES = frozenset(n for group in CLIENT_GROUPS for n in FEATURE_GROUPS[group].names)
-_POOL_NAMES = frozenset(POOL_ACTIVITY_FEATURES + POOL_INTERNAL_FEATURES)
-_INCOMING = frozenset({"zelle_in", "payment_in"})
-_OUTGOING = frozenset({"zelle_out", "payment_out"})
-_RELATION = {name: i for i, name in enumerate(RELATIONS)}
-_RAIL = {name: i for i, name in enumerate(RAILS)}
-_CHANNEL = {name: i for i, name in enumerate(CHANNELS)}
-_STRATUM = {name: i for i, name in enumerate(STRATA)}
 
 
 class HubLookup(Protocol):
-    """Hub status from history visible before the root cutoff (see live/hubs.py).
+    """Hub status from history visible before the root cutoff (see data/hub_registry.py).
 
     `phase` is the batch's visibility phase (1 train, 2 validation, 3 test); unscoped
     batches (score-new) use 3. Positional-only, so implementations may name them freely.
@@ -77,196 +57,6 @@ def child_key(message: dict[str, Any], parent: ContextKey | None = None) -> Cont
         parent.scope_id if parent else "",
         parent.visibility_phase if parent else 3,
     )
-
-
-def _log_columns(names: Sequence[str]) -> np.ndarray:
-    return np.asarray([n not in _IDENTITY and "_fourier_" not in n for n in names], dtype=bool)
-
-
-def pool_activity(context: dict[str, Any]) -> dict[str, float]:
-    """The pool groups (pool_activity, pool_internal_inflows) of one context.
-
-    These are counts over the payment messages of the context's own candidate pool,
-    at most `recent + older + distinct` per relation (`PoolPlan`), not over the account's
-    whole history; the `distinct` stratum favours new counterparties. TigerGraph returns
-    the messages strictly before the context cutoff and computes their pair and flow
-    fields there over the whole visible history, so every value is cutoff-safe. A
-    first-time inflow has no earlier payment in its directed pair
-    (`pair_prior_count == 0`; the GSQL pair is relation, rail and peer), and an internal
-    one has a peer that is not external. A rapid pass-through is an inflow whose next
-    outflow in the visible history (the per-message `flow_*` fields; pool events are
-    never paired here) follows within PASS_THROUGH_SECONDS and moves PASS_THROUGH_RATIO
-    of the inflow amount. Stubs and contexts without payments get zeros.
-    """
-    peers: dict[str, set[tuple[str, str]]] = {r: set() for r in RELATIONS[:4]}
-    counts = dict.fromkeys(RELATIONS[:4], 0)
-    bands = dict.fromkeys(FIRST_INFLOW_BANDS, 0)
-    first_in = first_internal = pass_through = 0
-    low, high = PASS_THROUGH_RATIO
-    try:
-        for m in context["messages"]:
-            relation = m["relation"]
-            if relation not in counts:
-                continue  # associations
-            counts[relation] += 1
-            peers[relation].add((m["node_type"], m["node_id"]))
-            if relation not in _INCOMING:
-                continue
-            if int(m["pair_prior_count"]) == 0:
-                first_in += 1
-                if not m["peer_external"]:
-                    first_internal += 1
-                    for band in bands:
-                        bands[band] += bool(m["amount_present"]) and m["amount"] >= band
-            pass_through += bool(
-                m["flow_present"]
-                and m["flow_ratio_present"]
-                and m["flow_delay_seconds"] <= PASS_THROUGH_SECONDS
-                and low <= m["flow_amount_ratio"] <= high
-            )
-    except KeyError as error:
-        raise ValueError(f"Message lacks required field {error.args[0]!r}") from None
-    values: dict[str, float] = {}
-    for relation in RELATIONS[:4]:
-        values[f"pool_{relation}_count"] = counts[relation]
-        values[f"pool_{relation}_unique"] = len(peers[relation])
-    values |= {
-        "pool_in_unique": len({peer for r in _INCOMING for peer in peers[r]}),
-        "pool_out_unique": len({peer for r in _OUTGOING for peer in peers[r]}),
-        "pool_first_in": first_in,
-        "pool_pass_through_1d": pass_through,
-        "pool_first_in_internal": first_internal,
-        **{f"pool_first_in_internal_{band}": n for band, n in bands.items()},
-    }
-    return values
-
-
-def _pooled(plan: FeaturePlan) -> bool:
-    return any(group in plan.groups for group in POOL_GROUPS)
-
-
-# Vectorized assembly -------------------------------------------------------------
-
-
-def _column(items: Sequence[dict[str, Any]], name: str, dtype: Any = np.float64) -> np.ndarray:
-    try:
-        return np.fromiter((m[name] for m in items), dtype=dtype, count=len(items))
-    except KeyError:
-        raise ValueError(f"Message lacks required field {name!r}") from None
-    except (TypeError, ValueError) as error:  # keep the tuple form for Python 3.12/3.13
-        raise ValueError(f"Message field {name!r} is not numeric: {error}") from None
-
-
-def node_matrix(
-    rows: Sequence[dict[str, Any]], plan: FeaturePlan, *, pooled: int | None = None
-) -> np.ndarray:
-    """The node and summary columns of many contexts (batch_reference.node_features).
-
-    Only the first ``pooled`` rows (all when None) get the client-computed pool counts;
-    the rest keep zeros there. Split batches pass their roots, which lead the rows,
-    since the split model reads the pool columns of roots only.
-    """
-    names = plan.node_names
-    for row in rows:
-        unexpected = set(row["features"]) - _NODE_NAMES
-        if unexpected:
-            raise ValueError(f"Unrecognized feature fields: {sorted(unexpected)}")
-    pools = [pool_activity(row) for row in rows[:pooled]] if _pooled(plan) else []
-    values = np.zeros((len(rows), len(names)), dtype=np.float64)
-    for j, name in enumerate(names):
-        if name in _POOL_NAMES:
-            values[: len(pools), j] = [pool[name] for pool in pools]
-            continue
-        values[:, j] = np.fromiter(
-            (
-                1.0 if name == "type_" + row["node_type"] else row["features"].get(name, 0)
-                for row in rows
-            ),
-            dtype=np.float64,
-            count=len(rows),
-        )
-    log = _log_columns(names)
-    values[:, log] = np.log1p(values[:, log])
-    return values.astype(np.float32)
-
-
-def base_matrix(
-    messages: Sequence[dict[str, Any]], withheld: np.ndarray, plan: FeaturePlan
-) -> np.ndarray:
-    """The base columns of many second-hop messages (batch_reference.base_features)."""
-    names = plan.names("node")
-    cutoff = _column(messages, "event_ts_ms", np.int64)
-    first = _column(messages, "peer_first_ms", np.int64)
-    if np.any(first <= 0) or np.any(first > cutoff):
-        raise ValueError("Peer metadata is not visible at its historical cutoff")
-    values = np.zeros((len(messages), len(names)), dtype=np.float64)
-    for j, name in enumerate(names):
-        if name.startswith("type_"):
-            values[:, j] = [m["node_type"] == name[5:] for m in messages]
-        elif name == "is_external":
-            values[:, j] = _column(messages, "peer_external")
-        elif name == "is_deposit":
-            values[:, j] = _column(messages, "peer_deposit")
-        elif name == "age_days":
-            values[:, j] = (cutoff - first) / DAY_MS
-        elif name == "history_withheld":
-            values[:, j] = withheld
-    log = _log_columns(names)
-    values[:, log] = np.log1p(values[:, log])
-    return values.astype(np.float32)
-
-
-def _stratum(message: dict[str, Any]) -> int:
-    name = message.get("stratum", "recent" if message["event_id"] else "association")
-    try:
-        return _STRATUM[name]
-    except KeyError:
-        raise ValueError(f"Unknown sampling stratum {name!r}") from None
-
-
-def edge_block(messages: Sequence[dict[str, Any]], plan: FeaturePlan) -> dict[str, np.ndarray]:
-    """Edge features and categorical codes for many messages, by column.
-
-    Fourier columns stay zero here; `age_ms`/`gap_ms` and their masks are returned
-    so the encoding can run on the target device.
-    """
-    names = plan.edge_names
-    count = len(messages)
-    event = np.fromiter((bool(m["event_id"]) for m in messages), dtype=bool, count=count)
-    values = np.zeros((count, len(names)), dtype=np.float64)
-    for j, name in enumerate(names):
-        if "_fourier_" not in name:
-            values[:, j] = event if name == "is_event" else _column(messages, name)
-    log = _log_columns(names)
-    values[:, log] = np.log1p(values[:, log])
-    try:
-        relation = [_RELATION[m["relation"]] for m in messages]
-        rail = [_RAIL[m["rail"]] for m in messages]
-    except KeyError as error:
-        raise ValueError(f"Unknown relation or rail {error.args[0]!r}") from None
-    other = _CHANNEL["other"]
-    block = {
-        "edge": values.astype(np.float32),
-        "relation": np.asarray(relation, dtype=np.int64),
-        "rail": np.asarray(rail, dtype=np.int64),
-        "channel": np.asarray(
-            [_CHANNEL.get(m.get("channel", "unknown"), other) for m in messages], dtype=np.int64
-        ),
-        "stratum": np.asarray([_stratum(m) for m in messages], dtype=np.int64),
-    }
-    if "time_encoding" in plan.groups:
-        gap_on = event & _column(messages, "gap_present", bool)
-        events = [m for m, e in zip(messages, event, strict=True) if e]
-        age = np.zeros(count, dtype=np.int64)
-        age[event] = _column(events, "age_ms", np.int64)
-        gap = np.zeros(count, dtype=np.int64)
-        gap[gap_on] = _column(
-            [m for m, g in zip(messages, gap_on, strict=True) if g], "gap_ms", np.int64
-        )
-        if np.any(age < 0) or np.any(gap < 0):
-            raise ValueError("Future timestamps cannot be encoded as historical context")
-        block |= {"age_ms": age, "age_on": event, "gap_ms": gap, "gap_on": gap_on}
-    return block
 
 
 def _fetched(rows: Sequence[dict[str, Any] | None]) -> None:
@@ -325,31 +115,6 @@ def _select(
         device=device if backend == "cugraph" else "cpu",
     )
     return [[table.messages[j] for j in row if j >= 0] for row in slots.tolist()]
-
-
-def batch_backend(
-    sampler: SamplerPlan, device: torch.device, mode: str, resolved: str | None = None
-) -> str:
-    """The backend one batch selects with: "torch" or "cugraph".
-
-    `resolved` is the run's `resolve_backend(sampler, device)` result; None resolves
-    here (the probe is cached). Evaluation always runs the hash-keyed torch path, so
-    there a resolved `cugraph` is accepted on any device and not used.
-    """
-    if resolved is not None:
-        allowed = ("torch", "cugraph") if sampler.backend == "auto" else (sampler.backend,)
-        if resolved not in allowed:
-            raise ValueError(
-                f"sampler_backend {resolved!r} does not fit the sampler backend "
-                f"{sampler.backend!r}; expected one of {allowed}"
-            )
-    if mode == "eval":
-        return "torch"
-    if resolved is None:
-        return resolve_backend(sampler, device)
-    if resolved == "cugraph" and device.type != "cuda":
-        raise ValueError(f"sampler_backend cugraph needs a CUDA batch device, got {device}")
-    return resolved
 
 
 def _tensor(value: np.ndarray, device: torch.device) -> torch.Tensor:

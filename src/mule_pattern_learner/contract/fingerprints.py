@@ -33,3 +33,8 @@ def hash64(*parts: object) -> int:
 
 def stable_score(value: str, seed: int, purpose: str) -> float:
     return hash64(purpose, seed, value) / 2**64
+
+
+def stable_hash(text: str) -> int:
+    """64-bit hash that is identical across processes, machines and Python versions."""
+    return int.from_bytes(hashlib.blake2b(text.encode(), digest_size=8).digest(), "little")

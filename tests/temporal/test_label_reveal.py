@@ -9,13 +9,13 @@ import pytest
 from temporal_fakes import reveal_inputs
 
 from mule_pattern_learner.config import DEFAULT_RUN, run_config, validate_config
+from mule_pattern_learner.contract import graph_schema
 from mule_pattern_learner.contract.clock import timestamp
-from mule_pattern_learner.temporal.live import labels, reveal_model
-from mule_pattern_learner.temporal.live.installation import (
-    TRAINING_QUERY_FILES,
-    definitions,
-    repository_queries,
-)
+from mule_pattern_learner.temporal.live import reveal_model
+from mule_pattern_learner.tigergraph import labels as tigergraph_labels
+from mule_pattern_learner.tigergraph import reveal as tigergraph_reveal
+from mule_pattern_learner.tigergraph.gsql_text import definitions, repository_queries
+from mule_pattern_learner.tigergraph.installer import TRAINING_QUERY_FILES
 
 ROOT = Path(__file__).resolve().parents[2]
 REVEAL_FILE = ROOT / "gsql/temporal/label_reveal.gsql"
@@ -23,13 +23,15 @@ REVEAL_FILE = ROOT / "gsql/temporal/label_reveal.gsql"
 
 def test_hash_mirror_is_pinned_uniform_and_stream_independent() -> None:
     # Pinned: the GSQL temporal_reveal_uniforms must return exactly these values.
-    assert labels.reveal_uniforms(123456789, 42, 3) == [
+    assert tigergraph_reveal.reveal_uniforms(123456789, 42, 3) == [
         0.8522561180182994,
         0.339975114371616,
         0.2213301638706262,
     ]
-    assert labels.reveal_uniforms(1, 1042, 1) == [0.856376556379896]
-    draws = np.array([labels.reveal_uniforms(k, 42, 2) for k in range(60_000_000, 60_020_000)])
+    assert tigergraph_reveal.reveal_uniforms(1, 1042, 1) == [0.856376556379896]
+    draws = np.array(
+        [tigergraph_reveal.reveal_uniforms(k, 42, 2) for k in range(60_000_000, 60_020_000)]
+    )
     assert ((draws > 0) & (draws < 1)).all()
     assert abs(draws.mean() - 0.5) < 0.01 and abs(draws.var() - 1 / 12) < 0.003
     assert abs(np.corrcoef(draws[:, 0], draws[:, 1])[0, 1]) < 0.03
@@ -40,7 +42,7 @@ def test_hash_mirror_is_pinned_uniform_and_stream_independent() -> None:
 
 def test_reveal_parameters_follow_the_run_dates_budget_and_seed() -> None:
     config = run_config()
-    params = labels.reveal_parameters(config, apply=True)
+    params = tigergraph_reveal.reveal_parameters(config, apply=True)
     assert params == {
         "scope_id": DEFAULT_RUN["scope_id"],
         "train_cutoff_ms": timestamp("2024-07-01"),
@@ -51,22 +53,24 @@ def test_reveal_parameters_follow_the_run_dates_budget_and_seed() -> None:
         "apply": True,
     }
     several = {**config, "dates": {**config["dates"], "train": ["2024-05-01", "2024-07-01"]}}
-    assert labels.reveal_parameters(several, apply=False)["train_cutoff_ms"] == timestamp(
-        "2024-07-01"
+    assert tigergraph_reveal.reveal_parameters(several, apply=False)[
+        "train_cutoff_ms"
+    ] == timestamp("2024-07-01")
+    assert (
+        tigergraph_reveal.reveal_parameters({**config, "reveal_salt": 7}, apply=False)["salt"] == 7
     )
-    assert labels.reveal_parameters({**config, "reveal_salt": 7}, apply=False)["salt"] == 7
     # A JSON override may write null; it means "not set", like cohort_seed.
     unset = validate_config({**config, "reveal_salt": None, "reveal_per_split": None, "seed": 5})
-    assert labels.reveal_parameters(unset, apply=False)["salt"] == 5
-    assert labels.reveal_parameters(unset, apply=False)["budget"] == 20
+    assert tigergraph_reveal.reveal_parameters(unset, apply=False)["salt"] == 5
+    assert tigergraph_reveal.reveal_parameters(unset, apply=False)["budget"] == 20
 
 
 def test_reveal_defaults_are_the_query_defaults() -> None:
-    query = definitions(REVEAL_FILE.read_text())[labels.REVEAL_QUERY]
+    query = definitions(REVEAL_FILE.read_text())[tigergraph_reveal.REVEAL_QUERY]
     header = query.split("(", 1)[1].split(") FOR GRAPH", 1)[0]
     declared = re.findall(r"\b(?:INT|DOUBLE)\s+(\w+)\s*=\s*([-\d.]+)", header)
-    assert {name: float(value) for name, value in declared} == labels.REVEAL_DEFAULTS
-    assert DEFAULT_RUN["reveal_per_split"] == labels.REVEAL_DEFAULTS["budget"]
+    assert {name: float(value) for name, value in declared} == tigergraph_reveal.REVEAL_DEFAULTS
+    assert DEFAULT_RUN["reveal_per_split"] == tigergraph_reveal.REVEAL_DEFAULTS["budget"]
 
 
 # Every mule is reported, acted on and traced; there is no proactive discovery.
@@ -81,7 +85,11 @@ CERTAIN = {
 
 @pytest.mark.parametrize("salt", [1, 2])
 def test_reveal_model_finds_reports_and_traces_and_reveals_within_budget(salt: int) -> None:
-    params = {**labels.reveal_parameters(run_config(), apply=False), **CERTAIN, "salt": salt}
+    params = {
+        **tigergraph_reveal.reveal_parameters(run_config(), apply=False),
+        **CERTAIN,
+        "salt": salt,
+    }
     result = reveal_model.plan(reveal_inputs(), {**params, "budget": 1})
     mules = result["mules"]
     assert {name: mules[name]["channel"] for name in "ABD"} == {
@@ -103,8 +111,8 @@ def test_reveal_model_finds_reports_and_traces_and_reveals_within_budget(salt: i
 
 
 def test_reveal_model_uses_the_query_defaults_and_monitoring() -> None:
-    params = labels.reveal_parameters(run_config(), apply=False)
-    model = {key: labels.REVEAL_DEFAULTS[key] for key in CERTAIN}
+    params = tigergraph_reveal.reveal_parameters(run_config(), apply=False)
+    model = {key: tigergraph_reveal.REVEAL_DEFAULTS[key] for key in CERTAIN}
     implicit = reveal_model.plan(reveal_inputs(), params)
     explicit = reveal_model.plan(reveal_inputs(), {**params, **model})
     assert implicit["mules"] == explicit["mules"] and implicit["revealed"] == explicit["revealed"]
@@ -125,9 +133,9 @@ class RevealServer:
 
     def run(self, name: str, params: dict[str, Any], **kwargs: Any) -> list[dict[str, Any]]:
         self.calls.append((name, params, kwargs))
-        if name == labels.REVEAL_QUERY:
+        if name == tigergraph_reveal.REVEAL_QUERY:
             return [self.reveal, {"revealed_mules": []}]
-        assert name == labels.VALIDATE_QUERY
+        assert name == tigergraph_labels.VALIDATE_QUERY
         return [self.audit]
 
 
@@ -135,7 +143,7 @@ CLEAN = {
     "known_labels": 752623,
     "true_mules": 233,
     "revealed_positives": 54,
-    **dict.fromkeys(labels.VIOLATIONS, 0),
+    **dict.fromkeys(tigergraph_labels.VIOLATIONS, 0),
 }
 
 
@@ -153,9 +161,13 @@ def test_first_run_reveals_once_and_reports_the_shortfall(
         "revealed_by_channel": {"victim_report": 40, "monitoring": 9, "network_trace": 5},
     }
     server = RevealServer(reveal, CLEAN)
-    summary = labels.ensure_revealed_labels(server, run_config())
+    summary = tigergraph_reveal.ensure_revealed_labels(server, run_config())
     name, params, options = server.calls[0]
-    assert name == labels.REVEAL_QUERY and params["apply"] is True and options["attempts"] == 1
+    assert (
+        name == tigergraph_reveal.REVEAL_QUERY
+        and params["apply"] is True
+        and options["attempts"] == 1
+    )
     assert summary["labels"] == "revealed now" and summary["revealed"] == reveal["revealed"]
     # Validation had only 14 mules a bank would have found by 1 October: never padded.
     assert summary["shortfall_discovered_by_cutoff"] == {"validation": 14}
@@ -167,13 +179,15 @@ def test_existing_labels_are_kept_and_contract_violations_fail() -> None:
     kept = RevealServer(
         {"status": "already_revealed", "known_labels": 9, "revealed_labels": 3}, CLEAN
     )
-    assert labels.ensure_revealed_labels(kept, run_config())["labels"] == "already revealed"
+    assert (
+        tigergraph_reveal.ensure_revealed_labels(kept, run_config())["labels"] == "already revealed"
+    )
     broken = RevealServer({"status": "already_revealed"}, {**CLEAN, "invalid_clocks": 2})
     with pytest.raises(ValueError, match="invalid_clocks"):
-        labels.ensure_revealed_labels(broken, run_config())
+        tigergraph_reveal.ensure_revealed_labels(broken, run_config())
     refused = RevealServer({"status": "scope_not_ready"}, CLEAN)
     with pytest.raises(ValueError, match="scope_not_ready"):
-        labels.ensure_revealed_labels(refused, run_config())
+        tigergraph_reveal.ensure_revealed_labels(refused, run_config())
 
 
 def test_reveal_queries_are_installed_with_training_and_read_truth_only_there() -> None:
@@ -200,10 +214,10 @@ def test_account_schema_contract_matches_canonical_ddl() -> None:
     fields = re.findall(
         r"^\s*(?:PRIMARY_ID )?(\w+)\s+(?:STRING|BOOL|UINT|INT)", block, re.MULTILINE
     )
-    assert fields == labels.ACCOUNT_STORAGE_COLUMNS
+    assert fields == graph_schema.ACCOUNT_STORAGE_COLUMNS
     assert re.search(r"is_mule INT DEFAULT 0", block)
     loader = (ROOT / "gsql/schema/temporal_account_loading.gsql").read_text()
     columns = re.findall(r'\$"(\w+)"', loader)
-    assert columns == labels.ACCOUNT_STORAGE_COLUMNS
+    assert columns == graph_schema.ACCOUNT_STORAGE_COLUMNS
     header = loader.split("DEFINE HEADER account_header =", 1)[1].split(";", 1)[0]
-    assert re.findall(r'"(\w+)"', header) == labels.ACCOUNT_LOAD_COLUMNS
+    assert re.findall(r'"(\w+)"', header) == graph_schema.ACCOUNT_LOAD_COLUMNS

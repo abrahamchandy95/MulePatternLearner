@@ -12,7 +12,7 @@ import threading
 import time
 from typing import TYPE_CHECKING, Any, Protocol, TypeVar
 
-from ...config import TRANSPORT_DEFAULTS
+from ..config import TRANSPORT_DEFAULTS
 
 if TYPE_CHECKING:
     from pyTigerGraph import TigerGraphConnection
@@ -213,7 +213,8 @@ class TigerGraphExecutor:
         self.retries: Counter[str] = Counter()
         if client is None:
             from mule_pattern_learner.tigergraph.client import Client
-            from mule_pattern_learner.tigergraph.settings import Settings
+
+            from .connection import Settings
 
             settings = Settings()
             client = self._retry(lambda: Client(settings), what="connect", attempts=None)

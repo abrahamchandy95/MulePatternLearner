@@ -34,15 +34,27 @@ from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.contract.sampler_plan import PoolPlan, SamplerPlan
 from mule_pattern_learner.contract.server import CONTRACT_VERSION
 from mule_pattern_learner.contract.time_basis import BASIS_ID
+from mule_pattern_learner.data import contexts
+from mule_pattern_learner.data import manifest as data_manifest
+from mule_pattern_learner.data.contexts import StreamingContextSource
+from mule_pattern_learner.data.hub_registry import (
+    HUB_COLUMNS,
+    HubRegistry,
+    hub_manifest,
+    hub_threshold,
+    load_hub_registry,
+)
 from mule_pattern_learner.paths import REPOSITORY_ROOT, load_config
-from mule_pattern_learner.temporal.live import dataset, installation, pipeline, scope, source
-from mule_pattern_learner.temporal.live.context_query import (
+from mule_pattern_learner.temporal.live import pipeline
+from mule_pattern_learner.tigergraph import gsql_text, installer, provenance, scope
+from mule_pattern_learner.tigergraph.client import Client, _status_error, _TimeoutConnection
+from mule_pattern_learner.tigergraph.context_query import (
     ContextTimeoutError,
     query_context_batch,
     query_context_split,
     validate_context,
 )
-from mule_pattern_learner.temporal.live.executor import (
+from mule_pattern_learner.tigergraph.executor import (
     AVAILABILITY,
     DETERMINISTIC,
     SERVER_TIMEOUT,
@@ -52,18 +64,9 @@ from mule_pattern_learner.temporal.live.executor import (
     failure_class,
     is_transient,
 )
-from mule_pattern_learner.temporal.live.hubs import (
-    HUB_COLUMNS,
-    HubRegistry,
-    hub_manifest,
-    hub_threshold,
-    load_hub_registry,
-    query_hub_registry,
-)
-from mule_pattern_learner.temporal.live.queries import DEFAULT_FLAG_GROUPS
-from mule_pattern_learner.temporal.live.source import StreamingContextSource
-from mule_pattern_learner.temporal.live.supervision import GraphObservedLabels
-from mule_pattern_learner.tigergraph.client import Client, _status_error, _TimeoutConnection
+from mule_pattern_learner.tigergraph.hubs import query_hub_registry
+from mule_pattern_learner.tigergraph.labels import GraphObservedLabels
+from mule_pattern_learner.tigergraph.render import DEFAULT_FLAG_GROUPS
 
 PLAN = FeaturePlan(("entity_meta", "message_core", "time_encoding"), "split")
 SAMPLER = SamplerPlan(
@@ -944,7 +947,7 @@ def live_config(tmp_path: Path, **changes: Any) -> dict[str, Any]:
 @pytest.fixture
 def fixed_hashes(monkeypatch: pytest.MonkeyPatch):
     hashes = {"gsql/temporal/training_context.gsql": "aaa", "gsql/temporal/hub_registry.gsql": "b"}
-    monkeypatch.setattr(dataset, "query_hashes", lambda: dict(hashes))
+    monkeypatch.setattr(data_manifest, "query_hashes", lambda: dict(hashes))
     return hashes
 
 
@@ -954,7 +957,10 @@ def write_manifest(
     manifest = {
         "status": status,
         "config": config,
-        "source": {"query_hashes": dict(hashes), "preparation": dataset.preparation_view(config)},
+        "source": {
+            "query_hashes": dict(hashes),
+            "preparation": data_manifest.preparation_view(config),
+        },
     }
     path.mkdir(parents=True, exist_ok=True)
     (path / "manifest.json").write_text(json.dumps(manifest))
@@ -986,7 +992,7 @@ def test_prepare_live_checks_query_hashes_before_reusing_a_ready_dataset(
     with pytest.raises(ValueError, match=r"hub_registry\.gsql.*mule-temporal install.*new output"):
         pipeline.prepare_live(config, out)
     with pytest.raises(ValueError, match="different GSQL sources"):
-        dataset.load_prepared(out)
+        data_manifest.load_prepared(out)
 
 
 def test_prepared_directory_is_inside_the_run_unless_prepared_id_is_set(tmp_path: Path) -> None:
@@ -1041,8 +1047,8 @@ def test_first_preparation_creates_the_scope_and_reveals_labels(
 
 def test_preparation_keys_fingerprint_only_preparation_settings(tmp_path: Path) -> None:
     base = live_config(tmp_path)
-    view = dataset.preparation_view(base)
-    assert tuple(view) == dataset.PREPARATION_KEYS
+    view = data_manifest.preparation_view(base)
+    assert tuple(view) == data_manifest.PREPARATION_KEYS
     same = [
         {"learning_rate": 0.5, "epochs": 3, "hidden": 8, "request_batch_size": 4},
         {"scope_unowned": "linked", "max_outage_s": 60},
@@ -1051,12 +1057,12 @@ def test_preparation_keys_fingerprint_only_preparation_settings(tmp_path: Path) 
         {"feature_groups": list(DEFAULT_GROUPS), "architecture": "summary"},
     ]
     for change in same:
-        assert dataset.preparation_fingerprint(
+        assert data_manifest.preparation_fingerprint(
             {**base, **change}
-        ) == dataset.preparation_fingerprint(base), change
-    assert dataset.preparation_fingerprint(
+        ) == data_manifest.preparation_fingerprint(base), change
+    assert data_manifest.preparation_fingerprint(
         validate_config(base)
-    ) == dataset.preparation_fingerprint(base)
+    ) == data_manifest.preparation_fingerprint(base)
     different = [
         {"split_seed": 1},
         {"seed": 1},
@@ -1067,11 +1073,13 @@ def test_preparation_keys_fingerprint_only_preparation_settings(tmp_path: Path) 
         {"sampler": {**base["sampler"], "children": {"recent": 2, "associations": 0}}},
     ]
     for change in different:
-        assert dataset.preparation_fingerprint(
+        assert data_manifest.preparation_fingerprint(
             {**base, **change}
-        ) != dataset.preparation_fingerprint(base), change
+        ) != data_manifest.preparation_fingerprint(base), change
     manifest = {"source": {"preparation": view}}
-    assert dataset.preparation_mismatches({**base, "split_seed": 1}, manifest) == ["split_seed"]
+    assert data_manifest.preparation_mismatches({**base, "split_seed": 1}, manifest) == [
+        "split_seed"
+    ]
 
 
 LINKED_COUNTS = {
@@ -1139,24 +1147,24 @@ def test_source_counts_ignore_experiment_scopes(monkeypatch: pytest.MonkeyPatch)
         runInstalledQuery=lambda name, params, **k: [{"status": "ok", **policy_counts("linked")}],
     )
     tg = executor(conn)
-    assert installation.source_counts(tg) == {"Account": 10, "Party": 4}
-    monkeypatch.setattr(installation, "verify_sources", lambda executor: [])
+    assert provenance.source_counts(tg) == {"Account": 10, "Party": 4}
+    monkeypatch.setattr(provenance, "verify_sources", lambda executor: [])
     manifest: dict[str, Any] = {
         "config": {"dataset_id": "snap", "scope_id": "s", "split_seed": 42},
         # Older manifests recorded the scope vertex count too.
         "source": {"source_counts": {"Account": 10, "Party": 4, "Temporal_Training_Scope": 1}},
     }
-    installation.verify_frozen_source(tg, manifest)
+    provenance.verify_frozen_source(tg, manifest)
     counts["Temporal_Training_Scope"] = 3  # another experiment created scopes
-    installation.verify_frozen_source(tg, manifest)
+    provenance.verify_frozen_source(tg, manifest)
     # The scope's unowned rule is rechecked on every streamed run.
     manifest["config"]["scope_unowned"] = "independent"
     with pytest.raises(ValueError, match="no longer valid.*scope_unowned = 'linked'"):
-        installation.verify_frozen_source(tg, manifest)
+        provenance.verify_frozen_source(tg, manifest)
     manifest["config"]["scope_unowned"] = "linked"
     counts["Account"] = 11
     with pytest.raises(ValueError, match="counts changed"):
-        installation.verify_frozen_source(tg, manifest)
+        provenance.verify_frozen_source(tg, manifest)
 
 
 def test_missing_scope_is_created_unless_forbidden(tmp_path: Path) -> None:
@@ -1221,13 +1229,13 @@ def test_existing_scope_must_have_the_configured_unowned_policy(tmp_path: Path) 
 
 def test_scope_policy_query_prints_what_the_client_reads() -> None:
     text = (REPOSITORY_ROOT / "gsql/temporal/training_scope.gsql").read_text()
-    queries = installation.definitions(text)
+    queries = gsql_text.definitions(text)
     assert scope.SCOPE_POLICY_QUERY in queries
     query = queries[scope.SCOPE_POLICY_QUERY]
-    assert installation.parameter_names(query) == {"scope_id"}
+    assert gsql_text.parameter_names(query) == {"scope_id"}
     for name in (*scope.SCOPE_POLICY_COUNTS, "members"):
         assert f"AS {name}" in query, name
-    create = installation.parameter_names(queries["temporal_create_training_scope"])
+    create = gsql_text.parameter_names(queries["temporal_create_training_scope"])
     assert "unowned_policy" in create and "shared_unowned" not in create
 
 
@@ -1250,7 +1258,7 @@ def population_row(account: str, positive: bool, known: int) -> dict[str, Any]:
 
 
 def test_only_graph_labels_read_labels_from_the_graph(tmp_path: Path) -> None:
-    from mule_pattern_learner.temporal.live.cohort import scoped_cohort
+    from mule_pattern_learner.data.accounts import scoped_cohort
 
     seen = []
 
@@ -1271,7 +1279,7 @@ def test_only_graph_labels_read_labels_from_the_graph(tmp_path: Path) -> None:
 
 @pytest.mark.legacy
 def test_stale_population_queries_fail_fast(tmp_path: Path) -> None:
-    from mule_pattern_learner.temporal.live.cohort import scoped_cohort
+    from mule_pattern_learner.data.accounts import scoped_cohort
 
     config = live_config(tmp_path)
     # An old query emits the discovery time of hidden or negative labels.
@@ -1429,13 +1437,13 @@ def test_override_tables_merge_into_the_built_in_run(tmp_path: Path) -> None:
 
 def test_transport_settings_come_from_the_training_config(monkeypatch: pytest.MonkeyPatch) -> None:
     seen = {}
-    monkeypatch.setattr(source, "verify_frozen_source", lambda executor, manifest: None)
+    monkeypatch.setattr(contexts, "verify_frozen_source", lambda executor, manifest: None)
 
     class Executor:
         def __init__(self, **kwargs: Any) -> None:
             seen.update(kwargs)
 
-    monkeypatch.setattr("mule_pattern_learner.temporal.live.executor.TigerGraphExecutor", Executor)
+    monkeypatch.setattr("mule_pattern_learner.tigergraph.executor.TigerGraphExecutor", Executor)
     prepared = {"dataset_id": "d", "scope_id": "scope"}
     manifest = {"config": prepared, "source": {}}
     training = {
@@ -1448,7 +1456,7 @@ def test_transport_settings_come_from_the_training_config(monkeypatch: pytest.Mo
         "max_outage_s": 120,
     }
     store = cast(
-        StreamingContextSource, source.open_context_source(Path("unused"), manifest, training)
+        StreamingContextSource, contexts.open_context_source(Path("unused"), manifest, training)
     )
     assert seen == {"max_attempts": 3, "max_outage_s": 120}
     assert (store.request_batch_size, store.concurrency, store.capacity) == (32, 4, 1024)
@@ -1456,7 +1464,7 @@ def test_transport_settings_come_from_the_training_config(monkeypatch: pytest.Mo
     store.close()
     changed = {**training, "sampler": {"recent": 5}}
     with pytest.raises(ValueError, match="pools differ"):
-        source.open_context_source(Path("unused"), manifest, changed)
+        contexts.open_context_source(Path("unused"), manifest, changed)
 
 
 # --- installation checks ---------------------------------------------------------------------
@@ -1473,8 +1481,8 @@ def test_verify_sources_requires_matching_text_and_enabled_endpoints() -> None:
     files = ("gsql/temporal/training_cutoffs.gsql", "gsql/features/temporal_fourier64.gsql")
     expected: dict[str, str] = {}
     for path in files:
-        expected.update(installation.definitions((REPOSITORY_ROOT / path).read_text()))
-    params = {name: installation.parameter_names(text) for name, text in expected.items()}
+        expected.update(gsql_text.definitions((REPOSITORY_ROOT / path).read_text()))
+    params = {name: gsql_text.parameter_names(text) for name, text in expected.items()}
     assert params["temporal_training_cutoffs"] == {"cutoff_times"}
 
     def conn(
@@ -1489,9 +1497,9 @@ def test_verify_sources_requires_matching_text_and_enabled_endpoints() -> None:
         )
 
     good = {name: endpoint(value) for name, value in params.items()}
-    assert set(
-        installation.verify_sources(executor(conn(expected.__getitem__, good)), files)
-    ) == set(expected)
+    assert set(installer.verify_sources(executor(conn(expected.__getitem__, good)), files)) == set(
+        expected
+    )
     disabled = {**good, "temporal_training_cutoffs": endpoint({"cutoff_times"}, False)}
     renamed = {**good, "temporal_fourier64": endpoint({"other"})}
     cases = [
@@ -1502,7 +1510,7 @@ def test_verify_sources_requires_matching_text_and_enabled_endpoints() -> None:
     ]
     for fake, message in cases:
         with pytest.raises(ValueError, match=message):
-            installation.verify_sources(executor(fake), files)
+            installer.verify_sources(executor(fake), files)
 
 
 INSTALL_FILES = ("gsql/features/temporal_fourier64.gsql", "gsql/temporal/training_cutoffs.gsql")
@@ -1520,7 +1528,7 @@ class InstallServer:
     def __init__(
         self, *, stale: tuple[str, ...] = (), mode: str = "sync", ready_after: int = 0
     ) -> None:
-        self.queries = installation.repository_queries(INSTALL_FILES)
+        self.queries = gsql_text.repository_queries(INSTALL_FILES)
         self.shown = {name: text for name, (_, text) in self.queries.items()}
         for name in stale:  # an older definition is installed
             self.shown[name] = self.shown[name].replace("{", "{ INT stale_marker = 0;", 1)
@@ -1539,9 +1547,9 @@ class InstallServer:
         if "SHOW QUERY" in text:
             return self.shown.get(text.rsplit(" ", 1)[1], "Query not found")
         self.created.append(text)
-        names = list(installation.definitions(text))
+        names = list(gsql_text.definitions(text))
         for name in names:
-            self.shown[name] = installation.definitions(text)[name]
+            self.shown[name] = gsql_text.definitions(text)[name]
             self.enabled[name] = False  # CREATE OR REPLACE disables the endpoint
         return f"Successfully created queries: [{', '.join(names)}]."
 
@@ -1571,24 +1579,24 @@ class InstallServer:
             self._enable()
         return {
             f"GET /query/Mule_Pattern_Learner/{name}": endpoint(
-                installation.parameter_names(text), self.enabled[name]
+                gsql_text.parameter_names(text), self.enabled[name]
             )
             for name, (_, text) in self.queries.items()
         }
 
 
 def test_install_creates_and_installs_only_stale_queries(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(installation, "TRAINING_QUERY_FILES", INSTALL_FILES)
-    names = list(installation.repository_queries(INSTALL_FILES))
+    monkeypatch.setattr(installer, "TRAINING_QUERY_FILES", INSTALL_FILES)
+    names = list(gsql_text.repository_queries(INSTALL_FILES))
     assert names == ["temporal_fourier64_values", "temporal_fourier64", "temporal_training_cutoffs"]
     # Everything current: nothing is created or installed.
     server = InstallServer()
-    logs = installation.install(executor(server))
+    logs = installer.install(executor(server))
     assert logs["installed"] == [] and logs["verified"] == names
     assert not server.created and not server.installs
     # A stale subquery is reinstalled together with its caller, nothing else.
     server = InstallServer(stale=("temporal_fourier64_values",))
-    logs = installation.install(executor(server))
+    logs = installer.install(executor(server))
     assert logs["installed"] == ["temporal_fourier64_values", "temporal_fourier64"]
     assert logs["up_to_date"] == ["temporal_training_cutoffs"]
     assert server.installs == [(["temporal_fourier64_values", "temporal_fourier64"], False)]
@@ -1597,30 +1605,28 @@ def test_install_creates_and_installs_only_stale_queries(monkeypatch: pytest.Mon
     assert logs["verified"] == names
     # force reinstalls every query.
     server = InstallServer()
-    logs = installation.install(executor(server), force=True)
+    logs = installer.install(executor(server), force=True)
     assert server.installs == [(names, False)] and len(server.created) == 2
     # A disabled endpoint is stale even when the text matches.
     server = InstallServer()
     server.enabled["temporal_training_cutoffs"] = False
-    assert installation.install(executor(server))["installed"] == ["temporal_training_cutoffs"]
+    assert installer.install(executor(server))["installed"] == ["temporal_training_cutoffs"]
     # Callers are found in the repository queries too.
-    queries = installation.repository_queries(installation.QUERY_FILES)
-    assert "temporal_training_context" in installation._with_callers(
+    queries = gsql_text.repository_queries(installer.QUERY_FILES)
+    assert "temporal_training_context" in installer._with_callers(
         {"temporal_fourier64_values"}, queries
     )
-    assert installation._with_callers({"temporal_hub_registry"}, queries) == {
-        "temporal_hub_registry"
-    }
+    assert installer._with_callers({"temporal_hub_registry"}, queries) == {"temporal_hub_registry"}
 
 
 def test_install_polls_endpoints_when_the_install_request_times_out(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(installation, "TRAINING_QUERY_FILES", INSTALL_FILES)
+    monkeypatch.setattr(installer, "TRAINING_QUERY_FILES", INSTALL_FILES)
     # Listing 1 finds the stale query; listings 2 and 3 still see it compiling.
     server = InstallServer(stale=("temporal_training_cutoffs",), mode="timeout", ready_after=3)
     tg = executor(server)
-    logs = installation.install(tg, sleep=tg.clock.sleep, clock=tg.clock.time, poll_s=30)
+    logs = installer.install(tg, sleep=tg.clock.sleep, clock=tg.clock.time, poll_s=30)
     assert logs["installed"] == ["temporal_training_cutoffs"] and logs["install"] is None
     assert tg.sleeps == [30, 30] and all(server.enabled.values())
     # Still compiling at the deadline: an actionable timeout, and a later run installs
@@ -1628,32 +1634,30 @@ def test_install_polls_endpoints_when_the_install_request_times_out(
     server = InstallServer(stale=("temporal_training_cutoffs",), mode="timeout", ready_after=99)
     tg = executor(server)
     with pytest.raises(TimeoutError, match="still not installed.*re-run `mule-temporal install`"):
-        installation.install(
-            tg, sleep=tg.clock.sleep, clock=tg.clock.time, poll_s=30, deadline_s=100
-        )
+        installer.install(tg, sleep=tg.clock.sleep, clock=tg.clock.time, poll_s=30, deadline_s=100)
     # Other failures of the install request propagate.
     server = InstallServer(stale=("temporal_training_cutoffs",))
     server.installQueries = lambda names, wait: (_ for _ in ()).throw(KeyError("bad"))
     with pytest.raises(KeyError):
-        installation.install(executor(server))
+        installer.install(executor(server))
 
 
 def test_install_follows_an_asynchronous_request(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(installation, "TRAINING_QUERY_FILES", INSTALL_FILES)
+    monkeypatch.setattr(installer, "TRAINING_QUERY_FILES", INSTALL_FILES)
     server = InstallServer(stale=("temporal_training_cutoffs",), mode="async")
     server.statuses = [{"message": "RUNNING"}, {"message": "Query installation SUCCESS"}]
     sleeps: list[float] = []
-    logs = installation.install(executor(server), sleep=sleeps.append, poll_s=5)
+    logs = installer.install(executor(server), sleep=sleeps.append, poll_s=5)
     assert logs["install"]["message"].endswith("SUCCESS") and sleeps == [5, 5]
     server = InstallServer(stale=("temporal_training_cutoffs",), mode="async")
     server.statuses = [{"message": "FAILED: type check"}]
     with pytest.raises(RuntimeError, match="failed"):
-        installation.install(executor(server), sleep=sleeps.append)
+        installer.install(executor(server), sleep=sleeps.append)
     server = InstallServer(stale=("temporal_training_cutoffs",), mode="async")
     server.statuses = [{"message": "RUNNING"}] * 5
     clock = iter([0.0, 10.0, 99999.0])
     with pytest.raises(TimeoutError, match="still running"):
-        installation.install(
+        installer.install(
             executor(server), sleep=sleeps.append, deadline_s=60, clock=lambda: next(clock)
         )
     server = InstallServer(stale=("temporal_training_cutoffs",))
@@ -1661,13 +1665,13 @@ def test_install_follows_an_asynchronous_request(monkeypatch: pytest.MonkeyPatch
         "Semantic Check Error" if "SHOW QUERY" not in text else "Query not found"
     )
     with pytest.raises(RuntimeError, match="Semantic Check"):
-        installation.install(executor(server))
+        installer.install(executor(server))
 
 
 def test_sent_parameters_match_the_repository_query_signatures() -> None:
     def signature(path: str, name: str) -> set[str]:
-        text = installation.definitions((REPOSITORY_ROOT / path).read_text())[name]
-        return installation.parameter_names(text)
+        text = gsql_text.definitions((REPOSITORY_ROOT / path).read_text())[name]
+        return gsql_text.parameter_names(text)
 
     context = signature("gsql/temporal/training_context.gsql", "temporal_training_context")
     windows = (FeaturePlan(DEFAULT_FLAG_GROUPS, a) for a in ("split", "summary"))

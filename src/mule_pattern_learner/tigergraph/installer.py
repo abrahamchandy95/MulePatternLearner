@@ -1,8 +1,4 @@
-"""Install and verify only the query definitions used by temporal training.
-
-verify_frozen_source also rechecks the live provenance of a prepared dataset (vertex
-counts and its scope; see scope.py) before a streamed run.
-"""
+"""Install and verify only the query definitions the training pipeline uses."""
 
 from __future__ import annotations
 
@@ -13,9 +9,9 @@ import re
 import time
 from typing import Any
 
-from ...paths import REPOSITORY_ROOT
+from ..paths import REPOSITORY_ROOT
 from .executor import AVAILABILITY, GRAPH, SERVER_TIMEOUT, connection_call, failure_class
-from .scope import verify_scope
+from .gsql_text import definitions, normalized, parameter_names, repository_queries
 
 # The queries preparation runs; a prepared dataset records their source hashes.
 QUERY_FILES = (
@@ -26,7 +22,7 @@ QUERY_FILES = (
     "gsql/temporal/hub_registry.gsql",
 )
 # Preparation queries plus the label contract: the oracle audit export/validation and the
-# one-time reveal job (the first run reveals known mules; see labels.py).
+# one-time reveal job (the first run reveals known mules; see reveal.py).
 TRAINING_QUERY_FILES = (
     *QUERY_FILES,
     "gsql/temporal/account_supervision.gsql",
@@ -37,8 +33,6 @@ OPTIONAL_QUERY_FILES = (
     "gsql/features/zelle_pair_time64.gsql",
     "gsql/features/payment_pair_time64.gsql",
 )
-# Experiment metadata written by preparation itself; never part of source identity.
-EXPERIMENT_METADATA_TYPES = frozenset({"Temporal_Training_Scope"})
 BUILTIN_ENDPOINT_PARAMETERS = frozenset({"query", "read_committed"})
 INSTALL_DEADLINE_S = 45 * 60.0
 
@@ -49,54 +43,6 @@ def _show_query(executor: Any, name: str) -> str:
     if gsql is not None:
         return str(gsql(text, what="SHOW QUERY " + name))
     return str(executor.client.conn.gsql(text))
-
-
-def normalized(source: str) -> str:
-    source = re.sub(r"/\*.*?\*/|//[^\n]*|#[^\n]*", "", source, flags=re.S)
-    tokens = re.findall(r'"(?:\\.|[^"\\])*"|[^\s"]+', source)
-    return "".join(token if token.startswith('"') else token.lower() for token in tokens)
-
-
-def definitions(source: str) -> dict[str, str]:
-    starts = list(re.finditer(r"CREATE (?:OR REPLACE )?QUERY (\w+)", source, re.I))
-    result = {}
-    for index, match in enumerate(starts):
-        end = starts[index + 1].start() if index + 1 < len(starts) else len(source)
-        result[match[1]] = source[match.start() : end].split("USE GRAPH")[0].strip()
-    return result
-
-
-def parameter_names(definition: str) -> set[str]:
-    """Names in `CREATE QUERY name(TYPE a, TYPE b = default, ...)`."""
-    match = re.search(r"QUERY\s+\w+\s*\(", definition, re.I)
-    if match is None:
-        raise ValueError("Query definition has no parameter list")
-    depth, quoted, current, parts = 1, False, "", []
-    for char in definition[match.end() :]:
-        if quoted:
-            quoted = char != '"'
-        elif char == '"':
-            quoted = True
-        elif char in "(<[":
-            depth += 1
-        elif char in ")>]":
-            depth -= 1
-            if depth == 0:
-                break
-        elif char == "," and depth == 1:
-            parts.append(current)
-            current = ""
-            continue
-        current += char
-    else:
-        raise ValueError("Unterminated query parameter list")
-    parts.append(current)
-    names = set()
-    for part in parts:
-        declaration = part.split("=", 1)[0].split()
-        if declaration:
-            names.add(declaration[-1])
-    return names
 
 
 def installed_endpoints(executor: Any) -> dict[str, dict[str, Any]]:
@@ -110,15 +56,6 @@ def installed_endpoints(executor: Any) -> dict[str, dict[str, Any]]:
         for endpoint, info in raw.items()
         if endpoint.startswith(prefix) and isinstance(info, dict)
     }
-
-
-def repository_queries(files: tuple[str, ...]) -> dict[str, tuple[str, str]]:
-    """Query name -> (repository file, definition text), in file order."""
-    result: dict[str, tuple[str, str]] = {}
-    for path in files:
-        for name, text in definitions((REPOSITORY_ROOT / path).read_text()).items():
-            result[name] = (path, text)
-    return result
 
 
 def query_problems(
@@ -161,41 +98,6 @@ def verify_sources(executor: Any, files: tuple[str, ...] = TRAINING_QUERY_FILES)
             + ". Run `mule-temporal install`."
         )
     return list(repository_queries(files))
-
-
-def source_counts(executor: Any) -> dict[str, int]:
-    """Live vertex counts by type, excluding experiment metadata vertex types."""
-    raw = connection_call(
-        executor, "getVertexCount", lambda conn: conn.getVertexCount("*", realtime=True)
-    )
-    if not isinstance(raw, dict):
-        raise ValueError("TigerGraph did not return counts by vertex type")
-    return {
-        str(name): int(count)
-        for name, count in raw.items()
-        if str(name) not in EXPERIMENT_METADATA_TYPES
-    }
-
-
-def verify_frozen_source(executor: Any, manifest: dict[str, Any]) -> None:
-    """Recheck live provenance on every streamed run, including prepared-data reuse.
-
-    Counts and headers catch drift, but cannot prove absence of same-count edits.
-    The experiment still requires an operationally frozen source. Scope vertices
-    are experiment metadata, so creating another scope does not invalidate data.
-    """
-    verify_sources(executor)
-    recorded = {
-        name: count
-        for name, count in manifest["source"]["source_counts"].items()
-        if name not in EXPERIMENT_METADATA_TYPES
-    }
-    if source_counts(executor) != recorded:
-        raise ValueError("Live graph counts changed; freeze the source and prepare a new dataset")
-    try:
-        verify_scope(executor, manifest["config"])
-    except ValueError as error:
-        raise ValueError(f"Prepared experiment scope is no longer valid: {error}") from None
 
 
 def _installation_state(status: Any) -> str:

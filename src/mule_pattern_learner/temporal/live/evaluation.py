@@ -15,7 +15,7 @@ from .checkpoint import ModelCheckpoint
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
-    from .executor import QueryExecutor
+    from ...tigergraph.executor import QueryExecutor
 
 # Review budgets of the weighted audit: the top 1, 5 and 10% of the estimated population.
 TOP_FRACTIONS = (0.01, 0.05, 0.10)
@@ -45,7 +45,7 @@ class GraphEvaluationTruth:
     executor: QueryExecutor | None = None
 
     def read(self) -> pd.DataFrame:
-        from .executor import TigerGraphExecutor, account_pages
+        from ...tigergraph.executor import TigerGraphExecutor, account_pages
 
         executor = self.executor if self.executor is not None else TigerGraphExecutor()
         rows: list[dict[str, Any]] = []
@@ -236,12 +236,13 @@ def evaluate_final_population(
     import json
 
     from ...contract.graph_schema import SPLIT_PHASE
-    from .dataset import MANIFEST, load_prepared, sample_keys
-    from .executor import account_pages, live_executor
-    from .hubs import load_hub_registry
-    from .policy import exceeds_rejection_limit
+    from ...data.contexts import close_source
+    from ...data.hub_registry import load_hub_registry
+    from ...data.manifest import MANIFEST, load_prepared
+    from ...data.splits import sample_keys
+    from ...inference.rejections import exceeds_rejection_limit, rejection_summary
+    from ...tigergraph.executor import account_pages, live_executor
     from .predictor import TemporalPredictor, write_rejected
-    from .source import close_source, rejection_summary
 
     if output.suffix != ".json":
         raise ValueError("Final audit output must be a .json report path")
@@ -264,7 +265,7 @@ def evaluate_final_population(
     manifest, _ = load_prepared(dataset)
     saved.check_dataset(dataset)
     if executor is None:
-        from .installation import verify_frozen_source
+        from ...tigergraph.provenance import verify_frozen_source
 
         # The checkpoint's retry budgets (max_query_attempts, max_outage_s).
         executor = live_executor(config)

@@ -33,16 +33,15 @@ import warnings
 
 import pandas as pd
 
-from ...contract.fingerprints import digest
-from .executor import CONVERSION_ERRORS, QueryExecutor, checked_rows
-from .policy import context_scope
+from ..contract.fingerprints import digest
+from ..contract.graph_schema import context_scope
 
 if TYPE_CHECKING:
-    from ...contract.feature_groups import FeaturePlan
-    from ...contract.sampler_plan import SamplerPlan
+    from ..contract.feature_groups import FeaturePlan
+    from ..contract.sampler_plan import SamplerPlan
+
 
 HUB_FILE = "hubs.parquet"
-HUB_QUERY = "temporal_hub_registry"
 HUB_COLUMNS = (
     "account_id",
     "cutoff_seq",
@@ -52,7 +51,6 @@ HUB_COLUMNS = (
     "reason",
 )
 HUB_REASONS = ("visible_history",)
-MAX_CUTOFFS = 24
 SCOPED_PHASES = (1, 2, 3)
 UNSCOPED_PHASES = (3,)
 
@@ -183,91 +181,6 @@ class HubRegistry:
         pending = path.with_suffix(".pending.parquet")
         pq.write_table(table, pending)
         pending.replace(path)
-
-
-def _parse_hubs(
-    rows: list[dict[str, Any]], cutoffs: list[int], threshold: int, scope_id: str
-) -> pd.DataFrame:
-    checked_rows(rows)
-    for row in rows:
-        if "threshold" in row and int(row["threshold"]) != threshold:
-            raise ValueError(
-                f"Hub registry echoed threshold={row['threshold']}, expected {threshold}"
-            )
-        if "scope_id" in row and str(row["scope_id"]) != scope_id:
-            raise ValueError(
-                f"Hub registry echoed scope_id={row['scope_id']!r}, expected {scope_id!r}"
-            )
-        if "cutoff_seqs" in row and sorted(map(int, row["cutoff_seqs"])) != cutoffs:
-            raise ValueError("Hub registry echoed different cutoffs")
-    pages = [row["hubs"] for row in rows if "hubs" in row]
-    if not pages:
-        raise ValueError("Hub registry response has no hubs field")
-    phases = registry_phases(scope_id)
-    records = []
-    for page in pages:
-        for item in page:
-            record = dict(item.get("attributes", item))
-            try:
-                account = str(record["account_id"])
-                cutoff = int(record["cutoff_seq"])
-                phase = int(record["visibility_phase"])
-                visible_count = int(record["max_visible"])
-                degree = int(record["max_degree"])
-                reason = str(record["reason"])
-            except (KeyError, *CONVERSION_ERRORS):
-                raise ValueError(f"Malformed hub registry row: {record}") from None
-            if (
-                not account
-                or cutoff not in cutoffs
-                or phase not in phases
-                or visible_count <= threshold
-                or degree < 0
-                or reason != "visible_history"
-            ):
-                raise ValueError(f"Hub registry row violates the query contract: {record}")
-            records.append(
-                {
-                    "account_id": account,
-                    "cutoff_seq": cutoff,
-                    "visibility_phase": phase,
-                    "max_visible": visible_count,
-                    "max_degree": degree,
-                    "reason": reason,
-                }
-            )
-    return pd.DataFrame(records, columns=list(HUB_COLUMNS))
-
-
-def query_hub_registry(
-    executor: QueryExecutor,
-    cutoff_seqs: Iterable[int],
-    *,
-    threshold: int,
-    scope_id: str = "",
-    timeout_s: float = 1800.0,
-) -> HubRegistry:
-    """Run the read-only temporal_hub_registry query for 1..24 root cutoffs.
-
-    With a scope_id the scope must be ready, and rows cover phases 1, 2 and 3;
-    without one the counts are unscoped and rows have phase 3.
-    """
-    cutoffs = sorted({int(value) for value in cutoff_seqs})
-    if not 1 <= len(cutoffs) <= MAX_CUTOFFS or cutoffs[0] <= 0:
-        raise ValueError(f"Hub registry needs 1..{MAX_CUTOFFS} positive cutoff sequences")
-    if threshold < 1:
-        raise ValueError("Hub threshold must be positive")
-    rows = executor.run(
-        HUB_QUERY,
-        {"cutoff_seqs": cutoffs, "threshold": threshold, "scope_id": scope_id},
-        timeout_s=timeout_s,
-    )
-    return HubRegistry(
-        _parse_hubs(rows, cutoffs, threshold, scope_id),
-        cutoff_seqs=cutoffs,
-        threshold=threshold,
-        scope_id=scope_id,
-    )
 
 
 def hub_manifest(registry: HubRegistry, path: Path) -> dict[str, Any]:

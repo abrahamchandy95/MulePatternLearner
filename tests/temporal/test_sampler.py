@@ -17,6 +17,9 @@ import pytest
 from temporal_fakes import encode
 import torch
 
+from mule_pattern_learner.batching import assemble
+from mule_pattern_learner.batching.assemble import child_key, make_live_batch
+from mule_pattern_learner.batching.limits import BatchCapacityError, BatchIndex, BatchLimits
 from mule_pattern_learner.batching.time_encoding import fourier64_torch
 from mule_pattern_learner.config import run_config
 from mule_pattern_learner.contract.feature_groups import (
@@ -39,27 +42,21 @@ from mule_pattern_learner.contract.graph_schema import (
 from mule_pattern_learner.contract.sampler_plan import SELECTION_KEYS_VERSION, PoolPlan, SamplerPlan
 from mule_pattern_learner.contract.server import CONTRACT_VERSION
 from mule_pattern_learner.contract.time_basis import fourier64
-from mule_pattern_learner.temporal.live import batching
-from mule_pattern_learner.temporal.live import sampler as sampling
-from mule_pattern_learner.temporal.live.batch_reference import (
-    base_features,
-    edge_features,
-    node_features,
-)
-from mule_pattern_learner.temporal.live.batching import child_key, make_live_batch
-from mule_pattern_learner.temporal.live.memory import BatchCapacityError, BatchIndex, BatchLimits
-from mule_pattern_learner.temporal.live.model import LiveTGAT
-from mule_pattern_learner.temporal.live.sampler import (
-    CandidateTable,
+from mule_pattern_learner.model.tgat import LiveTGAT
+from mule_pattern_learner.sampling import backend, candidates, cugraph_sampler, torch_sampler
+from mule_pattern_learner.sampling.backend import resolve_backend, select_resampled
+from mule_pattern_learner.sampling.candidates import CandidateTable, selection_keys, splitmix64
+from mule_pattern_learner.sampling.cugraph_sampler import (
     CuGraphProbe,
     CuGraphSampler,
     fanout_array,
     graph_arrays,
     probe_cugraph,
-    resolve_backend,
-    select_resampled,
-    selection_keys,
-    splitmix64,
+)
+from mule_pattern_learner.temporal.live.batch_reference import (
+    base_features,
+    edge_features,
+    node_features,
 )
 
 MPS = torch.backends.mps.is_available()
@@ -92,7 +89,7 @@ POOLED = SamplerPlan(roots=PoolPlan(recent=4, older=3, distinct=2, associations=
 
 
 def _rng(key: ContextKey, salt: int = 0) -> np.random.Generator:
-    return np.random.default_rng([sampling.context_hash(key) & 0xFFFFFFFF, salt])
+    return np.random.default_rng([candidates.context_hash(key) & 0xFFFFFFFF, salt])
 
 
 def payment(
@@ -291,7 +288,7 @@ def slots(
     step_seed: int = 0,
 ) -> list[list[dict[str, Any]]]:
     """The messages resampling puts in each context's slots, as batches draw them."""
-    return batching._select(  # pyright: ignore[reportPrivateUsage]
+    return assemble._select(  # pyright: ignore[reportPrivateUsage]
         keys,
         rows,
         hop=hop,
@@ -789,7 +786,7 @@ def test_eval_batches_draw_root_hops_independently(monkeypatch: pytest.MonkeyPat
     for key in keys:
         store.rows[1, key] = synthetic_row(key, V5_RESAMPLE.roots, encodings=False, full=True)
     draws: dict[int, list[list[dict[str, Any]]]] = {}
-    select = batching._select  # pyright: ignore[reportPrivateUsage]
+    select = assemble._select  # pyright: ignore[reportPrivateUsage]
 
     def recording(
         keys_: list[ContextKey], rows: list[dict[str, Any]], **kw: Any
@@ -798,7 +795,7 @@ def test_eval_batches_draw_root_hops_independently(monkeypatch: pytest.MonkeyPat
         draws[kw["hop"]] = chosen
         return chosen
 
-    monkeypatch.setattr(batching, "_select", recording)
+    monkeypatch.setattr(assemble, "_select", recording)
     plan = FeaturePlan(DEFAULT_GROUPS, "split")
     for mode in ("eval", "train"):
         make_live_batch(
@@ -1239,7 +1236,7 @@ def test_cugraph_sampler_maps_results_to_slots_with_the_torch_merge(unified: boo
 def test_cugraph_sampler_rejects_leaks_bad_versions_and_quota_overruns() -> None:
     keys, rows = _table({"zelle_out": 4, "Account_Uses_Device": 1})
     table = CandidateTable.build(keys, rows)
-    quotas = sampling.relation_quotas(RESAMPLE, 1)
+    quotas = candidates.relation_quotas(RESAMPLE, 1)
     leaky = CuGraphSampler(MockPLC(leak=True), to_device=host)
     with pytest.raises(RuntimeError, match="temporal leakage"):
         leaky.subset(table, quotas, random_state=1, device="cpu")
@@ -1259,18 +1256,18 @@ def test_cugraph_sampler_rejects_leaks_bad_versions_and_quota_overruns() -> None
     with pytest.MonkeyPatch.context() as patch:
         patch.setitem(__import__("sys").modules, "pylibcugraph", fake)
         with pytest.raises(RuntimeError, match="predates"):
-            sampling.import_pylibcugraph()
+            cugraph_sampler.import_pylibcugraph()
 
 
 def test_cugraph_sampler_rejects_under_sampling() -> None:
     # An off-by-one hop-0 time filter drops the same-cutoff association silently.
     keys, rows = _table({"zelle_out": 2, "Account_Uses_Device": 1})
     table = CandidateTable.build(keys, rows)
-    quotas = sampling.relation_quotas(RESAMPLE, 1)
+    quotas = candidates.relation_quotas(RESAMPLE, 1)
     dropping = CuGraphSampler(MockPLC(drop=True), to_device=host)
     with pytest.raises(RuntimeError, match="under-sampled"):
         dropping.subset(table, quotas, random_state=1, device="cpu")
-    torch_keep = sampling.TorchGroupedSampler().subset(
+    torch_keep = torch_sampler.TorchGroupedSampler().subset(
         table, quotas, selection_keys(table, mode="train", step_seed=1, evaluation_seed=0, hop=1)
     )
     assert bool(torch_keep.all())
@@ -1288,7 +1285,7 @@ def test_cugraph_sampler_rejects_under_sampling() -> None:
     engine = CuGraphSampler(MockPLC(), to_device=host)
     mask = engine.subset(boundary, np.full(len(RELATIONS), 8), random_state=3, device="cpu")
     assert mask.tolist() == [True, True, False, False]
-    assert sampling.expected_counts(boundary, np.full(len(RELATIONS), 8))[0, :5].tolist() == [
+    assert candidates.expected_counts(boundary, np.full(len(RELATIONS), 8))[0, :5].tolist() == [
         1,
         0,
         0,
@@ -1330,8 +1327,8 @@ def _fake_probes(monkeypatch: pytest.MonkeyPatch, probe: CuGraphProbe) -> list[i
         calls.append(index)
         return probe
 
-    monkeypatch.setattr(sampling, "_PROBES", {})
-    monkeypatch.setattr(sampling, "_probe_device", fake)
+    monkeypatch.setattr(cugraph_sampler, "_PROBES", {})
+    monkeypatch.setattr(cugraph_sampler, "_probe_device", fake)
     return calls
 
 
@@ -1361,10 +1358,10 @@ def test_real_probe_without_cupy_reports_the_missing_module(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setitem(__import__("sys").modules, "cupy", None)
-    monkeypatch.setattr(sampling, "_PROBES", {})
-    probe = sampling.cugraph_usable(0)
+    monkeypatch.setattr(cugraph_sampler, "_PROBES", {})
+    probe = cugraph_sampler.cugraph_usable(0)
     assert not probe.usable and not probe.installed and "cupy" in probe.reason
-    assert sampling.cugraph_usable(0) is probe
+    assert cugraph_sampler.cugraph_usable(0) is probe
 
 
 def test_backend_resolution_without_cuda() -> None:
@@ -1380,7 +1377,7 @@ def test_make_live_batch_uses_the_run_backend_without_resolving(
     def unexpected(*args: Any) -> str:
         raise AssertionError("make_live_batch resolved the backend again")
 
-    monkeypatch.setattr(batching, "resolve_backend", unexpected)
+    monkeypatch.setattr(backend, "resolve_backend", unexpected)
     plan = FeaturePlan(DEFAULT_GROUPS, "split")
     store = FakeStore(RESAMPLE)
     keys = roots(4)
@@ -1411,7 +1408,7 @@ def _gpu_ready() -> bool:
     if not torch.cuda.is_available():
         return False
     try:
-        sampling.import_pylibcugraph()
+        cugraph_sampler.import_pylibcugraph()
         import cupy  # noqa: F401  # pyright: ignore[reportMissingImports, reportUnusedImport]
     except Exception:
         return False
@@ -1468,10 +1465,10 @@ def test_real_cugraph_handles_seeds_without_edges_on_gpu() -> None:
     table = CandidateTable.build(keys, rows)
     engine = CuGraphSampler()
     for hop in (1, 2):
-        quotas = sampling.relation_quotas(RESAMPLE, hop)
+        quotas = candidates.relation_quotas(RESAMPLE, hop)
         keep = engine.subset(table, quotas, random_state=hop, device="cuda")
-        expected = sampling.expected_counts(table, quotas)
-        assert np.array_equal(sampling.group_counts(table, keep), expected)
+        expected = candidates.expected_counts(table, quotas)
+        assert np.array_equal(candidates.group_counts(table, keep), expected)
 
 
 def test_gpu_self_test_script_runs_its_synthetic_checks_on_the_mock(
@@ -1512,7 +1509,7 @@ def test_sampled_rows_rejects_inconsistent_results() -> None:
         "edge_start_time": arrays.edge_time[[0, 2]],
         "batch_id": np.asarray([0, 0], dtype=np.int32),
     }
-    assert sampling.sampled_rows(good, arrays, torch.device("cpu")).tolist() == [0, 2]
+    assert cugraph_sampler.sampled_rows(good, arrays, torch.device("cpu")).tolist() == [0, 2]
     for name, value in (
         ("minors", np.asarray([1, 2], dtype=np.int32)),
         ("edge_id", np.asarray([0, 9], dtype=np.int32)),
@@ -1524,9 +1521,9 @@ def test_sampled_rows_rejects_inconsistent_results() -> None:
             broken["minors"] = np.asarray([3, 3], dtype=np.int32)
             broken["edge_start_time"] = arrays.edge_time[[2, 2]]
         with pytest.raises(RuntimeError):
-            sampling.sampled_rows(broken, arrays, torch.device("cpu"))
+            cugraph_sampler.sampled_rows(broken, arrays, torch.device("cpu"))
     with pytest.raises(RuntimeError, match="lacks edge_start_time"):
-        sampling.sampled_rows(dict(good, edge_start_time=None), arrays, torch.device("cpu"))
+        cugraph_sampler.sampled_rows(dict(good, edge_start_time=None), arrays, torch.device("cpu"))
 
 
 def test_sampled_rows_accepts_batch_ids_ranked_over_seeds_with_edges() -> None:
@@ -1543,10 +1540,10 @@ def test_sampled_rows_accepts_batch_ids_ranked_over_seeds_with_edges() -> None:
     cpu = torch.device("cpu")
     for batch in ([0, 0, 1], [0, 0, 2]):
         ranked = dict(result, batch_id=np.asarray(batch, dtype=np.int32))
-        assert sampling.sampled_rows(ranked, arrays, cpu).tolist() == [0, 1, 2]
+        assert cugraph_sampler.sampled_rows(ranked, arrays, cpu).tolist() == [0, 1, 2]
     for batch in ([0, 1, 1], [1, 1, 2], [0, 0, 0]):
         with pytest.raises(RuntimeError, match=r"\(batch_id\)"):
-            sampling.sampled_rows(
+            cugraph_sampler.sampled_rows(
                 dict(result, batch_id=np.asarray(batch, dtype=np.int32)), arrays, cpu
             )
 
@@ -1564,7 +1561,7 @@ def test_cugraph_subset_handles_seeds_without_edges(unified: bool, seed_labels: 
     plc = MockPLC("26.10.00" if unified else "26.08.00", unified=unified, seed_labels=seed_labels)
     engine = CuGraphSampler(plc, to_device=host)
     for hop in (1, 2):
-        quotas = sampling.relation_quotas(RESAMPLE, hop)
+        quotas = candidates.relation_quotas(RESAMPLE, hop)
         keep = engine.subset(table, quotas, random_state=5, device="cpu")
-        expected = sampling.expected_counts(table, quotas)
-        assert np.array_equal(sampling.group_counts(table, keep), expected)
+        expected = candidates.expected_counts(table, quotas)
+        assert np.array_equal(candidates.group_counts(table, keep), expected)

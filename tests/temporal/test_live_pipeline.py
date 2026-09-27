@@ -14,21 +14,17 @@ import pytest
 from temporal_fakes import FakeExecutor, association, context, message
 import torch
 
+from mule_pattern_learner.batching.assemble import build_root_batch, child_key, make_live_batch
 from mule_pattern_learner.contract.feature_groups import DEFAULT_GROUPS, FeaturePlan
 from mule_pattern_learner.contract.graph_schema import RELATIONS, ContextKey
 from mule_pattern_learner.contract.sampler_plan import PoolPlan, SamplerPlan
+from mule_pattern_learner.data.contexts import StreamingContextSource
+from mule_pattern_learner.data.hub_registry import HUB_COLUMNS, HubRegistry
+from mule_pattern_learner.data.splits import validate_dates
+from mule_pattern_learner.model.tgat import LiveTGAT
 from mule_pattern_learner.temporal.live.batch_reference import node_features
-from mule_pattern_learner.temporal.live.batching import (
-    build_root_batch,
-    child_key,
-    make_live_batch,
-)
-from mule_pattern_learner.temporal.live.context_query import validate_context
-from mule_pattern_learner.temporal.live.dataset import validate_dates
-from mule_pattern_learner.temporal.live.hubs import HUB_COLUMNS, HubRegistry
-from mule_pattern_learner.temporal.live.model import LiveTGAT
-from mule_pattern_learner.temporal.live.queries import render_context_query
-from mule_pattern_learner.temporal.live.source import StreamingContextSource
+from mule_pattern_learner.tigergraph.context_query import validate_context
+from mule_pattern_learner.tigergraph.render import render_context_query
 
 V5_PLAN = FeaturePlan(DEFAULT_GROUPS, "split")
 ASSOCIATED = "Account_Owned_By_Party"
@@ -141,7 +137,7 @@ def test_dates_must_have_forward_chronological_splits() -> None:
 
 
 def test_query_comparison_preserves_string_literal_case_and_spacing() -> None:
-    from mule_pattern_learner.temporal.live.installation import normalized
+    from mule_pattern_learner.tigergraph.gsql_text import normalized
 
     assert normalized('PRINT "USD";') != normalized('PRINT "usd";')
     assert normalized('PRINT "a b";') != normalized('PRINT "ab";')
@@ -290,7 +286,7 @@ def test_feature_arms_and_model_seeds_share_one_preparation() -> None:
     from temporal_fakes import live_config
 
     from mule_pattern_learner.config import validate_config
-    from mule_pattern_learner.temporal.live.dataset import preparation_view
+    from mule_pattern_learner.data.manifest import preparation_view
     from mule_pattern_learner.temporal.live.experiments import feature_experiments
 
     base = live_config()

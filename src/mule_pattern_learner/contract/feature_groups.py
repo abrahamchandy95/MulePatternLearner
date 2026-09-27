@@ -80,10 +80,10 @@ def pool_definition(groups: Sequence[str]) -> dict[str, Any]:
 HALF_LIVES = {"1d": 86_400_000, "7d": 604_800_000, "30d": 2_592_000_000, "90d": 7_776_000_000}
 # The pool groups: counts over the payment messages of the context's own candidate pool
 # (at most `recent + older + distinct` per relation), not over the account's whole
-# history, computed by the client (batching.pool_activity). The numbers are round, but
-# the choice of counts followed a diagnostic study that had read the data generator's
-# mule typology and test-split mules, so test audits are optimistic for them. The
-# internal-payer counts and their amount bands suit the generator, which places scam
+# history, computed by the client (batching.pool_counts.pool_activity). The numbers are
+# round, but the choice of counts followed a diagnostic study that had read the data
+# generator's mule typology and test-split mules, so test audits are optimistic for them.
+# The internal-payer counts and their amount bands suit the generator, which places scam
 # victims inside the bank, more than a real bank, so they are a group of their own
 # (pool_internal_inflows) that an ablation can drop.
 FIRST_INFLOW_BANDS = (100, 1000)
@@ -91,7 +91,7 @@ FIRST_INFLOW_BANDS = (100, 1000)
 # 50 to 100 percent of the inflow amount.
 PASS_THROUGH_SECONDS = 86_400
 PASS_THROUGH_RATIO = (0.5, 1.0)
-# Changes whenever batching.pool_activity changes what a count means.
+# Changes whenever batching.pool_counts.pool_activity changes what a count means.
 POOL_ACTIVITY_VERSION = 1
 POOL_ACTIVITY_FEATURES = tuple(
     f"pool_{r}_{v}" for r in RELATIONS[:4] for v in ("count", "unique")

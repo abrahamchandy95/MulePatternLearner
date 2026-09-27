@@ -25,7 +25,7 @@ from ...config import validate_config
 from ...contract.feature_groups import FeaturePlan, contract_fingerprint
 from ...contract.fingerprints import fingerprint
 from ...contract.time_basis import BASIS_ID
-from .dataset import manifest_digest
+from ...data.manifest import manifest_digest
 
 CHECKPOINT_FORMAT = "temporal_live_checkpoint_v1"
 # Transport, prefetch and logging settings never change results, so a resumed run may

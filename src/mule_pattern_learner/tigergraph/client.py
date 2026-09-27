@@ -6,7 +6,7 @@ from typing import Any, cast, override
 from pyTigerGraph import TigerGraphConnection
 import requests
 
-from mule_pattern_learner.tigergraph.settings import Settings
+from .connection import Settings
 
 _READ_TIMEOUT_S = 600.0
 _CONNECT_TIMEOUT_S = 30.0

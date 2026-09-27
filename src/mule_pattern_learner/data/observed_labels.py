@@ -1,7 +1,7 @@
-"""Observed-label interfaces: the graph's revealed labels. This module never reads oracle truth.
+"""Observed labels: the revealed positives and their discovery times, never truth.
 
-Labels come from the graph (GraphObservedLabels). prepare() accepts any
-ObservedLabelSource, so tests can supply a table of labels instead.
+prepare() accepts any ObservedLabelSource, so tests can supply a table of labels
+instead of the graph's (tigergraph.labels.GraphObservedLabels).
 """
 
 from __future__ import annotations
@@ -12,8 +12,8 @@ from typing import Protocol
 import numpy as np
 import pandas as pd
 
-from ...contract.clock import timestamp
-from ...contract.graph_schema import SPLITS
+from ..contract.clock import timestamp
+from ..contract.graph_schema import SPLITS
 
 LABEL_COLUMNS = ("account_id", "known_positive", "known_from_ms")
 # Ground-truth fields that must never reach training metadata or observed labels.
@@ -25,50 +25,6 @@ class ObservedLabelSource(Protocol):
 
     def read(self, metadata: pd.DataFrame) -> pd.DataFrame: ...
     def positive_ids(self) -> set[str]: ...
-
-
-class GraphObservedLabels:
-    """Observed labels paged from the graph, the label source of every run.
-
-    This is the only label source for which population queries run with
-    include_observed = TRUE. The queries report the revealed positive of the
-    account label contract (pu_label = 1: known, is_mule = 1, not masked) and its
-    discovery time; every other account has observed_positive false and
-    known_from_ms 0.
-    """
-
-    def positive_ids(self) -> set[str]:
-        return set()  # Graph-provided positives are discovered while paging.
-
-    def read(self, metadata: pd.DataFrame) -> pd.DataFrame:
-        check_graph_label_rows(metadata)
-        labels = metadata[["account_id", "observed_positive", "known_from_ms"]].rename(
-            columns={"observed_positive": "known_positive"}
-        )
-        return align_observed_labels(metadata, labels)
-
-
-def check_graph_label_rows(rows: pd.DataFrame) -> None:
-    """Fail fast when a population query emits a discovery time for a non-positive.
-
-    The current queries emit known_from_ms only for revealed positives. A
-    nonzero clock on any other account means an older query is installed, one
-    that reads hidden (masked) labels or reveals which accounts are labeled.
-    """
-    clocks = pd.to_numeric(rows["known_from_ms"], errors="coerce").fillna(0)
-    positive = rows["observed_positive"].eq(True)
-    stale = rows.loc[(clocks > 0) & ~positive, "account_id"]
-    if len(stale):
-        raise ValueError(
-            f"{len(stale)} account(s) have known_from_ms > 0 but observed_positive false "
-            f"(for example {stale.iloc[0]!r}): the installed population query predates the "
-            "masked-label predicate. Run `mule-temporal install` and prepare again."
-        )
-
-
-def reads_graph_labels(labels: ObservedLabelSource) -> bool:
-    """Whether population queries may read observed labels (include_observed)."""
-    return isinstance(labels, GraphObservedLabels)
 
 
 def read_bounded_parquet(path: Path, message: str, limit: int = 100_000) -> pd.DataFrame:

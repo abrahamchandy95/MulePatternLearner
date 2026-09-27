@@ -26,6 +26,7 @@ import pyarrow.parquet as pq
 import pytest
 import torch
 
+from mule_pattern_learner.batching import assemble
 from mule_pattern_learner.config import validate_config
 from mule_pattern_learner.contract.clock import timestamp
 from mule_pattern_learner.contract.feature_groups import (
@@ -38,21 +39,18 @@ from mule_pattern_learner.contract.fingerprints import digest
 from mule_pattern_learner.contract.graph_schema import RELATIONS, ContextKey
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
 from mule_pattern_learner.contract.time_basis import BASIS_ID
+from mule_pattern_learner.data import manifest as data_manifest
+from mule_pattern_learner.data.hub_registry import HUB_COLUMNS, HubRegistry, warn_hub_stubs
+from mule_pattern_learner.data.manifest import preparation_view
+from mule_pattern_learner.data.observed_labels import align_observed_labels
+from mule_pattern_learner.inference.rejections import rejection_summary
+from mule_pattern_learner.model.build import build_model
+from mule_pattern_learner.model.loss import NonNegativePULoss
+from mule_pattern_learner.model.tgat import LiveTGAT
 from mule_pattern_learner.runtime.device import torch_runtime
-from mule_pattern_learner.temporal.live import (
-    batching,
-    cli,
-    inference,
-    pipeline,
-    predictor,
-    training,
-)
-from mule_pattern_learner.temporal.live import dataset as dataset_module
+from mule_pattern_learner.temporal.live import cli, inference, pipeline, predictor, training
 from mule_pattern_learner.temporal.live.checkpoint import restore_cuda_rng
-from mule_pattern_learner.temporal.live.dataset import preparation_view
 from mule_pattern_learner.temporal.live.evaluation import evaluate_final_population
-from mule_pattern_learner.temporal.live.hubs import HUB_COLUMNS, HubRegistry, warn_hub_stubs
-from mule_pattern_learner.temporal.live.model import LiveTGAT, build_model
 from mule_pattern_learner.temporal.live.sampling import (
     BatchPrefetcher,
     PUSample,
@@ -61,9 +59,6 @@ from mule_pattern_learner.temporal.live.sampling import (
     pu_batches,
     step_seed,
 )
-from mule_pattern_learner.temporal.live.source import rejection_summary
-from mule_pattern_learner.temporal.live.supervision import align_observed_labels
-from mule_pattern_learner.temporal.loss import NonNegativePULoss
 
 ROOT = Path(__file__).resolve().parents[2]
 DATES = {"train": ["2024-07-01"], "validation": ["2024-10-01"], "test": ["2025-01-01"]}
@@ -654,7 +649,7 @@ def prepared_dataset(
         assert dataset == path
         return deepcopy(manifest), accounts.copy()
 
-    for module in (training, inference, dataset_module):
+    for module in (training, inference, data_manifest):
         monkeypatch.setattr(module, "load_prepared", load)
     return path, manifest, accounts
 
@@ -794,7 +789,7 @@ def test_batches_use_train_mode_step_seeds_and_the_hub_registry(
     backends: set[str | None] = set()
     resolved: list[threading.Thread] = []
     lock = threading.Lock()
-    real = batching.make_live_batch
+    real = assemble.make_live_batch
     real_resolve = training.resolve_backend
 
     def resolve(sampler: SamplerPlan, device: torch.device) -> str:
@@ -817,7 +812,7 @@ def test_batches_use_train_mode_step_seeds_and_the_hub_registry(
             )
         return batch
 
-    monkeypatch.setattr(batching, "make_live_batch", record)
+    monkeypatch.setattr(assemble, "make_live_batch", record)
     monkeypatch.setattr(training, "resolve_backend", resolve)
     result = fit(tmp_path, "run", config)
     # One resolution per run, on the main thread; every batch gets its result.
@@ -1295,13 +1290,13 @@ def test_final_population_audit_scores_through_the_dataset_clock_and_hubs(
     truth["is_mule"] = truth.is_mule.astype(int)
     source = FakeSource(config, reject=frozenset({test_accounts.account_id.iloc[1]}))
     seen: list[int] = []
-    real = batching.make_live_batch
+    real = assemble.make_live_batch
 
     def record(store: Any, roots: list[ContextKey], **kwargs: Any) -> dict[str, torch.Tensor]:
         seen.extend(k.cutoff_seq for k in roots)
         return real(store, roots, **kwargs)
 
-    monkeypatch.setattr(batching, "make_live_batch", record)
+    monkeypatch.setattr(assemble, "make_live_batch", record)
 
     class Truth:
         def read(self) -> pd.DataFrame:
