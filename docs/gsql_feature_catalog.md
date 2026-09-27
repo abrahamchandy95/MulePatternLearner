@@ -84,7 +84,7 @@ Three feature groups never come from TigerGraph. The client computes them, the q
 no `include_*` flag for them, and a response carrying one of their names is rejected
 (`validate_context` reports an unknown node feature, and batch assembly refuses a
 client-only feature). Adding or changing them leaves the GSQL as it is, and a prepared
-cohort stays valid.
+dataset stays valid.
 
 - `hub_indicator`: `history_withheld`, 1 for a hub stub built without a query (see
   [hub accounts](live_temporal_training.md#hub-accounts-and-rejected-contexts)).

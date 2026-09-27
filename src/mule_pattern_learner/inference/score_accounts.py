@@ -90,7 +90,6 @@ def score(
         "device": str(predictor.device),
         "embedding_dimensions": predictor.model.head[0].in_features,
         "output": str(output),
-        "cohort": manifest["cohort"],
     }
 
 

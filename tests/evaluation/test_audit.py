@@ -74,7 +74,7 @@ def test_final_population_audit_scores_through_the_dataset_clock_and_hubs(
     assert result["rejected_accounts"] == 1 and result["rejected_negatives"] == 1
     assert result["rejected"] == 1 and result["rejected_roots_by_status"] == {"missing_entity": 1}
     assert result["metrics"]["sample_accounts"] == len(test_accounts) - 1
-    assert result["metrics"]["evaluation_cohort"].endswith("_minus_rejected_negatives")
+    assert result["metrics"]["evaluation_sample"].endswith("_minus_rejected_negatives")
     for pct in (1, 5, 10):
         assert 0 <= result["metrics"][f"recall_at_{pct}pct"] <= 1
         assert 0 <= result["metrics"][f"precision_at_{pct}pct"] <= 1

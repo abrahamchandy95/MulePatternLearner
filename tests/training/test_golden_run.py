@@ -1,6 +1,6 @@
 """Golden run: the built-in training profile on the fakes, pinned to recorded numbers.
 
-The run prepares a strict-inductive cohort from the fake scope, with labels revealed in
+The run prepares a strict-inductive dataset from the fake scope, with labels revealed in
 the graph as the built-in run reads them, then trains 2 epochs of 4 steps on the CPU
 with the built-in feature groups, slot sum, balanced positive weight and weight
 average. The literals at the end record its first training batch, every step's loss
@@ -104,7 +104,7 @@ def golden_source(executor: FakeExecutor, config: RunConfig) -> StreamingContext
 
 
 def prepare_golden(directory: Path) -> tuple[RunConfig, DatasetPaths, FakeExecutor]:
-    """Prepare the golden cohort with the built-in label source (graph_observed)."""
+    """Prepare the golden dataset with the built-in label source (graph_observed)."""
     config = golden_config()
     executor = golden_executor()
     dataset = DatasetPaths(directory / "dataset")

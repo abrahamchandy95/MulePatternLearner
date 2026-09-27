@@ -461,7 +461,7 @@ the live graph (the `built_in_no_slot_sum` arm of `feature_experiments` measures
 Loss: imbalanced nnPU ([Su, Chen and Xu, 2021](https://www.ijcai.org/proceedings/2021/0412.pdf)),
 the nnPU risk of [Kiryo et al., 2017](https://arxiv.org/abs/1703.00593) reweighted as if
 positives and negatives were balanced. The class prior `class_prior = 0.001` is an
-explicit prevalence assumption (the simulated cohort holds 233 mules in 317,840 accounts,
+explicit prevalence assumption (the simulated data holds 233 mules in 317,840 accounts,
 about 0.00073) and `positive_weight = "balanced"` sets the weight on the positive risk to
 `1 - class_prior`, which is that paper's objective with a balanced prior of 0.5 up to a
 constant factor (exactly, with the loss's beta = 0 and gamma = 1). Each step uses 16
@@ -632,7 +632,7 @@ instance, shrink the child pool, or move to the future work listed below.
    ```
 
 3. **Copy `.env`** (`HOST`, `GRAPHNAME`, `SECRET`). Nothing else is copied: settings are
-   built in, the known mules are in TigerGraph, and the run prepares its own cohort.
+   built in, the known mules are in TigerGraph, and the run prepares its own dataset.
 4. **Check cuGraph** (exit code 0 means every check passed, 2 means cuGraph cannot run):
 
    ```bash
@@ -640,7 +640,7 @@ instance, shrink the child pool, or move to the future work listed below.
    ```
 
    Then build one real batch per backend and run a deterministic CUDA step twice (this
-   prepares the default run's cohort first, which `train` then reuses):
+   prepares the default run's dataset first, which `train` then reuses):
 
    ```bash
    python scripts/verify_cugraph_sampler.py --live

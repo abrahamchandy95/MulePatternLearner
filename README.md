@@ -18,7 +18,7 @@ The project contains:
    the cutoff-aware training queries, the experiment scope, the hub registry, the Fourier
    time encoding and the one-time label reveal.
 2. **A Python layer** (`src/mule_pattern_learner/`, command `mule-temporal`)
-   that installs those queries, prepares a bounded cohort, streams batches from
+   that installs those queries, prepares a bounded dataset, streams batches from
    TigerGraph, trains, scores and evaluates.
 
 You need a working TigerGraph instance whose graph `Mule_Pattern_Learner` follows the

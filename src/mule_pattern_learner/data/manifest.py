@@ -46,8 +46,8 @@ def changed_query_files(manifest: dict[str, Any]) -> list[str]:
     The manifest records each file's digest by its path, and files are compared by
     digest alone: a file that moved with its text unchanged still matches, as every
     query file did in the layered restructure. A recorded file that preparation no
-    longer uses cannot affect the cohort, so it is not compared: retiring a query file
-    leaves existing cohorts usable.
+    longer uses cannot affect the dataset, so it is not compared: retiring a query file
+    leaves existing datasets usable.
     """
     recorded = set(manifest.get("source", {}).get("query_hashes", {}).values())
     return sorted(name for name, current in query_hashes().items() if current not in recorded)

@@ -85,8 +85,8 @@ header, as required by that API. The live integration check exercises this path.
 Only the Account loading contract changes. Zelle transfers, tokens, payment
 participation, association tenures and Fourier encoding fields remain as defined
 in [the temporal schema](temporal_schema.md). Refresh the exporter manifest and
-loader verification for the regenerated dataset. Prepared cohorts and checkpoints
-of the old dataset must not be reused as though they were trained on the new
+loader verification for the regenerated dataset. Prepared datasets and models
+of the old data must not be reused as though they were trained on the new
 labels.
 
 After loading, run:

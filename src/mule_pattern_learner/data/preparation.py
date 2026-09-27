@@ -12,7 +12,7 @@ from ..artifacts import atomic_write, file_digest
 from ..config import RunConfig
 from ..paths import DatasetPaths
 from ..runtime.progress import emit
-from .accounts import scoped_cohort
+from .accounts import select_accounts
 from .hub_registry import hub_manifest, hub_threshold
 from .manifest import (
     dataset_id,
@@ -41,12 +41,12 @@ def _stage_population(
 ) -> None:
     """Select and write accounts.parquet unless the manifest records it.
 
-    The cohort is bounded seed reservoirs of the scope partitions plus the observed
-    positives (accounts.scoped_cohort).
+    The accounts are bounded seed reservoirs of the scope partitions plus the observed
+    positives (accounts.select_accounts).
     """
     accounts_path = dataset.accounts
     if not accounts_path.exists() or "accounts_sha256" not in manifest:
-        accounts, manifest["population_by_split"] = scoped_cohort(
+        accounts, manifest["population_by_split"] = select_accounts(
             scope, config.scope.id, config.dataset, labels
         )
         if ORACLE_COLUMNS & set(accounts.columns):
@@ -57,7 +57,7 @@ def _stage_population(
         accounts = accounts.sort_values("account_id").reset_index(drop=True)
         _write_parquet(accounts, accounts_path)
         manifest["accounts_sha256"] = file_digest(accounts_path)
-        manifest["cohort"] = "bounded_internal_deposit_seeds"
+        manifest["account_selection"] = "bounded_internal_deposit_seeds"
         write_manifest(dataset, manifest)
 
 
