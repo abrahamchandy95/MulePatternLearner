@@ -25,6 +25,12 @@ from .contract import (
     CHANNELS,
     CLIENT_GROUPS,
     FEATURE_GROUPS,
+    FIRST_INFLOW_BANDS,
+    PASS_THROUGH_RATIO,
+    PASS_THROUGH_SECONDS,
+    POOL_ACTIVITY_FEATURES,
+    POOL_GROUPS,
+    POOL_INTERNAL_FEATURES,
     RAILS,
     RELATIONS,
     STRATA,
@@ -46,6 +52,9 @@ _NODE_NAMES = frozenset(
     n for spec in FEATURE_GROUPS.values() if spec.path in ("node", "summary") for n in spec.names
 )
 _CLIENT_NAMES = frozenset(n for group in CLIENT_GROUPS for n in FEATURE_GROUPS[group].names)
+_POOL_NAMES = frozenset(POOL_ACTIVITY_FEATURES + POOL_INTERNAL_FEATURES)
+_INCOMING = frozenset({"zelle_in", "payment_in"})
+_OUTGOING = frozenset({"zelle_out", "payment_out"})
 _RELATION = {name: i for i, name in enumerate(RELATIONS)}
 _RAIL = {name: i for i, name in enumerate(RAILS)}
 _CHANNEL = {name: i for i, name in enumerate(CHANNELS)}
@@ -151,11 +160,75 @@ def _log_columns(names: Sequence[str]) -> np.ndarray:
     return np.asarray([n not in _IDENTITY and "_fourier_" not in n for n in names], dtype=bool)
 
 
+def pool_activity(context: dict[str, Any]) -> dict[str, float]:
+    """The pool groups (pool_activity, pool_internal_inflows) of one context.
+
+    These are counts over the payment messages of the context's own candidate pool,
+    at most `recent + older + distinct` per relation (`PoolPlan`), not over the account's
+    whole history; the `distinct` stratum favours new counterparties. TigerGraph returns
+    the messages strictly before the context cutoff and computes their pair and flow
+    fields there over the whole visible history, so every value is cutoff-safe. A
+    first-time inflow has no earlier payment in its directed pair
+    (`pair_prior_count == 0`; the GSQL pair is relation, rail and peer), and an internal
+    one has a peer that is not external. A rapid pass-through is an inflow whose next
+    outflow in the visible history (the per-message `flow_*` fields; pool events are
+    never paired here) follows within PASS_THROUGH_SECONDS and moves PASS_THROUGH_RATIO
+    of the inflow amount. Stubs and contexts without payments get zeros.
+    """
+    peers: dict[str, set[tuple[str, str]]] = {r: set() for r in RELATIONS[:4]}
+    counts = dict.fromkeys(RELATIONS[:4], 0)
+    bands = dict.fromkeys(FIRST_INFLOW_BANDS, 0)
+    first_in = first_internal = pass_through = 0
+    low, high = PASS_THROUGH_RATIO
+    try:
+        for m in context["messages"]:
+            relation = m["relation"]
+            if relation not in counts:
+                continue  # associations
+            counts[relation] += 1
+            peers[relation].add((m["node_type"], m["node_id"]))
+            if relation not in _INCOMING:
+                continue
+            if int(m["pair_prior_count"]) == 0:
+                first_in += 1
+                if not m["peer_external"]:
+                    first_internal += 1
+                    for band in bands:
+                        bands[band] += bool(m["amount_present"]) and m["amount"] >= band
+            pass_through += bool(
+                m["flow_present"]
+                and m["flow_ratio_present"]
+                and m["flow_delay_seconds"] <= PASS_THROUGH_SECONDS
+                and low <= m["flow_amount_ratio"] <= high
+            )
+    except KeyError as error:
+        raise ValueError(f"Message lacks required field {error.args[0]!r}") from None
+    values: dict[str, float] = {}
+    for relation in RELATIONS[:4]:
+        values[f"pool_{relation}_count"] = counts[relation]
+        values[f"pool_{relation}_unique"] = len(peers[relation])
+    values |= {
+        "pool_in_unique": len({peer for r in _INCOMING for peer in peers[r]}),
+        "pool_out_unique": len({peer for r in _OUTGOING for peer in peers[r]}),
+        "pool_first_in": first_in,
+        "pool_pass_through_1d": pass_through,
+        "pool_first_in_internal": first_internal,
+        **{f"pool_first_in_internal_{band}": n for band, n in bands.items()},
+    }
+    return values
+
+
+def _pooled(plan: FeaturePlan) -> bool:
+    return any(group in plan.groups for group in POOL_GROUPS)
+
+
 def node_features(context: dict[str, Any], plan: FeaturePlan = FeaturePlan()) -> np.ndarray:
     values = {**context["features"], "type_" + context["node_type"]: 1.0}
     unexpected = set(values) - _NODE_NAMES
     if unexpected:
         raise ValueError(f"Unrecognized feature fields: {sorted(unexpected)}")
+    if _pooled(plan):
+        values |= pool_activity(context)
     return np.asarray([_transform(n, values.get(n, 0)) for n in plan.node_names], dtype=np.float32)
 
 
@@ -206,15 +279,26 @@ def _column(items: Sequence[dict[str, Any]], name: str, dtype: Any = np.float64)
         raise ValueError(f"Message field {name!r} is not numeric: {error}") from None
 
 
-def node_matrix(rows: Sequence[dict[str, Any]], plan: FeaturePlan) -> np.ndarray:
-    """`node_features` for many contexts, by column."""
+def node_matrix(
+    rows: Sequence[dict[str, Any]], plan: FeaturePlan, *, pooled: int | None = None
+) -> np.ndarray:
+    """`node_features` for many contexts, by column.
+
+    Only the first ``pooled`` rows (all when None) get the client-computed pool counts;
+    the rest keep zeros there. Split batches pass their roots, which lead the rows,
+    since the split model reads the pool columns of roots only.
+    """
     names = plan.node_names
     for row in rows:
         unexpected = set(row["features"]) - _NODE_NAMES
         if unexpected:
             raise ValueError(f"Unrecognized feature fields: {sorted(unexpected)}")
+    pools = [pool_activity(row) for row in rows[:pooled]] if _pooled(plan) else []
     values = np.zeros((len(rows), len(names)), dtype=np.float64)
     for j, name in enumerate(names):
+        if name in _POOL_NAMES:
+            values[: len(pools), j] = [pool[name] for pool in pools]
+            continue
         values[:, j] = np.fromiter(
             (
                 1.0 if name == "type_" + row["node_type"] else row["features"].get(name, 0)
@@ -308,10 +392,11 @@ def edge_block(messages: Sequence[dict[str, Any]], plan: FeaturePlan) -> dict[st
 
 
 def _fetched(rows: Sequence[dict[str, Any] | None]) -> None:
-    """Client-computed features (hub_indicator) must never come from TigerGraph."""
+    """Client-computed features (hub_indicator, the pool groups) never come from TigerGraph."""
     for row in rows:
-        if row is not None and _CLIENT_NAMES & row["features"].keys():
-            raise ValueError("TigerGraph returned a client-only feature (history_withheld)")
+        found = _CLIENT_NAMES & row["features"].keys() if row is not None else ()
+        if found:
+            raise ValueError(f"TigerGraph returned a client-only feature {sorted(found)}")
 
 
 def _stub_row(key: ContextKey, message: dict[str, Any]) -> dict[str, Any]:
@@ -513,7 +598,9 @@ def make_live_batch(
 
     arrays: dict[str, np.ndarray] = {
         "root_positions": np.asarray([lookup[key] for key in roots], dtype=np.int64),
-        "x": node_matrix(contexts, plan),
+        # The distinct roots lead the contexts; only they get pool counts (FeaturePlan
+        # keeps pool groups out of single models, which read every context's).
+        "x": node_matrix(contexts, plan, pooled=len(set(roots))),
         "neighbor_positions": np.zeros((len(roots), fanouts[0]), dtype=np.int64),
     }
     encodings: dict[str, dict[str, np.ndarray]] = {}

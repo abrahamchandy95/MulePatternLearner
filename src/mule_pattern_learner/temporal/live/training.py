@@ -68,7 +68,7 @@ from .dataset import (
 )
 from .hubs import HubRegistry, load_hub_registry, warn_hub_stubs
 from .memory import BatchLimits
-from .model import build_model
+from .model import build_model, probabilities_from_logits
 from .policy import exceeds_rejection_limit, validate_protocol
 from .sampler import resolve_backend
 from .sampling import (
@@ -879,9 +879,10 @@ class _TrainingRun:
     def score(self, split: str) -> tuple[np.ndarray, np.ndarray]:
         """Probabilities and the accepted mask for the split's rows (sample, then row order).
 
-        Roots that TigerGraph rejects are False in the mask (their score is NaN) and are
-        left out of metrics and outputs. A non-finite probability for an accepted root
-        is an error, never a rejection.
+        Probabilities are float64 (see ``probabilities_from_logits``), so high scores do
+        not tie. Roots that TigerGraph rejects are False in the mask (their score is NaN)
+        and are left out of metrics and outputs. A non-finite probability for an accepted
+        root is an error, never a rejection.
         """
         self.model.eval()
         size = self.settings.batch_size
@@ -890,7 +891,7 @@ class _TrainingRun:
         requests = (
             (self.keys(s.indices[start : start + size], s.date), "eval", 0) for s, start in chunks
         )
-        values: list[torch.Tensor] = []
+        logits: list[torch.Tensor] = []
         accepted: list[np.ndarray] = []
         total = sum(len(s.indices) for s in samples)
         done = 0
@@ -901,7 +902,7 @@ class _TrainingRun:
                 self.progress.add(prepared.stats)
                 accepted.append(prepared.accepted)
                 if prepared.batch is not None:
-                    values.append(torch.sigmoid(self.model(self.to_device(prepared.batch))))
+                    logits.append(self.model(self.to_device(prepared.batch)))
                 done += min(size, len(sample.indices) - start)
                 if number % self.settings.log_every_steps == 0 or number == len(chunks):
                     self.progress.emit(
@@ -909,9 +910,9 @@ class _TrainingRun:
                     )
         mask = np.concatenate(accepted) if accepted else np.zeros(0, dtype=bool)
         scores = np.full(total, np.nan)
-        if values:
+        if logits:
             # One device-to-host copy per split.
-            probabilities = torch.cat(values).cpu().numpy()
+            probabilities = probabilities_from_logits(torch.cat(logits))
             if not np.isfinite(probabilities).all():
                 raise ValueError(
                     f"Non-finite model probability for {int((~np.isfinite(probabilities)).sum())}"

@@ -387,13 +387,13 @@ rejected observed positive always fails).
 
 ### Tensors
 
-The v5 profile (`feature_groups = entity_meta, hub_indicator, message_core, time_encoding,
-pair_history, flow_timing`, `architecture = "split"`) produces, for B roots and N unique
-contexts:
+The built-in run (`feature_groups = entity_meta, hub_indicator, message_core,
+time_encoding, pair_history, flow_timing, pool_activity, pool_internal_inflows`,
+`architecture = "split"`) produces, for B roots and N unique contexts:
 
 | Tensor | Shape | Content |
 |---|---|---|
-| `x` | N x 9 | Six entity-type indicators, `is_external`, `is_deposit`, `history_withheld` |
+| `x` | N x 24 | Six entity-type indicators, `is_external`, `is_deposit`, `history_withheld`, then the 12 `pool_activity` and 3 `pool_internal_inflows` counts (roots only; other contexts hold zeros there) |
 | `first_edge` | B x 16 x 142 | Hop-1 message features |
 | `second_edge` | N x 4 x 142 | Hop-2 message features |
 | `second_x` | N x 4 x 9 | Base features of the outermost counterparties |
@@ -405,21 +405,65 @@ Fourier, 64 pair-gap Fourier, three pair-history and seven flow-timing values. C
 amounts, durations and the flow amount ratio get `log1p`; flags and Fourier coordinates pass
 through. Batch-local
 positions come from `BatchIndex`: the same account at two cutoffs is two contexts, and no
-global ID table exists.
+global ID table exists. The v5 profile of the
+[live training guide](live_temporal_training.md), the six `DEFAULT_GROUPS`, gives the same
+tensors without the pool columns (`x` is N x 9).
+
+The pool columns are counts over the root's own candidate pool (at most 16 payments per
+relation), not over its whole history, computed on the client from its payment messages
+(the [catalog](gsql_feature_catalog.md#client-computed-groups) defines them).
+`pool_activity` holds candidate payments and distinct counterparties per payment
+relation, distinct payers and payees, inflows from first-time payers and rapid
+pass-throughs; `pool_internal_inflows` holds first-time inflows from internal payers, all
+and of at least 100 and 1,000. Only the roots get them, since the split model reads them
+for the roots only, in its summary branch. They are in the built-in run because a
+diagnostic study found that without them a root's node vector held only its entity type,
+`is_external`, `is_deposit` and `history_withheld`, so the model reached an account's
+activity only through attention over at most 16 sampled payments, while distinct payers
+and internal first-time inflows alone ranked test mules at a weighted ROC AUC of 0.88 and
+0.92, against the model's 0.78. Those counts were chosen after reading the data
+generator's mule typology, and the internal ones suit it more than a real bank, which is
+why `pool_internal_inflows` is a group of its own that an ablation arm drops. TigerGraph
+never sends them, so the query and the extraction groups are unchanged and a streamed
+preparation made without the groups still serves the built-in run.
 
 ## The model and the loss
 
-`LiveTGAT` ([model.py](../src/mule_pattern_learner/temporal/live/model.py), 83,457
-parameters in the v5 profile, hidden 64, 4 heads, dropout 0.15):
+`LiveTGAT` ([model.py](../src/mule_pattern_learner/temporal/live/model.py), 101,121
+parameters in the built-in run, hidden 64, 4 heads, dropout 0.15; 88,705 with
+`slot_sum = false`, and 83,457 without the pool groups as well, the v5 profile):
 
-1. Project node features (9 to 64) for every context and base features (9 to 64) for
-   outermost peers.
+1. Project the nine entity columns of `x` (9 to 64) for every context and base features
+   (9 to 64) for outermost peers.
 2. Message embedding = `Linear(142 to 64)` of the message features plus relation (18) and
    rail (7) embeddings.
 3. Attention block 1: every context attends over itself and its hop-2 messages.
 4. Attention block 2: every root attends over itself and its hop-1 neighbours (their
    block-1 outputs plus the hop-1 message embeddings).
-5. An MLP head gives one logit per root.
+5. Slot sum: the same hop-1 tokens go through `Linear(64 to 64)`, GELU, `Linear(64 to 64)`;
+   padded slots are zeroed, and the rest are summed and divided by the hop-1 fan-out (16).
+6. Summary branch: project the root's 15 pool columns (15 to 64).
+7. An MLP head on the attention output, the slot sum and the summary (192) gives one logit
+   per root.
+
+Attention averages linear projections of the slots with softmax weights that sum to one,
+so a condition that combines several inputs of one slot (an internal, first-time and
+large inflow, say) cannot be separated before the slots are pooled, and how many slots
+meet it shows only indirectly. `slot_sum` (built in) applies an MLP to each slot first
+and sums the results, so it counts the slots that meet such a condition; mean and max
+aggregators cannot tell apart multisets that differ only in multiplicity, while a sum
+can ([Xu, Hu, Leskovec and Jegelka, "How Powerful are Graph Neural Networks?", ICLR
+2019](https://arxiv.org/abs/1810.00826)). The divisor is the configured fan-out, a
+constant rather than the number of filled slots, and padding changes nothing. Under the
+built-in sampler most roots fill all 16 slots (in the diagnostic data, every test mule
+and about nine in ten other accounts), so the result is mostly the share of slots that
+meet the condition, not their number; counts beyond the 16 drawn slots reach the model
+through the pool groups. Only the hop-1 slots get a sum: block 1 feeds block 2, so a
+hop-2 sum would need its own merge back into the 64-wide tokens, over a fan-out of only
+4. A configuration without the key, as saved by every run before it, builds the model
+without the branch, and the summary architecture ignores it. The branch is provisional:
+it has not yet been measured in a training run on the live graph (the
+`built_in_no_slot_sum` arm of `feature_experiments` measures it).
 
 Loss: imbalanced nnPU ([Su, Chen and Xu, 2021](https://www.ijcai.org/proceedings/2021/0412.pdf)),
 the nnPU risk of [Kiryo et al., 2017](https://arxiv.org/abs/1703.00593) reweighted as if
@@ -497,7 +541,9 @@ the kept checkpoint is still the best validation epoch.
   registry this run was trained on), `config.json`,
   `checkpoint_last.pt`, `progress.jsonl` (start, train records per logging interval,
   evaluate, epoch and complete events), `validation_predictions.parquet`,
-  `test_predictions.parquet` and `metrics.json`.
+  `test_predictions.parquet` and `metrics.json`. Scores in every output are float64
+  probabilities computed from the logit; in float32 every logit above about 17 scored
+  exactly 1, so the highest-scored accounts tied.
 
 Test roots (the 2025-01-01 cutoff, that is 2024-12-31 23:59:59.999 UTC, phase 3) are scored
 once with the frozen checkpoint and threshold; they never influence selection.
@@ -647,7 +693,7 @@ policy do not apply to another. Unknown keys are rejected.
 | Labels | `label_policy` (graph_observed), `reveal_per_split` (20), `reveal_salt` (defaults to `seed`), `evaluation_unlabeled_limit` (2000) |
 | Dates | `[dates]` train 2024-07-01, validation 2024-10-01, test 2025-01-01; `[seed_limits]` 20000 / 2000 / 2000 |
 | Sampler | `[sampler]` policy resample, recent 8, older 4, distinct 4, associations 2, max_history 2048, relation_fanouts [8, 4], association_fanout 1, association_slots 2, backend auto, evaluation_seed 0; `[sampler.children]` 4 / 2 / 2 / 0 / 2048 |
-| Model | `fanouts` [16, 4], `feature_groups`, `architecture` split, `hidden` 64, `heads` 4, `dropout` 0.15 |
+| Model | `fanouts` [16, 4], `feature_groups`, `architecture` split, `slot_sum` true, `hidden` 64, `heads` 4, `dropout` 0.15 |
 | Optimisation | `batch_size` 64, `epochs` 30, `steps_per_epoch` 100, `patience` 6, `learning_rate` 0.001, `weight_decay` 0.0001, `class_prior` 0.001, `positive_weight` balanced, `weight_average_decay` 0.99, `seed` 42 |
 | Runtime | `device` auto, `threads` 4, `deterministic` true, `prefetch_batches` 2, `checkpoint_every_steps` 0, `log_every_steps` 10, `max_rejected_root_fraction` 0.0 |
 | Transport | `request_batch_size` 8, `query_concurrency` 16, `context_lru_capacity` 256, `encoding_check_every` 64, `max_query_attempts` 6, `max_outage_s` 900 |
@@ -672,6 +718,8 @@ cohort; `--dataset <run>_run/prepared` reuses another run's.
 | cuGraph probe warning | pylibcugraph or the GPU failed the probe; training continues with the torch sampler; run `verify_cugraph_sampler.py` |
 | Retries in the log | TigerGraph was briefly unavailable or resuming; the run waits up to `max_outage_s` |
 | `Resumed configuration differs from the run: ['positive_weight']` (or `['weight_average_decay']`) | The run started before the built-in `positive_weight` became `"balanced"` and `weight_average_decay` became 0.99; finish it with `--config` setting `positive_weight = "prior"` and `weight_average_decay = 0`, or train into a new `--output` |
+| `Resumed configuration differs from the run: ['feature_groups', 'slot_sum']` (or one of them) | The run started before the pool groups joined the built-in `feature_groups` and `slot_sum` became true; finish it with `--config` restoring each named key (the six earlier groups, `slot_sum = false`), or train into a new `--output` |
+| `Checkpoint input groups or pool definitions differ from its configuration` | The checkpoint was trained with a pool group whose definition (amount bands, pass-through thresholds, `POOL_ACTIVITY_VERSION`) has changed since; score with a model trained under the current definition |
 
 ## Limitations and future work
 
@@ -688,7 +736,11 @@ cohort; `--dataset <run>_run/prepared` reuses another run's.
   it as a control, not for large runs.
 - `evaluate-final` needs complete 0/1 truth for the test population. The graph's label
   contract provides it by default; a `--truth` file must list negatives as well as
-  positives.
+  positives. Its report estimates population metrics from a weighted sample: AP, ROC
+  AUC, precision and recall at the frozen threshold, and precision and recall in the
+  top 1, 5 and 10% of the estimated population (`precision_at_1pct`, `recall_at_1pct`
+  and so on; see the [commands](live_temporal_training.md#commands) of the live
+  training guide). They carry no uncertainty intervals yet.
 - No mule-detection quality has been established. With 20 revealed training positives,
   compare `positive_weight` settings and several seeds on validation before drawing
   conclusions.

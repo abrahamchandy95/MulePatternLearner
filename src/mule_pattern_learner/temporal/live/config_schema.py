@@ -58,6 +58,7 @@ FALLBACKS: dict[str, Any] = {
     "heads": 4,
     "dropout": 0.15,
     "variant": "temporal",
+    "slot_sum": False,
     "epochs": 30,
     "patience": 6,
     "max_rejected_root_fraction": 0.0,
@@ -95,6 +96,22 @@ DEFAULT_RUN: dict[str, Any] = {
     "dropout": 0.15,
     "variant": "temporal",
     "architecture": "split",
+    # Beside attention, feed the head a small MLP of each of the root's hop-1 slots, summed
+    # and divided by the hop-1 fan-out. Attention averages linear projections of the
+    # slots; the MLP can test a combined condition on each slot before pooling, so the sum
+    # counts the slots that meet it (Xu, Hu, Leskovec and Jegelka, "How Powerful are Graph
+    # Neural Networks?", ICLR 2019). Most roots fill all 16 slots, so this is mostly the
+    # share of such slots. Absent (saved configurations) means off, so their models
+    # rebuild as they were. Provisional: not yet measured in a run on the live graph.
+    "slot_sum": True,
+    # The pool groups feed counts over the root's candidate pool (not all-time totals) to
+    # the split model's summary branch. Without them a root's node vector held only its
+    # entity type, is_external, is_deposit and history_withheld. In the diagnostic study
+    # distinct payers and internal first-time inflows alone ranked test mules at a
+    # weighted ROC AUC of 0.88 and 0.92, against the model's 0.78; those counts were
+    # chosen after reading the generator's mule typology, and the internal ones
+    # (pool_internal_inflows) suit the generator more than a real bank. Computed on the
+    # client, so the query and the extraction groups are unchanged.
     "feature_groups": [
         "entity_meta",
         "hub_indicator",
@@ -102,6 +119,8 @@ DEFAULT_RUN: dict[str, Any] = {
         "time_encoding",
         "pair_history",
         "flow_timing",
+        "pool_activity",
+        "pool_internal_inflows",
     ],
     "learning_rate": 0.001,
     "weight_decay": 0.0001,
@@ -239,6 +258,8 @@ class LiveConfig(_Strict):
     extraction_groups: list[str] | None = None
     variant: Literal["temporal", "no_fourier", "tabular"] | None = None
     architecture: Literal["single", "split", "summary"] | None = None
+    # Sum over the root's hop-1 slots beside attention; the summary architecture ignores it.
+    slot_sum: bool | None = None
     fanouts: (
         Annotated[list[Annotated[int, Field(ge=1, le=64)]], Field(min_length=2, max_length=2)]
         | None

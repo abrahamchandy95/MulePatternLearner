@@ -102,9 +102,15 @@ class ModelCheckpoint:
             raise ValueError("Checkpoint feature/time contract differs from this sampler")
 
     def check_inputs(self, plan: FeaturePlan) -> None:
-        """Refuse a model whose input groups differ from those of its configuration."""
+        """Refuse a model whose inputs differ from those of its configuration.
+
+        The input fingerprint also covers the pool groups' definitions (amount bands,
+        pass-through thresholds), which the contract fingerprint leaves out.
+        """
         if self.payload.get("input_fingerprint", plan.fingerprint()) != plan.fingerprint():
-            raise ValueError("Checkpoint input groups differ from its configuration")
+            raise ValueError(
+                "Checkpoint input groups or pool definitions differ from its configuration"
+            )
 
     def check_dataset(
         self,
@@ -129,9 +135,10 @@ def _result_view(config: dict[str, Any]) -> dict[str, Any]:
     # An empty [sampler] table means the defaults, like an absent one.
     if sampler:
         view["sampler"] = sampler
-    # No weight average (0) is what configurations from before the key meant.
-    if not view.get("weight_average_decay"):
-        view.pop("weight_average_decay", None)
+    # No weight average (0) and no slot sum are what configurations from before the keys meant.
+    for key in ("weight_average_decay", "slot_sum"):
+        if not view.get(key):
+            view.pop(key, None)
     return view
 
 

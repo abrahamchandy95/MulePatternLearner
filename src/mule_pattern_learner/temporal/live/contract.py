@@ -95,6 +95,12 @@ def fingerprint(value: object) -> str:
 
 
 def contract_fingerprint() -> str:
+    """The feature, relation and time-basis contract of checkpoints and SQLite caches.
+
+    The pool groups are left out: TigerGraph never sees them, and only models that
+    use them depend on their definitions, which `FeaturePlan.fingerprint` covers. So
+    checkpoints and caches from before the pool groups existed stay valid.
+    """
     return fingerprint(
         {
             "version": CONTRACT_VERSION,
@@ -102,13 +108,23 @@ def contract_fingerprint() -> str:
             "features": FEATURE_NAMES,
             "relations": RELATIONS,
             "rails": RAILS,
-            "groups": {k: vars(v) for k, v in FEATURE_GROUPS.items()},
-            "client_groups": sorted(CLIENT_GROUPS),
+            "groups": {k: vars(v) for k, v in FEATURE_GROUPS.items() if k not in POOL_GROUPS},
+            "client_groups": sorted(CLIENT_GROUPS - set(POOL_GROUPS)),
             "channels": CHANNELS,
             "amount_ratio_floor": AMOUNT_RATIO_FLOOR,
             "amount_ratio_cap": AMOUNT_RATIO_CAP,
         }
     )
+
+
+def pool_definition(groups: Sequence[str]) -> dict[str, Any]:
+    """What the pool counts of these groups mean, for the input fingerprint."""
+    return {
+        "version": POOL_ACTIVITY_VERSION,
+        "groups": {g: vars(FEATURE_GROUPS[g]) for g in POOL_GROUPS if g in groups},
+        "first_inflow_bands": FIRST_INFLOW_BANDS,
+        "pass_through": [PASS_THROUGH_SECONDS, *PASS_THROUGH_RATIO],
+    }
 
 
 # Unknown categorical values have a dedicated bucket, never an observed category.
@@ -128,6 +144,28 @@ CHANNELS = (
 )
 STRATA = ("recent", "older", "distinct", "association")
 HALF_LIVES = {"1d": 86_400_000, "7d": 604_800_000, "30d": 2_592_000_000, "90d": 7_776_000_000}
+# The pool groups: counts over the payment messages of the context's own candidate pool
+# (at most `recent + older + distinct` per relation), not over the account's whole
+# history, computed by the client (batching.pool_activity). The numbers are round, but
+# the choice of counts followed a diagnostic study that had read the data generator's
+# mule typology and test-split mules, so test audits are optimistic for them. The
+# internal-payer counts and their amount bands suit the generator, which places scam
+# victims inside the bank, more than a real bank, so they are a group of their own
+# (pool_internal_inflows) that an ablation can drop.
+FIRST_INFLOW_BANDS = (100, 1000)
+# Rapid pass-through: the next outflow after an inflow follows within a day and moves
+# 50 to 100 percent of the inflow amount.
+PASS_THROUGH_SECONDS = 86_400
+PASS_THROUGH_RATIO = (0.5, 1.0)
+# Changes whenever batching.pool_activity changes what a count means.
+POOL_ACTIVITY_VERSION = 1
+POOL_ACTIVITY_FEATURES = tuple(
+    f"pool_{r}_{v}" for r in RELATIONS[:4] for v in ("count", "unique")
+) + ("pool_in_unique", "pool_out_unique", "pool_first_in", "pool_pass_through_1d")
+POOL_INTERNAL_FEATURES = ("pool_first_in_internal",) + tuple(
+    f"pool_first_in_internal_{band}" for band in FIRST_INFLOW_BANDS
+)
+POOL_GROUPS = ("pool_activity", "pool_internal_inflows")
 
 
 @dataclass(frozen=True)
@@ -182,6 +220,15 @@ FEATURE_GROUPS = {
             for state in ("starts", "ends")
         ),
     ),
+    # The pool groups are client computed from the context's payment messages and never
+    # requested from TigerGraph. First-time counts read the pair_history fields and
+    # pass-through counts the flow_timing fields.
+    "pool_activity": FeatureGroup(
+        "summary", POOL_ACTIVITY_FEATURES, requires=("pair_history", "flow_timing")
+    ),
+    "pool_internal_inflows": FeatureGroup(
+        "summary", POOL_INTERNAL_FEATURES, requires=("pair_history",)
+    ),
     "message_core": FeatureGroup(
         "message", ("amount", "amount_present", "is_event"), ("amount_present", "is_event")
     ),
@@ -231,7 +278,7 @@ LEGACY_GROUPS = (
     "time_encoding",
     "pair_window_counts",
 )
-CLIENT_GROUPS = frozenset({"hub_indicator"})
+CLIENT_GROUPS = frozenset({"hub_indicator", *POOL_GROUPS})
 DEFAULT_GROUPS = (
     "entity_meta",
     "hub_indicator",
@@ -259,6 +306,10 @@ class FeaturePlan:
             raise ValueError("Graph models require message_core")
         if self.architecture == "summary" and not self.names("node", "summary"):
             raise ValueError("Summary model needs node or summary inputs")
+        # A single model reads every context's summary columns, and children's pool counts
+        # come from their smaller pool: the same column would mean two things.
+        if self.architecture == "single" and set(POOL_GROUPS) & set(self.groups):
+            raise ValueError("Pool groups need the split or summary architecture")
 
     def names(self, *paths: str) -> tuple[str, ...]:
         # Registry order is canonical, independent of configuration list order.
@@ -298,13 +349,16 @@ class FeaturePlan:
         return core + time + windows + fourier + extra
 
     def fingerprint(self) -> str:
-        return fingerprint(
-            {
-                "contract": contract_fingerprint(),
-                "groups": sorted(self.groups),
-                "architecture": self.architecture,
-            }
-        )
+        """The model inputs: contract, groups, architecture and any pool definitions."""
+        value: dict[str, Any] = {
+            "contract": contract_fingerprint(),
+            "groups": sorted(self.groups),
+            "architecture": self.architecture,
+        }
+        # The contract leaves the pool groups out, so a plan with one covers them here.
+        if set(POOL_GROUPS) & set(self.groups):
+            value["pool"] = pool_definition(self.groups)
+        return fingerprint(value)
 
     def query_flags(self, hop: int = 1) -> dict[str, bool]:
         """GSQL `include_*` parameters for one hop.

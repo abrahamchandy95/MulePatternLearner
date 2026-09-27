@@ -24,7 +24,7 @@ from .dataset import resolve_cutoff
 from .executor import QueryExecutor, live_executor
 from .hubs import HubRegistry, hub_threshold, query_hub_registry, warn_hub_stubs
 from .memory import BatchLimits
-from .model import build_model
+from .model import build_model, probabilities_from_logits
 from .sampling import BatchPrefetcher
 from .source import (
     ContextSource,
@@ -37,7 +37,8 @@ from .source import (
 SCORE_SCHEMA = pa.schema(
     [
         ("account_id", pa.string()),
-        ("score", pa.float32()),
+        # Float64 probabilities (see model.probabilities_from_logits).
+        ("score", pa.float64()),
         ("embedding", pa.list_(pa.float64())),
         ("predicted_mule", pa.bool_()),
         ("date", pa.string()),
@@ -133,7 +134,7 @@ class TemporalPredictor:
             return pd.DataFrame(
                 {
                     "account_id": pd.Series([], dtype=object),
-                    "score": np.zeros(0, dtype=np.float32),
+                    "score": np.zeros(0, dtype=np.float64),
                     "embedding": pd.Series([], dtype=object),
                     "predicted_mule": np.zeros(0, dtype=bool),
                 }
@@ -141,7 +142,7 @@ class TemporalPredictor:
         with torch.inference_mode():
             batch = {k: v.to(self.device) for k, v in prepared.batch.items()}
             hidden = self.model.encode(batch)
-            probabilities = torch.sigmoid(self.model.head(hidden).squeeze(-1)).cpu().numpy()
+            probabilities = probabilities_from_logits(self.model.head(hidden).squeeze(-1))
             vectors = hidden.cpu().tolist()
         return pd.DataFrame(
             {

@@ -2,18 +2,21 @@
 
 Historical payment neighbors are represented at their own event cutoffs.
 Valid-time associations retain the current cutoff and consume another layer.
-Optional root summaries are independently switchable. The event path can run
-with zero node features; no recurrent memory or account embedding table is used.
+Optional root summaries are independently switchable, and so is a sum of a per-slot
+MLP over the root's hop-1 slots (attention averages linear projections of the slots).
+The event path can run with zero node features; no recurrent memory or account
+embedding table is used.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+import numpy as np
 import torch
 from torch import nn
 
-from .config_schema import FALLBACKS, setting
+from .config_schema import FALLBACKS, fanouts, setting
 from .contract import FeaturePlan, RELATIONS, RAILS, CHANNELS, STRATA
 
 
@@ -54,6 +57,8 @@ class LiveTGAT(nn.Module):
         variant: str = FALLBACKS["variant"],
         *,
         plan: FeaturePlan | None = None,
+        slot_sum: bool = FALLBACKS["slot_sum"],
+        first_fanout: int = FALLBACKS["fanouts"][0],
     ) -> None:
         super().__init__()
         if variant not in {"temporal", "no_fourier", "tabular"}:
@@ -62,8 +67,19 @@ class LiveTGAT(nn.Module):
             raise ValueError("Hidden size must be 8..512 and divisible by 1..16 heads")
         if not 0 <= dropout < 1:
             raise ValueError("Dropout must be in [0,1)")
+        if not isinstance(slot_sum, bool):  # pyright: ignore[reportUnnecessaryIsInstance]
+            raise ValueError(f"slot_sum must be true or false, got {slot_sum!r}")
+        # Batches hold one column per hop-1 slot, at most 64 (make_live_batch).
+        if (
+            isinstance(first_fanout, bool)
+            or not isinstance(first_fanout, int)  # pyright: ignore[reportUnnecessaryIsInstance]
+            or not 1 <= first_fanout <= 64
+        ):
+            raise ValueError(f"Hop-1 fan-out must be an integer in [1,64], got {first_fanout!r}")
         self.variant = variant
         self.plan = plan or FeaturePlan.from_config({"variant": variant})
+        if slot_sum and self.plan.architecture == "summary":
+            raise ValueError("The summary architecture has no hop-1 slots to sum")
         self.legacy_no_fourier = plan is None and variant == "no_fourier"
         self.hidden = hidden
         plan = self.plan
@@ -90,7 +106,14 @@ class LiveTGAT(nn.Module):
                 nn.Embedding(len(STRATA), hidden) if "sampler_meta" in plan.groups else None
             )
             self.layers = nn.ModuleList([AttentionBlock(hidden, heads, dropout) for _ in range(2)])
-        width = hidden * (2 if self.summary is not None else 1)
+        # Built only when on, so a model without it keeps its parameters and initial weights.
+        self.first_fanout = first_fanout
+        self.slot_sum = (
+            nn.Sequential(nn.Linear(hidden, hidden), nn.GELU(), nn.Linear(hidden, hidden))
+            if slot_sum
+            else None
+        )
+        width = hidden * (1 + (self.slot_sum is not None) + (self.summary is not None))
         self.head = nn.Sequential(
             nn.Linear(width, hidden), nn.GELU(), nn.Dropout(dropout), nn.Linear(hidden, 1)
         )
@@ -133,27 +156,61 @@ class LiveTGAT(nn.Module):
             self.edge_embedding(batch, "second_"),
             batch["second_mask"],
         )
-        event = self.layers[1](
-            first[positions],
-            first[batch["neighbor_positions"]],
-            self.edge_embedding(batch, "first_"),
-            batch["first_mask"],
-        )
+        neighbors = first[batch["neighbor_positions"]]
+        edge = self.edge_embedding(batch, "first_")
+        event = self.layers[1](first[positions], neighbors, edge, batch["first_mask"])
+        parts = [event]
+        if self.slot_sum is not None:
+            # The tokens the block above attends over, besides the root itself.
+            parts.append(self.slot_total(self.slot_sum, neighbors + edge, batch["first_mask"]))
         if self.summary is not None:
-            summary = self.summary(batch["x"][positions][:, list(self.summary_indices)])
-            return torch.cat((event, summary), dim=-1)
-        return event
+            parts.append(self.summary(batch["x"][positions][:, list(self.summary_indices)]))
+        return torch.cat(parts, dim=-1) if len(parts) > 1 else event
+
+    def slot_total(self, mlp: nn.Module, slots: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        """A per-slot MLP summed over the valid slots (mask true) over the configured fan-out.
+
+        Attention averages linear projections of the slots, so a condition that combines
+        several slot inputs (an internal, first-time and large inflow, say) cannot be
+        separated before the slots are pooled. The MLP applies such a condition to each
+        slot first, and the sum counts the slots that meet it (Xu, Hu, Leskovec and
+        Jegelka, ICLR 2019, on sum against mean and max pooling). The divisor is the
+        constant fan-out, not the number of valid slots: when every slot is filled, as
+        for most roots under the built-in sampler, the result is the share of slots that
+        meet the condition; with fewer slots it also carries their number, and extra
+        padded columns change nothing.
+        """
+        if mask.shape[1] > self.first_fanout:
+            raise ValueError(
+                f"Batch has {mask.shape[1]} hop-1 slots, more than the model's fan-out "
+                f"{self.first_fanout}"
+            )
+        return mlp(slots).masked_fill(~mask[..., None], 0.0).sum(dim=1) / self.first_fanout
 
     def forward(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
         return self.head(self.encode(batch)).squeeze(-1)
 
 
+def probabilities_from_logits(logits: torch.Tensor) -> np.ndarray:
+    """Float64 mule probabilities on the host from the model's float32 logits.
+
+    A float32 probability near 1 resolves logits only to about 0.007 at a logit of 11
+    (0.05 at 13) and rounds to 1 above about 17, so the highest scores tie and top-k
+    rankings among them are arbitrary. In float64 the sigmoid tells apart adjacent
+    float32 logits up to about 23 and rounds to 1 only above about 37. The logits move
+    to the CPU first, since MPS has no float64.
+    """
+    return torch.sigmoid(logits.detach().cpu().double()).numpy()
+
+
 def build_model(
     config: dict[str, Any], plan: FeaturePlan, *, dropout: float | None = None
 ) -> LiveTGAT:
-    """The model a configuration describes (hidden, heads, dropout, variant).
+    """The model a configuration describes (hidden, heads, dropout, variant, slot_sum).
 
     ``dropout`` replaces the configured rate, for dropout-free determinism checks.
+    The summary architecture has no hop-1 slots, so it ignores ``slot_sum`` as it
+    ignores the fanouts; a configuration without the key builds the model without it.
     """
     return LiveTGAT(
         int(setting(config, "hidden")),
@@ -161,4 +218,6 @@ def build_model(
         float(setting(config, "dropout") if dropout is None else dropout),
         str(setting(config, "variant")),
         plan=plan,
+        slot_sum=setting(config, "slot_sum") if plan.architecture != "summary" else False,
+        first_fanout=fanouts(config)[0],
     )
