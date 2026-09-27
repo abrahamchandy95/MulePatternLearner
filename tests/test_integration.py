@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import ast
+import importlib.util
 import subprocess
 import sys
+from types import ModuleType
 
+from mule_pattern_learner.data.contexts import ContextSource, check_coverage
 from mule_pattern_learner.paths import REPOSITORY_ROOT
+from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
+from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
 
 INTEGRATION = REPOSITORY_ROOT / "tests" / "integration"
 # The integration test modules and the marker every test in them carries.
@@ -51,3 +56,37 @@ def test_integration_tests_collect_and_are_deselected_by_default() -> None:
     assert collect() == []
     selected = collect("-m", "graph or graph_write or cuda")
     assert {node.split("::")[0].rsplit("/", 1)[1] for node in selected} == set(MARKERS)
+
+
+def load(name: str) -> ModuleType:
+    """An integration test module, imported without running its tests."""
+    spec = importlib.util.spec_from_file_location(f"integration_{name}", INTEGRATION / name)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_isolation_source_requests_what_the_fixture_checks_and_the_model_reads() -> None:
+    # Offline, so a wrong source plan shows before the test writes to a graph.
+    isolation = load("test_scope_isolation.py")
+    config = isolation.model_config()
+    plan = isolation.source_plan(config.feature_plan())
+    # The values the fixture asserts on: first-hop root features and message fields.
+    checked = {
+        "1h_out_count",
+        "1h_out_amount",
+        "1d_out_in_amount_ratio",
+        "7d_out_in_amount_ratio",
+        "pair_count_1h",
+        "pair_count_1d",
+        "pair_count_7d",
+    }
+    assert checked <= set(plan.node_names + plan.edge_names)
+    flags = plan.query_flags(1)
+    for group in ("rolling_windows", "amount_ratios", "pair_window_counts"):
+        assert flags["include_" + group], group
+    # The model it trains and the predictor that scores it read nothing the source skips.
+    fetcher = TigerGraphContextFetcher(FakeTigerGraph())
+    with ContextSource(fetcher, plan=plan, sampler=config.sampler, capacity=0) as source:
+        check_coverage(source, config.feature_plan(), config.sampler)
