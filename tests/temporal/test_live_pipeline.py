@@ -46,6 +46,7 @@ V5_SAMPLER = SamplerPlan(
 )
 
 
+@pytest.mark.legacy
 def test_recursive_context_keeps_same_neighbor_at_two_different_event_times(tmp_path: Path) -> None:
     root = ContextKey("Account", "root", 100, 1000)
     messages = [message(90, 900, root), message(80, 800, root)]
@@ -98,6 +99,7 @@ def test_basis_and_clock_corruption_are_rejected() -> None:
         validate_context(key, bad)
 
 
+@pytest.mark.legacy
 def test_labels_cannot_enter_node_features() -> None:
     row = context(ContextKey("Account", "root", 100, 1000))
     assert node_features(row).shape == (len(FEATURE_NAMES),)
@@ -119,6 +121,7 @@ def test_amount_ratios_are_required_from_gsql_and_preserved_by_tensor_conversion
         validate_context(key, row)
 
 
+@pytest.mark.legacy
 def test_cache_provenance_offline_miss_and_batch_bound(tmp_path: Path) -> None:
     keys = [ContextKey("Account", str(i), 100, 1000) for i in range(35)]
     source = FakeExecutor({})
@@ -138,6 +141,7 @@ def test_cache_provenance_offline_miss_and_batch_bound(tmp_path: Path) -> None:
     offline.close()
 
 
+@pytest.mark.legacy
 def test_isolated_entities_and_model_ablations(tmp_path: Path) -> None:
     key = ContextKey("Token", "alone", 100, 1000)
     store = ContextStore(tmp_path / "cache.sqlite", {}, FakeExecutor({}))
@@ -148,6 +152,7 @@ def test_isolated_entities_and_model_ablations(tmp_path: Path) -> None:
     store.close()
 
 
+@pytest.mark.legacy
 def test_coowners_share_split_even_through_another_account() -> None:
     accounts = pd.DataFrame(
         {"account_id": ["a", "b", "c", "d"], "owner_ids": [["x"], ["x", "y"], ["y"], ["z"]]}
@@ -282,6 +287,7 @@ def test_hops_use_their_own_pools_and_only_spot_checks_carry_encodings() -> None
     assert all(not p["emit_encodings"] and not p["include_pair_window_counts"] for p in children)
 
 
+@pytest.mark.legacy
 def test_same_context_in_two_scopes_or_hops_is_never_shared(tmp_path: Path) -> None:
     key = ContextKey("Account", "a", 100, 1000, "strict", 1)
     executor = FakeExecutor()
@@ -299,6 +305,7 @@ def test_same_context_in_two_scopes_or_hops_is_never_shared(tmp_path: Path) -> N
     assert np.isfinite(node_features(context(key), V5_PLAN)).all()
 
 
+@pytest.mark.legacy
 def test_extraction_plan_ignores_client_groups_and_keeps_the_model_architecture() -> None:
     from mule_pattern_learner.temporal.live.contract import LEGACY_GROUPS, extraction_plan
 
@@ -322,6 +329,7 @@ def test_extraction_plan_ignores_client_groups_and_keeps_the_model_architecture(
         )
 
 
+@pytest.mark.legacy
 def test_feature_arms_and_model_seeds_share_one_streamed_preparation() -> None:
     from mule_pattern_learner.temporal.live.contract import LEGACY_GROUPS
     from mule_pattern_learner.temporal.live.dataset import preparation_view

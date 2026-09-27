@@ -211,6 +211,7 @@ def test_built_in_batches_feed_root_pool_counts_to_the_summary_branch() -> None:
     assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in model.summary.parameters())
 
 
+@pytest.mark.legacy
 def test_pool_groups_need_a_model_that_reads_them_for_roots_only() -> None:
     # A single model reads every context's summary columns, and children's pool counts
     # would come from the smaller children pool.
@@ -307,7 +308,8 @@ def test_pool_definitions_are_part_of_the_input_fingerprint_only(
 
 
 @pytest.mark.parametrize(
-    ("groups", "architecture"), [(LEGACY_GROUPS, "single"), (DEFAULT_GROUPS, "split")]
+    ("groups", "architecture"),
+    [pytest.param(LEGACY_GROUPS, "single", marks=pytest.mark.legacy), (DEFAULT_GROUPS, "split")],
 )
 def test_plans_without_pool_groups_are_unaffected(
     groups: tuple[str, ...], architecture: str, monkeypatch: pytest.MonkeyPatch

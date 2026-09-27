@@ -3,10 +3,14 @@
 The batch is the first scheduled training step of the prepared dataset, built the
 way train() builds it: the configured sampler (training-mode resampling with the
 step seed), hub stubs from the dataset registry, and rejected roots dropped. The
-report has REST calls and retries, seconds, stub and rejected counts and the
-sampler backend. With --train-step it also runs one optimizer step on the chosen
-device under the configured determinism. Only read queries run; the live source is
-checked with verify_frozen_source first.
+report has REST calls and retries, seconds, stub and rejected counts, the sampler
+backend and the digest of every batch tensor (batching.tensor_digests, the
+definition the golden-run test pins). With --train-step it also runs one optimizer
+step on the chosen device under the configured determinism and reports its loss
+and objective, the first values train() logs. Two code versions built the same
+batch and step when both print the same digests and loss on one machine and
+device. Only read queries run; the live source is checked with
+verify_frozen_source first.
 """
 
 from __future__ import annotations
@@ -28,7 +32,10 @@ import numpy as np  # noqa: E402
 import torch  # noqa: E402
 
 from mule_pattern_learner.device import choose_device, torch_runtime  # noqa: E402
-from mule_pattern_learner.temporal.live.batching import build_root_batch  # noqa: E402
+from mule_pattern_learner.temporal.live.batching import (  # noqa: E402
+    build_root_batch,
+    tensor_digests,
+)
 from mule_pattern_learner.temporal.live.contract import FeaturePlan, SamplerPlan  # noqa: E402
 from mule_pattern_learner.temporal.live.dataset import (  # noqa: E402
     load_prepared,
@@ -147,6 +154,7 @@ def main() -> None:
             }
             if batch is not None:
                 report["tensor_bytes"] = sum(t.numel() * t.element_size() for t in batch.values())
+                report["tensor_digests"] = tensor_digests(batch)
             if args.train_step and batch is not None:
                 report |= train_step(config, settings, plan, device, batch, prepared, step)
     finally:
@@ -193,6 +201,8 @@ def train_step(
         raise ValueError("Non-finite training loss in the benchmark step")
     return {
         "loss": value,
+        # The unclamped risk; it differs from the loss when the nnPU correction fired.
+        "objective": float(loss.objective.cpu()),
         "train_step_seconds": time.perf_counter() - started,
         "parameter_count": sum(p.numel() for p in model.parameters()),
     }

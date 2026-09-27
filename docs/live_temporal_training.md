@@ -519,8 +519,10 @@ the CLI sets `CUBLAS_WORKSPACE_CONFIG=:4096:8` before torch loads unless it is
 already set.
 
 Qualify one configured batch without saving a model. The report has REST calls,
-retries, seconds, stub and rejected counts and the sampler backend;
-`--train-step` adds one optimizer step on the chosen device:
+retries, seconds, stub and rejected counts, the sampler backend and a digest of every
+batch tensor; `--train-step` adds one optimizer step on the chosen device, with its
+loss and objective. Two code versions that print the same digests and loss on one
+machine and device built the same first batch and step:
 
 ```bash
 .venv/bin/python scripts/temporal/benchmark_live_batch.py --train-step

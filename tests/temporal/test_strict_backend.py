@@ -79,6 +79,7 @@ def test_stream_retention_is_bounded_across_many_disjoint_batches() -> None:
     assert not backend.memory
 
 
+@pytest.mark.legacy
 def test_new_account_scoring_needs_neither_training_dataset_nor_labels(tmp_path: Path) -> None:
     model = LiveTGAT(16, 4, 0)
     checkpoint = tmp_path / "model.pt"
@@ -210,7 +211,7 @@ def test_graph_evaluation_truth_pages_the_label_contract() -> None:
         GraphEvaluationTruth(Silent()).read()
 
 
-@pytest.mark.parametrize("profile", ["legacy", "v5"])
+@pytest.mark.parametrize("profile", [pytest.param("legacy", marks=pytest.mark.legacy), "built_in"])
 def test_strict_preparation_and_nnpu_use_the_correct_phase_end_to_end(
     tmp_path: Path, profile: str
 ) -> None:
