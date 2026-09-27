@@ -342,6 +342,16 @@ and associations up to `K`. The second hop is payments only: `chosen = P[:K]`.
 changed with the v5 contract, so checkpoints trained with that group under the v4
 contract are incompatible (the contract fingerprint refuses them).
 
+The built-in run adds two groups that `DEFAULT_GROUPS` lacks, `pool_activity` and
+`pool_internal_inflows`: counts over the root's candidate pool (distinct counterparties,
+first-time inflows, rapid pass-throughs and more; see the
+[catalog](gsql_feature_catalog.md#client-computed-groups)), fed to the split model's
+summary branch. Like `hub_indicator` they are computed on the client and never
+requested, so the query, the extraction groups and a streamed preparation are
+unchanged. Their definitions are part of the model's input fingerprint, not the
+contract fingerprint, so checkpoints saved before the groups existed still score and a
+SQLite cache prepared before them stays valid.
+
 ### Hub accounts and rejected contexts
 
 Preparation runs `temporal_hub_registry` for the dataset cutoffs and saves
@@ -395,6 +405,11 @@ so any rejected root fails the run):
 `metrics.json` reports `rejected_roots` per split (`requested`, `rejected`,
 `positive`, `unlabeled`) and `max_rejected_root_fraction`. A non-finite model
 probability for an accepted root raises instead of counting as a rejection.
+Probabilities are computed in float64 from the model's float32 logit, and every
+prediction file and metric keeps them in float64: a float32 probability rounds to 1
+above a logit of about 17 and resolves logits only to about 0.007 at 11, so the
+highest-scored accounts tied and top-k rankings among them were arbitrary. Float64
+rounds to 1 only above a logit of about 37.
 Scoring commands list rejected IDs in `<output>.rejected.txt`. Their results
 report `rejected` (roots not scored), `rejected_roots_by_status`,
 `rejected_children` (child contexts masked out of scored batches),
@@ -577,6 +592,22 @@ test positive is rejected or the rejected fraction exceeds the checkpoint's
 censored population. Rejected negatives within the limit are listed in
 `<output>.rejected.txt`, and the metrics' `evaluation_cohort` ends in
 `_minus_rejected_negatives`.
+
+The report's `metrics` estimate the whole test population, each sampled account
+standing for 1 / `inclusion_probability` accounts: `estimated_population`,
+`weighted_prevalence`, `average_precision`, `roc_auc`, and `precision`, `recall` and
+`f1` at the frozen threshold. `precision_at_1pct` and `recall_at_1pct` (and the same at
+`5pct` and `10pct`) describe reviewing the highest-scored 1, 5 or 10% of the estimated
+population. Accounts rank by score; the review budget is that fraction of
+`estimated_population`, and the sampled account that straddles its edge counts only for
+the part of its weight inside it. Tied scores form one block, as they form one
+threshold of the average precision: a budget that ends inside the block takes the same
+share of each of its accounts, the expected result of ordering them at random, so
+neither account IDs nor row order matter. Precision divides the weighted mules inside
+the budget by the budget, recall by all weighted mules. With unit weights, no ties and
+a whole number of accounts in the budget this is the definition of the unweighted
+metrics of the same names in `metrics.json` (which reports 1 and 5% only).
+`<output>.parquet` keeps the scored sample with its float64 scores.
 
 ### Upgrading earlier preparations
 

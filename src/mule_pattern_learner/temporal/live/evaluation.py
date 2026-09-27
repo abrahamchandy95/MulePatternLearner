@@ -13,7 +13,12 @@ from ..metrics import evaluate
 from .checkpoint import ModelCheckpoint
 
 if TYPE_CHECKING:
+    from numpy.typing import NDArray
+
     from .executor import QueryExecutor
+
+# Review budgets of the weighted audit: the top 1, 5 and 10% of the estimated population.
+TOP_FRACTIONS = (0.01, 0.05, 0.10)
 
 
 class EvaluationTruthSource(Protocol):
@@ -126,8 +131,48 @@ def final_evaluation_sample(
     )
 
 
+def weighted_top_fractions(
+    y: NDArray[Any], score: NDArray[Any], weight: NDArray[Any]
+) -> dict[str, float]:
+    """Weighted precision and recall in the top 1, 5 and 10% of the estimated population.
+
+    Accounts rank by score, highest first. Each sampled account stands for ``weight``
+    (1 / inclusion probability) population accounts, so the top fraction f is the
+    ranked prefix whose weights add up to f times the estimated population W. Accounts
+    with tied scores form one block, as one threshold of sklearn's average precision:
+    a budget that ends inside the block takes the same share of each of its accounts,
+    the expected result of ordering the tied population accounts at random. The block
+    that straddles the boundary counts only for the part inside it: a sampled negative
+    stands for many accounts. Precision is the weighted positives inside over f * W,
+    recall the same over all weighted positives. With unit weights, no ties and a whole
+    f * n these are the unweighted ``precision_at_1pct`` and ``recall_at_1pct`` (5, 10)
+    of the same ranking.
+    """
+    import numpy as np
+
+    order = np.argsort(-score, kind="stable")
+    ranked = score[order]
+    # The last rank of each block of tied scores.
+    ends = np.flatnonzero(np.append(ranked[1:] != ranked[:-1], True))
+    # Population accounts and weighted positives above each block end, starting at zero.
+    reviewed = np.concatenate(([0.0], np.cumsum(weight[order])[ends]))
+    found = np.concatenate(([0.0], np.cumsum(np.where(y == 1, weight, 0.0)[order])[ends]))
+    result: dict[str, float] = {}
+    for fraction in TOP_FRACTIONS:
+        size = fraction * float(reviewed[-1])
+        hits = float(np.interp(size, reviewed, found))
+        name = f"{round(fraction * 100)}pct"
+        result[f"precision_at_{name}"] = hits / size
+        result[f"recall_at_{name}"] = hits / max(float(found[-1]), 1)
+    return result
+
+
 def evaluate_weighted(frame: pd.DataFrame, threshold: float) -> dict[str, Any]:
-    """Weighted AP/ROC/threshold metrics; estimates, not census measurements."""
+    """Weighted AP/ROC/threshold and top-fraction metrics; estimates, not census measurements.
+
+    The top-fraction metrics (``weighted_top_fractions``) share a budget that ends among
+    tied scores evenly across them, so neither account IDs nor row order matter.
+    """
     import numpy as np
     from sklearn.metrics import average_precision_score, roc_auc_score
 
@@ -158,6 +203,7 @@ def evaluate_weighted(frame: pd.DataFrame, threshold: float) -> dict[str, Any]:
         "precision": precision,
         "recall": recall,
         "f1": 2 * precision * recall / max(precision + recall, 1e-12),
+        **weighted_top_fractions(y, score, w),
         "evaluation_cohort": "all_test_positives_plus_uniform_negatives_inverse_probability_weighted",
     }
 

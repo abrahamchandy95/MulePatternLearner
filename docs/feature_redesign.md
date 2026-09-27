@@ -23,6 +23,8 @@ select legacy groups explicitly in an overrides file to compare against them.
 | `history_support` | Visible payment participations, fewer-than-five flag | Optional; self-transfers participate in both directions. Counts only visible USD history. |
 | `decayed_activity` | Incoming/outgoing counts and amounts at half-lives 1, 7, 30, 90 days | Optional smooth summaries: contribution is `value * 2**(-age/half_life)`. These half-lives still need sensitivity tests. |
 | `identity_order` | Starts/ends of owner, token and device tenures since the tenth most recent payment | Ordinal, not hours or days. With fewer than ten payments, starts at the earliest available payment; with none, absent/zero. Never converts sequence differences to time. |
+| `pool_activity` | Counts over the root's own candidate pool, through the split model's summary branch | In the built-in run. Computed on the client from the payment messages, never requested from TigerGraph: candidate payments and distinct counterparties per relation, distinct payers and payees, first-time inflows, and inflows forwarded within 24 hours at 50 to 100 percent. Counts over the pool (at most `recent + older + distinct` per relation), not all-time totals. Requires `pair_history` and `flow_timing`; split or summary architecture only; see the [catalog](gsql_feature_catalog.md#client-computed-groups). |
+| `pool_internal_inflows` | First-time inflows from internal payers over the root's candidate pool: all, at least 100, at least 1,000 | In the built-in run, computed like `pool_activity`. A group of its own because it suits the data generator, which places scam victims inside the bank, more than a real bank; the `built_in_no_internal` arm measures it. Requires `pair_history`. |
 | `rolling_windows`, `amount_ratios`, `recency`, `association_counts`, `pair_window_counts` | Existing summary and pair inputs | Reproducible controls. `amount_ratios` requires `rolling_windows`. Out/in ratio is not pass-through speed. |
 | `sampler_meta` | Sampling-stratum embedding | Optional. Describes selection, not behavior. |
 
@@ -102,7 +104,10 @@ read by preparation, training, early stopping or threshold selection.
 The separate `evaluate-final` command enumerates the whole frozen test partition,
 includes every truth-positive test account and a uniform sample of truth-negative
 accounts, then computes inverse-inclusion-probability-weighted metrics at the
-frozen checkpoint threshold. This avoids depending on the few hidden positives
+frozen checkpoint threshold, and weighted precision and recall in the top 1, 5 and
+10% of the estimated population (`precision_at_1pct`, `recall_at_1pct` and the same
+at `5pct` and `10pct`; see the [commands](live_temporal_training.md#commands) of the
+live training guide). This avoids depending on the few hidden positives
 that happen to fall into the training preparation reservoir. It requires complete
 binary truth for that test population and one test date. It is a bounded POC audit
 (up to one million test metadata rows and 100,000 scored rows), not a production
@@ -139,7 +144,10 @@ sets only the keys it changes (tables such as `[sampler]` merge key by key).
 Run parity and cost qualification first, then nnPU/noise-floor comparisons, then
 summary-only, legacy single/split, event-core/zero-node, individual groups and
 combined winners. `feature_experiments()` builds these configurations while holding
-source/labels/clocks fixed. Repeat the event and hybrid comparisons under both
+source/labels/clocks fixed. Its feature-group arms run without `slot_sum`, the model
+they were designed on; the `built_in` arms measure the built-in run against itself
+without `slot_sum`, without the pool groups, without `pool_internal_inflows`, and as a
+summary-only model on the same root inputs (`built_in_tabular`). Repeat the event and hybrid comparisons under both
 samplers, with separately prepared contexts where necessary. The utility does not
 launch expensive runs automatically. No synthetic results are promoted as mule
 results.

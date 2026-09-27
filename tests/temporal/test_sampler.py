@@ -34,6 +34,7 @@ from mule_pattern_learner.temporal.live.contract import (
     DEFAULT_GROUPS,
     FEATURE_GROUPS,
     FEATURE_NAMES,
+    POOL_GROUPS,
     RAILS,
     RELATIONS,
     SELECTION_KEYS_VERSION,
@@ -76,7 +77,8 @@ ASSOCIATION_TARGET = {
     rel: typ for pair, types in zip(ASSOCIATIONS, TARGETS) for rel, typ in zip(pair, types)
 }
 PAYMENTS = RELATIONS[:4]
-V4_GROUPS = tuple(g for g in FEATURE_GROUPS if g not in ("sampler_meta",))
+# Every group a single model may read (FeaturePlan keeps the pool groups out of it).
+V4_GROUPS = tuple(g for g in FEATURE_GROUPS if g not in ("sampler_meta", *POOL_GROUPS))
 RESAMPLE = SamplerPlan(
     "resample",
     roots=PoolPlan(recent=4, older=3, distinct=2, associations=2),
@@ -334,7 +336,7 @@ def test_contract_constants_and_client_groups() -> None:
     assert CHANNELS[-1] == "other" and len(set(CHANNELS)) == len(CHANNELS)
     assert "event_channel" not in DEFAULT_GROUPS and "event_channel" in FEATURE_GROUPS
     assert DEFAULT_GROUPS[:2] == ("entity_meta", "hub_indicator")
-    assert CLIENT_GROUPS == {"hub_indicator"}
+    assert CLIENT_GROUPS == {"hub_indicator", *POOL_GROUPS}
     assert FEATURE_GROUPS["hub_indicator"].identity == ("history_withheld",)
     plan = FeaturePlan(DEFAULT_GROUPS, "split")
     assert plan.names("node")[-1] == "history_withheld"

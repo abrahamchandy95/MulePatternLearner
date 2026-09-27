@@ -54,7 +54,7 @@ The query never exports raw oracle truth or the synthetic mask.
 | `k_assoc` | 0..8 | Valid-time associations per association relation (0 for payments-only children). |
 | `max_history` | 32..4096 | Visible events per relation above which the request is rejected. |
 | `emit_encodings` | default FALSE | When TRUE, `age_encoding` and `gap_encoding` hold Fourier vectors; otherwise they are empty maps and no `temporal_fourier64_values` call runs. |
-| `include_*` | 14 flags | Exactly the non-categorical, non-client groups of `FeaturePlan.query_flags()`; there is no `include_hub_indicator`. |
+| `include_*` | 14 flags | Exactly the non-categorical, non-client groups of `FeaturePlan.query_flags()`; there is no `include_hub_indicator` or flag for a pool group ([client-computed groups](#client-computed-groups)). |
 | `scope_id`, `visibility_phase` | phase 1..3 | Strict scope filtering, applied before any feature or sampling. |
 
 A failed request never aborts the call: it prints `{status, request_index}` and
@@ -78,6 +78,69 @@ its `nonmonotonic_pair_clock` check) is skipped. Rolling-window and decayed sums
 keep the original traversal order, so their floating-point values are identical
 to the earlier query text. The exact repository text also runs under INTERPRET:
 `queries.as_interpreted(text)` swaps only the header.
+
+## Client-computed groups
+
+Three feature groups never come from TigerGraph. The client computes them, the query has
+no `include_*` flag for them, and a response carrying one of their names is rejected
+(`validate_context` reports an unknown node feature, and batch assembly refuses a
+client-only feature). Adding or changing them leaves the GSQL and the extraction groups
+as they are, so a streamed preparation stays valid. A SQLite cache also records the
+contract fingerprint, which covers `hub_indicator` but not the pool groups.
+
+- `hub_indicator`: `history_withheld`, 1 for a hub stub built without a query (see
+  [hub accounts](live_temporal_training.md#hub-accounts-and-rejected-contexts)).
+- The pool groups `pool_activity` and `pool_internal_inflows` (both in the built-in
+  run): counts over the payment messages of the root's own candidate pool, computed by
+  `batching.pool_activity`. The split model reads them for the roots only, in its
+  summary branch, so batches compute them for the roots only (children and stubs keep
+  zeros there); a single model, which reads every context's summary columns, refuses
+  them, since children's counts would come from the smaller children pool. Every count
+  gets `log1p`.
+
+| Group | Name | Meaning |
+|---|---|---|
+| `pool_activity` | `pool_<relation>_count`, `pool_<relation>_unique` | Candidate payments and distinct counterparties (entity type and ID) of each payment relation |
+| `pool_activity` | `pool_in_unique`, `pool_out_unique` | Distinct payers over `zelle_in` and `payment_in`; distinct payees over `zelle_out` and `payment_out` |
+| `pool_activity` | `pool_first_in` | Inflows from a first-time payer (`pair_prior_count = 0`: no earlier payment in the directed pair, which the query keys by relation, rail and counterparty) |
+| `pool_activity` | `pool_pass_through_1d` | Inflows whose next outflow followed within 24 hours and moved 50 to 100 percent of the inflow: `flow_present`, `flow_ratio_present`, `flow_delay_seconds <= 86400` and `0.5 <= flow_amount_ratio <= 1` |
+| `pool_internal_inflows` | `pool_first_in_internal` | First-time inflows with an internal payer (`peer_external` false) |
+| `pool_internal_inflows` | `pool_first_in_internal_100`, `pool_first_in_internal_1000` | Internal first-time inflows whose amount is present and at least 100, at least 1,000 |
+
+The first-time and pass-through tests use the per-message `pair_*` and `flow_*` fields,
+which the query computes over the account's whole visible history; the client never pairs
+events within the pool. So `pool_activity` requires `pair_history` and `flow_timing`, and
+`pool_internal_inflows` requires `pair_history`. Every message is strictly before the
+context cutoff, so the counts are cutoff-safe. Stubs and contexts without payments get
+zeros.
+
+The counts are over the candidate pool (`[sampler]` `recent`, `older`, `distinct` per
+relation: 8, 4 and 4 for roots in the built-in run), not over the account's history, and
+changing those keys changes what they mean. Most accounts have more visible payments than
+the pool holds, so `pool_payment_out_count` is at its cap of 16 for most roots, and the
+`distinct` stratum, which picks events with new counterparties, supplies many of the
+first-time inflows. The cap bounds drift between cutoffs, though Zelle counts still
+roughly doubled between the train and test cutoffs of the diagnostic study.
+
+The amount bands, the 24 hours and the 50 to 100 percent are round numbers, but the
+choice of counts followed a diagnostic study that had read the data generator's mule
+typology and test-split mules, so test audits are optimistic for them; report
+validation as well. The internal-payer counts and the 1,000 band suit PhantomLedger,
+which places scam victims inside the bank, more than a real bank, where most victims
+bank elsewhere: on the diagnostic data a logistic regression on `pool_activity` alone
+reached a test average precision of about 0.04, against 0.20 to 0.24 with
+`pool_internal_inflows` as well. Mules are revealed more often the more victim reports
+they have, and reports come from the same inflows these counts see, so observed-label
+metrics overstate them; compare revealed and hidden mules. The 0.5 lower ratio bound
+flags almost half of test non-mules; a narrower band (0.8 to 0.99) separated mules
+better on the diagnostic data, but it was found after looking at labels, so it is a
+lead to validate, not a setting.
+
+The pool definitions (the groups' names, the bands, the pass-through thresholds and
+`POOL_ACTIVITY_VERSION`) are part of a model's input fingerprint
+(`FeaturePlan.fingerprint`) when it uses a pool group, so a checkpoint trained with them
+is refused once they change. They are not part of the contract fingerprint, so
+checkpoints and SQLite caches from before the pool groups existed stay valid.
 
 ## The 83 entity/context features
 

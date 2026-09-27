@@ -21,6 +21,8 @@ import warnings
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 import torch
 
@@ -953,6 +955,29 @@ def test_non_finite_evaluation_scores_raise_instead_of_counting_as_rejections(
         fit(tmp_path, "run", config)
 
 
+def test_evaluation_scores_keep_float64_resolution_near_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = base_config()
+    prepared_dataset(tmp_path / "dataset", config, monkeypatch)
+    original = LiveTGAT.forward
+
+    def confident(self: LiveTGAT, batch: dict[str, torch.Tensor]) -> torch.Tensor:
+        logits = original(self, batch)
+        # Evaluation logits near 20, where a float32 probability is exactly 1.
+        return logits if self.training else logits + 20
+
+    monkeypatch.setattr(LiveTGAT, "forward", confident)
+    # The validation F1 threshold falls between scores that float32 would tie at 1.
+    assert 0.99 < fit(tmp_path, "run", config)["validation_proxy"]["threshold"] < 1
+    for split in ("validation", "test"):
+        path = tmp_path / f"run_run/{split}_predictions.parquet"
+        assert pq.read_schema(path).field("score").type == pa.float64()
+        frame = pd.read_parquet(path)
+        assert (frame.score < 1).all() and (frame.score.astype(np.float32) == 1).all()
+        assert frame.score.nunique() == len(frame)
+
+
 def test_patience_zero_disables_early_stopping(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1104,10 +1129,18 @@ def test_fake_end_to_end_training_on_cuda(tmp_path: Path, monkeypatch: pytest.Mo
 # Scoring ------------------------------------------------------------------------------
 
 
-def checkpoint(path: Path, config: dict[str, Any], manifest_path: Path | None = None) -> Path:
+def checkpoint(
+    path: Path,
+    config: dict[str, Any],
+    manifest_path: Path | None = None,
+    *,
+    logit_shift: float = 0.0,
+) -> Path:
     plan = FeaturePlan.from_config(config)
     torch.manual_seed(0)
     model = LiveTGAT(config["hidden"], config["heads"], 0.0, plan=plan)
+    with torch.no_grad():
+        model.head[-1].bias += logit_shift
     payload = {
         "state_dict": model.state_dict(),
         "config": config,
@@ -1192,6 +1225,25 @@ def test_score_new_writes_only_ok_rows_and_lists_rejected_ids(tmp_path: Path) ->
     assert source.closed and not (tmp_path / "scores.parquet.pending").exists()
 
 
+def test_score_new_keeps_float64_resolution_near_one(tmp_path: Path) -> None:
+    config = base_config()
+    # Logits near 20, where a float32 probability is exactly 1 for every account.
+    model = checkpoint(tmp_path / "model.pt", config, logit_shift=20.0)
+    output = tmp_path / "scores.parquet"
+    predictor.score_new_accounts(
+        model,
+        iter([f"new_{i}" for i in range(12)]),
+        "2025-01-01",
+        output,
+        executor=ScoringExecutor(),
+        contexts=FakeSource(config),
+    )
+    assert pq.read_schema(output).field("score").type == pa.float64()
+    frame = pd.read_parquet(output)
+    assert (frame.score < 1).all() and (frame.score.astype(np.float32) == 1).all()
+    assert frame.score.nunique() == len(frame) == 12 and frame.predicted_mule.all()
+
+
 def test_score_new_reports_root_and_child_rejections_separately(tmp_path: Path) -> None:
     config = base_config()
     model = checkpoint(tmp_path / "model.pt", config)
@@ -1236,6 +1288,7 @@ def test_inference_score_uses_the_dataset_hub_registry(
     frame = pd.read_parquet(output)
     assert loaded == [dataset]
     assert len(frame) == 23 and "A002" not in set(frame.account_id)
+    assert frame.score.dtype == np.float64
     assert result["rejected"] == 1 and (tmp_path / "test.parquet.rejected.txt").exists()
 
 
@@ -1275,6 +1328,10 @@ def test_final_population_audit_scores_through_the_dataset_clock_and_hubs(
     assert result["rejected"] == 1 and result["rejected_roots_by_status"] == {"missing_entity": 1}
     assert result["metrics"]["sample_accounts"] == len(test_accounts) - 1
     assert result["metrics"]["evaluation_cohort"].endswith("_minus_rejected_negatives")
+    for pct in (1, 5, 10):
+        assert 0 <= result["metrics"][f"recall_at_{pct}pct"] <= 1
+        assert 0 <= result["metrics"][f"precision_at_{pct}pct"] <= 1
+    assert pd.read_parquet(tmp_path / "final.parquet").score.dtype == np.float64
     assert (tmp_path / "final.rejected.txt").read_text().split() == [
         test_accounts.account_id.iloc[1]
     ]
