@@ -126,7 +126,7 @@ def test_two_epochs_equal_one_epoch_plus_resume(
     assert_same_run(tmp_path, "straight", "resumed")
     straight = json.loads((tmp_path / "straight_run/metrics.json").read_text())
     # Reported totals cover both segments of the resumed run.
-    for key in ("sampler_totals", "database_calls_during_training", "rejected_roots"):
+    for key in ("sampler_totals", "database_calls_during_training", "rejected_roots", "contexts"):
         assert result[key] == straight[key], key
     events = [
         json.loads(line)["event"]
@@ -159,6 +159,8 @@ def test_mid_epoch_step_checkpoint_resumes_exactly(
     # Steps replayed after the step checkpoint are counted once.
     assert resumed["sampler_totals"] == straight["sampler_totals"]
     assert resumed["rejected_roots"] == straight["rejected_roots"]
+    # Contexts prefetched before the step checkpoint are requested again, but not new.
+    assert resumed["contexts"]["distinct"] == straight["contexts"]["distinct"] > 0
 
 
 def test_prefetch_depth_and_resample_policy_do_not_break_determinism(
@@ -235,11 +237,10 @@ def test_batches_use_train_mode_step_seeds_and_the_hub_registry(
         json.loads(line) for line in (tmp_path / "run_run/progress.jsonl").read_text().splitlines()
     ]
     train_records = [r for r in records if r["event"] == "train"]
-    assert train_records and all(
-        {"query_calls", "rejections", "stub_children", "seconds_per_step", "sampler_backend"}
-        <= set(r)
-        for r in train_records
-    )
+    counters = {"query_calls", "rejections", "stub_children", "seconds_per_step", "cache_hits"}
+    counters |= {"contexts_requested", "contexts_distinct", "sampler_backend"}
+    assert train_records and all(counters <= set(r) for r in train_records)
+    assert 0 < train_records[-1]["contexts_distinct"] <= train_records[-1]["contexts_requested"]
     # The unclamped risk is logged beside the loss; they agree on steps without a correction.
     for record in train_records:
         assert 0 <= record["corrected_steps"] <= 2 and math.isfinite(record["objective"])

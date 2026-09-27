@@ -2,15 +2,18 @@
 
 StreamingContextSource requests each batch's contexts through a ContextFetcher
 (ports.py) and keeps a bounded LRU. It returns rows in key order, with None where
-TigerGraph rejected a request. check_coverage and close_source work with any
-ContextSource. A ContextOpener opens the source of a prepared dataset; the pipeline
-passes pipeline.connect.open_context_source to the use cases that need one.
+TigerGraph rejected a request. Every source counts what it was asked for in a
+ContextCounts. check_coverage and close_source work with any ContextSource. A
+ContextOpener opens the source of a prepared dataset; the pipeline passes
+pipeline.connect.open_context_source to the use cases that need one.
 """
 
 from __future__ import annotations
 
 from collections import Counter, OrderedDict, deque
+from collections.abc import Iterable
 from concurrent.futures import FIRST_COMPLETED, Future, wait
+from dataclasses import dataclass, field
 import threading
 from typing import Any, Protocol
 
@@ -23,6 +26,7 @@ from ..contract.bounds import (
     REQUEST_KEYS,
 )
 from ..contract.feature_groups import FeaturePlan
+from ..contract.fingerprints import hash64
 from ..contract.graph_schema import ContextKey
 from ..contract.sampler_plan import SamplerPlan
 from ..paths import DatasetPaths
@@ -83,13 +87,45 @@ def _resolve(
     return [rows[key] if rows[key].get("status") == "ok" else None for key in keys]
 
 
+def context_hash(key: ContextKey, hop: int) -> int:
+    """A 63-bit hash of one context, the same in every process (fits an int64 tensor)."""
+    parts = (key.node_type, key.node_id, key.cutoff_seq, key.cutoff_ms, key.scope_id)
+    return hash64(hop, *parts, key.visibility_phase) >> 1
+
+
+@dataclass
+class ContextCounts:
+    """What a context source was asked for: every context, the distinct ones, cache hits.
+
+    requested counts the contexts fetches asked for (a key repeated within one fetch
+    once) and cache_hits those served from memory without a request. seen holds the
+    context_hash of every distinct (hop, key) asked for; a resumed run restores it,
+    so distinct counts every segment of the run.
+    """
+
+    requested: int = 0
+    cache_hits: int = 0
+    seen: set[int] = field(default_factory=set[int])
+
+    def ask(self, keys: Iterable[ContextKey], hop: int) -> None:
+        """Count one fetch's distinct keys."""
+        for key in keys:
+            self.requested += 1
+            self.seen.add(context_hash(key, hop))
+
+    @property
+    def distinct(self) -> int:
+        return len(self.seen)
+
+
 class ContextSource(Protocol):
     """Model-facing port independent of the transport (HTTP today, a disk cache later).
 
     fetch returns rows in key order, None where TigerGraph rejected a request
     (counted by status in rejections, once per rejected key and fetch, and in
-    rejections_by_hop per hop, 1 roots and 2 children). close with wait=False does not
-    wait for requests in flight. Implementations are thread-safe.
+    rejections_by_hop per hop, 1 roots and 2 children). counts holds what fetches
+    asked for (ContextCounts). close with wait=False does not wait for requests in
+    flight. Implementations are thread-safe.
     """
 
     @property
@@ -102,6 +138,8 @@ class ContextSource(Protocol):
     def rejections(self) -> Counter[str]: ...
     @property
     def rejections_by_hop(self) -> dict[int, Counter[str]]: ...
+    @property
+    def counts(self) -> ContextCounts: ...
 
     def fetch(self, keys: list[ContextKey], *, hop: int = 1) -> list[dict[str, Any] | None]: ...
     def close(self, *, wait: bool = True) -> None: ...
@@ -149,6 +187,7 @@ class StreamingContextSource:
         self.query_calls = 0
         self.rejections: Counter[str] = Counter()
         self.rejections_by_hop: dict[int, Counter[str]] = {}
+        self.counts = ContextCounts()
         self.diagnostics: Counter[str] = Counter()
         self._lock = threading.Lock()
         self._inflight: dict[tuple[int, ContextKey], Future[dict[ContextKey, dict[str, Any]]]] = {}
@@ -178,7 +217,8 @@ class StreamingContextSource:
                     shared[key] = self._inflight[(hop, key)]
                 else:
                     missing.append(key)
-            self.diagnostics["lru_hits"] += len(rows)
+            self.counts.ask(unique, hop)
+            self.counts.cache_hits += len(rows)
             self.diagnostics["shared_inflight"] += len(shared)
             for start in range(0, len(missing), self.request_batch_size):
                 block = missing[start : start + self.request_batch_size]

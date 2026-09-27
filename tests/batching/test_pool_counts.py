@@ -27,7 +27,7 @@ from mule_pattern_learner.contract.feature_groups import (
     extraction_plan,
 )
 from mule_pattern_learner.contract.graph_schema import ContextKey
-from mule_pattern_learner.data.contexts import StreamingContextSource
+from mule_pattern_learner.data.contexts import ContextCounts, StreamingContextSource
 from mule_pattern_learner.data.manifest import dataset_mismatches, dataset_settings
 from mule_pattern_learner.inference.saved_model import ModelCheckpoint
 from mule_pattern_learner.model.build import build_model
@@ -123,6 +123,7 @@ class RawRows:
         self.plan, self.sampler, self.query_calls = PLAN, SAMPLER, 0
         self.rejections: Counter[str] = Counter()
         self.rejections_by_hop: dict[int, Counter[str]] = {}
+        self.counts = ContextCounts()
 
     def fetch(self, keys: list[ContextKey], *, hop: int = 1) -> list[dict[str, Any] | None]:
         return [self.rows[hop, key] for key in keys]

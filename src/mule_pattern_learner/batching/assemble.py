@@ -309,7 +309,8 @@ class PinnedRoots:
 
     Anything else (children, other keys) goes to the wrapped source, so concurrent
     batch builders cannot evict a batch's roots between filtering and assembly. The
-    plan, pools and rejection counters are the wrapped source's own objects.
+    plan, pools and rejection and context counters are the wrapped source's own
+    objects; the pinned roots were counted when they were first fetched.
     """
 
     def __init__(
@@ -319,6 +320,7 @@ class PinnedRoots:
         self.rows = dict(zip(keys, rows, strict=True))
         self.plan, self.sampler = store.plan, store.sampler
         self.rejections, self.rejections_by_hop = store.rejections, store.rejections_by_hop
+        self.counts = store.counts
 
     @property
     def query_calls(self) -> int:
