@@ -12,10 +12,8 @@ from mule_pattern_learner.temporal.live.contract import (
     FEATURE_GROUPS,
     DEFAULT_GROUPS,
 )
-from mule_pattern_learner.temporal.live.batching import (
-    make_live_batch,
-    node_features,
-)
+from mule_pattern_learner.temporal.live.batch_reference import node_features
+from mule_pattern_learner.temporal.live.batching import make_live_batch
 from mule_pattern_learner.temporal.live.history_reference import payment_features, stratify
 from mule_pattern_learner.temporal.live.evaluation import final_evaluation_sample, evaluate_weighted
 from mule_pattern_learner.temporal.live.model import LiveTGAT

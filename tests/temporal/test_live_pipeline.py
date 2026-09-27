@@ -13,11 +13,11 @@ import pandas as pd
 import pytest
 import torch
 
+from mule_pattern_learner.temporal.live.batch_reference import node_features
 from mule_pattern_learner.temporal.live.batching import (
     build_root_batch,
     child_key,
     make_live_batch,
-    node_features,
 )
 from mule_pattern_learner.temporal.live.context_query import validate_context
 from mule_pattern_learner.temporal.live.contract import (
