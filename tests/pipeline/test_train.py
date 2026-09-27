@@ -80,15 +80,19 @@ POPULATION = 200
 
 
 def fake_graph(monkeypatch: pytest.MonkeyPatch) -> FakeTigerGraph:
-    """The fake graph behind every connection of the pipeline; its graph writes are no-ops.
+    """The fake graph behind every connection of the pipeline.
 
-    It holds a frozen scope whose known mules are revealed, so preparation only reads.
+    Its queries are installed and it holds the built-in run's frozen scope of FAKE_SOURCE,
+    whose known mules are revealed (the reveal is a no-op), so preparation only reads.
     """
+    scope = DEFAULT_CONFIG.scope.id
+    header = {"ready": True, "source_id": FAKE_SOURCE, "split_seed": 42}
     executor = FakeTigerGraph(
         factory=neighbourhood,
         hubs=[("N3", cutoff) for cutoff in (101, 102, 103)],
         statuses={"N5": "history_capacity_exceeded"},
         population=scope_population(POPULATION),
+        scopes={scope: header},
     )
 
     def connect(transport: TransportConfig) -> FakeTigerGraph:
@@ -97,20 +101,9 @@ def fake_graph(monkeypatch: pytest.MonkeyPatch) -> FakeTigerGraph:
     def nothing(*args: Any, **kwargs: Any) -> None:
         return None
 
-    def source_counts(executor: Any) -> dict[str, int]:
-        return {"Account": POPULATION}
-
-    def resolve_source_id(*args: Any) -> str:
-        return FAKE_SOURCE
-
     for module in (pipeline_prepare, pipeline_connect, pipeline_evaluate):
         monkeypatch.setattr(module, "connect", connect)
-    for module in (pipeline_connect, pipeline_evaluate):
-        monkeypatch.setattr(module, "verify_frozen_source", nothing)
-    for name in ("install", "ensure_scope", "ensure_revealed_labels"):
-        monkeypatch.setattr(pipeline_prepare, name, nothing)
-    monkeypatch.setattr(pipeline_prepare, "source_counts", source_counts)
-    monkeypatch.setattr(pipeline_prepare, "resolve_source_id", resolve_source_id)
+    monkeypatch.setattr(pipeline_prepare, "ensure_revealed_labels", nothing)
     return executor
 
 
