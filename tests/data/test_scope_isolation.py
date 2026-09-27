@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 import torch
 
-from mule_pattern_learner.batching.assemble import child_key, build_batch
+from mule_pattern_learner.batching.assemble import build_batch, child_key
 from mule_pattern_learner.batching.limits import BatchCapacityError, BatchIndex
 from mule_pattern_learner.config import (
     DEFAULT_CONFIG,

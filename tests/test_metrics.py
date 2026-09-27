@@ -6,9 +6,9 @@ import numpy as np
 import pytest
 
 from mule_pattern_learner.metrics import (
+    bootstrap_interval,
     capture_curve,
     evaluate,
-    bootstrap_interval,
     weighted_metrics,
 )
 

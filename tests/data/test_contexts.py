@@ -16,7 +16,7 @@ import numpy as np
 import pytest
 from pyTigerGraph.common.exception import TigerGraphException
 
-from mule_pattern_learner.batching.assemble import build_root_batch, build_batch
+from mule_pattern_learner.batching.assemble import build_batch, build_root_batch
 from mule_pattern_learner.contract.feature_groups import FeaturePlan
 from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.data.contexts import ContextSource, context_hash

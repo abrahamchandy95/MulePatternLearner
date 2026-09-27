@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 import torch
 
-from mule_pattern_learner.batching.assemble import build_root_batch, child_key, build_batch
+from mule_pattern_learner.batching.assemble import build_batch, build_root_batch, child_key
 from mule_pattern_learner.contract.feature_groups import DEFAULT_GROUPS, FeaturePlan
 from mule_pattern_learner.contract.graph_schema import HUB_COLUMNS, RELATIONS, ContextKey
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
