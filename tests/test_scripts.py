@@ -15,12 +15,10 @@ from typing import Any
 
 import pytest
 
-from mule_pattern_learner.config import run_config
 from mule_pattern_learner.contract.feature_groups import FeaturePlan, extraction_plan
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
 from mule_pattern_learner.data.contexts import StreamingContextSource, check_coverage
 from mule_pattern_learner.data.preparation import prepare
-from mule_pattern_learner.experiments.variants import feature_experiments
 from mule_pattern_learner.paths import REPOSITORY_ROOT
 from mule_pattern_learner.reference import label_reveal
 from mule_pattern_learner.testing.builders import (
@@ -42,9 +40,7 @@ SCRIPTS = REPOSITORY_ROOT / "scripts"
 # Every script that talks to the live path; each must parse --help before connecting.
 LIVE_SCRIPTS = (
     "benchmark_batch",
-    "feature_experiments",
     "render_queries",
-    "run_experiments",
     "simulate_label_reveal",
     "verify_cugraph_sampler",
     "verify_feature_redesign",
@@ -65,8 +61,6 @@ def load(name: str) -> ModuleType:
 # The scripts that load torch; each reserves the cuBLAS workspace before anything else.
 TORCH_SCRIPTS = (
     "benchmark_batch",
-    "feature_experiments",
-    "run_experiments",
     "verify_cugraph_sampler",
     "verify_strict_isolation",
 )
@@ -237,15 +231,6 @@ def test_benchmark_builds_one_training_batch_and_step(
     # Digests of every batch tensor (test_golden_run pins their values).
     digests = report["tensor_digests"]
     assert digests["root_positions"]["shape"] == [32] and len(digests["x"]["sha256"]) == 64
-
-
-def test_feature_experiments_run_on_the_built_in_settings(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.setattr(sys, "argv", ["feature_experiments"])
-    load("feature_experiments").main()
-    printed = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
-    assert [row["experiment"] for row in printed] == list(feature_experiments(run_config()))
 
 
 class RevealGraph:

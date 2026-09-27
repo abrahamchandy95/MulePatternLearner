@@ -121,9 +121,6 @@ sets only the keys it changes (tables such as `[sampler]` merge key by key).
 `--dataset <run>_run/prepared` trains another arm on an existing preparation.
 
 ```sh
-# Review dimensions and parameter counts; does not train or open truth.
-.venv/bin/python scripts/feature_experiments.py
-
 # Install only after query parity/validation is satisfactory.
 .venv/bin/python -m mule_pattern_learner install
 
