@@ -86,16 +86,16 @@ def test_a_dataset_records_its_query_files_by_path_and_passes_its_own_check(
 def test_query_files_are_compared_by_their_text_not_their_path() -> None:
     current = data_manifest.query_hashes()
     # Datasets prepared before the query files moved recorded the same texts elsewhere.
-    moved = {f"gsql/temporal/{Path(name).name}": text for name, text in current.items()}
+    moved = {f"temporal/{Path(name).name}": text for name, text in current.items()}
     assert data_manifest.changed_query_files({"source": {"query_hashes": moved}}) == []
     # A changed or missing text is reported under the file's current path.
     changed = dict(current)
-    changed["gsql/queries/hub_accounts.gsql"] = "0" * 64
+    changed["queries/hub_accounts.gsql"] = "0" * 64
     assert data_manifest.changed_query_files({"source": {"query_hashes": changed}}) == [
-        "gsql/queries/hub_accounts.gsql"
+        "queries/hub_accounts.gsql"
     ]
-    missing = {k: v for k, v in current.items() if k != "gsql/queries/split_cutoffs.gsql"}
+    missing = {k: v for k, v in current.items() if k != "queries/split_cutoffs.gsql"}
     assert data_manifest.changed_query_files({"source": {"query_hashes": missing}}) == [
-        "gsql/queries/split_cutoffs.gsql"
+        "queries/split_cutoffs.gsql"
     ]
     assert data_manifest.changed_query_files({}) == sorted(current)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from ..paths import REPOSITORY_ROOT
+from ..paths import GSQL_DIR
 
 
 def normalized(source: str) -> str:
@@ -56,9 +56,9 @@ def parameter_names(definition: str) -> set[str]:
 
 
 def repository_queries(files: tuple[str, ...]) -> dict[str, tuple[str, str]]:
-    """Query name -> (repository file, definition text), in file order."""
+    """Query name -> (GSQL file, definition text), in file order; files are under GSQL_DIR."""
     result: dict[str, tuple[str, str]] = {}
     for path in files:
-        for name, text in definitions((REPOSITORY_ROOT / path).read_text()).items():
+        for name, text in definitions((GSQL_DIR / path).read_text()).items():
             result[name] = (path, text)
     return result

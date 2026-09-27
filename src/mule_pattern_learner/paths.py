@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+# The GSQL files; the package names each one by its path relative to this folder.
+GSQL_DIR = REPOSITORY_ROOT / "gsql"
 DEFAULT_MODEL = REPOSITORY_ROOT / "models/temporal/model.pt"
 
 

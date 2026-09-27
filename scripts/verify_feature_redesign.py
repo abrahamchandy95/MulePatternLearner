@@ -18,7 +18,9 @@ from mule_pattern_learner.config import DEFAULT_CONFIG
 from mule_pattern_learner.contract.feature_groups import FEATURE_GROUPS, FeaturePlan
 from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.contract.sampler_plan import PoolPlan, SamplerPlan
+from mule_pattern_learner.contract.server import CONTEXT_QUERY_FILE
 from mule_pattern_learner.data.splits import resolve_cutoff
+from mule_pattern_learner.paths import GSQL_DIR
 from mule_pattern_learner.pipeline.connect import connect
 from mule_pattern_learner.reference.gsql_features import payment_features, stratify, visible_history
 from mule_pattern_learner.tigergraph.context_query import validate_context
@@ -123,7 +125,7 @@ def main() -> None:
         started = time.perf_counter()
         if args.interpreted:
             # The repository text runs under INTERPRET with only its header swapped.
-            query = as_interpreted(Path("gsql/queries/training_context.gsql").read_text())
+            query = as_interpreted((GSQL_DIR / CONTEXT_QUERY_FILE).read_text())
             row = checked_rows(executor.client.conn.runInterpretedQuery(query, params))[0]
         else:
             row = checked_rows(executor.run(args.query_name, params))[0]

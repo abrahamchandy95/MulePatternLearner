@@ -26,7 +26,8 @@ from mule_pattern_learner.contract.bounds import REQUEST_KEYS
 from mule_pattern_learner.contract.feature_groups import FeaturePlan, extraction_plan
 from mule_pattern_learner.contract.graph_schema import RELATIONS, ContextKey
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
-from mule_pattern_learner.paths import REPOSITORY_ROOT
+from mule_pattern_learner.contract.server import CONTEXT_QUERY_FILE
+from mule_pattern_learner.paths import GSQL_DIR
 from mule_pattern_learner.testing.builders import (
     HUB,
     context,
@@ -46,14 +47,14 @@ PAYMENT_RELATIONS = frozenset(RELATIONS[:4])
 
 
 def signature(path: str, name: str) -> frozenset[str]:
-    """Parameter names of one repository query."""
-    return frozenset(parameter_names(definitions((REPOSITORY_ROOT / path).read_text())[name]))
+    """Parameter names of one repository query; path is relative to GSQL_DIR."""
+    return frozenset(parameter_names(definitions((GSQL_DIR / path).read_text())[name]))
 
 
-CONTEXT_PARAMETERS = signature("gsql/queries/training_context.gsql", CONTEXT_QUERY)
-HUB_PARAMETERS = signature("gsql/queries/hub_accounts.gsql", HUB_QUERY)
-SCOPE_POLICY_PARAMETERS = signature("gsql/queries/training_scope.gsql", SCOPE_POLICY_QUERY)
-POPULATION_PARAMETERS = signature("gsql/queries/training_scope.gsql", POPULATION_QUERY)
+CONTEXT_PARAMETERS = signature(CONTEXT_QUERY_FILE, CONTEXT_QUERY)
+HUB_PARAMETERS = signature("queries/hub_accounts.gsql", HUB_QUERY)
+SCOPE_POLICY_PARAMETERS = signature("queries/training_scope.gsql", SCOPE_POLICY_QUERY)
+POPULATION_PARAMETERS = signature("queries/training_scope.gsql", POPULATION_QUERY)
 
 
 def pooled(messages: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:

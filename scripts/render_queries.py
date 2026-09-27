@@ -1,9 +1,10 @@
 """Regenerate gsql/queries/training_context.gsql after editing its shared contract."""
 
 import argparse
-from pathlib import Path
 import sys
 
+from mule_pattern_learner.contract.server import CONTEXT_QUERY_FILE
+from mule_pattern_learner.paths import GSQL_DIR
 from mule_pattern_learner.tigergraph.render import render_context_query
 
 
@@ -15,7 +16,7 @@ def main() -> int:
         help="Only compare the rendered text with the file; exit 1 when it differs",
     )
     args = parser.parse_args()
-    path = Path(__file__).resolve().parents[1] / "gsql/queries/training_context.gsql"
+    path = GSQL_DIR / CONTEXT_QUERY_FILE
     text = render_context_query()
     if args.check:
         same = path.read_text() == text
