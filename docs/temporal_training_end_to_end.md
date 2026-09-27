@@ -624,7 +624,7 @@ instance, shrink the child pool, or move to the future work listed below.
    pypi.nvidia.com):
 
    ```bash
-   pip install -e '.[model,dev,cuda12]' --extra-index-url=https://pypi.nvidia.com
+   pip install -e '.[dev,cuda12]' --extra-index-url=https://pypi.nvidia.com
    ```
 
    For CUDA 13, use the cu130 torch wheel and the `cuda13` extra, which is on pypi.org:
@@ -634,7 +634,7 @@ instance, shrink the child pool, or move to the future work listed below.
    ```
 
    ```bash
-   pip install -e '.[model,dev,cuda13]'
+   pip install -e '.[dev,cuda13]'
    ```
 
 3. **Copy `.env`** (`HOST`, `GRAPHNAME`, `SECRET`). Nothing else is copied: settings are

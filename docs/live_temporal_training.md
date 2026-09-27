@@ -419,7 +419,7 @@ replaces the former `rejected_by_status`.
 
 ## Commands
 
-Install dependencies with `pip install -e '.[all]'` (Python 3.12 or newer) and
+Install dependencies with `pip install -e '.[dev]'` (Python 3.12 or newer) and
 supply the TigerGraph connection in the repository `.env`; environment variables
 override it. That is the only input: the settings are built in (`DEFAULT_RUN` in
 `config_schema.py`), and an optional `--config overrides.toml` changes only the
@@ -529,9 +529,9 @@ machine and device built the same first batch and step:
 ```
 
 On a CUDA host, install the GPU sampler with the extra that matches the CUDA major
-version of the torch wheel: `pip install -e '.[all,cuda12]'
+version of the torch wheel: `pip install -e '.[dev,cuda12]'
 --extra-index-url=https://pypi.nvidia.com` (pylibcugraph-cu12 from pypi.nvidia.com, with
-torch cu129) or `pip install -e '.[all,cuda13]'`
+torch cu129) or `pip install -e '.[dev,cuda13]'`
 (pylibcugraph-cu13 from pypi.org, with torch 2.13 or newer on cu130/cu132). Then
 check it before relying on `backend = "auto"`:
 

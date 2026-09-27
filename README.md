@@ -29,10 +29,10 @@ You need a working TigerGraph instance whose graph `Mule_Pattern_Learner` follow
 Python 3.12 or newer.
 
 ```bash
-pip install -e ".[model]"        # training
-pip install -e ".[all]"          # training and dev tools
-pip install -e ".[all,cuda12]" --extra-index-url=https://pypi.nvidia.com  # CUDA 12 hosts
-pip install -e ".[all,cuda13]"   # CUDA 13 hosts (install the matching CUDA torch wheel first)
+pip install -e .                 # training
+pip install -e ".[dev]"          # training and dev tools
+pip install -e ".[dev,cuda12]" --extra-index-url=https://pypi.nvidia.com  # CUDA 12 hosts
+pip install -e ".[dev,cuda13]"   # CUDA 13 hosts (install the matching CUDA torch wheel first)
 ```
 
 Install in editable mode: the commands read `gsql/` from the repository.
@@ -105,11 +105,14 @@ The other commands (`install`, `prepare`, `score`, `score-new`, `evaluate` and
 .venv/bin/python scripts/temporal/render_training_queries.py --check
 ```
 
-The tests never connect to TigerGraph. The scripts in `scripts/temporal/` install
-schema additions and run live checks against the graph; each prints its purpose with
-`--help` without connecting. The verification scripts that record a report write it
-under `artifacts/temporal/` (git-ignored); `--output` chooses another path. The one-time
-schema installers keep their preflight backup next to their documentation in `docs/`.
+The tests never connect to TigerGraph. Tests marked `cuda` need a GPU and are deselected
+by default; run them on a CUDA host with `.venv/bin/python -m pytest tests -m cuda`.
+
+The scripts in `scripts/temporal/` install schema additions and run live checks against
+the graph; each prints its purpose with `--help` without connecting. The verification
+scripts that record a report write it under `artifacts/temporal/` (git-ignored);
+`--output` chooses another path. The one-time schema installers keep their preflight
+backup next to their documentation in `docs/`.
 
 ## License
 

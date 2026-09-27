@@ -1421,6 +1421,7 @@ def _gpu_ready() -> bool:
     return True
 
 
+@pytest.mark.cuda
 @pytest.mark.skipif(not _gpu_ready(), reason="needs CUDA, cupy and pylibcugraph>=26.4")
 def test_real_cugraph_matches_torch_caps_on_gpu() -> None:
     keys, rows = _table({"zelle_out": 9, "zelle_in": 3, "Account_Owned_By_Party": 3}, contexts=64)
@@ -1456,6 +1457,7 @@ def test_real_cugraph_matches_torch_caps_on_gpu() -> None:
         assert ((a >= 0).sum(1) == 7).all()
 
 
+@pytest.mark.cuda
 @pytest.mark.skipif(not _gpu_ready(), reason="needs CUDA, cupy and pylibcugraph>=26.4")
 def test_real_cugraph_handles_seeds_without_edges_on_gpu() -> None:
     # The shape of a hop-2 table: empty and association-only contexts between others.
