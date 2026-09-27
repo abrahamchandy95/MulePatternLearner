@@ -16,8 +16,9 @@ import numpy as np
 import torch
 from torch import nn
 
-from .config_schema import fanouts
-from .contract import FeaturePlan, RELATIONS, RAILS, CHANNELS, STRATA
+from ...config import fanouts
+from ...contract.feature_groups import FeaturePlan
+from ...contract.graph_schema import CHANNELS, RAILS, RELATIONS, STRATA
 
 
 class AttentionBlock(nn.Module):

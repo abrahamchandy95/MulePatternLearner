@@ -13,7 +13,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 def load_config(path: Path) -> dict[str, Any]:
     """Read a TOML or JSON table as written, without any schema.
 
-    Live training reads override files through config_schema.run_config, which
+    Training reads override files through config.run_config, which
     merges them into the built-in settings and validates the result.
     """
     if path.suffix.lower() == ".toml":

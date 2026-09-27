@@ -3,8 +3,8 @@ from contextlib import contextmanager
 import threading
 from typing import Any, cast, override
 
-import requests
 from pyTigerGraph import TigerGraphConnection
+import requests
 
 from mule_pattern_learner.tigergraph.settings import Settings
 

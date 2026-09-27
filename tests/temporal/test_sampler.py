@@ -14,39 +14,41 @@ import warnings
 
 import numpy as np
 import pytest
+from temporal_fakes import encode
 import torch
 
-from mule_pattern_learner.temporal.encoding import fourier64, fourier64_torch
+from mule_pattern_learner.batching.time_encoding import fourier64_torch
+from mule_pattern_learner.config import run_config
+from mule_pattern_learner.contract.feature_groups import (
+    BUILT_IN_GROUPS,
+    CLIENT_GROUPS,
+    DEFAULT_GROUPS,
+    FEATURE_GROUPS,
+    POOL_GROUPS,
+    FeaturePlan,
+)
+from mule_pattern_learner.contract.fingerprints import fingerprint
+from mule_pattern_learner.contract.graph_schema import (
+    ASSOCIATIONS,
+    CHANNELS,
+    RAILS,
+    RELATIONS,
+    STRATA,
+    ContextKey,
+)
+from mule_pattern_learner.contract.sampler_plan import SELECTION_KEYS_VERSION, PoolPlan, SamplerPlan
+from mule_pattern_learner.contract.server import CONTRACT_VERSION
+from mule_pattern_learner.contract.time_basis import fourier64
 from mule_pattern_learner.temporal.live import batching
+from mule_pattern_learner.temporal.live import sampler as sampling
 from mule_pattern_learner.temporal.live.batch_reference import (
     base_features,
     edge_features,
     node_features,
 )
 from mule_pattern_learner.temporal.live.batching import child_key, make_live_batch
-from mule_pattern_learner.temporal.live.contract import (
-    ASSOCIATIONS,
-    CHANNELS,
-    CLIENT_GROUPS,
-    CONTRACT_VERSION,
-    DEFAULT_GROUPS,
-    BUILT_IN_GROUPS,
-    FEATURE_GROUPS,
-    POOL_GROUPS,
-    RAILS,
-    RELATIONS,
-    SELECTION_KEYS_VERSION,
-    STRATA,
-    ContextKey,
-    FeaturePlan,
-    PoolPlan,
-    SamplerPlan,
-    fingerprint,
-)
-from mule_pattern_learner.temporal.live.config_schema import run_config
 from mule_pattern_learner.temporal.live.memory import BatchCapacityError, BatchIndex, BatchLimits
 from mule_pattern_learner.temporal.live.model import LiveTGAT
-from mule_pattern_learner.temporal.live import sampler as sampling
 from mule_pattern_learner.temporal.live.sampler import (
     CandidateTable,
     CuGraphProbe,
@@ -59,7 +61,6 @@ from mule_pattern_learner.temporal.live.sampler import (
     selection_keys,
     splitmix64,
 )
-from temporal_fakes import encode
 
 MPS = torch.backends.mps.is_available()
 MS_PER_SEQ = 3_600_000  # synthetic clocks: one event sequence number per hour

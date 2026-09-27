@@ -6,20 +6,16 @@ from typing import Any
 
 import numpy as np
 import pytest
+from temporal_fakes import reveal_inputs
 
-from mule_pattern_learner.temporal.common import timestamp
+from mule_pattern_learner.config import DEFAULT_RUN, run_config, validate_config
+from mule_pattern_learner.contract.clock import timestamp
 from mule_pattern_learner.temporal.live import labels, reveal_model
-from mule_pattern_learner.temporal.live.config_schema import (
-    DEFAULT_RUN,
-    run_config,
-    validate_config,
-)
 from mule_pattern_learner.temporal.live.installation import (
     TRAINING_QUERY_FILES,
     definitions,
     repository_queries,
 )
-from temporal_fakes import reveal_inputs
 
 ROOT = Path(__file__).resolve().parents[2]
 REVEAL_FILE = ROOT / "gsql/temporal/label_reveal.gsql"

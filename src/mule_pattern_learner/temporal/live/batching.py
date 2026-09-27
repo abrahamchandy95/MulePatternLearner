@@ -19,9 +19,8 @@ from typing import TYPE_CHECKING, Any, Protocol
 import numpy as np
 import torch
 
-from ..encoding import fourier64_torch
-from .contract import (
-    CHANNELS,
+from ...batching.time_encoding import fourier64_torch
+from ...contract.feature_groups import (
     CLIENT_GROUPS,
     FEATURE_GROUPS,
     FIRST_INFLOW_BANDS,
@@ -30,13 +29,10 @@ from .contract import (
     POOL_ACTIVITY_FEATURES,
     POOL_GROUPS,
     POOL_INTERNAL_FEATURES,
-    RAILS,
-    RELATIONS,
-    STRATA,
-    ContextKey,
     FeaturePlan,
-    SamplerPlan,
 )
+from ...contract.graph_schema import CHANNELS, RAILS, RELATIONS, STRATA, ContextKey
+from ...contract.sampler_plan import SamplerPlan
 from .memory import BatchIndex, BatchLimits
 from .sampler import CandidateTable, resolve_backend, select_resampled
 

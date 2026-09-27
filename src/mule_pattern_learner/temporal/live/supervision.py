@@ -12,8 +12,8 @@ from typing import Protocol
 import numpy as np
 import pandas as pd
 
-from ..common import timestamp
-from .contract import SPLITS
+from ...contract.clock import timestamp
+from ...contract.graph_schema import SPLITS
 
 LABEL_COLUMNS = ("account_id", "known_positive", "known_from_ms")
 # Ground-truth fields that must never reach training metadata or observed labels.

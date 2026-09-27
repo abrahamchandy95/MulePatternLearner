@@ -11,13 +11,6 @@ from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
-
-from mule_pattern_learner.temporal.live import labels, reveal_model
-from mule_pattern_learner.temporal.live.config_schema import run_config
-from mule_pattern_learner.temporal.live.contract import FeaturePlan, SamplerPlan, extraction_plan
-from mule_pattern_learner.temporal.live.dataset import prepare
-from mule_pattern_learner.temporal.live.experiments import feature_experiments
-from mule_pattern_learner.temporal.live.source import StreamingContextSource, check_coverage
 from temporal_fakes import (
     REPOSITORY,
     FakeExecutor,
@@ -28,6 +21,14 @@ from temporal_fakes import (
     scoped_accounts,
     supplied_labels,
 )
+
+from mule_pattern_learner.config import run_config
+from mule_pattern_learner.contract.feature_groups import FeaturePlan, extraction_plan
+from mule_pattern_learner.contract.sampler_plan import SamplerPlan
+from mule_pattern_learner.temporal.live import labels, reveal_model
+from mule_pattern_learner.temporal.live.dataset import prepare
+from mule_pattern_learner.temporal.live.experiments import feature_experiments
+from mule_pattern_learner.temporal.live.source import StreamingContextSource, check_coverage
 
 SCRIPTS = REPOSITORY / "scripts/temporal"
 # Every script that talks to the live path; each must parse --help before connecting.

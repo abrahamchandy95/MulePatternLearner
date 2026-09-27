@@ -12,7 +12,7 @@ import threading
 import time
 from typing import TYPE_CHECKING, Any, Protocol, TypeVar
 
-from .config_schema import TRANSPORT_DEFAULTS
+from ...config import TRANSPORT_DEFAULTS
 
 if TYPE_CHECKING:
     from pyTigerGraph import TigerGraphConnection
@@ -106,8 +106,8 @@ def failure_class(error: BaseException) -> str | None:
       nor an HTML page, and query out-of-memory.
     Contract and validation errors (ValueError and the like) are permanent.
     """
-    import requests
     from pyTigerGraph.common.exception import TigerGraphException
+    import requests
 
     if isinstance(error, ServerTimeoutError):
         return SERVER_TIMEOUT

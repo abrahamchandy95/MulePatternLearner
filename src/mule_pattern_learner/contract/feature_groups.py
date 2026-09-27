@@ -1,40 +1,26 @@
-"""Shared feature, relation and query contracts for the live temporal pipeline."""
+"""The feature groups the context query and the batches share, and the feature plan.
+
+Every group lives in FEATURE_GROUPS, in the order that fixes column order. The pool
+groups are computed by the client from the context's candidate pool; the others come
+from TigerGraph.
+"""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import asdict, dataclass, replace
-import hashlib
-import json
-import operator
+from dataclasses import dataclass
 from typing import Any
 
-from ..encoding import BASIS_ID
+from .fingerprints import fingerprint
+from .graph_schema import ASSOCIATIONS, CHANNELS, NODE_TYPES, RAILS, RELATIONS
+from .server import CONTRACT_VERSION
+from .time_basis import BASIS_ID
 
-CONTRACT_VERSION = "temporal_live_v5_candidate_pools"
-NODE_TYPES = ("Account", "Token", "Party", "Device", "IP", "Address")
 WINDOWS = {"1h": 3_600_000, "1d": 86_400_000, "7d": 604_800_000, "30d": 2_592_000_000}
 AMOUNT_RATIO_WINDOWS = ("1d", "7d")
 AMOUNT_RATIO_FLOOR = 1.0
 AMOUNT_RATIO_CAP = 100.0
 AMOUNT_RATIO_FEATURES = tuple(f"{window}_out_in_amount_ratio" for window in AMOUNT_RATIO_WINDOWS)
-ASSOCIATIONS = (
-    ("Party_Owns_Account", "Account_Owned_By_Party"),
-    ("Party_Uses_Token", "Token_Used_By_Party"),
-    ("Token_Bound_To_Account", "Account_Bound_From_Token"),
-    ("Party_Uses_Device", "Device_Used_By_Party"),
-    ("Account_Uses_Device", "Device_Used_By_Account"),
-    ("Party_Uses_IP", "IP_Used_By_Party"),
-    ("Party_Has_Address", "Address_Used_By_Party"),
-)
-RELATIONS = ("zelle_out", "zelle_in", "payment_out", "payment_in") + tuple(
-    name for pair in ASSOCIATIONS for name in pair
-)
-RAILS = ("unknown", "zelle", "ach", "card", "cash", "check", "internal")
-# The scope visibility phase of each split; unscoped contexts use phase 3.
-SPLIT_PHASE = {"train": 1, "validation": 2, "test": 3}
-SPLITS = tuple(SPLIT_PHASE)
-PHASE_SPLIT = {phase: split for split, phase in SPLIT_PHASE.items()}
 ROLLING_FIELDS = (
     "out_count",
     "in_count",
@@ -57,43 +43,6 @@ CONTRACT_FEATURES = (
     + tuple(f"{r}_{state}" for pair in ASSOCIATIONS for r in pair for state in ("active", "ended"))
     + AMOUNT_RATIO_FEATURES
 )
-
-
-@dataclass(frozen=True, order=True)
-class ContextKey:
-    """History is seq < cutoff_seq AND timestamp <= cutoff_ms.
-
-    Association visibility uses seed_seq=cutoff_seq-1. A calendar cutoff is
-    converted to the preceding millisecond before its sequence is resolved.
-    """
-
-    node_type: str
-    node_id: str
-    cutoff_seq: int
-    cutoff_ms: int
-    scope_id: str = ""
-    visibility_phase: int = 3
-
-    def __post_init__(self) -> None:
-        if len(self.node_id.encode()) > 1024 or len(self.scope_id.encode()) > 256:
-            raise ValueError("Entity/scope ID exceeds the transport limit")
-        if self.visibility_phase not in PHASE_SPLIT:
-            raise ValueError("Visibility phase must be train=1, validation=2 or test=3")
-        if self.node_type not in NODE_TYPES or not self.node_id:
-            raise ValueError("Unsupported or empty entity")
-        if not 0 < self.cutoff_seq < 2**63 or not 0 < self.cutoff_ms < 2**63:
-            raise ValueError("Cutoff clocks must be positive signed-64-bit values")
-
-    @property
-    def batch_phase(self) -> int:
-        """The phase of a batch of this root: its own when scoped, 3 when unscoped."""
-        return self.visibility_phase if self.scope_id else 3
-
-
-def fingerprint(value: object) -> str:
-    return hashlib.sha256(
-        json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
 
 
 def contract_fingerprint() -> str:
@@ -128,22 +77,6 @@ def pool_definition(groups: Sequence[str]) -> dict[str, Any]:
     }
 
 
-# Unknown categorical values have a dedicated bucket, never an observed category.
-# Live data only carries digital, branch_or_atm, bank and unknown, 1:1 with rail.
-CHANNELS = (
-    "unknown",
-    "digital",
-    "branch_or_atm",
-    "bank",
-    "p2p",
-    "atm_withdrawal",
-    "card_purchase",
-    "online",
-    "mobile",
-    "branch",
-    "other",
-)
-STRATA = ("recent", "older", "distinct", "association")
 HALF_LIVES = {"1d": 86_400_000, "7d": 604_800_000, "30d": 2_592_000_000, "90d": 7_776_000_000}
 # The pool groups: counts over the payment messages of the context's own candidate pool
 # (at most `recent + older + distinct` per relation), not over the account's whole
@@ -277,7 +210,7 @@ DEFAULT_GROUPS = (
     "pair_history",
     "flow_timing",
 )
-# The groups of the built-in run (config_schema.DEFAULT_RUN): the defaults plus the pool
+# The groups of the built-in run (config.DEFAULT_RUN): the defaults plus the pool
 # groups.
 BUILT_IN_GROUPS = (*DEFAULT_GROUPS, *POOL_GROUPS)
 # Columns follow registry order. Before the layered restructure a fixed list placed the
@@ -366,211 +299,6 @@ class FeaturePlan:
         """feature_groups and architecture, each the built-in run's when absent."""
         groups = tuple(config.get("feature_groups", BUILT_IN_GROUPS))
         return cls(groups, config.get("architecture", "split"))
-
-
-POOL_KEYS = ("recent", "older", "distinct", "associations", "max_history")
-SAMPLER_BACKENDS = ("auto", "cugraph", "torch")
-# The keys of a [sampler] table besides the roots pool and [sampler.children].
-SAMPLER_KEYS = (
-    "relation_fanouts",
-    "association_fanout",
-    "association_slots",
-    "backend",
-    "evaluation_seed",
-)
-# Version of the resample key scheme (sampler.selection_keys), part of the fingerprint.
-# 2: evaluation keys mix the hop in (hop 1 unchanged, hop 2 an independent stream).
-SELECTION_KEYS_VERSION = 2
-
-
-def _bounded(owner: str, name: str, value: object, low: int, high: int) -> int:
-    try:
-        number = operator.index(value)  # type: ignore[arg-type]
-    except TypeError:
-        number = None
-    if isinstance(value, bool) or number is None or not low <= number <= high:
-        raise ValueError(f"{owner} {name} must be an integer in [{low},{high}], got {value!r}")
-    return number
-
-
-@dataclass(frozen=True)
-class PoolPlan:
-    """Bounded, cutoff-safe candidate pool that TigerGraph returns per context and hop.
-
-    Per payment relation: the `recent` most recent visible events, `older` rank
-    quantiles and `distinct` events with new peers. Per association relation:
-    `associations` valid-time associations. A context whose visible history in one
-    relation exceeds `max_history` is rejected (history_capacity_exceeded).
-    """
-
-    recent: int = 2
-    older: int = 0
-    distinct: int = 0
-    associations: int = 2
-    max_history: int = 2048
-
-    def __post_init__(self) -> None:
-        for name, low, high in (
-            ("recent", 1, 32),
-            ("older", 0, 16),
-            ("distinct", 0, 16),
-            ("associations", 0, 8),
-            ("max_history", 32, 4096),
-        ):
-            object.__setattr__(self, name, _bounded("Pool", name, getattr(self, name), low, high))
-
-    @property
-    def response_bound(self) -> int:
-        """Maximum messages in one context: 4 payment and 14 association relations."""
-        return 4 * (self.recent + self.older + self.distinct) + 14 * self.associations
-
-    def query_params(self) -> dict[str, int]:
-        return {
-            "per_relation": self.recent,
-            "k_old": self.older,
-            "k_div": self.distinct,
-            "k_assoc": self.associations,
-            "max_history": self.max_history,
-        }
-
-
-def _default_children(roots: PoolPlan) -> PoolPlan:
-    # The resampled second hop is payments-only, so children skip association candidates.
-    return replace(roots, associations=0)
-
-
-@dataclass(frozen=True, init=False)
-class SamplerPlan:
-    """Candidate pools per hop plus the client-side neighbour resampling.
-
-    TigerGraph returns each context's candidate pool (`PoolPlan`, one per hop). The
-    client draws, per context and relation, at most `relation_fanouts[hop-1]` payment
-    candidates (`association_fanout` per association relation at hop 1) uniformly
-    without replacement, then merges them into the fanout slots with at most
-    `association_slots` of them associations. Hop 2 is payments-only, so the children
-    pool defaults to the roots pool without associations.
-    """
-
-    roots: PoolPlan
-    children: PoolPlan
-    relation_fanouts: tuple[int, int]
-    association_fanout: int
-    association_slots: int
-    backend: str
-    evaluation_seed: int
-
-    def __init__(
-        self,
-        *,
-        roots: PoolPlan | None = None,
-        children: PoolPlan | None = None,
-        relation_fanouts: Sequence[int] = (8, 4),
-        association_fanout: int = 1,
-        association_slots: int = 2,
-        backend: str = "auto",
-        evaluation_seed: int = 0,
-    ) -> None:
-        roots = roots if roots is not None else PoolPlan()
-        fanouts = tuple(relation_fanouts)
-        if len(fanouts) != 2:
-            raise ValueError("Sampler relation_fanouts must have one value per hop")
-        if backend not in SAMPLER_BACKENDS:
-            raise ValueError(f"Sampler backend must be one of {SAMPLER_BACKENDS}")
-        values = {
-            "roots": roots,
-            "children": children if children is not None else _default_children(roots),
-            "relation_fanouts": tuple(
-                _bounded("Sampler", "relation_fanouts", v, 1, 64) for v in fanouts
-            ),
-            "association_fanout": _bounded(
-                "Sampler", "association_fanout", association_fanout, 0, 8
-            ),
-            "association_slots": _bounded("Sampler", "association_slots", association_slots, 0, 16),
-            "backend": backend,
-            "evaluation_seed": _bounded(
-                "Sampler", "evaluation_seed", evaluation_seed, 0, 2**63 - 1
-            ),
-        }
-        for name, value in values.items():
-            object.__setattr__(self, name, value)
-
-    def pool(self, hop: int) -> PoolPlan:
-        if hop == 1:
-            return self.roots
-        if hop == 2:
-            return self.children
-        raise ValueError("Hop must be 1 or 2")
-
-    def query_params(self, hop: int = 1) -> dict[str, int]:
-        return self.pool(hop).query_params()
-
-    def response_bound(self, hop: int = 1) -> int:
-        """Maximum messages in one context at this hop."""
-        return self.pool(hop).response_bound
-
-    def to_config(self) -> dict[str, Any]:
-        """The `[sampler]` table that `from_config` maps back to this plan."""
-        values: dict[str, Any] = asdict(self.roots)
-        if self.children != _default_children(self.roots):
-            values["children"] = asdict(self.children)
-        values |= {
-            "association_slots": self.association_slots,
-            "relation_fanouts": list(self.relation_fanouts),
-            "association_fanout": self.association_fanout,
-            "backend": self.backend,
-            "evaluation_seed": self.evaluation_seed,
-        }
-        return values
-
-    def fingerprint(self) -> str:
-        """Selection semantics for manifest checks; the execution backend is excluded.
-
-        It includes `selection_keys` (SELECTION_KEYS_VERSION), so manifests and
-        checkpoints drawn with an older key scheme are not treated as comparable. The
-        value keeps the policy name it had while other policies existed, so recorded
-        fingerprints still compare equal.
-        """
-        value = self.to_config()
-        value.pop("backend")
-        value["children"] = asdict(self.children)
-        value["policy"] = "resample"
-        value["selection_keys"] = SELECTION_KEYS_VERSION
-        return fingerprint(value)
-
-    def pool_fingerprint(self) -> str:
-        """Only what TigerGraph is asked for (preparation and cache identity)."""
-        return fingerprint({"roots": self.query_params(1), "children": self.query_params(2)})
-
-    @classmethod
-    def from_config(cls, config: dict[str, Any]) -> SamplerPlan:
-        """Flat `[sampler]` pool keys describe roots; `[sampler.children]` overrides them.
-
-        Configurations saved while other policies existed name this one, `policy =
-        "resample"`; any other policy is refused.
-        """
-        values = dict(config.get("sampler") or {})
-        children_values = values.pop("children", None)
-        policy = values.pop("policy", "resample")
-        if policy != "resample":
-            raise ValueError(f"Unknown history sampler {policy!r}: only resample remains")
-        unknown = sorted(set(values) - set(POOL_KEYS) - set(SAMPLER_KEYS))
-        if unknown:
-            raise ValueError(f"Unknown [sampler] key(s): {', '.join(unknown)}")
-        roots = PoolPlan(**{k: values.pop(k) for k in POOL_KEYS if k in values})
-        children = None
-        if children_values is not None:
-            if not isinstance(children_values, dict):
-                raise ValueError("[sampler.children] must be a table of pool keys")
-            unknown = sorted(set(children_values) - set(POOL_KEYS))
-            if unknown:
-                raise ValueError(f"Unknown [sampler.children] key(s): {', '.join(unknown)}")
-            children = replace(_default_children(roots), **children_values)
-        return cls(roots=roots, children=children, **values)
-
-
-def sampler_pools(sampler: SamplerPlan) -> dict[str, dict[str, Any]]:
-    """The query-relevant part of a sampler: what TigerGraph returns per hop."""
-    return {"roots": sampler.query_params(1), "children": sampler.query_params(2)}
 
 
 def extraction_plan(config: dict[str, Any]) -> FeaturePlan:

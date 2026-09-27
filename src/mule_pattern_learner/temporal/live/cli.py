@@ -18,8 +18,8 @@ import json  # noqa: E402
 from pathlib import Path  # noqa: E402
 from typing import Any  # noqa: E402
 
+from ...config import run_config  # noqa: E402
 from .checkpoint import ModelCheckpoint  # noqa: E402
-from .config_schema import run_config  # noqa: E402
 from .evaluation import (  # noqa: E402
     GraphEvaluationTruth,
     ParquetEvaluationTruth,

@@ -16,8 +16,8 @@ import json
 
 import numpy as np
 
-from mule_pattern_learner.temporal.live.config_schema import run_config
-from mule_pattern_learner.temporal.live.contract import PHASE_SPLIT
+from mule_pattern_learner.config import run_config
+from mule_pattern_learner.contract.graph_schema import PHASE_SPLIT
 from mule_pattern_learner.temporal.live.executor import TigerGraphExecutor
 from mule_pattern_learner.temporal.live.labels import reveal_parameters
 from mule_pattern_learner.temporal.live.reveal_model import INPUTS_QUERY, counts_by_split, plan

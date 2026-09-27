@@ -1,4 +1,4 @@
-"""Schema for live temporal training configuration files.
+"""Schema for training configuration files.
 
 `validate_config` rejects unknown or mistyped keys before any database work. A key
 the configuration leaves absent takes its DEFAULT_RUN value (the built-in run) or its
@@ -19,7 +19,7 @@ from typing import Annotated, Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from .contract import BUILT_IN_GROUPS, FEATURE_GROUPS
+from .contract.feature_groups import BUILT_IN_GROUPS, FEATURE_GROUPS
 
 TRANSPORT_DEFAULTS: dict[str, int] = {
     # Measured on the live graph: 8 contexts per request, 16 in parallel built a 64-root
@@ -390,7 +390,7 @@ def run_config(path: Path | None = None) -> dict[str, Any]:
     """
     config = copy.deepcopy(DEFAULT_RUN)
     if path is not None:
-        from mule_pattern_learner.configuration import load_config
+        from .paths import load_config
 
         config = merged(config, load_config(path))
     return validate_config(config)

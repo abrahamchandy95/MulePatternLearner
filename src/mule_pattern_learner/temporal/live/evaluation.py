@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 import pandas as pd
 
-from ..common import cutoff_ms
-from ..metrics import evaluate
+from ...contract.clock import cutoff_ms
+from ...metrics import evaluate
 from .checkpoint import ModelCheckpoint
 
 if TYPE_CHECKING:
@@ -235,7 +235,7 @@ def evaluate_final_population(
     """
     import json
 
-    from .contract import SPLIT_PHASE
+    from ...contract.graph_schema import SPLIT_PHASE
     from .dataset import MANIFEST, load_prepared, sample_keys
     from .executor import account_pages, live_executor
     from .hubs import load_hub_registry

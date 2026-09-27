@@ -13,7 +13,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from .contract import PHASE_SPLIT
+from ...contract.graph_schema import PHASE_SPLIT
 from .labels import REVEAL_DEFAULTS, reveal_uniforms
 
 DAY = 86400000.0

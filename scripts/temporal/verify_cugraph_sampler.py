@@ -36,16 +36,17 @@ os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 import argparse
 from collections.abc import Callable
 from dataclasses import replace
+from pathlib import Path
 import platform
 import sys
 import time
-from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
 
-from mule_pattern_learner.temporal.live.contract import RELATIONS, ContextKey, PoolPlan, SamplerPlan
+from mule_pattern_learner.contract.graph_schema import RELATIONS, ContextKey
+from mule_pattern_learner.contract.sampler_plan import PoolPlan, SamplerPlan
 from mule_pattern_learner.temporal.live.sampler import (
     NUM_RELATIONS,
     PAYMENT_RELATIONS,
@@ -285,10 +286,11 @@ def merged_slots(engine: CuGraphSampler, sampler: SamplerPlan, device: str = "cu
 
 
 def live(config_path: Path | None, roots: int) -> None:
-    from mule_pattern_learner.device import torch_runtime
-    from mule_pattern_learner.temporal.live.config_schema import fanouts as configured_fanouts
-    from mule_pattern_learner.temporal.live.config_schema import run_config
-    from mule_pattern_learner.temporal.live.contract import FeaturePlan
+    from mule_pattern_learner.config import fanouts as configured_fanouts
+    from mule_pattern_learner.config import run_config
+    from mule_pattern_learner.contract.feature_groups import FeaturePlan
+    from mule_pattern_learner.runtime.device import torch_runtime
+    from mule_pattern_learner.temporal.live.batching import build_root_batch
     from mule_pattern_learner.temporal.live.dataset import load_prepared, sample_keys
     from mule_pattern_learner.temporal.live.hubs import load_hub_registry
     from mule_pattern_learner.temporal.live.model import build_model
@@ -297,7 +299,6 @@ def live(config_path: Path | None, roots: int) -> None:
         prepare_live,
         prepared_config,
     )
-    from mule_pattern_learner.temporal.live.batching import build_root_batch
     from mule_pattern_learner.temporal.live.source import open_context_source
 
     def make_live_batch(store: Any, keys: Any, **options: Any) -> dict[str, torch.Tensor]:

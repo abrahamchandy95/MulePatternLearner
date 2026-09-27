@@ -18,15 +18,11 @@ import threading
 from typing import Any, Protocol, TypeVar
 import weakref
 
-from .config_schema import TRANSPORT_DEFAULTS
+from ...config import TRANSPORT_DEFAULTS
+from ...contract.feature_groups import FeaturePlan, extraction_plan
+from ...contract.graph_schema import ContextKey
+from ...contract.sampler_plan import SamplerPlan, sampler_pools
 from .context_query import query_context_split
-from .contract import (
-    ContextKey,
-    FeaturePlan,
-    SamplerPlan,
-    extraction_plan,
-    sampler_pools,
-)
 from .executor import QueryExecutor, live_executor, transport_settings
 from .installation import verify_frozen_source
 

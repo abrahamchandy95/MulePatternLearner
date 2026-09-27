@@ -14,8 +14,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ..common import timestamp
-from .contract import SPLIT_PHASE
+from ...contract.clock import timestamp
+from ...contract.graph_schema import SPLIT_PHASE
 from .executor import QueryExecutor, merged_rows
 
 REVEAL_QUERY = "temporal_reveal_mule_labels"

@@ -12,8 +12,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .config_schema import run_config
-from .contract import fingerprint
+from ...config import run_config
+from ...contract.fingerprints import fingerprint
 from .dataset import (
     MANIFEST,
     ROOT,

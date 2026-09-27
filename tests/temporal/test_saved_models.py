@@ -21,25 +21,25 @@ from typing import Any
 
 import pandas as pd
 import pytest
+from temporal_fakes import FakeExecutor, neighbourhood
 
-from mule_pattern_learner.temporal.common import cutoff_ms
-from mule_pattern_learner.temporal.live import pipeline
-from mule_pattern_learner.temporal.live.checkpoint import ModelCheckpoint
-from mule_pattern_learner.temporal.live.config_schema import run_config, validate_config
-from mule_pattern_learner.temporal.live.contract import (
+from mule_pattern_learner.config import run_config, validate_config
+from mule_pattern_learner.contract.clock import cutoff_ms
+from mule_pattern_learner.contract.feature_groups import (
     DEFAULT_GROUPS,
-    ContextKey,
     FeaturePlan,
-    SamplerPlan,
     contract_fingerprint,
     extraction_plan,
-    fingerprint,
 )
+from mule_pattern_learner.contract.fingerprints import fingerprint
+from mule_pattern_learner.contract.graph_schema import ContextKey
+from mule_pattern_learner.contract.sampler_plan import SamplerPlan
+from mule_pattern_learner.temporal.live import pipeline
+from mule_pattern_learner.temporal.live.checkpoint import ModelCheckpoint
 from mule_pattern_learner.temporal.live.inference import score
 from mule_pattern_learner.temporal.live.predictor import TemporalPredictor
 from mule_pattern_learner.temporal.live.source import streaming_source
 from mule_pattern_learner.temporal.live.training import train
-from temporal_fakes import FakeExecutor, neighbourhood
 
 FIXTURES = Path(__file__).parent / "fixtures" / "saved_models"
 RELATIVE = 1e-5

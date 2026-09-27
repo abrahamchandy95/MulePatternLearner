@@ -7,7 +7,7 @@ import re
 
 import pytest
 
-from mule_pattern_learner.temporal.live.contract import (
+from mule_pattern_learner.contract.feature_groups import (
     CLIENT_GROUPS,
     DEFAULT_GROUPS,
     FEATURE_GROUPS,

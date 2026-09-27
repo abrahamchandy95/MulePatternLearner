@@ -18,32 +18,29 @@ from typing import Any, cast
 
 import pandas as pd
 import pytest
-import requests
 from pyTigerGraph.common.exception import TigerGraphException
+import requests
+from temporal_fakes import FrameObservedLabels, encode, request_keys
 
-from mule_pattern_learner.configuration import REPOSITORY_ROOT, load_config
-from mule_pattern_learner.temporal.encoding import BASIS_ID
-from mule_pattern_learner.temporal.live import dataset, installation, pipeline, scope, source
-from mule_pattern_learner.temporal.live.config_schema import (
+from mule_pattern_learner.config import (
     DEFAULT_RUN,
     OPERATIONAL_DEFAULTS,
     LiveConfig,
     run_config,
     validate_config,
 )
+from mule_pattern_learner.contract.feature_groups import DEFAULT_GROUPS, FeaturePlan
+from mule_pattern_learner.contract.graph_schema import ContextKey
+from mule_pattern_learner.contract.sampler_plan import PoolPlan, SamplerPlan
+from mule_pattern_learner.contract.server import CONTRACT_VERSION
+from mule_pattern_learner.contract.time_basis import BASIS_ID
+from mule_pattern_learner.paths import REPOSITORY_ROOT, load_config
+from mule_pattern_learner.temporal.live import dataset, installation, pipeline, scope, source
 from mule_pattern_learner.temporal.live.context_query import (
     ContextTimeoutError,
     query_context_batch,
     query_context_split,
     validate_context,
-)
-from mule_pattern_learner.temporal.live.contract import (
-    CONTRACT_VERSION,
-    DEFAULT_GROUPS,
-    ContextKey,
-    FeaturePlan,
-    PoolPlan,
-    SamplerPlan,
 )
 from mule_pattern_learner.temporal.live.executor import (
     AVAILABILITY,
@@ -67,7 +64,6 @@ from mule_pattern_learner.temporal.live.queries import DEFAULT_FLAG_GROUPS
 from mule_pattern_learner.temporal.live.source import StreamingContextSource
 from mule_pattern_learner.temporal.live.supervision import GraphObservedLabels
 from mule_pattern_learner.tigergraph.client import Client, _status_error, _TimeoutConnection
-from temporal_fakes import FrameObservedLabels, encode, request_keys
 
 PLAN = FeaturePlan(("entity_meta", "message_core", "time_encoding"), "split")
 SAMPLER = SamplerPlan(

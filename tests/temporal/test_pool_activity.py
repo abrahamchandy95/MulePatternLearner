@@ -7,10 +7,23 @@ from typing import Any
 
 import numpy as np
 import pytest
+from temporal_fakes import FakeExecutor, association, context, message
 import torch
 
+from mule_pattern_learner.config import DEFAULT_RUN, run_config
+from mule_pattern_learner.contract import feature_groups
+from mule_pattern_learner.contract.feature_groups import (
+    DEFAULT_GROUPS,
+    POOL_ACTIVITY_FEATURES,
+    POOL_GROUPS,
+    POOL_INTERNAL_FEATURES,
+    FeaturePlan,
+    contract_fingerprint,
+    extraction_plan,
+)
+from mule_pattern_learner.contract.graph_schema import ContextKey
+from mule_pattern_learner.contract.sampler_plan import SamplerPlan
 from mule_pattern_learner.temporal.live import batch_reference, batching
-from mule_pattern_learner.temporal.live import contract as contract_module
 from mule_pattern_learner.temporal.live.batch_reference import node_features
 from mule_pattern_learner.temporal.live.batching import (
     child_key,
@@ -19,23 +32,10 @@ from mule_pattern_learner.temporal.live.batching import (
     pool_activity,
 )
 from mule_pattern_learner.temporal.live.checkpoint import ModelCheckpoint
-from mule_pattern_learner.temporal.live.config_schema import DEFAULT_RUN, run_config
 from mule_pattern_learner.temporal.live.context_query import validate_context
-from mule_pattern_learner.temporal.live.contract import (
-    DEFAULT_GROUPS,
-    POOL_ACTIVITY_FEATURES,
-    POOL_GROUPS,
-    POOL_INTERNAL_FEATURES,
-    ContextKey,
-    FeaturePlan,
-    SamplerPlan,
-    contract_fingerprint,
-    extraction_plan,
-)
 from mule_pattern_learner.temporal.live.dataset import preparation_mismatches, preparation_view
 from mule_pattern_learner.temporal.live.model import LiveTGAT, build_model
 from mule_pattern_learner.temporal.live.source import StreamingContextSource
-from temporal_fakes import FakeExecutor, association, context, message
 
 ROOT = ContextKey("Account", "root", 1000, 100_000_000)
 CONFIG = run_config()
@@ -285,7 +285,7 @@ def test_pool_definitions_are_part_of_the_input_fingerprint_only(
     ]
     for name, value in changes:
         with monkeypatch.context() as patch:
-            patch.setattr(contract_module, name, value)
+            patch.setattr(feature_groups, name, value)
             # Checkpoints and caches of every model keep their contract, and models
             # without a pool group their inputs.
             assert contract_fingerprint() == contract
@@ -295,7 +295,7 @@ def test_pool_definitions_are_part_of_the_input_fingerprint_only(
             assert internal.fingerprint() != first, name
     saved = ModelCheckpoint(Path("model.pt"), {"input_fingerprint": plan})
     saved.check_inputs(PLAN)
-    monkeypatch.setattr(contract_module, "PASS_THROUGH_RATIO", (0.8, 1.0))
+    monkeypatch.setattr(feature_groups, "PASS_THROUGH_RATIO", (0.8, 1.0))
     with pytest.raises(ValueError, match="pool definitions differ"):
         saved.check_inputs(PLAN)
 

@@ -31,12 +31,14 @@ from typing import Any  # noqa: E402
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
 
-from mule_pattern_learner.device import choose_device, torch_runtime  # noqa: E402
+from mule_pattern_learner.config import run_config  # noqa: E402
+from mule_pattern_learner.contract.feature_groups import FeaturePlan  # noqa: E402
+from mule_pattern_learner.contract.sampler_plan import SamplerPlan  # noqa: E402
+from mule_pattern_learner.runtime.device import choose_device, torch_runtime  # noqa: E402
 from mule_pattern_learner.temporal.live.batching import (  # noqa: E402
     build_root_batch,
     tensor_digests,
 )
-from mule_pattern_learner.temporal.live.contract import FeaturePlan, SamplerPlan  # noqa: E402
 from mule_pattern_learner.temporal.live.dataset import (  # noqa: E402
     load_prepared,
     preparation_mismatches,
@@ -45,7 +47,6 @@ from mule_pattern_learner.temporal.live.dataset import (  # noqa: E402
 from mule_pattern_learner.temporal.live.executor import TigerGraphExecutor  # noqa: E402
 from mule_pattern_learner.temporal.live.hubs import load_hub_registry  # noqa: E402
 from mule_pattern_learner.temporal.live.model import build_model  # noqa: E402
-from mule_pattern_learner.temporal.live.config_schema import run_config  # noqa: E402
 from mule_pattern_learner.temporal.live.pipeline import dataset_path, prepared_config  # noqa: E402
 from mule_pattern_learner.temporal.live.sampling import epoch_schedule  # noqa: E402
 from mule_pattern_learner.temporal.live.source import open_context_source  # noqa: E402

@@ -6,32 +6,26 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from temporal_fakes import FakeExecutor, context, message
 import torch
 from torch import nn
 
-from mule_pattern_learner.temporal.encoding import BASIS_ID
-from mule_pattern_learner.temporal.live.batching import make_live_batch
-from mule_pattern_learner.temporal.live.checkpoint import ModelCheckpoint
-from mule_pattern_learner.temporal.live.config_schema import (
-    DEFAULT_RUN,
-    run_config,
-    validate_config,
-)
-from mule_pattern_learner.temporal.live.contract import (
+from mule_pattern_learner.config import DEFAULT_RUN, run_config, validate_config
+from mule_pattern_learner.contract.feature_groups import (
     DEFAULT_GROUPS,
-    RAILS,
-    RELATIONS,
-    ContextKey,
     FeaturePlan,
-    SamplerPlan,
     contract_fingerprint,
     extraction_plan,
 )
+from mule_pattern_learner.contract.graph_schema import RAILS, RELATIONS, ContextKey
+from mule_pattern_learner.contract.sampler_plan import SamplerPlan
+from mule_pattern_learner.contract.time_basis import BASIS_ID
+from mule_pattern_learner.temporal.live.batching import make_live_batch
+from mule_pattern_learner.temporal.live.checkpoint import ModelCheckpoint
 from mule_pattern_learner.temporal.live.experiments import feature_experiments
 from mule_pattern_learner.temporal.live.model import LiveTGAT, build_model
 from mule_pattern_learner.temporal.live.predictor import TemporalPredictor
 from mule_pattern_learner.temporal.live.source import StreamingContextSource
-from temporal_fakes import FakeExecutor, context, message
 
 CONFIG = run_config()
 PLAN = FeaturePlan.from_config(CONFIG)

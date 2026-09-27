@@ -7,9 +7,9 @@ import pandas as pd
 import pytest
 import torch
 
+from mule_pattern_learner.metrics import evaluate
 from mule_pattern_learner.temporal.live.evaluation import evaluate_weighted
 from mule_pattern_learner.temporal.live.model import probabilities_from_logits
-from mule_pattern_learner.temporal.metrics import evaluate
 
 TOP_KEYS = [f"{kind}_at_{pct}pct" for pct in (1, 5, 10) for kind in ("precision", "recall")]
 
