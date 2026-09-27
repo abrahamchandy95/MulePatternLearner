@@ -11,10 +11,11 @@ from mule_pattern_learner.contract.feature_groups import DEFAULT_GROUPS, FEATURE
 from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.contract.sampler_plan import PoolPlan
 from mule_pattern_learner.data.contexts import StreamingContextSource
+from mule_pattern_learner.evaluation.audit import evaluate_weighted
+from mule_pattern_learner.evaluation.sample import final_evaluation_sample
 from mule_pattern_learner.model.tgat import LiveTGAT
-from mule_pattern_learner.temporal.live.batch_reference import node_features
-from mule_pattern_learner.temporal.live.evaluation import evaluate_weighted, final_evaluation_sample
-from mule_pattern_learner.temporal.live.history_reference import payment_features, stratify
+from mule_pattern_learner.reference.batch_features import node_features
+from mule_pattern_learner.reference.gsql_features import payment_features, stratify
 from mule_pattern_learner.tigergraph.render import render_context_query
 
 

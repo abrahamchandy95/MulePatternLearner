@@ -22,11 +22,11 @@ from mule_pattern_learner.contract.graph_schema import RAILS, RELATIONS, Context
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
 from mule_pattern_learner.contract.time_basis import BASIS_ID
 from mule_pattern_learner.data.contexts import StreamingContextSource
+from mule_pattern_learner.experiments.variants import feature_experiments
+from mule_pattern_learner.inference.predictor import TemporalPredictor
+from mule_pattern_learner.inference.saved_model import ModelCheckpoint
 from mule_pattern_learner.model.build import build_model
 from mule_pattern_learner.model.tgat import LiveTGAT
-from mule_pattern_learner.temporal.live.checkpoint import ModelCheckpoint
-from mule_pattern_learner.temporal.live.experiments import feature_experiments
-from mule_pattern_learner.temporal.live.predictor import TemporalPredictor
 
 CONFIG = run_config()
 PLAN = FeaturePlan.from_config(CONFIG)

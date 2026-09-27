@@ -22,7 +22,7 @@ from mule_pattern_learner.data.contexts import StreamingContextSource
 from mule_pattern_learner.data.hub_registry import HUB_COLUMNS, HubRegistry
 from mule_pattern_learner.data.splits import validate_dates
 from mule_pattern_learner.model.tgat import LiveTGAT
-from mule_pattern_learner.temporal.live.batch_reference import node_features
+from mule_pattern_learner.reference.batch_features import node_features
 from mule_pattern_learner.tigergraph.context_query import validate_context
 from mule_pattern_learner.tigergraph.render import render_context_query
 
@@ -287,7 +287,7 @@ def test_feature_arms_and_model_seeds_share_one_preparation() -> None:
 
     from mule_pattern_learner.config import validate_config
     from mule_pattern_learner.data.manifest import preparation_view
-    from mule_pattern_learner.temporal.live.experiments import feature_experiments
+    from mule_pattern_learner.experiments.variants import feature_experiments
 
     base = live_config()
     views = {json_key(preparation_view(arm)) for arm in feature_experiments(base).values()}

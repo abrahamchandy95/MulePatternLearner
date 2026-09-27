@@ -47,8 +47,8 @@ dev = [
 ]
 
 [project.scripts]
-mule = "mule_pattern_learner.temporal.live.cli:main"
-mule-temporal = "mule_pattern_learner.temporal.live.cli:main"
+mule = "mule_pattern_learner.cli:main"
+mule-temporal = "mule_pattern_learner.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mule_pattern_learner"]

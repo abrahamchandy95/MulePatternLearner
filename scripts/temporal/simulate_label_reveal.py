@@ -18,7 +18,7 @@ import numpy as np
 
 from mule_pattern_learner.config import run_config
 from mule_pattern_learner.contract.graph_schema import PHASE_SPLIT
-from mule_pattern_learner.temporal.live.reveal_model import INPUTS_QUERY, counts_by_split, plan
+from mule_pattern_learner.reference.label_reveal import INPUTS_QUERY, counts_by_split, plan
 from mule_pattern_learner.tigergraph.executor import TigerGraphExecutor
 from mule_pattern_learner.tigergraph.reveal import reveal_parameters
 

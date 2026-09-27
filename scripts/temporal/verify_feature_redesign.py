@@ -18,11 +18,7 @@ from mule_pattern_learner.contract.feature_groups import FEATURE_GROUPS, Feature
 from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.contract.sampler_plan import PoolPlan, SamplerPlan
 from mule_pattern_learner.data.splits import resolve_cutoff
-from mule_pattern_learner.temporal.live.history_reference import (
-    payment_features,
-    stratify,
-    visible_history,
-)
+from mule_pattern_learner.reference.gsql_features import payment_features, stratify, visible_history
 from mule_pattern_learner.tigergraph.context_query import validate_context
 from mule_pattern_learner.tigergraph.executor import TigerGraphExecutor, checked_rows
 from mule_pattern_learner.tigergraph.render import as_interpreted

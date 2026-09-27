@@ -55,7 +55,7 @@ def _column(items: Sequence[dict[str, Any]], name: str, dtype: Any = np.float64)
 def node_matrix(
     rows: Sequence[dict[str, Any]], plan: FeaturePlan, *, pooled: int | None = None
 ) -> np.ndarray:
-    """The node and summary columns of many contexts (batch_reference.node_features).
+    """The node and summary columns of many contexts (reference.batch_features.node_features).
 
     Only the first ``pooled`` rows (all when None) get the client-computed pool counts;
     the rest keep zeros there. Split batches pass their roots, which lead the rows,
@@ -88,7 +88,7 @@ def node_matrix(
 def base_matrix(
     messages: Sequence[dict[str, Any]], withheld: np.ndarray, plan: FeaturePlan
 ) -> np.ndarray:
-    """The base columns of many second-hop messages (batch_reference.base_features)."""
+    """The base columns of many second-hop messages (reference.batch_features.base_features)."""
     names = plan.names("node")
     cutoff = _column(messages, "event_ts_ms", np.int64)
     first = _column(messages, "peer_first_ms", np.int64)

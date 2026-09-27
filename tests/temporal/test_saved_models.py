@@ -35,11 +35,11 @@ from mule_pattern_learner.contract.fingerprints import fingerprint
 from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
 from mule_pattern_learner.data.contexts import streaming_source
-from mule_pattern_learner.temporal.live import pipeline
-from mule_pattern_learner.temporal.live.checkpoint import ModelCheckpoint
-from mule_pattern_learner.temporal.live.inference import score
-from mule_pattern_learner.temporal.live.predictor import TemporalPredictor
-from mule_pattern_learner.temporal.live.training import train
+from mule_pattern_learner.inference.predictor import TemporalPredictor
+from mule_pattern_learner.inference.saved_model import ModelCheckpoint
+from mule_pattern_learner.inference.score_accounts import score
+from mule_pattern_learner.pipeline import prepare
+from mule_pattern_learner.training.trainer import train
 
 FIXTURES = Path(__file__).parent / "fixtures" / "saved_models"
 RELATIVE = 1e-5
@@ -165,8 +165,8 @@ def test_a_cohort_prepared_before_the_restructure_is_reused(
     def refuse(config: dict[str, Any]) -> None:
         raise AssertionError("a ready cohort is reused without connecting")
 
-    monkeypatch.setattr(pipeline, "live_executor", refuse)
-    assert pipeline.prepare_live(config, dataset)["status"] == "ready"
+    monkeypatch.setattr(prepare, "live_executor", refuse)
+    assert prepare.prepare_live(config, dataset)["status"] == "ready"
 
     def source() -> Any:
         executor = FakeExecutor(factory=neighbourhood)

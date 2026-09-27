@@ -1,0 +1,227 @@
+"""Score the accounts of a prepared split, or arbitrary accounts at a date."""
+
+from __future__ import annotations
+
+from collections.abc import Iterable, Iterator
+from itertools import islice
+from pathlib import Path
+from typing import Any
+
+import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
+
+from ..contract.graph_schema import ContextKey
+from ..contract.sampler_plan import SamplerPlan
+from ..data.contexts import ContextSource, close_source, open_context_source
+from ..data.hub_registry import HubRegistry, hub_threshold, load_hub_registry, warn_hub_stubs
+from ..data.manifest import load_prepared
+from ..data.splits import eligible_mask, resolve_cutoff, sample_keys
+from ..tigergraph.executor import QueryExecutor, live_executor
+from ..tigergraph.hubs import query_hub_registry
+from .predictor import TemporalPredictor
+from .rejections import rejection_summary
+from .saved_model import ModelCheckpoint
+
+
+def score(
+    checkpoint: Path | ModelCheckpoint,
+    dataset: Path,
+    date: str,
+    split: str,
+    output: Path,
+    *,
+    contexts: ContextSource | None = None,
+    hubs: HubRegistry | None = None,
+) -> dict[str, Any]:
+    """Score every eligible account of one prepared split and cutoff.
+
+    Roots that TigerGraph rejects are not scored; their IDs go to
+    ``<output>.rejected.txt``. Rejected roots and masked child contexts are
+    reported separately (see ``rejections.rejection_summary``). ``contexts``/``hubs``
+    replace the dataset's live source and hub registry (tests, offline replays).
+    """
+    rejected_output = rejected_path(output)
+    for path in (output, rejected_output):
+        if path.exists():
+            raise FileExistsError(path)
+    saved = ModelCheckpoint.of(checkpoint)
+    manifest, accounts = load_prepared(dataset)
+    saved.check_dataset(dataset)
+    if date not in saved.config["dates"].get(split, []):
+        raise ValueError("Requested split/cutoff was not prepared")
+    accounts = accounts[eligible_mask(accounts, split, date)]
+    if accounts.empty:
+        raise ValueError("No eligible accounts at this cutoff")
+    registry = hubs if hubs is not None else load_hub_registry(dataset, manifest)
+    store = (
+        contexts
+        if contexts is not None
+        else open_context_source(dataset, manifest, saved.validated_config())
+    )
+    failed = True
+    try:
+        predictor = TemporalPredictor(saved, store, hubs=registry)
+        size = predictor.batch_size
+        frames, rejected = predictor.score_keys(
+            sample_keys(accounts.iloc[start : start + size], date, manifest)
+            for start in range(0, len(accounts), size)
+        )
+        failed = False
+    finally:
+        close_source(store, failed=failed)
+    result = pd.concat(frames, ignore_index=True)
+    result["date"] = date
+    result["cutoff_utc"] = date
+    output.parent.mkdir(parents=True, exist_ok=True)
+    result.to_parquet(output, index=False)
+    if rejected:
+        write_rejected(rejected_output, rejected)
+    return {
+        "accounts": len(result),
+        **rejection_summary(store, len(rejected), predictor.totals),
+        "rejected_output": str(rejected_output) if rejected else None,
+        "device": str(predictor.device),
+        "embedding_dimensions": predictor.model.head[0].in_features,
+        "output": str(output),
+        "cohort": manifest["cohort"],
+    }
+
+
+SCORE_SCHEMA = pa.schema(
+    [
+        ("account_id", pa.string()),
+        # Float64 probabilities (see model.probabilities_from_logits).
+        ("score", pa.float64()),
+        ("embedding", pa.list_(pa.float64())),
+        ("predicted_mule", pa.bool_()),
+        ("date", pa.string()),
+        ("cutoff_utc", pa.string()),
+    ]
+)
+
+
+def query_hubs(
+    executor: QueryExecutor, cutoff_seqs: list[int], sampler: SamplerPlan
+) -> HubRegistry:
+    """Unscoped hub registry for arbitrary cutoffs, with the checkpoint's threshold.
+
+    Score-new runs unscoped, so its rows carry visibility phase 3.
+    """
+    return query_hub_registry(executor, cutoff_seqs, threshold=hub_threshold(sampler))
+
+
+def id_batches(ids: Iterable[str], size: int) -> Iterator[list[str]]:
+    """Consume input IDs lazily; never allocate a database-wide ID map."""
+    iterator = iter(ids)
+    while batch := list(islice(iterator, size)):
+        yield batch
+
+
+def read_account_ids(path: Path) -> Iterator[str]:
+    with path.open() as stream:
+        for line in stream:
+            value = line.strip()
+            if value:
+                yield value
+
+
+def rejected_path(output: Path) -> Path:
+    return output.with_name(output.name + ".rejected.txt")
+
+
+def write_rejected(path: Path, ids: list[str]) -> None:
+    """One rejected root ID per line."""
+    path.write_text("".join(value + "\n" for value in ids))
+
+
+def score_new_accounts(
+    checkpoint: Path | ModelCheckpoint,
+    account_ids: Iterable[str],
+    date: str,
+    output: Path,
+    *,
+    executor: QueryExecutor | None = None,
+    contexts: ContextSource | None = None,
+    hubs: HubRegistry | None = None,
+) -> dict[str, Any]:
+    """Score arbitrary existing-in-TigerGraph account IDs without a training manifest.
+
+    Inference can use all history available at its cutoff. Strict experiment
+    scoring uses scoped ContextKeys through TemporalPredictor instead. IDs that
+    TigerGraph rejects (missing, not yet visible, over capacity) are not scored:
+    they are listed in ``<output>.rejected.txt``. The result reports rejected roots and
+    masked child contexts separately (see ``rejection_summary``). A date before the
+    first visible event is refused, since no account could be scored at it.
+    """
+    rejected_output = rejected_path(output)
+    pending = output.with_name(output.name + ".pending")
+    rejected_pending = rejected_output.with_name(rejected_output.name + ".pending")
+    for path in (output, rejected_output, pending, rejected_pending):
+        if path.exists():
+            raise FileExistsError(path)
+    saved = ModelCheckpoint.of(checkpoint)
+    if executor is None:
+        from ..tigergraph.installer import verify_sources
+
+        # The checkpoint's retry budgets (max_query_attempts, max_outage_s).
+        live = live_executor(saved.validated_config())
+        verify_sources(live)
+        executor = live
+    seq, ms = resolve_cutoff(executor, date)
+    predictor = TemporalPredictor(saved, contexts, executor=executor, hubs=hubs)
+    source = predictor.contexts
+    output.parent.mkdir(parents=True, exist_ok=True)
+    writer: pq.ParquetWriter | None = None
+    count = rejected = supplied = 0
+    examples: list[str] = []
+    failed = True
+    try:
+        if hubs is None:
+            predictor.hubs = query_hubs(executor, [seq], predictor.sampler)
+            warn_hub_stubs(predictor.hubs, predictor.plan)
+        writer = pq.ParquetWriter(pending, SCORE_SCHEMA)
+        with rejected_pending.open("w") as rejected_stream:
+            batches = (
+                [ContextKey("Account", value, seq, ms) for value in ids]
+                for ids in id_batches(account_ids, predictor.batch_size)
+            )
+            for frame, bad in predictor.stream(batches):
+                supplied += len(frame) + len(bad)
+                for key in bad:
+                    rejected_stream.write(key.node_id + "\n")
+                    if len(examples) < 20:
+                        examples.append(key.node_id)
+                rejected += len(bad)
+                if len(frame):
+                    frame["date"] = date
+                    frame["cutoff_utc"] = date
+                    writer.write_table(
+                        pa.Table.from_pandas(frame, schema=SCORE_SCHEMA, preserve_index=False)
+                    )
+                    count += len(frame)
+        if not supplied:
+            raise ValueError("No account IDs supplied")
+        writer.close()
+        writer = None
+        pending.replace(output)
+        if rejected:
+            rejected_pending.replace(rejected_output)
+        failed = False
+    finally:
+        if writer is not None:
+            writer.close()
+        for path in (pending, rejected_pending):
+            if path.exists():
+                path.unlink()
+        close_source(source, failed=failed)
+    return {
+        "accounts": count,
+        **rejection_summary(source, rejected, predictor.totals),
+        "rejected_examples": examples,
+        "rejected_output": str(rejected_output) if rejected else None,
+        "output": str(output),
+        "device": str(predictor.device),
+        "database_calls": source.query_calls,
+        "scope": "available_history_at_prediction",
+    }

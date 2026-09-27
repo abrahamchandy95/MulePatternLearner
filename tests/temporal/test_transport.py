@@ -22,6 +22,7 @@ from pyTigerGraph.common.exception import TigerGraphException
 import requests
 from temporal_fakes import FrameObservedLabels, encode, request_keys
 
+from mule_pattern_learner import paths
 from mule_pattern_learner.config import (
     DEFAULT_RUN,
     OPERATIONAL_DEFAULTS,
@@ -45,7 +46,8 @@ from mule_pattern_learner.data.hub_registry import (
     load_hub_registry,
 )
 from mule_pattern_learner.paths import REPOSITORY_ROOT, load_config
-from mule_pattern_learner.temporal.live import pipeline
+from mule_pattern_learner.pipeline import prepare as pipeline_prepare
+from mule_pattern_learner.pipeline import train
 from mule_pattern_learner.tigergraph import gsql_text, installer, provenance, scope
 from mule_pattern_learner.tigergraph.client import Client, _status_error, _TimeoutConnection
 from mule_pattern_learner.tigergraph.context_query import (
@@ -977,27 +979,29 @@ def test_prepare_live_checks_query_hashes_before_reusing_a_ready_dataset(
     def no_connection(config: dict[str, Any]) -> None:
         raise AssertionError("prepare_live must not connect for a ready dataset")
 
-    monkeypatch.setattr(pipeline, "live_executor", no_connection)
-    assert pipeline.prepare_live(config, out) == manifest
+    monkeypatch.setattr(pipeline_prepare, "live_executor", no_connection)
+    assert pipeline_prepare.prepare_live(config, out) == manifest
     # A query file preparation no longer uses cannot change the cohort.
     retired = write_manifest(
         out, config, {**fixed_hashes, "gsql/temporal/retired_query.gsql": "old"}
     )
-    assert pipeline.prepare_live(config, out) == retired
+    assert pipeline_prepare.prepare_live(config, out) == retired
     # Model and transport settings are not preparation settings.
-    assert pipeline.prepare_live({**config, "learning_rate": 0.1, "query_concurrency": 2}, out)
+    assert pipeline_prepare.prepare_live(
+        {**config, "learning_rate": 0.1, "query_concurrency": 2}, out
+    )
     with pytest.raises(ValueError, match=r"split_seed.*new output"):
-        pipeline.prepare_live({**config, "split_seed": 7}, out)
+        pipeline_prepare.prepare_live({**config, "split_seed": 7}, out)
     fixed_hashes["gsql/temporal/hub_registry.gsql"] = "changed"
     with pytest.raises(ValueError, match=r"hub_registry\.gsql.*mule-temporal install.*new output"):
-        pipeline.prepare_live(config, out)
+        pipeline_prepare.prepare_live(config, out)
     with pytest.raises(ValueError, match="different GSQL sources"):
         data_manifest.load_prepared(out)
 
 
 def test_prepared_directory_is_inside_the_run_unless_prepared_id_is_set(tmp_path: Path) -> None:
-    assert pipeline.dataset_path({}, tmp_path / "m.pt") == tmp_path / "m_run" / "prepared"
-    shared = pipeline.dataset_path({"prepared_id": "p2"}, tmp_path / "m.pt")
+    assert paths.dataset_path({}, tmp_path / "m.pt") == tmp_path / "m_run" / "prepared"
+    shared = paths.dataset_path({"prepared_id": "p2"}, tmp_path / "m.pt")
     assert shared.name == "p2" and shared.parent.name == "temporal"
 
 
@@ -1007,40 +1011,44 @@ def test_dataset_identity_comes_from_the_scope_or_the_graph(tmp_path: Path) -> N
     config = {k: v for k, v in live_config(tmp_path).items() if k != "dataset_id"}
     server = ScopeServer(header, "linked")
     server.client.conn.graphname = "G"
-    assert pipeline.resolve_identity(cast(Any, server), config, counts)["dataset_id"] == (
+    assert pipeline_prepare.resolve_identity(cast(Any, server), config, counts)["dataset_id"] == (
         "unit_snapshot"
     )
     fresh = ScopeServer(None, "linked")
     fresh.client.conn.graphname = "G"
-    derived = pipeline.resolve_identity(cast(Any, fresh), config, counts)["dataset_id"]
-    assert derived == pipeline.derived_dataset_id("G", counts) and derived.startswith("G_")
-    assert derived != pipeline.derived_dataset_id("G", {**counts, "Account": 11})
+    derived = pipeline_prepare.resolve_identity(cast(Any, fresh), config, counts)["dataset_id"]
+    assert derived == pipeline_prepare.derived_dataset_id("G", counts) and derived.startswith("G_")
+    assert derived != pipeline_prepare.derived_dataset_id("G", {**counts, "Account": 11})
     explicit = {**config, "dataset_id": "pinned"}
-    assert pipeline.resolve_identity(cast(Any, fresh), explicit, counts) == explicit
+    assert pipeline_prepare.resolve_identity(cast(Any, fresh), explicit, counts) == explicit
     # With an existing dataset the identity comes from its manifest, and a pin is kept.
     manifest = {"source": {"dataset_id": "unit_snapshot"}}
-    assert pipeline.prepared_config(config, manifest)["dataset_id"] == "unit_snapshot"
-    assert pipeline.prepared_config(explicit, manifest)["dataset_id"] == "pinned"
+    assert train.prepared_config(config, manifest)["dataset_id"] == "unit_snapshot"
+    assert train.prepared_config(explicit, manifest)["dataset_id"] == "pinned"
 
 
 def test_first_preparation_creates_the_scope_and_reveals_labels(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     steps: list[str] = []
-    monkeypatch.setattr(pipeline, "live_executor", lambda config: SimpleNamespace())
-    monkeypatch.setattr(pipeline, "install", lambda executor: steps.append("install"))
-    monkeypatch.setattr(pipeline, "source_counts", lambda executor: {"Account": 10})
-    monkeypatch.setattr(pipeline, "ensure_scope", lambda executor, config: steps.append("scope"))
+    monkeypatch.setattr(pipeline_prepare, "live_executor", lambda config: SimpleNamespace())
+    monkeypatch.setattr(pipeline_prepare, "install", lambda executor: steps.append("install"))
+    monkeypatch.setattr(pipeline_prepare, "source_counts", lambda executor: {"Account": 10})
     monkeypatch.setattr(
-        pipeline, "ensure_revealed_labels", lambda executor, config: steps.append("reveal")
+        pipeline_prepare, "ensure_scope", lambda executor, config: steps.append("scope")
+    )
+    monkeypatch.setattr(
+        pipeline_prepare, "ensure_revealed_labels", lambda executor, config: steps.append("reveal")
     )
 
     def prepare(config: dict[str, Any], *args: Any, **kwargs: Any) -> dict[str, Any]:
         steps.append("prepare")
         return {"status": "ready"}
 
-    monkeypatch.setattr(pipeline, "prepare", prepare)
-    assert pipeline.prepare_live(live_config(tmp_path), tmp_path / "run") == {"status": "ready"}
+    monkeypatch.setattr(pipeline_prepare, "prepare", prepare)
+    assert pipeline_prepare.prepare_live(live_config(tmp_path), tmp_path / "run") == {
+        "status": "ready"
+    }
     # The reveal draws its splits from the scope partitions, so the scope comes first.
     assert steps == ["install", "scope", "reveal", "prepare"]
 

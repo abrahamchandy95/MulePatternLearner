@@ -2,64 +2,23 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
-from ...contract.clock import cutoff_ms
-from ...metrics import evaluate
-from .checkpoint import ModelCheckpoint
+from ..contract.clock import cutoff_ms
+from ..inference.saved_model import ModelCheckpoint
+from ..metrics import evaluate
+from .sample import final_evaluation_sample
+from .truth import EvaluationTruthSource
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
-    from ...tigergraph.executor import QueryExecutor
 
 # Review budgets of the weighted audit: the top 1, 5 and 10% of the estimated population.
 TOP_FRACTIONS = (0.01, 0.05, 0.10)
-
-
-class EvaluationTruthSource(Protocol):
-    def read(self) -> pd.DataFrame: ...
-
-
-@dataclass
-class ParquetEvaluationTruth:
-    path: Path
-
-    def read(self) -> pd.DataFrame:
-        return pd.read_parquet(self.path)
-
-
-@dataclass
-class GraphEvaluationTruth:
-    """Oracle truth paged from the graph's label contract, for evaluation only.
-
-    temporal_get_account_supervision is the oracle endpoint; training never calls
-    it. An account whose label is not known (mule_label_known false) reports
-    is_mule = -1, which the evaluators treat as unknown, never as a negative.
-    """
-
-    executor: QueryExecutor | None = None
-
-    def read(self) -> pd.DataFrame:
-        from ...tigergraph.executor import TigerGraphExecutor, account_pages
-
-        executor = self.executor if self.executor is not None else TigerGraphExecutor()
-        rows: list[dict[str, Any]] = []
-        pages = account_pages(executor, "temporal_get_account_supervision", {}, timeout_s=900.0)
-        for page in pages:
-            for row in page:
-                known = bool(row["mule_label_known"])
-                rows.append(
-                    {
-                        "account_id": str(row["account_id"]),
-                        "is_mule": int(row["is_mule"]) if known else -1,
-                    }
-                )
-        return pd.DataFrame(rows, columns=["account_id", "is_mule"])
 
 
 def evaluate_predictions(
@@ -93,42 +52,6 @@ def evaluate_predictions(
             hidden.is_mule.to_numpy(dtype="int64"), hidden.score.to_numpy(), threshold
         )
     return result
-
-
-def final_evaluation_sample(
-    universe: pd.DataFrame, truth: pd.DataFrame, *, negative_limit: int = 2000, seed: int = 42
-) -> pd.DataFrame:
-    """Final-only case/control sample with known inclusion probabilities.
-
-    The caller supplies the COMPLETE frozen test population, not the preparation
-    reservoir. This function must never feed training or threshold selection.
-    Unknown truth is an error: otherwise neither prevalence nor weights is known.
-    """
-    import numpy as np
-
-    if negative_limit < 1 or "split" not in universe or not universe.split.eq("test").all():
-        raise ValueError("Provide a complete test-only population and positive sample limit")
-    if universe.account_id.duplicated().any() or truth.account_id.duplicated().any():
-        raise ValueError("Final population and truth must have unique account IDs")
-    if "is_mule" in universe:
-        raise ValueError("Evaluation population must be label-blind")
-    frame = universe.merge(
-        truth[["account_id", "is_mule"]], on="account_id", how="left", validate="one_to_one"
-    )
-    if not frame.is_mule.isin([0, 1]).all():
-        raise ValueError("Complete binary truth is required for population-weighted evaluation")
-    positive = frame[frame.is_mule == 1].copy()
-    negative = frame[frame.is_mule == 0].sort_values("account_id")
-    n = min(len(negative), negative_limit)
-    chosen = np.random.default_rng(seed).choice(len(negative), size=n, replace=False)
-    negative_sample = negative.iloc[chosen].copy()
-    positive["inclusion_probability"] = 1.0
-    negative_sample["inclusion_probability"] = n / len(negative) if len(negative) else 1.0
-    return (
-        pd.concat([positive, negative_sample], ignore_index=True)
-        .sort_values("account_id")
-        .reset_index(drop=True)
-    )
 
 
 def weighted_top_fractions(
@@ -235,14 +158,15 @@ def evaluate_final_population(
     """
     import json
 
-    from ...contract.graph_schema import SPLIT_PHASE
-    from ...data.contexts import close_source
-    from ...data.hub_registry import load_hub_registry
-    from ...data.manifest import MANIFEST, load_prepared
-    from ...data.splits import sample_keys
-    from ...inference.rejections import exceeds_rejection_limit, rejection_summary
-    from ...tigergraph.executor import account_pages, live_executor
-    from .predictor import TemporalPredictor, write_rejected
+    from ..contract.graph_schema import SPLIT_PHASE
+    from ..data.contexts import close_source
+    from ..data.hub_registry import load_hub_registry
+    from ..data.manifest import MANIFEST, load_prepared
+    from ..data.splits import sample_keys
+    from ..inference.predictor import TemporalPredictor
+    from ..inference.rejections import exceeds_rejection_limit, rejection_summary
+    from ..inference.score_accounts import write_rejected
+    from ..tigergraph.executor import account_pages, live_executor
 
     if output.suffix != ".json":
         raise ValueError("Final audit output must be a .json report path")
@@ -265,7 +189,7 @@ def evaluate_final_population(
     manifest, _ = load_prepared(dataset)
     saved.check_dataset(dataset)
     if executor is None:
-        from ...tigergraph.provenance import verify_frozen_source
+        from ..tigergraph.provenance import verify_frozen_source
 
         # The checkpoint's retry budgets (max_query_attempts, max_outage_s).
         executor = live_executor(config)

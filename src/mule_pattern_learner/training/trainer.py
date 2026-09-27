@@ -20,11 +20,10 @@ both observed classes after its rejections.
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Generator, Iterator, Mapping
+from collections.abc import Iterator, Mapping
 import contextlib
 from dataclasses import dataclass
 import json
-import math
 from pathlib import Path
 import time
 from typing import Any, NamedTuple
@@ -34,24 +33,27 @@ import pandas as pd
 import torch
 from torch import nn
 
-from ...batching.assemble import RootBatch, build_root_batch
-from ...batching.limits import BatchLimits
-from ...config import fanouts, validate_config
-from ...contract.feature_groups import FeaturePlan, contract_fingerprint, extraction_plan
-from ...contract.graph_schema import EVALUATION_PROTOCOL, ContextKey, context_scope
-from ...contract.sampler_plan import SamplerPlan
-from ...contract.time_basis import BASIS_ID
-from ...data.contexts import ContextSource, check_coverage, close_source, open_context_source
-from ...data.hub_registry import HubRegistry, load_hub_registry, warn_hub_stubs
-from ...data.manifest import load_prepared, manifest_digest, preparation_mismatches
-from ...data.observed_labels import label_summary, load_observed_labels, visible_labels
-from ...data.splits import eligible_mask, marginal_mask, sample_keys
-from ...inference.rejections import exceeds_rejection_limit
-from ...metrics import evaluate, select_threshold
-from ...model.build import build_model, probabilities_from_logits
-from ...model.loss import NonNegativePULoss
-from ...runtime.device import choose_device, torch_runtime
-from ...sampling.backend import resolve_backend
+from ..batching.assemble import RootBatch, build_root_batch
+from ..batching.limits import BatchLimits
+from ..config import fanouts, validate_config
+from ..contract.feature_groups import FeaturePlan, contract_fingerprint, extraction_plan
+from ..contract.graph_schema import EVALUATION_PROTOCOL, ContextKey, context_scope
+from ..contract.sampler_plan import SamplerPlan
+from ..contract.time_basis import BASIS_ID
+from ..data.contexts import ContextSource, check_coverage, close_source, open_context_source
+from ..data.hub_registry import HubRegistry, load_hub_registry, warn_hub_stubs
+from ..data.manifest import load_prepared, manifest_digest, preparation_mismatches
+from ..data.observed_labels import label_summary, load_observed_labels, visible_labels
+from ..data.splits import eligible_mask, marginal_mask, sample_keys
+from ..inference.rejections import exceeds_rejection_limit
+from ..metrics import evaluate, select_threshold
+from ..model.build import build_model, probabilities_from_logits
+from ..model.loss import NonNegativePULoss
+from ..paths import output_paths
+from ..runtime.device import choose_device, torch_runtime
+from ..runtime.workers import MAX_PREFETCH, BatchPrefetcher
+from ..sampling.backend import resolve_backend
+from .averaging import WeightAverage
 from .checkpoint import (
     CHECKPOINT_FORMAT,
     RUN_STATE_FILES,
@@ -61,25 +63,12 @@ from .checkpoint import (
     restore_cuda_rng,
     resume_fingerprint,
 )
-from .sampling import (
-    MAX_PREFETCH,
-    BatchPrefetcher,
-    PUSample,
-    TrainingStep,
-    epoch_schedule,
-    evaluation_indices,
-)
+from .objective import nnpu_objective, objective_name
+from .schedule import PUSample, TrainingStep, epoch_schedule, evaluation_indices
 
 TRAINING_PROTOCOL = "scoped_observed_label_nnpu_v5"
 Batch = dict[str, torch.Tensor]
 BatchRequest = tuple[list[ContextKey], str, int]
-
-
-def output_paths(output: Path) -> tuple[Path, Path]:
-    """A .pt output names the model; directory outputs retain the experiment API."""
-    if output.suffix == ".pt":
-        return output, output.with_name(output.stem + "_run")
-    return output / "model.pt", output
 
 
 @dataclass(frozen=True)
@@ -180,87 +169,12 @@ def check_source(
     check_coverage(store, model, sampler)
 
 
-def nnpu_objective(config: dict[str, Any]) -> tuple[float, float]:
-    """The class prior and the positive-risk weight.
-
-    "prior" is textbook nnPU (the weight is the prior). "balanced" is imbalanced nnPU
-    (Su, Chen and Xu, IJCAI 2021) with a balanced target prior of 0.5: its risk
-    0.5 * R_p^+ + 0.5 / (1 - prior) * (R_u^- - prior * R_p^-) is this loss with weight
-    1 - prior, scaled by a constant (exactly so for the loss's beta = 0, gamma = 1).
-    """
-    prior = float(config["class_prior"])
-    weight = config["positive_weight"]
-    if weight == "prior":
-        return prior, prior
-    if weight == "balanced":
-        return prior, 1.0 - prior
-    return prior, float(weight)
-
-
-def objective_name(prior: float, positive_weight: float) -> str:
-    if positive_weight == prior:
-        return "nnPU"
-    if math.isclose(positive_weight, 1.0 - prior):
-        return "imbalanced_nnPU"
-    return "positive_reweighted_nnPU"
-
-
 def build_optimizer(model: nn.Module, config: dict[str, Any]) -> torch.optim.AdamW:
     return torch.optim.AdamW(
         model.parameters(),
         lr=float(config["learning_rate"]),
         weight_decay=float(config["weight_decay"]),
     )
-
-
-class WeightAverage:
-    """Exponential moving average of a model's weights (Polyak averaging).
-
-    With few revealed positives, resampled neighbourhoods and a constant learning
-    rate, the raw weights keep moving around a region of similar loss; their average
-    is a steadier model to validate, select and save. After n updates the decay is
-    min(decay, (1 + n) / (10 + n)), as in TensorFlow's ExponentialMovingAverage, so
-    early averages are not dominated by the initial weights. Training never reads it.
-    """
-
-    def __init__(self, model: nn.Module, decay: float) -> None:
-        self.decay = decay
-        self.updates = 0
-        self.state = {k: v.detach().clone() for k, v in model.state_dict().items()}
-
-    @torch.no_grad()
-    def update(self, model: nn.Module) -> None:
-        self.updates += 1
-        decay = min(self.decay, (1 + self.updates) / (10 + self.updates))
-        for key, value in model.state_dict().items():
-            average = self.state[key]
-            if average.is_floating_point():
-                average.lerp_(value, 1 - decay)
-            else:
-                average.copy_(value)
-
-    @contextlib.contextmanager
-    def applied(self, model: nn.Module) -> Generator[None]:
-        """Load the average into ``model`` for the block, then restore its own weights."""
-        raw = {k: v.detach().clone() for k, v in model.state_dict().items()}
-        model.load_state_dict(self.state)
-        try:
-            yield
-        finally:
-            model.load_state_dict(raw)
-
-    def saved(self) -> dict[str, Any]:
-        return {
-            "state": {k: v.detach().cpu().clone() for k, v in self.state.items()},
-            "updates": self.updates,
-        }
-
-    def load(self, saved: dict[str, Any]) -> None:
-        if set(saved["state"]) != set(self.state):
-            raise ValueError("Saved weight average does not match the model's parameters")
-        for key, value in saved["state"].items():
-            self.state[key].copy_(value)
-        self.updates = int(saved["updates"])
 
 
 class StepLoss(NamedTuple):
@@ -948,7 +862,7 @@ class _TrainingRun:
         return result
 
     def _model_payload(self, threshold: float) -> dict[str, Any]:
-        """The model.pt payload of the selected state (read by checkpoint.ModelCheckpoint)."""
+        """The model.pt payload of the selected state (read by saved_model.ModelCheckpoint)."""
         return {
             "state_dict": self.best_state,
             "config": self.config,

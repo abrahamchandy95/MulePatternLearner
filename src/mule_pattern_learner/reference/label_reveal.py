@@ -2,10 +2,10 @@
 
 `plan` recomputes the job's discovery channel, discovery time, eligibility and
 revealed set for every internal mule from the rows INPUTS_QUERY prints, with the
-job's own hash (labels.reveal_uniforms) and parameter defaults
-(labels.REVEAL_DEFAULTS). It reads nothing itself: scripts/temporal/verify_label_reveal.py
-compares it with the installed job, and scripts/temporal/simulate_label_reveal.py
-runs it over many salts.
+job's own hash (tigergraph.reveal.reveal_uniforms) and parameter defaults
+(tigergraph.reveal.REVEAL_DEFAULTS). It reads nothing itself:
+scripts/temporal/verify_label_reveal.py compares it with the installed job, and
+scripts/temporal/simulate_label_reveal.py runs it over many salts.
 """
 
 from __future__ import annotations
@@ -13,8 +13,8 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from ...contract.graph_schema import PHASE_SPLIT
-from ...tigergraph.reveal import REVEAL_DEFAULTS, reveal_uniforms
+from ..contract.graph_schema import PHASE_SPLIT
+from ..tigergraph.reveal import REVEAL_DEFAULTS, reveal_uniforms
 
 DAY = 86400000.0
 NEVER = 1.0e15

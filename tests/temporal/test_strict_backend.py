@@ -31,12 +31,12 @@ from mule_pattern_learner.contract.time_basis import BASIS_ID
 from mule_pattern_learner.data import contexts
 from mule_pattern_learner.data.accounts import scoped_cohort
 from mule_pattern_learner.data.contexts import StreamingContextSource
+from mule_pattern_learner.inference.score_accounts import score_new_accounts
 from mule_pattern_learner.model.build import build_model
-from mule_pattern_learner.temporal.live.evaluation import GraphEvaluationTruth
-from mule_pattern_learner.temporal.live.predictor import score_new_accounts
-from mule_pattern_learner.temporal.live.sampling import pu_batches
 from mule_pattern_learner.tigergraph import provenance
 from mule_pattern_learner.tigergraph.context_query import validate_context
+from mule_pattern_learner.tigergraph.oracle import GraphEvaluationTruth
+from mule_pattern_learner.training.schedule import pu_batches
 
 
 def test_batch_ids_are_dense_scoped_and_temporal_and_never_global() -> None:
@@ -220,7 +220,7 @@ def test_graph_evaluation_truth_pages_the_label_contract() -> None:
 
 def test_strict_preparation_and_nnpu_use_the_correct_phase_end_to_end(tmp_path: Path) -> None:
     from mule_pattern_learner.data.preparation import prepare
-    from mule_pattern_learner.temporal.live.training import train
+    from mule_pattern_learner.training.trainer import train
 
     cfg = live_config(
         scope_id="unit_strict",

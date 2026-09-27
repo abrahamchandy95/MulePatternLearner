@@ -50,9 +50,9 @@ from mule_pattern_learner.contract.feature_groups import extraction_plan
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
 from mule_pattern_learner.data.contexts import StreamingContextSource, streaming_source
 from mule_pattern_learner.data.preparation import prepare
-from mule_pattern_learner.temporal.live import training
-from mule_pattern_learner.temporal.live.sampling import step_seed
 from mule_pattern_learner.tigergraph.render import render_context_query
+from mule_pattern_learner.training import trainer
+from mule_pattern_learner.training.schedule import step_seed
 
 RELATIVE = 1e-5
 # The built-in run (run_config) with a smaller cohort, batch and run. Dropout is the one
@@ -120,7 +120,7 @@ class Observed:
 def first_training_batch(config: dict[str, Any]) -> Generator[list[RootBatch]]:
     """Record the batch of epoch 1, step 1, which a prefetch thread may build."""
     seed = step_seed(int(config["seed"]), 0, 0)
-    real = training.build_root_batch
+    real = trainer.build_root_batch
     found: list[RootBatch] = []
     lock = threading.Lock()
 
@@ -131,14 +131,14 @@ def first_training_batch(config: dict[str, Any]) -> Generator[list[RootBatch]]:
                 found.append(batch)
         return batch
 
-    with patch.object(training, "build_root_batch", build):
+    with patch.object(trainer, "build_root_batch", build):
         yield found
 
 
 def golden_run(directory: Path) -> Observed:
     config, dataset, executor = prepare_golden(directory)
     with first_training_batch(config) as found:
-        result = training.train(
+        result = trainer.train(
             config, dataset, directory / "model.pt", contexts=golden_source(executor, config)
         )
     (first,) = found
