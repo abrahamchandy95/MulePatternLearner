@@ -2,8 +2,8 @@
 
 Read-only. Fetches every input the reveal uses (mules, scope partitions, draw keys,
 fraud-labelled Zelle inflows and mule-to-mule events), recomputes the whole plan with
-reveal_model.plan, runs temporal_reveal_mule_labels with apply = FALSE, and compares
-discovery channel, availability clock and revealed set mule by mule. The dry run
+reference.label_reveal.plan, runs temporal_reveal_mule_labels with apply = FALSE, and
+compares discovery channel, availability clock and revealed set mule by mule. The dry run
 passes force = TRUE only to skip the job's already-revealed check, so the check also
 works on a graph whose labels were revealed; with apply = FALSE nothing is written.
 

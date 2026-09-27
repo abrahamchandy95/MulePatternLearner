@@ -1,8 +1,8 @@
 """The graph's label contract: revealed labels for training and the contract audit.
 
 GraphObservedLabels is the label source of every run: population queries report the
-revealed positives and their discovery times. validate_supervision counts contract
-violations. Nothing here reads hidden truth.
+revealed positives and their discovery times, never a hidden label. validate_supervision
+runs the contract audit, which returns only violation counts.
 """
 
 from __future__ import annotations

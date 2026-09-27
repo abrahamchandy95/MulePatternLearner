@@ -19,7 +19,7 @@ from mule_pattern_learner.data.contexts import StreamingContextSource, check_cov
 from mule_pattern_learner.data.preparation import prepare
 from mule_pattern_learner.experiments.variants import feature_experiments
 from mule_pattern_learner.paths import REPOSITORY_ROOT
-from mule_pattern_learner.reference import label_reveal as reveal_model
+from mule_pattern_learner.reference import label_reveal
 from mule_pattern_learner.testing.builders import (
     FrameObservedLabels,
     live_config,
@@ -181,22 +181,22 @@ class RevealGraph:
         self.calls: list[tuple[str, dict[str, Any]]] = []
 
     def inputs(self, text: str, params: dict[str, Any]) -> list[dict[str, Any]]:
-        assert text == reveal_model.INPUTS_QUERY and set(params) == {"scope_id"}
+        assert text == label_reveal.INPUTS_QUERY and set(params) == {"scope_id"}
         return reveal_inputs()
 
     def run(self, name: str, params: dict[str, Any], **kwargs: Any) -> list[dict[str, Any]]:
         self.calls.append((name, params))
-        result = reveal_model.plan(reveal_inputs(), params)
+        result = label_reveal.plan(reveal_inputs(), params)
         mules = result["mules"]
         rows = [
             {
                 "account_id": k,
                 "channel": mules[k]["channel"],
-                "known_ts_ms": reveal_model.available_ms(mules[k], 10**13),
+                "known_ts_ms": label_reveal.available_ms(mules[k], 10**13),
             }
             for k in result["revealed"]
         ]
-        eligible = reveal_model.counts_by_split(result, "eligible")
+        eligible = label_reveal.counts_by_split(result, "eligible")
         return [
             {
                 "status": "dry_run",
