@@ -50,7 +50,7 @@ from mule_pattern_learner.config import DEFAULT_CONFIG, RunConfig
 from mule_pattern_learner.contract.feature_groups import extraction_plan
 from mule_pattern_learner.data.contexts import StreamingContextSource, streaming_source
 from mule_pattern_learner.data.preparation import prepare
-from mule_pattern_learner.paths import REPOSITORY_ROOT
+from mule_pattern_learner.paths import REPOSITORY_ROOT, DatasetPaths
 from mule_pattern_learner.testing.builders import neighbourhood, scope_population
 from mule_pattern_learner.testing.fake_graph import FakeExecutor
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
@@ -102,11 +102,11 @@ def golden_source(executor: FakeExecutor, config: RunConfig) -> StreamingContext
     )
 
 
-def prepare_golden(directory: Path) -> tuple[RunConfig, Path, FakeExecutor]:
+def prepare_golden(directory: Path) -> tuple[RunConfig, DatasetPaths, FakeExecutor]:
     """Prepare the golden cohort with the built-in label source (graph_observed)."""
     config = golden_config()
     executor = golden_executor()
-    dataset = directory / "dataset"
+    dataset = DatasetPaths(directory / "dataset")
     prepare(
         config,
         GOLDEN_SOURCE,
@@ -287,8 +287,9 @@ def test_the_golden_settings_select_the_accounts_the_tag_selected(tmp_path: Path
     # The dataset's accounts and observed labels feed every other literal. They were
     # recorded with the code at the tag pre-restructure, which prepared the same rows.
     _, dataset, _ = prepare_golden(tmp_path)
+    files = {"accounts": dataset.accounts, "observed_labels": dataset.observed_labels}
     for name, (rows, digest) in GOLDEN_DATASET.items():
-        frame = pd.read_parquet(dataset / f"{name}.parquet")
+        frame = pd.read_parquet(files[name])
         assert (len(frame), frame_digest(frame)) == (rows, digest), name
 
 
@@ -307,13 +308,13 @@ def test_benchmark_reports_the_golden_first_batch_and_loss(
     config, dataset, executor = prepare_golden(tmp_path)
     module = load_benchmark()
 
-    def open_source(path: Path, manifest: dict[str, Any], settings: RunConfig) -> Any:
+    def open_source(path: DatasetPaths, manifest: dict[str, Any], settings: RunConfig) -> Any:
         assert path == dataset and settings == config
         return golden_source(executor, settings)
 
     monkeypatch.setattr(module, "open_context_source", open_source)
     report_path = tmp_path / "report.json"
-    argv = ["benchmark_batch", "--dataset", str(dataset)]
+    argv = ["benchmark_batch", "--dataset", str(dataset.root)]
     monkeypatch.setattr(sys, "argv", [*argv, "--output", str(report_path), "--train-step"])
     module.main(config)
     report = json.loads(report_path.read_text())

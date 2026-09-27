@@ -19,6 +19,7 @@ from ..data.hub_registry import HubRegistry, hub_threshold, load_hub_registry, w
 from ..data.manifest import load_prepared
 from ..data.ports import ContextFetcher, CutoffReader, HubReader
 from ..data.splits import eligible_mask, resolve_cutoff, sample_keys
+from ..paths import DatasetPaths
 from .predictor import TemporalPredictor
 from .rejections import rejection_summary
 from .saved_model import ModelCheckpoint
@@ -26,7 +27,7 @@ from .saved_model import ModelCheckpoint
 
 def score(
     checkpoint: Path | ModelCheckpoint,
-    dataset: Path,
+    dataset: DatasetPaths,
     date: str,
     split: str,
     output: Path,

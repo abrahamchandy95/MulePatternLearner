@@ -8,6 +8,7 @@ from typing import Any
 from ..evaluation.audit import audit_inputs, evaluate_final_population, evaluate_predictions
 from ..evaluation.truth import ParquetEvaluationTruth, TruthReader
 from ..inference.saved_model import ModelCheckpoint
+from ..paths import DatasetPaths
 from ..tigergraph.context_query import TigerGraphContextFetcher
 from ..tigergraph.oracle import GraphEvaluationTruth
 from ..tigergraph.provenance import verify_frozen_source
@@ -30,7 +31,7 @@ def evaluate(predictions: Path, checkpoint: Path, truth: Path | None) -> dict[st
 
 
 def final_audit(
-    checkpoint: Path, truth: Path | None, output: Path, *, dataset: Path | None = None
+    checkpoint: Path, truth: Path | None, output: Path, *, dataset: DatasetPaths | None = None
 ) -> dict[str, Any]:
     """The frozen-model audit, which connects once its inputs passed their checks.
 

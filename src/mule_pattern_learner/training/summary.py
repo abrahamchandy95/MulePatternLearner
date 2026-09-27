@@ -15,6 +15,7 @@ from ..contract.graph_schema import EVALUATION_PROTOCOL
 from ..contract.sampler_plan import SamplerPlan
 from ..contract.time_basis import BASIS_ID
 from ..data.manifest import manifest_digest
+from ..paths import DatasetPaths
 from .history import Progress
 from .objective import objective_name
 from .schedule import EvaluationSample
@@ -26,7 +27,7 @@ def model_payload(
     *,
     state: dict[str, torch.Tensor],
     config: RunConfig,
-    dataset: Path,
+    dataset: DatasetPaths,
     threshold: float,
     plan: FeaturePlan,
     sampler: SamplerPlan,
@@ -40,7 +41,7 @@ def model_payload(
         "config": config.to_dict(),
         "basis_id": BASIS_ID,
         "contract": contract_fingerprint(),
-        "dataset": str(dataset.resolve()),
+        "dataset": str(dataset.root.resolve()),
         "dataset_manifest_sha256": manifest_digest(dataset),
         "threshold": threshold,
         "feature_dim": len(plan.node_names),

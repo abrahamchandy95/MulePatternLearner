@@ -109,7 +109,7 @@ def test_inference_score_uses_the_dataset_hub_registry(
 ) -> None:
     config = base_config()
     dataset, _, _ = prepared_dataset(tmp_path / "dataset", config, monkeypatch)
-    model = checkpoint(tmp_path / "model.pt", config, dataset / "manifest.json")
+    model = checkpoint(tmp_path / "model.pt", config, dataset)
     loaded = []
 
     def registry(path: Path, manifest: dict[str, Any]) -> HubRegistry:

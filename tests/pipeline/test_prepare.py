@@ -12,7 +12,8 @@ import pytest
 
 from mule_pattern_learner.config import RunConfig, ScopeConfig, SplitDates, TransportConfig
 from mule_pattern_learner.data import manifest as data_manifest
-from mule_pattern_learner.data.manifest import dataset_settings, query_hashes
+from mule_pattern_learner.data.manifest import dataset_id, dataset_settings, query_hashes
+from mule_pattern_learner.paths import DatasetPaths
 from mule_pattern_learner.pipeline import prepare as pipeline_prepare
 from mule_pattern_learner.testing.builders import (
     SNAPSHOT_SOURCE,
@@ -31,46 +32,53 @@ def fixed_hashes(monkeypatch: pytest.MonkeyPatch):
 
 
 def write_manifest(
-    path: Path, config: RunConfig, hashes: dict[str, Any], status: str = "ready"
-) -> dict[str, Any]:
+    data: Path,
+    config: RunConfig,
+    hashes: dict[str, Any],
+    status: str = "ready",
+    source_id: str = SNAPSHOT_SOURCE,
+) -> tuple[DatasetPaths, dict[str, Any]]:
+    """A manifest in the directory of config's dataset of source_id under data."""
     manifest = {
         "status": status,
         "source": {
-            "source_id": SNAPSHOT_SOURCE,
+            "source_id": source_id,
             "query_hashes": dict(hashes),
-            "settings": dataset_settings(SNAPSHOT_SOURCE, config),
+            "settings": dataset_settings(source_id, config),
         },
     }
-    path.mkdir(parents=True, exist_ok=True)
-    (path / "manifest.json").write_text(json.dumps(manifest))
-    return manifest
+    dataset = DatasetPaths.of(dataset_id(source_id, config), data)
+    dataset.root.mkdir(parents=True, exist_ok=True)
+    dataset.manifest.write_text(json.dumps(manifest))
+    return dataset, manifest
 
 
 def test_prepare_live_checks_query_hashes_before_reusing_a_ready_dataset(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fixed_hashes: dict[str, str]
 ) -> None:
     config = unit_config()
-    out = tmp_path / "prepared"
-    manifest = write_manifest(out, config, fixed_hashes)
+    data = tmp_path / "data"
+    dataset, _ = write_manifest(data, config, fixed_hashes)
 
     def no_connection(transport: Any) -> None:
         raise AssertionError("prepare_live must not connect for a ready dataset")
 
     monkeypatch.setattr(pipeline_prepare, "connect", no_connection)
-    assert pipeline_prepare.prepare_live(config, out) == manifest
+    assert pipeline_prepare.prepare_live(config, data) == dataset
     # A query file preparation no longer uses cannot change the dataset.
-    retired = write_manifest(out, config, {**fixed_hashes, "queries/retired_query.gsql": "old"})
-    assert pipeline_prepare.prepare_live(config, out) == retired
+    write_manifest(data, config, {**fixed_hashes, "queries/retired_query.gsql": "old"})
+    assert pipeline_prepare.prepare_live(config, data) == dataset
     # Model and transport settings are not dataset settings.
     changes = {"training": {"learning_rate": 0.1}, "transport": {"query_concurrency": 2}}
-    assert pipeline_prepare.prepare_live(config.with_changes(changes), out)
-    with pytest.raises(ValueError, match=r"dataset.split_seed.*new output"):
-        pipeline_prepare.prepare_live(config.with_changes({"dataset": {"split_seed": 7}}), out)
+    assert pipeline_prepare.prepare_live(config.with_changes(changes), data) == dataset
+    # Other dataset settings name another dataset, which is prepared beside this one.
+    split_seed = config.with_changes({"dataset": {"split_seed": 7}})
+    assert pipeline_prepare.find_datasets(split_seed, data) == []
     fixed_hashes["queries/hub_accounts.gsql"] = "changed"
-    with pytest.raises(ValueError, match=r"hub_accounts\.gsql.*mule-temporal install.*new output"):
-        pipeline_prepare.prepare_live(config, out)
+    with pytest.raises(ValueError, match=r"hub_accounts\.gsql.*mule-temporal install.*aside"):
+        pipeline_prepare.prepare_live(config, data)
     with pytest.raises(ValueError, match="different GSQL sources"):
-        data_manifest.load_prepared(out)
+        data_manifest.load_prepared(dataset)
 
 
 def test_the_source_id_comes_from_the_scope_or_the_graph() -> None:
@@ -110,8 +118,10 @@ def record_graph_steps(monkeypatch: pytest.MonkeyPatch, steps: list[str]) -> Non
     def ensure_revealed_labels(executor: Any, scope: ScopeConfig, dates: SplitDates) -> None:
         steps.append("reveal")
 
-    def prepare(config: RunConfig, source_id: str, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        steps.append(f"prepare {source_id}")
+    def prepare(
+        config: RunConfig, source_id: str, dataset: DatasetPaths, *args: Any, **kwargs: Any
+    ) -> dict[str, Any]:
+        steps.append(f"prepare {source_id} {dataset.root.name}")
         return {"status": "ready"}
 
     for stand_in in (
@@ -131,14 +141,17 @@ def test_first_preparation_creates_the_scope_and_reveals_labels(
 ) -> None:
     steps: list[str] = []
     record_graph_steps(monkeypatch, steps)
-    assert pipeline_prepare.prepare_live(unit_config(), tmp_path / "run") == {"status": "ready"}
+    config = unit_config()
+    data = tmp_path / "data"
+    identity = dataset_id(UNIT_SOURCE, config)
+    assert pipeline_prepare.prepare_live(config, data) == DatasetPaths.of(identity, data)
     # The reveal draws its splits from the scope partitions, so the scope comes first.
     assert steps == [
         "install",
         "resolve unit_scope",
         f"scope unit_scope {UNIT_SOURCE} 42",
         "reveal",
-        f"prepare {UNIT_SOURCE}",
+        f"prepare {UNIT_SOURCE} {identity}",
     ]
 
 
@@ -146,37 +159,46 @@ def test_a_dataset_being_prepared_keeps_its_source_id(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fixed_hashes: dict[str, str]
 ) -> None:
     config = unit_config()
-    out = tmp_path / "prepared"
-    write_manifest(out, config, fixed_hashes, status="preparing")
+    data = tmp_path / "data"
+    dataset, _ = write_manifest(data, config, fixed_hashes, status="preparing")
     steps: list[str] = []
     record_graph_steps(monkeypatch, steps)
-    assert pipeline_prepare.prepare_live(config, out) == {"status": "ready"}
+    assert pipeline_prepare.prepare_live(config, data) == dataset
     assert steps == [
         "install",
         f"scope unit_scope {SNAPSHOT_SOURCE} 42",
         "reveal",
-        f"prepare {SNAPSHOT_SOURCE}",
+        f"prepare {SNAPSHOT_SOURCE} {dataset.root.name}",
     ]
 
 
+def test_datasets_of_several_sources_read_the_source_id_from_the_graph(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fixed_hashes: dict[str, str]
+) -> None:
+    # After a reload the old source's dataset stays beside the new one's.
+    config = unit_config()
+    data = tmp_path / "data"
+    write_manifest(data, config, fixed_hashes)
+    current, _ = write_manifest(data, config, fixed_hashes, source_id=UNIT_SOURCE)
+    assert len(pipeline_prepare.find_datasets(config, data)) == 2
+    steps: list[str] = []
+    record_graph_steps(monkeypatch, steps)
+    assert pipeline_prepare.prepare_live(config, data) == current
+    assert steps[:2] == ["install", "resolve unit_scope"]
+
+
 def test_ready_pipeline_reuses_cache_without_connecting(tmp_path: Path) -> None:
-    from mule_pattern_learner.pipeline.prepare import prepare_live
+    from mule_pattern_learner.pipeline.prepare import find_datasets, prepare_live
 
     c = live_config()
-    manifest = {
-        "status": "ready",
-        "source": {
-            "source_id": UNIT_SOURCE,
-            "query_hashes": query_hashes(),
-            "settings": dataset_settings(UNIT_SOURCE, c),
-        },
-    }
-    (tmp_path / "manifest.json").write_text(json.dumps(manifest))
+    dataset, _ = write_manifest(tmp_path, c, query_hashes(), source_id=UNIT_SOURCE)
     with patch("mule_pattern_learner.pipeline.prepare.connect") as client:
-        assert prepare_live(c, tmp_path) == manifest
+        assert prepare_live(c, tmp_path) == dataset
         # Model settings may change; dataset settings may not, and nothing connects.
         changes = {"model": {"hidden": 32}, "training": {"learning_rate": 0.01}}
-        assert prepare_live(c.with_changes(changes), tmp_path) == manifest
-        with pytest.raises(ValueError, match="dataset.seed_limits.test"):
-            prepare_live(c.with_changes({"dataset": {"seed_limits": {"test": 10}}}), tmp_path)
+        assert prepare_live(c.with_changes(changes), tmp_path) == dataset
+        assert (
+            find_datasets(c.with_changes({"dataset": {"seed_limits": {"test": 10}}}), tmp_path)
+            == []
+        )
         client.assert_not_called()

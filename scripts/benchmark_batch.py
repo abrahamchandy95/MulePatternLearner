@@ -42,8 +42,9 @@ from mule_pattern_learner.data.observed_labels import load_observed_labels
 from mule_pattern_learner.data.splits import sample_keys
 from mule_pattern_learner.model.build import build_model
 from mule_pattern_learner.model.loss import NonNegativePULoss
-from mule_pattern_learner.paths import dataset_path
+from mule_pattern_learner.paths import DatasetPaths
 from mule_pattern_learner.pipeline.connect import open_context_source
+from mule_pattern_learner.pipeline.prepare import find_datasets
 from mule_pattern_learner.runtime.device import (
     choose_device,
     reserve_deterministic_cublas,
@@ -65,21 +66,32 @@ def rest_calls(source: Any) -> tuple[int, dict[str, int]]:
     return executor.calls, dict(executor.retries)
 
 
+def run_dataset(config: RunConfig) -> DatasetPaths:
+    """The run's one dataset in data/; the benchmark only reads, so it never prepares one."""
+    found = find_datasets(config)
+    if len(found) != 1:
+        raise ValueError(
+            f"Found {len(found)} datasets of the run in data/; prepare one with "
+            "`mule-temporal prepare`, or pass --dataset"
+        )
+    return found[0]
+
+
 def main(config: RunConfig = DEFAULT_CONFIG) -> None:
     # Before any CUDA work: deterministic cuBLAS GEMMs need a fixed workspace.
     reserve_deterministic_cublas()
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--dataset", type=Path, help="prepared dataset (default: the run's)")
     parser.add_argument(
-        "--output", type=Path, default=Path("artifacts/temporal/batch_readiness.json")
+        "--dataset", type=Path, help="prepared dataset (default: the run's dataset in data/)"
     )
+    parser.add_argument("--output", type=Path, help="also write the report to this file")
     parser.add_argument("--device", help="override the configured device (auto, cpu, mps, cuda)")
     parser.add_argument(
         "--mode", choices=("train", "eval"), default="train", help="sampler mode of the batch"
     )
     parser.add_argument("--train-step", action="store_true", help="also run one optimizer step")
     args = parser.parse_args()
-    dataset = args.dataset or dataset_path()
+    dataset = run_dataset(config) if args.dataset is None else DatasetPaths(args.dataset)
     manifest, accounts = load_prepared(dataset)
     changed = dataset_mismatches(config, manifest)
     if changed:
@@ -162,8 +174,9 @@ def main(config: RunConfig = DEFAULT_CONFIG) -> None:
         report["mps_driver_allocated_bytes"] = torch.mps.driver_allocated_memory()
     if device.type == "cuda":
         report["cuda_max_allocated_bytes"] = torch.cuda.max_memory_allocated()
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
+    if args.output is not None:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(report, indent=2, allow_nan=False) + "\n")
     print(json.dumps(report, indent=2, allow_nan=False))
 
 

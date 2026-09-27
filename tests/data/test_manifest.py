@@ -9,6 +9,7 @@ from mule_pattern_learner.contract.feature_groups import DEFAULT_GROUPS
 from mule_pattern_learner.contract.server import QUERY_FILES
 from mule_pattern_learner.data import manifest as data_manifest
 from mule_pattern_learner.data.preparation import prepare
+from mule_pattern_learner.paths import DatasetPaths
 from mule_pattern_learner.testing.builders import (
     UNIT_SOURCE,
     FrameObservedLabels,
@@ -66,7 +67,7 @@ def test_a_dataset_records_its_query_files_by_path_and_passes_its_own_check(
     population = scoped_accounts()
     executor = FakeExecutor({}, population=population)
     config = live_config(dataset={"seed_limits": {"train": 10, "validation": 10, "test": 10}})
-    dataset = tmp_path / "dataset"
+    dataset = DatasetPaths(tmp_path / "dataset")
     manifest = prepare(
         config,
         UNIT_SOURCE,

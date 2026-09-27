@@ -41,7 +41,7 @@ def test_final_population_audit_scores_through_the_dataset_clock_and_hubs(
 ) -> None:
     config = base_config(runtime={"max_rejected_root_fraction": 0.1})
     dataset, _, accounts = prepared_dataset(tmp_path / "dataset", config, monkeypatch)
-    model = checkpoint(tmp_path / "model.pt", config, dataset / "manifest.json")
+    model = checkpoint(tmp_path / "model.pt", config, dataset)
     test_accounts = accounts[accounts.split == "test"]
     truth = test_accounts[["account_id"]].assign(is_mule=(np.arange(len(test_accounts)) % 4 == 0))
     truth["is_mule"] = truth.is_mule.astype(int)
@@ -87,7 +87,7 @@ def test_final_population_audit_fails_on_censored_rejections(
 ) -> None:
     config = base_config(runtime={"max_rejected_root_fraction": limit})
     dataset, _, accounts = prepared_dataset(tmp_path / "dataset", config, monkeypatch)
-    model = checkpoint(tmp_path / "model.pt", config, dataset / "manifest.json")
+    model = checkpoint(tmp_path / "model.pt", config, dataset)
     test_accounts = accounts[accounts.split == "test"]
     truth = test_accounts[["account_id"]].assign(
         is_mule=(np.arange(len(test_accounts)) % 4 == 0).astype(int)

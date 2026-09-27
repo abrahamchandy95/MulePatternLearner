@@ -14,6 +14,7 @@ import pandas as pd
 from ..contract.bounds import DATASET_ROWS
 from ..contract.clock import timestamp
 from ..contract.graph_schema import SPLITS
+from ..paths import DatasetPaths
 
 LABEL_COLUMNS = ("account_id", "known_positive", "known_from_ms")
 # Ground-truth fields that must never reach training metadata or observed labels.
@@ -63,10 +64,10 @@ def align_observed_labels(metadata: pd.DataFrame, labels: pd.DataFrame) -> pd.Da
     return result
 
 
-def load_observed_labels(accounts: pd.DataFrame, dataset: Path) -> pd.DataFrame:
+def load_observed_labels(accounts: pd.DataFrame, dataset: DatasetPaths) -> pd.DataFrame:
     """The prepared observed labels, aligned with the prepared accounts."""
     labels = read_bounded_parquet(
-        dataset / "observed_labels.parquet",
+        dataset.observed_labels,
         f"Observed-label source exceeds the {DATASET_ROWS}-row bounded pool",
     )
     return align_observed_labels(accounts, labels)

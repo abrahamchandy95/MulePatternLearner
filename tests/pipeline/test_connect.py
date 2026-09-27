@@ -13,9 +13,13 @@ import pytest
 
 from mule_pattern_learner.config import DEFAULT_CONFIG, TransportConfig
 from mule_pattern_learner.data.manifest import dataset_settings
+from mule_pattern_learner.paths import DatasetPaths
 from mule_pattern_learner.pipeline import connect
 from mule_pattern_learner.testing.fake_graph import scope_counts
 from mule_pattern_learner.tigergraph import provenance
+
+# open_context_source reads the dataset from its manifest; the directory is not read.
+UNUSED = DatasetPaths(Path("unused"))
 
 
 def test_the_transport_section_sets_the_source_and_the_retry_budgets(
@@ -42,7 +46,7 @@ def test_the_transport_section_sets_the_source_and_the_retry_budgets(
         "max_outage_s": 120,
     }
     training = DEFAULT_CONFIG.with_changes({"transport": transport})
-    store = connect.open_context_source(Path("unused"), manifest, training)
+    store = connect.open_context_source(UNUSED, manifest, training)
     assert seen == {"settings": settings, "max_attempts": 3, "max_outage_s": 120}
     assert (store.request_batch_size, store.concurrency, store.capacity) == (32, 4, 1024)
     assert store._cadence.every == 8
@@ -50,7 +54,7 @@ def test_the_transport_section_sets_the_source_and_the_retry_budgets(
     changed = training.with_changes({"sampler": {"roots": {"recent": 5}}})
     seen.clear()
     with pytest.raises(ValueError, match="pools differ"):
-        connect.open_context_source(Path("unused"), manifest, changed)
+        connect.open_context_source(UNUSED, manifest, changed)
     # Mismatched pools are refused before connecting.
     assert seen == {}
 
@@ -95,19 +99,19 @@ def test_resumed_stream_checks_live_source_before_fetching(monkeypatch: pytest.M
             "settings": dataset_settings("snapshot", config),
         },
     }
-    backend = connect.open_context_source(Path("unused"), manifest, config)
+    backend = connect.open_context_source(UNUSED, manifest, config)
     backend.close()
     assert checked == [executor] and budgets == [(3, 60)]
     assert policy_calls == [{"scope_id": "scope"}]
     # A scope created with another scope.unowned rule than the configured one is refused.
     policy["scope_unowned"] = "independent"
     with pytest.raises(ValueError, match="no longer valid.*scope.unowned = 'independent'"):
-        connect.open_context_source(Path("unused"), manifest, config)
+        connect.open_context_source(UNUSED, manifest, config)
     policy["scope_unowned"] = "linked"
     counts["Account"] += 1
     with pytest.raises(ValueError, match="counts changed"):
-        connect.open_context_source(Path("unused"), manifest, config)
+        connect.open_context_source(UNUSED, manifest, config)
     counts["Account"] -= 1
     header["ready"] = False
     with pytest.raises(ValueError, match="no longer valid"):
-        connect.open_context_source(Path("unused"), manifest, config)
+        connect.open_context_source(UNUSED, manifest, config)

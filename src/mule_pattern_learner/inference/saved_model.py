@@ -22,6 +22,7 @@ from ..contract.feature_groups import BUILT_IN_GROUPS, FeaturePlan, contract_fin
 from ..contract.sampler_plan import PoolPlan
 from ..contract.time_basis import BASIS_ID
 from ..data.manifest import manifest_digest
+from ..paths import DatasetPaths
 
 # Where each setting of a configuration saved before the typed configuration lives in
 # RunConfig: the dotted name of its field, or None for a setting that names nothing
@@ -209,10 +210,10 @@ class ModelCheckpoint:
         return self.payload.get("training_protocol")
 
     @property
-    def dataset(self) -> Path | None:
+    def dataset(self) -> DatasetPaths | None:
         """The prepared dataset recorded at training time, if any."""
         value = self.payload.get("dataset")
-        return Path(value) if value else None
+        return DatasetPaths(Path(value)) if value else None
 
     def check_contract(self) -> None:
         """Refuse a model saved under another feature or time-basis contract."""
@@ -235,7 +236,7 @@ class ModelCheckpoint:
 
     def check_dataset(
         self,
-        dataset: Path,
+        dataset: DatasetPaths,
         message: str = "Checkpoint belongs to a different prepared dataset",
     ) -> None:
         """Refuse a prepared dataset other than the one this model was trained on."""

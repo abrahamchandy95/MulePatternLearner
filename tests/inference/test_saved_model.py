@@ -41,6 +41,7 @@ from mule_pattern_learner.data.preparation import prepare
 from mule_pattern_learner.inference.predictor import TemporalPredictor
 from mule_pattern_learner.inference.saved_model import ModelCheckpoint, saved_run_config
 from mule_pattern_learner.inference.score_accounts import score
+from mule_pattern_learner.paths import DatasetPaths
 from mule_pattern_learner.testing.builders import neighbourhood, scope_population
 from mule_pattern_learner.testing.fake_graph import FakeExecutor
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
@@ -172,8 +173,8 @@ def fixture_source(config: RunConfig) -> StreamingContextSource:
 
 
 def test_the_dataset_prepared_before_the_restructure_scores_as_it_did(tmp_path: Path) -> None:
-    dataset = tmp_path / "prepared"
-    shutil.copytree(FIXTURES / "dataset", dataset)
+    dataset = DatasetPaths(tmp_path / "prepared")
+    shutil.copytree(FIXTURES / "dataset", dataset.root)
     saved = ModelCheckpoint.load(FIXTURES / "built_in.pt")
     assert saved.config == DEFAULT_CONFIG.with_changes(CHANGES)
     output = tmp_path / "scores.parquet"
@@ -188,7 +189,7 @@ def test_the_dataset_prepared_before_the_restructure_scores_as_it_did(tmp_path: 
 def test_the_same_settings_prepare_the_dataset_of_the_old_code(tmp_path: Path) -> None:
     config = DEFAULT_CONFIG.with_changes(CHANGES)
     executor = FakeExecutor(factory=neighbourhood, population=scope_population(200))
-    dataset = tmp_path / "dataset"
+    dataset = DatasetPaths(tmp_path / "dataset")
     prepare(
         config,
         SOURCE,
@@ -199,11 +200,12 @@ def test_the_same_settings_prepare_the_dataset_of_the_old_code(tmp_path: Path) -
         cutoffs=TigerGraphCutoffs(executor),
         hubs=TigerGraphHubs(executor),
     )
-    for name in ("accounts", "observed_labels"):
-        pd.testing.assert_frame_equal(
-            pd.read_parquet(dataset / f"{name}.parquet"),
-            pd.read_parquet(FIXTURES / "dataset" / f"{name}.parquet"),
-        )
+    fixture = DatasetPaths(FIXTURES / "dataset")
+    for have, want in (
+        (dataset.accounts, fixture.accounts),
+        (dataset.observed_labels, fixture.observed_labels),
+    ):
+        pd.testing.assert_frame_equal(pd.read_parquet(have), pd.read_parquet(want))
     # And a new model trains on it.
     result = train(config, dataset, tmp_path / "model.pt", contexts=fixture_source(config))
     assert result["status"] == "complete"

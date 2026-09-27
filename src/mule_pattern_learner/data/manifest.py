@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -14,29 +13,27 @@ from ..contract.fingerprints import fingerprint
 from ..contract.graph_schema import context_scope
 from ..contract.sampler_plan import sampler_pools
 from ..contract.server import QUERY_FILES
-from ..paths import GSQL_DIR
-from .hub_registry import HUB_FILE
+from ..paths import GSQL_DIR, DatasetPaths
 from .observed_labels import ORACLE_COLUMNS, read_bounded_parquet
 
-MANIFEST = "manifest.json"
 # The settings a dataset is prepared from (dataset_settings). Training compares exactly
 # these; model, optimisation, transport and runtime settings may change between runs.
 DATASET_SETTINGS = ("source_id", "scope", "dataset", "sampler_pools")
 
 
-def read_manifest(dataset: Path) -> dict[str, Any]:
-    return json.loads((dataset / MANIFEST).read_text())
+def read_manifest(dataset: DatasetPaths) -> dict[str, Any]:
+    return json.loads(dataset.manifest.read_text())
 
 
-def write_manifest(dataset: Path, manifest: dict[str, Any]) -> None:
+def write_manifest(dataset: DatasetPaths, manifest: dict[str, Any]) -> None:
     """Replace the manifest atomically, so a crash never leaves a truncated file."""
-    with atomic_write(dataset / MANIFEST) as pending:
+    with atomic_write(dataset.manifest) as pending:
         pending.write_text(json.dumps(manifest, indent=2) + "\n")
 
 
-def manifest_digest(dataset: Path) -> str:
+def manifest_digest(dataset: DatasetPaths) -> str:
     """The manifest's sha256; a checkpoint records it to name its prepared dataset."""
-    return file_digest(dataset / MANIFEST)
+    return file_digest(dataset.manifest)
 
 
 def query_hashes() -> dict[str, str]:
@@ -56,13 +53,13 @@ def changed_query_files(manifest: dict[str, Any]) -> list[str]:
     return sorted(name for name, current in query_hashes().items() if current not in recorded)
 
 
-def check_query_hashes(manifest: dict[str, Any], dataset: Path) -> None:
+def check_query_hashes(manifest: dict[str, Any], dataset: DatasetPaths) -> None:
     changed = changed_query_files(manifest)
     if changed:
         raise ValueError(
-            f"Prepared dataset {dataset} was built from different GSQL sources "
+            f"Prepared dataset {dataset.root} was built from different GSQL sources "
             f"({', '.join(changed)}). Install the current queries (mule-temporal install), "
-            f"then train into a new output, or move {dataset} aside."
+            f"then move {dataset.root} aside to prepare it again."
         )
 
 
@@ -112,22 +109,22 @@ def dataset_mismatches(config: RunConfig, manifest: dict[str, Any]) -> list[str]
     return differing_settings(dataset_settings(source["source_id"], config), recorded)
 
 
-def load_prepared(dataset: Path) -> tuple[dict[str, Any], pd.DataFrame]:
+def load_prepared(dataset: DatasetPaths) -> tuple[dict[str, Any], pd.DataFrame]:
     """Shared training/inference integrity gate for all prepared artifacts."""
     manifest = read_manifest(dataset)
     if manifest["status"] != "ready":
         raise ValueError(f"Dataset is incomplete ({manifest['status']}); run prepare again")
     check_query_hashes(manifest, dataset)
     required = [
-        ("accounts.parquet", "accounts_sha256"),
-        ("observed_labels.parquet", "observed_labels_sha256"),
-        (HUB_FILE, "hubs_sha256"),
+        (dataset.accounts, "accounts_sha256"),
+        (dataset.observed_labels, "observed_labels_sha256"),
+        (dataset.hubs, "hubs_sha256"),
     ]
-    for name, field in required:
-        if file_digest(dataset / name) != manifest[field]:
-            raise ValueError(f"Prepared artifact changed: {name}")
+    for path, field in required:
+        if file_digest(path) != manifest[field]:
+            raise ValueError(f"Prepared artifact changed: {path.name}")
     accounts = read_bounded_parquet(
-        dataset / "accounts.parquet",
+        dataset.accounts,
         "Prepared seed metadata exceeds the bounded population contract",
     )
     if ORACLE_COLUMNS & set(accounts.columns):

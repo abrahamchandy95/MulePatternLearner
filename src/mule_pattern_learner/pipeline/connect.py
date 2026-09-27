@@ -8,7 +8,6 @@ it to the use cases that open one (a data.contexts.ContextOpener).
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from ..config import RunConfig, TransportConfig
@@ -16,6 +15,7 @@ from ..contract.feature_groups import extraction_plan
 from ..contract.sampler_plan import sampler_pools
 from ..data.contexts import StreamingContextSource, streaming_source
 from ..data.manifest import recorded_settings
+from ..paths import DatasetPaths
 from ..tigergraph.connection import Settings
 from ..tigergraph.context_query import TigerGraphContextFetcher
 from ..tigergraph.executor import TigerGraphExecutor
@@ -32,7 +32,7 @@ def connect(transport: TransportConfig) -> TigerGraphExecutor:
 
 
 def open_context_source(
-    dataset: Path, manifest: dict[str, Any], config: RunConfig
+    dataset: DatasetPaths, manifest: dict[str, Any], config: RunConfig
 ) -> StreamingContextSource:
     """Open the live source of a prepared dataset for a training or scoring configuration.
 
@@ -42,7 +42,7 @@ def open_context_source(
     """
     if sampler_pools(config.sampler) != recorded_settings(manifest)["sampler_pools"]:
         raise ValueError(
-            f"Sampler candidate pools differ from the dataset in {dataset}; prepare a new "
+            f"Sampler candidate pools differ from the dataset in {dataset.root}; prepare a new "
             "dataset or restore the prepared sampler pools"
         )
     executor = connect(config.transport)

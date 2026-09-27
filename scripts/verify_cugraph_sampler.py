@@ -289,7 +289,6 @@ def live(roots: int) -> None:
     from mule_pattern_learner.data.manifest import load_prepared
     from mule_pattern_learner.data.splits import sample_keys
     from mule_pattern_learner.model.build import build_model
-    from mule_pattern_learner.paths import dataset_path
     from mule_pattern_learner.pipeline.connect import open_context_source
     from mule_pattern_learner.pipeline.prepare import prepare_live
     from mule_pattern_learner.runtime.device import torch_runtime
@@ -305,9 +304,8 @@ def live(roots: int) -> None:
 
     config = DEFAULT_CONFIG
     plan, sampler = config.feature_plan(), config.sampler
-    # The default run's prepared cache; preparing it here is what `train` would do first.
-    dataset = dataset_path()
-    prepare_live(config, dataset)
+    # The default run's dataset in data/; preparing it here is what `train` would do first.
+    dataset = prepare_live(config)
     manifest, accounts = load_prepared(dataset)
     hubs = load_hub_registry(dataset, manifest)
     date = config.dataset.dates.train[0]

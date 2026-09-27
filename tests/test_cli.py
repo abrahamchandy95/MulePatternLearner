@@ -13,7 +13,7 @@ import pytest
 
 from mule_pattern_learner import cli
 from mule_pattern_learner.config import DEFAULT_CONFIG, RunConfig
-from mule_pattern_learner.paths import REPOSITORY_ROOT
+from mule_pattern_learner.paths import DATA_DIR, REPOSITORY_ROOT, DatasetPaths
 from mule_pattern_learner.pipeline import train as pipeline_train
 from mule_pattern_learner.pipeline.connect import open_context_source
 
@@ -66,7 +66,8 @@ def test_cli_reserves_the_cublas_workspace_first_and_keeps_user_values(
 def test_cli_needs_no_config_truth_or_dataset() -> None:
     parser = cli.build_parser()
     args = parser.parse_args(["train"])
-    assert args.dataset is None
+    # The dataset is the built-in run's own, in data/.
+    assert not hasattr(args, "dataset")
     # The settings are built in: no command reads a configuration file.
     for command in (["train"], ["prepare"]):
         with pytest.raises(SystemExit):
@@ -107,26 +108,27 @@ def test_train_command_prepares_then_trains_or_resumes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     prepared: list[tuple[RunConfig, Path]] = []
-    trained: list[tuple[RunConfig, Path, Path, dict[str, Any]]] = []
+    trained: list[tuple[RunConfig, DatasetPaths, Path, dict[str, Any]]] = []
+    dataset = DatasetPaths.of("id", tmp_path / "data")
 
-    def prepare(c: RunConfig, path: Path) -> dict[str, Any]:
-        prepared.append((c, path))
-        return {"source": {"source_id": "derived"}}
+    def prepare(c: RunConfig, data: Path) -> DatasetPaths:
+        prepared.append((c, data))
+        return dataset
 
     # `mule-temporal train` is pipeline.run with resume: patch the pipeline's steps.
     monkeypatch.setattr(pipeline_train, "prepare_live", prepare)
 
-    def train(c: RunConfig, d: Path, o: Path, **kwargs: Any) -> dict[str, Any]:
+    def train(c: RunConfig, d: DatasetPaths, o: Path, **kwargs: Any) -> dict[str, Any]:
         trained.append((c, d, o, kwargs))
         return {}
 
     monkeypatch.setattr(pipeline_train, "train", train)
     output = tmp_path / "model.pt"
     cli.train_command(cli.build_parser().parse_args(["train", "--output", str(output)]))
-    # One command prepares the built-in run into the run directory, then trains it
+    # One command prepares the built-in run's dataset in data/, then trains it
     # (resuming if interrupted).
-    assert prepared[-1] == (DEFAULT_CONFIG, tmp_path / "model_run" / "prepared")
+    assert prepared[-1] == (DEFAULT_CONFIG, DATA_DIR)
     c, d, o, kwargs = trained[-1]
-    assert c is DEFAULT_CONFIG and d == prepared[-1][1] and o == output
+    assert c is DEFAULT_CONFIG and d == dataset and o == output
     # The trainer opens the live source through the pipeline once its checks passed.
     assert kwargs == {"open_contexts": open_context_source, "resume": True}

@@ -19,7 +19,7 @@ from mule_pattern_learner.config import RunConfig
 from mule_pattern_learner.contract.feature_groups import FeaturePlan, extraction_plan
 from mule_pattern_learner.data.contexts import StreamingContextSource, check_coverage
 from mule_pattern_learner.data.preparation import prepare
-from mule_pattern_learner.paths import REPOSITORY_ROOT
+from mule_pattern_learner.paths import REPOSITORY_ROOT, DatasetPaths
 from mule_pattern_learner.reference import label_reveal
 from mule_pattern_learner.testing.builders import (
     UNIT_SOURCE,
@@ -192,7 +192,7 @@ def test_benchmark_builds_one_training_batch_and_step(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config = live_config(training={"batch_size": 32}, sampler={"fanouts": [8, 2]})
-    dataset = tmp_path / "dataset"
+    dataset = DatasetPaths(tmp_path / "dataset")
     executor = FakeExecutor(factory=neighbourhood, hubs=[("N3", 101)], population=scoped_accounts())
     prepare(
         config,
@@ -206,7 +206,7 @@ def test_benchmark_builds_one_training_batch_and_step(
     )
     module = load("benchmark_batch")
 
-    def open_source(path: Path, manifest: dict[str, Any], training: RunConfig) -> Any:
+    def open_source(path: DatasetPaths, manifest: dict[str, Any], training: RunConfig) -> Any:
         assert path == dataset and training == config
         return StreamingContextSource(
             TigerGraphContextFetcher(executor),
@@ -216,7 +216,7 @@ def test_benchmark_builds_one_training_batch_and_step(
 
     monkeypatch.setattr(module, "open_context_source", open_source)
     output = tmp_path / "report.json"
-    argv = ["benchmark_batch", "--dataset", str(dataset), "--output", str(output)]
+    argv = ["benchmark_batch", "--dataset", str(dataset.root), "--output", str(output)]
     monkeypatch.setattr(sys, "argv", [*argv, "--train-step"])
     module.main(config)
     report = json.loads(output.read_text())
