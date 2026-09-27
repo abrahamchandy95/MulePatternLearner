@@ -23,7 +23,6 @@ from mule_pattern_learner.temporal.live.config_schema import DEFAULT_RUN, run_co
 from mule_pattern_learner.temporal.live.context_query import validate_context
 from mule_pattern_learner.temporal.live.contract import (
     DEFAULT_GROUPS,
-    LEGACY_GROUPS,
     POOL_ACTIVITY_FEATURES,
     POOL_GROUPS,
     POOL_INTERNAL_FEATURES,
@@ -211,15 +210,9 @@ def test_built_in_batches_feed_root_pool_counts_to_the_summary_branch() -> None:
     assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in model.summary.parameters())
 
 
-@pytest.mark.legacy
-def test_pool_groups_need_a_model_that_reads_them_for_roots_only() -> None:
-    # A single model reads every context's summary columns, and children's pool counts
-    # would come from the smaller children pool.
-    for group in POOL_GROUPS:
-        with pytest.raises(ValueError, match="split or summary architecture"):
-            FeaturePlan((*WITHOUT_POOLS["feature_groups"], group), "single")
+def test_pool_groups_feed_models_that_read_them_for_roots_only() -> None:
     # The tabular control of the built-in run (summary architecture) scores roots only.
-    tabular = {**CONFIG, "variant": "tabular"}
+    tabular = {**CONFIG, "architecture": "summary"}
     plan = FeaturePlan.from_config(tabular)
     assert plan.architecture == "summary" and plan.names("summary") == POOL_NAMES
     executor = FakeExecutor({ROOT: context(ROOT, POOL)})
@@ -309,7 +302,7 @@ def test_pool_definitions_are_part_of_the_input_fingerprint_only(
 
 @pytest.mark.parametrize(
     ("groups", "architecture"),
-    [pytest.param(LEGACY_GROUPS, "single", marks=pytest.mark.legacy), (DEFAULT_GROUPS, "split")],
+    [(DEFAULT_GROUPS, "split"), (DEFAULT_GROUPS, "summary")],
 )
 def test_plans_without_pool_groups_are_unaffected(
     groups: tuple[str, ...], architecture: str, monkeypatch: pytest.MonkeyPatch

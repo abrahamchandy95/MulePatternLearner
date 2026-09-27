@@ -31,8 +31,8 @@ from mule_pattern_learner.temporal.live.contract import (
     CLIENT_GROUPS,
     CONTRACT_VERSION,
     DEFAULT_GROUPS,
+    BUILT_IN_GROUPS,
     FEATURE_GROUPS,
-    FEATURE_NAMES,
     POOL_GROUPS,
     RAILS,
     RELATIONS,
@@ -77,7 +77,8 @@ ASSOCIATION_TARGET = {
     rel: typ for pair, types in zip(ASSOCIATIONS, TARGETS) for rel, typ in zip(pair, types)
 }
 PAYMENTS = RELATIONS[:4]
-# Every group a single model may read (FeaturePlan keeps the pool groups out of it).
+# Every group but sampler_meta and the pool groups, whose counts batches give the roots
+# only while the scalar features give them to every context.
 V4_GROUPS = tuple(g for g in FEATURE_GROUPS if g not in ("sampler_meta", *POOL_GROUPS))
 RESAMPLE = SamplerPlan(
     roots=PoolPlan(recent=4, older=3, distinct=2, associations=2),
@@ -199,7 +200,7 @@ def synthetic_row(
         "is_deposit": float(rng.integers(0, 2)),
         "age_days": float(rng.random() * 400),
     }
-    for name in FEATURE_NAMES[9:30]:
+    for name in FEATURE_GROUPS["rolling_windows"].names[:21]:
         features[name] = float(rng.integers(0, 20))
     features.update({"1d_out_in_amount_ratio": 1.5, "7d_out_in_amount_ratio": 0.25})
     features.update({"visible_event_count": 7.0, "decay_1d_out_count": 0.5})
@@ -363,7 +364,6 @@ def reference_batch(
 # Contract ------------------------------------------------------------------------
 
 
-@pytest.mark.legacy
 def test_contract_constants_and_client_groups() -> None:
     assert CONTRACT_VERSION == "temporal_live_v5_candidate_pools"
     assert CHANNELS[:4] == ("unknown", "digital", "branch_or_atm", "bank")
@@ -376,21 +376,20 @@ def test_contract_constants_and_client_groups() -> None:
     assert plan.names("node")[-1] == "history_withheld"
     for hop in (1, 2):
         assert not any("hub" in flag for flag in plan.query_flags(hop))
-    # Legacy plans keep their node layout.
-    assert FeaturePlan().node_names == FEATURE_NAMES
+    # The default plan is the built-in run's.
+    assert FeaturePlan() == FeaturePlan(BUILT_IN_GROUPS, "split")
 
 
-@pytest.mark.legacy
 def test_query_flags_skip_child_summaries_only_for_split_models() -> None:
     groups = ("entity_meta", "entity_age", "rolling_windows", "amount_ratios", "message_core")
     groups += ("time_encoding", "flow_timing", "decayed_activity", "hub_indicator")
-    split, single = FeaturePlan(groups, "split"), FeaturePlan(groups, "single")
+    split, summary = FeaturePlan(groups, "split"), FeaturePlan(groups, "summary")
     assert set(split.query_flags(2)) == set(split.query_flags(1))
     assert split.query_flags(1)["include_rolling_windows"]
     for name, on in split.query_flags(2).items():
         spec = FEATURE_GROUPS[name.removeprefix("include_")]
         assert on == (spec.path != "summary" and name.removeprefix("include_") in groups)
-    assert single.query_flags(2) == single.query_flags(1) == single.query_flags()
+    assert summary.query_flags(2) == summary.query_flags(1) == split.query_flags()
     with pytest.raises(ValueError, match="Hop"):
         split.query_flags(3)
 
@@ -476,12 +475,11 @@ def test_sampler_fingerprints_ignore_backend_and_keep_recorded_values() -> None:
 # Legacy parity and assembly ------------------------------------------------------
 
 
-@pytest.mark.legacy
 @pytest.mark.parametrize("mode", ["eval", "train"])
 @pytest.mark.parametrize(
     "plan",
-    [FeaturePlan(), FeaturePlan(DEFAULT_GROUPS, "split"), FeaturePlan(V4_GROUPS, "single")],
-    ids=["legacy", "v5-split", "all-single"],
+    [FeaturePlan(DEFAULT_GROUPS, "split"), FeaturePlan(V4_GROUPS, "split")],
+    ids=["default", "all-but-pools"],
 )
 def test_vectorised_assembly_matches_the_scalar_features_bit_for_bit(
     mode: str, plan: FeaturePlan

@@ -28,6 +28,20 @@ from .contract import (
 )
 
 MAX_REQUESTS = 64
+# The groups whose include_* parameter defaults to TRUE in the rendered query. Callers
+# pass every flag, so the defaults only keep the installed text as it is until the
+# server step.
+DEFAULT_FLAG_GROUPS = (
+    "entity_meta",
+    "entity_age",
+    "rolling_windows",
+    "recency",
+    "association_counts",
+    "amount_ratios",
+    "message_core",
+    "time_encoding",
+    "pair_window_counts",
+)
 PRIMARY_KEYS = {"Token": "token_id", "Address": "address_id"}
 # Target types of each (forward, reverse) association pair, aligned with ASSOCIATIONS.
 ASSOCIATION_TARGETS = (
@@ -880,9 +894,8 @@ MESSAGES = """    FOREACH item IN @@events DO
 
 def render_context_query() -> str:
     """The exact text of gsql/temporal/training_context.gsql."""
-    flags = ",\n  ".join(
-        f"BOOL {name} = {str(value).upper()}" for name, value in FeaturePlan().query_flags().items()
-    )
+    defaults = FeaturePlan(DEFAULT_FLAG_GROUPS, "split").query_flags()
+    flags = ",\n  ".join(f"BOOL {name} = {str(value).upper()}" for name, value in defaults.items())
     parts = [_header(flags), _root_catalog(), _request_setup()]
     parts.append('    IF root_type == "Account" OR root_type == "Token" THEN\n')
     for prefix, vtype, pid, rail, stem, out_edges, in_edges in EVENT_TYPES:

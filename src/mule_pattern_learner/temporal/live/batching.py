@@ -522,8 +522,8 @@ def make_live_batch(
 
     arrays: dict[str, np.ndarray] = {
         "root_positions": np.asarray([lookup[key] for key in roots], dtype=np.int64),
-        # The distinct roots lead the contexts; only they get pool counts (FeaturePlan
-        # keeps pool groups out of single models, which read every context's).
+        # The distinct roots lead the contexts; only they get pool counts, and the model
+        # reads the summary columns of roots only.
         "x": node_matrix(contexts, plan, pooled=len(set(roots))),
         "neighbor_positions": np.zeros((len(roots), fanouts[0]), dtype=np.int64),
     }

@@ -22,7 +22,6 @@ from mule_pattern_learner.temporal.live.batching import (
 from mule_pattern_learner.temporal.live.context_query import validate_context
 from mule_pattern_learner.temporal.live.contract import (
     DEFAULT_GROUPS,
-    FEATURE_NAMES,
     ContextKey,
     RELATIONS,
     FeaturePlan,
@@ -45,7 +44,6 @@ V5_SAMPLER = SamplerPlan(
 )
 
 
-@pytest.mark.legacy
 def test_recursive_context_keeps_same_neighbor_at_two_different_event_times() -> None:
     root = ContextKey("Account", "root", 100, 1000)
     messages = [message(90, 900, root), message(80, 800, root)]
@@ -62,7 +60,8 @@ def test_recursive_context_keeps_same_neighbor_at_two_different_event_times() ->
     assert model.edge.weight.grad is not None
     assert torch.count_nonzero(model.edge.weight.grad[:, 7:]) > 0
     # A real zero pair gap has cosine coordinates; it is not missing time.
-    assert torch.all(batch["first_edge"][0, 0, 72::2] == 1)
+    gap = FeaturePlan().edge_names.index("gap_fourier_0")
+    assert torch.all(batch["first_edge"][0, 0, gap + 1 : gap + 64 : 2] == 1)
     store.close()
 
 
@@ -92,10 +91,9 @@ def test_basis_and_clock_corruption_are_rejected() -> None:
         validate_context(key, bad)
 
 
-@pytest.mark.legacy
 def test_labels_cannot_enter_node_features() -> None:
     row = context(ContextKey("Account", "root", 100, 1000))
-    assert node_features(row).shape == (len(FEATURE_NAMES),)
+    assert node_features(row).shape == (len(FeaturePlan().node_names),)
     row["features"]["is_mule"] = 1
     with pytest.raises(ValueError, match="Unrecognized"):
         node_features(row)
@@ -105,23 +103,24 @@ def test_amount_ratios_are_required_from_gsql_and_preserved_by_tensor_conversion
     key = ContextKey("Account", "root", 100, 1000)
     row = context(key)
     row["features"].update({"1d_out_in_amount_ratio": 2.5, "7d_out_in_amount_ratio": 100.0})
-    validate_context(key, row)
-    features = node_features(row)
-    assert features[FEATURE_NAMES.index("1d_out_in_amount_ratio")] == pytest.approx(np.log1p(2.5))
-    assert features[FEATURE_NAMES.index("7d_out_in_amount_ratio")] == pytest.approx(np.log1p(100.0))
+    plan = FeaturePlan(("entity_meta", "rolling_windows", "amount_ratios", "message_core"))
+    validate_context(key, row, plan)
+    features = node_features(row, plan)
+    ratio = plan.node_names.index
+    assert features[ratio("1d_out_in_amount_ratio")] == pytest.approx(np.log1p(2.5))
+    assert features[ratio("7d_out_in_amount_ratio")] == pytest.approx(np.log1p(100.0))
     del row["features"]["1d_out_in_amount_ratio"]
     with pytest.raises(ValueError, match="missing amount ratios"):
-        validate_context(key, row)
+        validate_context(key, row, plan)
 
 
-@pytest.mark.legacy
 def test_isolated_entities_and_model_ablations() -> None:
     key = ContextKey("Token", "alone", 100, 1000)
     store = StreamingContextSource(FakeExecutor({}))
     batch = make_live_batch(store, [key])
     assert not batch["first_mask"].any()
-    for variant in ("temporal", "no_fourier", "tabular"):
-        assert torch.isfinite(LiveTGAT(16, 4, 0, variant)(batch)).all()
+    for plan in (FeaturePlan(), FeaturePlan(architecture="summary")):
+        assert torch.isfinite(LiveTGAT(16, 4, 0, plan=plan)(batch)).all()
     store.close()
 
 
@@ -250,7 +249,6 @@ def test_hops_use_their_own_pools_and_only_spot_checks_carry_encodings() -> None
     assert all(not p["emit_encodings"] and not p["include_pair_window_counts"] for p in children)
 
 
-@pytest.mark.legacy
 def test_same_context_in_two_scopes_or_hops_is_never_shared() -> None:
     key = ContextKey("Account", "a", 100, 1000, "strict", 1)
     executor = FakeExecutor()
@@ -268,11 +266,24 @@ def test_same_context_in_two_scopes_or_hops_is_never_shared() -> None:
     assert np.isfinite(node_features(context(key), V5_PLAN)).all()
 
 
+WINDOW_GROUPS = (
+    "entity_meta",
+    "entity_age",
+    "rolling_windows",
+    "recency",
+    "association_counts",
+    "amount_ratios",
+    "message_core",
+    "time_encoding",
+    "pair_window_counts",
+)
+
+
 @pytest.mark.legacy
 def test_extraction_plan_ignores_client_groups_and_keeps_the_model_architecture() -> None:
-    from mule_pattern_learner.temporal.live.contract import LEGACY_GROUPS, extraction_plan
+    from mule_pattern_learner.temporal.live.contract import extraction_plan
 
-    superset = sorted({*LEGACY_GROUPS, *DEFAULT_GROUPS} - {"hub_indicator"})
+    superset = sorted({*WINDOW_GROUPS, *DEFAULT_GROUPS} - {"hub_indicator"})
     split = extraction_plan(
         {
             "feature_groups": list(DEFAULT_GROUPS),
@@ -282,31 +293,37 @@ def test_extraction_plan_ignores_client_groups_and_keeps_the_model_architecture(
     )
     assert "hub_indicator" not in split.groups and split.architecture == "split"
     assert not split.query_flags(2)["include_rolling_windows"]
-    single = extraction_plan({"feature_groups": list(LEGACY_GROUPS), "extraction_groups": superset})
-    # A single model reads child summaries, so its second hop keeps the summary flags.
-    assert single.architecture == "single" and single.query_flags(2)["include_rolling_windows"]
+    summary = extraction_plan(
+        {
+            "feature_groups": list(WINDOW_GROUPS),
+            "architecture": "summary",
+            "extraction_groups": superset,
+        }
+    )
+    assert summary.architecture == "summary" and summary.query_flags(1)["include_rolling_windows"]
     assert "hub_indicator" not in extraction_plan({"feature_groups": list(DEFAULT_GROUPS)}).groups
     with pytest.raises(ValueError, match="pair_history"):
         extraction_plan(
-            {"feature_groups": list(DEFAULT_GROUPS), "extraction_groups": list(LEGACY_GROUPS)}
+            {"feature_groups": list(DEFAULT_GROUPS), "extraction_groups": list(WINDOW_GROUPS)}
         )
 
 
 @pytest.mark.legacy
 def test_feature_arms_and_model_seeds_share_one_streamed_preparation() -> None:
-    from mule_pattern_learner.temporal.live.contract import LEGACY_GROUPS
     from mule_pattern_learner.temporal.live.dataset import preparation_view
+    from mule_pattern_learner.temporal.live.config_schema import validate_config
     from mule_pattern_learner.temporal.live.experiments import feature_experiments
     from temporal_fakes import live_config
 
-    groups = sorted({*LEGACY_GROUPS, *DEFAULT_GROUPS, "event_channel", "decayed_activity"})
+    groups = sorted({*WINDOW_GROUPS, *DEFAULT_GROUPS, "event_channel", "decayed_activity"})
     groups += ["history_support", "identity_order", "device_ip_context"]
     base = live_config(extraction_groups=groups)
     views = {json_key(preparation_view(arm)) for arm in feature_experiments(base).values()}
-    assert len(views) == 1  # single, split and summary arms all fit the same preparation
-    # Model variants read fewer inputs but keep the configured extraction.
+    assert len(views) == 1  # split and summary arms all fit the same preparation
+    # Models saved with a variant read fewer inputs but keep the configured extraction.
     variants = {
-        json_key(preparation_view({**base, "variant": v})) for v in ("no_fourier", "tabular")
+        json_key(preparation_view(validate_config({**base, "variant": v})))
+        for v in ("no_fourier", "tabular")
     }
     assert variants == views
     reseeded = {**base, "seed": 7, "cohort_seed": base["seed"]}

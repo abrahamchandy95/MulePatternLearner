@@ -257,7 +257,7 @@ def test_nonsense_options_are_rejected() -> None:
         with pytest.raises(ValueError, match="slot_sum"):
             validate_config({"slot_sum": flag})
     # The tabular variant of the built-in run has no slots: the switch adds nothing.
-    tabular = {**CONFIG, "variant": "tabular"}
+    tabular = {**CONFIG, "architecture": "summary"}
     model = build_model(tabular, FeaturePlan.from_config(tabular))
     assert model.slot_sum is None and model.head[0].in_features == HIDDEN
     # A batch wider than the configured fan-out would change the divisor's meaning.

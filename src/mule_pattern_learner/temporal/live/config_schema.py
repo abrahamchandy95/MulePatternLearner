@@ -19,6 +19,8 @@ from typing import Annotated, Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from .contract import BUILT_IN_GROUPS, FEATURE_GROUPS
+
 TRANSPORT_DEFAULTS: dict[str, int] = {
     # Measured on the live graph: 8 contexts per request, 16 in parallel built a 64-root
     # batch in about 11 s, against about 20 s for 16 x 8 and 22 s for 4 x 16.
@@ -55,7 +57,6 @@ FALLBACKS: dict[str, Any] = {
     "hidden": 64,
     "heads": 4,
     "dropout": 0.15,
-    "variant": "temporal",
     "slot_sum": False,
     "epochs": 30,
     "patience": 6,
@@ -90,7 +91,6 @@ DEFAULT_RUN: dict[str, Any] = {
     "hidden": 64,
     "heads": 4,
     "dropout": 0.15,
-    "variant": "temporal",
     "architecture": "split",
     # Beside attention, feed the head a small MLP of each of the root's hop-1 slots, summed
     # and divided by the hop-1 fan-out. Attention averages linear projections of the
@@ -108,16 +108,7 @@ DEFAULT_RUN: dict[str, Any] = {
     # chosen after reading the generator's mule typology, and the internal ones
     # (pool_internal_inflows) suit the generator more than a real bank. Computed on the
     # client, so the query and the extraction groups are unchanged.
-    "feature_groups": [
-        "entity_meta",
-        "hub_indicator",
-        "message_core",
-        "time_encoding",
-        "pair_history",
-        "flow_timing",
-        "pool_activity",
-        "pool_internal_inflows",
-    ],
+    "feature_groups": list(BUILT_IN_GROUPS),
     "learning_rate": 0.001,
     "weight_decay": 0.0001,
     # Validate, select and save an exponential moving average of the weights (decay per
@@ -257,8 +248,7 @@ class LiveConfig(_Strict):
     # Features, sampling and model.
     feature_groups: list[str] | None = None
     extraction_groups: list[str] | None = None
-    variant: Literal["temporal", "no_fourier", "tabular"] | None = None
-    architecture: Literal["single", "split", "summary"] | None = None
+    architecture: Literal["split", "summary"] | None = None
     # Sum over the root's hop-1 slots beside attention; the summary architecture ignores it.
     slot_sum: bool | None = None
     fanouts: (
@@ -320,8 +310,6 @@ class LiveConfig(_Strict):
     @field_validator("feature_groups", "extraction_groups")
     @classmethod
     def _known_groups(cls, groups: list[str] | None) -> list[str] | None:
-        from .contract import FEATURE_GROUPS
-
         unknown = sorted(set(groups or ()) - set(FEATURE_GROUPS))
         if unknown:
             raise ValueError(f"unknown feature groups {unknown}; known: {sorted(FEATURE_GROUPS)}")
@@ -351,11 +339,33 @@ def without_retired_keys(config: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def without_variant(config: dict[str, Any]) -> dict[str, Any]:
+    """config without `variant`, which configurations saved before the restructure hold.
+
+    The model variants became settings: "temporal" is the plain model, "tabular" the
+    summary architecture and "no_fourier" the feature groups without time_encoding.
+    Extraction keeps the configured feature groups, as it did for a variant.
+    """
+    if "variant" not in config:
+        return config
+    result = dict(config)
+    variant = result.pop("variant")
+    groups = list(result.get("feature_groups") or BUILT_IN_GROUPS)
+    if variant == "tabular":
+        result["architecture"] = "summary"
+    elif variant == "no_fourier":
+        result["feature_groups"] = [group for group in groups if group != "time_encoding"]
+        result.setdefault("extraction_groups", groups)
+    elif variant != "temporal":
+        raise ValueError(f"variant = {variant!r} is no longer supported")
+    return result
+
+
 def validate_config(config: dict[str, Any]) -> dict[str, Any]:
     """Return a validated copy with operational defaults; raise ValueError on bad input."""
     if not isinstance(config, dict):  # pyright: ignore[reportUnnecessaryIsInstance]
         raise ValueError("Configuration must be a table")
-    config = without_retired_keys(config)
+    config = without_variant(without_retired_keys(config))
     unknown = sorted(set(config) - KNOWN_KEYS)
     if unknown:
         raise ValueError(

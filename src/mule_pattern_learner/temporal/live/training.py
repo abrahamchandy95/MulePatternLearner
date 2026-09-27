@@ -1010,7 +1010,6 @@ class _TrainingRun:
             "status": "complete",
             "cohort": self.manifest["cohort"],
             "label_policy": "graph_observed",
-            "variant": self.model.variant,
             "seed": self.settings.seed,
             "known_mules": label_summary(self.mask),
             "device": str(self.device),

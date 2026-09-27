@@ -8,10 +8,11 @@ import json
 from pathlib import Path
 
 from mule_pattern_learner.temporal.live.context_query import validate_context
-from mule_pattern_learner.temporal.live.contract import ContextKey
+from mule_pattern_learner.temporal.live.contract import ContextKey, FeaturePlan, SamplerPlan
 from mule_pattern_learner.temporal.live.dataset import query_hashes, resolve_cutoff
 from mule_pattern_learner.temporal.live.executor import TigerGraphExecutor, checked_rows
 from mule_pattern_learner.temporal.live.installation import verify_sources
+from mule_pattern_learner.temporal.live.queries import DEFAULT_FLAG_GROUPS
 
 
 def main() -> None:
@@ -50,7 +51,9 @@ def main() -> None:
             },
         )
     )[0]
-    validate_context(key, row, require_encodings=True)
+    # The request passes no flags or pools beyond per_relation, so it gets the defaults.
+    defaults = FeaturePlan(DEFAULT_FLAG_GROUPS, "split")
+    validate_context(key, row, defaults, SamplerPlan(), require_encodings=True)
     pairs = []
     for relation in ("zelle_out", "payment_out", "payment_in"):
         message = next((m for m in row["messages"] if m["relation"] == relation), None)

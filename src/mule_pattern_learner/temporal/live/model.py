@@ -54,15 +54,12 @@ class LiveTGAT(nn.Module):
         hidden: int = FALLBACKS["hidden"],
         heads: int = FALLBACKS["heads"],
         dropout: float = FALLBACKS["dropout"],
-        variant: str = FALLBACKS["variant"],
         *,
         plan: FeaturePlan | None = None,
         slot_sum: bool = FALLBACKS["slot_sum"],
         first_fanout: int = FALLBACKS["fanouts"][0],
     ) -> None:
         super().__init__()
-        if variant not in {"temporal", "no_fourier", "tabular"}:
-            raise ValueError("Unknown model variant")
         if not 8 <= hidden <= 512 or not 1 <= heads <= 16 or hidden % heads:
             raise ValueError("Hidden size must be 8..512 and divisible by 1..16 heads")
         if not 0 <= dropout < 1:
@@ -76,16 +73,13 @@ class LiveTGAT(nn.Module):
             or not 1 <= first_fanout <= 64
         ):
             raise ValueError(f"Hop-1 fan-out must be an integer in [1,64], got {first_fanout!r}")
-        self.variant = variant
-        self.plan = plan or FeaturePlan.from_config({"variant": variant})
-        if slot_sum and self.plan.architecture == "summary":
+        self.plan = plan = plan or FeaturePlan()
+        if slot_sum and plan.architecture == "summary":
             raise ValueError("The summary architecture has no hop-1 slots to sum")
-        self.legacy_no_fourier = plan is None and variant == "no_fourier"
         self.hidden = hidden
-        plan = self.plan
-        node_names = (
-            plan.node_names if plan.architecture in ("single", "summary") else plan.names("node")
-        )
+        # A summary model reads every root column; the split model's summary columns go
+        # to their own branch.
+        node_names = plan.node_names if plan.architecture == "summary" else plan.names("node")
         self.node_indices = tuple(plan.node_names.index(n) for n in node_names)
         self.summary_indices = tuple(plan.node_names.index(n) for n in plan.names("summary"))
         self.node = self.projection(len(node_names), hidden)
@@ -131,11 +125,8 @@ class LiveTGAT(nn.Module):
         return module(x) if module is not None else x.new_zeros((*x.shape[:-1], self.hidden))
 
     def edge_embedding(self, batch: dict[str, torch.Tensor], prefix: str) -> torch.Tensor:
-        x = batch[prefix + "edge"]
-        if self.legacy_no_fourier:
-            x = torch.cat((x[..., :3], x[..., 4:7]), dim=-1)
         value = (
-            self.edge(x)
+            self.edge(batch[prefix + "edge"])
             + self.relation(batch[prefix + "relation"])
             + self.rail(batch[prefix + "rail"])
         )
@@ -206,7 +197,7 @@ def probabilities_from_logits(logits: torch.Tensor) -> np.ndarray:
 def build_model(
     config: dict[str, Any], plan: FeaturePlan, *, dropout: float | None = None
 ) -> LiveTGAT:
-    """The model a configuration describes (hidden, heads, dropout, variant, slot_sum).
+    """The model a configuration describes (hidden, heads, dropout, slot_sum).
 
     ``dropout`` replaces the configured rate, for dropout-free determinism checks.
     The summary architecture has no hop-1 slots, so it ignores ``slot_sum`` as it
@@ -216,7 +207,6 @@ def build_model(
         int(setting(config, "hidden")),
         int(setting(config, "heads")),
         float(setting(config, "dropout") if dropout is None else dropout),
-        str(setting(config, "variant")),
         plan=plan,
         slot_sum=setting(config, "slot_sum") if plan.architecture != "summary" else False,
         first_fanout=fanouts(config)[0],

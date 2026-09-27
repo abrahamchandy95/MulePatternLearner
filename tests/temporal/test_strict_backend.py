@@ -120,7 +120,8 @@ def test_new_account_scoring_needs_neither_training_dataset_nor_labels(tmp_path:
     assert result["accounts"] == len(frame) == 13
     assert all(frame.score.between(0, 1))
     assert frame.account_id.tolist() == [f"never_trained_{i}" for i in range(13)]
-    assert all(len(v) == 16 for v in frame.embedding)
+    # The embedding joins the attention output and the summary branch of the pool counts.
+    assert all(len(v) == 32 for v in frame.embedding)
     assert not (tmp_path / "new.parquet.pending").exists()
     assert not {"is_mule", "known_positive", "pu_label"} & set(frame.columns)
     # The hub registry was computed for the requested cutoff only (one past the last event).
