@@ -14,6 +14,7 @@ from typing import Any
 
 import numpy as np
 
+from ..contract.bounds import REQUEST_KEYS
 from ..contract.feature_groups import (
     AMOUNT_RATIO_CAP,
     AMOUNT_RATIO_FEATURES,
@@ -212,8 +213,8 @@ def query_context_rows(
     """One REST call; validated ok rows or per-request status rows, in key order."""
     if not batch or len({(k.scope_id, k.visibility_phase) for k in batch}) != 1:
         raise ValueError("Query batch must have one visibility scope and phase")
-    if len(batch) > 64:
-        raise ValueError("A context request carries at most 64 keys")
+    if len(batch) > REQUEST_KEYS.high:
+        raise ValueError(f"A context request carries at most {REQUEST_KEYS.high} keys")
     params = {
         "node_types": [key.node_type for key in batch],
         "node_ids": [key.node_id for key in batch],

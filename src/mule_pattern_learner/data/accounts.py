@@ -9,6 +9,7 @@ from typing import Any
 
 import pandas as pd
 
+from ..contract.bounds import ID_BYTES, POSITIVE_POOL, SEED_LIMIT
 from ..contract.clock import timestamp
 from ..contract.fingerprints import stable_score
 from ..contract.graph_schema import PHASE_SPLIT, SPLITS
@@ -79,9 +80,11 @@ def scoped_cohort(
     graph_labels = reads_graph_labels(labels)
     limits = config["seed_limits"]
     if set(limits) != set(SPLITS) or any(
-        type(n) is not int or not 1 <= n <= 20000 for n in limits.values()
+        type(n) is not int or not SEED_LIMIT.holds(n) for n in limits.values()
     ):
-        raise ValueError("seed_limits needs three integer capacities in [1,20000]")
+        raise ValueError(
+            f"seed_limits needs three integer capacities in [{SEED_LIMIT.low},{SEED_LIMIT.high}]"
+        )
     seed = cohort_seed(config)
     known_ids = labels.positive_ids()
     heaps: dict[str, list[tuple[float, str, dict[str, Any]]]] = {s: [] for s in limits}
@@ -92,7 +95,7 @@ def scoped_cohort(
             raise ValueError("Oracle fields cannot enter population metadata")
         _check_label_fields(row, graph_labels)
         account = row["account_id"]
-        if not isinstance(account, str) or len(account.encode()) > 1024:
+        if not isinstance(account, str) or len(account.encode()) > ID_BYTES:
             raise ValueError("Account pagination/ID violates the transport contract")
         # Server-assigned scope partitions are the visibility phases of the splits.
         if row["partition"] not in PHASE_SPLIT:
@@ -111,7 +114,7 @@ def scoped_cohort(
         elif rank < -heap[0][0]:
             heapq.heapreplace(heap, entry)
         if account in known_ids or (graph_labels and row["observed_positive"]):
-            if len(positives) >= 40000:
+            if len(positives) >= POSITIVE_POOL:
                 raise ValueError("Observed-positive pool exceeds bounded cohort capacity")
             positives[account] = {**row, "in_marginal": False}
     selected = dict(positives)

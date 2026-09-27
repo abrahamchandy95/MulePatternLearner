@@ -16,9 +16,10 @@ from types import TracebackType
 from typing import Any, Generic, TypeVar
 import weakref
 
+from ..contract.bounds import PREFETCH_BATCHES
+
 T = TypeVar("T")
 R = TypeVar("R")
-MAX_PREFETCH = 8
 _END = object()
 
 _Work = tuple[Future[Any], Callable[..., Any], tuple[Any, ...]]
@@ -126,8 +127,10 @@ class BatchPrefetcher(Generic[T, R]):
         depth: int = 2,
         name: str = "temporal-batch",
     ) -> None:
-        if not 0 <= depth <= MAX_PREFETCH:
-            raise ValueError(f"prefetch_batches must be in [0,{MAX_PREFETCH}]")
+        if not PREFETCH_BATCHES.holds(depth):
+            raise ValueError(
+                f"prefetch_batches must be in [{PREFETCH_BATCHES.low},{PREFETCH_BATCHES.high}]"
+            )
         self.build, self.depth = build, depth
         self.items = iter(items)
         self.pool = DaemonPool(depth, name)

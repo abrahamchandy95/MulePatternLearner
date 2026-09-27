@@ -41,6 +41,7 @@ from ..artifacts import atomic_write
 from ..batching.assemble import RootBatch, batch_device, build_root_batch, to_device
 from ..batching.limits import BatchLimits
 from ..config import fanouts, validate_config
+from ..contract.bounds import PREFETCH_BATCHES
 from ..contract.feature_groups import FeaturePlan, extraction_plan
 from ..contract.graph_schema import ContextKey, context_scope
 from ..contract.sampler_plan import SamplerPlan
@@ -56,7 +57,7 @@ from ..model.build import build_model
 from ..model.loss import NonNegativePULoss
 from ..paths import output_paths
 from ..runtime.device import choose_device, torch_runtime
-from ..runtime.workers import MAX_PREFETCH, BatchPrefetcher
+from ..runtime.workers import BatchPrefetcher
 from ..sampling.backend import resolve_backend
 from .averaging import WeightAverage, evaluated_weights
 from .checkpoint import (
@@ -110,8 +111,10 @@ class RunSettings:
             raise ValueError("Training needs two fanouts, epochs >= 1 and patience >= 0")
         if not 0.0 <= self.max_rejected_root_fraction <= 1.0:
             raise ValueError("max_rejected_root_fraction must be in [0,1]")
-        if not 0 <= self.prefetch_batches <= MAX_PREFETCH:
-            raise ValueError(f"prefetch_batches must be in [0,{MAX_PREFETCH}]")
+        if not PREFETCH_BATCHES.holds(self.prefetch_batches):
+            raise ValueError(
+                f"prefetch_batches must be in [{PREFETCH_BATCHES.low},{PREFETCH_BATCHES.high}]"
+            )
         if self.checkpoint_every_steps < 0 or self.log_every_steps < 1:
             raise ValueError("checkpoint_every_steps must be >= 0 and log_every_steps >= 1")
         if not 0.0 <= self.weight_average_decay < 1.0:

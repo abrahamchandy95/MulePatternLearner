@@ -21,6 +21,7 @@ from typing import Any
 import pandas as pd
 from pyTigerGraph.common.exception import TigerGraphException
 
+from mule_pattern_learner.contract.bounds import REQUEST_KEYS
 from mule_pattern_learner.contract.feature_groups import FeaturePlan, extraction_plan
 from mule_pattern_learner.contract.graph_schema import RELATIONS, ContextKey
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
@@ -41,7 +42,6 @@ from mule_pattern_learner.tigergraph.hubs import HUB_QUERY
 from mule_pattern_learner.tigergraph.scope import SCOPE_POLICY_QUERY
 
 PAYMENT_RELATIONS = frozenset(RELATIONS[:4])
-MAX_REQUEST_KEYS = 64
 
 
 def signature(path: str, name: str) -> frozenset[str]:
@@ -153,7 +153,7 @@ class FakeExecutor:
     def context_rows(self, params: dict[str, Any]) -> list[dict[str, Any]]:
         assert set(params) == CONTEXT_PARAMETERS, set(params) ^ CONTEXT_PARAMETERS
         keys = request_keys(params)
-        assert 1 <= len(keys) <= MAX_REQUEST_KEYS
+        assert REQUEST_KEYS.holds(len(keys))
         pool = tuple(
             int(params[k]) for k in ("per_relation", "k_old", "k_div", "k_assoc", "max_history")
         )
