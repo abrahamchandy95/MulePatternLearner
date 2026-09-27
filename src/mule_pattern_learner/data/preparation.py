@@ -102,7 +102,7 @@ def _stage_hubs(
         registry.save(hubs_path)
         manifest.update(hub_manifest(registry, hubs_path))
         write_manifest(dataset, manifest)
-        emit({"hub_counts": manifest["hub_counts"]})
+        emit({"event": "hubs", "hub_counts": manifest["hub_counts"]})
 
 
 def prepare(

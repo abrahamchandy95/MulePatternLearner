@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from mule_pattern_learner.artifacts import read_events
-from mule_pattern_learner.runtime.progress import emit, recording
+from mule_pattern_learner.runtime.progress import emit, recording, warn
 
 
 def test_lines_are_printed_and_recorded_only_while_a_run_records(
@@ -28,7 +28,18 @@ def test_lines_are_printed_and_recorded_only_while_a_run_records(
     assert read_events(other) == [{"event": "inner"}]
 
 
-def test_a_line_that_is_not_json_is_refused(tmp_path: Path) -> None:
-    with recording(tmp_path / "events.jsonl"), pytest.raises(ValueError):
-        emit({"loss": float("nan")})
+def test_a_line_that_is_not_json_or_names_no_event_is_refused(tmp_path: Path) -> None:
+    with recording(tmp_path / "events.jsonl"):
+        with pytest.raises(ValueError):
+            emit({"event": "train", "loss": float("nan")})
+        with pytest.raises(ValueError, match="needs an event name"):
+            emit({"scope": "s", "created": True})
     assert not (tmp_path / "events.jsonl").exists()
+
+
+def test_warnings_are_events(tmp_path: Path) -> None:
+    with recording(tmp_path / "events.jsonl"):
+        warn("hub_stubs", "hub children become stubs")
+    assert read_events(tmp_path / "events.jsonl") == [
+        {"event": "warning", "warning": "hub_stubs", "message": "hub children become stubs"}
+    ]

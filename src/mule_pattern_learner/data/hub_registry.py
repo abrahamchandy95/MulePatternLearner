@@ -29,13 +29,13 @@ from collections.abc import Iterable
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-import warnings
 
 import pandas as pd
 
 from ..artifacts import atomic_write, file_digest
 from ..contract.graph_schema import HUB_COLUMNS, HUB_REASONS, context_scope
 from ..paths import DatasetPaths
+from ..runtime.progress import warn
 
 if TYPE_CHECKING:
     from ..contract.feature_groups import FeaturePlan
@@ -198,13 +198,12 @@ def load_hub_registry(dataset: DatasetPaths, manifest: dict[str, Any]) -> HubReg
 
 
 def warn_hub_stubs(hubs: HubRegistry, plan: FeaturePlan) -> None:
-    """Warn once when hub children become stubs the model cannot recognise as hubs."""
+    """Warn when hub children become stubs the model cannot recognise as hubs."""
     if len(hubs) and "hub_indicator" not in plan.groups:
-        warnings.warn(
+        warn(
+            "hub_stubs",
             f"The hub registry lists {len(hubs)} hub rows but the feature plan has no "
             "hub_indicator group: hub children are replaced by stubs without history, which "
             "this model cannot tell apart from dormant accounts. Add hub_indicator to "
-            "feature_groups to give stubs their history_withheld flag.",
-            UserWarning,
-            stacklevel=2,
+            "features to give stubs their history_withheld flag.",
         )

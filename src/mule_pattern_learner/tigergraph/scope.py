@@ -193,14 +193,14 @@ def ensure_scope(
     attrs = scope_header(executor, scope_id)
     if attrs is not None:
         counts = verified()
-        emit({"scope": scope_id, "unowned_members": counts})
+        emit({"event": "scope", "scope": scope_id, "unowned_members": counts})
         return
     if not scope.create:
         raise ValueError(
             f"Scope {scope_id!r} does not exist on TigerGraph and scope.create is false; "
             "set it to true to let the first run create it"
         )
-    emit({"scope": scope_id, "creating": True})
+    emit({"event": "scope", "scope": scope_id, "creating": True})
     created = checked_rows(
         executor.run(
             CREATE_SCOPE_QUERY,
@@ -224,4 +224,4 @@ def ensure_scope(
         )
     )
     counts = verified()
-    emit({"scope": scope_id, "created": True, "unowned_members": counts})
+    emit({"event": "scope", "scope": scope_id, "created": True, "unowned_members": counts})

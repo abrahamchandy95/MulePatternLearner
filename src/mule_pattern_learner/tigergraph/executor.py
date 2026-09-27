@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Callable, Iterator
 import json
-import logging
 import random
 import re
 import threading
@@ -15,13 +14,13 @@ from typing import TYPE_CHECKING, Any, Protocol, TypeVar
 from ..config import DEFAULT_CONFIG
 from ..contract.bounds import OUTAGE_SECONDS, QUERY_ATTEMPTS
 from ..contract.server import GRAPH_NAME
+from ..runtime.progress import emit
 
 if TYPE_CHECKING:
     from pyTigerGraph import TigerGraphConnection
 
     from .connection import Settings
 
-LOGGER = logging.getLogger(__name__)
 T = TypeVar("T")
 
 
@@ -306,13 +305,15 @@ class TigerGraphExecutor:
                     pause = self.delay(1)
                 with self._lock:
                     self.retries[what] += 1
-                LOGGER.warning(
-                    "TigerGraph %s failure in %s (attempt %d, retry in %.1fs): %s",
-                    kind,
-                    label,
-                    total,
-                    pause,
-                    error_summary(error),
+                emit(
+                    {
+                        "event": "retry",
+                        "failure": kind,
+                        "operation": label,
+                        "attempt": total,
+                        "retry_in_s": round(pause, 1),
+                        "error": error_summary(error),
+                    }
                 )
                 self._sleep(pause)
             else:

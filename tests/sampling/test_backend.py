@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import json
+import re
 from typing import Any
-import warnings
 
 import pytest
 import torch
@@ -31,21 +32,28 @@ def _fake_probes(monkeypatch: pytest.MonkeyPatch, probe: CuGraphProbe) -> list[i
     return calls
 
 
+def warnings_emitted(capsys: pytest.CaptureFixture[str]) -> list[dict[str, Any]]:
+    """The warning events printed since the last call."""
+    printed = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    return [record for record in printed if record["event"] == "warning"]
+
+
 def test_auto_backend_falls_back_to_torch_when_the_probe_fails(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     broken = CuGraphProbe(False, True, "RuntimeError: CUDA error: no kernel image")
     calls = _fake_probes(monkeypatch, broken)
-    with pytest.warns(RuntimeWarning, match="no kernel image.*torch sampler"):
-        assert resolve_backend(RESAMPLE, "cuda:1") == "torch"
+    assert resolve_backend(RESAMPLE, "cuda:1") == "torch"
+    (warning,) = warnings_emitted(capsys)
+    assert warning["warning"] == "cugraph_probe"
+    assert re.search("no kernel image.*torch sampler", warning["message"])
     with pytest.raises(RuntimeError, match="cannot run on cuda:1: RuntimeError: CUDA error"):
         resolve_backend(replace(RESAMPLE, backend="cugraph"), "cuda:1")
     assert calls == [1]  # probed once per process and device, then cached
     # cuGraph not installed at all: torch without a warning.
     _fake_probes(monkeypatch, CuGraphProbe(False, False, "ModuleNotFoundError: cupy"))
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
-        assert resolve_backend(RESAMPLE, "cuda:0") == "torch"
+    assert resolve_backend(RESAMPLE, "cuda:0") == "torch"
+    assert warnings_emitted(capsys) == []
     calls = _fake_probes(monkeypatch, CuGraphProbe(True, True, "ok"))
     assert resolve_backend(RESAMPLE, "cuda:0") == "cugraph"
     assert resolve_backend(replace(RESAMPLE, backend="cugraph"), "cuda:0") == "cugraph"

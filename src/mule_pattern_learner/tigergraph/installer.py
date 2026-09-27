@@ -176,7 +176,7 @@ def install(
     names = [name for name in queries if name in stale]
     logs["installed"] = names
     logs["up_to_date"] = [name for name in queries if name not in stale]
-    emit({"install": names, "up_to_date": logs["up_to_date"]})
+    emit({"event": "install", "stale": names, "up_to_date": logs["up_to_date"]})
     if not names:
         logs["verified"] = verify_sources(executor, files)
         return logs
@@ -198,8 +198,9 @@ def install(
             raise
         emit(
             {
-                "install_request": "no answer; polling the endpoint listing",
+                "event": "install_unanswered",
                 "error": type(error).__name__,
+                "note": "polling the endpoint listing",
             }
         )
     request_id = status.get("requestId") if isinstance(status, dict) else None
@@ -210,7 +211,14 @@ def install(
                 f"Query installation {request_id} still running after {elapsed:.0f}s; "
                 "check it with getQueryInstallationStatus before retrying"
             )
-        emit({"installing": len(names), "request_id": request_id, "elapsed_s": round(elapsed)})
+        emit(
+            {
+                "event": "install_wait",
+                "installing": len(names),
+                "request_id": request_id,
+                "elapsed_s": round(elapsed),
+            }
+        )
         sleep(poll_s)
         status = executor.call(
             lambda conn: conn.getQueryInstallationStatus(str(request_id)),
@@ -248,5 +256,5 @@ def _await_enabled(
                 "may still be compiling: re-run `mule install` later, which installs "
                 "only what is still stale."
             )
-        emit({"awaiting": pending, "elapsed_s": round(elapsed)})
+        emit({"event": "install_wait", "awaiting": pending, "elapsed_s": round(elapsed)})
         sleep(poll_s)
