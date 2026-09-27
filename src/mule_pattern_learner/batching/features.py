@@ -18,7 +18,7 @@ from ..contract.feature_groups import (
     POOL_INTERNAL_FEATURES,
     FeaturePlan,
 )
-from ..contract.graph_schema import CHANNELS, RAILS, RELATIONS, STRATA
+from ..contract.graph_schema import CHANNELS, RAILS, RELATION_INDEX, STRATA
 from .pool_counts import pool_activity
 
 DAY_MS = 86_400_000
@@ -29,7 +29,6 @@ _NODE_NAMES = frozenset(
     n for spec in FEATURE_GROUPS.values() if spec.path in ("node", "summary") for n in spec.names
 )
 _POOL_NAMES = frozenset(POOL_ACTIVITY_FEATURES + POOL_INTERNAL_FEATURES)
-_RELATION = {name: i for i, name in enumerate(RELATIONS)}
 _RAIL = {name: i for i, name in enumerate(RAILS)}
 _CHANNEL = {name: i for i, name in enumerate(CHANNELS)}
 _STRATUM = {name: i for i, name in enumerate(STRATA)}
@@ -135,7 +134,7 @@ def edge_block(messages: Sequence[dict[str, Any]], plan: FeaturePlan) -> dict[st
     log = _log_columns(names)
     values[:, log] = np.log1p(values[:, log])
     try:
-        relation = [_RELATION[m["relation"]] for m in messages]
+        relation = [RELATION_INDEX[m["relation"]] for m in messages]
         rail = [_RAIL[m["rail"]] for m in messages]
     except KeyError as error:
         raise ValueError(f"Unknown relation or rail {error.args[0]!r}") from None

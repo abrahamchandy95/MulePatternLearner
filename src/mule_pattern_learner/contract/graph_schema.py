@@ -23,6 +23,8 @@ ASSOCIATIONS = (
 RELATIONS = ("zelle_out", "zelle_in", "payment_out", "payment_in") + tuple(
     name for pair in ASSOCIATIONS for name in pair
 )
+# The position of each relation in RELATIONS: its code in candidate tables and batches.
+RELATION_INDEX = {name: i for i, name in enumerate(RELATIONS)}
 RAILS = ("unknown", "zelle", "ach", "card", "cash", "check", "internal")
 # The scope visibility phase of each split; unscoped contexts use phase 3.
 SPLIT_PHASE = {"train": 1, "validation": 2, "test": 3}
