@@ -79,8 +79,19 @@ option besides `--help`.
 | `mule train` | Prepares as needed (install, scope, reveal, dataset), then trains the built-in run into `results/baseline/seed-42/`, resumes it, or reports it when it is complete |
 | `mule evaluate [RUN]` | Ground-truth audit of the run's model on the frozen test partition, written to the run's `audit/`; `RUN` defaults to `results/baseline/seed-42` |
 | `mule score ACCOUNTS [DATE]` | Scores the accounts listed in a file (one id per line) with the built-in run's model; `DATE` defaults to the test cutoff. Writes `scores/<file stem>_<date>.parquet` in the run, and the ids TigerGraph rejects to `scores/<file stem>_<date>_rejected.txt` |
-| `mule check` | Read-only readiness: the graph, its installed queries and the cuGraph probe, then one training batch with its tensor digests and the first loss |
+| `mule check` | Read-only readiness: the graph, its installed queries and the cuGraph probe, then one training batch with its tensor digests and the first loss. The batch needs the built-in run's prepared dataset in `data/` (see below) |
 | `mule install` | Adds the scope vertex type if it is missing, installs the queries whose text differs and lists installed queries that no file defines (`train` does this too) |
+
+`mule check` reads its batch from the built-in run's prepared dataset, which `mule train`
+prepares before it trains. To prepare the dataset without training, for example to check
+a graph before a long training run, call the same step from Python:
+
+```bash
+python -c "from mule_pattern_learner.config import DEFAULT_CONFIG; from mule_pattern_learner.pipeline.prepare import prepare_dataset; print(prepare_dataset(DEFAULT_CONFIG).root)"
+```
+
+Like `mule train`, it installs the queries, creates the scope and reveals the known mules
+on a fresh graph; on a graph where they are in place it only reads.
 
 `python -m mule_pattern_learner` runs the same commands. Each prints one JSON result.
 The end-to-end guide describes
