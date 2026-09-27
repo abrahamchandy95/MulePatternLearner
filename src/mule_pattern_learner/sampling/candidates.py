@@ -16,12 +16,11 @@ import numpy as np
 import torch
 
 from ..contract.fingerprints import stable_hash
-from ..contract.graph_schema import RELATIONS, ContextKey
+from ..contract.graph_schema import RELATION_INDEX, RELATIONS, ContextKey
 from ..contract.sampler_plan import SamplerPlan
 
 PAYMENT_RELATIONS = 4
 NUM_RELATIONS = len(RELATIONS)
-RELATION_INDEX = {name: i for i, name in enumerate(RELATIONS)}
 _MASK64 = (1 << 64) - 1
 
 
