@@ -115,5 +115,5 @@ def ensure_revealed_labels(
     summary["contract"] = {
         key: audit.get(key) for key in ("known_labels", "true_mules", "revealed_positives")
     }
-    emit(summary)
+    emit({"event": "reveal", **summary})
     return summary

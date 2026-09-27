@@ -87,7 +87,8 @@ def main() -> None:
     # Before any CUDA work: deterministic cuBLAS GEMMs need a fixed workspace.
     reserve_deterministic_cublas()
     result = run_command(build_parser().parse_args())
-    print(json.dumps(result, indent=2, allow_nan=False))
+    # One line, like the event lines before it.
+    print(json.dumps(result, allow_nan=False))
     if result.get("status") == "not_ready":
         raise SystemExit(1)
 

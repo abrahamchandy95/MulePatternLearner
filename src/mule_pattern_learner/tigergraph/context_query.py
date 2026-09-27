@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import asdict
-import logging
 from typing import Any
 
 import numpy as np
@@ -26,9 +25,8 @@ from ..contract.graph_schema import CHANNELS, NODE_TYPES, RAILS, RELATIONS, STRA
 from ..contract.sampler_plan import SamplerPlan
 from ..contract.server import CONTEXT_CONTRACT, CONTEXT_QUERY
 from ..contract.time_basis import BASIS_ID, fourier64
+from ..runtime.progress import emit
 from .executor import CONVERSION_ERRORS, QueryExecutor, ServerTimeoutError, error_summary
-
-LOGGER = logging.getLogger(__name__)
 
 # Per-request statuses: the query continues with the next request and the
 # client receives None for that key. Every other non-ok status is call-level.
@@ -316,10 +314,13 @@ def query_context_split(
     except ServerTimeoutError as error:
         if len(batch) == 1:
             raise ContextTimeoutError(batch[0], hop, error_summary(error)) from error
-        LOGGER.warning(
-            "TigerGraph timed out on a %d-key context request (hop %d); splitting it",
-            len(batch),
-            hop,
+        emit(
+            {
+                "event": "context_split",
+                "keys": len(batch),
+                "hop": hop,
+                "error": error_summary(error),
+            }
         )
         if diagnostics is not None:
             diagnostics["timeout_splits"] += 1

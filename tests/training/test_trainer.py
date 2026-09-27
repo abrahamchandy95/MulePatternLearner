@@ -9,7 +9,6 @@ import math
 from pathlib import Path
 import threading
 from typing import Any, NoReturn
-import warnings
 
 import numpy as np
 import pandas as pd
@@ -556,19 +555,19 @@ def test_resume_refuses_a_different_sampler_backend_unless_configured(
 
 
 def test_missing_hub_indicator_warns_once_at_start(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     groups = [g for g in DEFAULT_GROUPS if g != "hub_indicator"]
     config = base_config(features=groups, training={"epochs": 1})
     plan = config.feature_plan()
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
-        warn_hub_stubs(HubRegistry.empty(), plan)
-        warn_hub_stubs(hub_registry(), base_config().feature_plan())
+    warn_hub_stubs(HubRegistry.empty(), plan)
+    warn_hub_stubs(hub_registry(), base_config().feature_plan())
+    assert capsys.readouterr().out == ""
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
-    with pytest.warns(UserWarning, match="no hub_indicator group") as caught:
-        fit(tmp_path, "run", config)
-    assert sum("hub_indicator" in str(w.message) for w in caught) == 1
+    fit(tmp_path, "run", config)
+    warned = [e for e in read_events(RunPaths(tmp_path / "run").events) if e["event"] == "warning"]
+    assert [e["warning"] for e in warned] == ["hub_stubs"]
+    assert "no hub_indicator group" in warned[0]["message"]
 
 
 def test_run_directory_is_created_only_after_the_source_opens(

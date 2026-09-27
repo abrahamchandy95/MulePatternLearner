@@ -165,7 +165,6 @@ def train(
     runtime = config.runtime
     device = choose_device(runtime.device)
     registry = hubs if hubs is not None else load_hub_registry(dataset, manifest)
-    warn_hub_stubs(registry, plan)
     if contexts is None:
         if open_contexts is None:
             raise ValueError(
@@ -407,6 +406,7 @@ class _TrainingRun:
     def execute(self, state: ResumeState | None) -> dict[str, Any]:
         self.run.root.mkdir(parents=True, exist_ok=True)
         with recording(self.run.events):
+            warn_hub_stubs(self.hubs, self.plan)
             if state is not None:
                 self.restore(state)
             host = host_settings(self.device, self.runtime)

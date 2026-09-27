@@ -24,12 +24,11 @@ with `backend = "torch"`, and resolve the backend once per run (`resolve_backend
 
 from __future__ import annotations
 
-import warnings
-
 import numpy as np
 import torch
 
 from ..contract.sampler_plan import SamplerPlan
+from ..runtime.progress import warn
 from .candidates import CandidateTable, hop_seed, merge_slots, relation_quotas, selection_keys
 from .cugraph_sampler import (
     PYLIBCUGRAPH_PIN,
@@ -128,12 +127,11 @@ def resolve_backend(sampler: SamplerPlan, device: str | torch.device) -> str:
             'or set sampler.backend = "torch"'
         )
     if probe.installed:
-        warnings.warn(
+        warn(
+            "cugraph_probe",
             f"cuGraph probe failed on cuda:{index} ({probe.reason}); using the torch "
             'sampler. Set sampler.backend = "torch" to silence this, or "cugraph" '
             "to require cuGraph.",
-            RuntimeWarning,
-            stacklevel=2,
         )
     return "torch"
 
