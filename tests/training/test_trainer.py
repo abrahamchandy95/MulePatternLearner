@@ -678,30 +678,24 @@ def build_context_source(executor: FakeTigerGraph, config: RunConfig, **kwargs: 
     )
 
 
-class PreparedExecutor(FakeTigerGraph):
-    """The scope population, context, cutoff and hub queries.
+def frozen_labels(dataset: DatasetPaths) -> Callable[[str, dict[str, Any]], None]:
+    """A check that the label mask is frozen when the first feature query starts."""
 
-    The scope population holds the fixture accounts with their splits as partitions, and
-    the revealed positives of supplied_labels.
-    """
-
-    def __init__(self, dataset: DatasetPaths, **kwargs: Any) -> None:
-        super().__init__(population=scoped_accounts(), **kwargs)
-        self.dataset = dataset
-
-    def run(self, name: str, params: dict[str, Any], **kwargs: Any) -> list[dict[str, Any]]:
+    def check(name: str, params: dict[str, Any]) -> None:
         if name == CONTEXT_QUERY:
-            # A label mask must already be frozen when the first feature query starts.
-            frozen = pd.read_parquet(self.dataset.observed_labels)
+            frozen = pd.read_parquet(dataset.observed_labels)
             assert label_summary(frozen) == {"train": 20, "validation": 20, "test": 20}
-        return super().run(name, params, **kwargs)
+
+    return check
 
 
 def prepared(
     tmp_path: Path, config: RunConfig, **kwargs: Any
 ) -> tuple[DatasetPaths, FakeTigerGraph]:
     dataset = DatasetPaths(tmp_path / "dataset")
-    executor = PreparedExecutor(dataset, **kwargs)
+    # The fixture accounts with their splits as partitions, and the revealed positives
+    # of supplied_labels.
+    executor = FakeTigerGraph(population=scoped_accounts(), before=frozen_labels(dataset), **kwargs)
     prepare(
         config,
         UNIT_SOURCE,
