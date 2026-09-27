@@ -9,7 +9,7 @@ import time
 from typing import Any
 
 from ..contract.server import QUERY_FILES
-from ..paths import REPOSITORY_ROOT
+from ..paths import GSQL_DIR
 from .executor import AVAILABILITY, GRAPH, SERVER_TIMEOUT, ConnectionExecutor, failure_class
 from .gsql_text import definitions, normalized, parameter_names, repository_queries
 
@@ -17,15 +17,15 @@ from .gsql_text import definitions, normalized, parameter_names, repository_quer
 # and the one-time reveal job (the first run reveals known mules; see reveal.py).
 TRAINING_QUERY_FILES = (
     *QUERY_FILES,
-    "gsql/evaluation/ground_truth.gsql",
-    "gsql/queries/label_contract.gsql",
-    "gsql/queries/label_reveal.gsql",
+    "evaluation/ground_truth.gsql",
+    "queries/label_contract.gsql",
+    "queries/label_reveal.gsql",
 )
 # Analytics queries: parity tools for the persisted pair encodings. Training never calls
 # them, so they are installed only when asked for (install --include-optional).
 OPTIONAL_QUERY_FILES = (
-    "gsql/analytics/zelle_pair_gaps.gsql",
-    "gsql/analytics/payment_pair_gaps.gsql",
+    "analytics/zelle_pair_gaps.gsql",
+    "analytics/payment_pair_gaps.gsql",
 )
 BUILTIN_ENDPOINT_PARAMETERS = frozenset({"query", "read_committed"})
 INSTALL_DEADLINE_S = 45 * 60.0
@@ -159,7 +159,7 @@ def install(
     logs: dict[str, Any] = {}
     schema = conn.getSchema(force=True)
     if "Temporal_Training_Scope" not in {v["Name"] for v in schema["VertexTypes"]}:
-        migration = REPOSITORY_ROOT / "gsql/schema/scope_vertex.gsql"
+        migration = GSQL_DIR / "schema/scope_vertex.gsql"
         result = str(conn.gsql(migration.read_text()))
         if "Local schema change succeeded" not in result:
             raise RuntimeError(result)

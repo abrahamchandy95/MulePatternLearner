@@ -14,7 +14,7 @@ from ..contract.fingerprints import fingerprint
 from ..contract.graph_schema import context_scope
 from ..contract.sampler_plan import sampler_pools
 from ..contract.server import QUERY_FILES
-from ..paths import REPOSITORY_ROOT
+from ..paths import GSQL_DIR
 from .hub_registry import HUB_FILE
 from .observed_labels import ORACLE_COLUMNS, read_bounded_parquet
 
@@ -40,7 +40,7 @@ def manifest_digest(dataset: Path) -> str:
 
 
 def query_hashes() -> dict[str, str]:
-    return {name: file_digest(REPOSITORY_ROOT / name) for name in QUERY_FILES}
+    return {name: file_digest(GSQL_DIR / name) for name in QUERY_FILES}
 
 
 def changed_query_files(manifest: dict[str, Any]) -> list[str]:

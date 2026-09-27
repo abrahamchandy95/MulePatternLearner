@@ -8,7 +8,7 @@ import pytest
 
 from mule_pattern_learner.contract.feature_groups import FeaturePlan
 from mule_pattern_learner.data.contexts import StreamingContextSource
-from mule_pattern_learner.paths import REPOSITORY_ROOT
+from mule_pattern_learner.paths import GSQL_DIR
 from mule_pattern_learner.testing.builders import PLAN, SAMPLER, hub_rows, root
 from mule_pattern_learner.testing.fake_graph import ContextServer, Runner
 from mule_pattern_learner.tigergraph import gsql_text, scope
@@ -17,7 +17,7 @@ from mule_pattern_learner.tigergraph.gsql_text import definitions, parameter_nam
 from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
 from mule_pattern_learner.tigergraph.render import DEFAULT_FLAG_GROUPS
 
-GSQL = REPOSITORY_ROOT / "gsql/queries"
+GSQL = GSQL_DIR / "queries"
 ORACLE = (
     "is_mule",
     "is_mule_masked",
@@ -63,10 +63,10 @@ ROLE_EDGES = {
 
 def test_sent_parameters_match_the_repository_query_signatures() -> None:
     def signature(path: str, name: str) -> set[str]:
-        text = gsql_text.definitions((REPOSITORY_ROOT / path).read_text())[name]
+        text = gsql_text.definitions((GSQL_DIR / path).read_text())[name]
         return gsql_text.parameter_names(text)
 
-    context = signature("gsql/queries/training_context.gsql", "temporal_training_context")
+    context = signature("queries/training_context.gsql", "temporal_training_context")
     windows = (FeaturePlan(DEFAULT_FLAG_GROUPS, a) for a in ("split", "summary"))
     for plan in (PLAN, *windows):
         server = ContextServer()
@@ -79,10 +79,10 @@ def test_sent_parameters_match_the_repository_query_signatures() -> None:
     TigerGraphHubs(Runner(lambda n, p: calls.append(p) or hub_rows([1000, 2000]))).hub_registry(
         [1000, 2000], threshold=1024
     )
-    assert set(calls[0]) == signature("gsql/queries/hub_accounts.gsql", "temporal_hub_registry")
-    creation = signature("gsql/queries/training_scope.gsql", "temporal_create_training_scope")
+    assert set(calls[0]) == signature("queries/hub_accounts.gsql", "temporal_hub_registry")
+    creation = signature("queries/training_scope.gsql", "temporal_create_training_scope")
     assert {"scope_id", "source_id", "split_seed", "unowned_policy"} <= creation
-    policy = signature("gsql/queries/training_scope.gsql", scope.SCOPE_POLICY_QUERY)
+    policy = signature("queries/training_scope.gsql", scope.SCOPE_POLICY_QUERY)
     assert policy == {"scope_id"}
 
 

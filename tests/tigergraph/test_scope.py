@@ -8,7 +8,7 @@ from typing import Any, cast
 import pytest
 
 from mule_pattern_learner.config import ScopeConfig
-from mule_pattern_learner.paths import REPOSITORY_ROOT
+from mule_pattern_learner.paths import GSQL_DIR
 from mule_pattern_learner.testing.builders import SNAPSHOT_SOURCE, unit_config
 from mule_pattern_learner.testing.fake_graph import Runner, ScopeServer, policy_counts
 from mule_pattern_learner.tigergraph import gsql_text, scope
@@ -82,7 +82,7 @@ def test_existing_scope_must_have_the_configured_unowned_policy() -> None:
 
 
 def test_scope_policy_query_prints_what_the_client_reads() -> None:
-    text = (REPOSITORY_ROOT / "gsql/queries/training_scope.gsql").read_text()
+    text = (GSQL_DIR / "queries/training_scope.gsql").read_text()
     queries = gsql_text.definitions(text)
     assert scope.SCOPE_POLICY_QUERY in queries
     query = queries[scope.SCOPE_POLICY_QUERY]

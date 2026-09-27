@@ -13,11 +13,11 @@ import pytest
 import requests
 
 from mule_pattern_learner.contract.server import QUERY_FILES
-from mule_pattern_learner.paths import REPOSITORY_ROOT
+from mule_pattern_learner.paths import GSQL_DIR
 from mule_pattern_learner.testing.fake_connection import executor
 from mule_pattern_learner.tigergraph import gsql_text, installer
 
-INSTALL_FILES = ("gsql/queries/fourier64.gsql", "gsql/queries/split_cutoffs.gsql")
+INSTALL_FILES = ("queries/fourier64.gsql", "queries/split_cutoffs.gsql")
 
 
 def endpoint(parameters: set[str], enabled: bool = True) -> dict[str, Any]:
@@ -28,10 +28,10 @@ def endpoint(parameters: set[str], enabled: bool = True) -> dict[str, Any]:
 
 
 def test_verify_sources_requires_matching_text_and_enabled_endpoints() -> None:
-    files = ("gsql/queries/split_cutoffs.gsql", "gsql/queries/fourier64.gsql")
+    files = ("queries/split_cutoffs.gsql", "queries/fourier64.gsql")
     expected: dict[str, str] = {}
     for path in files:
-        expected.update(gsql_text.definitions((REPOSITORY_ROOT / path).read_text()))
+        expected.update(gsql_text.definitions((GSQL_DIR / path).read_text()))
     params = {name: gsql_text.parameter_names(text) for name, text in expected.items()}
     assert params["temporal_training_cutoffs"] == {"cutoff_times"}
 

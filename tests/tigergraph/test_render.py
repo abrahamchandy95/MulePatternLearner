@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import re
 
 from mule_pattern_learner.contract.feature_groups import (
@@ -11,17 +10,16 @@ from mule_pattern_learner.contract.feature_groups import (
     FEATURE_GROUPS,
     FeaturePlan,
 )
-from mule_pattern_learner.paths import REPOSITORY_ROOT
+from mule_pattern_learner.paths import GSQL_DIR
 from mule_pattern_learner.tigergraph.render import as_interpreted, render_context_query
 
-GSQL = REPOSITORY_ROOT / "gsql/queries"
+GSQL = GSQL_DIR / "queries"
 
 
 def test_query_renderer_matches_reviewed_source_and_uses_no_labels() -> None:
-    root = Path(__file__).resolve().parents[2]
     text = render_context_query()
     assert re.sub(r"\s+", "", text) == re.sub(
-        r"\s+", "", (root / "gsql/queries/training_context.gsql").read_text()
+        r"\s+", "", (GSQL / "training_context.gsql").read_text()
     )
     for field in ("is_mule", "fraud_label", "pu_label", "ring_id", "pair_time_encoding"):
         assert field not in text
