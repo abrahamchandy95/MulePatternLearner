@@ -8,8 +8,8 @@ from typing import Any
 import pandas as pd
 import pytest
 
+from mule_pattern_learner.contract.graph_schema import HUB_COLUMNS
 from mule_pattern_learner.data.hub_registry import (
-    HUB_COLUMNS,
     HubRegistry,
     hub_manifest,
     hub_threshold,
@@ -52,7 +52,7 @@ def test_hub_registry_parse_save_load_and_stub_semantics(tmp_path: Path) -> None
     assert scoped.is_stub("Account", "H2", 2000, 1) and not scoped.is_stub("Account", "H2", 2000)
     path = tmp_path / "hubs.parquet"
     scoped.save(path)
-    assert tuple(pd.read_parquet(path).columns) == HUB_COLUMNS
+    assert tuple(pd.read_parquet(path).columns) == tuple(HUB_COLUMNS)
     manifest = {
         "cutoff_seqs": {"2024-07-01": 1000, "2024-10-01": 2000},
         "config": {"scope_id": "scope"},

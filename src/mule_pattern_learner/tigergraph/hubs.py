@@ -7,7 +7,8 @@ from typing import Any
 
 import pandas as pd
 
-from ..data.hub_registry import HUB_COLUMNS, HubRegistry, registry_phases
+from ..contract.graph_schema import HUB_COLUMNS, HUB_REASONS
+from ..data.hub_registry import HubRegistry, registry_phases
 from .executor import CONVERSION_ERRORS, QueryExecutor, checked_rows
 
 HUB_QUERY = "temporal_hub_registry"
@@ -33,38 +34,26 @@ def _parse_hubs(
     if not pages:
         raise ValueError("Hub registry response has no hubs field")
     phases = registry_phases(scope_id)
-    records = []
+    records: list[dict[str, Any]] = []
     for page in pages:
         for item in page:
             record = dict(item.get("attributes", item))
             try:
-                account = str(record["account_id"])
-                cutoff = int(record["cutoff_seq"])
-                phase = int(record["visibility_phase"])
-                visible_count = int(record["max_visible"])
-                degree = int(record["max_degree"])
-                reason = str(record["reason"])
+                hub: dict[str, Any] = {
+                    name: kind(record[name]) for name, kind in HUB_COLUMNS.items()
+                }
             except (KeyError, *CONVERSION_ERRORS):
                 raise ValueError(f"Malformed hub registry row: {record}") from None
             if (
-                not account
-                or cutoff not in cutoffs
-                or phase not in phases
-                or visible_count <= threshold
-                or degree < 0
-                or reason != "visible_history"
+                not hub["account_id"]
+                or hub["cutoff_seq"] not in cutoffs
+                or hub["visibility_phase"] not in phases
+                or hub["max_visible"] <= threshold
+                or hub["max_degree"] < 0
+                or hub["reason"] not in HUB_REASONS
             ):
                 raise ValueError(f"Hub registry row violates the query contract: {record}")
-            records.append(
-                {
-                    "account_id": account,
-                    "cutoff_seq": cutoff,
-                    "visibility_phase": phase,
-                    "max_visible": visible_count,
-                    "max_degree": degree,
-                    "reason": reason,
-                }
-            )
+            records.append(hub)
     return pd.DataFrame(records, columns=list(HUB_COLUMNS))
 
 

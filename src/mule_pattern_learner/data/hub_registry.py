@@ -34,7 +34,7 @@ import warnings
 import pandas as pd
 
 from ..artifacts import atomic_write, file_digest
-from ..contract.graph_schema import context_scope
+from ..contract.graph_schema import HUB_COLUMNS, HUB_REASONS, context_scope
 
 if TYPE_CHECKING:
     from ..contract.feature_groups import FeaturePlan
@@ -42,15 +42,6 @@ if TYPE_CHECKING:
 
 
 HUB_FILE = "hubs.parquet"
-HUB_COLUMNS = (
-    "account_id",
-    "cutoff_seq",
-    "visibility_phase",
-    "max_visible",
-    "max_degree",
-    "reason",
-)
-HUB_REASONS = ("visible_history",)
 SCOPED_PHASES = (1, 2, 3)
 UNSCOPED_PHASES = (3,)
 
@@ -76,18 +67,11 @@ class HubRegistry:
         threshold: int,
         scope_id: str = "",
     ) -> None:
-        if tuple(frame.columns) != HUB_COLUMNS:
-            raise ValueError(f"Hub registry needs columns {HUB_COLUMNS}")
+        if tuple(frame.columns) != tuple(HUB_COLUMNS):
+            raise ValueError(f"Hub registry needs columns {tuple(HUB_COLUMNS)}")
         self.frame = (
             frame.astype(
-                {
-                    "account_id": str,
-                    "cutoff_seq": "int64",
-                    "visibility_phase": "int64",
-                    "max_visible": "int64",
-                    "max_degree": "int64",
-                    "reason": str,
-                }
+                {name: "int64" if kind is int else str for name, kind in HUB_COLUMNS.items()}
             )
             .sort_values(["cutoff_seq", "visibility_phase", "account_id"])
             .reset_index(drop=True)
@@ -169,12 +153,8 @@ class HubRegistry:
 
         schema = pa.schema(
             [
-                ("account_id", pa.string()),
-                ("cutoff_seq", pa.int64()),
-                ("visibility_phase", pa.int64()),
-                ("max_visible", pa.int64()),
-                ("max_degree", pa.int64()),
-                ("reason", pa.string()),
+                (name, pa.int64() if kind is int else pa.string())
+                for name, kind in HUB_COLUMNS.items()
             ]
         )
         table = pa.Table.from_pandas(self.frame, schema=schema, preserve_index=False)
