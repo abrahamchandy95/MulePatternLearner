@@ -1,0 +1,904 @@
+# Restructuring plan (approved 2026-09-27)
+
+This is the design record for moving the repository to its layered layout. It is
+temporary: the migration's docs step turns it into `docs/architecture.md` and deletes it.
+Where the owner decisions below differ from the proposal that follows, the decisions win.
+
+## Owner decisions
+
+1. **Layout approved** as proposed below.
+2. **Commands take no flags.** Inputs come from built-in settings and the latest run:
+
+   | Command | What it does |
+   |---|---|
+   | `mule train` | Prepares as needed (install, scope, reveal, cohort), trains the one model into `runs/baseline/seed-42/`, resumes an interrupted run, writes the training plots |
+   | `mule evaluate [RUN]` | Ground-truth audit of validation and test with intervals and plots |
+   | `mule report [RUN]` | Redraws every figure and `report.md` from saved files, offline |
+   | `mule score ACCOUNTS [DATE]` | Scores the accounts listed in a file; the date defaults to the test cutoff |
+   | `mule check` | Read-only readiness: connection, installed queries, cuGraph probe, one batch with tensor digests and the first loss |
+   | `mule diagnose [ANALYSIS]` | Re-runs the diagnostic study (all analyses by default) |
+   | `mule install` | Installs queries whose text differs (train already does this) |
+
+   `RUN` defaults to the baseline run. There is no `--config`, `--split`, `--truth`, `--force`,
+   `--drop`, `--batch` or `prepare` command; retiring installed queries is part of the
+   one-off server rename, not a flag.
+3. **Control experiments** run as `python scripts/run_experiments.py [SUITE or VARIANT ...]`
+   with no flags: suite `controls` by default, seeds fixed in code (42, 43, 44), suites and
+   variants listed under `--help`, completed runs skipped, mismatched runs moved to
+   `runs/archive/` automatically (never deleted), comparison tables and plots always written.
+   Variants are declared in `experiments/variants.py`. Nothing is read from or written to `/tmp`.
+4. **TigerGraph queries are renamed after their responsibility** (verb first, no prefix), and
+   only queries the project uses remain. Pipeline queries live in `gsql/queries/`, the
+   ground-truth query in `gsql/evaluation/`, and queries used only for analysis in
+   `gsql/analytics/`:
+
+   | Current | New | Folder |
+   |---|---|---|
+   | `temporal_training_context` | `fetch_training_context` | `queries/` (generated) |
+   | `temporal_fourier64_values` | `encode_fourier64` | `queries/` (subquery of the context query) |
+   | `temporal_create_training_scope` | `create_training_scope` | `queries/` |
+   | `temporal_finalize_training_scope` | `finalize_training_scope` | `queries/` |
+   | `temporal_scope_population` | `list_scope_accounts` | `queries/` |
+   | `temporal_scope_policy` | `summarize_scope_policy` | `queries/` |
+   | `temporal_training_cutoffs` | `resolve_split_cutoffs` | `queries/` |
+   | `temporal_hub_registry` | `list_hub_accounts` | `queries/` |
+   | `temporal_reveal_mule_labels` | `reveal_mule_labels` | `queries/` |
+   | `temporal_reveal_uniforms` | `draw_reveal_uniforms` | `queries/` (subquery of the reveal) |
+   | `temporal_validate_account_supervision` | `validate_label_contract` | `queries/` |
+   | `temporal_get_account_supervision` | `read_ground_truth` | `evaluation/` |
+   | `zelle_pair_time64` | `encode_zelle_pair_gaps` | `analytics/` |
+   | `payment_pair_time64` | `encode_payment_pair_gaps` | `analytics/` |
+   | `temporal_training_population` | retired (unused once `shared_history` is removed) | |
+   | `temporal_fourier64` (public wrapper) | retired (only a deleted verification script called it) | |
+
+   The rename happens once, in the server step, after live parity with the unchanged queries.
+   Files are named after the responsibility their queries share.
+5. **Window and account-aggregate computations the model does not use belong to analytics.**
+   In the server step, feature groups that neither the built-in run nor a declared training
+   variant uses move out of the training context query into a query under `gsql/analytics/`,
+   used by `mule diagnose`. The exact split is decided (and confirmed with the owner) in that step;
+   until then all groups stay in the context query unchanged.
+6. **Decisions use the validation ground-truth audit.** The test audit is for reporting only.
+7. **Replacing main** is a fast-forward; pushing to `origin` and `learner` needs the owner's
+   confirmation at that time.
+
+## Cost correction
+
+Measured on the CUDA host, a graph run takes about 3 s per step and about 1 hour with early
+stopping (the reference run stopped at epoch 11), not the 11 s per step and 12.5 hours below.
+
+## Part 2: Final proposal
+
+### Decisions at a glance
+
+**Names.**
+- The distribution stays `mule-pattern-learner` and the package stays `mule_pattern_learner`.
+- There is one console script, `mule`, and `python -m mule_pattern_learner` also works.
+- No path, identifier or command contains `temporal`, `live`, `v5` or `legacy`. The exceptions are the allow-listed server values (see Naming).
+
+**One model, `TGAT`.**
+- `SummaryMLP` exists only for the controls.
+- These are deleted: the `variant` axis, the `single` architecture, the `LEGACY_GROUPS` constant, the `recent`/`stratified` samplers, SQLite storage, `shared_history`, and the parquet label policy.
+- All 20 feature groups stay in the registry and in the query.
+
+**One output root.** Everything goes under `runs/`. `mule train` writes `runs/baseline/seed-42/`.
+
+**Configuration is Python.**
+- Frozen dataclasses in `config.py`; their defaults are the built-in run.
+- `.env` holds only the connection.
+- There is no `--config`, and no tracked TOML, YAML or JSON.
+
+**Control experiments.**
+- Variants are declared in `experiments/variants.py`.
+- `scripts/run_experiments.py` trains the chosen variants and seeds on one cohort, audits validation and test, and writes the tables and figures to `runs/experiments/<suite>/`.
+- Decisions use the validation audit. The test audit is for reporting.
+
+**Plots.** Only `reporting/` imports matplotlib, and it reads saved files only. `mule report DIR` rebuilds any figure offline.
+
+**Layers** are enforced by import-linter in the test gate, with an AST test as the fallback.
+
+**Server step.** Query names are renamed once, as above, and it is optional.
+
+**Replacing main** is a fast-forward. No push happens without the owner's confirmation.
+
+### Directory tree
+
+```
+MulePatternLearner/
+├── pyproject.toml          hatchling; `mule` script; torch and matplotlib as core deps; extras cuda12, cuda13, dev
+│                           (pytest, ruff, basedpyright, import-linter); pytest importlib mode and markers
+├── README.md               the model, setup, `mule train`, `mule evaluate`, the experiments script, doc index
+├── LICENSE
+├── .env.example            HOST, GRAPHNAME, SECRET (GRAPHNAME must equal contract.server.GRAPH_NAME; checked at connect)
+├── .gitignore              unchanged
+├── src/mule_pattern_learner/
+│   ├── __init__.py         package version
+│   ├── __main__.py         `python -m mule_pattern_learner` runs cli.main
+│   ├── py.typed
+│   ├── cli.py              argparse; calls pipeline, reporting and diagnostics; prints one JSON result
+│   ├── config.py           RunConfig and its sections; DEFAULT_CONFIG (the built-in run); fingerprint(); to_dict/from_dict
+│   ├── paths.py            REPOSITORY_ROOT, GSQL_DIR, RUNS_DIR; RunPaths (every run file name); cohort, suite, diagnostics dirs
+│   ├── artifacts.py        column schemas and read/write of every run file; atomic_write and file_digest (the only copies)
+│   ├── metrics.py          pure numpy/sklearn: threshold, weighted AP/ROC AUC, PR/ROC/capture curves, tie-aware recall and
+│   │                       precision at review budgets, stratified, ring-clustered and paired bootstrap, weighted quantiles
+│   ├── contract/           definitions shared with GSQL; no I/O, no torch
+│   │   ├── server.py           GRAPH_NAME, SCOPE_VERTEX, query names and parameter sets, CONTEXT_CONTRACT
+│   │   ├── graph_schema.py     node types, relations, associations, rails, channels, strata, splits and phases, ContextKey,
+│   │   │                       context_scope, row columns (hub, oracle, account load, score)
+│   │   ├── feature_groups.py   FeatureGroup, FEATURE_GROUPS (all 20), BUILT_IN_GROUPS, OPTIONAL_GROUPS, pool-count names,
+│   │   │                       bands and pass-through constants, FeaturePlan
+│   │   ├── sampler_plan.py     PoolPlan, SamplerPlan (also the config section type), selection-key version
+│   │   ├── bounds.py           every numeric bound once: request cap 64, fan-out 1 to 64, batch up to 128, seed limits,
+│   │   │                       pool ranges
+│   │   ├── time_basis.py       Fourier64 in numpy, BASIS_ID
+│   │   ├── fingerprints.py     fingerprint (sha256 of JSON), stable_hash (blake2b, sampler keys), hash64; the docstring says
+│   │   │                       why there are three (persisted draws)
+│   │   ├── clock.py            timestamp parsing, cutoff_ms
+│   │   └── salts.py            frozen RNG salt values
+│   ├── runtime/
+│   │   ├── device.py           CUDA, then MPS, then CPU; determinism; reserve_deterministic_cublas() (called first by every
+│   │   │                       entry point); threads
+│   │   ├── workers.py          DaemonPool: the one bounded pool (context requests and batch prefetch)
+│   │   └── progress.py         emit(): one structured stdout line, also appended to the current run's events.jsonl
+│   ├── tigergraph/         the only code that speaks REST or GSQL
+│   │   ├── connection.py       ConnectionSettings from .env, loaded when called
+│   │   ├── client.py           pyTigerGraph connection, finite timeouts, HTTP error raising
+│   │   ├── executor.py         QueryExecutor protocol; TigerGraphExecutor: failure classes, retry and outage budgets, paging
+│   │   ├── gsql_text.py        read, strip comments from and normalise GSQL; query signatures
+│   │   ├── installer.py        install queries whose text differs; the one scope schema change when its vertex type is
+│   │   │                       missing; list installed queries no file defines; drop named ones
+│   │   ├── render.py           build-time generator of gsql/queries/training_context.gsql (the runtime never imports it)
+│   │   ├── context_query.py    TigerGraphContextFetcher: validation, bisection on timeout, per-row contract and encoding check
+│   │   ├── scope.py            TigerGraphScope: header, create, finalize, population pages, policy
+│   │   ├── cutoffs.py          TigerGraphCutoffs
+│   │   ├── hubs.py             TigerGraphHubs: hub query, rows parsed into data.hub_registry.HubRegistry
+│   │   ├── labels.py           TigerGraphObservedLabels; label-contract audit
+│   │   ├── reveal.py           the one-time reveal (writes; runs only when the graph has no revealed mules)
+│   │   ├── oracle.py           TigerGraphTruth: is_mule, ring id, label source (evaluation and diagnostics only)
+│   │   └── provenance.py       vertex counts, derived dataset id, frozen-source check
+│   ├── data/
+│   │   ├── ports.py            ContextFetcher, ScopeReader, CutoffReader, HubReader, ObservedLabelReader
+│   │   ├── cohort.py           seed reservoirs and positive pool (paging through ScopeReader, the one pager)
+│   │   ├── splits.py           split dates, cutoff clocks, context keys per split
+│   │   ├── observed_labels.py  observed-label frame, alignment, summaries
+│   │   ├── hub_registry.py     HubRegistry, parquet save/load, stub warning
+│   │   ├── manifest.py         cohort manifest, cohort id, integrity gate
+│   │   ├── preparation.py      prepare_cohort(): reservoirs, labels, hubs, manifest (resumable; read ports only)
+│   │   ├── contexts.py         ContextSource: request windows over DaemonPool, LRU, coverage check, rejection counts
+│   │   └── context_cache.py    disk tier of ContextSource under runs/cohorts/<id>/contexts/ (cache step)
+│   ├── sampling/           candidates.py, torch_sampler.py, cugraph_sampler.py (pylibcugraph on first use), backend.py
+│   ├── model/              torch modules; imports contract and config only
+│   │   ├── inputs.py           ModelInputs
+│   │   ├── tgat.py             TGAT-style attention over hop-1 and hop-2 slots, summary branch, slot sum
+│   │   ├── summary.py          SummaryMLP (the no_attention and no_graph controls)
+│   │   ├── loss.py             NonNegativePULoss
+│   │   └── build.py            build_model(), probabilities_from_logits()
+│   ├── batching/
+│   │   ├── features.py         vectorised node, base and edge matrices
+│   │   ├── time_encoding.py    Fourier64 in torch for client-computed edge ages (tested against contract.time_basis)
+│   │   ├── pool_counts.py      pool counts over the root's candidate pool
+│   │   ├── limits.py           BatchLimits, BatchIndex (bounds from contract.bounds)
+│   │   └── assemble.py         RootBatch, build_batch(), to_device() (the one device rule)
+│   ├── inference/          saved_model.py, predictor.py (the one scoring loop), rejections.py, score_accounts.py
+│   ├── training/           trainer.py, objective.py, averaging.py, schedule.py, checkpoint.py, history.py, summary.py
+│   ├── evaluation/
+│   │   ├── truth.py            TruthReader protocol, ParquetTruth
+│   │   ├── sample.py           audit_sample(split): every positive plus uniform negatives with inclusion probabilities;
+│   │   │                       AUDIT_NEGATIVES = 2000
+│   │   └── audit.py            audit(run, split): score, rejection limit, weighted metrics with ring-clustered intervals,
+│   │                           revealed flags
+│   ├── pipeline/           composition root: the only place adapters are built
+│   │   ├── connect.py          settings, executor with config.transport, adapters, graph-name check
+│   │   ├── prepare.py          install, scope, reveal, prepare_cohort, frozen-source checks
+│   │   ├── train.py            train_run(): trainer, then run report
+│   │   ├── evaluate.py         evaluate_run(): audits, then audit report
+│   │   ├── score.py            score_accounts use case
+│   │   └── check.py            read-only readiness, --batch digests
+│   ├── reporting/          style.py, training.py, ranking.py, scores.py, comparison.py, diagnostics.py, report.py
+│   ├── experiments/        variants.py, runner.py, comparison.py
+│   ├── diagnostics/        feature_table.py, baselines.py, learning_curve.py, univariate.py, drift.py, subgroups.py,
+│   │                       proxy_validity.py, reveal_spread.py, nnpu_simulation.py
+│   ├── reference/          CPU mirrors, never imported by runtime layers except diagnostics
+│   │   ├── gsql_features.py    mirror of the context query's features
+│   │   ├── label_reveal.py     mirror of the reveal job
+│   │   └── batch_features.py   scalar node, base and edge features (oracle for batching.features)
+│   └── testing/            fakes and builders (the PyG testing/ pattern)
+│       ├── fake_graph.py       FakeTigerGraph: a QueryExecutor answering every repository query, asserting GSQL signatures
+│       ├── fake_connection.py  fake pyTigerGraph connections for client and executor tests
+│       └── builders.py         accounts, messages, payments, associations, contexts, test RunConfig, FrameObservedLabels
+├── gsql/
+│   ├── README.md
+│   ├── queries/            repeatable: reinstalled when their text changes
+│   │   ├── training_context.gsql   generated by scripts/render_queries.py; do not edit
+│   │   ├── fourier64.gsql          the subquery of training_context
+│   │   ├── training_scope.gsql     create/finalize_training_scope, scope_population, scope_policy
+│   │   ├── training_cutoffs.gsql
+│   │   ├── hub_registry.gsql
+│   │   ├── label_reveal.gsql       reveal_uniforms, reveal_mule_labels
+│   │   └── account_supervision.gsql  account_supervision (oracle), validate_account_supervision
+│   └── schema/
+│       ├── schema.gsql             fresh graph DDL (run by a person)
+│       ├── account_loading.gsql
+│       └── training_scope.gsql     applied by `mule install` when the scope vertex type is missing
+├── scripts/
+│   ├── run_experiments.py  control-experiment entry point (thin wrapper over experiments.runner)
+│   └── render_queries.py   regenerate, or `--check`, gsql/queries/training_context.gsql
+├── tests/
+│   ├── conftest.py         fixtures: test RunConfig, FakeTigerGraph, temporary runs dir
+│   ├── contract/ tigergraph/ data/ sampling/ model/ batching/ inference/ training/ evaluation/ pipeline/
+│   │   reporting/ experiments/ diagnostics/ reference/ runtime/      test_<module>.py, mirroring src
+│   ├── test_config.py, test_metrics.py, test_artifacts.py, test_cli.py, test_scripts.py, test_naming.py,
+│   │   test_layers.py (AST fallback of the contracts), test_doc_links.py
+│   └── integration/        markers graph, graph_write (needs --allow-graph-writes), cuda; excluded by default
+├── docs/
+│   ├── architecture.md
+│   ├── how-to/             set-up-a-graph.md, train-and-evaluate.md, run-control-experiments.md, score-new-accounts.md,
+│   │                       run-diagnostics.md
+│   ├── reference/          cli.md, configuration.md, outputs.md, features.md, schema.md, labels.md, queries.md
+│   ├── explanation/        training.md, sampling.md, feature-design.md, time-encoding.md, leakage-and-scaling.md,
+│   │                       label-reveal.md
+│   └── research/           diagnostic-study.md, mule-profile.md, nnpu-positive-weight.md, reference-run.md,
+│                           figures/ (committed PNGs of recorded findings)
+└── runs/                   gitignored
+    ├── cohorts/<cohort id>/          manifest.json, accounts.parquet, observed_labels.parquet, hubs.parquet, contexts/
+    ├── <variant>/seed-<n>/           one training run
+    ├── experiments/<suite>/          summary.csv, comparison.csv, report.md, plots/
+    ├── diagnostics/<cohort id>/      features.parquet, <analysis>.csv, report.md, plots/
+    └── archive/                      runs moved aside by --archive-stale (never deleted)
+```
+
+### Run directory (`runs/<variant>/seed-<n>/`, names fixed in `paths.RunPaths`)
+
+| File | Written by | Content |
+|---|---|---|
+| `config.json` | train | `{"config": …, "fingerprint": …, "provenance": {git commit, dirty flag, versions of the package, torch, numpy, scikit-learn and pyTigerGraph, device, sampler backend, cohort id, started}}` |
+| `model.pt` | train | selected weights, RunConfig, feature plan, threshold, cohort id, `SavedModel.FORMAT` |
+| `resume.pt` | train | optimizer, weight average, RNG, epoch, step, selection state |
+| `history.csv` | train | `epoch, step, date, loss, objective, corrected_steps, steps, seconds_per_step, batch_wait_seconds, database_calls, contexts_requested, contexts_distinct, cache_hits, rejected_roots, stub_children` |
+| `epochs.csv` | train | `epoch, loss, steps, validation_ap, validation_roc_auc, weights, selected, stopped` |
+| `events.jsonl` | every command | resume, backend choice, warnings, rejections (the lines `emit()` prints) |
+| `predictions/validation.parquet`, `predictions/test.parquet` | train | proxy scores on observed labels |
+| `metrics.json` | train | proxy metrics, totals, rejections, sampler totals |
+| `audit/<split>.json`, `audit/<split>.parquet`, `audit/<split>_rejected.txt` | evaluate | ground-truth audit of `validation` and `test`. Parquet columns: `account_id, is_mule, inclusion_probability, score, revealed, ring_id, label_source`. The JSON records the audit constants |
+| `scores/<accounts stem>_<date>.parquet` | score | scores of arbitrary accounts |
+| `plots/*.png`, `report.md` | train, evaluate, report | figures and tables |
+
+### CLI (`mule`)
+
+| Command | What it does | Graph writes |
+|---|---|---|
+| `mule install [--force] [--drop NAME ...]` | Adds the scope vertex type if missing, installs queries whose text differs, and lists installed queries that no file defines. Drops only the queries named, callers first. | yes |
+| `mule prepare` | Stages the cohort in `runs/cohorts/<id>/` (`train` does this itself). | first run only: scope and reveal |
+| `mule train` | Built-in run into `runs/baseline/seed-42/`; resumes an interrupted run; a complete matching run is reported and left untouched; a mismatching one is an error that names the differing keys. Writes the training plots. | as prepare |
+| `mule evaluate [RUN] [--split validation\|test\|both] [--truth FILE]` | Ground-truth audits (default both) plus audit plots. | no |
+| `mule score --accounts FILE --date DATE [--run RUN]` | Scores arbitrary accounts; replaces `score` and `score-new`. | no |
+| `mule report [DIR]` | Redraws figures and `report.md` from the files already in a run, suite or diagnostics directory. Offline. | no |
+| `mule diagnose ANALYSIS [--run RUN]` | `features`, `baselines`, `learning-curve`, `univariate`, `drift`, `subgroups`, `proxy-validity`, `reveal-spread`, `nnpu-simulation` or `all`. | no |
+| `mule check [--batch]` | Connection, graph-name match, scope schema, installed query text, sampler probe. `--batch` builds one batch and one step and prints tensor digests and the first loss. | no |
+
+`RUN` defaults to `runs/baseline/seed-42`.
+
+**Why these names.**
+- **`mule`, not `mule-pattern-learner`.** The PyPA guide pairs a console script with `__main__.py` (https://packaging.python.org/en/latest/guides/creating-command-line-tools/), and a short command matches Ludwig's CLI (`ludwig train`, https://github.com/ludwig-ai/ludwig/tree/main/ludwig). `python -m mule_pattern_learner` covers a machine where another tool (for example a MuleSoft runtime) also installs `mule`.
+- **`score`, not `predict`.** The output is a risk score.
+- **Experiments are a script, not a subcommand.** The owner asked for a script.
+
+### Layering rules
+
+```
+cli                                              entry point
+experiments | diagnostics                        research use cases
+pipeline                                         composition root: the only place adapters are built
+training | evaluation | reporting | tigergraph   use cases, figures, the TigerGraph adapter
+inference                                        saved model, the one scoring loop
+batching                                         contexts to ModelInputs
+data | sampling | model                          cohort, ports and contexts; neighbour sampling; nn modules
+runtime                                          device, worker pool, progress
+artifacts | metrics                              file schemas; pure metrics
+config | paths                                   built-in run; filesystem layout
+contract                                         definitions shared with GSQL
+(reference, testing, __main__: outside the stack)
+```
+
+**The rules.**
+- **One way down.** A module imports only from layers below it. Modules separated by `|` are independent of each other.
+- **Ports belong to their consumers.**
+  - `data/ports.py` holds the read ports that preparation, training, inference and evaluation use.
+  - `evaluation/truth.py` holds `TruthReader`, so ground truth is not even on training's import surface.
+  - `tigergraph` satisfies them structurally.
+  - Only `pipeline` builds adapters, with the `config.transport` retry budgets. That removes the hidden `TigerGraphExecutor()` calls (`L/evaluation.py:50`, `L/cli.py:126`) and the `live_executor` calls inside `L/source.py:583`, the predictor and `prepare_live`.
+  - Sources: Cosmic Python's composition root (https://www.cosmicpython.com/book/chapter_13_dependency_injection.html). PyG shapes its remote-backend port around reads (`FeatureStore`/`GraphStore`, https://github.com/pyg-team/pytorch_geometric/blob/master/torch_geometric/data/feature_store.py), and its docs name TigerGraph as a GraphStore (https://pytorch-geometric.readthedocs.io/en/latest/advanced/remote.html).
+- **Graph writes** (install, scope creation, reveal) happen only in `pipeline/prepare.py` and `tigergraph`. `data.preparation` gets read ports only.
+- **`model` imports only `contract` and `config`.** `batching` adapts data to `ModelInputs`. Precedents: PyG's `nn/models/tgn.py` imports only `nn.inits` and `utils` (https://github.com/pyg-team/pytorch_geometric/tree/master/torch_geometric), and in Transformers configuration never imports modeling (https://github.com/huggingface/transformers/tree/main/src/transformers).
+- **Metrics are pure and sit low.** This replaces the three or four copies the inventory found. Models: sklearn's split between `_ranking.py` and `_plot/` (https://github.com/scikit-learn/scikit-learn/tree/main/sklearn/metrics), and GraphStorm's `eval_func.py` (https://github.com/awslabs/graphstorm/blob/main/python/graphstorm/eval/eval_func.py).
+- **Reporting reads saved files only.** Sources: CCDS (https://cookiecutter-data-science.drivendata.org/opinions/) and PyKEEN's `plot_utils.py` (https://github.com/pykeen/pykeen/blob/master/src/pykeen/pipeline/plot_utils.py).
+- **`pipeline` is the one wiring point**, as in GraphStorm's `gsgnn_np` (https://github.com/awslabs/graphstorm/blob/main/python/graphstorm/run/gsgnn_np/gsgnn_np.py) and PyKEEN's `pipeline()` (https://github.com/pykeen/pykeen/blob/master/src/pykeen/pipeline/api.py). The CLI and the runner both call `pipeline.train.train_run` and `pipeline.evaluate.evaluate_run`.
+
+**Enforcement.** Layer contracts: https://github.com/seddonym/import-linter/blob/main/docs/contract_types/layers.md. Forbidden contracts check indirect imports unless told otherwise: https://github.com/seddonym/import-linter/blob/main/docs/contract_types/forbidden.md
+
+```toml
+[tool.importlinter]
+root_package = "mule_pattern_learner"
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Layers run one way"
+type = "layers"
+containers = ["mule_pattern_learner"]
+layers = ["cli", "experiments | diagnostics", "pipeline", "training | evaluation | reporting | tigergraph",
+          "inference", "batching", "data | sampling | model", "runtime", "artifacts | metrics",
+          "config | paths", "contract"]
+
+[[tool.importlinter.contracts]]
+name = "Use cases reach TigerGraph only through ports"
+type = "forbidden"
+source_modules = ["mule_pattern_learner.training", "mule_pattern_learner.evaluation", "mule_pattern_learner.data",
+                  "mule_pattern_learner.batching", "mule_pattern_learner.inference", "mule_pattern_learner.sampling",
+                  "mule_pattern_learner.model", "mule_pattern_learner.reporting"]
+forbidden_modules = ["mule_pattern_learner.tigergraph", "pyTigerGraph"]
+
+[[tool.importlinter.contracts]]
+name = "Training never reads ground truth"
+type = "forbidden"
+source_modules = ["mule_pattern_learner.training", "mule_pattern_learner.data", "mule_pattern_learner.batching",
+                  "mule_pattern_learner.inference", "mule_pattern_learner.sampling", "mule_pattern_learner.model"]
+forbidden_modules = ["mule_pattern_learner.evaluation", "mule_pattern_learner.diagnostics",
+                     "mule_pattern_learner.tigergraph.oracle"]
+
+[[tool.importlinter.contracts]]
+name = "Only reporting draws"
+type = "forbidden"
+source_modules = ["<every package except reporting, listed>"]
+forbidden_modules = ["matplotlib"]
+allow_indirect_imports = true          # pipeline, cli, experiments and diagnostics call reporting
+
+[[tool.importlinter.contracts]]
+name = "Reporting reads files, not models or the graph"
+type = "forbidden"
+source_modules = ["mule_pattern_learner.reporting"]
+forbidden_modules = ["torch", "mule_pattern_learner.model", "mule_pattern_learner.inference",
+                     "mule_pattern_learner.training"]
+
+[[tool.importlinter.contracts]]
+name = "Fakes stay out of the package"
+type = "forbidden"
+source_modules = ["<every package except testing, listed>"]
+forbidden_modules = ["mule_pattern_learner.testing"]
+
+[[tool.importlinter.contracts]]
+name = "Only diagnostics uses the verification mirrors"
+type = "forbidden"
+source_modules = ["<every package except diagnostics and reference, listed>"]
+forbidden_modules = ["mule_pattern_learner.reference"]
+allow_indirect_imports = true          # cli reaches reference only through diagnostics
+
+[[tool.importlinter.contracts]]
+name = "The model knows nothing about storage"
+type = "forbidden"
+source_modules = ["mule_pattern_learner.model"]
+forbidden_modules = ["pandas", "pyarrow", "requests", "mule_pattern_learner.data"]
+```
+
+If import-linter does not install on Python 3.14, `tests/test_layers.py` enforces the same contracts from an AST import graph.
+
+### Configuration
+
+- **`config.py` holds the built-in run** as frozen dataclasses. Each component receives only its own section.
+  - Validation happens in `__post_init__`, and bounds come from `contract.bounds`.
+  - The sampler section *is* `contract.SamplerPlan`.
+  - This follows Twelve-Factor (https://12factor.net/config) and Transformers' dataclass defaults.
+- **`.env` holds the connection only.** It is read when `pipeline.connect` runs, never at import.
+- **Deleted:** `FALLBACKS`, `OPERATIONAL_DEFAULTS`, the pydantic `LiveConfig`, `run_config`, `setting()`, and the TOML/JSON loaders. nanoGPT's own docstring calls exec'd override files "Probably a terrible idea" (https://github.com/karpathy/nanoGPT/blob/master/configurator.py).
+
+```python
+@dataclass(frozen=True)
+class RunConfig:
+    scope: ScopeConfig = ScopeConfig()          # id="strict_mule_v2", create=True, unowned="linked",
+                                                # reveal_per_split=20, reveal_salt=42
+    cohort: CohortConfig = CohortConfig()       # dates, seed_limits, cohort_seed=42, split_seed=42
+    sampler: SamplerPlan = BUILT_IN_SAMPLER     # fanouts (16, 4), roots and children pools, relation_fanouts (8, 4),
+                                                # association_fanout 1, association_slots 2, backend "auto", evaluation_seed 0
+    features: tuple[str, ...] = BUILT_IN_GROUPS
+    model: ModelConfig = ModelConfig()          # architecture "tgat" | "summary", hidden 64, heads 4, dropout 0.15, slot_sum True
+    loss: LossConfig = LossConfig()             # class_prior 0.001, positive_weight "balanced" | "prior" | float
+    training: TrainingConfig = TrainingConfig() # seed 42, epochs 30, steps_per_epoch 100, batch_size 64, patience 6,
+                                                # learning_rate 1e-3, weight_decay 1e-4, weight_average_decay 0.99,
+                                                # proxy_unlabeled_limit 2000
+    transport: TransportConfig = TransportConfig()  # request_batch_size 8, query_concurrency 16 (keep the measurement
+                                                # comment), context_lru_capacity 256, encoding_check_every 64,
+                                                # max_query_attempts 6, max_outage_s 900, prepare_batch_size 16
+    runtime: RuntimeConfig = RuntimeConfig()    # device "auto", threads 4, deterministic True, prefetch_batches 2,
+                                                # checkpoint_every_steps 0, log_every_steps 10, max_rejected_root_fraction 0.0
+
+    def fingerprint(self) -> str: ...           # every section except transport and runtime (today's RUNTIME_KEYS plus
+                                                # device, threads, deterministic, which provenance records)
+DEFAULT_CONFIG = RunConfig()
+```
+
+- **The cohort id** is the fingerprint of the dataset id, `scope`, `cohort` and the sampler's pool parameters. It is exactly today's `PREPARATION_KEYS` minus the deleted ones.
+- **Audit constants are not run configuration.** `AUDIT_NEGATIVES = 2000` (`evaluation/sample.py`), `REVIEW_BUDGETS = (0.01, 0.05, 0.10)`, `BOOTSTRAP_REPLICATES = 1000` and `INTERVAL = 0.90` (`metrics.py`) are recorded in each audit JSON.
+- **Component selection.** One `match` per real choice: `model.build.build_model` (tgat or summary), `sampling.backend.choose_sampler` (auto, torch or cugraph) and `training.objective` (positive weight).
+  - The only registries are two plain tables: feature groups and variants.
+  - There are no class resolvers. PyKEEN's `class_resolver`, GraphGym's `register_*` and GraphStorm's `BUILTIN_*` solve a problem that a single model does not have.
+- **GSQL stays at the repository root** and is found through `paths.GSQL_DIR`.
+  - The repository is used as an editable install, `runs/` already ties runtime to the root, reviewers read GSQL as files, and a byte-identity test guards the generated query.
+  - CCDS uses the same single root constant (https://github.com/drivendataorg/cookiecutter-data-science/blob/master/%7B%7B%20cookiecutter.repo_name%20%7D%7D/%7B%7B%20cookiecutter.module_name%20%7D%7D/config.py).
+  - TigerGraph warns that schema changes invalidate queries (https://www.tigergraph.com/docs/gsql-ref/4.2/ddl-and-loading/modifying-a-graph-schema), so `mule install` applies the scope schema change before installing any query.
+  - A numbered migrations folder, in the style of Flyway's versioned migrations (https://documentation.red-gate.com/fd/versioned-migrations-273973333.html), comes back only if a second schema change appears.
+- **Packaging.**
+  - Keep the src layout (https://packaging.python.org/en/latest/discussions/src-layout-vs-flat-layout/) and pip.
+  - Make torch and matplotlib core dependencies; remove the `model` and `all` extras; keep `dev`, `cuda12` and `cuda13`.
+  - Configure pytest with `--import-mode=importlib`, and drop `pythonpath` and basedpyright's `extraPaths` (https://docs.pytest.org/en/stable/explanation/goodpractices.html, https://docs.pytest.org/en/stable/explanation/pythonpath.html).
+  - Do not commit a lock file: CUDA torch wheels come from per-CUDA indexes. Provenance records the package versions instead.
+
+### Naming conventions
+
+| Thing | Rule | Examples |
+|---|---|---|
+| Packages, modules | Lowercase role nouns. Never `utils`, `common`, `helpers`, `live`, `temporal`, `v5` or `legacy`. No two modules with the same name (https://github.com/wemake-services/wemake-python-styleguide/blob/master/wemake_python_styleguide/constants.py; https://peps.python.org/pep-0008/) | `training/trainer.py`, `data/contexts.py` |
+| Classes | CapWords, role suffix, no project prefix | `Trainer`, `Predictor`, `SavedModel`, `ResumeState`, `ContextSource`, `TorchNeighborSampler` |
+| Ports and adapters | Port = role noun + `Reader`/`Fetcher`/`Executor`; adapter = `<Technology><Port>` (Cosmic Python's `SqlAlchemyRepository`); fake = `Fake<Technology>` | `ContextFetcher` / `TigerGraphContextFetcher` / `FakeTigerGraph` |
+| Functions | Verbs for use cases and factories; `*_curve` returns arrays, `bootstrap_*` intervals, `plot_*` draws | `prepare_cohort`, `train_run`, `audit`, `capture_curve`, `plot_capture` |
+| Constants | UPPER_CASE, defined once | `BUILT_IN_GROUPS`, `GRAPH_NAME`, `REQUEST_CAP` |
+| Config keys | Section-qualified snake_case, no repeated section name, units as suffixes | `scope.id`, `loss.positive_weight`, `transport.max_outage_s` |
+| Variants | "Variant" everywhere (never "arm"). `baseline`, `no_<mechanism>`, `drop_<group>`, `add_<group>`, or a control's own name | `no_attention`, `no_graph`, `drop_pair_history`, `add_rolling_windows`, `prior_weight` |
+| Concepts | One name each: "cohort" (not dataset or preparation); "audit" is the ground-truth report and `evaluate` the command that writes it; the context source parameter is always `contexts` | |
+| Runs and figures | `runs/<variant>/seed-<n>/`; `plots/<topic>_<figure>.png` | `audit_capture.png` |
+| GSQL | A file is named after the query it defines, or after the noun its queries share; query names snake_case with no prefix (the graph is dedicated) | `training_context.gsql` defines `training_context` |
+| Tests | `tests/<package>/test_<module>.py`; markers `graph`, `graph_write`, `cuda` | `tests/sampling/test_cugraph_sampler.py` |
+| Docs | kebab-case in the Diataxis folders (https://diataxis.fr/) | `docs/how-to/run-control-experiments.md` |
+
+`tests/test_naming.py` checks file and folder names, Python identifiers (read from the AST), CLI commands, run paths and GSQL query names. It does not check prose.
+
+**Renames**
+
+| Current | New |
+|---|---|
+| `mule-temporal`, `mule_pattern_learner.temporal.live.*` | `mule`, the layered packages |
+| `LiveTGAT` with `split`, `summary`, `single` | `TGAT` (`tgat`), `SummaryMLP` (`summary`); `single` deleted |
+| `variant` (`temporal`, `no_fourier`, `tabular`) | deleted; variants `drop_time_encoding` and `no_attention` |
+| `DEFAULT_RUN`, `FALLBACKS`, `OPERATIONAL_DEFAULTS`, `TRANSPORT_DEFAULTS`, `LiveConfig` | `RunConfig`, `DEFAULT_CONFIG` |
+| `make_live_batch`, `live_executor`, `prepare_live`, `pipeline.run` | `build_batch`, `pipeline.connect`, `prepare_cohort`, `train_run` |
+| `TemporalPredictor`, `_TrainingRun.score` | `Predictor` |
+| `ModelCheckpoint`, `checkpoint_last.pt` | `SavedModel` (`model.pt`), `ResumeState` (`resume.pt`) |
+| `StreamingContextSource`; `store`, `source`, `contexts` | `ContextSource`; `contexts` |
+| `GraphEvaluationTruth`, `ParquetEvaluationTruth`, `evaluate_final_population`, `evaluate-final` | `TigerGraphTruth`, `ParquetTruth`, `audit`, `mule evaluate` |
+| `grouped_ap_interval`, `weighted_top_fractions`, `evaluate_weighted` | `bootstrap_interval` (stratified or ring-clustered), `capture_at_budgets`, `audit_metrics` |
+| `sampler.py`/`sampling.py`, `memory.py`, `policy.py`, `contract.py`, `config_schema.py`, `common.py` | `sampling/`, `training/schedule.py`, `batching/limits.py`, split up, `contract/`, `config.py`, split up |
+| `CONTRACT_VERSION` | `CONTEXT_CONTRACT` in `contract/server.py` (value unchanged until the server step) |
+| `TRAINING_PROTOCOL`, `CHECKPOINT_FORMAT` | `SavedModel.FORMAT = 1`, `ResumeState.FORMAT = 1` |
+| `progress.jsonl`, `metrics.json["history"]`, `<split>_predictions.parquet`, `final_eval.*` | `history.csv` plus `events.jsonl`, `epochs.csv`, `predictions/<split>.parquet`, `audit/<split>.*` |
+| `models/temporal/model.pt`, `<run>/prepared`, `artifacts/temporal/<id>` | `runs/baseline/seed-42/model.pt`, `runs/cohorts/<id>/` |
+| Queries `temporal_*` (server step) | same names without the prefix; `temporal_get_account_supervision` becomes `account_supervision`; `temporal_fourier64_values` becomes `fourier64`; the `temporal_fourier64` wrapper and `temporal_training_population` are retired |
+
+**Kept on purpose** (allow-listed with reasons in `tests/test_naming.py`):
+- the `Temporal_Training_Scope` vertex type and its edges;
+- the scope id `strict_mule_v2`;
+- the salt values in `contract/salts.py` (`"temporal_live_step"`, the cohort and split salts);
+- until the server step: the query names and the `CONTEXT_CONTRACT` value.
+
+The constants that hold these values get new names; only the persisted values stay.
+
+`CONTEXT_CONTRACT` stays a literal in `contract/server.py`. From the server step on, a render test asserts that it equals `"context_" + sha256(normalised rendered query without the literal)[:12]`, so a query change cannot ship without a new value.
+
+### Plots
+
+**Principles.**
+- Every figure function has the shape `plot_<thing>(ax: Axes, data) -> Axes`. It takes computed inputs, never reads files and never saves. This is matplotlib's object-oriented style (https://matplotlib.org/stable/users/explain/quick_start.html) and PyKEEN's shape.
+- `reporting/report.py` alone reads files and saves figures.
+- Figures are built with `matplotlib.figure.Figure()` and saved through the Agg canvas, so pyplot is never imported (https://matplotlib.org/stable/gallery/user_interfaces/web_application_server_sgskip.html, https://matplotlib.org/stable/users/explain/figure/backends.html).
+- Curves come from `metrics.py` (sklearn curves with `sample_weight`). sklearn Display classes are not used, because they import pyplot.
+- Output is PNG at 150 dpi with fixed colours; the baseline, mule and non-mule colours never change.
+- **When figures are written:**
+  - after `model.pt` and every run file are saved (so a plotting error cannot lose a model, and it makes the command exit non-zero only after everything else is written);
+  - after audits;
+  - by the runner;
+  - by `diagnose`.
+- `report.md` holds the tables with relative image links.
+- Findings recorded in `docs/research/` embed PNGs copied into `docs/research/figures/`, which are tracked.
+
+| File | Function | Source | What it shows |
+|---|---|---|---|
+| `training_objective.png` | `plot_objective` | history.csv | Loss and unclamped nnPU objective per interval, rolling mean, epoch boundaries |
+| `training_corrections.png` | `plot_corrections` | history.csv | Share of steps whose non-negative correction fired |
+| `validation_ranking.png` | `plot_validation_ranking` | epochs.csv | Proxy AP and ROC AUC per epoch, selected epoch, prevalence line, which weights were validated |
+| `training_throughput.png` | `plot_throughput` | history.csv | Seconds per step, batch wait, contexts requested, distinct and cached |
+| `proxy_precision_recall.png` | `plot_precision_recall` | predictions/*.parquet | Validation and test PR on observed labels, titled as a proxy |
+| `run_health.png` | `plot_run_health` | metrics.json, history.csv | Rejections by split and status, stub children, sampler backend totals, database calls |
+| `audit_precision_recall.png` | `plot_precision_recall` | audit/*.parquet, *.json | Weighted PR per split, chance line, AP with its ring-clustered 90% interval |
+| `audit_roc.png` | `plot_roc` | audit/*.parquet | Weighted ROC per split with AUC |
+| `audit_capture.png` | `plot_capture` | audit/*.parquet | Cumulative gains per split, random and perfect lines, markers at 1%, 5% and 10% labelled with recall and precision |
+| `audit_threshold.png` | `plot_threshold_metrics` | audit/test.parquet | Weighted precision, recall and F1 against threshold, the selected threshold |
+| `audit_score_distribution.png` | `plot_score_distribution` | audit/test.parquet | Weighted densities of log10 odds, mules against non-mules, threshold line |
+| `audit_revealed_hidden.png` | `plot_revealed_vs_hidden` | audit/test.parquet | ECDF of percentile rank, revealed against hidden mules, points and medians |
+| `comparison_ap.png` | `plot_comparison` | summary.csv, comparison.csv | Validation-audit and test-audit AP per variant (two panels): one dot per seed, seed mean, interval, baseline line |
+| `comparison_delta.png` | `plot_paired_delta` | comparison.csv | Validation-audit AP minus baseline: paired interval, per-seed deltas, zero line, sorted |
+| `comparison_budget.png` | `plot_budget_recall` | summary.csv | Recall at 1%, 5% and 10% per variant (validation audit) |
+| `comparison_capture.png` | `plot_capture_overlay` | audit parquets | Seed-mean capture curves, baseline emphasised |
+| `comparison_validation.png` | `plot_validation_overlay` | epochs.csv files | Seed-mean proxy AP per epoch per variant |
+| `comparison_proxy_vs_audit.png` | `plot_proxy_vs_audit` | epochs.csv, audit/validation.json | Selected proxy AP against validation-audit AP per run: is the proxy informative? |
+| `label_curve.png` | `plot_label_curve` | learning_curve.csv | Test audit AP against oracle-labelled training mules (log x), LR and HGB bands, model line, revealed-count marker |
+| `univariate_auc.png` | `plot_univariate` | univariate.csv | Weighted ROC AUC per feature and split, top 30 |
+| `drift.png` | `plot_drift` | drift.csv | Standardised mean difference of non-mule features at validation and test cutoffs against train |
+| `baselines.png` | `plot_baselines` | baselines.csv | AP with intervals per baseline family, single-feature rankings, the model |
+| `ap_concentration.png` | `plot_ap_concentration` | subgroups.csv | Cumulative AP against number of top-ranked mules |
+| `ring_coverage.png` | `plot_ring_coverage` | subgroups.csv | Share of test rings with a member in the top 1%, 5% and 10% |
+| `proxy_validity.png` | `plot_proxy_validity` | proxy_validity.csv | Oracle metrics of the proxy predictions: all, hidden only, revealed only |
+| `reveal_spread.png` | `plot_reveal_spread` | reveal_spread.csv | Per-split reveal outcomes over salts |
+| `nnpu_simulation.png` | `plot_nnpu_simulation` | nnpu_simulation.csv | Simulated ranking quality and collapse rate, prior against balanced positive weight |
+
+### Experiments
+
+**Variants are frozen dataclasses of changes against the built-in run.** Seeds are a separate axis. A variant never sets a seed, and `cohort_seed`, `split_seed` and `reveal_salt` are explicit fields that no variant touches.
+
+```python
+@dataclass(frozen=True)
+class Variant:
+    name: str
+    question: str
+    change: Callable[[RunConfig], RunConfig]          # built with dataclasses.replace
+
+    def config(self, base: RunConfig, seed: int) -> RunConfig:
+        return with_seed(self.change(base), seed)     # sets training.seed only
+
+ACCOUNT_AGGREGATES = ("entity_meta", "entity_age", "rolling_windows", "amount_ratios", "recency",
+                      "decayed_activity", "history_support")      # server-computed from the account's own events
+BASELINE = Variant("baseline", "The built-in run", lambda c: c)
+CONTROLS = (
+    Variant("no_attention", "Does attention over sampled neighbours add anything beyond the root's own inputs, "
+            "pool counts included?", lambda c: with_model(c, architecture="summary", slot_sum=False)),
+    Variant("no_graph", "How well does a table of the account's own activity aggregates rank mules, with no "
+            "neighbour, association or pool input?",
+            lambda c: with_model(with_groups(c, ACCOUNT_AGGREGATES), architecture="summary", slot_sum=False)),
+    Variant("no_slot_sum", "Does the per-slot MLP sum help beyond attention?", lambda c: with_model(c, slot_sum=False)),
+    Variant("no_pool_counts", "How much of the ranking comes from the candidate-pool counts?",
+            lambda c: without_groups(c, POOL_GROUPS)),
+    Variant("prior_weight", "Does the balanced positive weight beat textbook nnPU across seeds?",
+            lambda c: with_loss(c, positive_weight="prior")),
+    Variant("no_weight_average", "Does selecting on the moving average of the weights help?",
+            lambda c: with_training(c, weight_average_decay=0.0)),
+    drop_group("time_encoding"),
+)
+FEATURE_DROPS = tuple(drop_group(g) for g in BUILT_IN_GROUPS if g != "message_core")   # drops dependents too
+FEATURE_ADDS = tuple(add_group(g) for g in OPTIONAL_GROUPS)                           # adds requirements too
+SUITES = {"controls": (BASELINE, *CONTROLS),
+          "feature_drops": (BASELINE, *FEATURE_DROPS),
+          "feature_adds": (BASELINE, *FEATURE_ADDS)}
+SUITES["all"] = unique_by_name(*SUITES.values())
+SEEDS = (42, 43, 44)      # 42 is the built-in seed: `mule train` is baseline seed 42 and is reused
+```
+
+**What the generated variants are.**
+- **Drops:** `drop_entity_meta`, `drop_hub_indicator`, `drop_time_encoding`, `drop_pair_history` (also removes both pool groups; its question says so), `drop_flow_timing` (also removes `pool_activity`), `drop_pool_activity` and `drop_pool_internal_inflows` (replaces `/tmp` `no_internal.toml`).
+- **Additions:** `add_entity_age`, `add_rolling_windows`, `add_amount_ratios` (adds `rolling_windows`), `add_recency`, `add_association_counts`, `add_pair_window_counts`, `add_decayed_activity`, `add_history_support`, `add_identity_order`, `add_device_ip_context`, `add_event_channel` and `add_sampler_meta`.
+- **Replaced `/tmp` files:** `tabular.toml` becomes `no_attention`, and `seed7.toml` becomes `--seeds 7`.
+- **Cost:** `no_attention` and `no_graph` fetch no children, so they cost about a fifteenth per batch.
+
+**The script** (`scripts/run_experiments.py`, about 30 lines):
+```
+python scripts/run_experiments.py --list        # variants, questions, config diff against baseline
+python scripts/run_experiments.py --plan        # validate offline; print the run matrix and a time bound
+python scripts/run_experiments.py               # suite "controls", seeds 42 43 44
+python scripts/run_experiments.py --suite feature_drops --seeds 42 43
+python scripts/run_experiments.py --variants no_attention no_graph --seeds 42
+python scripts/run_experiments.py --compare-only   # recompute summary and comparison from run dirs, then draw
+python scripts/run_experiments.py --archive-stale  # move mismatched run dirs to runs/archive/ (never deletes)
+```
+
+**What `run_suite` does, in order.**
+1. **Resolve the variants.** Take the suite, filter it by `--variants`, and always include `baseline`.
+2. **Validate offline.** Build every variant's `RunConfig`, `FeaturePlan` and model on CPU. Every variant must share one cohort id and have a distinct fingerprint. Failures name the variant.
+3. **Connect once**, run `pipeline.prepare` once (install, scope, reveal and cohort, as `mule train` does), and read the oracle truth once.
+4. **Train, seeds outer and variants inner.** Each run goes to `runs/<variant>/seed-<n>/`.
+   - A complete run with an equal `fingerprint()` is skipped.
+   - A differing one is an error naming the keys, and `--archive-stale` moves it aside.
+   - An error specific to one variant is recorded as `failed` and the suite continues.
+   - A TigerGraph outage (the executor's availability budget exhausted) stops the suite.
+   - Exit status is 1 if anything failed.
+5. **Audit** validation and test for every complete run that lacks them. The audit sample depends only on scope, truth and `split_seed`, so every variant is scored on the same accounts.
+6. **Compare.** Write `summary.csv` (long format: variant, seed, split, metric, value, status, commit) and `comparison.csv`.
+   - `comparison.csv` holds, per variant: the question, seeds, validation and test AP means, spread over seeds, intervals, paired validation delta, ROC AUC, recall and precision at the three budgets, mean best epoch, parameter count and training hours.
+   - It flags runs that differ in git commit, dirty state, device or sampler backend.
+   - Layout follows Ludwig's `MetricDiff` (https://github.com/ludwig-ai/ludwig/tree/main/ludwig) and GADBench's mean and spread over fixed seeds (https://github.com/squareRoot3/GADBench/tree/master).
+7. **Report** with `reporting.write_suite_report`. `report.md` ranks variants by the validation audit. It marks the test audit "for reporting, not selection", and warns that the pool groups were designed after reading test-split mules.
+
+**Statistics.**
+- **Per run, per split:** weighted AP, ROC AUC, and recall and precision at the budgets. Each has a 90% bootstrap interval with 1,000 replicates and seed 0.
+  - Positives are resampled by ring (`ring_id`), and negatives within class. Inclusion weights are kept.
+  - The level and replicate count come from `/tmp/mpl_arms/audit_summary.py`.
+- **Paired delta:** every replicate draws one resample of the shared accounts and rings and applies it to every run. The statistic is seed-mean AP of the variant minus seed-mean AP of the baseline.
+  - The interval covers audit-sample uncertainty for these seeds, not seed-to-seed variation. The per-seed deltas are plotted beside it.
+  - A variant is marked "consistent" only when every seed's delta has the same sign and the interval excludes zero.
+  - With about 18 variants at 90%, about two will exclude zero by chance, so results are exploratory until repeated with more seeds.
+- **Rejections:** accounts rejected in any run are left out of the pairing, and their count is reported.
+- **Sample size:** the diagnostic sample held 233 mules across the three splits (`mule_profile.md`), so expect wide intervals.
+
+**Cost.**
+- The docs measure about 11 s per 64-root batch and about 25 minutes per epoch including validation. A graph run is therefore up to about 12.5 hours before early stopping.
+- The `controls` suite over three seeds is 24 runs: 18 graph runs and 6 summary runs. That is about 230 hours back to back without the cache.
+- `--plan` prints this bound from the last run's `history.csv`.
+- The context cache lands before the first suite (see the migration plan).
+
+**Tests.**
+- `tests/experiments/test_variants.py` is parametrised over every variant. Each must build a valid config, plan and model offline, share the baseline's cohort id, and have a distinct fingerprint. This follows PyKEEN's `test_experiment_integrity.py` (https://github.com/pykeen/pykeen/blob/master/tests/test_experiment_integrity.py).
+- `tests/experiments/test_runner.py` runs 2 variants × 2 seeds × 1 epoch on `FakeTigerGraph` and checks:
+  - the run files, both CSVs and the plots;
+  - skip-if-done;
+  - the mismatch error and `--archive-stale`;
+  - stop on outage.
+
+No experiment writes to `/tmp`.
+
+### Diagnostics
+
+**The rule.**
+- An analysis becomes a module and a `mule diagnose` command when it should rerun whenever the cohort, features or model change.
+- It becomes a research note when it answered a one-off question, or when the path it tested is gone or has become a variant.
+
+**How the modules behave.**
+- They read the graph only through ports and use truth only through `TruthReader`.
+- They write to `runs/diagnostics/<cohort id>/`, with CSVs in the long format of `summary.csv`.
+- `reveal_spread` may import `reference`.
+
+| Source | Becomes | Notes |
+|---|---|---|
+| `mpl_diag/stage_*.py`, `common.py`, `probe.py` | `diagnostics/feature_table.py`, `mule diagnose features` | Public functions of `evaluation.sample`, `ContextSource` and `batching.features` instead of `source._canonical`; train, validation and test samples |
+| `mpl_diag/bl_lib.py` | `metrics.py`; `split_rank_transform` to `diagnostics/drift.py` | removes the duplicate metrics |
+| `bl_models.py` A | `diagnostics/baselines.py` | adds single-feature rankings and the attribute-only floor |
+| `bl_models.py` B | `diagnostics/learning_curve.py` | |
+| `bl_models.py` D, `bl_shift.py` | `diagnostics/drift.py` | |
+| `bl_models.py` A3, C, D1 | `docs/research/diagnostic-study.md` | one-off answers recorded |
+| `bl_univariate.py` | `diagnostics/univariate.py` | |
+| `bl_subgroup.py`, `mpl_arms/audit_summary.py` (revealed/hidden part) | `diagnostics/subgroups.py` | adds ring coverage |
+| `mpl_arms/audit_summary.py` (intervals) | `evaluation/audit.py` | non-tie-aware `top()` replaced by `metrics.capture_at_budgets`; ring-clustered |
+| dropped `evaluate` command | `diagnostics/proxy_validity.py` | oracle metrics of the proxy predictions, hidden and revealed |
+| `bl_report.py` | `reporting/report.py` (`write_diagnostics_report`) | |
+| `pool_activity_check*.py`, `pool_activity_offline.py`, `pool_activity_passthrough.py`, `pool_activity_check.md` | `docs/research/diagnostic-study.md` | superseded by `univariate`, `baselines` and the `drop_pool_*` variants |
+| `binormal_ap.py` | `docs/research/diagnostic-study.md` | expected-AP reasoning recorded |
+| `mpl_diag/profile/p1` to `p11`, `load_messages.py`, `mule_profile.md` | `docs/research/mule-profile.md` | records the typology findings that shaped the pool groups, and the resulting test-audit optimism |
+| `extract_notes.md`, `shift_review.md`, `baselines.md`, `bl_tables.md`, `bl_template.md` | the two research notes | numbers copied in |
+| `flags_check.py`, `head_src/`, `mpl_arms/fake/` | nothing | a HEAD-versus-tree flag check superseded by the variant tests; a source copy; a fixture |
+| `mpl_arms/*.toml` | variants `no_attention`, `drop_pool_internal_inflows`; `--seeds 7` | files not moved |
+| `nnpu_sim/sim.py`, `grid.py`, `traj.py` | `diagnostics/nnpu_simulation.py` (offline) and `docs/research/nnpu-positive-weight.md` | the live test is `prior_weight` |
+| `scripts/temporal/simulate_label_reveal.py` | `diagnostics/reveal_spread.py` | uses `reference/label_reveal.py` |
+
+### Mapping from current files to new homes
+
+**Python modules** (`L/` = `src/mule_pattern_learner/temporal/live/`)
+
+| Current | New home |
+|---|---|
+| `__init__.py`, `py.typed` | same place |
+| `configuration.py` | `paths.py`; TOML/JSON loaders deleted |
+| `device.py` | `runtime/device.py`; `cli.py:14` deleted (entry points call `reserve_deterministic_cublas()` first) |
+| `tigergraph/__init__.py`, `settings.py`, `client.py` | `tigergraph/__init__.py`, `connection.py`, `client.py` |
+| `temporal/__init__.py`, `L/__init__.py` | deleted |
+| `temporal/common.py` | `contract/clock.py`, `contract/fingerprints.py`, `artifacts.file_digest` |
+| `temporal/encoding.py` | `contract/time_basis.py` (numpy, `BASIS_ID`), `batching/time_encoding.py` (torch) |
+| `temporal/loss.py` | `model/loss.py` |
+| `temporal/metrics.py` | `metrics.py`, merged with the weighted metrics of `L/evaluation.py`; `grouped_ap_interval` becomes the clustered bootstrap |
+| `L/contract.py` | `contract/server.py`, `graph_schema.py`, `feature_groups.py` (all groups; pool constants), `sampler_plan.py`, `bounds.py`, `fingerprints.py`; `from_config`/`extraction_plan` deleted; `LEGACY_GROUPS`, `FEATURE_NAMES` ordering, `HopBound`, positional pool arguments and `per_relation` deleted |
+| `L/config_schema.py` | `config.py`; `FALLBACKS` and `OPERATIONAL_DEFAULTS` deleted |
+| `L/executor.py` | `tigergraph/executor.py`; `transport_settings`/`live_executor` to `pipeline/connect.py` |
+| `L/installation.py` | `tigergraph/gsql_text.py`, `installer.py`, `provenance.py`; installs through the executor, not `executor.client.conn` |
+| `L/queries.py` | `tigergraph/render.py` |
+| `L/context_query.py` | `tigergraph/context_query.py`; `query_context_batch` to `testing/builders.py` |
+| `L/source.py` | `data/contexts.py`; `_DaemonPool` to `runtime/workers.py`; `ContextStore` deleted; `open_context_source` to `pipeline/connect.py`; `rejection_summary` to `inference/rejections.py` |
+| `L/scope.py` | `tigergraph/scope.py`; `strict_mule_v1`-era inference deleted |
+| `L/cohort.py` | `data/cohort.py`; stale-query guards deleted |
+| `L/policy.py` | `context_scope` to `contract/graph_schema.py`; rejection limit to `inference/rejections.py`; protocol validation deleted |
+| `L/labels.py` | `tigergraph/reveal.py`, `tigergraph/labels.py`; `ACCOUNT_LOAD_COLUMNS` to `contract/graph_schema.py` |
+| `L/reveal_model.py` | `reference/label_reveal.py` |
+| `L/supervision.py` | `data/observed_labels.py`; graph source to `tigergraph/labels.py`; `FrameObservedLabels` to `testing/builders.py`; parquet policy deleted |
+| `L/hubs.py` | `data/hub_registry.py`, `tigergraph/hubs.py`; `HUB_COLUMNS` once in contract; `scan_cap` guard deleted |
+| `L/dataset.py` | `data/manifest.py`, `preparation.py`, `splits.py`; legacy export, union-find split, SQLite fill and `preparation_fingerprint` deleted |
+| `L/batching.py` | `batching/features.py`, `pool_counts.py`, `assemble.py`; backend policy to `sampling/backend.py`; scalar features to `reference/batch_features.py`; legacy selection deleted; `PinnedRoots.__getattr__` replaced by fields |
+| `L/memory.py` | `batching/limits.py` |
+| `L/sampler.py` | `sampling/candidates.py`, `torch_sampler.py`, `cugraph_sampler.py`, `backend.py` |
+| `L/sampling.py` | `training/schedule.py`; `BatchPrefetcher` merged into `runtime/workers.py` |
+| `L/model.py` | `model/inputs.py`, `tgat.py`, `summary.py`, `build.py` (submodule creation order preserved) |
+| `L/training.py` | `training/trainer.py`, `objective.py`, `averaging.py`, `history.py`, `summary.py`; scoring to `inference/predictor.py` |
+| `L/checkpoint.py` | `inference/saved_model.py`, `training/checkpoint.py`; `_result_view` deleted |
+| `L/predictor.py` | `inference/predictor.py`, `inference/score_accounts.py` |
+| `L/inference.py` | deleted (training writes split predictions; `mule score` covers accounts) |
+| `L/evaluation.py` | `evaluation/sample.py` (any split), `audit.py`, `truth.py`; graph truth to `tigergraph/oracle.py`; `evaluate_predictions` to `diagnostics/proxy_validity.py` |
+| `L/pipeline.py` | `pipeline/` package; path policy to `paths.py` |
+| `L/experiments.py` | `experiments/variants.py` |
+| `L/history_reference.py` | `reference/gsql_features.py` |
+| `L/cli.py` | `cli.py` |
+| new | `__main__.py`, `data/ports.py`, `data/context_cache.py`, `artifacts.py`, `runtime/progress.py`, `reporting/`, `experiments/runner.py`, `comparison.py`, `diagnostics/`, `testing/` |
+
+**Scripts** (`scripts/temporal/`)
+
+| Current | New home |
+|---|---|
+| `run_live_experiments.py`, `feature_experiments.py` | `scripts/run_experiments.py` |
+| `render_training_queries.py` | `scripts/render_queries.py` |
+| `benchmark_live_batch.py` | `mule check --batch` (gains digest output first, in the safety-net step) |
+| `verify_live_training.py` | `mule check`; `tests/integration/test_context_query.py` |
+| `verify_cugraph_sampler.py` | probe in `mule check`; `tests/integration/test_cugraph_sampler.py` (`cuda`) |
+| `verify_strict_isolation.py` | `tests/integration/test_scope_isolation.py` (`graph_write`, `--allow-graph-writes`) |
+| `verify_feature_redesign.py` | `tests/integration/test_feature_parity.py` (`graph`) |
+| `verify_label_reveal.py` | `tests/integration/test_label_reveal.py` (`graph`, `apply=FALSE`) |
+| `simulate_label_reveal.py` | `diagnostics/reveal_spread.py` |
+| `convert_mule_label_to_integer.py`, `install_account_supervision.py`, `install_time_encoding.py`, `verify_account_supervision.py`, `verify_time_encoding.py` | deleted (applied migrations; in git history) |
+
+**GSQL**
+
+| Current | New home |
+|---|---|
+| `gsql/README.md` | rewritten; fresh-graph procedure to `docs/how-to/set-up-a-graph.md` |
+| `features/temporal_fourier64.gsql` | `queries/fourier64.gsql` (text unchanged until the server step, which drops the wrapper) |
+| `features/zelle_pair_time64.gsql`, `payment_pair_time64.gsql` | deleted with `OPTIONAL_QUERY_FILES` and `--include-optional` |
+| `schema/temporal_schema.gsql`, `temporal_account_loading.gsql` | `schema/schema.gsql`, `schema/account_loading.gsql` (the unused `pair_*` attributes stay, documented as unused) |
+| `schema/migrations/temporal_training_scope.gsql` | `schema/training_scope.gsql` |
+| `schema/migrations/temporal_valid_time.gsql`, `temporal_encoding_attributes.gsql`, `account_mule_supervision.gsql` | deleted (applied; in the fresh DDL) |
+| `temporal/training_context.gsql` | `queries/training_context.gsql` (byte-identical until the server step) |
+| `temporal/training_scope.gsql`, `training_cutoffs.gsql`, `hub_registry.gsql`, `label_reveal.gsql`, `account_supervision.gsql` | `queries/`, same file names |
+| `temporal/training_population.gsql` | deleted from the tree with `shared_history`; the installed query is retired in the server step |
+
+**Tests** (`tests/temporal/`)
+
+| Current | New home |
+|---|---|
+| `conftest.py` | `tests/conftest.py` with fixtures; `sys.path` insert deleted |
+| `temporal_fakes.py` | `testing/fake_graph.py` (`FakeExecutor` becomes `FakeTigerGraph`, absorbing the inline executors), `testing/builders.py`; `LEGACY_PROFILE` and `profile_config` deleted; test config defaults to `DEFAULT_CONFIG` |
+| `test_transport.py` | `tests/tigergraph/test_client.py`, `test_executor.py`, `test_context_query.py`, `test_installer.py`, `test_scope.py`; `tests/data/test_contexts.py`, `test_cohort.py`, `test_observed_labels.py`; `tests/pipeline/test_connect.py`; server fakes to `testing/fake_connection.py` |
+| `test_sampler.py` | `tests/sampling/*`, `tests/batching/test_assemble.py`; `recent`/`stratified` tests deleted |
+| `test_training_runtime.py` | `tests/training/*`, `tests/runtime/*`, `tests/evaluation/test_audit.py`, `tests/inference/test_score_accounts.py`, `tests/test_cli.py` |
+| `test_gsql_v5.py` | `tests/tigergraph/test_render.py`, `test_gsql_text.py`, `test_query_files.py` |
+| `test_live_training.py` | `tests/pipeline/test_train.py`, `tests/training/test_golden_run.py` |
+| `test_live_pipeline.py` | `tests/contract/test_feature_groups.py`, `tests/data/test_manifest.py`, `tests/model/test_build.py`, `tests/experiments/test_variants.py` |
+| `test_pool_activity.py` | `tests/batching/test_pool_counts.py` |
+| `test_strict_backend.py` | `tests/data/test_scope_isolation.py` |
+| `test_slot_sum.py` | `tests/model/test_tgat.py`, `tests/experiments/test_variants.py` |
+| `test_scripts.py` | `tests/test_scripts.py` |
+| `test_feature_redesign.py` | `tests/reference/test_gsql_features.py`, `tests/test_metrics.py` |
+| `test_label_reveal.py` | `tests/tigergraph/test_reveal.py`, `tests/reference/test_label_reveal.py` |
+| `test_loss.py`, `test_score_precision.py` | `tests/model/test_loss.py`, `tests/model/test_build.py`, `tests/test_metrics.py` |
+| new | `tests/reference/test_batch_features.py` (vectorised against scalar), `test_naming.py`, `test_layers.py`, `test_config.py`, `test_doc_links.py`, `tests/reporting/`, `tests/experiments/test_runner.py`, `tests/diagnostics/`, `tests/integration/` |
+
+The five message and payment builders, two `Hubs` fakes, two `hub_registry` helpers and two `live_config` helpers merge into `testing/builders.py`.
+
+**Docs**
+
+| Current | New home |
+|---|---|
+| `temporal_training_end_to_end.md`, `live_temporal_training.md` | README quickstart, `how-to/train-and-evaluate.md`, `explanation/training.md`, `explanation/sampling.md`, `reference/configuration.md`; "Upgrading earlier preparations" deleted |
+| `gsql_feature_catalog.md` | `reference/features.md` (all 20 groups), `reference/queries.md` |
+| `feature_redesign.md` | `explanation/feature-design.md`; commands replaced by `how-to/run-control-experiments.md`; "Validation status" deleted |
+| `leakage_and_scaling.md` | `explanation/leakage-and-scaling.md` (adds the context cache) |
+| `temporal_schema.md` | `reference/schema.md` |
+| `temporal_encoding.md` | `explanation/time-encoding.md` |
+| `account_mule_labels.md` | `reference/labels.md` |
+| `label_reveal.md` | `explanation/label-reveal.md` |
+| `feature_plan_v4.md`, `temporal_gsql_review.md` | deleted |
+| new | `architecture.md`, `how-to/set-up-a-graph.md`, `score-new-accounts.md`, `run-diagnostics.md`, `reference/cli.md`, `reference/outputs.md`, `research/*.md` and `figures/` |
+
+**Top level and local files**
+
+| Current | New |
+|---|---|
+| `pyproject.toml` | as under Configuration (no lock file) |
+| `README.md` | rewritten |
+| `.gitignore`, `LICENSE`, `.env.example` | unchanged |
+| `models/temporal/` (local) | keep until the new baseline has an audit, then delete by hand |
+| `models/*.pt` (main era), `artifacts/`, `walkthrough.ipynb`, `docs/*.json` (local) | delete by hand when convenient |
+
+### Migration plan
+
+**Working rules.**
+- Branch: `git switch -c restructure temporal`.
+- Gate for every commit: `.venv/bin/python -m ruff check`, `ruff format --check`, `basedpyright` and `pytest`. From the layered-tree step on, add `lint-imports` (or `tests/test_layers.py`).
+- Commit messages carry no attribution trailers.
+- A commit that deliberately changes numbers says so.
+- Keep running old-code jobs (for example on the CUDA machine) on `temporal`. They are unaffected until the server step.
+
+The steps, in order:
+
+0. **Preserve the out-of-repo work now.**
+   - Commit the `.py` and `.md` files from `/private/tmp/mpl_diag` (including `profile/`), `mpl_arms` and `nnpu_sim` to a side branch `archive/diagnostic-study` that is never merged. The data files are ignored and stay local.
+   - Draft `docs/research/reference-run.md` from `models/temporal/metrics.json` and `final_eval.*`.
+1. **Safety net.**
+   - Add `test_golden_run.py`: the built-in profile on the fakes, CPU, deterministic, 2 epochs of 4 steps. It asserts exact sha256 digests of the first batch's tensors, loss and objective per interval (relative tolerance 1e-5), the selected epoch, the validation AP and the rendered query's sha256. The values are Python literals.
+   - Switch `temporal_fakes.live_config` to the built-in profile. Mark the tests that still need a legacy path `@pytest.mark.legacy`.
+   - Make `benchmark_live_batch.py` print the tensor digests and the first-step loss.
+   - Tag this commit `pre-restructure`.
+   - Gate: suite green, golden test green twice.
+2. **Packaging.**
+   - torch and matplotlib become core dependencies; import-linter goes into `dev`; remove `model` and `all`.
+   - Add `mule` beside `mule-temporal` and add `__main__.py`.
+   - pytest uses importlib mode and excludes the markers by default.
+   - Gate: `pip install -e '.[dev]'`, suite, `python -m mule_pattern_learner --help`, and a check that import-linter runs on 3.14.
+3. **Remove one-off material.** Delete the five migration scripts, the three applied migrations, the pair_time64 queries with `OPTIONAL_QUERY_FILES` and `--include-optional`, the two obsolete docs, and their `test_scripts` entries. Gate: `git grep` finds no references.
+4. **Remove legacy runtime paths**, one commit each, with the golden test identical after each:
+   - SQLite storage;
+   - `shared_history` and the population query file (it leaves `QUERY_FILES`, so live cohorts need re-preparation but nothing is reinstalled);
+   - the parquet label policy;
+   - the `recent`/`stratified` samplers and their compatibility arguments;
+   - the `single` architecture, the `variant` axis, `legacy_no_fourier`, `LEGACY_GROUPS` and the `FEATURE_NAMES` ordering (all groups stay);
+   - `FALLBACKS`, the re-applied defaults, checkpoint back-compat and the upgrade guards;
+   - scalar features moved to `reference/`;
+   - `extraction_groups` out of the preparation key and the config.
+
+   Gate for each: `git grep` for the removed names is empty.
+5. **Move into the layered tree.**
+   - Pure `git mv`, bottom-up. GSQL files move byte-identical, and query names stay in `contract/server.py`.
+   - Tests move with their modules; `temporal_fakes.py` becomes `testing/`.
+   - Add the import contracts with an `ignore_imports` list of today's violations, each with its reason.
+   - Gate: golden identical.
+6. **Split mixed modules and remove duplication.** One commit per item, each deleting one ignore line or one duplicate:
+   - the training god class;
+   - one scoring loop;
+   - one worker pool;
+   - one metrics module;
+   - one `atomic_write`;
+   - one population pager;
+   - hub columns once;
+   - `contract/bounds.py`;
+   - consumer-owned ports instead of `getattr`/`inspect` probes;
+   - adapters built only in `pipeline`;
+   - no environment mutation at import.
+
+   Gate: golden identical; the ignore list ends empty.
+7. **Typed configuration.** Add the `config.py` dataclasses with explicit `cohort_seed` and `reveal_salt`, `fingerprint()`, and the sampler section as `SamplerPlan`. Delete pydantic `LiveConfig`, `run_config`, `setting()`, the loaders and `--config`. Gate: a test maps `DEFAULT_CONFIG` field by field to the old `DEFAULT_RUN` through an explicit table; golden identical.
+8. **Run layout, renames and the `mule` CLI.**
+   - `RunPaths`, `runs/`, `history.csv` with the context counters, `epochs.csv`, `events.jsonl`, `runs/cohorts/<id>`.
+   - Renamed identifiers (including `split` to `tgat`) and the new subcommands.
+   - Remove `mule-temporal`; add `test_naming.py` with the server names allow-listed.
+   - Update the README's commands in the same commit.
+   - Gate: an offline end-to-end test asserts the run directory's file set; golden identical.
+9. **Live parity with unchanged queries (owner-run, read-only).**
+   - (a) `mule check` reports every query up to date. The text did not change, so nothing is installed.
+   - (b) The new cohort's accounts and observed labels have the same rows as the old preparation's.
+   - (c) `mule check --batch` prints the same digests and first loss as `benchmark_live_batch.py --train-step` at `pre-restructure`, on the same machine and device.
+   - (d) Optional: the first three log intervals of `mule train` equal those of `mule-temporal train` at the tag. Stop both after 30 steps, and write the old run's output under `runs/parity/`.
+10. **Server rename** (owner decision, owner-run). Precondition: no old-code run is active anywhere.
+    - Render with the new names, the derived `CONTEXT_CONTRACT`, and without the `fourier64` wrapper.
+    - Run `mule install` (about 50 minutes; rerun if the 45-minute wait expires). The new cohort is re-prepared (about 6 minutes).
+    - Repeat check (c): the digests must be unchanged.
+    - Then `mule install --drop` with the confirmed retired names, callers first.
+    - Gate offline: render check; golden identical except the query hash literal; the allow-list shrinks to the vertex, scope id and salts.
+    - If declined, skip this step.
+
+    The baseline run (`mule train`, up to 12.5 hours) can start once this step is done.
+11. **Audit additions.**
+    - Audits of any split; `revealed`, `ring_id` and `label_source` columns.
+    - Ring-clustered intervals, curve arrays, tie-aware budgets everywhere, `diagnostics/proxy_validity.py`.
+    - Gate: hand-computed small cases; audits on `FakeTigerGraph`.
+12. **Plots and reports.** `reporting/`, `mule report`, automatic plots. Gate: every figure smoke-renders from synthetic files to a non-empty PNG under its fixed name; the matplotlib and torch contracts pass.
+13. **Context cache**, before any suite.
+    - A disk tier inside `ContextSource` under `runs/cohorts/<id>/contexts/`, with a size cap.
+    - Keyed by hop, `ContextKey`, requested group flags, pool fingerprint, `CONTEXT_CONTRACT` and cohort id. It stores raw TigerGraph rows compressed, and the frozen-source check invalidates it.
+    - The baseline run's `contexts_distinct` sets the cap.
+    - Gate: golden identical with the cache on and off; hit rate in `metrics.json`.
+14. **Experiments.** `variants.py`, `runner.py`, `comparison.py`, `scripts/run_experiments.py` and the tests described under Experiments.
+15. **Diagnostics.** The modules, `mule diagnose`, and the research notes filled from `archive/diagnostic-study`. Gate: each analysis runs on a synthetic features table, and `feature_table` on `FakeTigerGraph` matches the batching features of the same keys.
+16. **Docs.** The Diataxis tree and `architecture.md`. Gate: `test_doc_links.py` and the naming test.
+17. **Replace main.** Gate: the full offline gate, `pytest -m cuda` on the CUDA host, and read-only `pytest -m graph`. No push until the owner confirms.
+
+```
+git fetch origin && git fetch learner
+git merge-base --is-ancestor origin/main restructure && echo origin-ff
+git merge-base --is-ancestor learner/main restructure && echo learner-ff
+git switch main
+git merge --ff-only restructure
+# after confirmation, and after checking branch protection and the default branch on both remotes:
+git push origin main
+git push learner main            # local main tracks learner/main; name each remote explicitly
+git push origin pre-restructure  # optional: keeps the parity reference reachable
+```
+
+**If a remote main has moved.**
+- Read `git log restructure..<remote>/main` first.
+- Only if nothing there should be kept, run `git merge -s ours <remote>/main -m "Replace the old main with the restructured model"` on `restructure`, rerun the gate, and fast-forward.
+
+**Afterwards.** Keep `temporal`, `origin/temporal`, `archive/diagnostic-study` and the `claude/great-mirzakhani-802edd` worktree branch until the owner decides.
+
+### Decisions for the owner to approve
+
+1. **The server rename** (the server-rename step: about an hour of installing and re-preparing, done once), or keep the query names as allow-listed data.
+2. **Keep all 20 feature groups** and add the window-based `no_graph` control, instead of deleting the "legacy" groups.
+3. **Validation audits for decisions**, with the test audit for reporting only.
+4. **Commit the `/tmp` scripts and notes to `archive/diagnostic-study` now.**
+5. **Push the fast-forwarded `main`** to `origin` and `learner`.
