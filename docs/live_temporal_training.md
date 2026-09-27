@@ -334,7 +334,7 @@ first-time inflows, rapid pass-throughs and more; see the
 summary branch. Like `hub_indicator` they are computed on the client and never
 requested, so the query, the extraction groups and a prepared cohort are
 unchanged. Their definitions are part of the model's input fingerprint, not the
-contract fingerprint, so checkpoints saved before the groups existed still score.
+contract fingerprint.
 
 ### Hub accounts and rejected contexts
 
@@ -344,8 +344,7 @@ Preparation runs `temporal_hub_registry` for the dataset cutoffs and saves
 phase when its visible history in some payment relation, counting only events
 before that cutoff, exceeds `min(roots.max_history, children.max_history)`; the
 reason is always `visible_history`. All-time degree never decides hub status:
-`max_degree` is informational only, and the former all-time `scan_cap` rule (with
-its `hub_scan_cap` key) is gone.
+`max_degree` is informational only.
 
 For `strict_inductive` the registry is computed for the preparation's `scope_id`
 and has rows per visibility phase 1, 2 and 3. A phase counts only the events whose
@@ -591,16 +590,3 @@ the budget by the budget, recall by all weighted mules. With unit weights, no ti
 a whole number of accounts in the budget this is the definition of the unweighted
 metrics of the same names in `metrics.json` (which reports 1 and 5% only).
 `<output>.parquet` keeps the scored sample with its float64 scores.
-
-### Upgrading earlier preparations
-
-- Install the changed and new queries first (`temporal_scope_population`,
-  `temporal_create_training_scope`, `temporal_hub_registry` and the new
-  `temporal_scope_policy`); `install` finds them by itself.
-- Prepared datasets without a scoped hub registry (no `hub_scope_id` in the
-  manifest) are refused; prepare them again by training into a new output.
-- Datasets prepared with graph labels before the masked-label predicate count masked
-  mules as positives; prepare them again.
-- Configurations may no longer set `hub_scan_cap`.
-- A scope keeps its unowned rule: set `scope_unowned = "independent"` for scopes
-  created before the rule existed, such as `strict_mule_v1`, or create a new scope.

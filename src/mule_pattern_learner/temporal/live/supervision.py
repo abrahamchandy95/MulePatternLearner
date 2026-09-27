@@ -7,7 +7,7 @@ ObservedLabelSource, so tests can supply a table of labels instead.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Protocol
 
 import numpy as np
 import pandas as pd
@@ -114,12 +114,8 @@ def align_observed_labels(metadata: pd.DataFrame, labels: pd.DataFrame) -> pd.Da
     return result
 
 
-def load_observed_labels(
-    accounts: pd.DataFrame, dataset: Path, manifest: dict[str, Any]
-) -> pd.DataFrame:
+def load_observed_labels(accounts: pd.DataFrame, dataset: Path) -> pd.DataFrame:
     """The prepared observed labels, aligned with the prepared accounts."""
-    if "observed_labels_sha256" not in manifest:
-        raise ValueError("Legacy simulated-label cache: prepare with an observed-label provider")
     labels = read_bounded_parquet(
         dataset / "observed_labels.parquet",
         "Observed-label source exceeds the 100000-row bounded pool",

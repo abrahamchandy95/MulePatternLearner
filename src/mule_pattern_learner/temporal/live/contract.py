@@ -100,8 +100,7 @@ def contract_fingerprint() -> str:
     """The feature, relation and time-basis contract that checkpoints record.
 
     The pool groups are left out: TigerGraph never sees them, and only models that
-    use them depend on their definitions, which `FeaturePlan.fingerprint` covers. So
-    checkpoints from before the pool groups existed stay valid.
+    use them depend on their definitions, which `FeaturePlan.fingerprint` covers.
     """
     return fingerprint(
         {

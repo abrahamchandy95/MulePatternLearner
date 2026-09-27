@@ -453,11 +453,10 @@ built-in sampler most roots fill all 16 slots (in the diagnostic data, every tes
 and about nine in ten other accounts), so the result is mostly the share of slots that
 meet the condition, not their number; counts beyond the 16 drawn slots reach the model
 through the pool groups. Only the hop-1 slots get a sum: block 1 feeds block 2, so a
-hop-2 sum would need its own merge back into the 64-wide tokens, over a fan-out of only
-4. A configuration without the key, as saved by every run before it, builds the model
-without the branch, and the summary architecture ignores it. The branch is provisional:
-it has not yet been measured in a training run on the live graph (the
-`built_in_no_slot_sum` arm of `feature_experiments` measures it).
+hop-2 sum would need its own merge back into the 64-wide tokens, over a fan-out of only 4.
+`slot_sum = false` builds the model without the branch, and the summary architecture
+ignores it. The branch is provisional: it has not yet been measured in a training run on
+the live graph (the `built_in_no_slot_sum` arm of `feature_experiments` measures it).
 
 Loss: imbalanced nnPU ([Su, Chen and Xu, 2021](https://www.ijcai.org/proceedings/2021/0412.pdf)),
 the nnPU risk of [Kiryo et al., 2017](https://arxiv.org/abs/1703.00593) reweighted as if
@@ -514,7 +513,7 @@ the kept checkpoint is still the best validation epoch.
   is `weight_average_decay = 0.99` per step, warmed up as `min(0.99, (1 + n) / (10 + n))`
   after n steps, so the average spans about the last n / 10 steps until it reaches 0.99
   at step 890 (about 10, 30 and 50 steps at the end of epochs 1, 3 and 5), then about one
-  epoch. 0, or a configuration without the key, validates the raw weights. In the
+  epoch. 0 validates the raw weights. In the
   reference run the raw weights' AP swung between 0.011 and 0.096 from epoch to epoch.
   AP on 11 positives is a coarse estimate: across random draws of 11 positives, a
   simulated model of constant quality (ROC AUC 0.89) spans 0.04 to 0.35. The epoch

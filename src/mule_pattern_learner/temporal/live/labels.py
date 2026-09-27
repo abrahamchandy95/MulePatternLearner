@@ -15,7 +15,6 @@ import json
 from typing import Any
 
 from ..common import timestamp
-from .config_schema import model_seed
 from .contract import SPLIT_PHASE
 from .executor import QueryExecutor, merged_rows
 
@@ -79,7 +78,7 @@ def reveal_parameters(config: dict[str, Any], *, apply: bool) -> dict[str, Any]:
     """Query parameters: the scope, each split's latest cutoff, budget and salt.
 
     An absent or null reveal_per_split takes the query's default budget; an absent
-    or null reveal_salt takes the run's seed (model_seed).
+    or null reveal_salt takes the run's seed.
     """
     dates = config["dates"]
     budget = config.get("reveal_per_split")
@@ -90,7 +89,7 @@ def reveal_parameters(config: dict[str, Any], *, apply: bool) -> dict[str, Any]:
         "validation_cutoff_ms": max(timestamp(d) for d in dates["validation"]),
         "test_cutoff_ms": max(timestamp(d) for d in dates["test"]),
         "budget": int(REVEAL_DEFAULTS["budget"] if budget is None else budget),
-        "salt": model_seed(config) if salt is None else int(salt),
+        "salt": int(config["seed"] if salt is None else salt),
         "apply": apply,
     }
 

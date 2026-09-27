@@ -107,7 +107,7 @@ class ModelCheckpoint:
         The input fingerprint also covers the pool groups' definitions (amount bands,
         pass-through thresholds), which the contract fingerprint leaves out.
         """
-        if self.payload.get("input_fingerprint", plan.fingerprint()) != plan.fingerprint():
+        if self.payload.get("input_fingerprint") != plan.fingerprint():
             raise ValueError(
                 "Checkpoint input groups or pool definitions differ from its configuration"
             )
@@ -135,10 +135,6 @@ def _result_view(config: dict[str, Any]) -> dict[str, Any]:
     # An empty [sampler] table means the defaults, like an absent one.
     if sampler:
         view["sampler"] = sampler
-    # No weight average (0) and no slot sum are what configurations from before the keys meant.
-    for key in ("weight_average_decay", "slot_sum"):
-        if not view.get(key):
-            view.pop(key, None)
     return view
 
 
@@ -154,20 +150,15 @@ def explicit_backend(config: dict[str, Any]) -> str | None:
     return None if backend in (None, "auto") else str(backend)  # pyright: ignore[reportUnknownArgumentType]
 
 
-def restore_cuda_rng(saved: Any, device: torch.device) -> None:
-    """Restore a saved CUDA generator state on any number of visible GPUs.
+def restore_cuda_rng(saved: torch.Tensor | None, device: torch.device) -> None:
+    """Restore the training device's saved CUDA generator state.
 
-    Checkpoints hold the training device's state. A list (one state per device)
-    restores only the devices that are visible now. Every training step reseeds
-    all devices through torch.manual_seed, so nothing in training depends on it.
+    Every training step reseeds all devices through torch.manual_seed, so nothing in
+    training depends on it.
     """
     if saved is None or device.type != "cuda":
         return
-    if isinstance(saved, torch.Tensor):
-        torch.cuda.set_rng_state(saved, device)
-        return
-    for index, value in enumerate(list(saved)[: torch.cuda.device_count()]):  # pyright: ignore[reportUnknownArgumentType]
-        torch.cuda.set_rng_state(value, index)  # pyright: ignore[reportUnknownArgumentType]
+    torch.cuda.set_rng_state(saved, device)
 
 
 def atomic_save(value: dict[str, Any], path: Path) -> None:

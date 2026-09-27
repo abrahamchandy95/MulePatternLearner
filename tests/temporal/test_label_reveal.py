@@ -167,7 +167,6 @@ def test_first_run_reveals_once_and_reports_the_shortfall(
     assert "revealed now" in capsys.readouterr().out
 
 
-@pytest.mark.legacy
 def test_existing_labels_are_kept_and_contract_violations_fail() -> None:
     kept = RevealServer(
         {"status": "already_revealed", "known_labels": 9, "revealed_labels": 3}, CLEAN

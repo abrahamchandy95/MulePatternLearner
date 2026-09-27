@@ -38,7 +38,6 @@ from mule_pattern_learner.temporal.live import (
     training,
 )
 from mule_pattern_learner.temporal.live import dataset as dataset_module
-from mule_pattern_learner.temporal.live import checkpoint as checkpoint_module
 from mule_pattern_learner.temporal.live.checkpoint import restore_cuda_rng
 from mule_pattern_learner.temporal.live.config_schema import validate_config
 from mule_pattern_learner.temporal.live.contract import (
@@ -54,7 +53,7 @@ from mule_pattern_learner.temporal.live.dataset import preparation_view
 from mule_pattern_learner.temporal.live.evaluation import evaluate_final_population
 from mule_pattern_learner.temporal.live.experiments import feature_experiments
 from mule_pattern_learner.temporal.live.hubs import HUB_COLUMNS, HubRegistry, warn_hub_stubs
-from mule_pattern_learner.temporal.live.model import LiveTGAT
+from mule_pattern_learner.temporal.live.model import LiveTGAT, build_model
 from mule_pattern_learner.temporal.live.sampling import (
     BatchPrefetcher,
     PUSample,
@@ -566,6 +565,9 @@ def base_config(**overrides: Any) -> dict[str, Any]:
         "learning_rate": 0.01,
         "class_prior": 0.05,
         "positive_weight": 0.5,
+        # A small model without the slot sum, validated on its raw weights.
+        "slot_sum": False,
+        "weight_average_decay": 0.0,
         "seed": 7,
         "split_seed": 7,
         "device": "cpu",
@@ -993,7 +995,7 @@ def test_patience_zero_disables_early_stopping(
     assert [h["epoch"] for h in result["history"]] == [1, 2, 3] and result["best_epoch"] == 1
 
 
-def test_cuda_rng_restore_tolerates_a_different_gpu_count(
+def test_cuda_rng_restore_sets_the_training_device_only(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     restored: list[Any] = []
@@ -1001,16 +1003,11 @@ def test_cuda_rng_restore_tolerates_a_different_gpu_count(
     def set_rng_state(state: torch.Tensor, device: int | torch.device = 0) -> None:
         restored.append(device)
 
-    monkeypatch.setattr(torch.cuda, "device_count", lambda: 1)
     monkeypatch.setattr(torch.cuda, "set_rng_state", set_rng_state)
-    states = [torch.zeros(16, dtype=torch.uint8) for _ in range(8)]
-    # A checkpoint written with one state per GPU of an 8-GPU node, resumed on one GPU.
-    restore_cuda_rng(states, torch.device("cuda"))
-    assert restored == [0]
-    restored.clear()
-    restore_cuda_rng(states[0], torch.device("cuda", 0))
+    state = torch.zeros(16, dtype=torch.uint8)
+    restore_cuda_rng(state, torch.device("cuda", 0))
     assert restored == [torch.device("cuda", 0)]
-    restore_cuda_rng(states, torch.device("cpu"))
+    restore_cuda_rng(state, torch.device("cpu"))
     restore_cuda_rng(None, torch.device("cuda"))
     assert len(restored) == 1
     assert "get_rng_state_all" not in inspect.getsource(training)
@@ -1135,7 +1132,7 @@ def checkpoint(
 ) -> Path:
     plan = FeaturePlan.from_config(config)
     torch.manual_seed(0)
-    model = LiveTGAT(config["hidden"], config["heads"], 0.0, plan=plan)
+    model = build_model(config, plan, dropout=0.0)
     with torch.no_grad():
         model.head[-1].bias += logit_shift
     payload = {
@@ -1218,7 +1215,6 @@ def test_score_new_writes_only_ok_rows_and_lists_rejected_ids(tmp_path: Path) ->
     assert result["rejection_events_by_status"] == {"missing_entity": len(rejected_ids)}
     hub_call = next(p for name, p in executor.calls if name == "temporal_hub_registry")
     assert hub_call["cutoff_seqs"] == [30_000] and hub_call["threshold"] == 2048
-    assert "scan_cap" not in hub_call
     assert source.closed and not (tmp_path / "scores.parquet.pending").exists()
 
 
@@ -1500,11 +1496,3 @@ def test_averaged_run_validates_and_saves_the_average(
     assert all(torch.equal(saved[k], averaged[k]) for k in saved)
     assert all(torch.equal(state["best_state"][k], averaged[k]) for k in saved)
     assert any(not torch.equal(averaged[k], raw[k]) for k in raw)
-
-
-@pytest.mark.legacy
-def test_runs_from_before_the_weight_average_resume_with_it_off() -> None:
-    old = {"epochs": 2, "positive_weight": "prior"}
-    view = checkpoint_module._result_view
-    assert view({**old, "weight_average_decay": 0.0}) == view(old)
-    assert view({**old, "weight_average_decay": 0.99}) != view(old)

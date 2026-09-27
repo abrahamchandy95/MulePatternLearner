@@ -95,7 +95,7 @@ def main() -> None:
     hubs = load_hub_registry(dataset, manifest)
 
     # The first step of epoch 0, exactly as train() schedules it.
-    samples = training_samples(config, accounts, load_observed_labels(accounts, dataset, manifest))
+    samples = training_samples(config, accounts, load_observed_labels(accounts, dataset))
     if not samples:
         raise ValueError("No train cutoff has revealed positives; train() would refuse too")
     step = epoch_schedule(

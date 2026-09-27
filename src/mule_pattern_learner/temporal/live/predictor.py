@@ -18,7 +18,7 @@ from mule_pattern_learner.device import choose_device
 
 from .batching import RootBatch, build_root_batch
 from .checkpoint import ModelCheckpoint
-from .config_schema import fanouts, setting
+from .config_schema import fanouts
 from .contract import ContextKey, FeaturePlan, SamplerPlan
 from .dataset import resolve_cutoff
 from .executor import QueryExecutor, live_executor
@@ -98,16 +98,16 @@ class TemporalPredictor:
             self.batch_device = self.device if self.device.type == "cuda" else torch.device("cpu")
             # Read like RunSettings reads them, so scoring samples training's neighbourhoods.
             self.fanouts = fanouts(self.config)
-            self.hidden = int(setting(self.config, "hidden"))
-            self.batch_size = min(int(setting(self.config, "batch_size")), 128)
+            self.hidden = int(self.config["hidden"])
+            self.batch_size = min(int(self.config["batch_size"]), 128)
             BatchLimits().validate_model(
                 self.batch_size, self.fanouts, self.hidden, self.plan, self.sampler
             )
-            self.prefetch = int(setting(self.config, "prefetch_batches"))
+            self.prefetch = int(self.config["prefetch_batches"])
             self.model = build_model(self.config, self.plan).to(self.device)
             self.model.load_state_dict(saved.state_dict)
             self.model.eval()
-            torch.set_num_threads(int(setting(self.config, "threads")))
+            torch.set_num_threads(int(self.config["threads"]))
         except BaseException:
             if created:
                 contexts.close()

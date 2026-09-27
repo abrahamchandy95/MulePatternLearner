@@ -9,10 +9,15 @@ import torch
 
 from mule_pattern_learner.temporal.encoding import BASIS_ID
 from mule_pattern_learner.temporal.live.batching import make_live_batch, child_key
-from mule_pattern_learner.temporal.live.contract import ContextKey, contract_fingerprint
+from mule_pattern_learner.temporal.live.config_schema import validate_config
+from mule_pattern_learner.temporal.live.contract import (
+    ContextKey,
+    FeaturePlan,
+    contract_fingerprint,
+)
 from mule_pattern_learner.temporal.live.evaluation import GraphEvaluationTruth
 from mule_pattern_learner.temporal.live.memory import BatchIndex, BatchCapacityError
-from mule_pattern_learner.temporal.live.model import LiveTGAT
+from mule_pattern_learner.temporal.live.model import build_model
 from mule_pattern_learner.temporal.live.contract import SamplerPlan, extraction_plan
 from mule_pattern_learner.temporal.live.context_query import validate_context
 from mule_pattern_learner.temporal.live.source import StreamingContextSource
@@ -79,9 +84,13 @@ def test_stream_retention_is_bounded_across_many_disjoint_batches() -> None:
     assert not backend.memory
 
 
-@pytest.mark.legacy
 def test_new_account_scoring_needs_neither_training_dataset_nor_labels(tmp_path: Path) -> None:
-    model = LiveTGAT(16, 4, 0)
+    config = validate_config(
+        {"hidden": 16, "heads": 4, "dropout": 0.0, "batch_size": 4, "fanouts": [2, 2]}
+        | {"sampler": {"recent": 1}}
+    )
+    plan = FeaturePlan.from_config(config)
+    model = build_model(config, plan)
     checkpoint = tmp_path / "model.pt"
     torch.save(
         {
@@ -89,14 +98,8 @@ def test_new_account_scoring_needs_neither_training_dataset_nor_labels(tmp_path:
             "contract": contract_fingerprint(),
             "basis_id": BASIS_ID,
             "threshold": 0.5,
-            "config": {
-                "hidden": 16,
-                "heads": 4,
-                "dropout": 0.0,
-                "batch_size": 4,
-                "fanouts": [2, 2],
-                "sampler": {"recent": 1},
-            },
+            "config": config,
+            "input_fingerprint": plan.fingerprint(),
         },
         checkpoint,
     )
@@ -120,8 +123,8 @@ def test_new_account_scoring_needs_neither_training_dataset_nor_labels(tmp_path:
     assert result["accounts"] == len(frame) == 13
     assert all(frame.score.between(0, 1))
     assert frame.account_id.tolist() == [f"never_trained_{i}" for i in range(13)]
-    # The embedding joins the attention output and the summary branch of the pool counts.
-    assert all(len(v) == 32 for v in frame.embedding)
+    # The embedding joins attention, the slot sum and the summary branch of the pool counts.
+    assert all(len(v) == 48 for v in frame.embedding)
     assert not (tmp_path / "new.parquet.pending").exists()
     assert not {"is_mule", "known_positive", "pu_label"} & set(frame.columns)
     # The hub registry was computed for the requested cutoff only (one past the last event).
@@ -212,15 +215,11 @@ def test_graph_evaluation_truth_pages_the_label_contract() -> None:
         GraphEvaluationTruth(Silent()).read()
 
 
-@pytest.mark.parametrize("profile", [pytest.param("legacy", marks=pytest.mark.legacy), "built_in"])
-def test_strict_preparation_and_nnpu_use_the_correct_phase_end_to_end(
-    tmp_path: Path, profile: str
-) -> None:
+def test_strict_preparation_and_nnpu_use_the_correct_phase_end_to_end(tmp_path: Path) -> None:
     from mule_pattern_learner.temporal.live.dataset import prepare
     from mule_pattern_learner.temporal.live.training import train
 
     cfg = live_config(
-        profile,
         scope_id="unit_strict",
         seed_limits={"train": 10, "validation": 10, "test": 10},
     )
@@ -288,7 +287,7 @@ def test_resumed_stream_checks_live_source_before_fetching(monkeypatch: pytest.M
 
     monkeypatch.setattr(source, "live_executor", live_executor)
     manifest = {
-        "config": {"dataset_id": "snapshot", "scope_id": "scope"},
+        "config": {"dataset_id": "snapshot", "scope_id": "scope", "split_seed": 42},
         "source": {"source_counts": dict(counts)},
     }
     backend = source.open_context_source(

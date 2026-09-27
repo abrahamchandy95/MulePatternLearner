@@ -16,7 +16,7 @@ import numpy as np
 import torch
 from torch import nn
 
-from .config_schema import FALLBACKS, fanouts, setting
+from .config_schema import fanouts
 from .contract import FeaturePlan, RELATIONS, RAILS, CHANNELS, STRATA
 
 
@@ -51,13 +51,13 @@ class AttentionBlock(nn.Module):
 class LiveTGAT(nn.Module):
     def __init__(
         self,
-        hidden: int = FALLBACKS["hidden"],
-        heads: int = FALLBACKS["heads"],
-        dropout: float = FALLBACKS["dropout"],
+        hidden: int,
+        heads: int,
+        dropout: float,
         *,
         plan: FeaturePlan | None = None,
-        slot_sum: bool = FALLBACKS["slot_sum"],
-        first_fanout: int = FALLBACKS["fanouts"][0],
+        slot_sum: bool = False,
+        first_fanout: int = 8,
     ) -> None:
         super().__init__()
         if not 8 <= hidden <= 512 or not 1 <= heads <= 16 or hidden % heads:
@@ -197,17 +197,17 @@ def probabilities_from_logits(logits: torch.Tensor) -> np.ndarray:
 def build_model(
     config: dict[str, Any], plan: FeaturePlan, *, dropout: float | None = None
 ) -> LiveTGAT:
-    """The model a configuration describes (hidden, heads, dropout, slot_sum).
+    """The model a validated configuration describes (hidden, heads, dropout, slot_sum).
 
     ``dropout`` replaces the configured rate, for dropout-free determinism checks.
     The summary architecture has no hop-1 slots, so it ignores ``slot_sum`` as it
-    ignores the fanouts; a configuration without the key builds the model without it.
+    ignores the fanouts.
     """
     return LiveTGAT(
-        int(setting(config, "hidden")),
-        int(setting(config, "heads")),
-        float(setting(config, "dropout") if dropout is None else dropout),
+        int(config["hidden"]),
+        int(config["heads"]),
+        float(config["dropout"] if dropout is None else dropout),
         plan=plan,
-        slot_sum=setting(config, "slot_sum") if plan.architecture != "summary" else False,
+        slot_sum=config["slot_sum"] if plan.architecture != "summary" else False,
         first_fanout=fanouts(config)[0],
     )

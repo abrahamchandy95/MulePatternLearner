@@ -23,9 +23,15 @@ import torch
 
 from mule_pattern_learner.temporal.encoding import BASIS_ID
 from mule_pattern_learner.temporal.live.batching import make_live_batch
-from mule_pattern_learner.temporal.live.contract import ContextKey, contract_fingerprint
+from mule_pattern_learner.temporal.live.config_schema import validate_config
+from mule_pattern_learner.temporal.live.contract import (
+    ContextKey,
+    FeaturePlan,
+    SamplerPlan,
+    contract_fingerprint,
+)
 from mule_pattern_learner.temporal.live.executor import TigerGraphExecutor
-from mule_pattern_learner.temporal.live.model import LiveTGAT
+from mule_pattern_learner.temporal.live.model import build_model
 from mule_pattern_learner.temporal.live.predictor import TemporalPredictor
 from mule_pattern_learner.temporal.live.source import StreamingContextSource
 from mule_pattern_learner.device import choose_device
@@ -211,9 +217,21 @@ def main() -> None:
             raise AssertionError("Held-out account accepted as a training root")
         # Real accelerator update, then inductive prediction for B with unchanged weights.
         device = choose_device()
-        model = LiveTGAT(16, 4, 0).to(device)
+        # The source's default pools, so the predictor below can read from it.
+        config = validate_config(
+            {
+                "hidden": 16,
+                "heads": 4,
+                "dropout": 0.0,
+                "fanouts": [2, 2],
+                "batch_size": 16,
+                "sampler": SamplerPlan().to_config(),
+            }
+        )
+        plan = FeaturePlan.from_config(config)
+        model = build_model(config, plan).to(device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=0.001)
-        batch = make_live_batch(source, keys[:1], fanouts=(2, 2), device=device)
+        batch = make_live_batch(source, keys[:1], fanouts=(2, 2), device=device, plan=plan)
         loss = torch.nn.functional.binary_cross_entropy_with_logits(
             model(batch), torch.ones(1, device=device)
         )
@@ -225,13 +243,8 @@ def main() -> None:
             torch.save(
                 {
                     "state_dict": {n: v.cpu() for n, v in model.state_dict().items()},
-                    "config": {
-                        "hidden": 16,
-                        "heads": 4,
-                        "dropout": 0.0,
-                        "fanouts": [2, 2],
-                        "batch_size": 16,
-                    },
+                    "config": config,
+                    "input_fingerprint": plan.fingerprint(),
                     "contract": contract_fingerprint(),
                     "basis_id": BASIS_ID,
                     "threshold": 0.5,

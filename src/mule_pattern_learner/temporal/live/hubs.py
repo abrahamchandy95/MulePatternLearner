@@ -189,11 +189,6 @@ def _parse_hubs(
 ) -> pd.DataFrame:
     checked_rows(rows)
     for row in rows:
-        if "scan_cap" in row:
-            raise ValueError(
-                "The installed temporal_hub_registry still has the scan_cap decision; "
-                "run `mule-temporal install`"
-            )
         if "threshold" in row and int(row["threshold"]) != threshold:
             raise ValueError(
                 f"Hub registry echoed threshold={row['threshold']}, expected {threshold}"
@@ -287,10 +282,6 @@ def hub_manifest(registry: HubRegistry, path: Path) -> dict[str, Any]:
 def load_hub_registry(dataset: Path, manifest: dict[str, Any]) -> HubRegistry:
     """Load and verify the prepared registry for the dataset's cutoffs and scope."""
     path = dataset / HUB_FILE
-    if "hubs_sha256" not in manifest or "hub_scope_id" not in manifest:
-        raise ValueError(
-            "Prepared dataset has no scoped hub registry; prepare it again (set a new prepared_id)"
-        )
     if not path.exists() or digest(path) != manifest["hubs_sha256"]:
         raise ValueError(f"Prepared hub registry changed or is missing: {path}")
     config = manifest.get("config")

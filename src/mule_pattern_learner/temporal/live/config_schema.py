@@ -1,17 +1,17 @@
 """Schema for live temporal training configuration files.
 
-`validate_config` rejects unknown or mistyped keys before any database work.
-Operational keys (transport, runtime and preparation switches) receive their
-documented defaults. Modelling keys whose absence has a meaning downstream
-(feature_groups, extraction_groups, sampler, fanouts, ...) are
-kept absent so the owning component applies its own default (FALLBACKS and
-`setting` for the scalar ones); saved checkpoint configurations rely on that.
-`run_config` starts from DEFAULT_RUN, so a training run always has the modelling keys
-DEFAULT_RUN sets (feature_groups, sampler, fanouts and the model and optimisation keys).
+`validate_config` rejects unknown or mistyped keys before any database work. A key
+the configuration leaves absent takes its DEFAULT_RUN value (the built-in run) or its
+operational default, so a validated configuration holds every key the code reads,
+and components index it directly. A table the configuration writes is kept as
+written. The optional keys stay absent: dataset_id, prepared_id, cohort_seed and
+reveal_salt (both default to seed) and extraction_groups (defaults to
+feature_groups). `run_config` merges an optional overrides file into DEFAULT_RUN.
 """
 
 from __future__ import annotations
 
+import copy
 from datetime import datetime
 from pathlib import Path
 import re
@@ -43,31 +43,6 @@ OPERATIONAL_DEFAULTS: dict[str, Any] = {
     "checkpoint_every_steps": 0,
     "log_every_steps": 10,
 }
-# What a modelling key means when a configuration leaves it absent (or null). Unlike
-# OPERATIONAL_DEFAULTS these never enter a validated configuration, so config.json and
-# resume fingerprints record only what was written (preparation views resolve
-# split_seed through them). Configs from
-# run_config set every one of them (DEFAULT_RUN); the fallbacks decide saved and
-# hand-written configurations, so they must not change (fanouts stays (8, 4)).
-FALLBACKS: dict[str, Any] = {
-    "seed": 42,
-    "split_seed": 42,
-    "fanouts": (8, 4),
-    "batch_size": 64,
-    "hidden": 64,
-    "heads": 4,
-    "dropout": 0.15,
-    "slot_sum": False,
-    "epochs": 30,
-    "patience": 6,
-    "max_rejected_root_fraction": 0.0,
-    "learning_rate": 0.001,
-    "weight_decay": 0.0001,
-    "weight_average_decay": 0.0,
-    "positive_weight": "prior",
-    "device": "auto",
-    "threads": 4,
-}
 # The run `mule-temporal train` performs with no configuration file: strict inductive
 # splits over the frozen scope, labels revealed in the graph (label contract), the v5
 # candidate-pool sampler and the model and optimisation settings of the reference run.
@@ -97,8 +72,7 @@ DEFAULT_RUN: dict[str, Any] = {
     # slots; the MLP can test a combined condition on each slot before pooling, so the sum
     # counts the slots that meet it (Xu, Hu, Leskovec and Jegelka, "How Powerful are Graph
     # Neural Networks?", ICLR 2019). Most roots fill all 16 slots, so this is mostly the
-    # share of such slots. Absent (saved configurations) means off, so their models
-    # rebuild as they were. Provisional: not yet measured in a run on the live graph.
+    # share of such slots. Provisional: not yet measured in a run on the live graph.
     "slot_sum": True,
     # The pool groups feed counts over the root's candidate pool (not all-time totals) to
     # the split model's summary branch. Without them a root's node vector held only its
@@ -362,7 +336,10 @@ def without_variant(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def validate_config(config: dict[str, Any]) -> dict[str, Any]:
-    """Return a validated copy with operational defaults; raise ValueError on bad input."""
+    """Return a validated, complete copy; raise ValueError on bad input.
+
+    Absent keys take their DEFAULT_RUN or operational default (see the module docstring).
+    """
     if not isinstance(config, dict):  # pyright: ignore[reportUnnecessaryIsInstance]
         raise ValueError("Configuration must be a table")
     config = without_variant(without_retired_keys(config))
@@ -380,32 +357,16 @@ def validate_config(config: dict[str, Any]) -> dict[str, Any]:
             for item in error.errors()
         )
         raise ValueError(f"Invalid configuration: {problems}") from None
-    # Nested tables keep only the keys that were written, like the top level.
+    # A written table keeps only its written keys; an absent one takes the default.
     result = model.model_dump(exclude_unset=True)
-    for key, value in OPERATIONAL_DEFAULTS.items():
-        result.setdefault(key, value)
+    for key, value in {**DEFAULT_RUN, **OPERATIONAL_DEFAULTS}.items():
+        result.setdefault(key, copy.deepcopy(value))
     return result
-
-
-def setting(config: dict[str, Any], key: str) -> Any:
-    """config[key]; a missing or null key means its FALLBACKS or OPERATIONAL_DEFAULTS value."""
-    value = config.get(key)
-    if value is not None:
-        return value
-    return FALLBACKS[key] if key in FALLBACKS else OPERATIONAL_DEFAULTS[key]
-
-
-def model_seed(config: dict[str, Any]) -> int:
-    return int(setting(config, "seed"))
-
-
-def split_seed(config: dict[str, Any]) -> int:
-    return int(setting(config, "split_seed"))
 
 
 def fanouts(config: dict[str, Any]) -> tuple[int, int]:
     """Children sampled per context at hop 1 and hop 2 (validated configs hold exactly two)."""
-    return tuple(int(v) for v in setting(config, "fanouts"))  # type: ignore[return-value]
+    return tuple(int(v) for v in config["fanouts"])  # type: ignore[return-value]
 
 
 def merged(base: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
@@ -427,8 +388,6 @@ def run_config(path: Path | None = None) -> dict[str, Any]:
     backend and `[dates] train = [...]` keeps the default validation and test dates.
     Lists and scalars replace the default.
     """
-    import copy
-
     config = copy.deepcopy(DEFAULT_RUN)
     if path is not None:
         from mule_pattern_learner.configuration import load_config

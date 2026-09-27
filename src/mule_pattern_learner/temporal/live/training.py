@@ -49,7 +49,7 @@ from .checkpoint import (
     restore_cuda_rng,
     resume_fingerprint,
 )
-from .config_schema import fanouts, model_seed, setting, split_seed, validate_config
+from .config_schema import fanouts, validate_config
 from .contract import (
     CLIENT_GROUPS,
     ContextKey,
@@ -131,24 +131,25 @@ class RunSettings:
 
     @classmethod
     def from_config(cls, config: dict[str, Any]) -> RunSettings:
-        steps = config.get("steps_per_epoch")
+        """The settings of a validated configuration."""
+        steps = config["steps_per_epoch"]
         return cls(
-            batch_size=int(setting(config, "batch_size")),
+            batch_size=int(config["batch_size"]),
             fanouts=fanouts(config),
-            hidden=int(setting(config, "hidden")),
-            epochs=int(setting(config, "epochs")),
+            hidden=int(config["hidden"]),
+            epochs=int(config["epochs"]),
             steps_per_epoch=None if steps is None else int(steps),
-            patience=int(setting(config, "patience")),
-            seed=model_seed(config),
-            split_seed=split_seed(config),
-            device=str(setting(config, "device")),
-            threads=int(setting(config, "threads")),
-            deterministic=setting(config, "deterministic"),
-            prefetch_batches=int(setting(config, "prefetch_batches")),
-            checkpoint_every_steps=int(setting(config, "checkpoint_every_steps")),
-            log_every_steps=int(setting(config, "log_every_steps")),
-            max_rejected_root_fraction=float(setting(config, "max_rejected_root_fraction")),
-            weight_average_decay=float(setting(config, "weight_average_decay")),
+            patience=int(config["patience"]),
+            seed=int(config["seed"]),
+            split_seed=int(config["split_seed"]),
+            device=str(config["device"]),
+            threads=int(config["threads"]),
+            deterministic=config["deterministic"],
+            prefetch_batches=int(config["prefetch_batches"]),
+            checkpoint_every_steps=int(config["checkpoint_every_steps"]),
+            log_every_steps=int(config["log_every_steps"]),
+            max_rejected_root_fraction=float(config["max_rejected_root_fraction"]),
+            weight_average_decay=float(config["weight_average_decay"]),
         )
 
     def check_limits(self, plan: FeaturePlan, sampler: SamplerPlan) -> None:
@@ -200,7 +201,7 @@ def nnpu_objective(config: dict[str, Any]) -> tuple[float, float]:
     1 - prior, scaled by a constant (exactly so for the loss's beta = 0, gamma = 1).
     """
     prior = float(config["class_prior"])
-    weight = setting(config, "positive_weight")
+    weight = config["positive_weight"]
     if weight == "prior":
         return prior, prior
     if weight == "balanced":
@@ -219,8 +220,8 @@ def objective_name(prior: float, positive_weight: float) -> str:
 def build_optimizer(model: nn.Module, config: dict[str, Any]) -> torch.optim.AdamW:
     return torch.optim.AdamW(
         model.parameters(),
-        lr=float(setting(config, "learning_rate")),
-        weight_decay=float(setting(config, "weight_decay")),
+        lr=float(config["learning_rate"]),
+        weight_decay=float(config["weight_decay"]),
     )
 
 
@@ -347,7 +348,7 @@ def train(
     source_plan = extraction_plan(config)
     if set(plan.groups) - set(source_plan.groups) - CLIENT_GROUPS:
         raise ValueError("Prepared extraction does not contain requested feature groups")
-    mask = load_observed_labels(accounts, dataset, manifest)
+    mask = load_observed_labels(accounts, dataset)
     training, evaluation = _samples(config, settings, accounts, mask)
     prior, positive_weight = nnpu_objective(config)
     device = choose_device(settings.device)
@@ -619,8 +620,8 @@ class _TrainingRun:
         atomic_save(state, self.last_path)
 
     def restore(self, state: dict[str, Any]) -> None:
-        saved = state.get("sampler_backend")
-        if saved is not None and saved != self.backend:
+        saved = state["sampler_backend"]
+        if saved != self.backend:
             if explicit_backend(self.config) != self.backend:
                 raise ValueError(
                     f"Checkpoint was sampled with the {saved} backend but this host resolves "
@@ -635,10 +636,6 @@ class _TrainingRun:
         self.model.load_state_dict(state["model"])
         self.optimizer.load_state_dict(state["optimizer"])
         if self.average is not None:
-            if state.get("weight_average") is None:
-                raise ValueError(
-                    "Checkpoint holds no weight average; resume with its configuration"
-                )
             self.average.load(state["weight_average"])
         self.epoch_rng_state = state["numpy_rng"]
         self.rng.bit_generator.state = state["numpy_rng"]
@@ -649,19 +646,15 @@ class _TrainingRun:
         self.loss_steps = state["loss_steps"]
         self.best_state, self.best_ap = state["best_state"], state["best_ap"]
         self.best_epoch, self.history = state["best_epoch"], state["history"]
-        scores = state["best_scores"]
+        scores, accepted = state["best_scores"], state["best_accepted"]
         self.best_scores = None if scores is None else scores.numpy()
-        accepted = state.get("best_accepted")
-        if accepted is not None:
-            self.best_accepted = accepted.numpy()
-        elif self.best_scores is not None:
-            self.best_accepted = ~np.isnan(self.best_scores)
-        self.progress.started -= float(state.get("elapsed_seconds", 0.0))
-        self.progress.totals = Counter(state.get("progress_totals", {}))
-        self.progress.base_calls = int(state.get("query_calls", 0))
-        self.progress.base_rejections = Counter(state.get("rejections", {}))
-        self.train_rejections = Counter(state.get("train_rejections", {}))
-        self.epoch_rejections = Counter(state.get("epoch_rejections", {}))
+        self.best_accepted = None if accepted is None else accepted.numpy()
+        self.progress.started -= float(state["elapsed_seconds"])
+        self.progress.totals = Counter(state["progress_totals"])
+        self.progress.base_calls = int(state["query_calls"])
+        self.progress.base_rejections = Counter(state["rejections"])
+        self.train_rejections = Counter(state["train_rejections"])
+        self.epoch_rejections = Counter(state["epoch_rejections"])
 
     # Phases ------------------------------------------------------------------
 
