@@ -37,7 +37,7 @@ from mule_pattern_learner.data.observed_labels import label_summary
 from mule_pattern_learner.data.preparation import prepare
 from mule_pattern_learner.data.splits import sample_keys
 from mule_pattern_learner.evaluation.audit import evaluate_predictions
-from mule_pattern_learner.evaluation.truth import ParquetEvaluationTruth
+from mule_pattern_learner.evaluation.truth import ParquetTruth
 from mule_pattern_learner.model.loss import NonNegativePULoss
 from mule_pattern_learner.model.tgat import TGAT
 from mule_pattern_learner.paths import DatasetPaths, RunPaths
@@ -668,14 +668,14 @@ def test_hidden_truth_cannot_change_updates_or_checkpoint_selection(tmp_path: Pa
     before = evaluate_predictions(
         RunPaths(tmp_path / "first").predictions("test"),
         RunPaths(tmp_path / "first").model,
-        ParquetEvaluationTruth(truth_path),
+        ParquetTruth(truth_path),
     )
     truth["is_mule"] = 1 - truth.is_mule
     truth.to_parquet(truth_path, index=False)
     after = evaluate_predictions(
         RunPaths(tmp_path / "first").predictions("test"),
         RunPaths(tmp_path / "first").model,
-        ParquetEvaluationTruth(truth_path),
+        ParquetTruth(truth_path),
     )
     assert before != after
     second = train(

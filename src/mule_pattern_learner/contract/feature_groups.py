@@ -13,7 +13,7 @@ from typing import Any
 
 from .fingerprints import fingerprint
 from .graph_schema import ASSOCIATIONS, CHANNELS, NODE_TYPES, RAILS, RELATIONS
-from .server import CONTRACT_VERSION
+from .server import CONTEXT_CONTRACT
 from .time_basis import BASIS_ID
 
 WINDOWS = {"1h": 3_600_000, "1d": 86_400_000, "7d": 604_800_000, "30d": 2_592_000_000}
@@ -53,7 +53,7 @@ def contract_fingerprint() -> str:
     """
     return fingerprint(
         {
-            "version": CONTRACT_VERSION,
+            "version": CONTEXT_CONTRACT,
             "basis": BASIS_ID,
             "features": CONTRACT_FEATURES,
             "relations": RELATIONS,

@@ -5,12 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from ..evaluation.audit import audit_inputs, evaluate_final_population, evaluate_predictions
-from ..evaluation.truth import ParquetEvaluationTruth, TruthReader
+from ..evaluation.audit import audit_inputs, audit, evaluate_predictions
+from ..evaluation.truth import ParquetTruth, TruthReader
 from ..inference.saved_model import SavedModel
 from ..paths import DATA_DIR, DatasetPaths, RunPaths
 from ..tigergraph.context_query import TigerGraphContextFetcher
-from ..tigergraph.oracle import GraphEvaluationTruth
+from ..tigergraph.oracle import TigerGraphTruth
 from ..tigergraph.provenance import verify_frozen_source
 from ..tigergraph.scope import TigerGraphScope
 from .connect import connect
@@ -24,13 +24,13 @@ def evaluate(predictions: Path, checkpoint: Path, truth: Path | None) -> dict[st
     saved = SavedModel.of(checkpoint)
     reader: TruthReader
     if truth is not None:
-        reader = ParquetEvaluationTruth(truth)
+        reader = ParquetTruth(truth)
     else:
-        reader = GraphEvaluationTruth(connect(saved.config.transport))
+        reader = TigerGraphTruth(connect(saved.config.transport))
     return evaluate_predictions(predictions, saved, reader)
 
 
-def final_audit(
+def evaluate_run(
     run: RunPaths,
     truth: Path | None,
     *,
@@ -49,10 +49,10 @@ def final_audit(
     verify_frozen_source(executor, manifest)
     reader: TruthReader
     if truth is not None:
-        reader = ParquetEvaluationTruth(truth)
+        reader = ParquetTruth(truth)
     else:
-        reader = GraphEvaluationTruth(executor)
-    return evaluate_final_population(
+        reader = TigerGraphTruth(executor)
+    return audit(
         run,
         reader,
         scope=TigerGraphScope(executor),

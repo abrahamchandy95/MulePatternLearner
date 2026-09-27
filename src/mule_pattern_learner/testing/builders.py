@@ -39,7 +39,7 @@ from mule_pattern_learner.contract.graph_schema import (
     ContextKey,
 )
 from mule_pattern_learner.contract.sampler_plan import PoolPlan, SamplerPlan
-from mule_pattern_learner.contract.server import CONTRACT_VERSION
+from mule_pattern_learner.contract.server import CONTEXT_CONTRACT
 from mule_pattern_learner.contract.time_basis import BASIS_ID, fourier64
 from mule_pattern_learner.data import manifest as data_manifest
 from mule_pattern_learner.data.hub_registry import HubRegistry
@@ -269,7 +269,7 @@ def context(
     row: dict[str, Any] = {
         **asdict(key),
         "status": "ok",
-        "contract_version": CONTRACT_VERSION,
+        "contract_version": CONTEXT_CONTRACT,
         "basis_id": BASIS_ID,
         "features": {
             "is_deposit": 1,
@@ -407,7 +407,7 @@ def context_row(
     row: dict[str, Any] = {
         **asdict(key),
         "status": "ok",
-        "contract_version": CONTRACT_VERSION,
+        "contract_version": CONTEXT_CONTRACT,
         "basis_id": BASIS_ID,
         "features": {
             "type_Account": 1,

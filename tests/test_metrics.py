@@ -8,21 +8,21 @@ import pytest
 from mule_pattern_learner.metrics import (
     capture_curve,
     evaluate,
-    grouped_ap_interval,
+    bootstrap_interval,
     weighted_metrics,
 )
 
 
-def test_grouped_ap_interval_bootstraps_whole_groups() -> None:
+def test_bootstrap_interval_resamples_whole_groups() -> None:
     y = np.array([1, 0, 0, 1, 0, 0, 0, 1], dtype=np.int64)
     scores = np.array([0.9, 0.2, 0.1, 0.8, 0.3, 0.4, 0.2, 0.7])
     groups = np.array([0, 0, 1, 1, 2, 2, 3, 3])
-    low, high = grouped_ap_interval(y, scores, groups, seed=7, draws=100) or (None, None)
+    low, high = bootstrap_interval(y, scores, groups, seed=7, draws=100) or (None, None)
     assert low is not None and high is not None and 0.0 <= low <= high <= 1.0
     # Same seed, same interval; one group or no positive has no interval.
-    assert grouped_ap_interval(y, scores, groups, seed=7, draws=100) == [low, high]
-    assert grouped_ap_interval(y, scores, np.zeros(8, dtype=np.int64)) is None
-    assert grouped_ap_interval(np.zeros(8, dtype=np.int64), scores, groups) is None
+    assert bootstrap_interval(y, scores, groups, seed=7, draws=100) == [low, high]
+    assert bootstrap_interval(y, scores, np.zeros(8, dtype=np.int64)) is None
+    assert bootstrap_interval(np.zeros(8, dtype=np.int64), scores, groups) is None
 
 
 def test_the_capture_curve_has_one_point_per_block_of_tied_scores() -> None:

@@ -19,7 +19,7 @@ class TruthReader(Protocol):
 
 
 @dataclass
-class ParquetEvaluationTruth:
+class ParquetTruth:
     path: Path
 
     def read(self) -> pd.DataFrame:

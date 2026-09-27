@@ -17,7 +17,7 @@ from ..contract.clock import cutoff_ms
 from ..inference.saved_model import SavedModel
 from ..metrics import evaluate, weighted_metrics
 from ..paths import DATA_DIR, DatasetPaths, RunPaths
-from .sample import final_evaluation_sample
+from .sample import audit_sample
 from .truth import TruthReader
 
 if TYPE_CHECKING:
@@ -59,7 +59,7 @@ def evaluate_predictions(
     return result
 
 
-def evaluate_weighted(frame: pd.DataFrame, threshold: float) -> dict[str, Any]:
+def audit_metrics(frame: pd.DataFrame, threshold: float) -> dict[str, Any]:
     """The weighted metrics (``metrics.weighted_metrics``) of an audit sample.
 
     Each account is weighted by 1 / its inclusion probability. Account IDs are not
@@ -115,7 +115,7 @@ def audit_inputs(
     return saved, dataset, manifest
 
 
-def evaluate_final_population(
+def audit(
     run: RunPaths,
     truth: TruthReader,
     *,
@@ -135,7 +135,7 @@ def evaluate_final_population(
     the test cutoff clock and the hub registry, so scoring matches training. The test
     population comes from ``scope`` and the contexts from ``fetcher`` (``contexts``
     replaces them); the pipeline builds both on a frozen source it has verified
-    (pipeline.evaluate.final_audit).
+    (pipeline.evaluate.evaluate_run).
 
     Accounts TigerGraph rejects are not scored. A rejected test positive, or a
     rejected fraction of the sample above the model's
@@ -170,7 +170,7 @@ def evaluate_final_population(
     answer = truth.read()
     if "date" in answer and not answer.date.eq(date).all():
         raise ValueError("Evaluation truth date differs from the frozen test cutoff")
-    selected = final_evaluation_sample(
+    selected = audit_sample(
         pd.DataFrame(population),
         answer,
         negative_limit=negative_limit,
@@ -208,7 +208,7 @@ def evaluate_final_population(
             f"first {examples}. Weighted metrics over the remaining accounts would describe "
             "a censored population, so no report was written"
         )
-    metrics = evaluate_weighted(scored, saved.threshold)
+    metrics = audit_metrics(scored, saved.threshold)
     if len(unscored):
         metrics["evaluation_sample"] += "_minus_rejected_negatives"
     result = {

@@ -95,7 +95,7 @@ Complete simulation `is_mule` values are oracle truth. Only the one-time
 [label reveal](label_reveal.md) reads them before training: it writes the observed
 positives and their discovery clocks into the graph's label contract, which the
 trainer reads through `GraphObservedLabels`. Evaluation reads truth separately,
-through `GraphEvaluationTruth`, after checkpoint selection. The trainer rejects
+through `TigerGraphTruth`, after checkpoint selection. The trainer rejects
 oracle columns. When an external observed-label provider is used, the population
 query skips reading graph label attributes.
 

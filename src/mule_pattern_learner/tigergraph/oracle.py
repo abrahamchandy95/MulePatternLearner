@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
 
 @dataclass
-class GraphEvaluationTruth:
+class TigerGraphTruth:
     """Oracle truth paged from the graph's label contract, for evaluation only.
 
     temporal_get_account_supervision is the oracle endpoint; training never calls

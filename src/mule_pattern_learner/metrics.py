@@ -48,7 +48,7 @@ def evaluate(y: NDArray[np.int64], score: NDArray[np.float64], threshold: float)
 
 
 # Review budgets of the weighted audit: the top 1, 5 and 10% of the estimated population.
-TOP_FRACTIONS = (0.01, 0.05, 0.10)
+REVIEW_BUDGETS = (0.01, 0.05, 0.10)
 
 
 def capture_curve(
@@ -71,7 +71,7 @@ def capture_curve(
     return reviewed, found
 
 
-def weighted_top_fractions(
+def capture_at_budgets(
     y: NDArray[Any], score: NDArray[Any], weight: NDArray[Any]
 ) -> dict[str, float]:
     """Weighted precision and recall in the top 1, 5 and 10% of the estimated population.
@@ -90,7 +90,7 @@ def weighted_top_fractions(
     """
     reviewed, found = capture_curve(y, score, weight)
     result: dict[str, float] = {}
-    for fraction in TOP_FRACTIONS:
+    for fraction in REVIEW_BUDGETS:
         size = fraction * float(reviewed[-1])
         hits = float(np.interp(size, reviewed, found))
         name = f"{round(fraction * 100)}pct"
@@ -106,7 +106,7 @@ def weighted_metrics(
 
     Each sampled account stands for ``weight`` population accounts, so these are
     estimates, not census measurements. The top-fraction metrics
-    (``weighted_top_fractions``) share a budget that ends among tied scores evenly
+    (``capture_at_budgets``) share a budget that ends among tied scores evenly
     across them, so row order does not matter.
     """
     predicted = score >= threshold
@@ -127,11 +127,11 @@ def weighted_metrics(
         "precision": precision,
         "recall": recall,
         "f1": 2 * precision * recall / max(precision + recall, 1e-12),
-        **weighted_top_fractions(y, score, weight),
+        **capture_at_budgets(y, score, weight),
     }
 
 
-def grouped_ap_interval(
+def bootstrap_interval(
     y: NDArray[np.int64],
     scores: NDArray[np.float64],
     groups: NDArray[Any],
