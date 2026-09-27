@@ -8,7 +8,7 @@ from typing import Any
 from ..evaluation.audit import audit_inputs, evaluate_final_population, evaluate_predictions
 from ..evaluation.truth import ParquetEvaluationTruth, TruthReader
 from ..inference.saved_model import ModelCheckpoint
-from ..paths import DatasetPaths
+from ..paths import DatasetPaths, RunPaths
 from ..tigergraph.context_query import TigerGraphContextFetcher
 from ..tigergraph.oracle import GraphEvaluationTruth
 from ..tigergraph.provenance import verify_frozen_source
@@ -31,15 +31,15 @@ def evaluate(predictions: Path, checkpoint: Path, truth: Path | None) -> dict[st
 
 
 def final_audit(
-    checkpoint: Path, truth: Path | None, output: Path, *, dataset: DatasetPaths | None = None
+    run: RunPaths, truth: Path | None, *, dataset: DatasetPaths | None = None
 ) -> dict[str, Any]:
-    """The frozen-model audit, which connects once its inputs passed their checks.
+    """The audit of a run's frozen model, which connects once its inputs passed their checks.
 
-    The connection has the checkpoint's retry budgets, and its source must still be the
+    The connection has the model's retry budgets, and its source must still be the
     frozen one the dataset was prepared from. Truth is a supplied parquet, else the
-    graph's oracle truth.
+    graph's oracle truth. The audit goes into the run's audit/ files.
     """
-    saved, dataset, manifest = audit_inputs(checkpoint, output, dataset)
+    saved, dataset, manifest = audit_inputs(run, dataset)
     executor = connect(saved.config.transport)
     verify_frozen_source(executor, manifest)
     reader: TruthReader
@@ -48,9 +48,8 @@ def final_audit(
     else:
         reader = GraphEvaluationTruth(executor)
     return evaluate_final_population(
-        saved,
+        run,
         reader,
-        output,
         scope=TigerGraphScope(executor),
         fetcher=TigerGraphContextFetcher(executor),
         dataset=dataset,

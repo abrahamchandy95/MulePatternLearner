@@ -1,4 +1,8 @@
-"""Optional post-training oracle evaluation, isolated from the trainer."""
+"""Optional post-training oracle evaluation, isolated from the trainer.
+
+The final audit writes a run's audit/test.json (the report), audit/test.parquet (the
+scored sample) and audit/test_rejected.txt (the accounts TigerGraph rejected, if any).
+"""
 
 from __future__ import annotations
 
@@ -7,11 +11,12 @@ from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
+from ..artifacts import write_audit_scores, write_json, write_rejected
 from ..contract.bounds import AUDIT_POPULATION, AUDIT_SAMPLE
 from ..contract.clock import cutoff_ms
 from ..inference.saved_model import ModelCheckpoint
 from ..metrics import evaluate, weighted_metrics
-from ..paths import DatasetPaths
+from ..paths import DatasetPaths, RunPaths
 from .sample import final_evaluation_sample
 from .truth import TruthReader
 
@@ -76,23 +81,26 @@ def evaluate_weighted(frame: pd.DataFrame, threshold: float) -> dict[str, Any]:
     }
 
 
-def audit_inputs(
-    checkpoint: Path | ModelCheckpoint, output: Path, dataset: DatasetPaths | None = None
-) -> tuple[ModelCheckpoint, DatasetPaths, dict[str, Any]]:
-    """The frozen model, its prepared dataset and the dataset's manifest, all checked.
+# The split the final audit samples: its frozen population at the test cutoff.
+AUDITED_SPLIT = "test"
 
-    The final audit reads nothing from the graph before these checks pass: a report
-    that exists, a model with more than one test cutoff and a missing or changed
-    dataset are refused. ``dataset`` defaults to the path recorded in the checkpoint.
+
+def audit_inputs(
+    run: RunPaths, dataset: DatasetPaths | None = None
+) -> tuple[ModelCheckpoint, DatasetPaths, dict[str, Any]]:
+    """The run's frozen model, its prepared dataset and the dataset's manifest, all checked.
+
+    The final audit reads nothing from the graph before these checks pass: an audit
+    the run already has, a model with more than one test cutoff and a missing or
+    changed dataset are refused. ``dataset`` defaults to the one the model records.
     """
     from ..data.manifest import load_prepared
 
-    if output.suffix != ".json":
-        raise ValueError("Final audit output must be a .json report path")
-    rejected_output = output.with_suffix(".rejected.txt")
-    if output.exists() or output.with_suffix(".parquet").exists() or rejected_output.exists():
-        raise FileExistsError(output)
-    saved = ModelCheckpoint.of(checkpoint)
+    split = AUDITED_SPLIT
+    for path in (run.audit_metrics(split), run.audit_scores(split), run.audit_rejected(split)):
+        if path.exists():
+            raise FileExistsError(path)
+    saved = ModelCheckpoint.load(run.model)
     if len(saved.config.dataset.dates.test) != 1:
         raise ValueError("Final population audit requires one test cutoff")
     if dataset is None:
@@ -108,9 +116,8 @@ def audit_inputs(
 
 
 def evaluate_final_population(
-    checkpoint: Path | ModelCheckpoint,
+    run: RunPaths,
     truth: TruthReader,
-    output: Path,
     *,
     scope: ScopeReader,
     fetcher: ContextFetcher | None = None,
@@ -121,9 +128,10 @@ def evaluate_final_population(
 ) -> dict[str, Any]:
     """Score a fresh final-only sample from the entire frozen test partition.
 
+    The model is the run's model.pt, and the audit goes into the run's audit/ files.
     This POC audit bounds host metadata to one million test accounts. It never
-    changes a checkpoint and refuses to overwrite an existing final report. The
-    prepared dataset (``dataset`` or the path recorded in the checkpoint) supplies
+    changes a model and refuses to overwrite an existing audit. The
+    prepared dataset (``dataset`` or the one recorded in the model) supplies
     the test cutoff clock and the hub registry, so scoring matches training. The test
     population comes from ``scope`` and the contexts from ``fetcher`` (``contexts``
     replaces them); the pipeline builds both on a frozen source it has verified
@@ -133,11 +141,9 @@ def evaluate_final_population(
     rejected fraction of the sample above the checkpoint's
     ``runtime.max_rejected_root_fraction`` (default 0), fails the audit before anything is
     written: the weighted metrics would silently describe a censored population.
-    Rejected negatives within the limit are listed in ``<output>.rejected.txt`` and
+    Rejected negatives within the limit are listed in audit/test_rejected.txt and
     the metrics' ``evaluation_cohort`` says that they were dropped.
     """
-    import json
-
     from ..contract.graph_schema import SPLIT_PHASE
     from ..data.accounts import scope_accounts
     from ..data.contexts import close_source
@@ -145,17 +151,16 @@ def evaluate_final_population(
     from ..data.splits import sample_keys
     from ..inference.predictor import TemporalPredictor
     from ..inference.rejections import exceeds_rejection_limit, rejection_summary
-    from ..inference.score_accounts import write_rejected
 
-    saved, dataset, manifest = audit_inputs(checkpoint, output, dataset)
-    rejected_output = output.with_suffix(".rejected.txt")
+    saved, dataset, manifest = audit_inputs(run, dataset)
+    split = AUDITED_SPLIT
     config = saved.config
     (date,) = config.dataset.dates.test
     last_ms = cutoff_ms(date)
     population: list[dict[str, Any]] = []
     for row in scope_accounts(scope, config.scope.id, include_observed=False):
-        if row["partition"] == SPLIT_PHASE["test"] and row["first_seen_ts_ms"] <= last_ms:
-            population.append({"account_id": row["account_id"], "split": "test"})
+        if row["partition"] == SPLIT_PHASE[split] and row["first_seen_ts_ms"] <= last_ms:
+            population.append({"account_id": row["account_id"], "split": split})
             if len(population) > AUDIT_POPULATION:
                 raise ValueError(
                     "Final audit metadata budget exceeded; use a streamed truth provider"
@@ -218,9 +223,9 @@ def evaluate_final_population(
         "scope": config.scope.id,
         "model_changed": False,
     }
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(result, indent=2, allow_nan=False) + "\n")
-    scored.to_parquet(output.with_suffix(".parquet"), index=False)
+    run.audit_metrics(split).parent.mkdir(parents=True, exist_ok=True)
+    write_json(run.audit_metrics(split), result)
+    write_audit_scores(run.audit_scores(split), scored)
     if rejected:
-        write_rejected(rejected_output, rejected)
+        write_rejected(run.audit_rejected(split), rejected)
     return result
