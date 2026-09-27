@@ -17,6 +17,7 @@ from typing import Any
 import numpy as np
 import torch
 
+from ..batching.assemble import batch_counts
 from ..data.contexts import ContextSource
 
 
@@ -39,10 +40,7 @@ class Progress:
         self.base_rejections: Counter[str] = Counter()
 
     def add(self, stats: dict[str, Any]) -> None:
-        for key, value in plain(stats).items():
-            # Batch statistics are counts; the sampler backend is the only string.
-            if isinstance(value, int) and not isinstance(value, bool):
-                self.totals[key] += value
+        self.totals.update(batch_counts(stats))
 
     def calls(self) -> int:
         """REST calls of every segment of the run."""
