@@ -9,6 +9,13 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+from ..contract.bounds import (
+    BATCH_CONTEXTS,
+    BATCH_ROOTS,
+    CANDIDATE_MESSAGES,
+    MODEL_WORKING_BYTES,
+    TENSOR_BYTES,
+)
 from ..contract.feature_groups import FeaturePlan
 from ..contract.graph_schema import ContextKey
 from ..contract.sampler_plan import SamplerPlan
@@ -28,11 +35,11 @@ class BatchLimits:
     `sampler.response_bound(2)` messages.
     """
 
-    max_roots: int = 128
-    max_contexts: int = 2048
-    max_tensor_bytes: int = 64 * 1024 * 1024
-    max_model_working_bytes: int = 512 * 1024 * 1024
-    max_candidate_messages: int = 524_288
+    max_roots: int = BATCH_ROOTS.high
+    max_contexts: int = BATCH_CONTEXTS
+    max_tensor_bytes: int = TENSOR_BYTES
+    max_model_working_bytes: int = MODEL_WORKING_BYTES
+    max_candidate_messages: int = CANDIDATE_MESSAGES
 
     def validate(
         self,
@@ -93,7 +100,7 @@ class BatchIndex:
     or an account at different historical times, remain distinct.
     """
 
-    def __init__(self, keys: Iterable[ContextKey], capacity: int = 2048) -> None:
+    def __init__(self, keys: Iterable[ContextKey], capacity: int = BATCH_CONTEXTS) -> None:
         self.keys: list[ContextKey] = []
         self.positions: dict[ContextKey, int] = {}
         for key in keys:

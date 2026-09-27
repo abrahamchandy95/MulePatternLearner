@@ -25,6 +25,7 @@ from ..batching.assemble import (
 )
 from ..batching.limits import BatchLimits
 from ..config import fanouts
+from ..contract.bounds import BATCH_ROOTS
 from ..contract.feature_groups import FeaturePlan
 from ..contract.graph_schema import ContextKey
 from ..contract.sampler_plan import SamplerPlan
@@ -152,7 +153,7 @@ class TemporalPredictor:
             # Read like RunSettings reads them, so scoring samples training's neighbourhoods.
             self.fanouts = fanouts(self.config)
             self.hidden = int(self.config["hidden"])
-            self.batch_size = min(int(self.config["batch_size"]), 128)
+            self.batch_size = min(int(self.config["batch_size"]), BATCH_ROOTS.high)
             BatchLimits().validate_model(
                 self.batch_size, self.fanouts, self.hidden, self.plan, self.sampler
             )

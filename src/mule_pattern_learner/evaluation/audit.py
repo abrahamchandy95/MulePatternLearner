@@ -7,6 +7,7 @@ from typing import Any
 
 import pandas as pd
 
+from ..contract.bounds import AUDIT_POPULATION, AUDIT_SAMPLE
 from ..contract.clock import cutoff_ms
 from ..inference.saved_model import ModelCheckpoint
 from ..metrics import evaluate, weighted_metrics
@@ -137,7 +138,7 @@ def evaluate_final_population(
     for row in scope_accounts(executor, config["scope_id"], include_observed=False):
         if row["partition"] == SPLIT_PHASE["test"] and row["first_seen_ts_ms"] <= last_ms:
             population.append({"account_id": row["account_id"], "split": "test"})
-            if len(population) > 1_000_000:
+            if len(population) > AUDIT_POPULATION:
                 raise ValueError(
                     "Final audit metadata budget exceeded; use a streamed truth provider"
                 )
@@ -152,7 +153,7 @@ def evaluate_final_population(
         negative_limit=negative_limit,
         seed=int(config["split_seed"]),
     )
-    if len(selected) > 100_000:
+    if len(selected) > AUDIT_SAMPLE:
         raise ValueError("Final scoring sample exceeds audit budget")
     registry = hubs if hubs is not None else load_hub_registry(dataset, manifest)
     predictor = TemporalPredictor(saved, contexts, executor=executor, hubs=registry)

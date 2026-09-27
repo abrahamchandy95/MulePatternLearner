@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 import numpy as np
 import torch
 
+from ..contract.bounds import FANOUT
 from ..contract.feature_groups import CLIENT_GROUPS, FEATURE_GROUPS, FeaturePlan
 from ..contract.graph_schema import ContextKey
 from ..contract.sampler_plan import SamplerPlan
@@ -150,8 +151,10 @@ def make_live_batch(
     once on the main thread and passes it here, so every batch of a run samples with
     the same backend; None resolves per call (cached probe).
     """
-    if not roots or len(fanouts) != 2 or min(fanouts) < 1 or max(fanouts) > 64:
-        raise ValueError("Nonempty roots and two fanouts in [1,64] are required")
+    if not roots or len(fanouts) != 2 or not all(FANOUT.holds(fanout) for fanout in fanouts):
+        raise ValueError(
+            f"Nonempty roots and two fanouts in [{FANOUT.low},{FANOUT.high}] are required"
+        )
     if mode not in ("train", "eval"):
         raise ValueError("Batch mode must be train or eval")
     limits.validate(len(roots), fanouts, plan, sampler)

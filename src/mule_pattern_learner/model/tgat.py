@@ -13,6 +13,7 @@ from __future__ import annotations
 import torch
 from torch import nn
 
+from ..contract.bounds import FANOUT, HEADS, HIDDEN
 from ..contract.feature_groups import FeaturePlan
 from ..contract.graph_schema import CHANNELS, RAILS, RELATIONS, STRATA
 
@@ -57,19 +58,25 @@ class LiveTGAT(nn.Module):
         first_fanout: int = 8,
     ) -> None:
         super().__init__()
-        if not 8 <= hidden <= 512 or not 1 <= heads <= 16 or hidden % heads:
-            raise ValueError("Hidden size must be 8..512 and divisible by 1..16 heads")
+        if not HIDDEN.holds(hidden) or not HEADS.holds(heads) or hidden % heads:
+            raise ValueError(
+                f"Hidden size must be {HIDDEN.low}..{HIDDEN.high} and divisible by "
+                f"{HEADS.low}..{HEADS.high} heads"
+            )
         if not 0 <= dropout < 1:
             raise ValueError("Dropout must be in [0,1)")
         if not isinstance(slot_sum, bool):  # pyright: ignore[reportUnnecessaryIsInstance]
             raise ValueError(f"slot_sum must be true or false, got {slot_sum!r}")
-        # Batches hold one column per hop-1 slot, at most 64 (make_live_batch).
+        # Batches hold one column per hop-1 slot, at most FANOUT.high (make_live_batch).
         if (
             isinstance(first_fanout, bool)
             or not isinstance(first_fanout, int)  # pyright: ignore[reportUnnecessaryIsInstance]
-            or not 1 <= first_fanout <= 64
+            or not FANOUT.holds(first_fanout)
         ):
-            raise ValueError(f"Hop-1 fan-out must be an integer in [1,64], got {first_fanout!r}")
+            raise ValueError(
+                f"Hop-1 fan-out must be an integer in [{FANOUT.low},{FANOUT.high}], "
+                f"got {first_fanout!r}"
+            )
         self.plan = plan = plan or FeaturePlan()
         if slot_sum and plan.architecture == "summary":
             raise ValueError("The summary architecture has no hop-1 slots to sum")

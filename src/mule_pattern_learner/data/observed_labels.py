@@ -12,6 +12,7 @@ from typing import Protocol
 import numpy as np
 import pandas as pd
 
+from ..contract.bounds import DATASET_ROWS
 from ..contract.clock import timestamp
 from ..contract.graph_schema import SPLITS
 
@@ -27,7 +28,7 @@ class ObservedLabelSource(Protocol):
     def positive_ids(self) -> set[str]: ...
 
 
-def read_bounded_parquet(path: Path, message: str, limit: int = 100_000) -> pd.DataFrame:
+def read_bounded_parquet(path: Path, message: str, limit: int = DATASET_ROWS) -> pd.DataFrame:
     """Read a parquet file, refusing (with message) one of more than limit rows before loading."""
     import pyarrow.parquet as pq
 
@@ -74,7 +75,7 @@ def load_observed_labels(accounts: pd.DataFrame, dataset: Path) -> pd.DataFrame:
     """The prepared observed labels, aligned with the prepared accounts."""
     labels = read_bounded_parquet(
         dataset / "observed_labels.parquet",
-        "Observed-label source exceeds the 100000-row bounded pool",
+        f"Observed-label source exceeds the {DATASET_ROWS}-row bounded pool",
     )
     return align_observed_labels(accounts, labels)
 

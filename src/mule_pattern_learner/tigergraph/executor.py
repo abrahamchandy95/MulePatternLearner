@@ -13,6 +13,7 @@ import time
 from typing import TYPE_CHECKING, Any, Protocol, TypeVar
 
 from ..config import TRANSPORT_DEFAULTS
+from ..contract.bounds import OUTAGE_SECONDS, QUERY_ATTEMPTS
 
 if TYPE_CHECKING:
     from pyTigerGraph import TigerGraphConnection
@@ -194,8 +195,8 @@ class TigerGraphExecutor:
         rng: random.Random | None = None,
     ) -> None:
         if (
-            not 1 <= max_attempts <= 20
-            or max_outage_s < 0
+            not QUERY_ATTEMPTS.holds(max_attempts)
+            or max_outage_s < OUTAGE_SECONDS.low
             or timeout_s <= 0
             or not 0 <= base_delay_s <= max_delay_s
             or slow_attempt_s < 0

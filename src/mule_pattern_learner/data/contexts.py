@@ -16,6 +16,13 @@ import threading
 from typing import Any, Protocol
 
 from ..config import TRANSPORT_DEFAULTS
+from ..contract.bounds import (
+    BATCH_CONTEXTS,
+    CONTEXT_LRU_CAPACITY,
+    ENCODING_CHECK_EVERY,
+    QUERY_CONCURRENCY,
+    REQUEST_KEYS,
+)
 from ..contract.feature_groups import FeaturePlan, extraction_plan
 from ..contract.graph_schema import ContextKey
 from ..contract.sampler_plan import SamplerPlan, sampler_pools
@@ -23,8 +30,6 @@ from ..runtime.workers import DaemonPool
 from ..tigergraph.context_query import query_context_split
 from ..tigergraph.executor import QueryExecutor, live_executor, transport_settings
 from ..tigergraph.provenance import verify_frozen_source
-
-MAX_FETCH_KEYS = 2048
 
 
 def _canonical(row: dict[str, Any]) -> dict[str, Any]:
@@ -41,8 +46,8 @@ def _canonical(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _check_source_limits(keys: list[ContextKey], hop: int) -> None:
-    if len(keys) > MAX_FETCH_KEYS:
-        raise ValueError(f"Context fetch is bounded to {MAX_FETCH_KEYS} items")
+    if len(keys) > BATCH_CONTEXTS:
+        raise ValueError(f"Context fetch is bounded to {BATCH_CONTEXTS} items")
     if hop not in (1, 2):
         raise ValueError("Context hop must be 1 (roots) or 2 (children)")
 
@@ -51,8 +56,11 @@ class _EncodingCadence:
     """Requests 0, n, 2n, ... carry emit_encodings=True and are verified."""
 
     def __init__(self, every: int) -> None:
-        if not 1 <= every <= 1_000_000:
-            raise ValueError("encoding_check_every must be in [1,1000000]")
+        if not ENCODING_CHECK_EVERY.holds(every):
+            raise ValueError(
+                "encoding_check_every must be in "
+                f"[{ENCODING_CHECK_EVERY.low},{ENCODING_CHECK_EVERY.high}]"
+            )
         self.every, self.requests = every, 0
 
     def next(self) -> bool:
@@ -121,9 +129,11 @@ class StreamingContextSource:
         concurrency: int = TRANSPORT_DEFAULTS["query_concurrency"],
         encoding_check_every: int = TRANSPORT_DEFAULTS["encoding_check_every"],
     ) -> None:
-        if not 1 <= concurrency <= 16:
-            raise ValueError("Query concurrency must be in [1,16]")
-        if not 0 <= capacity <= 4096 or not 1 <= request_batch_size <= 64:
+        if not QUERY_CONCURRENCY.holds(concurrency):
+            raise ValueError(
+                f"Query concurrency must be in [{QUERY_CONCURRENCY.low},{QUERY_CONCURRENCY.high}]"
+            )
+        if not CONTEXT_LRU_CAPACITY.holds(capacity) or not REQUEST_KEYS.holds(request_batch_size):
             raise ValueError("Invalid context source capacity or query size")
         self.plan = plan
         self.sampler = sampler

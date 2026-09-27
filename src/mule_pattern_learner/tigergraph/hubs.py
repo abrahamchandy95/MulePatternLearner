@@ -7,12 +7,12 @@ from typing import Any
 
 import pandas as pd
 
+from ..contract.bounds import HUB_CUTOFFS
 from ..contract.graph_schema import HUB_COLUMNS, HUB_REASONS
 from ..data.hub_registry import HubRegistry, registry_phases
 from .executor import CONVERSION_ERRORS, QueryExecutor, checked_rows
 
 HUB_QUERY = "temporal_hub_registry"
-MAX_CUTOFFS = 24
 
 
 def _parse_hubs(
@@ -71,8 +71,10 @@ def query_hub_registry(
     without one the counts are unscoped and rows have phase 3.
     """
     cutoffs = sorted({int(value) for value in cutoff_seqs})
-    if not 1 <= len(cutoffs) <= MAX_CUTOFFS or cutoffs[0] <= 0:
-        raise ValueError(f"Hub registry needs 1..{MAX_CUTOFFS} positive cutoff sequences")
+    if not HUB_CUTOFFS.holds(len(cutoffs)) or cutoffs[0] <= 0:
+        raise ValueError(
+            f"Hub registry needs {HUB_CUTOFFS.low}..{HUB_CUTOFFS.high} positive cutoff sequences"
+        )
     if threshold < 1:
         raise ValueError("Hub threshold must be positive")
     rows = executor.run(

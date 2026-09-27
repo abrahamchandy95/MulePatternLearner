@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from .bounds import ID_BYTES, SCOPE_ID_BYTES
+
 NODE_TYPES = ("Account", "Token", "Party", "Device", "IP", "Address")
 ASSOCIATIONS = (
     ("Party_Owns_Account", "Account_Owned_By_Party"),
@@ -58,7 +60,7 @@ class ContextKey:
     visibility_phase: int = 3
 
     def __post_init__(self) -> None:
-        if len(self.node_id.encode()) > 1024 or len(self.scope_id.encode()) > 256:
+        if len(self.node_id.encode()) > ID_BYTES or len(self.scope_id.encode()) > SCOPE_ID_BYTES:
             raise ValueError("Entity/scope ID exceeds the transport limit")
         if self.visibility_phase not in PHASE_SPLIT:
             raise ValueError("Visibility phase must be train=1, validation=2 or test=3")

@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass, replace
 import operator
 from typing import Any
 
+from .bounds import ASSOCIATION_FANOUT, ASSOCIATION_SLOTS, EVALUATION_SEED, FANOUT, POOL, Bound
 from .fingerprints import fingerprint
 
 POOL_KEYS = ("recent", "older", "distinct", "associations", "max_history")
@@ -25,13 +26,15 @@ SAMPLER_KEYS = (
 SELECTION_KEYS_VERSION = 2
 
 
-def _bounded(owner: str, name: str, value: object, low: int, high: int) -> int:
+def _bounded(owner: str, name: str, value: object, bound: Bound) -> int:
     try:
         number = operator.index(value)  # type: ignore[arg-type]
     except TypeError:
         number = None
-    if isinstance(value, bool) or number is None or not low <= number <= high:
-        raise ValueError(f"{owner} {name} must be an integer in [{low},{high}], got {value!r}")
+    if isinstance(value, bool) or number is None or not bound.holds(number):
+        raise ValueError(
+            f"{owner} {name} must be an integer in [{bound.low},{bound.high}], got {value!r}"
+        )
     return number
 
 
@@ -52,14 +55,8 @@ class PoolPlan:
     max_history: int = 2048
 
     def __post_init__(self) -> None:
-        for name, low, high in (
-            ("recent", 1, 32),
-            ("older", 0, 16),
-            ("distinct", 0, 16),
-            ("associations", 0, 8),
-            ("max_history", 32, 4096),
-        ):
-            object.__setattr__(self, name, _bounded("Pool", name, getattr(self, name), low, high))
+        for name, bound in POOL.items():
+            object.__setattr__(self, name, _bounded("Pool", name, getattr(self, name), bound))
 
     @property
     def response_bound(self) -> int:
@@ -122,15 +119,17 @@ class SamplerPlan:
             "roots": roots,
             "children": children if children is not None else _default_children(roots),
             "relation_fanouts": tuple(
-                _bounded("Sampler", "relation_fanouts", v, 1, 64) for v in fanouts
+                _bounded("Sampler", "relation_fanouts", v, FANOUT) for v in fanouts
             ),
             "association_fanout": _bounded(
-                "Sampler", "association_fanout", association_fanout, 0, 8
+                "Sampler", "association_fanout", association_fanout, ASSOCIATION_FANOUT
             ),
-            "association_slots": _bounded("Sampler", "association_slots", association_slots, 0, 16),
+            "association_slots": _bounded(
+                "Sampler", "association_slots", association_slots, ASSOCIATION_SLOTS
+            ),
             "backend": backend,
             "evaluation_seed": _bounded(
-                "Sampler", "evaluation_seed", evaluation_seed, 0, 2**63 - 1
+                "Sampler", "evaluation_seed", evaluation_seed, EVALUATION_SEED
             ),
         }
         for name, value in values.items():

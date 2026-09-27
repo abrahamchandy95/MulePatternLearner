@@ -19,6 +19,23 @@ from typing import Annotated, Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from .contract.bounds import (
+    ASSOCIATION_FANOUT,
+    ASSOCIATION_SLOTS,
+    BATCH_ROOTS,
+    CONTEXT_LRU_CAPACITY,
+    ENCODING_CHECK_EVERY,
+    FANOUT,
+    OUTAGE_SECONDS,
+    POOL,
+    PREFETCH_BATCHES,
+    QUERY_ATTEMPTS,
+    QUERY_CONCURRENCY,
+    REQUEST_KEYS,
+    REVEAL_PER_SPLIT,
+    SEED_LIMIT,
+    Bound,
+)
 from .contract.feature_groups import BUILT_IN_GROUPS, FEATURE_GROUPS
 
 TRANSPORT_DEFAULTS: dict[str, int] = {
@@ -141,30 +158,35 @@ Positive = Annotated[int, Field(ge=1)]
 NonNegative = Annotated[int, Field(ge=0)]
 
 
+def _within(bound: Bound) -> Any:
+    """The constraint of an integer in a bound of contract.bounds."""
+    return Field(ge=bound.low, le=bound.high)
+
+
+Fanouts = Annotated[list[Annotated[int, _within(FANOUT)]], Field(min_length=2, max_length=2)]
+
+
 class _Strict(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid")
 
 
 class PoolConfig(_Strict):
-    """One candidate pool; ranges mirror `PoolPlan`."""
+    """One candidate pool; its ranges are those of `PoolPlan` (contract.bounds.POOL)."""
 
-    recent: Annotated[int, Field(ge=1, le=32)] | None = None
-    older: Annotated[int, Field(ge=0, le=16)] | None = None
-    distinct: Annotated[int, Field(ge=0, le=16)] | None = None
-    associations: Annotated[int, Field(ge=0, le=8)] | None = None
-    max_history: Annotated[int, Field(ge=32, le=4096)] | None = None
+    recent: Annotated[int, _within(POOL["recent"])] | None = None
+    older: Annotated[int, _within(POOL["older"])] | None = None
+    distinct: Annotated[int, _within(POOL["distinct"])] | None = None
+    associations: Annotated[int, _within(POOL["associations"])] | None = None
+    max_history: Annotated[int, _within(POOL["max_history"])] | None = None
 
 
 class SamplerConfig(PoolConfig):
     """`[sampler]`: flat keys are the roots pool, `[sampler.children]` the second hop."""
 
     children: PoolConfig | None = None
-    relation_fanouts: (
-        Annotated[list[Annotated[int, Field(ge=1, le=64)]], Field(min_length=2, max_length=2)]
-        | None
-    ) = None
-    association_fanout: Annotated[int, Field(ge=0, le=8)] | None = None
-    association_slots: Annotated[int, Field(ge=0, le=16)] | None = None
+    relation_fanouts: Fanouts | None = None
+    association_fanout: Annotated[int, _within(ASSOCIATION_FANOUT)] | None = None
+    association_slots: Annotated[int, _within(ASSOCIATION_SLOTS)] | None = None
     backend: Literal["auto", "cugraph", "torch"] | None = None
     evaluation_seed: NonNegative | None = None
 
@@ -186,9 +208,9 @@ class DatesConfig(_Strict):
 
 
 class SeedLimitsConfig(_Strict):
-    train: Annotated[int, Field(ge=1, le=20000)]
-    validation: Annotated[int, Field(ge=1, le=20000)]
-    test: Annotated[int, Field(ge=1, le=20000)]
+    train: Annotated[int, _within(SEED_LIMIT)]
+    validation: Annotated[int, _within(SEED_LIMIT)]
+    test: Annotated[int, _within(SEED_LIMIT)]
 
 
 class LiveConfig(_Strict):
@@ -206,10 +228,10 @@ class LiveConfig(_Strict):
     ]
     create_scope: bool = OPERATIONAL_DEFAULTS["create_scope"]
     # First-run label reveal: at most this many known mules per split.
-    reveal_per_split: Annotated[int, Field(ge=0, le=1000)] | None = None
+    reveal_per_split: Annotated[int, _within(REVEAL_PER_SPLIT)] | None = None
     # Seed of the reveal's deterministic draws; defaults to `seed`.
     reveal_salt: int | None = None
-    prepare_batch_size: Annotated[int, Field(ge=1, le=128)] = OPERATIONAL_DEFAULTS[
+    prepare_batch_size: Annotated[int, _within(BATCH_ROOTS)] = OPERATIONAL_DEFAULTS[
         "prepare_batch_size"
     ]
     dates: DatesConfig | None = None
@@ -224,10 +246,7 @@ class LiveConfig(_Strict):
     architecture: Literal["split", "summary"] | None = None
     # Sum over the root's hop-1 slots beside attention; the summary architecture ignores it.
     slot_sum: bool | None = None
-    fanouts: (
-        Annotated[list[Annotated[int, Field(ge=1, le=64)]], Field(min_length=2, max_length=2)]
-        | None
-    ) = None
+    fanouts: Fanouts | None = None
     sampler: SamplerConfig | None = None
     hidden: Positive | None = None
     heads: Positive | None = None
@@ -238,7 +257,7 @@ class LiveConfig(_Strict):
     patience: NonNegative | None = None
     # Largest fraction of an epoch's or evaluation split's roots TigerGraph may reject.
     max_rejected_root_fraction: Annotated[float, Field(ge=0, le=1)] | None = None
-    batch_size: Annotated[int, Field(ge=1, le=128)] | None = None
+    batch_size: Annotated[int, _within(BATCH_ROOTS)] | None = None
     learning_rate: Annotated[float, Field(gt=0)] | None = None
     weight_decay: Annotated[float, Field(ge=0)] | None = None
     weight_average_decay: Annotated[float, Field(ge=0, lt=1)] | None = None
@@ -250,23 +269,25 @@ class LiveConfig(_Strict):
     threads: Positive | None = None
     deterministic: bool | Literal["strict"] = OPERATIONAL_DEFAULTS["deterministic"]
     # Transport and runtime.
-    request_batch_size: Annotated[int, Field(ge=1, le=64)] = OPERATIONAL_DEFAULTS[
+    request_batch_size: Annotated[int, _within(REQUEST_KEYS)] = OPERATIONAL_DEFAULTS[
         "request_batch_size"
     ]
-    query_concurrency: Annotated[int, Field(ge=1, le=16)] = OPERATIONAL_DEFAULTS[
+    query_concurrency: Annotated[int, _within(QUERY_CONCURRENCY)] = OPERATIONAL_DEFAULTS[
         "query_concurrency"
     ]
-    context_lru_capacity: Annotated[int, Field(ge=0, le=4096)] = OPERATIONAL_DEFAULTS[
+    context_lru_capacity: Annotated[int, _within(CONTEXT_LRU_CAPACITY)] = OPERATIONAL_DEFAULTS[
         "context_lru_capacity"
     ]
-    encoding_check_every: Annotated[int, Field(ge=1, le=1_000_000)] = OPERATIONAL_DEFAULTS[
+    encoding_check_every: Annotated[int, _within(ENCODING_CHECK_EVERY)] = OPERATIONAL_DEFAULTS[
         "encoding_check_every"
     ]
-    max_query_attempts: Annotated[int, Field(ge=1, le=20)] = OPERATIONAL_DEFAULTS[
+    max_query_attempts: Annotated[int, _within(QUERY_ATTEMPTS)] = OPERATIONAL_DEFAULTS[
         "max_query_attempts"
     ]
-    max_outage_s: Annotated[int, Field(ge=0, le=86_400)] = OPERATIONAL_DEFAULTS["max_outage_s"]
-    prefetch_batches: Annotated[int, Field(ge=0, le=8)] = OPERATIONAL_DEFAULTS["prefetch_batches"]
+    max_outage_s: Annotated[int, _within(OUTAGE_SECONDS)] = OPERATIONAL_DEFAULTS["max_outage_s"]
+    prefetch_batches: Annotated[int, _within(PREFETCH_BATCHES)] = OPERATIONAL_DEFAULTS[
+        "prefetch_batches"
+    ]
     checkpoint_every_steps: NonNegative = OPERATIONAL_DEFAULTS["checkpoint_every_steps"]
     log_every_steps: Positive = OPERATIONAL_DEFAULTS["log_every_steps"]
 
