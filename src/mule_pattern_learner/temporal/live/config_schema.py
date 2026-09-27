@@ -32,7 +32,6 @@ TRANSPORT_DEFAULTS: dict[str, int] = {
 }
 OPERATIONAL_DEFAULTS: dict[str, Any] = {
     **TRANSPORT_DEFAULTS,
-    "context_storage": "stream",
     "prepare_batch_size": 16,
     # The first run creates a missing scope; false forbids that write.
     "create_scope": True,
@@ -45,7 +44,7 @@ OPERATIONAL_DEFAULTS: dict[str, Any] = {
 # What a modelling key means when a configuration leaves it absent (or null). Unlike
 # OPERATIONAL_DEFAULTS these never enter a validated configuration, so config.json and
 # resume fingerprints record only what was written (preparation views resolve
-# split_seed, label_policy and the SQLite fanouts through them). Configs from
+# split_seed and label_policy through them). Configs from
 # run_config set every one of them (DEFAULT_RUN); the fallbacks decide saved and
 # hand-written configurations, so they must not change (fanouts stays (8, 4)).
 FALLBACKS: dict[str, Any] = {
@@ -163,6 +162,11 @@ DEFAULT_RUN: dict[str, Any] = {
         },
     },
 }
+# Keys that configurations written before the layered restructure hold (saved models,
+# prepared cohorts and run directories), each with the one value this code still
+# implements. validate_config drops them, so those files keep loading; any other value
+# names a removed path and is refused.
+RETIRED_KEYS: dict[str, Any] = {"context_storage": "stream"}
 # Identifiers that become directory names or server-side scope metadata.
 IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
@@ -242,7 +246,6 @@ class LiveConfig(_Strict):
     reveal_per_split: Annotated[int, Field(ge=0, le=1000)] | None = None
     # Seed of the reveal's deterministic draws; defaults to `seed`.
     reveal_salt: int | None = None
-    context_storage: Literal["stream", "sqlite"] = OPERATIONAL_DEFAULTS["context_storage"]
     prepare_batch_size: Annotated[int, Field(ge=1, le=128)] = OPERATIONAL_DEFAULTS[
         "prepare_batch_size"
     ]
@@ -331,10 +334,21 @@ class LiveConfig(_Strict):
 KNOWN_KEYS = frozenset(LiveConfig.model_fields)
 
 
+def without_retired_keys(config: dict[str, Any]) -> dict[str, Any]:
+    """config without RETIRED_KEYS; a retired key with another value is refused."""
+    for key, value in RETIRED_KEYS.items():
+        if key in config and config[key] != value:
+            raise ValueError(
+                f"{key} = {config[key]!r} is no longer supported: only {value!r} remains"
+            )
+    return {key: value for key, value in config.items() if key not in RETIRED_KEYS}
+
+
 def validate_config(config: dict[str, Any]) -> dict[str, Any]:
     """Return a validated copy with operational defaults; raise ValueError on bad input."""
     if not isinstance(config, dict):  # pyright: ignore[reportUnnecessaryIsInstance]
         raise ValueError("Configuration must be a table")
+    config = without_retired_keys(config)
     unknown = sorted(set(config) - KNOWN_KEYS)
     if unknown:
         raise ValueError(

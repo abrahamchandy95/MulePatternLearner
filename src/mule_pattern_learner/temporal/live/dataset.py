@@ -1,4 +1,4 @@
-"""Supervision export, ownership-isolated splits and resumable cache preparation."""
+"""Supervision export, ownership-isolated splits and resumable cohort preparation."""
 
 from __future__ import annotations
 
@@ -13,30 +13,20 @@ import pandas as pd
 from mule_pattern_learner.configuration import REPOSITORY_ROOT, resolve_path
 
 from ..common import cutoff_ms, digest, stable_score, timestamp
-from .batching import build_root_batch, child_key
 from .cohort import cohort_seed, scoped_cohort
-from .config_schema import DEFAULT_RUN, OPERATIONAL_DEFAULTS, fanouts, setting, split_seed
+from .config_schema import DEFAULT_RUN, OPERATIONAL_DEFAULTS, setting, split_seed
 from .contract import (
     SPLIT_PHASE,
     ContextKey,
-    FeaturePlan,
     SamplerPlan,
     extraction_plan,
     fingerprint,
     sampler_pools,
 )
 from .executor import QueryExecutor, account_pages, checked_rows, printed
-from .hubs import (
-    HUB_FILE,
-    HubRegistry,
-    hub_manifest,
-    hub_threshold,
-    load_hub_registry,
-    query_hub_registry,
-)
+from .hubs import HUB_FILE, hub_manifest, hub_threshold, query_hub_registry
 from .installation import QUERY_FILES
 from .policy import context_scope, validate_protocol
-from .source import MAX_FETCH_KEYS, ContextStore, context_store
 from .supervision import (
     ORACLE_COLUMNS,
     ObservedLabelSource,
@@ -62,11 +52,9 @@ PREPARATION_KEYS = (
     "cohort_seed",
     "label_policy",
     "observed_labels",
-    "context_storage",
     "sampler_pools",
     "extraction_groups",
     "scope_unowned",
-    "sqlite_selection",
 )
 
 
@@ -115,15 +103,12 @@ def preparation_view(config: dict[str, Any]) -> dict[str, Any]:
     observed_labels is the label file's content hash; a configured file that is
     missing raises, because the hash check cannot be skipped. sampler_pools is what
     TigerGraph returns per hop. extraction_groups are the groups TigerGraph is
-    asked for; streaming derives the hop-2 flags from each training model, so
-    arms of any architecture can share one streamed preparation.
-    sqlite_selection records the fanouts, sampler and extraction architecture
-    that decide what a SQLite cache holds (None for streaming).
+    asked for; the source derives the hop-2 flags from each training model, so
+    arms of any architecture can share one preparation.
     """
     sampler = SamplerPlan.from_config(config)
     plan = extraction_plan(config)
     labels = config.get("observed_labels")
-    storage = config.get("context_storage", OPERATIONAL_DEFAULTS["context_storage"])
     if labels:
         path = resolve_path(labels)
         if not path.is_file():
@@ -142,19 +127,9 @@ def preparation_view(config: dict[str, Any]) -> dict[str, Any]:
         "cohort_seed": cohort_seed(config),
         "label_policy": setting(config, "label_policy"),
         "observed_labels": label_hash,
-        "context_storage": storage,
         "sampler_pools": sampler_pools(sampler),
         "extraction_groups": sorted(plan.groups),
         "scope_unowned": config.get("scope_unowned", OPERATIONAL_DEFAULTS["scope_unowned"]),
-        "sqlite_selection": (
-            {
-                "fanouts": list(fanouts(config)),
-                "sampler": sampler.fingerprint(),
-                "architecture": plan.architecture,
-            }
-            if storage == "sqlite"
-            else None
-        ),
     }
     assert tuple(view) == PREPARATION_KEYS
     return json.loads(json.dumps(view))
@@ -184,8 +159,6 @@ def load_prepared(dataset: Path) -> tuple[dict[str, Any], pd.DataFrame]:
         ("observed_labels.parquet", "observed_labels_sha256"),
         (HUB_FILE, "hubs_sha256"),
     ]
-    if manifest["source"].get("context_storage") != "stream":
-        required.append(("contexts.sqlite", "cache_sha256"))
     for name, field in required:
         if field not in manifest or digest(dataset / name) != manifest[field]:
             raise ValueError(f"Prepared artifact changed or legacy oracle cache: {name}")
@@ -308,55 +281,6 @@ def resolve_cutoff(executor: QueryExecutor, date: str) -> tuple[int, int]:
     return resolve_cutoffs(executor, [date])[date], cutoff_ms(date)
 
 
-def cache_contexts(
-    store: ContextStore,
-    keys: list[ContextKey],
-    *,
-    fanouts: tuple[int, int],
-    plan: FeaturePlan,
-    sampler: SamplerPlan,
-    hubs: HubRegistry,
-) -> None:
-    """Fill a SQLite cache with every context training and evaluation can request.
-
-    Deterministic policies (recent, stratified) cache what their fixed selection
-    reaches. The resample policy draws children anew each step, so every candidate
-    child of every root is cached (hub stubs are never fetched). Rejected contexts
-    are cached as status rows; training drops rejected roots and masks children.
-    """
-    if sampler.policy != "resample":
-        build_root_batch(
-            store,
-            keys,
-            fanouts=fanouts,
-            device="cpu",
-            plan=plan,
-            sampler=sampler,
-            hubs=hubs,
-            mode="eval",
-        )
-        return
-    rows = store.fetch(keys, hop=1)
-    if plan.architecture == "summary":
-        return
-    children = list(
-        dict.fromkeys(
-            child_key(message, key)
-            for key, row in zip(keys, rows, strict=True)
-            if row is not None
-            for message in row["messages"]
-            if not hubs.is_stub(
-                message["node_type"],
-                message["node_id"],
-                key.cutoff_seq,
-                key.batch_phase,
-            )
-        )
-    )
-    for start in range(0, len(children), MAX_FETCH_KEYS):
-        store.fetch(children[start : start + MAX_FETCH_KEYS], hop=2)
-
-
 def select_population(
     config: dict[str, Any], executor: QueryExecutor, labels: ObservedLabelSource
 ) -> tuple[pd.DataFrame, str, dict[str, int] | None]:
@@ -454,60 +378,6 @@ def _stage_hubs(
         print(json.dumps({"hub_counts": manifest["hub_counts"]}), flush=True)
 
 
-def _stage_contexts(
-    config: dict[str, Any],
-    output: Path,
-    manifest: dict[str, Any],
-    metadata: dict[str, Any],
-    executor: QueryExecutor,
-    accounts: pd.DataFrame,
-    plan: FeaturePlan,
-    sampler: SamplerPlan,
-) -> None:
-    """Fill contexts.sqlite for every split and date; the cache skips what it holds."""
-    hubs = load_hub_registry(output, manifest)
-    step = int(config.get("prepare_batch_size", OPERATIONAL_DEFAULTS["prepare_batch_size"]))
-    store = context_store(
-        output / "contexts.sqlite",
-        metadata,
-        config,
-        plan=extraction_plan(config),
-        sampler=sampler,
-        executor=executor,
-    )
-    try:
-        for split, dates in config["dates"].items():
-            for date in dates:
-                keys = sample_keys(accounts[eligible_mask(accounts, split, date)], date, manifest)
-                for start in range(0, len(keys), step):
-                    cache_contexts(
-                        store,
-                        keys[start : start + step],
-                        fanouts=fanouts(config),
-                        plan=plan,
-                        sampler=sampler,
-                        hubs=hubs,
-                    )
-                    print(
-                        json.dumps(
-                            {
-                                "preparing": split,
-                                "date": date,
-                                "accounts": min(start + step, len(keys)),
-                                "total": len(keys),
-                                "query_calls": store.query_calls,
-                                "rejections": dict(store.rejections),
-                            }
-                        ),
-                        flush=True,
-                    )
-        manifest["cached_contexts"] = store.conn.execute(
-            "SELECT COUNT(*) FROM contexts"
-        ).fetchone()[0]
-    finally:
-        store.close()
-
-
 def prepare(
     config: dict[str, Any],
     output: Path,
@@ -515,21 +385,18 @@ def prepare(
     source_counts: dict[str, int],
     labels: ObservedLabelSource | None = None,
 ) -> dict[str, Any]:
-    """Resumable preparation: cohort, observed labels, cutoffs, hub registry, cache.
+    """Resumable preparation: cohort, observed labels, cutoffs and hub registry.
 
-    `labels` defaults to the source configured by label_source(config); there is
-    no implicit graph-label fallback. Each stage writes the manifest when it is
-    done, and a resumed preparation skips the stages the manifest records.
+    Contexts are not stored: training requests them from TigerGraph. `labels`
+    defaults to the source configured by label_source(config); there is no implicit
+    graph-label fallback. Each stage writes the manifest when it is done, and a
+    resumed preparation skips the stages the manifest records.
     """
-    plan = FeaturePlan.from_config(config)
     sampler = SamplerPlan.from_config(config)
     validate_protocol(config)
     validate_dates(config)
     if not config.get("dataset_id"):
         raise ValueError("A new immutable dataset_id is required after each graph reload/backfill")
-    storage = config.get("context_storage", OPERATIONAL_DEFAULTS["context_storage"])
-    if storage not in ("stream", "sqlite"):
-        raise ValueError("context_storage must be stream or sqlite")
     labels = label_source(config) if labels is None else labels
     output.mkdir(parents=True, exist_ok=True)
     preparation = preparation_view(config)
@@ -540,7 +407,6 @@ def prepare(
         "query_hashes": query_hashes(),
         "preparation_sha256": fingerprint(preparation),
         "preparation": preparation,
-        "context_storage": storage,
         "evaluation_protocol": config["evaluation_protocol"],
         "scope_id": config.get("scope_id", ""),
     }
@@ -565,13 +431,6 @@ def prepare(
     _stage_labels(output, manifest, labels, accounts)
     _stage_cutoffs(config, output, manifest, executor)
     _stage_hubs(config, output, manifest, executor, sampler)
-    if storage == "stream":
-        manifest["status"] = "ready"
-        manifest["cached_contexts"] = 0
-        write_manifest(output, manifest)
-        return manifest
-    _stage_contexts(config, output, manifest, metadata, executor, accounts, plan, sampler)
     manifest["status"] = "ready"
-    manifest["cache_sha256"] = digest(output / "contexts.sqlite")
     write_manifest(output, manifest)
     return manifest

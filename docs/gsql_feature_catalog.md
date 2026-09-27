@@ -17,7 +17,7 @@ aggregation; see [leakage and scaling](leakage_and_scaling.md).
 | `temporal_training_population` | Legacy metadata pages including ownership IDs, with the same optional observed supervision (`include_observed`, default FALSE). | Optional shared-history preparation only; client metadata is capped. |
 | `temporal_training_cutoffs` | Converts exclusive calendar cutoffs to sequence watermarks using payments and entity first observations. Every requested cutoff key is present, 0 when nothing is visible. | Preparation and `score-new`. Scans history; not a constant-time lookup. |
 | `temporal_hub_registry` | For 1 to 24 cutoff sequences, lists Accounts whose visible history (events before the cutoff, all currencies) in some payment relation exceeds `threshold`; the only reason is `visible_history`. With `scope_id` empty the counts are unscoped and every row has `visibility_phase` 3. With a `scope_id` (the scope must be ready, else `scope_not_ready`) it counts per phase 1, 2 and 3 only events whose From/To Account endpoints are all members with partition at most that phase, the endpoint rule of `temporal_training_context`, and the hub itself must be allowed in the phase. Rows are `(account_id, cutoff_seq, visibility_phase, max_visible, max_degree, reason)`; `max_degree`, the all-time relation outdegree, is informational only. The response echoes `cutoff_seqs`, `threshold` and `scope_id`. O(1) outdegree prefilter; read-only. | Preparation (dataset cutoffs; the scope for `strict_inductive`) and `score-new` (the requested cutoff, unscoped). |
-| `temporal_training_context` | Accepts 1 to 64 entity/time contexts plus scope and phase, and returns one candidate pool per context. Filters excluded Account/Party contributions before rolling features, neighbor selection and pair history. | Every batch in streaming mode (roots, then children); once per context in optional SQLite staging. |
+| `temporal_training_context` | Accepts 1 to 64 entity/time contexts plus scope and phase, and returns one candidate pool per context. Filters excluded Account/Party contributions before rolling features, neighbor selection and pair history. | Every batch (roots, then children). |
 | `temporal_fourier64_values` | Encodes a nonnegative millisecond delta into 32 sine/cosine pairs. | Called inside temporal queries. |
 | `temporal_fourier64` | Public validation wrapper for the same calculation. | Diagnostics and parity checks. |
 | `temporal_reveal_mule_labels` | Reads ground truth once: simulates each internal mule's discovery (victim reports, network trace, monitoring) and, with `apply = TRUE`, writes the Account label contract with up to `budget` revealed positives per split ([label reveal](label_reveal.md)). A graph with known labels is left alone unless `force = TRUE`. | First strict `train` or `prepare` with `label_policy = "graph_observed"` on a graph without known labels. |
@@ -85,8 +85,7 @@ Three feature groups never come from TigerGraph. The client computes them, the q
 no `include_*` flag for them, and a response carrying one of their names is rejected
 (`validate_context` reports an unknown node feature, and batch assembly refuses a
 client-only feature). Adding or changing them leaves the GSQL and the extraction groups
-as they are, so a streamed preparation stays valid. A SQLite cache also records the
-contract fingerprint, which covers `hub_indicator` but not the pool groups.
+as they are, so a prepared cohort stays valid.
 
 - `hub_indicator`: `history_withheld`, 1 for a hub stub built without a query (see
   [hub accounts](live_temporal_training.md#hub-accounts-and-rejected-contexts)).
@@ -140,7 +139,7 @@ The pool definitions (the groups' names, the bands, the pass-through thresholds 
 `POOL_ACTIVITY_VERSION`) are part of a model's input fingerprint
 (`FeaturePlan.fingerprint`) when it uses a pool group, so a checkpoint trained with them
 is refused once they change. They are not part of the contract fingerprint, so
-checkpoints and SQLite caches from before the pool groups existed stay valid.
+checkpoints from before the pool groups existed stay valid.
 
 ## The 83 entity/context features
 

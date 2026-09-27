@@ -33,7 +33,7 @@ from mule_pattern_learner.temporal.live.dataset import assign_groups, validate_d
 from mule_pattern_learner.temporal.live.hubs import HUB_COLUMNS, HubRegistry
 from mule_pattern_learner.temporal.live.model import LiveTGAT
 from mule_pattern_learner.temporal.live.queries import render_context_query
-from mule_pattern_learner.temporal.live.source import ContextStore, StreamingContextSource
+from mule_pattern_learner.temporal.live.source import StreamingContextSource
 from temporal_fakes import FakeExecutor, association, context, message
 
 V5_PLAN = FeaturePlan(DEFAULT_GROUPS, "split")
@@ -47,11 +47,11 @@ V5_SAMPLER = SamplerPlan(
 
 
 @pytest.mark.legacy
-def test_recursive_context_keeps_same_neighbor_at_two_different_event_times(tmp_path: Path) -> None:
+def test_recursive_context_keeps_same_neighbor_at_two_different_event_times() -> None:
     root = ContextKey("Account", "root", 100, 1000)
     messages = [message(90, 900, root), message(80, 800, root)]
     source = FakeExecutor({root: context(root, messages)})
-    store = ContextStore(tmp_path / "cache.sqlite", {"dataset": "one"}, source)
+    store = StreamingContextSource(source)
     batch = make_live_batch(store, [root], fanouts=(2, 2))
     assert child_key(messages[0]) in source.requested
     assert child_key(messages[1]) in source.requested
@@ -65,12 +65,6 @@ def test_recursive_context_keeps_same_neighbor_at_two_different_event_times(tmp_
     # A real zero pair gap has cosine coordinates; it is not missing time.
     assert torch.all(batch["first_edge"][0, 0, 72::2] == 1)
     store.close()
-    offline = ContextStore(tmp_path / "cache.sqlite", {"dataset": "one"})
-    again = make_live_batch(offline, [root], fanouts=(2, 2))
-    for key in batch:
-        torch.testing.assert_close(batch[key], again[key])
-    assert offline.query_calls == 0
-    offline.close()
 
 
 def test_future_and_same_event_are_rejected() -> None:
@@ -122,29 +116,9 @@ def test_amount_ratios_are_required_from_gsql_and_preserved_by_tensor_conversion
 
 
 @pytest.mark.legacy
-def test_cache_provenance_offline_miss_and_batch_bound(tmp_path: Path) -> None:
-    keys = [ContextKey("Account", str(i), 100, 1000) for i in range(35)]
-    source = FakeExecutor({})
-    store = ContextStore(
-        tmp_path / "cache.sqlite", {"dataset": "one"}, source, request_batch_size=16
-    )
-    store.fetch(keys)
-    assert store.query_calls == 3
-    store.fetch(keys)
-    assert store.query_calls == 3
-    store.close()
-    with pytest.raises(ValueError, match="provenance"):
-        ContextStore(tmp_path / "cache.sqlite", {"dataset": "two"})
-    offline = ContextStore(tmp_path / "cache.sqlite", {"dataset": "one"})
-    with pytest.raises(ValueError, match="Offline"):
-        offline.fetch([ContextKey("Account", "absent", 100, 1000)])
-    offline.close()
-
-
-@pytest.mark.legacy
-def test_isolated_entities_and_model_ablations(tmp_path: Path) -> None:
+def test_isolated_entities_and_model_ablations() -> None:
     key = ContextKey("Token", "alone", 100, 1000)
-    store = ContextStore(tmp_path / "cache.sqlite", {}, FakeExecutor({}))
+    store = StreamingContextSource(FakeExecutor({}))
     batch = make_live_batch(store, [key])
     assert not batch["first_mask"].any()
     for variant in ("temporal", "no_fourier", "tabular"):
@@ -288,10 +262,10 @@ def test_hops_use_their_own_pools_and_only_spot_checks_carry_encodings() -> None
 
 
 @pytest.mark.legacy
-def test_same_context_in_two_scopes_or_hops_is_never_shared(tmp_path: Path) -> None:
+def test_same_context_in_two_scopes_or_hops_is_never_shared() -> None:
     key = ContextKey("Account", "a", 100, 1000, "strict", 1)
     executor = FakeExecutor()
-    store = ContextStore(tmp_path / "cache.sqlite", {}, executor, plan=V5_PLAN, sampler=V5_SAMPLER)
+    store = StreamingContextSource(executor, plan=V5_PLAN, sampler=V5_SAMPLER)
     store.fetch([key], hop=1)
     store.fetch([key], hop=2)
     store.fetch([replace(key, visibility_phase=2)], hop=1)
@@ -338,7 +312,7 @@ def test_feature_arms_and_model_seeds_share_one_streamed_preparation() -> None:
 
     groups = sorted({*LEGACY_GROUPS, *DEFAULT_GROUPS, "event_channel", "decayed_activity"})
     groups += ["history_support", "identity_order", "device_ip_context"]
-    base = live_config(context_storage="stream", extraction_groups=groups)
+    base = live_config(extraction_groups=groups)
     views = {json_key(preparation_view(arm)) for arm in feature_experiments(base).values()}
     assert len(views) == 1  # single, split and summary arms all fit the same preparation
     # Model variants read fewer inputs but keep the configured extraction.
@@ -349,12 +323,6 @@ def test_feature_arms_and_model_seeds_share_one_streamed_preparation() -> None:
     reseeded = {**base, "seed": 7, "cohort_seed": base["seed"]}
     assert preparation_view(reseeded) == preparation_view(base)
     assert preparation_view({**base, "seed": 7})["cohort_seed"] == 7
-    # A SQLite cache holds one architecture's hop-2 features, so there it is recorded.
-    sqlite = {**base, "context_storage": "sqlite"}
-    single = {**sqlite, "feature_groups": list(LEGACY_GROUPS), "architecture": "single"}
-    assert (
-        preparation_view(single)["sqlite_selection"] != preparation_view(sqlite)["sqlite_selection"]
-    )
 
 
 def json_key(value: object) -> str:

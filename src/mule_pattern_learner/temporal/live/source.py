@@ -1,10 +1,9 @@
-"""Context sources: the model-facing port, its SQLite and streaming adapters, and factories.
+"""Context sources: the model-facing port, its streaming adapter, and factories.
 
-ContextStore is the SQLite cache that preparation fills and training reads offline;
-StreamingContextSource requests each batch's contexts from TigerGraph and keeps a
-bounded LRU. Both request through context_query and return rows in key order, with
-None where TigerGraph rejected a request. check_coverage, close_source and
-rejection_summary work with any ContextSource.
+StreamingContextSource requests each batch's contexts from TigerGraph through
+context_query and keeps a bounded LRU. It returns rows in key order, with None where
+TigerGraph rejected a request. check_coverage, close_source and rejection_summary
+work with any ContextSource.
 """
 
 from __future__ import annotations
@@ -12,26 +11,20 @@ from __future__ import annotations
 from collections import Counter, OrderedDict, deque
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, wait
-from dataclasses import asdict
 import inspect
-import json
 from pathlib import Path
 import queue
-import sqlite3
 import threading
 from typing import Any, Protocol, TypeVar
 import weakref
-import zlib
 
 from .config_schema import TRANSPORT_DEFAULTS
-from .context_query import PER_REQUEST_STATUSES, query_context_split, validate_context
+from .context_query import query_context_split
 from .contract import (
     ContextKey,
     FeaturePlan,
     SamplerPlan,
-    contract_fingerprint,
     extraction_plan,
-    fingerprint,
     sampler_pools,
 )
 from .executor import QueryExecutor, live_executor, transport_settings
@@ -78,149 +71,6 @@ class _EncodingCadence:
         emit = self.requests % self.every == 0
         self.requests += 1
         return emit
-
-
-class ContextStore:
-    """SQLite cache keyed by immutable dataset identity, query contract, hop and clocks.
-
-    A missing entry in offline mode is an error. Training cannot silently query
-    a mutable live graph. Per-request rejections are cached as status rows and
-    returned as None. The small LRU bounds decompressed host memory. One lock
-    serializes access so batch-builder threads can share the store.
-    """
-
-    def __init__(
-        self,
-        path: Path,
-        metadata: dict[str, Any],
-        executor: QueryExecutor | None = None,
-        *,
-        per_relation: int | None = None,
-        request_batch_size: int = TRANSPORT_DEFAULTS["request_batch_size"],
-        plan: FeaturePlan = FeaturePlan(),
-        sampler: SamplerPlan | None = None,
-        encoding_check_every: int = TRANSPORT_DEFAULTS["encoding_check_every"],
-        capacity: int = 256,
-    ) -> None:
-        if not 1 <= request_batch_size <= 64 or not 0 <= capacity <= 4096:
-            raise ValueError("Unsupported query batch or cache capacity")
-        self.plan = plan
-        self.sampler = sampler or _default_sampler(per_relation)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        self.path, self.executor = path, executor
-        self.request_batch_size, self.capacity = request_batch_size, capacity
-        self.metadata = {
-            **{
-                k: v
-                for k, v in metadata.items()
-                if k
-                not in (
-                    "config_sha256",
-                    "preparation",
-                    "preparation_sha256",
-                    "observed_labels_sha256",
-                )
-            },
-            "contract": contract_fingerprint(),
-            "extraction_groups": sorted(plan.groups),
-            "sampler": {str(hop): self.sampler.query_params(hop) for hop in (1, 2)},
-            "flags": {str(hop): plan.query_flags(hop) for hop in (1, 2)},
-        }
-        self._cadence = _EncodingCadence(encoding_check_every)
-        self._lock = threading.RLock()
-        self.conn = sqlite3.connect(path, check_same_thread=False)
-        self.conn.execute(
-            "CREATE TABLE IF NOT EXISTS metadata (id INTEGER PRIMARY KEY, value TEXT)"
-        )
-        self.conn.execute(
-            "CREATE TABLE IF NOT EXISTS contexts (key TEXT PRIMARY KEY, value BLOB NOT NULL)"
-        )
-        existing = self.conn.execute("SELECT value FROM metadata WHERE id=1").fetchone()
-        if existing and json.loads(existing[0]) != json.loads(json.dumps(self.metadata)):
-            self.conn.close()
-            raise ValueError("Cache provenance mismatch; use a new dataset/cache directory")
-        if not existing:
-            self.conn.execute(
-                "INSERT INTO metadata VALUES (1, ?)", (json.dumps(self.metadata, sort_keys=True),)
-            )
-            self.conn.commit()
-        self.memory: OrderedDict[tuple[int, ContextKey], dict[str, Any]] = OrderedDict()
-        self.query_calls = 0
-        self.rejections: Counter[str] = Counter()
-        self.rejections_by_hop: dict[int, Counter[str]] = {}
-        self.diagnostics: Counter[str] = Counter()
-
-    @staticmethod
-    def _key(hop: int, key: ContextKey) -> str:
-        return fingerprint({**asdict(key), "hop": hop})
-
-    def close(self) -> None:
-        with self._lock:
-            self.conn.close()
-            self.memory.clear()
-
-    def _remember(self, hop: int, key: ContextKey, row: dict[str, Any]) -> None:
-        self.memory[(hop, key)] = row
-        self.memory.move_to_end((hop, key))
-        while len(self.memory) > self.capacity:
-            self.memory.popitem(last=False)
-
-    def _read(self, hop: int, key: ContextKey) -> dict[str, Any] | None:
-        cached = self.memory.get((hop, key))
-        if cached is not None:
-            self.memory.move_to_end((hop, key))
-            return cached
-        found = self.conn.execute(
-            "SELECT value FROM contexts WHERE key=?", (self._key(hop, key),)
-        ).fetchone()
-        if not found:
-            return None
-        row = json.loads(zlib.decompress(found[0]))
-        if row.get("status") == "ok":
-            validate_context(key, row, self.plan, self.sampler, hop)
-        elif row.get("status") not in PER_REQUEST_STATUSES:
-            raise ValueError("Cached context has an unknown status")
-        self._remember(hop, key, row)
-        return row
-
-    def fetch(self, keys: list[ContextKey], *, hop: int = 1) -> list[dict[str, Any] | None]:
-        _check_source_limits(keys, hop)
-        with self._lock:
-            rows: dict[ContextKey, dict[str, Any]] = {}
-            missing = []
-            for key in dict.fromkeys(keys):
-                row = self._read(hop, key)
-                if row is None:
-                    missing.append(key)
-                else:
-                    rows[key] = row
-            if missing and self.executor is None:
-                raise ValueError(
-                    f"Offline cache lacks {len(missing)} contexts; prepare this cohort first"
-                )
-            for start in range(0, len(missing), self.request_batch_size):
-                batch = missing[start : start + self.request_batch_size]
-                assert self.executor is not None
-                result, calls = query_context_split(
-                    self.executor,
-                    batch,
-                    plan=self.plan,
-                    sampler=self.sampler,
-                    hop=hop,
-                    emit_encodings=self._cadence.next(),
-                    diagnostics=self.diagnostics,
-                )
-                self.query_calls += calls
-                for key, row in zip(batch, result, strict=True):
-                    row = _canonical(row)
-                    data = zlib.compress(json.dumps(row, allow_nan=False).encode())
-                    self.conn.execute(
-                        "INSERT OR REPLACE INTO contexts VALUES (?, ?)", (self._key(hop, key), data)
-                    )
-                    rows[key] = row
-                    self._remember(hop, key, row)
-                self.conn.commit()
-            return _resolve(keys, rows, self.rejections, self.rejections_by_hop, hop)
 
 
 def _resolve(
@@ -322,7 +172,7 @@ class _DaemonPool:
 
 
 class ContextSource(Protocol):
-    """Model-facing port independent of SQLite, HTTP or future streaming transports.
+    """Model-facing port independent of the transport (HTTP today, a disk cache later).
 
     fetch returns rows in key order, None where TigerGraph rejected a request
     (counted by status in rejections, once per rejected key and fetch).
@@ -531,61 +381,32 @@ def streaming_source(
     )
 
 
-def context_store(
-    path: Path,
-    metadata: dict[str, Any],
-    config: dict[str, Any],
-    *,
-    plan: FeaturePlan,
-    sampler: SamplerPlan,
-    executor: QueryExecutor | None = None,
-) -> ContextStore:
-    """SQLite cache with the transport settings of a configuration (offline without executor)."""
-    transport = transport_settings(config)
-    return ContextStore(
-        path,
-        metadata,
-        executor,
-        plan=plan,
-        sampler=sampler,
-        request_batch_size=transport["request_batch_size"],
-        encoding_check_every=transport["encoding_check_every"],
-        capacity=transport["context_lru_capacity"],
-    )
-
-
 def open_context_source(
     dataset: Path, manifest: dict[str, Any], config: dict[str, Any] | None = None
 ) -> ContextSource:
-    """Open the prepared transport; `config` is the training config (default: prepared).
+    """Open the live source of a prepared dataset; `config` is the training config.
 
-    Streaming requests the extraction plan of the training model: the prepared
-    extraction groups (training compares them with PREPARATION_KEYS) and the hop-2
-    flags of the model's architecture. A SQLite cache holds exactly what
-    preparation requested, so it is read with the prepared plan.
+    It requests the extraction plan of the training model: the prepared extraction
+    groups (training compares them with PREPARATION_KEYS) and the hop-2 flags of the
+    model's architecture. `config` defaults to the prepared configuration.
     """
     prepared: dict[str, Any] = manifest["config"]
     training = prepared if config is None else config
-    streaming = manifest["source"].get("context_storage") == "stream"
-    plan = extraction_plan(training if streaming else prepared)
+    plan = extraction_plan(training)
     if sorted(plan.groups) != sorted(extraction_plan(prepared).groups):
         raise ValueError(
-            "Extraction groups differ from preparation; prepare a new dataset "
-            "(set prepared_id) or restore the prepared extraction_groups"
+            f"Extraction groups differ from the preparation in {dataset}; prepare a new "
+            "dataset (set prepared_id) or restore the prepared extraction_groups"
         )
     sampler = SamplerPlan.from_config(training)
     if sampler_pools(sampler) != sampler_pools(SamplerPlan.from_config(prepared)):
         raise ValueError(
-            "Sampler candidate pools differ from preparation; prepare a new dataset "
-            "(set prepared_id) or restore the prepared [sampler] pools"
+            f"Sampler candidate pools differ from the preparation in {dataset}; prepare a "
+            "new dataset (set prepared_id) or restore the prepared [sampler] pools"
         )
-    if streaming:
-        executor = live_executor(training)
-        verify_frozen_source(executor, manifest)
-        return streaming_source(executor, plan, sampler, training)
-    return context_store(
-        dataset / "contexts.sqlite", manifest["source"], training, plan=plan, sampler=sampler
-    )
+    executor = live_executor(training)
+    verify_frozen_source(executor, manifest)
+    return streaming_source(executor, plan, sampler, training)
 
 
 def check_coverage(store: ContextSource, plan: FeaturePlan, sampler: SamplerPlan) -> None:

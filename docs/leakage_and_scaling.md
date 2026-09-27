@@ -107,20 +107,16 @@ truth file is appropriate only when that is the declared target definition.
 
 ## Bounded transport rather than full feature replication
 
-`ContextSource` is the model-facing interface. Two implementations exist:
+`ContextSource` is the model-facing interface. Its implementation,
+`StreamingContextSource`, requests the current batch from TigerGraph, retains 64
+contexts in memory by default (hard maximum 256), and writes no disk context cache.
+Each HTTP request is capped at 16 contexts; query concurrency and queued results are
+bounded to two by default, with a configurable maximum of four.
 
-- `StreamingContextSource`: requests the current batch from TigerGraph, retains
-  64 contexts in memory by default (hard maximum 256), and writes no disk context
-  cache. Each HTTP request is capped at 16 contexts; query concurrency and queued
-  results are bounded to two by default, with a configurable maximum of four.
-- `ContextStore`: the earlier compressed SQLite implementation, retained as an
-  explicit offline experiment option (`context_storage = "sqlite"`).
-
-The default example uses streaming. Preparation pages partition metadata from
-TigerGraph and retains label-blind seed reservoirs plus observed positives, then
-resolves cutoffs. It does not precompute a feature cache or retain all account IDs.
-Training and evaluation query the source as needed. Stream mode requires a frozen
-source or a future snapshot-aware service; it does not provide database snapshot
+Preparation pages partition metadata from TigerGraph and retains label-blind seed
+reservoirs plus observed positives, then resolves cutoffs. It does not precompute a
+feature cache or retain all account IDs. Training and evaluation query the source as
+needed. Streaming requires a frozen source or a future snapshot-aware service; it does not provide database snapshot
 isolation by itself. Manifests and count checks cannot detect same-count edits.
 
 The current client bounds both seed metadata and feature batches. At default

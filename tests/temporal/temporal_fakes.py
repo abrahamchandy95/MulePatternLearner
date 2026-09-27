@@ -52,11 +52,10 @@ SCOPE_POPULATION_QUERY = "temporal_scope_population"
 SCOPE_POPULATION_PARAMETERS = signature("gsql/temporal/training_scope.gsql", SCOPE_POPULATION_QUERY)
 # The legacy control profile: the recent sampler, legacy feature groups and the single
 # architecture, which components choose when sampler, feature_groups and architecture
-# are absent, over a shared_history cohort cached in SQLite. Only a raw configuration
-# can omit them; run_config fills them in. Tests of this profile are marked legacy.
+# are absent, over a shared_history cohort. Only a raw configuration can omit them;
+# run_config fills them in. Tests of this profile are marked legacy.
 LEGACY_PROFILE: dict[str, Any] = {
     "label_policy": "observed",
-    "context_storage": "sqlite",
     "evaluation_unlabeled_limit": 2000,
     "fanouts": [8, 4],
     "per_relation": 2,
@@ -83,7 +82,7 @@ LEGACY_PROFILE: dict[str, Any] = {
 
 
 def profile_config(profile: str) -> dict[str, Any]:
-    """The built-in run (strict inductive, streamed, graph labels), or the legacy profile.
+    """The built-in run (strict inductive, graph labels), or the legacy profile.
 
     Tests of the built-in profile hand prepare() their labels (FrameObservedLabels).
     """

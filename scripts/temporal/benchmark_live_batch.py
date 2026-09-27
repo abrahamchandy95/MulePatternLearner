@@ -61,7 +61,7 @@ from mule_pattern_learner.temporal.loss import NonNegativePULoss  # noqa: E402
 
 
 def rest_calls(source: Any) -> tuple[int, dict[str, int]]:
-    """Successful REST calls and retries of the live executor (0 without one, e.g. SQLite)."""
+    """Successful REST calls and retries of the live executor (0 without one, e.g. a fake)."""
     executor = getattr(source, "executor", None)
     if not isinstance(executor, TigerGraphExecutor):
         return 0, {}
