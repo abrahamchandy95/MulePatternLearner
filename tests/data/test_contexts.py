@@ -19,6 +19,7 @@ from pyTigerGraph.common.exception import TigerGraphException
 from mule_pattern_learner.batching.assemble import build_batch, build_root_batch
 from mule_pattern_learner.contract.feature_groups import FeaturePlan
 from mule_pattern_learner.contract.graph_schema import ContextKey
+from mule_pattern_learner.contract.sampler_plan import SamplerPlan
 from mule_pattern_learner.contract.server import CONTEXT_QUERY
 from mule_pattern_learner.data.contexts import ContextSource, context_hash
 from mule_pattern_learner.data.hub_registry import HubRegistry
@@ -347,7 +348,12 @@ def test_corrupted_or_missing_spot_check_vectors_fail() -> None:
 
 def test_the_context_source_serves_repeats_from_its_bounded_lru() -> None:
     keys = [ContextKey("Account", str(i), 100, 1000) for i in range(80)]
-    memory = ContextSource(TigerGraphContextFetcher(FakeTigerGraph({})), capacity=3)
+    memory = ContextSource(
+        TigerGraphContextFetcher(FakeTigerGraph({})),
+        capacity=3,
+        plan=FeaturePlan(),
+        sampler=SamplerPlan(),
+    )
     rows = memory.fetch(keys)
     assert len(memory.memory) == 3
     calls = memory.database_calls

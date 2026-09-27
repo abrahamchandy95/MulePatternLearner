@@ -229,7 +229,7 @@ def test_pool_groups_feed_models_that_read_them_for_roots_only() -> None:
     with ContextSource(
         TigerGraphContextFetcher(executor), plan=extraction_plan(plan), sampler=SAMPLER
     ) as source:
-        batch = build_batch(source, [ROOT, ROOT], plan=plan, sampler=SAMPLER)
+        batch = build_batch(source, [ROOT, ROOT], plan=plan, sampler=SAMPLER, fanouts=(8, 4))
     expected = node_matrix([context(ROOT, POOL)], plan)
     np.testing.assert_allclose(batch["x"].numpy(), np.repeat(expected, 2, axis=0))
     assert build_model(tabular.model, plan, SAMPLER.fanouts[0])(batch).shape == (2,)
@@ -250,14 +250,14 @@ def test_tigergraph_cannot_supply_pool_counts() -> None:
     with pytest.raises(ValueError, match="Unknown node feature"):
         validate_context(ROOT, bad, extraction_plan(PLAN), SAMPLER)
     with pytest.raises(ValueError, match=r"client-only feature \['pool_first_in'\]"):
-        build_batch(RawRows({(1, ROOT): bad}), [ROOT], plan=PLAN, sampler=SAMPLER)
+        build_batch(RawRows({(1, ROOT): bad}), [ROOT], plan=PLAN, sampler=SAMPLER, fanouts=(8, 4))
     link = message(80, 800_000, ROOT, node_id="N")
     child = child_key(link, ROOT)
     bad_child = context(child)
     bad_child["features"]["pool_first_in_internal"] = 1
     rows = {(1, ROOT): context(ROOT, [link]), (2, child): bad_child}
     with pytest.raises(ValueError, match="client-only feature"):
-        build_batch(RawRows(rows), [ROOT], plan=PLAN, sampler=SAMPLER)
+        build_batch(RawRows(rows), [ROOT], plan=PLAN, sampler=SAMPLER, fanouts=(8, 4))
 
 
 def test_client_groups_leave_the_wire_and_the_preparation_unchanged() -> None:

@@ -9,6 +9,7 @@ from mule_pattern_learner.batching.assemble import build_batch
 from mule_pattern_learner.config import DEFAULT_CONFIG
 from mule_pattern_learner.contract.feature_groups import FeaturePlan
 from mule_pattern_learner.contract.graph_schema import ContextKey
+from mule_pattern_learner.contract.sampler_plan import SamplerPlan
 from mule_pattern_learner.data.contexts import ContextSource
 from mule_pattern_learner.model.build import build_model
 from mule_pattern_learner.model.summary_mlp import SummaryMLP
@@ -46,8 +47,8 @@ def test_summary_models_fetch_only_the_roots_and_have_no_graph_parameters() -> N
     root = ContextKey("Account", "root", 100, 1000)
     summary = FeaturePlan(("decayed_activity",), "summary")
     executor = FakeTigerGraph({root: context(root, [message(80, 800, root)])})
-    source = ContextSource(TigerGraphContextFetcher(executor), plan=summary)
-    batch = build_batch(source, [root], plan=summary)
+    source = ContextSource(TigerGraphContextFetcher(executor), plan=summary, sampler=SamplerPlan())
+    batch = build_batch(source, [root], plan=summary, fanouts=(8, 4), sampler=SamplerPlan())
     assert executor.requested == [root]
     assert set(batch) == {"x", "root_positions"}
     model = SummaryMLP(16, 0, plan=summary)

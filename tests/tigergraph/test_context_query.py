@@ -10,6 +10,7 @@ import pytest
 
 from mule_pattern_learner.contract.feature_groups import FeaturePlan
 from mule_pattern_learner.contract.graph_schema import ContextKey
+from mule_pattern_learner.contract.sampler_plan import SamplerPlan
 from mule_pattern_learner.reference.batch_features import node_features
 from mule_pattern_learner.testing.builders import (
     PLAN,
@@ -77,7 +78,7 @@ def test_future_and_same_event_are_rejected() -> None:
         row = context(key, [message(seq, min(ts, 1000), key)])
         row["messages"][0]["event_ts_ms"] = ts
         with pytest.raises(ValueError):
-            validate_context(key, row)
+            validate_context(key, row, plan=FeaturePlan(), sampler=SamplerPlan())
 
 
 def test_basis_and_clock_corruption_are_rejected() -> None:
@@ -86,15 +87,15 @@ def test_basis_and_clock_corruption_are_rejected() -> None:
     bad = deepcopy(row)
     bad["age_encoding"]["zelle_out:E90"][0] += 0.1
     with pytest.raises(ValueError, match="encoding"):
-        validate_context(key, bad)
+        validate_context(key, bad, plan=FeaturePlan(), sampler=SamplerPlan())
     bad = deepcopy(row)
     bad["cutoff_seq"] = 101
     with pytest.raises(ValueError, match="differs"):
-        validate_context(key, bad)
+        validate_context(key, bad, plan=FeaturePlan(), sampler=SamplerPlan())
     bad = deepcopy(row)
     bad["messages"][0]["gap_present"] = False
     with pytest.raises(ValueError, match="Missing predecessor"):
-        validate_context(key, bad)
+        validate_context(key, bad, plan=FeaturePlan(), sampler=SamplerPlan())
 
 
 def test_amount_ratios_are_required_from_gsql_and_preserved_by_tensor_conversion() -> None:
@@ -102,11 +103,11 @@ def test_amount_ratios_are_required_from_gsql_and_preserved_by_tensor_conversion
     row = context(key)
     row["features"].update({"1d_out_in_amount_ratio": 2.5, "7d_out_in_amount_ratio": 100.0})
     plan = FeaturePlan(("entity_meta", "rolling_windows", "amount_ratios", "message_core"))
-    validate_context(key, row, plan)
+    validate_context(key, row, plan, sampler=SamplerPlan())
     features = node_features(row, plan)
     ratio = plan.node_names.index
     assert features[ratio("1d_out_in_amount_ratio")] == pytest.approx(np.log1p(2.5))
     assert features[ratio("7d_out_in_amount_ratio")] == pytest.approx(np.log1p(100.0))
     del row["features"]["1d_out_in_amount_ratio"]
     with pytest.raises(ValueError, match="missing amount ratios"):
-        validate_context(key, row, plan)
+        validate_context(key, row, plan, sampler=SamplerPlan())

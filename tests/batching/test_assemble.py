@@ -212,7 +212,9 @@ def test_rejected_children_are_masked_and_rejected_roots_raise() -> None:
     kept = batch["first_mask"]
     assert torch.equal(batch["first_edge"][kept], good["first_edge"][kept])
     with pytest.raises(ValueError, match="rejected 1 of 6 root.*history_capacity_exceeded"):
-        build_batch(FakeStore(sampler, reject={keys[2]}), keys, plan=plan, sampler=sampler)
+        build_batch(
+            FakeStore(sampler, reject={keys[2]}), keys, plan=plan, sampler=sampler, fanouts=(8, 4)
+        )
 
 
 def test_tigergraph_cannot_supply_client_features() -> None:
@@ -222,19 +224,19 @@ def test_tigergraph_cannot_supply_client_features() -> None:
     store = FakeStore(sampler)
     store.row(keys[1])["features"]["history_withheld"] = 1.0
     with pytest.raises(ValueError, match="client-only"):
-        build_batch(store, keys, plan=plan, sampler=sampler)
+        build_batch(store, keys, plan=plan, sampler=sampler, fanouts=(8, 4))
     store = FakeStore(sampler)
     child = sorted(_first_children(store, keys, sampler, fanout=8))[0]
     store.row(child, 2)["features"]["history_withheld"] = 0.0
     with pytest.raises(ValueError, match="client-only"):
-        build_batch(store, keys, plan=plan, sampler=sampler)
+        build_batch(store, keys, plan=plan, sampler=sampler, fanouts=(8, 4))
 
 
 def test_summary_models_fetch_only_roots() -> None:
     plan = FeaturePlan(("decayed_activity",), "summary")
     store = FakeStore(RESAMPLE)
     stats: dict[str, Any] = {}
-    batch = build_batch(store, roots(3), plan=plan, sampler=RESAMPLE, stats=stats)
+    batch = build_batch(store, roots(3), plan=plan, sampler=RESAMPLE, stats=stats, fanouts=(8, 4))
     assert set(batch) == {"root_positions", "x"} and len(store.calls) == 1
     assert stats["contexts"] == 3
 
@@ -243,8 +245,10 @@ def test_recursive_context_keeps_same_neighbor_at_two_different_event_times() ->
     root = ContextKey("Account", "root", 100, 1000)
     messages = [message(90, 900, root), message(80, 800, root)]
     source = FakeTigerGraph({root: context(root, messages)})
-    store = ContextSource(TigerGraphContextFetcher(source))
-    batch = build_batch(store, [root], fanouts=(2, 2))
+    store = ContextSource(
+        TigerGraphContextFetcher(source), plan=FeaturePlan(), sampler=SamplerPlan()
+    )
+    batch = build_batch(store, [root], fanouts=(2, 2), plan=FeaturePlan(), sampler=SamplerPlan())
     assert child_key(messages[0]) in source.requested
     assert child_key(messages[1]) in source.requested
     assert len(set(batch["neighbor_positions"][0].tolist())) == 2
@@ -321,7 +325,7 @@ def test_rejected_roots_raise_in_batches_and_are_dropped_by_root_batches() -> No
         request_batch_size=64,
     ) as source:
         with pytest.raises(ValueError, match="rejected 1 of 64 root contexts"):
-            build_batch(source, roots, plan=CORE_PLAN, sampler=SMALL_SAMPLER)
+            build_batch(source, roots, plan=CORE_PLAN, sampler=SMALL_SAMPLER, fanouts=(8, 4))
         assert executor.names().count(CONTEXT_QUERY) == 1  # one 64-key request
         prepared = build_root_batch(
             source,
