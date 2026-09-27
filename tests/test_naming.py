@@ -112,8 +112,9 @@ def forbidden(name: str) -> bool:
 
 
 def tracked(*folders: str) -> list[Path]:
+    """The files git tracks under folders, and the new ones it does not ignore."""
     listed = subprocess.run(
-        ["git", "ls-files", *folders],
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", *folders],
         cwd=REPOSITORY_ROOT,
         capture_output=True,
         text=True,
@@ -194,7 +195,8 @@ def test_the_code_defines_no_name_with_an_old_word() -> None:
 def test_names_in_strings_are_new_or_persisted() -> None:
     problems = []
     used: set[str] = set()
-    for path in python_files():
+    # This module's own strings are the lists of words and names, not names in use.
+    for path in (path for path in python_files() if path != Path(__file__)):
         tree = ast.parse(path.read_text())
         used.update(defined_names(tree))
         for value in name_literals(tree):
@@ -238,7 +240,7 @@ def test_the_command_line_is_mule_with_five_commands() -> None:
     assert markers == MARKERS
 
 
-def test_outputs_live_under_results_and_datasets_under_data() -> None:
+def test_outputs_go_under_results_and_datasets_under_data() -> None:
     assert (DATA_DIR.name, RESULTS_DIR.name) == ("data", "results")
     run = RunPaths.of(BASELINE_VARIANT, 42)
     assert run.root.relative_to(RESULTS_DIR).as_posix() == "baseline/seed-42"
