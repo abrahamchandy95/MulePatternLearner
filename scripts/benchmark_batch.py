@@ -31,7 +31,12 @@ from typing import Any  # noqa: E402
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
 
-from mule_pattern_learner.batching.assemble import build_root_batch, tensor_digests  # noqa: E402
+from mule_pattern_learner.batching.assemble import (  # noqa: E402
+    batch_device,
+    build_root_batch,
+    tensor_digests,
+    to_device,
+)
 from mule_pattern_learner.config import run_config  # noqa: E402
 from mule_pattern_learner.contract.feature_groups import FeaturePlan  # noqa: E402
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan  # noqa: E402
@@ -106,7 +111,6 @@ def main() -> None:
     started = time.perf_counter()
     source = open_context_source(dataset, manifest, config)
     open_seconds = time.perf_counter() - started
-    batch_device = device if device.type == "cuda" else torch.device("cpu")
     try:
         with torch_runtime(device, deterministic=settings.deterministic, threads=settings.threads):
             calls_before, _ = rest_calls(source)
@@ -116,7 +120,7 @@ def main() -> None:
                 source,
                 keys,
                 fanouts=settings.fanouts,
-                device=batch_device,
+                device=batch_device(device),
                 plan=plan,
                 sampler=sampler,
                 hubs=hubs,
@@ -187,7 +191,7 @@ def train_step(
         model,
         optimizer,
         loss_fn,
-        {k: v.to(device) for k, v in batch.items()},
+        to_device(batch, device),
         positives,
         step.seed,
     )
