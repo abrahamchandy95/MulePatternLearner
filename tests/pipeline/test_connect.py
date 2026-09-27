@@ -50,7 +50,7 @@ def test_the_transport_section_sets_the_source_and_the_retry_budgets(
     store = connect.open_context_source(UNUSED, manifest, training)
     assert seen == {"settings": settings, "max_attempts": 3, "max_outage_s": 120}
     assert (store.request_batch_size, store.concurrency, store.capacity) == (32, 4, 1024)
-    assert store._cadence.every == 8
+    assert store.encoding_check_every == 8
     store.close()
     changed = training.with_changes({"sampler": {"roots": {"recent": 5}}})
     seen.clear()

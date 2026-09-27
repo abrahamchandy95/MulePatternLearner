@@ -10,6 +10,7 @@ import pandas as pd
 import pytest
 import torch
 
+from mule_pattern_learner.batching import assemble
 from mule_pattern_learner.batching.assemble import build_batch, build_root_batch, child_key
 from mule_pattern_learner.contract.feature_groups import CORE_GROUPS, FeaturePlan
 from mule_pattern_learner.contract.graph_schema import HUB_COLUMNS, RELATIONS, ContextKey
@@ -21,6 +22,7 @@ from mule_pattern_learner.model.tgat import TGAT
 from mule_pattern_learner.testing.builders import (
     CORE_PLAN,
     POOLED,
+    POOLED_RESAMPLE,
     RESAMPLE,
     SMALL_SAMPLER,
     association,
@@ -28,6 +30,7 @@ from mule_pattern_learner.testing.builders import (
     message,
     roots,
     slots,
+    synthetic_row,
 )
 from mule_pattern_learner.testing.fake_graph import FakeStore, FakeTigerGraph
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
@@ -340,3 +343,32 @@ def test_rejected_roots_raise_in_batches_and_are_dropped_by_root_batches() -> No
     assert prepared.rejected == [roots[7]]
     assert prepared.batch is not None and len(prepared.batch["root_positions"]) == 63
     assert prepared.stats["rejected_roots"] == 1
+
+
+def test_eval_batches_draw_root_hops_independently(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = FakeStore(POOLED_RESAMPLE)
+    keys = roots(16)
+    for key in keys:
+        store.rows[1, key] = synthetic_row(key, POOLED_RESAMPLE.roots, encodings=False, full=True)
+    draws: dict[int, list[list[dict[str, Any]]]] = {}
+    select = assemble._select  # pyright: ignore[reportPrivateUsage]
+
+    def recording(
+        keys_: list[ContextKey], rows: list[dict[str, Any]], **kw: Any
+    ) -> list[list[dict[str, Any]]]:
+        chosen = select(keys_, rows, **kw)
+        draws[kw["hop"]] = chosen
+        return chosen
+
+    monkeypatch.setattr(assemble, "_select", recording)
+    plan = FeaturePlan(CORE_GROUPS, "tgat")
+    for mode in ("eval", "train"):
+        build_batch(
+            store, keys, fanouts=(16, 4), plan=plan, sampler=POOLED_RESAMPLE, mode=mode, step_seed=5
+        )
+        prefixes = 0
+        for root in range(len(keys)):  # roots come first in the hop-2 context order
+            payments = [m["event_id"] for m in draws[1][root] if m["event_id"]]
+            picked = [m["event_id"] for m in draws[2][root]]
+            prefixes += picked == payments[: len(picked)]
+        assert prefixes <= len(keys) // 4, (mode, prefixes)

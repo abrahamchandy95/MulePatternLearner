@@ -10,12 +10,11 @@ from copy import deepcopy
 from dataclasses import asdict, dataclass, replace
 import json
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 import zlib
 
 import numpy as np
 import pandas as pd
-import pytest
 import torch
 
 from mule_pattern_learner.artifacts import file_digest
@@ -53,6 +52,9 @@ from mule_pattern_learner.sampling import candidates
 from mule_pattern_learner.tigergraph.context_query import query_context_rows
 from mule_pattern_learner.tigergraph.executor import QueryExecutor
 from mule_pattern_learner.training import trainer
+
+if TYPE_CHECKING:
+    import pytest
 
 # The source ids the test datasets are prepared from.
 UNIT_SOURCE = "unit_fixture"
@@ -483,6 +485,12 @@ RESAMPLE = SamplerPlan(
 )
 # The roots pool of the built-in run's shape, drawn into the default relation fan-outs.
 POOLED = SamplerPlan(roots=PoolPlan(recent=4, older=3, distinct=2, associations=2))
+# Pools with every kind of candidate at both hops, and relation fan-outs below them.
+POOLED_RESAMPLE = SamplerPlan(
+    roots=PoolPlan(recent=8, older=4, distinct=4, associations=2),
+    children=PoolPlan(recent=4, older=2, distinct=2, associations=0),
+    relation_fanouts=(8, 4),
+)
 
 
 def context_rng(key: ContextKey, salt: int = 0) -> np.random.Generator:

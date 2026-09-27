@@ -182,7 +182,7 @@ class ContextSource:
         self.sampler = sampler
         self.fetcher = fetcher
         self.capacity, self.request_batch_size = capacity, request_batch_size
-        self.concurrency = concurrency
+        self.concurrency, self.encoding_check_every = concurrency, encoding_check_every
         self._cadence = _EncodingCadence(encoding_check_every)
         self.pool = DaemonPool(concurrency, "context-requests")
         self.memory: OrderedDict[tuple[int, ContextKey], dict[str, Any]] = OrderedDict()
