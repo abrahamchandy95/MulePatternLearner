@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .fingerprints import fingerprint
-from .graph_schema import ASSOCIATIONS, CHANNELS, NODE_TYPES, RAILS, RELATIONS
+from .graph_schema import ASSOCIATIONS, CHANNELS, NODE_TYPES, PAYMENT_RELATIONS, RAILS, RELATIONS
 from .server import CONTEXT_CONTRACT
 from .time_basis import BASIS_ID
 
@@ -94,7 +94,7 @@ PASS_THROUGH_RATIO = (0.5, 1.0)
 # Changes whenever batching.pool_counts.pool_activity changes what a count means.
 POOL_ACTIVITY_VERSION = 1
 POOL_ACTIVITY_FEATURES = tuple(
-    f"pool_{r}_{v}" for r in RELATIONS[:4] for v in ("count", "unique")
+    f"pool_{r}_{v}" for r in PAYMENT_RELATIONS for v in ("count", "unique")
 ) + ("pool_in_unique", "pool_out_unique", "pool_first_in", "pool_pass_through_1d")
 POOL_INTERNAL_FEATURES = ("pool_first_in_internal",) + tuple(
     f"pool_first_in_internal_{band}" for band in FIRST_INFLOW_BANDS

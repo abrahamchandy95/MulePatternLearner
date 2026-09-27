@@ -21,7 +21,7 @@ from ..contract.sampler_plan import SamplerPlan
 from ..sampling.backend import select_resampled
 from ..sampling.candidates import (
     NUM_RELATIONS,
-    PAYMENT_RELATIONS,
+    PAYMENT_COUNT,
     CandidateTable,
     group_counts,
     relation_quotas,
@@ -37,7 +37,7 @@ Runs = list[tuple[str, Callable[[int], np.ndarray]]]
 
 
 def message(relation: str, seq: int, key: ContextKey, n: int) -> dict[str, Any]:
-    payment = RELATIONS.index(relation) < PAYMENT_RELATIONS
+    payment = RELATIONS.index(relation) < PAYMENT_COUNT
     return {
         "relation": relation,
         "node_type": "Account" if payment else "Party",
@@ -59,13 +59,11 @@ def synthetic_table(
         key = ContextKey("Account", f"ctx{c}", cutoff, cutoff * 1000)
         messages: list[dict[str, Any]] = []
         for r, relation in enumerate(RELATIONS):
-            limit = 20 if r < PAYMENT_RELATIONS else 3
+            limit = 20 if r < PAYMENT_COUNT else 3
             count = (
-                full
-                if full is not None and r < PAYMENT_RELATIONS
-                else int(rng.integers(0, limit + 1))
+                full if full is not None and r < PAYMENT_COUNT else int(rng.integers(0, limit + 1))
             )
-            if r < PAYMENT_RELATIONS:
+            if r < PAYMENT_COUNT:
                 seqs = rng.choice(np.arange(1, cutoff), min(count, cutoff - 1), replace=False)
                 messages += [message(relation, int(s), key, n) for n, s in enumerate(seqs)]
             elif full is None:
@@ -96,7 +94,7 @@ def check_subsets(
             mask = run(11)
             assert np.array_equal(group_counts(table, mask), expected), (name, hop)
             if hop == 2:
-                assert not mask[table.relation >= PAYMENT_RELATIONS].any(), name
+                assert not mask[table.relation >= PAYMENT_COUNT].any(), name
             valid = table.time_key[mask] < table.seed_time[table.context[mask]]
             assert bool(valid.all()), f"{name} hop {hop} sampled an edge at its cutoff or later"
             assert np.array_equal(run(11), mask), f"{name} hop {hop}: same seed, other subset"
