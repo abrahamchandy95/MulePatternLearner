@@ -7,7 +7,7 @@ still differ in detail (several build messages); they are shared, not yet merged
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, replace
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -44,7 +44,7 @@ from mule_pattern_learner.contract.time_basis import BASIS_ID, fourier64
 from mule_pattern_learner.data import manifest as data_manifest
 from mule_pattern_learner.data.hub_registry import HubRegistry
 from mule_pattern_learner.data.manifest import dataset_settings
-from mule_pattern_learner.data.observed_labels import align_observed_labels, validate_label_table
+from mule_pattern_learner.data.observed_labels import align_observed_labels
 from mule_pattern_learner.inference.saved_model import SavedModel
 from mule_pattern_learner.model.build import build_model
 from mule_pattern_learner.paths import DatasetPaths
@@ -66,8 +66,8 @@ def example_config(**sections: Any) -> RunConfig:
     """A small, explicit unit run of the built-in settings in an example scope.
 
     Each keyword names a section and a table of the fields it changes, as in
-    RunConfig.with_changes. Tests hand prepare() their labels (FrameObservedLabels) and
-    the source id UNIT_SOURCE.
+    RunConfig.with_changes. Tests prepare it from the source id UNIT_SOURCE, with the
+    labels the graph reveals (scoped_accounts).
     """
     small = {
         "scope": {"id": "example_strict_scope", "create": False},
@@ -131,30 +131,19 @@ def assigned_accounts() -> pd.DataFrame:
 
 
 def scoped_accounts() -> list[dict[str, Any]]:
-    """assigned_accounts as scope population rows, the split as the partition."""
+    """assigned_accounts as scope population rows, the split as the partition.
+
+    The accounts supplied_labels lists are revealed positives, with its discovery times,
+    as the scope population query reports them with include_observed.
+    """
     accounts = assigned_accounts()
-    rows = accounts.drop(columns=["owner_ids", "split"])
+    known = supplied_labels().set_index("account_id").known_from_ms
+    revealed = accounts.account_id.map(known)
+    rows = accounts.drop(columns=["owner_ids", "split"]).assign(
+        observed_positive=revealed.notna(), known_from_ms=revealed.fillna(0).astype("int64")
+    )
     records = rows.assign(partition=accounts.split.map(SPLIT_PHASE)).to_dict("records")
     return cast(list[dict[str, Any]], records)
-
-
-@dataclass
-class FrameObservedLabels:
-    """Observed labels from a table: a label source for prepare() other than the graph.
-
-    Population queries run without include_observed for it: its labels are not the
-    graph's.
-    """
-
-    labels: pd.DataFrame
-    from_graph = False
-
-    def positive_ids(self) -> set[str]:
-        validate_label_table(self.labels)
-        return set(self.labels.loc[self.labels.known_positive.astype(bool), "account_id"])
-
-    def read(self, metadata: pd.DataFrame) -> pd.DataFrame:
-        return align_observed_labels(metadata, self.labels)
 
 
 def supplied_labels(per_split: int = 20) -> pd.DataFrame:

@@ -42,7 +42,6 @@ from mule_pattern_learner.paths import DatasetPaths, RunPaths
 from mule_pattern_learner.testing.builders import (
     RUNTIME_SOURCE,
     UNIT_SOURCE,
-    FrameObservedLabels,
     assigned_accounts,
     base_config,
     example_config,
@@ -56,6 +55,7 @@ from mule_pattern_learner.testing.fake_graph import FakeSource, FakeTigerGraph
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
 from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffs
 from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
+from mule_pattern_learner.tigergraph.labels import TigerGraphObservedLabels
 from mule_pattern_learner.tigergraph.scope import TigerGraphScope
 from mule_pattern_learner.training import trainer
 from mule_pattern_learner.training.schedule import step_seed
@@ -681,7 +681,8 @@ def build_context_source(executor: FakeTigerGraph, config: RunConfig, **kwargs: 
 class PreparedExecutor(FakeTigerGraph):
     """The scope population, context, cutoff and hub queries.
 
-    The scope population holds the fixture accounts with their splits as partitions.
+    The scope population holds the fixture accounts with their splits as partitions, and
+    the revealed positives of supplied_labels.
     """
 
     def __init__(self, dataset: DatasetPaths, **kwargs: Any) -> None:
@@ -706,7 +707,7 @@ def prepared(
         UNIT_SOURCE,
         dataset,
         {"Account": 1000},
-        FrameObservedLabels(supplied_labels()),
+        TigerGraphObservedLabels(),
         scope=TigerGraphScope(executor),
         cutoffs=TigerGraphCutoffs(executor),
         hub_reader=TigerGraphHubs(executor),

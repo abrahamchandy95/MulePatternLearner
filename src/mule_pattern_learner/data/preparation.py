@@ -37,7 +37,6 @@ def _stage_population(
     dataset: DatasetPaths,
     manifest: dict[str, Any],
     scope: ScopeReader,
-    labels: ObservedLabelReader,
 ) -> None:
     """Select and write accounts.parquet unless the manifest records it.
 
@@ -47,7 +46,7 @@ def _stage_population(
     accounts_path = dataset.accounts
     if not accounts_path.exists() or "accounts_sha256" not in manifest:
         accounts, manifest["population_by_split"] = select_accounts(
-            scope, config.scope.id, config.dataset, labels
+            scope, config.scope.id, config.dataset
         )
         if ORACLE_COLUMNS & set(accounts.columns):
             raise ValueError(
@@ -149,7 +148,7 @@ def prepare(
             "created_at_utc": datetime.now(timezone.utc).isoformat(),
         }
         write_manifest(dataset, manifest)
-    _stage_population(config, dataset, manifest, scope, labels)
+    _stage_population(config, dataset, manifest, scope)
     accounts = pd.read_parquet(dataset.accounts)
     if file_digest(dataset.accounts) != manifest["accounts_sha256"]:
         raise ValueError("Prepared account file changed")

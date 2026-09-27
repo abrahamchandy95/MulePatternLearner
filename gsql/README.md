@@ -52,9 +52,9 @@ queries are read-only. Relationships are never changed.
 The context query is generated from the shared Python relation/window contract.
 Strict mode removes excluded Account/Party contributions before aggregation,
 sampling and predecessor searches. The paged scope population exports observed
-supervision only and skips label reads for external observed-label providers.
-Only the label reveal, the `label_contract.gsql` audit and the `ground_truth.gsql`
-evaluation query read complete truth; no feature or preparation query calls them.
+supervision only. Only the label reveal, the `label_contract.gsql` audit and the
+`ground_truth.gsql` evaluation query read complete truth; no feature or preparation
+query calls them.
 
 Existing pair queries provide independent timing checks. See the
 [live training guide](../docs/live_temporal_training.md) and

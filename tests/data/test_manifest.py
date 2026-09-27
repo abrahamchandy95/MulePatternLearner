@@ -12,15 +12,14 @@ from mule_pattern_learner.data.preparation import prepare
 from mule_pattern_learner.paths import DatasetPaths
 from mule_pattern_learner.testing.builders import (
     UNIT_SOURCE,
-    FrameObservedLabels,
     example_config,
     scoped_accounts,
-    supplied_labels,
     unit_config,
 )
 from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
 from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffs
 from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
+from mule_pattern_learner.tigergraph.labels import TigerGraphObservedLabels
 from mule_pattern_learner.tigergraph.scope import TigerGraphScope
 
 
@@ -73,7 +72,7 @@ def test_a_dataset_records_its_query_files_by_path_and_passes_its_own_check(
         UNIT_SOURCE,
         dataset,
         {"Account": len(population)},
-        FrameObservedLabels(supplied_labels()),
+        TigerGraphObservedLabels(),
         scope=TigerGraphScope(executor),
         cutoffs=TigerGraphCutoffs(executor),
         hub_reader=TigerGraphHubs(executor),

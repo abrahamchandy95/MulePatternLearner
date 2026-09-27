@@ -1,4 +1,4 @@
-"""Seed reservoirs read graph labels only for the graph's label source."""
+"""Seed reservoirs read the scope population with the labels revealed in the graph."""
 
 from __future__ import annotations
 
@@ -7,13 +7,10 @@ from typing import Any
 import pandas as pd
 import pytest
 
-from mule_pattern_learner.testing.builders import FrameObservedLabels, unit_config
+from mule_pattern_learner.testing.builders import unit_config
 from mule_pattern_learner.testing.fake_graph import Runner
 from mule_pattern_learner.tigergraph.labels import TigerGraphObservedLabels
 from mule_pattern_learner.tigergraph.scope import TigerGraphScope
-
-# A table source with no labels: population queries then run without include_observed.
-NO_LABELS = pd.DataFrame(columns=["account_id", "known_positive", "known_from_ms"])
 
 
 def population_row(account: str, positive: bool, known: int) -> dict[str, Any]:
@@ -27,28 +24,19 @@ def population_row(account: str, positive: bool, known: int) -> dict[str, Any]:
     }
 
 
-def test_only_graph_labels_read_labels_from_the_graph() -> None:
+def test_the_population_is_read_with_the_labels_revealed_in_the_graph() -> None:
     from mule_pattern_learner.data.accounts import select_accounts
 
     seen = []
 
     def run(name: str, params: dict[str, Any]) -> list[dict[str, Any]]:
         seen.append(params["include_observed"])
-        graph = params["include_observed"]
-        row = population_row("A1", graph, 5 if graph else 0)
-        return [{"status": "ok", "accounts": [row]}]
+        return [{"status": "ok", "accounts": [population_row("A1", True, 5)]}]
 
-    fake = Runner(run)
     config = unit_config()
-    select_accounts(
-        TigerGraphScope(fake), config.scope.id, config.dataset, FrameObservedLabels(NO_LABELS)
-    )
-    frame, _ = select_accounts(
-        TigerGraphScope(fake), config.scope.id, config.dataset, TigerGraphObservedLabels()
-    )
-    assert seen == [False, True] and frame.in_marginal.tolist() == [True]
-    with pytest.raises(ValueError, match="explicit"):
-        select_accounts(TigerGraphScope(fake), config.scope.id, config.dataset, None)
+    frame, _ = select_accounts(TigerGraphScope(Runner(run)), config.scope.id, config.dataset)
+    assert seen == [True] and frame.in_marginal.tolist() == [True]
+    assert frame.observed_positive.tolist() == [True] and frame.known_from_ms.tolist() == [5]
 
 
 def test_stale_population_queries_fail_fast() -> None:
@@ -58,15 +46,7 @@ def test_stale_population_queries_fail_fast() -> None:
     # An old query emits the discovery time of hidden or negative labels.
     stale = Runner(lambda n, p: [{"status": "ok", "accounts": [population_row("A1", False, 5)]}])
     with pytest.raises(ValueError, match="predates the masked-label predicate"):
-        select_accounts(
-            TigerGraphScope(stale), config.scope.id, config.dataset, TigerGraphObservedLabels()
-        )
-    # Without include_observed the query must return no label information.
-    leaky = Runner(lambda n, p: [{"status": "ok", "accounts": [population_row("A1", True, 5)]}])
-    with pytest.raises(ValueError, match="include_observed is false"):
-        select_accounts(
-            TigerGraphScope(leaky), config.scope.id, config.dataset, FrameObservedLabels(NO_LABELS)
-        )
+        select_accounts(TigerGraphScope(stale), config.scope.id, config.dataset)
     metadata = pd.DataFrame(
         {
             "account_id": ["A1", "A2", "A3"],

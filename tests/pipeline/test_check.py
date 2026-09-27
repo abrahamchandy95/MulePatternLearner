@@ -25,11 +25,9 @@ from mule_pattern_learner.paths import DatasetPaths
 from mule_pattern_learner.pipeline import check as pipeline_check
 from mule_pattern_learner.testing.builders import (
     UNIT_SOURCE,
-    FrameObservedLabels,
     example_config,
     neighbourhood,
     scoped_accounts,
-    supplied_labels,
 )
 from mule_pattern_learner.testing.fake_connection import RecordingExecutor
 from mule_pattern_learner.testing.fake_connection import executor as recording_executor
@@ -38,6 +36,7 @@ from mule_pattern_learner.tigergraph import gsql_text
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
 from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffs
 from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
+from mule_pattern_learner.tigergraph.labels import TigerGraphObservedLabels
 from mule_pattern_learner.tigergraph.scope import TigerGraphScope
 
 CONFIG = example_config(training={"batch_size": 32}, sampler={"fanouts": [8, 2]})
@@ -91,7 +90,7 @@ def prepared(data: Path, config: RunConfig) -> tuple[DatasetPaths, FakeTigerGrap
         UNIT_SOURCE,
         dataset,
         {"Account": 1000},
-        FrameObservedLabels(supplied_labels()),
+        TigerGraphObservedLabels(),
         scope=TigerGraphScope(fake),
         cutoffs=TigerGraphCutoffs(fake),
         hub_reader=TigerGraphHubs(fake),
