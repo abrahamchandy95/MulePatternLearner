@@ -1,7 +1,7 @@
 """Threshold-locked proxy metrics and the weighted metrics of an audit sample.
 
 Everything here is pure numpy and scikit-learn: arrays in, numbers out. The proxy
-metrics score observed labels as they are; the weighted metrics estimate population
+metrics (proxy_metrics) score observed labels as they are; the weighted metrics estimate population
 values from a sample in which each account stands for ``weight`` accounts. Both share
 the thresholded precision, recall and F1 (threshold_metrics).
 """
@@ -37,7 +37,10 @@ def threshold_metrics(
     }
 
 
-def evaluate(y: NDArray[np.int64], score: NDArray[np.float64], threshold: float) -> dict[str, Any]:
+def proxy_metrics(
+    y: NDArray[np.int64], score: NDArray[np.float64], threshold: float
+) -> dict[str, Any]:
+    """AP, ROC AUC and the thresholded and top-fraction metrics of observed labels."""
     if not len(y):
         return {"n": 0, "positives": 0, "average_precision": None, "roc_auc": None}
     order = np.argsort(-score, kind="stable")

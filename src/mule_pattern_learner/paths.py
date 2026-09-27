@@ -110,7 +110,7 @@ class RunPaths:
         """The proxy scores of a split's observed-label rows."""
         return self.root / "predictions" / f"{split}.parquet"
 
-    def audit_metrics(self, split: str) -> Path:
+    def audit_report(self, split: str) -> Path:
         """The ground-truth audit of a split: its metrics and constants."""
         return self.root / "audit" / f"{split}.json"
 

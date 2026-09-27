@@ -78,7 +78,7 @@ def test_the_audit_scores_through_the_dataset_clock_and_hubs(
     for pct in (1, 5, 10):
         assert 0 <= result["metrics"][f"recall_at_{pct}pct"] <= 1
         assert 0 <= result["metrics"][f"precision_at_{pct}pct"] <= 1
-    assert read_json(run.audit_metrics("test")) == result
+    assert read_json(run.audit_report("test")) == result
     scores = read_audit_scores(run.audit_scores("test"))
     assert scores.score.dtype == np.float64 and len(scores) == len(test_accounts) - 1
     assert run.audit_rejected("test").read_text().split() == [test_accounts.account_id.iloc[1]]

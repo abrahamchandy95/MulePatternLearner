@@ -41,7 +41,7 @@ def test_evaluate_run_connects_after_its_checks_and_reads_truth_on_that_connecti
     monkeypatch.setattr(pipeline_evaluate, "connect", connect)
     monkeypatch.setattr(pipeline_evaluate, "verify_frozen_source", lambda e, m: verified.append(e))
     monkeypatch.setattr(pipeline_evaluate, "audit", audit)
-    existing = run.audit_metrics("test")
+    existing = run.audit_report("test")
     existing.parent.mkdir()
     existing.write_text("{}")
     with pytest.raises(FileExistsError):
