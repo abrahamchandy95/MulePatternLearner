@@ -33,20 +33,19 @@ def score(
     split: str,
     output: Path,
     *,
+    rejected_output: Path,
     contexts: ContextReader | None = None,
     open_contexts: ContextOpener | None = None,
     hubs: HubRegistry | None = None,
 ) -> dict[str, Any]:
     """Score every eligible account of one prepared split and cutoff.
 
-    Roots that TigerGraph rejects are not scored; their IDs go to
-    ``<output>.rejected.txt``. Rejected roots and masked child contexts are
-    reported separately (see ``rejections.rejection_summary``). Without ``contexts``,
-    ``open_contexts`` opens the dataset's live source once the inputs passed their
+    Roots that TigerGraph rejects are not scored; their IDs go to ``rejected_output``.
+    Rejected roots and masked child contexts are reported separately (see
+    ``rejections.rejection_summary``). Without ``contexts``, ``open_contexts`` opens the dataset's live source once the inputs passed their
     checks (pipeline.connect.open_context_source). ``contexts``/``hubs`` replace the
     dataset's source and hub registry (tests, offline replays).
     """
-    rejected_output = rejected_path(output)
     for path in (output, rejected_output):
         if path.exists():
             raise FileExistsError(path)
@@ -130,13 +129,8 @@ def read_account_ids(path: Path) -> Iterator[str]:
                 yield value
 
 
-def rejected_path(output: Path) -> Path:
-    return output.with_name(output.name + ".rejected.txt")
-
-
-def check_new_outputs(output: Path) -> None:
+def check_new_outputs(output: Path, rejected_output: Path) -> None:
     """Refuse scores of new accounts that exist, or that another run is writing."""
-    rejected_output = rejected_path(output)
     # A pending file is another scoring run's output in the making.
     for path in (output, rejected_output, pending_path(output), pending_path(rejected_output)):
         if path.exists():
@@ -149,6 +143,7 @@ def score_new_accounts(
     date: str,
     output: Path,
     *,
+    rejected_output: Path,
     cutoffs: CutoffReader,
     hub_reader: HubReader,
     fetcher: ContextFetcher | None = None,
@@ -160,7 +155,7 @@ def score_new_accounts(
     Inference can use all history available at its cutoff. Strict experiment
     scoring uses scoped ContextKeys through Predictor instead. IDs that
     TigerGraph rejects (missing, not yet visible, over capacity) are not scored:
-    they are listed in ``<output>.rejected.txt``. The result reports rejected roots and
+    they are listed in ``rejected_output``. The result reports rejected roots and
     masked child contexts separately (see ``rejection_summary``). A date before the
     first visible event is refused, since no account could be scored at it.
     The date's cutoff comes from ``cutoffs``, the unscoped hub registry from
@@ -168,8 +163,7 @@ def score_new_accounts(
     replaces them); the pipeline builds them on a connection whose installed queries
     it has verified.
     """
-    check_new_outputs(output)
-    rejected_output = rejected_path(output)
+    check_new_outputs(output, rejected_output)
     saved = SavedModel.of(model)
     seq, ms = resolve_cutoff(cutoffs, date)
     predictor = Predictor(saved, contexts, fetcher=fetcher, hubs=hubs)

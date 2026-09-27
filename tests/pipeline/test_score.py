@@ -26,7 +26,7 @@ def test_scoring_checks_inputs_and_outputs_then_verifies_the_installed_queries(
     accounts.write_text("A1\nA2\n")
     executor = SimpleNamespace()
     steps: list[str] = []
-    scored: list[tuple[str, list[str], Path]] = []
+    scored: list[tuple[str, list[str], Path, Path]] = []
 
     def connect(transport: Any) -> Any:
         steps.append("connect")
@@ -34,7 +34,7 @@ def test_scoring_checks_inputs_and_outputs_then_verifies_the_installed_queries(
 
     def score(saved: SavedModel, ids: Any, date: str, path: Path, **options: Any) -> dict[str, Any]:
         steps.append("score")
-        scored.append((date, list(ids), path))
+        scored.append((date, list(ids), path, options.pop("rejected_output")))
         emit({"event": "score", "date": date})
         return options
 
@@ -45,18 +45,20 @@ def test_scoring_checks_inputs_and_outputs_then_verifies_the_installed_queries(
         pipeline_score.score_accounts(run, tmp_path / "missing.txt")
     with pytest.raises(ValueError, match="ISO date"):
         pipeline_score.score_accounts(run, accounts, "../elsewhere")
-    # Another scoring run is writing this output: the run's scores of the file at the
-    # model's test cutoff.
+    # Another scoring run is writing this output, or its rejected ids exist: the run's
+    # scores of the file at the model's test cutoff.
     output = run.scores("new_accounts", "2025-01-01")
+    rejected = run.scores_rejected("new_accounts", "2025-01-01")
     output.parent.mkdir(parents=True)
-    pending_path(output).write_text("")
-    with pytest.raises(FileExistsError):
-        pipeline_score.score_accounts(run, accounts)
+    for path in (pending_path(output), rejected):
+        path.write_text("")
+        with pytest.raises(FileExistsError):
+            pipeline_score.score_accounts(run, accounts)
+        path.unlink()
     assert steps == []
-    pending_path(output).unlink()
     result = pipeline_score.score_accounts(run, accounts)
     assert steps == ["connect", "verify", "score"]
-    assert scored == [("2025-01-01", ["A1", "A2"], output)]
+    assert scored == [("2025-01-01", ["A1", "A2"], output, rejected)]
     # The lines scoring prints go to the run's events.jsonl.
     assert read_events(run.events) == [{"event": "score", "date": "2025-01-01"}]
     # The cutoff clock, the hub registry and the contexts are read on that connection.

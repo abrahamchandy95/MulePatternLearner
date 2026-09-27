@@ -126,6 +126,10 @@ class RunPaths:
         """Scores of the accounts listed in a file with this stem, at a date."""
         return self.root / "scores" / f"{accounts}_{date}.parquet"
 
+    def scores_rejected(self, accounts: str, date: str) -> Path:
+        """The accounts of those scores that TigerGraph rejected, one per line."""
+        return self.root / "scores" / f"{accounts}_{date}_rejected.txt"
+
     @property
     def plots(self) -> Path:
         """The directory of the run's figures."""

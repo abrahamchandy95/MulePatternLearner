@@ -179,9 +179,12 @@ def test_the_dataset_prepared_before_the_restructure_scores_as_it_did(tmp_path: 
     shutil.copytree(FIXTURES / "dataset", dataset.root)
     saved = SavedModel.load(FIXTURES / "built_in.pt")
     assert saved.config == DEFAULT_CONFIG.with_changes(CHANGES)
-    output = tmp_path / "scores.parquet"
+    output, rejected = tmp_path / "scores.parquet", tmp_path / "scores_rejected.txt"
     contexts = fixture_source(saved.config)
-    assert score(saved, dataset, "2025-01-01", "test", output, contexts=contexts)["accounts"] == 19
+    result = score(
+        saved, dataset, "2025-01-01", "test", output, rejected_output=rejected, contexts=contexts
+    )
+    assert result["accounts"] == 19
     frame = pd.read_parquet(output)
     assert frame.account_id.tolist() == list(DATASET_SCORES)
     for account, have in zip(frame.account_id, frame.score, strict=True):

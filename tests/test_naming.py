@@ -261,6 +261,7 @@ def test_outputs_go_under_results_and_datasets_under_data() -> None:
         run.audit_scores("test"),
         run.audit_rejected("test"),
         run.scores("accounts", "2025-01-01"),
+        run.scores_rejected("accounts", "2025-01-01"),
         run.plots,
         run.report,
     ]

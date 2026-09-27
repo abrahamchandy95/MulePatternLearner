@@ -35,11 +35,13 @@ def test_score_new_writes_only_ok_rows_and_lists_rejected_ids(tmp_path: Path) ->
     ids[1:1], ids[9:9] = ["ghost_1"], ["ghost_2"]
     rejected_ids = ["ghost_1", "ghost_2"]
     output = tmp_path / "scores.parquet"
+    rejected_file = tmp_path / "scores_rejected.txt"
     result = score_accounts.score_new_accounts(
         model,
         iter(ids),
         "2025-01-01",
         output,
+        rejected_output=rejected_file,
         cutoffs=TigerGraphCutoffs(executor),
         hub_reader=TigerGraphHubs(executor),
         contexts=source,
@@ -47,7 +49,6 @@ def test_score_new_writes_only_ok_rows_and_lists_rejected_ids(tmp_path: Path) ->
     frame = pd.read_parquet(output)
     assert frame.account_id.tolist() == [v for v in ids if v not in rejected_ids]
     assert frame.score.between(0, 1).all() and (frame.date == "2025-01-01").all()
-    rejected_file = tmp_path / "scores.parquet.rejected.txt"
     assert rejected_file.read_text().split() == rejected_ids
     assert result["accounts"] == len(frame) and result["rejected"] == len(rejected_ids)
     assert result["rejected_roots_by_status"] == {"missing_entity": len(rejected_ids)}
@@ -68,6 +69,7 @@ def test_score_new_keeps_float64_resolution_near_one(tmp_path: Path) -> None:
         iter([f"new_{i}" for i in range(12)]),
         "2025-01-01",
         output,
+        rejected_output=tmp_path / "scores_rejected.txt",
         cutoffs=TigerGraphCutoffs(ScoringExecutor()),
         hub_reader=TigerGraphHubs(ScoringExecutor()),
         contexts=FakeSource(config),
@@ -89,6 +91,7 @@ def test_score_new_reports_root_and_child_rejections_separately(tmp_path: Path) 
         iter(ids),
         "2025-01-01",
         tmp_path / "scores.parquet",
+        rejected_output=tmp_path / "scores_rejected.txt",
         cutoffs=TigerGraphCutoffs(ScoringExecutor()),
         hub_reader=TigerGraphHubs(ScoringExecutor()),
         contexts=source,
@@ -118,10 +121,12 @@ def test_inference_score_uses_the_dataset_hub_registry(
 
     monkeypatch.setattr(score_accounts, "load_hub_registry", registry)
     source = FakeSource(config, reject=frozenset({"A002"}))
-    output = tmp_path / "test.parquet"
-    result = score_accounts.score(model, dataset, "2025-01-01", "test", output, contexts=source)
+    output, rejected = tmp_path / "test.parquet", tmp_path / "test_rejected.txt"
+    result = score_accounts.score(
+        model, dataset, "2025-01-01", "test", output, rejected_output=rejected, contexts=source
+    )
     frame = pd.read_parquet(output)
     assert loaded == [dataset]
     assert len(frame) == 23 and "A002" not in set(frame.account_id)
     assert frame.score.dtype == np.float64
-    assert result["rejected"] == 1 and (tmp_path / "test.parquet.rejected.txt").exists()
+    assert result["rejected"] == 1 and rejected.read_text().split() == ["A002"]
