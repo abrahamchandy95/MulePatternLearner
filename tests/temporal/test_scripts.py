@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import math
 from pathlib import Path
 import sys
 from types import ModuleType, SimpleNamespace
@@ -21,10 +22,10 @@ from mule_pattern_learner.temporal.live.supervision import FrameObservedLabels
 from temporal_fakes import (
     REPOSITORY,
     FakeExecutor,
-    fixture_accounts,
     live_config,
     neighbourhood,
     reveal_inputs,
+    scoped_accounts,
     supplied_labels,
 )
 
@@ -81,22 +82,15 @@ def test_strict_isolation_fixture_needs_explicit_write_consent(
     assert stopped.value.code == 2
 
 
-class PopulationExecutor(FakeExecutor):
-    def run(self, name: str, params: dict[str, Any], **kwargs: Any) -> list[dict[str, Any]]:
-        if name == "temporal_training_population":
-            return [{"status": "ok", "accounts": fixture_accounts().to_dict("records")}]
-        return super().run(name, params, **kwargs)
-
-
 def test_benchmark_builds_one_training_batch_and_step(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    config = live_config(context_storage="stream", batch_size=32, fanouts=[8, 2])
+    config = live_config(batch_size=32, fanouts=[8, 2])
     config_path = tmp_path / "config.json"
     # The identity comes from the prepared dataset, as it does for `mule-temporal train`.
     config_path.write_text(json.dumps({k: v for k, v in config.items() if k != "dataset_id"}))
     dataset = tmp_path / "dataset"
-    executor = PopulationExecutor(factory=neighbourhood, hubs=[("N3", 101)])
+    executor = FakeExecutor(factory=neighbourhood, hubs=[("N3", 101)], population=scoped_accounts())
     prepare(
         config, dataset, executor, {"Account": 1000}, labels=FrameObservedLabels(supplied_labels())
     )
@@ -120,8 +114,13 @@ def test_benchmark_builds_one_training_batch_and_step(
     assert report["batch"]["stub_children"] > 0 and report["batch"]["first_edges"] > 0
     assert report["context_requests"] > 0 and report["rest_calls"] == 0  # fakes count none
     assert report["loss"] > 0 and report["train_step_seconds"] > 0
+    assert math.isfinite(report["objective"])
+    # Digests of every batch tensor (test_golden_run pins their values).
+    digests = report["tensor_digests"]
+    assert digests["root_positions"]["shape"] == [32] and len(digests["x"]["sha256"]) == 64
 
 
+@pytest.mark.legacy
 def test_feature_experiments_run_on_the_built_in_settings(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

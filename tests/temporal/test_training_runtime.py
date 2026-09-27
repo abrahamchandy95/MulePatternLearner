@@ -1432,6 +1432,7 @@ def test_train_command_prepares_then_trains_or_resumes(
     assert c["dataset_id"] == "derived" and d == prepared[-1][1] and o == output and resume
 
 
+@pytest.mark.legacy
 def test_feature_arms_keep_the_base_extraction() -> None:
     groups = sorted(
         {
@@ -1504,6 +1505,7 @@ def test_averaged_run_validates_and_saves_the_average(
     assert any(not torch.equal(averaged[k], raw[k]) for k in raw)
 
 
+@pytest.mark.legacy
 def test_runs_from_before_the_weight_average_resume_with_it_off() -> None:
     old = {"epochs": 2, "positive_weight": "prior"}
     view = checkpoint_module._result_view

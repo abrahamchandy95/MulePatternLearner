@@ -13,8 +13,9 @@ preparation and scoring share, drops the roots TigerGraph rejected first.
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+import hashlib
 from typing import TYPE_CHECKING, Any, Protocol
 
 import numpy as np
@@ -748,3 +749,44 @@ def build_root_batch(
         sampler_backend=sampler_backend,
     )
     return RootBatch(keys, accepted, batch, stats)
+
+
+def tensor_digests(batch: Mapping[str, torch.Tensor]) -> dict[str, dict[str, Any]]:
+    """Fingerprints of a batch's tensors by name, to compare batches across code versions.
+
+    Every tensor gets its dtype, shape and the sha256 of its little-endian bytes. On one
+    machine and device the hashes of two equal batches match exactly. Integer and boolean
+    tensors come from integer arithmetic, so their hashes also match across machines.
+    Floating tensors do not: math libraries round sin, cos and log differently. They
+    also get summaries in float64 that other machines reproduce to within rounding: the
+    sum, the sum of absolute values, a sum weighted by position (weights 1 to 7, so a
+    moved value changes it) and the elements at four fixed flat positions.
+    """
+    digests: dict[str, dict[str, Any]] = {}
+    for name in sorted(batch):
+        tensor = batch[name].detach().cpu().contiguous()
+        array = tensor.numpy()
+        little = array.astype(array.dtype.newbyteorder("<"), copy=False)
+        digest: dict[str, Any] = {
+            "dtype": str(tensor.dtype).removeprefix("torch."),
+            "shape": list(tensor.shape),
+            "sha256": hashlib.sha256(little.tobytes()).hexdigest(),
+        }
+        if tensor.is_floating_point():
+            values = tensor.double().flatten()
+            count = len(values)
+            weights = torch.arange(count, dtype=torch.float64) % 7 + 1
+            positions = sorted({0, count // 3, 2 * count // 3, count - 1}) if count else []
+            digest |= {
+                "sum": _rounded(values.sum()),
+                "abs_sum": _rounded(values.abs().sum()),
+                "weighted_sum": _rounded((values * weights).sum()),
+                "elements": {str(i): _rounded(values[i]) for i in positions},
+            }
+        digests[name] = digest
+    return digests
+
+
+def _rounded(value: torch.Tensor) -> float:
+    """A float64 scalar to 10 significant digits, far below any cross-machine tolerance."""
+    return float(f"{float(value):.10g}")

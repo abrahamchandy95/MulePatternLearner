@@ -90,6 +90,7 @@ def test_decay_is_smooth_and_missing_amount_is_not_invented():
     assert 0 < payment_features([e], later)[1]["decay_1d_in_count"] < 0.5
 
 
+@pytest.mark.legacy
 def test_rank_and_peer_strata_survive_a_recent_burst_without_duplicate_events():
     sampler = SamplerPlan("stratified", 4, 3, 2, 2, 2048)
     old = [event(i, i * 1000, peer=f"p{i}") for i in range(1, 61)]
@@ -166,6 +167,7 @@ def test_zero_node_features_and_summary_only_have_no_unused_projection_or_fetche
     source.close()
 
 
+@pytest.mark.legacy
 def test_registry_dependencies_fingerprints_and_unknown_fields():
     with pytest.raises(ValueError, match="dependencies"):
         FeaturePlan(("message_core", "amount_ratios"))
@@ -181,6 +183,7 @@ def test_registry_dependencies_fingerprints_and_unknown_fields():
         node_features(row, a)
 
 
+@pytest.mark.legacy
 def test_extraction_cache_can_be_shared_across_model_seeds_but_not_sampling_or_scope(
     tmp_path: Path,
 ) -> None:

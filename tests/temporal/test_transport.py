@@ -809,6 +809,7 @@ def test_corrupted_or_missing_spot_check_vectors_fail() -> None:
 # --- SQLite store --------------------------------------------------------------------------
 
 
+@pytest.mark.legacy
 def test_context_store_keys_by_hop_caches_rejections_and_reads_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -955,6 +956,7 @@ def test_hub_registry_rejects_contract_violations(scope_id: str, change: dict[st
         )
 
 
+@pytest.mark.legacy
 def test_hub_registry_rejects_stale_or_mismatched_responses() -> None:
     def check(rows: list[dict[str, Any]], message: str, scope_id: str = "") -> None:
         with pytest.raises(ValueError, match=message):
@@ -982,21 +984,26 @@ def test_hub_registry_rejects_stale_or_mismatched_responses() -> None:
 
 
 def live_config(tmp_path: Path, **changes: Any) -> dict[str, Any]:
+    """Raw preparation settings of the built-in run: graph labels, candidate-pool sampler."""
+    config = {
+        "dataset_id": "unit_snapshot",
+        "evaluation_protocol": "strict_inductive",
+        "scope_id": "unit_scope",
+        "label_policy": "graph_observed",
+        "dates": {"train": ["2024-07-01"], "validation": ["2024-10-01"], "test": ["2025-01-01"]},
+        "sampler": deepcopy(DEFAULT_RUN["sampler"]),
+    }
+    return {**config, **changes}
+
+
+def parquet_labels(tmp_path: Path) -> dict[str, Any]:
+    """The parquet label policy (legacy) with a one-row label file under tmp_path."""
     labels = tmp_path / "labels.parquet"
     if not labels.exists():
         pd.DataFrame(
             {"account_id": ["A1"], "known_positive": [True], "known_from_ms": [5]}
         ).to_parquet(labels)
-    config = {
-        "dataset_id": "unit_snapshot",
-        "evaluation_protocol": "strict_inductive",
-        "scope_id": "unit_scope",
-        "label_policy": "observed",
-        "observed_labels": str(labels),
-        "dates": {"train": ["2024-07-01"], "validation": ["2024-10-01"], "test": ["2025-01-01"]},
-        "sampler": {"policy": "stratified", "recent": 4, "older": 2, "distinct": 1},
-    }
-    return {**config, **changes}
+    return {"label_policy": "observed", "observed_labels": str(labels)}
 
 
 @pytest.fixture
@@ -1070,6 +1077,7 @@ def test_dataset_identity_comes_from_the_scope_or_the_graph(tmp_path: Path) -> N
     assert pipeline.prepared_config(explicit, manifest)["dataset_id"] == "pinned"
 
 
+@pytest.mark.legacy
 def test_only_strict_runs_reveal_labels(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     reveals: list[str] = []
     monkeypatch.setattr(pipeline, "live_executor", lambda config: SimpleNamespace())
@@ -1082,11 +1090,7 @@ def test_only_strict_runs_reveal_labels(tmp_path: Path, monkeypatch: pytest.Monk
         lambda executor, config: reveals.append(config["evaluation_protocol"]),
     )
     monkeypatch.setattr(pipeline, "prepare", lambda config, *args, **kwargs: {"status": "ready"})
-    config = {
-        **live_config(tmp_path, dataset_id="unit_snapshot"),
-        "label_policy": "graph_observed",
-        "observed_labels": None,
-    }
+    config = live_config(tmp_path)
     for protocol in ("shared_history", "strict_inductive"):
         run = {**config, "evaluation_protocol": protocol}
         assert pipeline.prepare_live(run, tmp_path / protocol) == {"status": "ready"}
@@ -1094,8 +1098,9 @@ def test_only_strict_runs_reveal_labels(tmp_path: Path, monkeypatch: pytest.Monk
     assert reveals == ["strict_inductive"]
 
 
+@pytest.mark.legacy
 def test_preparation_keys_fingerprint_only_preparation_settings(tmp_path: Path) -> None:
-    base = live_config(tmp_path)
+    base = live_config(tmp_path, **parquet_labels(tmp_path))
     view = dataset.preparation_view(base)
     assert tuple(view) == dataset.PREPARATION_KEYS and "hub_scan_cap" not in view
     same = [
@@ -1251,6 +1256,7 @@ def test_missing_scope_is_created_unless_forbidden(tmp_path: Path) -> None:
         assert server.calls[0][1]["unowned_policy"] == policy
 
 
+@pytest.mark.legacy
 def test_existing_scope_must_have_the_configured_unowned_policy(tmp_path: Path) -> None:
     header = {"ready": True, "source_id": "unit_snapshot", "split_seed": 42}
     config = live_config(tmp_path)
@@ -1301,6 +1307,7 @@ def test_scope_policy_query_prints_what_the_client_reads() -> None:
 # --- labels ----------------------------------------------------------------------------------
 
 
+@pytest.mark.legacy
 def test_label_source_must_be_explicit(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="No observed-label source"):
         label_source({})
@@ -1311,7 +1318,7 @@ def test_label_source_must_be_explicit(tmp_path: Path) -> None:
         label_source({"label_policy": "graph_observed", "observed_labels": "x.parquet"})
     with pytest.raises(ValueError, match="source file not found at .*absent.*observed_labels"):
         label_source({"observed_labels": str(tmp_path / "absent.parquet")})
-    config = live_config(tmp_path)
+    config = live_config(tmp_path, **parquet_labels(tmp_path))
     labels = label_source(config)
     assert isinstance(labels, ParquetObservedLabels) and labels.path == Path(
         config["observed_labels"]
@@ -1331,6 +1338,7 @@ def population_row(account: str, positive: bool, known: int) -> dict[str, Any]:
     }
 
 
+@pytest.mark.legacy
 def test_only_graph_label_policy_reads_graph_labels(tmp_path: Path) -> None:
     from mule_pattern_learner.temporal.live.cohort import scoped_cohort
 
@@ -1343,7 +1351,7 @@ def test_only_graph_label_policy_reads_graph_labels(tmp_path: Path) -> None:
         return [{"status": "ok", "accounts": [row]}]
 
     fake = Runner(run)
-    config = live_config(tmp_path)
+    config = live_config(tmp_path, **parquet_labels(tmp_path))
     scoped_cohort(fake, config, label_source(config))
     frame, _ = scoped_cohort(fake, config, GraphObservedLabels())
     assert seen == [False, True] and frame.in_marginal.tolist() == [True]
@@ -1359,10 +1367,11 @@ def test_only_graph_label_policy_reads_graph_labels(tmp_path: Path) -> None:
     assert seen == [False, True]  # failed before any query
 
 
+@pytest.mark.legacy
 def test_stale_population_queries_fail_fast(tmp_path: Path) -> None:
     from mule_pattern_learner.temporal.live.cohort import scoped_cohort
 
-    config = live_config(tmp_path)
+    config = live_config(tmp_path, **parquet_labels(tmp_path))
     # An old query emits the discovery time of hidden or negative labels.
     stale = Runner(lambda n, p: [{"status": "ok", "accounts": [population_row("A1", False, 5)]}])
     with pytest.raises(ValueError, match="predates the masked-label predicate"):
@@ -1390,6 +1399,7 @@ def test_stale_population_queries_fail_fast(tmp_path: Path) -> None:
 # --- configuration schema ------------------------------------------------------------------
 
 
+@pytest.mark.legacy
 def test_config_schema_rejects_unknown_keys_and_applies_operational_defaults(
     tmp_path: Path,
 ) -> None:
@@ -1483,6 +1493,7 @@ def test_override_tables_merge_into_the_built_in_run(tmp_path: Path) -> None:
     assert run_config() == default
 
 
+@pytest.mark.legacy
 def test_transport_settings_come_from_the_training_config(monkeypatch: pytest.MonkeyPatch) -> None:
     seen = {}
     monkeypatch.setattr(source, "verify_frozen_source", lambda executor, manifest: None)
@@ -1720,6 +1731,7 @@ def test_install_follows_an_asynchronous_request(monkeypatch: pytest.MonkeyPatch
         installation.install(executor(server))
 
 
+@pytest.mark.legacy
 def test_sent_parameters_match_the_repository_query_signatures() -> None:
     def signature(path: str, name: str) -> set[str]:
         text = installation.definitions((REPOSITORY_ROOT / path).read_text())[name]

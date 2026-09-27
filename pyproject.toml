@@ -54,6 +54,9 @@ packages = ["src/mule_pattern_learner"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+    "legacy: exercises a path the layered restructure removes (SQLite storage, shared_history, the parquet label policy, the recent and stratified samplers, the single architecture, model variants, legacy feature groups, extraction_groups, FALLBACKS and back-compat guards); runs by default",
+]
 
 [tool.basedpyright]
 include = ["src", "tests", "scripts"]

@@ -15,7 +15,7 @@ from copy import deepcopy
 from dataclasses import asdict
 from pathlib import Path
 import threading
-from typing import Any
+from typing import Any, cast
 import zlib
 
 import numpy as np
@@ -24,7 +24,12 @@ import pandas as pd
 from mule_pattern_learner.temporal.common import timestamp
 from mule_pattern_learner.temporal.encoding import BASIS_ID, fourier64
 from mule_pattern_learner.temporal.live.config_schema import run_config
-from mule_pattern_learner.temporal.live.contract import CONTRACT_VERSION, RELATIONS, ContextKey
+from mule_pattern_learner.temporal.live.contract import (
+    CONTRACT_VERSION,
+    RELATIONS,
+    SPLIT_PHASE,
+    ContextKey,
+)
 from mule_pattern_learner.temporal.live.installation import definitions, parameter_names
 
 REPOSITORY = Path(__file__).resolve().parents[2]
@@ -43,12 +48,15 @@ CONTEXT_PARAMETERS = signature("gsql/temporal/training_context.gsql", CONTEXT_QU
 HUB_PARAMETERS = signature("gsql/temporal/hub_registry.gsql", HUB_QUERY)
 SCOPE_POLICY_QUERY = "temporal_scope_policy"
 SCOPE_POLICY_PARAMETERS = signature("gsql/temporal/training_scope.gsql", SCOPE_POLICY_QUERY)
+SCOPE_POPULATION_QUERY = "temporal_scope_population"
+SCOPE_POPULATION_PARAMETERS = signature("gsql/temporal/training_scope.gsql", SCOPE_POPULATION_QUERY)
 # The legacy control profile: the recent sampler, legacy feature groups and the single
 # architecture, which components choose when sampler, feature_groups and architecture
-# are absent. Only a raw configuration can omit them; run_config fills them in.
+# are absent, over a shared_history cohort cached in SQLite. Only a raw configuration
+# can omit them; run_config fills them in. Tests of this profile are marked legacy.
 LEGACY_PROFILE: dict[str, Any] = {
     "label_policy": "observed",
-    "context_storage": "stream",
+    "context_storage": "sqlite",
     "evaluation_unlabeled_limit": 2000,
     "fanouts": [8, 4],
     "per_relation": 2,
@@ -67,7 +75,7 @@ LEGACY_PROFILE: dict[str, Any] = {
     "split_seed": 42,
     "device": "auto",
     "threads": 4,
-    "evaluation_protocol": "strict_inductive",
+    "evaluation_protocol": "shared_history",
     "scope_id": "example_strict_scope",
     "dates": {"train": ["2024-07-01"], "validation": ["2024-10-01"], "test": ["2025-01-01"]},
     "seed_limits": {"train": 20000, "validation": 2000, "test": 2000},
@@ -75,20 +83,18 @@ LEGACY_PROFILE: dict[str, Any] = {
 
 
 def profile_config(profile: str) -> dict[str, Any]:
-    """The legacy control profile, or the built-in v5 run with test-supplied labels."""
+    """The built-in run (strict inductive, streamed, graph labels), or the legacy profile.
+
+    Tests of the built-in profile hand prepare() their labels (FrameObservedLabels).
+    """
     if profile == "legacy":
         return deepcopy(LEGACY_PROFILE)
-    if profile != "v5":
+    if profile != "built_in":
         raise ValueError(f"unknown profile {profile!r}")
-    return {
-        **run_config(),
-        "label_policy": "observed",
-        "scope_id": "example_strict_scope",
-        "create_scope": False,
-    }
+    return {**run_config(), "scope_id": "example_strict_scope", "create_scope": False}
 
 
-def live_config(profile: str = "v5", **changes: Any) -> dict[str, Any]:
+def live_config(profile: str = "built_in", **changes: Any) -> dict[str, Any]:
     """A small, explicit unit run on top of one example profile."""
     value = profile_config(profile)
     value.update(
@@ -100,8 +106,6 @@ def live_config(profile: str = "v5", **changes: Any) -> dict[str, Any]:
         steps_per_epoch=2,
         device="cpu",
         threads=1,
-        evaluation_protocol="shared_history",
-        context_storage="sqlite",
     )
     value.update(changes)
     return value
@@ -120,10 +124,42 @@ def fixture_accounts(count: int = 1000, date: str = "2024-07-01") -> pd.DataFram
     )
 
 
+def scope_population(count: int = 200) -> list[dict[str, Any]]:
+    """Scope members as temporal_scope_population prints them with include_observed.
+
+    Partitions repeat 1, 1, 1, 2, 3 (train, validation, test). Every seventh account is
+    a revealed mule, discovered on 2024-03-01, so every split has revealed mules. Every
+    account was opened on 2024-01-01, before each split's cutoff.
+    """
+    rows = []
+    for i in range(count):
+        positive = i % 7 == 0
+        rows.append(
+            {
+                "account_id": f"S{i:04}",
+                "first_seen_seq": 5,
+                "first_seen_ts_ms": timestamp("2024-01-01"),
+                "partition": (1, 1, 1, 2, 3)[i % 5],
+                "group_id": f"G{i:04}",
+                "observed_positive": positive,
+                "known_from_ms": timestamp("2024-03-01") if positive else 0,
+            }
+        )
+    return rows
+
+
 def assigned_accounts() -> pd.DataFrame:
     from mule_pattern_learner.temporal.live.dataset import assign_groups
 
     return assign_groups(fixture_accounts(), 42)
+
+
+def scoped_accounts() -> list[dict[str, Any]]:
+    """assigned_accounts as temporal_scope_population rows, the split as the partition."""
+    accounts = assigned_accounts()
+    rows = accounts.drop(columns=["owner_ids", "split"])
+    records = rows.assign(partition=accounts.split.map(SPLIT_PHASE)).to_dict("records")
+    return cast(list[dict[str, Any]], records)
 
 
 def supplied_labels(per_split: int = 20) -> pd.DataFrame:
@@ -324,8 +360,10 @@ class FakeExecutor:
     phase 3 for an unscoped call, once per phase 1, 2 and 3 for a scoped one.
     `last_visible(index, cutoff_ms)` answers temporal_training_cutoffs.
     `scope_policy` names the scope_unowned rule temporal_scope_policy reports
-    for every scope (default "linked", the configuration default). Subclasses
-    add the population queries a test needs.
+    for every scope (default "linked", the configuration default). `population`
+    holds the rows temporal_scope_population pages through (see scope_population);
+    without include_observed their labels are withheld. Subclasses add the other
+    population queries a test needs.
     """
 
     def __init__(
@@ -337,9 +375,11 @@ class FakeExecutor:
         hubs: Iterable[tuple[str, int]] = (),
         last_visible: Callable[[int, int], int] = lambda index, ms: 100 + index,
         scope_policy: str = "linked",
+        population: Iterable[dict[str, Any]] = (),
     ) -> None:
         self.rows = rows or {}
         self.scope_policy = scope_policy
+        self.population = sorted(population, key=lambda row: str(row["account_id"]))
         self.factory = factory or context
         self.statuses = statuses or {}
         self.hubs = list(hubs)
@@ -359,6 +399,8 @@ class FakeExecutor:
             return self.hub_rows(params)
         if name == SCOPE_POLICY_QUERY:
             return self.scope_policy_rows(params)
+        if name == SCOPE_POPULATION_QUERY:
+            return self.population_rows(params)
         if name == "temporal_training_cutoffs":
             return [
                 {
@@ -438,6 +480,18 @@ class FakeExecutor:
         """Membership classes a scope created with `scope_policy` would report."""
         assert set(params) == SCOPE_POLICY_PARAMETERS, set(params) ^ SCOPE_POLICY_PARAMETERS
         return [{"status": "ok", "scope_id": params["scope_id"], **scope_counts(self.scope_policy)}]
+
+    def population_rows(self, params: dict[str, Any]) -> list[dict[str, Any]]:
+        """One page of `population` after after_id; labels only with include_observed."""
+        assert set(params) == SCOPE_POPULATION_PARAMETERS, set(params) ^ SCOPE_POPULATION_PARAMETERS
+        labels = bool(params["include_observed"])
+        withheld = {} if labels else {"observed_positive": False, "known_from_ms": 0}
+        page = [
+            {**row, **withheld}
+            for row in self.population
+            if str(row["account_id"]) > params["after_id"]
+        ]
+        return [{"status": "ok"}, {"accounts": page[: params["batch_size"]]}]
 
 
 def scope_counts(policy: str) -> dict[str, int]:

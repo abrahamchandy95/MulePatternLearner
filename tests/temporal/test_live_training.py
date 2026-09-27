@@ -53,10 +53,11 @@ from temporal_fakes import (
     fixture_accounts,
     live_config,
     neighbourhood,
+    scoped_accounts,
     supplied_labels,
 )
 
-PROFILES = ("legacy", "v5")
+PROFILES = (pytest.param("legacy", marks=pytest.mark.legacy), "built_in")
 
 
 def streaming_source(executor: FakeExecutor, config: dict[str, Any], **kwargs: Any):
@@ -95,6 +96,7 @@ def test_observed_labels_have_no_oracle_and_preserve_split_isolation() -> None:
         align_observed_labels(a, supplied_labels().assign(known_from_ms=0))
 
 
+@pytest.mark.legacy
 def test_strict_claim_fails_before_preparation_or_training() -> None:
     with pytest.raises(ValueError, match="frozen TigerGraph scope_id"):
         validate_protocol({"evaluation_protocol": "strict_inductive"})
@@ -113,10 +115,14 @@ def test_nnpu_draws_only_known_positives_and_covers_the_label_blind_marginal() -
 
 
 class PreparedExecutor(FakeExecutor):
-    """Shared-history population plus the context, cutoff and hub queries."""
+    """Both population queries plus the context, cutoff and hub queries.
+
+    The scope population (strict_inductive) holds the fixture accounts with their splits
+    as partitions; temporal_training_population serves the legacy shared_history cohort.
+    """
 
     def __init__(self, directory: Path, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
+        super().__init__(population=scoped_accounts(), **kwargs)
         self.directory = directory
 
     def run(self, name: str, params: dict[str, Any], **kwargs: Any) -> list[dict[str, Any]]:
@@ -150,7 +156,13 @@ def test_hidden_truth_cannot_change_updates_or_checkpoint_selection(
     c = live_config(profile)
     dataset, executor = prepared(tmp_path, c)
     assert executor.names().count("temporal_hub_registry") == 1
-    first = train(c, dataset, tmp_path / "first.pt")
+    # A streamed preparation trains against the fake graph; SQLite needs no source.
+    streamed = c["context_storage"] == "stream"
+
+    def contexts() -> StreamingContextSource | None:
+        return streaming_source(executor, c) if streamed else None
+
+    first = train(c, dataset, tmp_path / "first.pt", contexts=contexts())
     saved_first = torch.load(tmp_path / "first.pt", weights_only=True)
     # The oracle is a separate file that is never opened by training.
     a = pd.read_parquet(dataset / "accounts.parquet")
@@ -171,7 +183,7 @@ def test_hidden_truth_cannot_change_updates_or_checkpoint_selection(
         ParquetEvaluationTruth(truth_path),
     )
     assert before != after
-    second = train(c, dataset, tmp_path / "second.pt")
+    second = train(c, dataset, tmp_path / "second.pt", contexts=contexts())
     saved_second = torch.load(tmp_path / "second.pt", weights_only=True)
     assert first["history"] == second["history"]
     assert first["best_epoch"] == second["best_epoch"]
@@ -180,7 +192,7 @@ def test_hidden_truth_cannot_change_updates_or_checkpoint_selection(
     assert first["observed_label_proxy"] == second["observed_label_proxy"]
     for name, value in saved_first["state_dict"].items():
         torch.testing.assert_close(value, saved_second["state_dict"][name], rtol=0, atol=0)
-    assert first["database_calls_during_training"] == 0
+    assert (first["database_calls_during_training"] > 0) == streamed
     assert first["known_mules"] == {"train": 20, "validation": 20, "test": 20}
 
 
@@ -212,9 +224,7 @@ def test_minimal_command_and_run_defaults(tmp_path: Path) -> None:
 def test_ready_pipeline_reuses_cache_without_connecting(tmp_path: Path) -> None:
     from mule_pattern_learner.temporal.live.pipeline import prepare_live
 
-    labels = tmp_path / "observed_labels.parquet"
-    supplied_labels().to_parquet(labels, index=False)
-    c = live_config(observed_labels=str(labels))
+    c = live_config()
     manifest = {
         "status": "ready",
         "source": {"query_hashes": query_hashes(), "preparation": preparation_view(c)},
@@ -224,8 +234,8 @@ def test_ready_pipeline_reuses_cache_without_connecting(tmp_path: Path) -> None:
         assert prepare_live(c, tmp_path) == manifest
         # Model settings may change; preparation settings may not, and nothing connects.
         assert prepare_live({**c, "hidden": 32, "learning_rate": 0.01}, tmp_path) == manifest
-        with pytest.raises(ValueError, match="fanouts|sqlite_selection"):
-            prepare_live({**c, "fanouts": [4, 2]}, tmp_path)
+        with pytest.raises(ValueError, match="seed_limits"):
+            prepare_live({**c, "seed_limits": {**c["seed_limits"], "test": 10}}, tmp_path)
         client.assert_not_called()
 
 
@@ -243,6 +253,7 @@ def test_streaming_preparation_and_training_never_create_disk_context_cache(tmp_
     assert len(source.memory) <= 4
 
 
+@pytest.mark.legacy
 def test_streaming_and_sqlite_return_identical_features_with_bounded_retention(
     tmp_path: Path,
 ) -> None:
@@ -319,6 +330,7 @@ def test_training_end_to_end_with_v5_neighbour_messages(tmp_path: Path) -> None:
     assert json.loads(progress[-1])["event"] == "complete"
 
 
+@pytest.mark.legacy
 def test_sqlite_preparation_caches_every_resampling_candidate(tmp_path: Path) -> None:
     # Rejected roots fail closed by default; this run tolerates up to 5% per split.
     c = live_config(context_storage="sqlite", max_rejected_root_fraction=0.05)
@@ -346,11 +358,11 @@ def test_sqlite_preparation_caches_every_resampling_candidate(tmp_path: Path) ->
 
 
 def test_rejected_roots_fail_the_run_under_the_default_limit(tmp_path: Path) -> None:
-    c = live_config(context_storage="sqlite")
+    c = live_config()
     validation = assigned_accounts().query("split == 'validation'").account_id
-    dataset, _ = prepared(
+    dataset, executor = prepared(
         tmp_path, c, factory=neighbourhood, statuses={str(validation.iloc[20]): "invisible_entity"}
     )
     with pytest.raises(ValueError, match="validation: TigerGraph rejected 1 of"):
-        train(c, dataset, tmp_path / "model.pt")
+        train(c, dataset, tmp_path / "model.pt", contexts=streaming_source(executor, c))
     assert not (tmp_path / "model.pt").exists()

@@ -330,6 +330,7 @@ def reference_batch(
 # Contract ------------------------------------------------------------------------
 
 
+@pytest.mark.legacy
 def test_contract_constants_and_client_groups() -> None:
     assert CONTRACT_VERSION == "temporal_live_v5_candidate_pools"
     assert CHANNELS[:4] == ("unknown", "digital", "branch_or_atm", "bank")
@@ -346,6 +347,7 @@ def test_contract_constants_and_client_groups() -> None:
     assert FeaturePlan().node_names == FEATURE_NAMES
 
 
+@pytest.mark.legacy
 def test_query_flags_skip_child_summaries_only_for_split_models() -> None:
     groups = ("entity_meta", "entity_age", "rolling_windows", "amount_ratios", "message_core")
     groups += ("time_encoding", "flow_timing", "decayed_activity", "hub_indicator")
@@ -360,6 +362,7 @@ def test_query_flags_skip_child_summaries_only_for_split_models() -> None:
         split.query_flags(3)
 
 
+@pytest.mark.legacy
 def test_sampler_plan_legacy_forms_properties_and_bounds() -> None:
     legacy = SamplerPlan("stratified", 4, 3, 2, 2, 2048)
     assert legacy == SamplerPlan("stratified", roots=PoolPlan(4, 3, 2, 2, 2048))
@@ -395,6 +398,7 @@ def test_sampler_plan_legacy_forms_properties_and_bounds() -> None:
     assert copy.deepcopy(RESAMPLE) == RESAMPLE and hash(copy.deepcopy(RESAMPLE)) == hash(RESAMPLE)
 
 
+@pytest.mark.legacy
 def test_sampler_from_config_children_unknown_keys_and_round_trip() -> None:
     config = {
         "per_relation": 3,
@@ -418,6 +422,7 @@ def test_sampler_from_config_children_unknown_keys_and_round_trip() -> None:
         SamplerPlan.from_config({"sampler": {"children": {"nope": 1}}})
 
 
+@pytest.mark.legacy
 def test_sampler_fingerprints_ignore_backend_and_unused_resample_fields() -> None:
     legacy = SamplerPlan("stratified", 4, 3, 2)
     assert legacy.fingerprint() == SamplerPlan("stratified", 4, 3, 2).fingerprint()
@@ -441,6 +446,7 @@ def test_sampler_fingerprints_ignore_backend_and_unused_resample_fields() -> Non
 # Legacy parity and assembly ------------------------------------------------------
 
 
+@pytest.mark.legacy
 @pytest.mark.parametrize("policy", ["recent", "stratified"])
 @pytest.mark.parametrize(
     "plan",
@@ -464,6 +470,7 @@ def test_legacy_policies_match_the_previous_assembly_bit_for_bit(
     assert batch["first_mask"].sum() > len(keys) and batch["second_mask"].any()
 
 
+@pytest.mark.legacy
 def test_fourier_columns_come_from_scalar_deltas_on_every_device() -> None:
     sampler = SamplerPlan("stratified", 4, 3, 2, 2)
     plan = FeaturePlan(DEFAULT_GROUPS, "split")
@@ -512,6 +519,7 @@ def test_torch_fourier_matches_numpy(device: str) -> None:
         fourier64_torch(torch.tensor([1.5], device=device))
 
 
+@pytest.mark.legacy
 def test_missing_required_message_fields_raise_instead_of_defaulting() -> None:
     sampler = SamplerPlan(recent=3)
     plan = FeaturePlan(DEFAULT_GROUPS, "split")
@@ -860,6 +868,7 @@ def _first_children(
     return {child_key(m, k) for k in keys for m in select_messages(store.row(k), fanout, sampler)}
 
 
+@pytest.mark.legacy
 def test_hub_children_become_local_stubs_and_mark_outer_peers() -> None:
     sampler = SamplerPlan("stratified", 4, 3, 2, 2)
     plan = FeaturePlan((*DEFAULT_GROUPS, "entity_age"), "split")
@@ -922,6 +931,7 @@ def test_hub_children_become_local_stubs_and_mark_outer_peers() -> None:
     assert int(reference["x"][:, column].sum()) == 0
 
 
+@pytest.mark.legacy
 @pytest.mark.parametrize(
     ("scope", "phase", "expected"),
     [("s", 1, 1), ("s", 2, 2), ("s", 3, 3), ("", 3, 3), ("", 1, 3)],
@@ -939,6 +949,7 @@ def test_hub_lookups_use_the_batch_visibility_phase(scope: str, phase: int, expe
     assert {p for *_, p in hubs.calls} == {expected}
 
 
+@pytest.mark.legacy
 def test_rejected_children_are_masked_and_rejected_roots_raise() -> None:
     sampler = SamplerPlan("stratified", 4, 3, 2, 2)
     plan = FeaturePlan(DEFAULT_GROUPS, "split")
@@ -967,6 +978,7 @@ def test_rejected_children_are_masked_and_rejected_roots_raise() -> None:
         make_live_batch(FakeStore(sampler, reject={keys[2]}), keys, plan=plan, sampler=sampler)
 
 
+@pytest.mark.legacy
 def test_tigergraph_cannot_supply_client_features() -> None:
     sampler = SamplerPlan("stratified", 4, 3, 2, 2)
     plan = FeaturePlan(DEFAULT_GROUPS, "split")
@@ -1333,6 +1345,7 @@ def test_real_probe_without_cupy_reports_the_missing_module(
     assert sampling.cugraph_usable(0) is probe
 
 
+@pytest.mark.legacy
 def test_backend_resolution_without_cuda() -> None:
     assert resolve_backend(RESAMPLE, "cpu") == "torch"
     assert resolve_backend(replace(RESAMPLE, backend="torch"), "cuda") == "torch"
@@ -1350,6 +1363,7 @@ def test_backend_resolution_without_cuda() -> None:
     assert stats["sampler_backend"] == "deterministic"
 
 
+@pytest.mark.legacy
 def test_make_live_batch_uses_the_run_backend_without_resolving(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

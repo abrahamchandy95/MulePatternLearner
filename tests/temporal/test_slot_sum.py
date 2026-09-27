@@ -192,6 +192,7 @@ def test_padding_changes_nothing() -> None:
     torch.testing.assert_close(model.encode(wide), expected)
 
 
+@pytest.mark.legacy
 def test_a_configuration_without_the_key_builds_the_old_model() -> None:
     assert FALLBACKS["slot_sum"] is False and DEFAULT_RUN["slot_sum"] is True
     assert "slot_sum" not in validate_config(OLD_CONFIG)
@@ -215,6 +216,7 @@ def test_a_configuration_without_the_key_builds_the_old_model() -> None:
     assert sum(p.numel() for p in model.parameters()) == 101_121
 
 
+@pytest.mark.legacy
 def test_checkpoints_from_before_the_change_load_and_score(tmp_path: Path) -> None:
     # The pool groups stay out of the contract, so older checkpoints and caches match.
     assert contract_fingerprint() == V5_CONTRACT and OLD_PLAN.fingerprint() == V5_INPUTS
@@ -240,6 +242,7 @@ def test_checkpoints_from_before_the_change_load_and_score(tmp_path: Path) -> No
             assert frame.score.tolist() == pytest.approx(expected.tolist(), rel=1e-6)
 
 
+@pytest.mark.legacy
 def test_nonsense_options_are_rejected() -> None:
     summary = FeaturePlan(("entity_meta", "decayed_activity", "history_support"), "summary")
     with pytest.raises(ValueError, match="no hop-1 slots"):
@@ -264,6 +267,7 @@ def test_nonsense_options_are_rejected() -> None:
         narrow.encode(slot_batch(PLAN, [[0]], width=16))
 
 
+@pytest.mark.legacy
 def test_every_ablation_arm_states_its_slot_sum() -> None:
     arms = feature_experiments(CONFIG)
     for name, arm in arms.items():
@@ -288,6 +292,7 @@ def test_every_ablation_arm_states_its_slot_sum() -> None:
     assert "pool_internal_inflows" not in arms["built_in_no_internal"]["feature_groups"]
 
 
+@pytest.mark.legacy
 def test_runs_from_before_the_key_resume_with_it_off() -> None:
     view = checkpoint_module._result_view  # pyright: ignore[reportPrivateUsage]
     old = {"epochs": 2, "positive_weight": "prior"}
