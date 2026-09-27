@@ -30,9 +30,9 @@ See [encoding semantics](../docs/temporal_encoding.md) and
 ## Live temporal training queries
 
 The training path installs `features/temporal_fourier64.gsql`,
-`temporal/training_context.gsql`, `temporal/training_population.gsql`,
-`temporal/training_scope.gsql`, `temporal/training_cutoffs.gsql`,
-`temporal/hub_registry.gsql`, `temporal/account_supervision.gsql` and
+`temporal/training_context.gsql`, `temporal/training_scope.gsql`,
+`temporal/training_cutoffs.gsql`, `temporal/hub_registry.gsql`,
+`temporal/account_supervision.gsql` and
 `temporal/label_reveal.gsql` (`TRAINING_QUERY_FILES` in
 `src/mule_pattern_learner/temporal/live/installation.py`). `mule-temporal train`
 installs whatever is stale; to install ahead of time:

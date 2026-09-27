@@ -182,9 +182,6 @@ and the Python feature contract drift apart.
   2,000 test accounts opened before their split's cutoff) plus the observed positives. For
   `strict_mule_v2`: population 222,337 / 47,754 / 47,749 by split, 24,059 prepared rows.
 
-`temporal_training_population` is the unscoped equivalent used only by the legacy
-`shared_history` protocol, which cannot prepare on this graph (it caps at 100,000 accounts).
-
 ### temporal_training_cutoffs (preparation, score-new)
 
 - **Reads:** `event_ts_ms` and `event_seq` of every event, `first_seen_*` of every entity.
@@ -689,7 +686,7 @@ policy do not apply to another. Unknown keys are rejected.
 
 | Group | Keys (built-in value) |
 |---|---|
-| Scope | `scope_id` (strict_mule_v2), `scope_unowned` (linked), `create_scope` (true: created on first use), `evaluation_protocol` (strict_inductive); `dataset_id` is derived from the scope or the graph (a pinned value must match the prepared dataset) |
+| Scope | `scope_id` (strict_mule_v2), `scope_unowned` (linked), `create_scope` (true: created on first use); `dataset_id` is derived from the scope or the graph (a pinned value must match the prepared dataset) |
 | Labels | `label_policy` (graph_observed), `reveal_per_split` (20), `reveal_salt` (defaults to `seed`), `evaluation_unlabeled_limit` (2000) |
 | Dates | `[dates]` train 2024-07-01, validation 2024-10-01, test 2025-01-01; `[seed_limits]` 20000 / 2000 / 2000 |
 | Sampler | `[sampler]` policy resample, recent 8, older 4, distinct 4, associations 2, max_history 2048, relation_fanouts [8, 4], association_fanout 1, association_slots 2, backend auto, evaluation_seed 0; `[sampler.children]` 4 / 2 / 2 / 0 / 2048 |
@@ -699,7 +696,7 @@ policy do not apply to another. Unknown keys are rejected.
 | Transport | `request_batch_size` 8, `query_concurrency` 16, `context_lru_capacity` 256, `encoding_check_every` 64, `max_query_attempts` 6, `max_outage_s` 900 |
 
 Preparation keys (the derived dataset_id, an optional shared `prepared_id`,
-evaluation_protocol, scope_id, scope_unowned, dates, seed_limits, split_seed, cohort_seed,
+scope_id, scope_unowned, dates, seed_limits, split_seed, cohort_seed,
 label_policy and any observed-label file hash, the candidate pools, and
 the extraction groups derived from feature_groups) must match between preparation and
 training; other settings may change between runs. A new `--output` prepares its own

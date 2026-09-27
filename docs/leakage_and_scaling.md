@@ -4,10 +4,10 @@
 
 The strict sampler is implemented. `temporal_training_context` checks frozen
 server-side Account/Party partitions before payment aggregation, association
-summaries, neighbor selection and pair-history calculations. The default
-`strict_inductive` experiment withholds existing ownership groups from training.
+summaries, neighbor selection and pair-history calculations. The `strict_inductive`
+experiment, the only protocol, withholds existing ownership groups from training.
 Shared auxiliary entities are allowed, with held-out account/party contributions
-removed. Explicit `shared_history` mode is a different evaluation protocol.
+removed.
 
 The live fixture in `scripts/temporal/verify_strict_isolation.py` adds and changes
 held-out payments and shared-identifier associations, then compares complete

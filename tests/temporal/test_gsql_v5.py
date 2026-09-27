@@ -38,7 +38,7 @@ PER_REQUEST = (
     "invalid_event_roles",
 )
 CALL_LEVEL = ("invalid_parameters", "invalid_visibility_phase", "scope_not_ready")
-POPULATION_QUERIES = ("temporal_training_population", "temporal_scope_population")
+POPULATION_QUERIES = ("temporal_scope_population",)
 
 
 @pytest.fixture(scope="module")
@@ -217,7 +217,7 @@ def test_population_queries_default_to_no_observed_labels() -> None:
 
 
 def population_queries() -> dict[str, str]:
-    texts = {**query_texts("training_population.gsql"), **query_texts("training_scope.gsql")}
+    texts = query_texts("training_scope.gsql")
     return {name: texts[name] for name in POPULATION_QUERIES}
 
 
@@ -505,7 +505,6 @@ def test_scope_policy_query_classifies_unowned_accounts() -> None:
         "training_context.gsql",
         "hub_registry.gsql",
         "training_scope.gsql",
-        "training_population.gsql",
         "training_cutoffs.gsql",
     ],
 )

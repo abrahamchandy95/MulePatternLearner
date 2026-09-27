@@ -21,7 +21,7 @@ import zlib
 import numpy as np
 import pandas as pd
 
-from mule_pattern_learner.temporal.common import timestamp
+from mule_pattern_learner.temporal.common import stable_score, timestamp
 from mule_pattern_learner.temporal.encoding import BASIS_ID, fourier64
 from mule_pattern_learner.temporal.live.config_schema import run_config
 from mule_pattern_learner.temporal.live.contract import (
@@ -52,8 +52,8 @@ SCOPE_POPULATION_QUERY = "temporal_scope_population"
 SCOPE_POPULATION_PARAMETERS = signature("gsql/temporal/training_scope.gsql", SCOPE_POPULATION_QUERY)
 # The legacy control profile: the recent sampler, legacy feature groups and the single
 # architecture, which components choose when sampler, feature_groups and architecture
-# are absent, over a shared_history cohort. Only a raw configuration can omit them;
-# run_config fills them in. Tests of this profile are marked legacy.
+# are absent. Only a raw configuration can omit them; run_config fills them in. Tests of
+# this profile are marked legacy.
 LEGACY_PROFILE: dict[str, Any] = {
     "label_policy": "observed",
     "evaluation_unlabeled_limit": 2000,
@@ -74,7 +74,6 @@ LEGACY_PROFILE: dict[str, Any] = {
     "split_seed": 42,
     "device": "auto",
     "threads": 4,
-    "evaluation_protocol": "shared_history",
     "scope_id": "example_strict_scope",
     "dates": {"train": ["2024-07-01"], "validation": ["2024-10-01"], "test": ["2025-01-01"]},
     "seed_limits": {"train": 20000, "validation": 2000, "test": 2000},
@@ -111,7 +110,7 @@ def live_config(profile: str = "built_in", **changes: Any) -> dict[str, Any]:
 
 
 def fixture_accounts(count: int = 1000, date: str = "2024-07-01") -> pd.DataFrame:
-    """Population rows as temporal_training_population returns them, all visible at date."""
+    """Accounts with one owner each, all visible at date (see assigned_accounts)."""
     return pd.DataFrame(
         {
             "account_id": [f"A{i:04}" for i in range(count)],
@@ -148,9 +147,18 @@ def scope_population(count: int = 200) -> list[dict[str, Any]]:
 
 
 def assigned_accounts() -> pd.DataFrame:
-    from mule_pattern_learner.temporal.live.dataset import assign_groups
+    """fixture_accounts with an ownership group and a split drawn from the group's hash.
 
-    return assign_groups(fixture_accounts(), 42)
+    Each account has its own owner, so it is its own group; about 70% of the groups are
+    train, 15% validation and 15% test.
+    """
+    accounts = fixture_accounts()
+    accounts["group_id"] = "Account:" + accounts.account_id
+    scores = accounts.group_id.map(lambda group: stable_score(group, 42, "split"))
+    accounts["split"] = np.where(
+        scores < 0.7, "train", np.where(scores < 0.85, "validation", "test")
+    )
+    return accounts
 
 
 def scoped_accounts() -> list[dict[str, Any]]:

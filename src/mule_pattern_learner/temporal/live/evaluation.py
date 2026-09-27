@@ -251,8 +251,8 @@ def evaluate_final_population(
         raise FileExistsError(output)
     saved = ModelCheckpoint.of(checkpoint)
     config = saved.validated_config()
-    if config.get("evaluation_protocol") != "strict_inductive" or len(config["dates"]["test"]) != 1:
-        raise ValueError("Final population audit requires a frozen scope and one test cutoff")
+    if len(config["dates"]["test"]) != 1:
+        raise ValueError("Final population audit requires one test cutoff")
     date = config["dates"]["test"][0]
     last_ms = cutoff_ms(date)
     if dataset is None:

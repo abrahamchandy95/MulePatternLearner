@@ -179,10 +179,6 @@ def test_existing_labels_are_kept_and_contract_violations_fail() -> None:
     refused = RevealServer({"status": "scope_not_ready"}, CLEAN)
     with pytest.raises(ValueError, match="scope_not_ready"):
         labels.ensure_revealed_labels(refused, run_config())
-    with pytest.raises(ValueError, match="strict_inductive"):
-        labels.ensure_revealed_labels(
-            refused, {**run_config(), "evaluation_protocol": "shared_history"}
-        )
 
 
 def test_reveal_queries_are_installed_with_training_and_read_truth_only_there() -> None:

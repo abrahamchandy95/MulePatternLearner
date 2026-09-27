@@ -75,7 +75,6 @@ FALLBACKS: dict[str, Any] = {
 # Identity (dataset_id) is read from the scope or derived from the graph, and the
 # prepared cache lives inside the run directory, so none of it is configured.
 DEFAULT_RUN: dict[str, Any] = {
-    "evaluation_protocol": "strict_inductive",
     "scope_id": "strict_mule_v2",
     "label_policy": "graph_observed",
     # Known mules the first run reveals per split, among those a bank would have
@@ -166,7 +165,10 @@ DEFAULT_RUN: dict[str, Any] = {
 # prepared cohorts and run directories), each with the one value this code still
 # implements. validate_config drops them, so those files keep loading; any other value
 # names a removed path and is refused.
-RETIRED_KEYS: dict[str, Any] = {"context_storage": "stream"}
+RETIRED_KEYS: dict[str, Any] = {
+    "context_storage": "stream",
+    "evaluation_protocol": "strict_inductive",
+}
 # Identifiers that become directory names or server-side scope metadata.
 IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
@@ -234,7 +236,6 @@ class LiveConfig(_Strict):
     # Identity and preparation.
     dataset_id: str | None = None
     prepared_id: str | None = None
-    evaluation_protocol: Literal["strict_inductive", "shared_history"] | None = None
     scope_id: str | None = None
     scope_unowned: Literal["independent", "shared", "linked"] = OPERATIONAL_DEFAULTS[
         "scope_unowned"

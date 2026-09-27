@@ -551,7 +551,6 @@ class FakeSource:
 def base_config(**overrides: Any) -> dict[str, Any]:
     value = {
         "dataset_id": "unit_runtime",
-        "evaluation_protocol": "strict_inductive",
         "scope_id": "unit_scope",
         "label_policy": "observed",
         "dates": deepcopy(DATES),

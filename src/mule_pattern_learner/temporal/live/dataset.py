@@ -1,4 +1,4 @@
-"""Supervision export, ownership-isolated splits and resumable cohort preparation."""
+"""Resumable cohort preparation inside the frozen scope, and the prepared-data gate."""
 
 from __future__ import annotations
 
@@ -12,9 +12,15 @@ import pandas as pd
 
 from mule_pattern_learner.configuration import REPOSITORY_ROOT, resolve_path
 
-from ..common import cutoff_ms, digest, stable_score, timestamp
+from ..common import cutoff_ms, digest, timestamp
 from .cohort import cohort_seed, scoped_cohort
-from .config_schema import DEFAULT_RUN, OPERATIONAL_DEFAULTS, setting, split_seed
+from .config_schema import (
+    DEFAULT_RUN,
+    OPERATIONAL_DEFAULTS,
+    setting,
+    split_seed,
+    without_retired_keys,
+)
 from .contract import (
     SPLIT_PHASE,
     ContextKey,
@@ -23,10 +29,10 @@ from .contract import (
     fingerprint,
     sampler_pools,
 )
-from .executor import QueryExecutor, account_pages, checked_rows, printed
+from .executor import QueryExecutor, checked_rows, printed
 from .hubs import HUB_FILE, hub_manifest, hub_threshold, query_hub_registry
 from .installation import QUERY_FILES
-from .policy import context_scope, validate_protocol
+from .policy import context_scope
 from .supervision import (
     ORACLE_COLUMNS,
     ObservedLabelSource,
@@ -34,7 +40,6 @@ from .supervision import (
     label_summary,
     missing_label_source,
     read_bounded_parquet,
-    reads_graph_labels,
 )
 
 ROOT = REPOSITORY_ROOT
@@ -46,7 +51,6 @@ PREPARATION_KEYS = (
     "prepared_id",
     "dates",
     "seed_limits",
-    "evaluation_protocol",
     "scope_id",
     "split_seed",
     "cohort_seed",
@@ -79,12 +83,13 @@ def query_hashes() -> dict[str, str]:
 
 
 def changed_query_files(manifest: dict[str, Any]) -> list[str]:
-    """Query files whose repository text differs from the one used for preparation."""
+    """Query files preparation uses whose repository text differs from the one it used.
+
+    A recorded file that preparation no longer uses cannot affect the cohort, so it is
+    not compared: retiring a query file leaves existing cohorts usable.
+    """
     recorded = manifest.get("source", {}).get("query_hashes", {})
-    current = query_hashes()
-    return sorted(
-        name for name in set(recorded) | set(current) if recorded.get(name) != current.get(name)
-    )
+    return sorted(name for name, current in query_hashes().items() if recorded.get(name) != current)
 
 
 def check_query_hashes(manifest: dict[str, Any], dataset: Path) -> None:
@@ -121,7 +126,6 @@ def preparation_view(config: dict[str, Any]) -> dict[str, Any]:
         "prepared_id": config.get("prepared_id"),
         "dates": config.get("dates"),
         "seed_limits": config.get("seed_limits", DEFAULT_RUN["seed_limits"]),
-        "evaluation_protocol": config.get("evaluation_protocol"),
         "scope_id": config.get("scope_id", ""),
         "split_seed": split_seed(config),
         "cohort_seed": cohort_seed(config),
@@ -168,48 +172,10 @@ def load_prepared(dataset: Path) -> tuple[dict[str, Any], pd.DataFrame]:
     )
     if ORACLE_COLUMNS & set(accounts.columns):
         raise ValueError("Oracle columns are forbidden in prepared training metadata")
-    validate_protocol(manifest["config"])
+    # A cohort prepared on a removed path is refused, not misread.
+    without_retired_keys(manifest["config"])
+    context_scope(manifest["config"])
     return manifest, accounts
-
-
-def export_accounts(executor: QueryExecutor, *, include_observed: bool = False) -> pd.DataFrame:
-    records: list[dict[str, Any]] = []
-    for rows in account_pages(
-        executor, "temporal_training_population", {"include_observed": include_observed}
-    ):
-        if len(records) + len(rows) > 100000:
-            raise ValueError(
-                "Unbounded legacy population export refused; use strict scoped seed reservoirs"
-            )
-        records.extend(rows)
-        print(json.dumps({"exported_accounts": len(records)}), flush=True)
-    if not records:
-        raise ValueError("No internal deposit accounts found")
-    return pd.DataFrame(records)
-
-
-def assign_groups(accounts: pd.DataFrame, split_seed: int) -> pd.DataFrame:
-    """Union all co-owners, including repeated tenures, before selecting cohorts."""
-    parent: dict[str, str] = {}
-
-    def root(key: str) -> str:
-        parent.setdefault(key, key)
-        while parent[key] != key:
-            parent[key] = parent[parent[key]]
-            key = parent[key]
-        return key
-
-    for account in accounts.to_dict("records"):
-        account_key = "Account:" + account["account_id"]
-        root(account_key)
-        for owner in account["owner_ids"]:
-            a, b = root(account_key), root("Party:" + owner)
-            parent[max(a, b)] = min(a, b)
-    result = accounts.copy()
-    result["group_id"] = [root("Account:" + account) for account in accounts["account_id"]]
-    scores = result["group_id"].map(lambda v: stable_score(str(v), split_seed, "split"))
-    result["split"] = np.where(scores < 0.7, "train", np.where(scores < 0.85, "validation", "test"))
-    return result
 
 
 def validate_dates(config: dict[str, Any]) -> None:
@@ -245,14 +211,7 @@ def sample_keys(accounts: pd.DataFrame, date: str, manifest: dict[str, Any]) -> 
     seq = int(manifest["cutoff_seqs"][date])
     scope = context_scope(manifest["config"])
     return [
-        ContextKey(
-            "Account",
-            str(row.account_id),
-            seq,
-            ms,
-            scope,
-            SPLIT_PHASE[str(row.split)] if scope else 3,
-        )
+        ContextKey("Account", str(row.account_id), seq, ms, scope, SPLIT_PHASE[str(row.split)])
         for row in accounts.itertuples(index=False)
     ]
 
@@ -281,24 +240,6 @@ def resolve_cutoff(executor: QueryExecutor, date: str) -> tuple[int, int]:
     return resolve_cutoffs(executor, [date])[date], cutoff_ms(date)
 
 
-def select_population(
-    config: dict[str, Any], executor: QueryExecutor, labels: ObservedLabelSource
-) -> tuple[pd.DataFrame, str, dict[str, int] | None]:
-    """The cohort of the configured protocol: accounts, cohort name and per-split counts.
-
-    strict_inductive keeps bounded seed reservoirs of the scope partitions;
-    shared_history exports every internal deposit account and splits ownership
-    groups by hash (no per-split counts).
-    """
-    if config["evaluation_protocol"] == "strict_inductive":
-        accounts, population_counts = scoped_cohort(executor, config, labels)
-        return accounts, "bounded_internal_deposit_seeds", population_counts
-    accounts = assign_groups(
-        export_accounts(executor, include_observed=reads_graph_labels(labels)), split_seed(config)
-    )
-    return accounts, "internal_deposit_accounts", None
-
-
 def _write_parquet(frame: pd.DataFrame, path: Path) -> None:
     """Write a pending file, then rename it, so a crash never leaves a truncated file."""
     temporary = path.with_suffix(".pending.parquet")
@@ -313,12 +254,14 @@ def _stage_population(
     executor: QueryExecutor,
     labels: ObservedLabelSource,
 ) -> None:
-    """Select and write accounts.parquet unless the manifest records it."""
+    """Select and write accounts.parquet unless the manifest records it.
+
+    The cohort is bounded seed reservoirs of the scope partitions plus the observed
+    positives (cohort.scoped_cohort).
+    """
     accounts_path = output / "accounts.parquet"
     if not accounts_path.exists() or "accounts_sha256" not in manifest:
-        accounts, cohort, population_counts = select_population(config, executor, labels)
-        if population_counts is not None:
-            manifest["population_by_split"] = population_counts
+        accounts, manifest["population_by_split"] = scoped_cohort(executor, config, labels)
         if ORACLE_COLUMNS & set(accounts.columns):
             raise ValueError(
                 "Population query returned oracle fields; install the observed-only query"
@@ -327,7 +270,7 @@ def _stage_population(
         accounts = accounts.sort_values("account_id").reset_index(drop=True)
         _write_parquet(accounts, accounts_path)
         manifest["accounts_sha256"] = digest(accounts_path)
-        manifest["cohort"] = cohort
+        manifest["cohort"] = "bounded_internal_deposit_seeds"
         write_manifest(output, manifest)
 
 
@@ -393,7 +336,7 @@ def prepare(
     resumed preparation skips the stages the manifest records.
     """
     sampler = SamplerPlan.from_config(config)
-    validate_protocol(config)
+    context_scope(config)
     validate_dates(config)
     if not config.get("dataset_id"):
         raise ValueError("A new immutable dataset_id is required after each graph reload/backfill")
@@ -407,7 +350,6 @@ def prepare(
         "query_hashes": query_hashes(),
         "preparation_sha256": fingerprint(preparation),
         "preparation": preparation,
-        "evaluation_protocol": config["evaluation_protocol"],
         "scope_id": config.get("scope_id", ""),
     }
     manifest: dict[str, Any]

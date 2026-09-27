@@ -26,7 +26,7 @@ from .dataset import (
 from .executor import TigerGraphExecutor, live_executor
 from .installation import install, source_counts
 from .labels import ensure_revealed_labels
-from .policy import validate_protocol
+from .policy import context_scope
 from .scope import ensure_scope, scope_header
 from .supervision import label_source
 from .training import output_paths, train
@@ -56,10 +56,9 @@ def resolve_identity(
     """Fill dataset_id: an existing scope's source, else a name derived from the graph."""
     if config.get("dataset_id"):
         return config
-    if config.get("evaluation_protocol") == "strict_inductive":
-        attrs = scope_header(executor, config["scope_id"])
-        if attrs is not None:
-            return {**config, "dataset_id": str(attrs["source_id"])}
+    attrs = scope_header(executor, config["scope_id"])
+    if attrs is not None:
+        return {**config, "dataset_id": str(attrs["source_id"])}
     graph = str(getattr(executor.client.conn, "graphname", "graph"))
     return {**config, "dataset_id": derived_dataset_id(graph, counts)}
 
@@ -70,11 +69,10 @@ def prepare_live(config: dict[str, Any], output: Path) -> dict[str, Any]:
     A ready directory is reused without connecting, but only after its GSQL
     hashes and preparation settings (PREPARATION_KEYS) match the current ones.
     Otherwise the graph is brought to a trainable state first: stale queries are
-    installed, the scope is created if missing, and a strict run reveals known mules
-    if the graph has none (label_policy = "graph_observed"). A shared_history run
-    reads whatever labels the graph has.
+    installed, the scope is created if missing, and known mules are revealed if the
+    graph has none (label_policy = "graph_observed").
     """
-    validate_protocol(config)
+    context_scope(config)
     labels = label_source(config)
     if (output / MANIFEST).exists():
         manifest = read_manifest(output)
@@ -94,11 +92,10 @@ def prepare_live(config: dict[str, Any], output: Path) -> dict[str, Any]:
     install(executor)
     counts = source_counts(executor)
     config = resolve_identity(executor, config, counts)
-    if config["evaluation_protocol"] == "strict_inductive":
-        ensure_scope(executor, config)
-        # The reveal draws its splits from the scope partitions.
-        if config.get("label_policy") == "graph_observed":
-            ensure_revealed_labels(executor, config)
+    ensure_scope(executor, config)
+    # The reveal draws its splits from the scope partitions.
+    if config.get("label_policy") == "graph_observed":
+        ensure_revealed_labels(executor, config)
     counts = source_counts(executor)
     result = prepare(config, output, executor, counts, labels=labels)
     if source_counts(executor) != counts:

@@ -874,7 +874,7 @@ def test_hub_registry_parse_save_load_and_stub_semantics(tmp_path: Path) -> None
     assert tuple(pd.read_parquet(path).columns) == HUB_COLUMNS
     manifest = {
         "cutoff_seqs": {"2024-07-01": 1000, "2024-10-01": 2000},
-        "config": {"evaluation_protocol": "strict_inductive", "scope_id": "scope"},
+        "config": {"scope_id": "scope"},
         **hub_manifest(scoped, path),
     }
     assert manifest["hub_scope_id"] == "scope" and "hub_scan_cap" not in manifest
@@ -885,7 +885,7 @@ def test_hub_registry_parse_save_load_and_stub_semantics(tmp_path: Path) -> None
     loaded = load_hub_registry(tmp_path, manifest)
     assert loaded.is_stub("Account", "H1", 1000, 2) and len(loaded) == 3
     with pytest.raises(ValueError, match="computed for scope 'scope'"):
-        load_hub_registry(tmp_path, {**manifest, "config": {"evaluation_protocol": "x"}})
+        load_hub_registry(tmp_path, {**manifest, "config": {"scope_id": "other"}})
     with pytest.raises(ValueError, match="no scoped hub registry"):
         load_hub_registry(tmp_path, {k: v for k, v in manifest.items() if k != "hub_scope_id"})
     HubRegistry(loaded.frame.iloc[:1], cutoff_seqs=cutoffs, threshold=1, scope_id="scope").save(
@@ -953,7 +953,6 @@ def live_config(tmp_path: Path, **changes: Any) -> dict[str, Any]:
     """Raw preparation settings of the built-in run: graph labels, candidate-pool sampler."""
     config = {
         "dataset_id": "unit_snapshot",
-        "evaluation_protocol": "strict_inductive",
         "scope_id": "unit_scope",
         "label_policy": "graph_observed",
         "dates": {"train": ["2024-07-01"], "validation": ["2024-10-01"], "test": ["2025-01-01"]},
@@ -1004,6 +1003,11 @@ def test_prepare_live_checks_query_hashes_before_reusing_a_ready_dataset(
 
     monkeypatch.setattr(pipeline, "live_executor", no_connection)
     assert pipeline.prepare_live(config, out) == manifest
+    # A query file preparation no longer uses cannot change the cohort.
+    retired = write_manifest(
+        out, config, {**fixed_hashes, "gsql/temporal/retired_query.gsql": "old"}
+    )
+    assert pipeline.prepare_live(config, out) == retired
     # Model and transport settings are not preparation settings.
     assert pipeline.prepare_live({**config, "learning_rate": 0.1, "query_concurrency": 2}, out)
     with pytest.raises(ValueError, match=r"split_seed.*new output"):
@@ -1043,25 +1047,26 @@ def test_dataset_identity_comes_from_the_scope_or_the_graph(tmp_path: Path) -> N
     assert pipeline.prepared_config(explicit, manifest)["dataset_id"] == "pinned"
 
 
-@pytest.mark.legacy
-def test_only_strict_runs_reveal_labels(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    reveals: list[str] = []
+def test_first_preparation_creates_the_scope_and_reveals_labels(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    steps: list[str] = []
     monkeypatch.setattr(pipeline, "live_executor", lambda config: SimpleNamespace())
-    monkeypatch.setattr(pipeline, "install", lambda executor: None)
+    monkeypatch.setattr(pipeline, "install", lambda executor: steps.append("install"))
     monkeypatch.setattr(pipeline, "source_counts", lambda executor: {"Account": 10})
-    monkeypatch.setattr(pipeline, "ensure_scope", lambda executor, config: None)
+    monkeypatch.setattr(pipeline, "ensure_scope", lambda executor, config: steps.append("scope"))
     monkeypatch.setattr(
-        pipeline,
-        "ensure_revealed_labels",
-        lambda executor, config: reveals.append(config["evaluation_protocol"]),
+        pipeline, "ensure_revealed_labels", lambda executor, config: steps.append("reveal")
     )
-    monkeypatch.setattr(pipeline, "prepare", lambda config, *args, **kwargs: {"status": "ready"})
-    config = live_config(tmp_path)
-    for protocol in ("shared_history", "strict_inductive"):
-        run = {**config, "evaluation_protocol": protocol}
-        assert pipeline.prepare_live(run, tmp_path / protocol) == {"status": "ready"}
-    # A shared_history run reads whatever labels the graph has.
-    assert reveals == ["strict_inductive"]
+
+    def prepare(config: dict[str, Any], *args: Any, **kwargs: Any) -> dict[str, Any]:
+        steps.append("prepare")
+        return {"status": "ready"}
+
+    monkeypatch.setattr(pipeline, "prepare", prepare)
+    assert pipeline.prepare_live(live_config(tmp_path), tmp_path / "run") == {"status": "ready"}
+    # The reveal draws its splits from the scope partitions, so the scope comes first.
+    assert steps == ["install", "scope", "reveal", "prepare"]
 
 
 @pytest.mark.legacy
@@ -1176,11 +1181,7 @@ def test_source_counts_ignore_experiment_scopes(monkeypatch: pytest.MonkeyPatch)
     assert installation.source_counts(tg) == {"Account": 10, "Party": 4}
     monkeypatch.setattr(installation, "verify_sources", lambda executor: [])
     manifest: dict[str, Any] = {
-        "config": {
-            "dataset_id": "snap",
-            "scope_id": "s",
-            "evaluation_protocol": "strict_inductive",
-        },
+        "config": {"dataset_id": "snap", "scope_id": "s"},
         # Older manifests recorded the scope vertex count too.
         "source": {"source_counts": {"Account": 10, "Party": 4, "Temporal_Training_Scope": 1}},
     }
@@ -1418,10 +1419,12 @@ def test_config_schema_rejects_unknown_keys_and_applies_operational_defaults(
 def test_configurations_saved_before_the_restructure_still_validate() -> None:
     # Saved models and prepared cohorts hold keys of removed paths, with the one value
     # that remains; validation drops them. Another value names a removed path.
-    saved = {**run_config(), "context_storage": "stream"}
+    saved = {**run_config(), "context_storage": "stream", "evaluation_protocol": "strict_inductive"}
     assert validate_config(saved) == run_config()
     with pytest.raises(ValueError, match="context_storage = 'sqlite' is no longer supported"):
         validate_config({**saved, "context_storage": "sqlite"})
+    with pytest.raises(ValueError, match="evaluation_protocol = 'shared_history'"):
+        validate_config({**saved, "evaluation_protocol": "shared_history"})
 
 
 def test_built_in_run_validates_and_only_run_config_applies_the_schema(tmp_path: Path) -> None:
@@ -1476,7 +1479,7 @@ def test_transport_settings_come_from_the_training_config(monkeypatch: pytest.Mo
             seen.update(kwargs)
 
     monkeypatch.setattr("mule_pattern_learner.temporal.live.executor.TigerGraphExecutor", Executor)
-    prepared = {"dataset_id": "d", "evaluation_protocol": "shared_history"}
+    prepared = {"dataset_id": "d", "scope_id": "scope"}
     manifest = {"config": prepared, "source": {}}
     training = {
         **prepared,
