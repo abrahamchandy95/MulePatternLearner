@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version
 import subprocess
+import time
 from typing import Any
 
 import numpy as np
@@ -136,6 +137,8 @@ def run_summary(
         "evaluation_protocol": EVALUATION_PROTOCOL,
         "validation_proxy": selection,
         "database_calls_during_training": progress.calls(),
+        # Wall-clock seconds of every segment of the run, test scoring included.
+        "elapsed_seconds": round(time.perf_counter() - progress.started, 3),
         "contexts": progress.context_counts(),
         "rejections": progress.rejections(),
         "sampler_backend": progress.backend,

@@ -246,6 +246,7 @@ def test_the_run_records_its_settings_provenance_and_epochs(
     # The metrics hold no history: its intervals and epochs have their own files.
     assert "history" not in json.loads(run.metrics.read_text())
     assert result["proxy_unlabeled_limit"] == config.training.proxy_unlabeled_limit
+    assert result["elapsed_seconds"] > 0
     epochs = read_epochs(run.epochs)
     assert epochs.epoch.tolist() == [1, 2] and epochs.selected.sum() == 1
     assert epochs.selected.tolist()[result["best_epoch"] - 1]

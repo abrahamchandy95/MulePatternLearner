@@ -287,7 +287,7 @@ MulePatternLearner/
 | `epochs.csv` | train | `epoch, loss, steps, validation_ap, validation_roc_auc, weights, selected, stopped` |
 | `events.jsonl` | every command | resume (with the segment's device, threads and determinism, and any change of them), backend choice, warnings, rejections (the lines `emit()` prints) |
 | `predictions/validation.parquet`, `predictions/test.parquet` | train | proxy scores on observed labels |
-| `metrics.json` | train | proxy metrics, totals, rejections, sampler totals |
+| `metrics.json` | train | proxy metrics, totals, rejections, sampler totals, wall-clock seconds over every segment |
 | `audit/<split>.json`, `audit/<split>.parquet`, `audit/<split>_rejected.txt` | evaluate | ground-truth audit of `validation` and `test`. Parquet columns: `account_id, is_mule, inclusion_probability, score, revealed, ring_id, label_source`. The JSON records the audit constants |
 | `scores/<accounts stem>_<date>.parquet`, `scores/<accounts stem>_<date>_rejected.txt` | score | scores of arbitrary accounts, and the accounts TigerGraph rejected |
 | `plots/*.png`, `report.md` | train, evaluate, report | figures and tables |
