@@ -15,6 +15,7 @@ from mule_pattern_learner.data.hub_registry import (
     hub_threshold,
     load_hub_registry,
 )
+from mule_pattern_learner.paths import DatasetPaths
 from mule_pattern_learner.testing.builders import SAMPLER, hub_rows
 from mule_pattern_learner.testing.fake_graph import Runner
 from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
@@ -50,7 +51,8 @@ def test_hub_registry_parse_save_load_and_stub_semantics(tmp_path: Path) -> None
         True,
     ]
     assert scoped.is_stub("Account", "H2", 2000, 1) and not scoped.is_stub("Account", "H2", 2000)
-    path = tmp_path / "hubs.parquet"
+    dataset = DatasetPaths(tmp_path)
+    path = dataset.hubs
     scoped.save(path)
     assert tuple(pd.read_parquet(path).columns) == tuple(HUB_COLUMNS)
     manifest = {
@@ -63,15 +65,15 @@ def test_hub_registry_parse_save_load_and_stub_semantics(tmp_path: Path) -> None
         "1000": {"1": 0, "2": 1, "3": 1},
         "2000": {"1": 1, "2": 0, "3": 0},
     }
-    loaded = load_hub_registry(tmp_path, manifest)
+    loaded = load_hub_registry(dataset, manifest)
     assert loaded.is_stub("Account", "H1", 1000, 2) and len(loaded) == 3
     with pytest.raises(ValueError, match="computed for scope 'scope'"):
-        load_hub_registry(tmp_path, {**manifest, "source": {"scope_id": "other"}})
+        load_hub_registry(dataset, {**manifest, "source": {"scope_id": "other"}})
     HubRegistry(loaded.frame.iloc[:1], cutoff_seqs=cutoffs, threshold=1, scope_id="scope").save(
         path
     )
     with pytest.raises(ValueError, match="changed"):
-        load_hub_registry(tmp_path, manifest)
+        load_hub_registry(dataset, manifest)
     empty = HubRegistry.empty()
     assert not empty.is_stub("Account", "H1", 123, 1) and len(empty) == 0
     assert hub_threshold(SAMPLER) == 1024

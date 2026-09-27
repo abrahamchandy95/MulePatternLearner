@@ -47,6 +47,7 @@ from mule_pattern_learner.data.manifest import dataset_settings
 from mule_pattern_learner.data.observed_labels import align_observed_labels, validate_label_table
 from mule_pattern_learner.inference import score_accounts
 from mule_pattern_learner.model.build import build_model
+from mule_pattern_learner.paths import DatasetPaths
 from mule_pattern_learner.sampling import candidates
 from mule_pattern_learner.tigergraph.context_query import query_context_rows
 from mule_pattern_learner.tigergraph.executor import QueryExecutor
@@ -844,42 +845,43 @@ def hub_registry() -> HubRegistry:
 
 def prepared_dataset(
     path: Path, config: RunConfig, monkeypatch: pytest.MonkeyPatch
-) -> tuple[Path, dict[str, Any], pd.DataFrame]:
-    """A prepared-dataset directory; load_prepared is replaced by its in-memory copy.
+) -> tuple[DatasetPaths, dict[str, Any], pd.DataFrame]:
+    """A prepared dataset in directory path; load_prepared is replaced by its in-memory copy.
 
     Its manifest records config's dataset settings for the source RUNTIME_SOURCE.
     """
+    dataset = DatasetPaths(path)
     path.mkdir(parents=True, exist_ok=True)
     accounts = accounts_frame()
     align_observed_labels(accounts, labels_frame(accounts)).to_parquet(
-        path / "observed_labels.parquet", index=False
+        dataset.observed_labels, index=False
     )
     manifest = {
         "status": "ready",
         "cutoff_seqs": dict(CUTOFFS),
         "cohort": "bounded_internal_deposit_seeds",
-        "observed_labels_sha256": file_digest(path / "observed_labels.parquet"),
+        "observed_labels_sha256": file_digest(dataset.observed_labels),
         "source": {
             "source_id": RUNTIME_SOURCE,
             "settings": dataset_settings(RUNTIME_SOURCE, config),
             "scope_id": config.scope.id,
         },
     }
-    (path / "manifest.json").write_text(json.dumps(manifest))
+    dataset.manifest.write_text(json.dumps(manifest))
 
-    def load(dataset: Path) -> tuple[dict[str, Any], pd.DataFrame]:
-        assert dataset == path
+    def load(loaded: DatasetPaths) -> tuple[dict[str, Any], pd.DataFrame]:
+        assert loaded == dataset
         return deepcopy(manifest), accounts.copy()
 
     for module in (trainer, score_accounts, data_manifest):
         monkeypatch.setattr(module, "load_prepared", load)
-    return path, manifest, accounts
+    return dataset, manifest, accounts
 
 
 def checkpoint(
     path: Path,
     config: RunConfig,
-    manifest_path: Path | None = None,
+    dataset: DatasetPaths | None = None,
     *,
     logit_shift: float = 0.0,
 ) -> Path:
@@ -899,8 +901,8 @@ def checkpoint(
         "input_fingerprint": plan.fingerprint(),
         "selected_on": "validation_observed_label_proxy_ap",
     }
-    if manifest_path is not None:
-        payload["dataset_manifest_sha256"] = file_digest(manifest_path)
-        payload["dataset"] = str(manifest_path.parent)
+    if dataset is not None:
+        payload["dataset_manifest_sha256"] = file_digest(dataset.manifest)
+        payload["dataset"] = str(dataset.root)
     torch.save(payload, path)
     return path

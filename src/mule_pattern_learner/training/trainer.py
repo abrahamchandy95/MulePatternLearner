@@ -53,7 +53,7 @@ from ..inference.rejections import exceeds_rejection_limit
 from ..metrics import evaluate, select_threshold
 from ..model.build import build_model
 from ..model.loss import NonNegativePULoss
-from ..paths import output_paths
+from ..paths import DatasetPaths, output_paths
 from ..runtime.device import choose_device, torch_runtime
 from ..runtime.workers import BatchPrefetcher
 from ..sampling.backend import resolve_backend
@@ -117,7 +117,7 @@ def build_optimizer(model: nn.Module, training: TrainingConfig) -> torch.optim.A
 
 def train(
     config: RunConfig,
-    dataset: Path,
+    dataset: DatasetPaths,
     output: Path,
     *,
     contexts: ContextSource | None = None,
@@ -138,8 +138,7 @@ def train(
     # Fails fast on per-hop candidate pools too, before any database work.
     check_limits(config, plan)
     checkpoint_path, run_dir = output_paths(output)
-    # The run directory may already hold the prepared cache (run_dir/prepared); a run
-    # has started once training wrote its own state there.
+    # A run has started once training wrote its own state into its directory.
     started = any((run_dir / name).exists() for name in RUN_STATE_FILES)
     resuming = resume and started
     if not resuming and (checkpoint_path.exists() or started):
@@ -241,7 +240,7 @@ class _TrainingRun:
         self,
         *,
         config: RunConfig,
-        dataset: Path,
+        dataset: DatasetPaths,
         manifest: dict[str, Any],
         accounts: pd.DataFrame,
         mask: pd.DataFrame,

@@ -11,6 +11,7 @@ from ..contract.bounds import AUDIT_POPULATION, AUDIT_SAMPLE
 from ..contract.clock import cutoff_ms
 from ..inference.saved_model import ModelCheckpoint
 from ..metrics import evaluate, weighted_metrics
+from ..paths import DatasetPaths
 from .sample import final_evaluation_sample
 from .truth import TruthReader
 
@@ -76,15 +77,15 @@ def evaluate_weighted(frame: pd.DataFrame, threshold: float) -> dict[str, Any]:
 
 
 def audit_inputs(
-    checkpoint: Path | ModelCheckpoint, output: Path, dataset: Path | None = None
-) -> tuple[ModelCheckpoint, Path, dict[str, Any]]:
+    checkpoint: Path | ModelCheckpoint, output: Path, dataset: DatasetPaths | None = None
+) -> tuple[ModelCheckpoint, DatasetPaths, dict[str, Any]]:
     """The frozen model, its prepared dataset and the dataset's manifest, all checked.
 
     The final audit reads nothing from the graph before these checks pass: a report
     that exists, a model with more than one test cutoff and a missing or changed
     dataset are refused. ``dataset`` defaults to the path recorded in the checkpoint.
     """
-    from ..data.manifest import MANIFEST, load_prepared
+    from ..data.manifest import load_prepared
 
     if output.suffix != ".json":
         raise ValueError("Final audit output must be a .json report path")
@@ -96,7 +97,7 @@ def audit_inputs(
         raise ValueError("Final population audit requires one test cutoff")
     if dataset is None:
         dataset = saved.dataset
-    if dataset is None or not (dataset / MANIFEST).exists():
+    if dataset is None or not dataset.manifest.exists():
         raise ValueError(
             "Final audit needs the prepared dataset of this checkpoint for its cutoff clock "
             "and hub registry; pass --dataset"
@@ -114,7 +115,7 @@ def evaluate_final_population(
     scope: ScopeReader,
     fetcher: ContextFetcher | None = None,
     negative_limit: int = 2000,
-    dataset: Path | None = None,
+    dataset: DatasetPaths | None = None,
     contexts: ContextSource | None = None,
     hubs: HubRegistry | None = None,
 ) -> dict[str, Any]:

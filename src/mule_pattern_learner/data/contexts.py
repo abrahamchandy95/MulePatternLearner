@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from collections import Counter, OrderedDict, deque
 from concurrent.futures import FIRST_COMPLETED, Future, wait
-from pathlib import Path
 import threading
 from typing import Any, Protocol
 
@@ -26,6 +25,7 @@ from ..contract.bounds import (
 from ..contract.feature_groups import FeaturePlan
 from ..contract.graph_schema import ContextKey
 from ..contract.sampler_plan import SamplerPlan
+from ..paths import DatasetPaths
 from ..runtime.workers import DaemonPool
 from .ports import ContextFetcher
 
@@ -304,7 +304,7 @@ class ContextOpener(Protocol):
     """
 
     def __call__(
-        self, dataset: Path, manifest: dict[str, Any], config: RunConfig
+        self, dataset: DatasetPaths, manifest: dict[str, Any], config: RunConfig
     ) -> ContextSource: ...
 
 

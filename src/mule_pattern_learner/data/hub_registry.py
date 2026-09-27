@@ -35,13 +35,13 @@ import pandas as pd
 
 from ..artifacts import atomic_write, file_digest
 from ..contract.graph_schema import HUB_COLUMNS, HUB_REASONS, context_scope
+from ..paths import DatasetPaths
 
 if TYPE_CHECKING:
     from ..contract.feature_groups import FeaturePlan
     from ..contract.sampler_plan import SamplerPlan
 
 
-HUB_FILE = "hubs.parquet"
 SCOPED_PHASES = (1, 2, 3)
 UNSCOPED_PHASES = (3,)
 
@@ -172,9 +172,9 @@ def hub_manifest(registry: HubRegistry, path: Path) -> dict[str, Any]:
     }
 
 
-def load_hub_registry(dataset: Path, manifest: dict[str, Any]) -> HubRegistry:
+def load_hub_registry(dataset: DatasetPaths, manifest: dict[str, Any]) -> HubRegistry:
     """Load and verify the prepared registry for the dataset's cutoffs and scope."""
-    path = dataset / HUB_FILE
+    path = dataset.hubs
     if not path.exists() or file_digest(path) != manifest["hubs_sha256"]:
         raise ValueError(f"Prepared hub registry changed or is missing: {path}")
     expected = context_scope(manifest["source"]["scope_id"])

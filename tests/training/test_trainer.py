@@ -34,6 +34,7 @@ from mule_pattern_learner.evaluation.audit import evaluate_predictions
 from mule_pattern_learner.evaluation.truth import ParquetEvaluationTruth
 from mule_pattern_learner.model.loss import NonNegativePULoss
 from mule_pattern_learner.model.tgat import LiveTGAT
+from mule_pattern_learner.paths import DatasetPaths
 from mule_pattern_learner.testing.builders import (
     UNIT_SOURCE,
     FrameObservedLabels,
@@ -66,7 +67,7 @@ def fit(
 ) -> dict[str, Any]:
     return trainer.train(
         config,
-        tmp_path / "dataset",
+        DatasetPaths(tmp_path / "dataset"),
         tmp_path / f"{name}.pt",
         contexts=source or FakeSource(config),
         hubs=hub_registry(),
@@ -437,13 +438,13 @@ def test_run_directory_is_created_only_after_the_source_opens(
     config = base_config()
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
 
-    def refuse(dataset: Path, manifest: dict[str, Any], config: RunConfig) -> NoReturn:
+    def refuse(dataset: DatasetPaths, manifest: dict[str, Any], config: RunConfig) -> NoReturn:
         raise ValueError("Live graph counts changed")
 
     with pytest.raises(ValueError, match="counts changed"):
         trainer.train(
             config,
-            tmp_path / "dataset",
+            DatasetPaths(tmp_path / "dataset"),
             tmp_path / "m.pt",
             open_contexts=refuse,
             hubs=hub_registry(),
@@ -540,20 +541,20 @@ class PreparedExecutor(FakeExecutor):
     The scope population holds the fixture accounts with their splits as partitions.
     """
 
-    def __init__(self, directory: Path, **kwargs: Any) -> None:
+    def __init__(self, dataset: DatasetPaths, **kwargs: Any) -> None:
         super().__init__(population=scoped_accounts(), **kwargs)
-        self.directory = directory
+        self.dataset = dataset
 
     def run(self, name: str, params: dict[str, Any], **kwargs: Any) -> list[dict[str, Any]]:
         if name == "temporal_training_context":
             # A label mask must already be frozen when the first feature query starts.
-            frozen = pd.read_parquet(self.directory / "observed_labels.parquet")
+            frozen = pd.read_parquet(self.dataset.observed_labels)
             assert label_summary(frozen) == {"train": 20, "validation": 20, "test": 20}
         return super().run(name, params, **kwargs)
 
 
-def prepared(tmp_path: Path, config: RunConfig, **kwargs: Any) -> tuple[Path, FakeExecutor]:
-    dataset = tmp_path / "dataset"
+def prepared(tmp_path: Path, config: RunConfig, **kwargs: Any) -> tuple[DatasetPaths, FakeExecutor]:
+    dataset = DatasetPaths(tmp_path / "dataset")
     executor = PreparedExecutor(dataset, **kwargs)
     prepare(
         config,
@@ -575,7 +576,7 @@ def test_hidden_truth_cannot_change_updates_or_checkpoint_selection(tmp_path: Pa
     first = train(c, dataset, tmp_path / "first.pt", contexts=streaming_source(executor, c))
     saved_first = torch.load(tmp_path / "first.pt", weights_only=True)
     # The oracle is a separate file that is never opened by training.
-    a = pd.read_parquet(dataset / "accounts.parquet")
+    a = pd.read_parquet(dataset.accounts)
     assert "is_mule" not in a.columns
     truth = a[["account_id"]].assign(is_mule=np.arange(len(a)) % 2)
     truth_path = tmp_path / "evaluation_truth.parquet"

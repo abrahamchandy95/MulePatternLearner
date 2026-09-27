@@ -25,6 +25,7 @@ from mule_pattern_learner.data.accounts import scoped_cohort
 from mule_pattern_learner.data.contexts import StreamingContextSource
 from mule_pattern_learner.inference.score_accounts import score_new_accounts
 from mule_pattern_learner.model.build import build_model
+from mule_pattern_learner.paths import DatasetPaths
 from mule_pattern_learner.testing.builders import (
     UNIT_SOURCE,
     FrameObservedLabels,
@@ -262,7 +263,7 @@ def test_strict_preparation_and_nnpu_use_the_correct_phase_end_to_end(tmp_path: 
             return super().run(name, params, **kwargs)
 
     executor = Executor({}, last_visible=lambda index, ms: 100)
-    dataset = tmp_path / "dataset"
+    dataset = DatasetPaths(tmp_path / "dataset")
     manifest = prepare(
         cfg,
         UNIT_SOURCE,

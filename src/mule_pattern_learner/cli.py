@@ -13,9 +13,10 @@ from pathlib import Path
 from typing import Any
 
 from .config import DEFAULT_CONFIG
+from .data.manifest import read_manifest
 from .inference.saved_model import ModelCheckpoint
 from .inference.score_accounts import read_account_ids, score
-from .paths import DEFAULT_MODEL, dataset_path
+from .paths import DEFAULT_MODEL, DatasetPaths
 from .pipeline.connect import connect, open_context_source
 from .pipeline.evaluate import evaluate, final_audit
 from .pipeline.prepare import prepare_live
@@ -42,15 +43,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Reinstall every query, even those already installed with the repository text",
     )
-    prep = commands.add_parser("prepare", help="Optionally stage the data ahead of training")
-    prep.add_argument(
-        "--output", type=Path, default=DEFAULT_MODEL, help="Model .pt path whose run it prepares"
+    commands.add_parser(
+        "prepare", help="Optionally stage the built-in run's dataset in data/ ahead of training"
     )
     training = commands.add_parser(
         "train", help="Prepare as needed, train with nnPU and save (resumes an interrupted run)"
     )
     training.add_argument("--output", type=Path, default=DEFAULT_MODEL, help="Model .pt path")
-    training.add_argument("--dataset", type=Path, help="Reuse an existing prepared dataset")
     scoring = commands.add_parser("score")
     scoring.add_argument("--checkpoint", type=Path, required=True)
     scoring.add_argument("--dataset", type=Path, help="Default: the checkpoint's prepared data")
@@ -88,7 +87,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def checkpoint_dataset(checkpoint: ModelCheckpoint) -> Path:
+def checkpoint_dataset(checkpoint: ModelCheckpoint) -> DatasetPaths:
     """The prepared dataset a checkpoint was trained on."""
     if checkpoint.dataset is None:
         raise ValueError(f"{checkpoint.path} records no prepared dataset; pass --dataset")
@@ -96,9 +95,9 @@ def checkpoint_dataset(checkpoint: ModelCheckpoint) -> Path:
 
 
 def train_command(args: argparse.Namespace) -> dict[str, Any]:
-    """Prepare when no dataset is given, then train (or resume) and save the model."""
+    """Prepare the dataset as needed, then train (or resume) and save the model."""
     # An interrupted run continues from its checkpoint; a finished one is an error.
-    return run(args.output, dataset=args.dataset, resume=True)
+    return run(args.output, resume=True)
 
 
 def main() -> None:
@@ -113,7 +112,8 @@ def main() -> None:
             force=args.force,
         )
     elif args.command == "evaluate-final":
-        result = final_audit(args.checkpoint, args.truth, args.output, dataset=args.dataset)
+        dataset = None if args.dataset is None else DatasetPaths(args.dataset)
+        result = final_audit(args.checkpoint, args.truth, args.output, dataset=dataset)
     elif args.command == "evaluate":
         if args.output.exists():
             raise FileExistsError(args.output)
@@ -124,7 +124,9 @@ def main() -> None:
         result = score_new(args.checkpoint, read_account_ids(args.accounts), args.date, args.output)
     elif args.command == "score":
         checkpoint = ModelCheckpoint.load(args.checkpoint)
-        dataset = args.dataset or checkpoint_dataset(checkpoint)
+        dataset = (
+            checkpoint_dataset(checkpoint) if args.dataset is None else DatasetPaths(args.dataset)
+        )
         result = score(
             checkpoint,
             dataset,
@@ -134,7 +136,7 @@ def main() -> None:
             open_contexts=open_context_source,
         )
     elif args.command == "prepare":
-        result = prepare_live(DEFAULT_CONFIG, dataset_path(args.output))
+        result = read_manifest(prepare_live(DEFAULT_CONFIG))
     else:
         result = train_command(args)
     print(json.dumps(result, indent=2, allow_nan=False))
