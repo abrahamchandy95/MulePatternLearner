@@ -6,7 +6,7 @@ from typing import Any, cast, override
 from pyTigerGraph import TigerGraphConnection
 import requests
 
-from .connection import Settings
+from .connection import ConnectionSettings
 
 _READ_TIMEOUT_S = 600.0
 _CONNECT_TIMEOUT_S = 30.0
@@ -77,10 +77,10 @@ class Client:
     Client that connects to TigerGraph
     """
 
-    _settings: Settings
+    _settings: ConnectionSettings
     conn: TigerGraphConnection
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: ConnectionSettings) -> None:
         self._settings = settings
         self.conn = _TimeoutConnection(
             host=settings.host,

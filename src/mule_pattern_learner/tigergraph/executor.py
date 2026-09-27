@@ -19,7 +19,7 @@ from ..runtime.progress import emit
 if TYPE_CHECKING:
     from pyTigerGraph import TigerGraphConnection
 
-    from .connection import Settings
+    from .connection import ConnectionSettings
 
 T = TypeVar("T")
 
@@ -198,7 +198,7 @@ class TigerGraphExecutor:
         slow_attempt_s: float = 30.0,
         size_limit: int = 64_000_000,
         client: Any = None,
-        settings: Settings | None = None,
+        settings: ConnectionSettings | None = None,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
         rng: random.Random | None = None,

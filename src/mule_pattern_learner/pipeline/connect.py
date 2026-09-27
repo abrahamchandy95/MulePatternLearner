@@ -17,7 +17,7 @@ from ..contract.sampler_plan import sampler_pools
 from ..data.contexts import ContextSource, build_context_source
 from ..data.manifest import recorded_settings
 from ..paths import DatasetPaths
-from ..tigergraph.connection import Settings
+from ..tigergraph.connection import ConnectionSettings
 from ..tigergraph.context_query import TigerGraphContextFetcher
 from ..tigergraph.executor import QueryExecutor, TigerGraphExecutor
 from ..tigergraph.provenance import verify_frozen_source
@@ -26,7 +26,7 @@ from ..tigergraph.provenance import verify_frozen_source
 def connect(transport: TransportConfig) -> TigerGraphExecutor:
     """A connected executor with the retry budgets of a transport section."""
     return TigerGraphExecutor(
-        settings=Settings(),
+        settings=ConnectionSettings(),
         max_attempts=transport.max_query_attempts,
         max_outage_s=transport.max_outage_s,
     )

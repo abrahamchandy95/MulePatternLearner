@@ -114,7 +114,7 @@ def first_step(config: RunConfig, dataset: DatasetPaths, contexts: ContextReader
     keys = sample_keys(accounts.iloc[step.indices], step.date, manifest)
     with torch_runtime(device, deterministic=runtime.deterministic, threads=runtime.threads):
         calls_before, _ = rest_calls(contexts)
-        requests_before = contexts.query_calls
+        requests_before = contexts.database_calls
         started = time.perf_counter()
         prepared = build_root_batch(
             contexts,
@@ -139,7 +139,7 @@ def first_step(config: RunConfig, dataset: DatasetPaths, contexts: ContextReader
             "accepted_roots": int(prepared.accepted.sum()),
             "batch": prepared.stats,
             "rejections": dict(contexts.rejections),
-            "context_requests": contexts.query_calls - requests_before,
+            "context_requests": contexts.database_calls - requests_before,
             "rest_calls": calls_after - calls_before,
             "retries": retries,
             "batch_seconds": build_seconds,

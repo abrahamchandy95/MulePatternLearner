@@ -24,7 +24,7 @@ from mule_pattern_learner.data.contexts import ContextSource, context_hash
 from mule_pattern_learner.data.hub_registry import HubRegistry
 from mule_pattern_learner.reference.batch_features import node_features
 from mule_pattern_learner.testing.builders import (
-    DEFAULT_TGAT_PLAN,
+    CORE_PLAN,
     PLAN,
     SAMPLER,
     SMALL_SAMPLER,
@@ -58,7 +58,7 @@ def test_per_request_failures_become_none_and_are_counted() -> None:
     assert store.rejections == Counter({"history_capacity_exceeded": 1, "missing_entity": 1})
     assert rows[0] is not None and rows[0]["node_id"] == keys[0].node_id
     # Cached rejections are served without another call and counted again.
-    assert store.fetch([keys[3]]) == [None] and store.query_calls == 1
+    assert store.fetch([keys[3]]) == [None] and store.database_calls == 1
     assert store.rejections["missing_entity"] == 2
     assert query_context_batch(server, keys[:2], plan=PLAN, sampler=SAMPLER)[1] is None
     # The same counts per hop: roots (hop 1) and children (hop 2) are reported apart.
@@ -79,7 +79,7 @@ def test_hop_pools_and_flags_are_sent_and_lru_is_keyed_by_hop() -> None:
     store.fetch([key], hop=1)
     store.fetch([key], hop=2)
     store.fetch([key], hop=1)
-    assert store.query_calls == 2 and len(server.calls) == 2
+    assert store.database_calls == 2 and len(server.calls) == 2
     first, second = server.calls
     assert {k: first[k] for k in SAMPLER.query_params(1)} == SAMPLER.query_params(1)
     assert {k: second[k] for k in SAMPLER.query_params(2)} == SAMPLER.query_params(2)
@@ -112,7 +112,7 @@ def test_sources_count_requested_distinct_and_cached_contexts() -> None:
     roots = [ContextKey("Account", f"R{i:02}", 100, 1000) for i in range(8)]
     with ContextSource(
         TigerGraphContextFetcher(FakeTigerGraph(factory=neighbourhood)),
-        plan=DEFAULT_TGAT_PLAN,
+        plan=CORE_PLAN,
         sampler=SMALL_SAMPLER,
     ) as source:
         prepared = build_root_batch(
@@ -120,7 +120,7 @@ def test_sources_count_requested_distinct_and_cached_contexts() -> None:
             roots,
             fanouts=(8, 4),
             device="cpu",
-            plan=DEFAULT_TGAT_PLAN,
+            plan=CORE_PLAN,
             sampler=SMALL_SAMPLER,
             hubs=HubRegistry.empty(),
             mode="eval",
@@ -141,8 +141,8 @@ def test_lru_is_bounded_and_close_releases_it() -> None:
     keys = [root(i) for i in range(100, 180)]
     rows = store.fetch(keys)
     assert list(store.memory) == [(1, key) for key in keys[-8:]]
-    calls = store.query_calls
-    assert store.fetch(keys[-8:]) == rows[-8:] and store.query_calls == calls
+    calls = store.database_calls
+    assert store.fetch(keys[-8:]) == rows[-8:] and store.database_calls == calls
     assert store.fetch(keys[:2]) == rows[:2] and "request_index" not in (rows[0] or {})
     store.close()
     assert not store.memory
@@ -181,7 +181,7 @@ def test_concurrent_fetches_share_requests_and_respect_concurrency() -> None:
     assert not errors and len(results) == 12
     assert server.peak <= 3
     assert max(server.requested.values()) == 1  # each (hop, key) requested once
-    assert store.query_calls == len(server.calls)
+    assert store.database_calls == len(server.calls)
     store.close()
 
 
@@ -285,7 +285,7 @@ def test_timed_out_blocks_are_bisected_and_a_single_slow_key_is_fatal() -> None:
     rows = store.fetch(keys)
     assert [row and row["node_id"] for row in rows] == [key.node_id for key in keys]
     assert server.sizes == [8, 4, 2, 2, 4, 2, 2]
-    assert store.query_calls == 4 and store.diagnostics["timeout_splits"] == 3
+    assert store.database_calls == 4 and store.diagnostics["timeout_splits"] == 3
     store.close()
     server = Slow(limit=8, slow_ids={keys[5].node_id})
     store = ContextSource(
@@ -350,9 +350,9 @@ def test_the_context_source_serves_repeats_from_its_bounded_lru() -> None:
     memory = ContextSource(TigerGraphContextFetcher(FakeTigerGraph({})), capacity=3)
     rows = memory.fetch(keys)
     assert len(memory.memory) == 3
-    calls = memory.query_calls
+    calls = memory.database_calls
     assert memory.fetch(keys[-3:]) == rows[-3:]
-    assert memory.query_calls == calls
+    assert memory.database_calls == calls
 
 
 def test_hops_use_their_own_pools_and_only_spot_checks_carry_encodings() -> None:
@@ -361,7 +361,7 @@ def test_hops_use_their_own_pools_and_only_spot_checks_carry_encodings() -> None
     executor = FakeTigerGraph({root: context(root, many)})
     with ContextSource(
         TigerGraphContextFetcher(executor),
-        plan=DEFAULT_TGAT_PLAN,
+        plan=CORE_PLAN,
         sampler=SMALL_SAMPLER,
         encoding_check_every=1000,
     ) as source:
@@ -369,7 +369,7 @@ def test_hops_use_their_own_pools_and_only_spot_checks_carry_encodings() -> None
             source,
             [root],
             fanouts=(8, 2),
-            plan=DEFAULT_TGAT_PLAN,
+            plan=CORE_PLAN,
             sampler=SMALL_SAMPLER,
             mode="train",
         )
@@ -389,17 +389,15 @@ def test_hops_use_their_own_pools_and_only_spot_checks_carry_encodings() -> None
 def test_same_context_in_two_scopes_or_hops_is_never_shared() -> None:
     key = ContextKey("Account", "a", 100, 1000, "strict", 1)
     executor = FakeTigerGraph()
-    store = ContextSource(
-        TigerGraphContextFetcher(executor), plan=DEFAULT_TGAT_PLAN, sampler=SMALL_SAMPLER
-    )
+    store = ContextSource(TigerGraphContextFetcher(executor), plan=CORE_PLAN, sampler=SMALL_SAMPLER)
     store.fetch([key], hop=1)
     store.fetch([key], hop=2)
     store.fetch([replace(key, visibility_phase=2)], hop=1)
     store.fetch([key], hop=1)
-    assert store.query_calls == 3
+    assert store.database_calls == 3
     store.close()
     bad = deepcopy(context(key))
     bad["features"]["history_withheld"] = 1
     with pytest.raises(ValueError, match="Unknown node feature"):
-        validate_context(key, bad, DEFAULT_TGAT_PLAN, SMALL_SAMPLER)
-    assert np.isfinite(node_features(context(key), DEFAULT_TGAT_PLAN)).all()
+        validate_context(key, bad, CORE_PLAN, SMALL_SAMPLER)
+    assert np.isfinite(node_features(context(key), CORE_PLAN)).all()

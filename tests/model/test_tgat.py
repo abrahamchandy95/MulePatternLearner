@@ -13,7 +13,7 @@ from torch import nn
 from mule_pattern_learner.batching.assemble import build_batch
 from mule_pattern_learner.config import DEFAULT_CONFIG, ModelConfig, RunConfig
 from mule_pattern_learner.contract.feature_groups import (
-    DEFAULT_GROUPS,
+    CORE_GROUPS,
     FeaturePlan,
     contract_fingerprint,
     extraction_plan,
@@ -123,7 +123,7 @@ def payload(config: RunConfig, model: TGAT, contract: str, inputs: str) -> dict[
     }
 
 
-@pytest.mark.parametrize("groups", [DEFAULT_CONFIG.features, DEFAULT_GROUPS])
+@pytest.mark.parametrize("groups", [DEFAULT_CONFIG.features, CORE_GROUPS])
 def test_output_shapes(groups: tuple[str, ...]) -> None:
     config = replace(CONFIG, features=groups)
     plan = config.feature_plan()
@@ -208,7 +208,7 @@ def test_padding_changes_nothing() -> None:
 def test_the_slot_sum_is_on_by_default_and_off_builds_the_model_without_it() -> None:
     assert ModelConfig().slot_sum is True
     without = CONFIG.with_changes({"model": {"slot_sum": False}})
-    no_pools = replace(without, features=DEFAULT_GROUPS)
+    no_pools = replace(without, features=CORE_GROUPS)
     for config, parameters in ((no_pools, 83_457), (without, 88_705)):
         plan = config.feature_plan()
         # The model as it was before the option existed.

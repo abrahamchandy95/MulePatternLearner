@@ -113,7 +113,7 @@ def prepare_golden(directory: Path) -> tuple[RunConfig, DatasetPaths, FakeTigerG
         TigerGraphObservedLabels(),
         scope=TigerGraphScope(executor),
         cutoffs=TigerGraphCutoffs(executor),
-        hubs=TigerGraphHubs(executor),
+        hub_reader=TigerGraphHubs(executor),
     )
     return config, dataset, executor
 

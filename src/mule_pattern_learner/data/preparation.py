@@ -89,12 +89,12 @@ def _stage_cutoffs(
 
 
 def _stage_hubs(
-    config: RunConfig, dataset: DatasetPaths, manifest: dict[str, Any], hubs: HubReader
+    config: RunConfig, dataset: DatasetPaths, manifest: dict[str, Any], hub_reader: HubReader
 ) -> None:
     """Query and save the hub registry of the prepared cutoffs and scope."""
     hubs_path = dataset.hubs
     if "hubs_sha256" not in manifest:
-        registry = hubs.hub_registry(
+        registry = hub_reader.hub_registry(
             manifest["cutoff_seqs"].values(),
             threshold=hub_threshold(config.sampler),
             scope_id=config.scope.id,
@@ -114,7 +114,7 @@ def prepare(
     *,
     scope: ScopeReader,
     cutoffs: CutoffReader,
-    hubs: HubReader,
+    hub_reader: HubReader,
 ) -> dict[str, Any]:
     """Resumable preparation: the accounts, observed labels, cutoffs and hub registry.
 
@@ -155,7 +155,7 @@ def prepare(
         raise ValueError("Prepared account file changed")
     _stage_labels(dataset, manifest, labels, accounts)
     _stage_cutoffs(config, dataset, manifest, cutoffs)
-    _stage_hubs(config, dataset, manifest, hubs)
+    _stage_hubs(config, dataset, manifest, hub_reader)
     manifest["status"] = "ready"
     write_manifest(dataset, manifest)
     return manifest

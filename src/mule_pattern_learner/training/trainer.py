@@ -80,7 +80,7 @@ from .checkpoint import (
     restore_cuda_rng,
     run_started,
 )
-from .history import LogInterval, Progress, epoch_record, plain
+from .history import LogInterval, RunTotals, epoch_record, plain
 from .objective import StepLoss, nnpu_objective, nnpu_step
 from .schedule import (
     EvaluationSample,
@@ -279,7 +279,7 @@ class _TrainingRun:
         self.backend = resolve_backend(self.sampler, self.batch_device)
         self.limit = config.runtime.max_rejected_root_fraction
         self.observed = {sample.date: sample.observed for sample in training}
-        self.progress = Progress(time.perf_counter(), contexts, self.backend)
+        self.progress = RunTotals(time.perf_counter(), contexts, self.backend)
         # Seeded right before the model is built: initial weights depend only on the seed.
         torch.manual_seed(config.training.seed)
         self.model = build_model(config.model, plan, self.sampler.fanouts[0]).to(device)

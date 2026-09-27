@@ -29,7 +29,7 @@ import torch
 from mule_pattern_learner.config import BUILT_IN_SAMPLER, DEFAULT_CONFIG, RunConfig
 from mule_pattern_learner.contract.clock import cutoff_ms
 from mule_pattern_learner.contract.feature_groups import (
-    DEFAULT_GROUPS,
+    CORE_GROUPS,
     FeaturePlan,
     contract_fingerprint,
     extraction_plan,
@@ -161,7 +161,7 @@ def test_the_built_in_inputs_keep_their_recorded_fingerprints() -> None:
 
 def test_models_whose_columns_moved_are_refused(tmp_path: Path) -> None:
     # Columns follow registry order now; before, the window groups' columns sat elsewhere.
-    plan = FeaturePlan((*DEFAULT_GROUPS, "rolling_windows"))
+    plan = FeaturePlan((*CORE_GROUPS, "rolling_windows"))
     recorded = fingerprint(
         {"contract": contract_fingerprint(), "groups": sorted(plan.groups), "architecture": "split"}
     )
@@ -218,7 +218,7 @@ def test_the_same_settings_prepare_the_dataset_of_the_old_code(tmp_path: Path) -
         TigerGraphObservedLabels(),
         scope=TigerGraphScope(executor),
         cutoffs=TigerGraphCutoffs(executor),
-        hubs=TigerGraphHubs(executor),
+        hub_reader=TigerGraphHubs(executor),
     )
     fixture = DatasetPaths(FIXTURES / "dataset")
     for have, want in (

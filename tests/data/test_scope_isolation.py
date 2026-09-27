@@ -82,9 +82,9 @@ def test_scope_follows_recursive_events_and_cache_never_crosses_scope() -> None:
     build_batch(backend, [a], fanouts=(2, 2))
     assert child_key(msg, a) in source.requested
     assert all(key.scope_id == "strict" and key.visibility_phase == 1 for key in source.requested)
-    previous = backend.query_calls
+    previous = backend.database_calls
     backend.fetch([replace(a, visibility_phase=3)])
-    assert backend.query_calls > previous
+    assert backend.database_calls > previous
     with pytest.raises(ValueError, match="differs"):
         validate_context(a, context(replace(a, visibility_phase=3)))
 
@@ -96,7 +96,7 @@ def test_stream_retention_is_bounded_across_many_disjoint_batches() -> None:
     for start in range(0, 512, 16):
         backend.fetch([ContextKey("Account", str(i), 100, 1000) for i in range(start, start + 16)])
         assert len(backend.memory) <= 8
-    assert backend.query_calls == 32
+    assert backend.database_calls == 32
     backend.close()
     assert not backend.memory
 
@@ -280,7 +280,7 @@ def test_strict_preparation_and_nnpu_use_the_correct_phase_end_to_end(tmp_path: 
         FrameObservedLabels(supplied_labels()),
         scope=TigerGraphScope(executor),
         cutoffs=TigerGraphCutoffs(executor),
-        hubs=TigerGraphHubs(executor),
+        hub_reader=TigerGraphHubs(executor),
     )
     assert manifest["status"] == "ready" and not executor.requested
     source = ContextSource(

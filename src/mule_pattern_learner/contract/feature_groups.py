@@ -202,7 +202,9 @@ FEATURE_GROUPS = {
     "sampler_meta": FeatureGroup("categorical", ("stratum",)),
 }
 CLIENT_GROUPS = frozenset({"hub_indicator", *POOL_GROUPS})
-DEFAULT_GROUPS = (
+# The built-in run's groups without the pool groups: the model the pool groups were
+# added to.
+CORE_GROUPS = (
     "entity_meta",
     "hub_indicator",
     "message_core",
@@ -210,9 +212,9 @@ DEFAULT_GROUPS = (
     "pair_history",
     "flow_timing",
 )
-# The groups of the built-in run (config.DEFAULT_CONFIG): the defaults plus the pool
+# The groups of the built-in run (config.DEFAULT_CONFIG): the core groups plus the pool
 # groups.
-BUILT_IN_GROUPS = (*DEFAULT_GROUPS, *POOL_GROUPS)
+BUILT_IN_GROUPS = (*CORE_GROUPS, *POOL_GROUPS)
 # Columns follow registry order. Before the layered restructure a fixed list placed the
 # columns of these groups elsewhere, so a plan with one of them fingerprints differently
 # now, and a model saved with such a plan is refused instead of misread.

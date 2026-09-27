@@ -151,6 +151,6 @@ def score_new_accounts(
         "rejected_output": str(rejected_output) if rejected else None,
         "output": str(output),
         "device": str(predictor.device),
-        "database_calls": contexts.query_calls,
+        "database_calls": contexts.database_calls,
         "scope": "available_history_at_prediction",
     }

@@ -30,7 +30,7 @@ def test_the_transport_section_sets_the_source_and_the_retry_budgets(
     settings = SimpleNamespace()
     monkeypatch.setattr(connect, "verify_frozen_source", lambda executor, manifest: None)
     # The connection settings would come from .env; the test never reads it.
-    monkeypatch.setattr(connect, "Settings", lambda: settings)
+    monkeypatch.setattr(connect, "ConnectionSettings", lambda: settings)
 
     class Executor:
         def __init__(self, **kwargs: Any) -> None:
