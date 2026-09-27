@@ -221,17 +221,12 @@ def test_the_graph_truth_pages_the_label_contract() -> None:
         {"account_id": f"A{i:05}", "is_mule": i % 2, "mule_label_known": i % 3 != 0}
         for i in range(10050)
     ]
-    calls: list[dict[str, Any]] = []
-
-    class Executor:
-        def run(self, name: str, params: dict[str, Any], **_: Any) -> list[dict[str, Any]]:
-            assert name == TRUTH_QUERY
-            calls.append(params)
-            page = [{"attributes": r} for r in rows if r["account_id"] > params["after_id"]]
-            return [{"status": "ok"}, {"accounts": page[: params["batch_size"]]}]
-
-    truth = TigerGraphTruth(Executor()).read()
-    assert [(c["after_id"], c["batch_size"]) for c in calls] == [("", 10000), ("A09999", 10000)]
+    graph = FakeTigerGraph(truth=rows)
+    truth = TigerGraphTruth(graph).read()
+    assert graph.calls == [
+        (TRUTH_QUERY, {"after_id": "", "batch_size": 10000}),
+        (TRUTH_QUERY, {"after_id": "A09999", "batch_size": 10000}),
+    ]
     assert truth.account_id.tolist() == [r["account_id"] for r in rows]
     # An account whose label is not known is -1, never a negative.
     assert truth.is_mule.tolist() == [r["is_mule"] if r["mule_label_known"] else -1 for r in rows]

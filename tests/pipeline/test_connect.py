@@ -16,8 +16,7 @@ from mule_pattern_learner.contract.server import SCOPE_POLICY_QUERY
 from mule_pattern_learner.data.manifest import dataset_settings
 from mule_pattern_learner.paths import DatasetPaths
 from mule_pattern_learner.pipeline import connect
-from mule_pattern_learner.testing.fake_graph import scope_counts
-from mule_pattern_learner.tigergraph import provenance
+from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
 
 # open_context_source reads the dataset from its manifest; the directory is not read.
 UNUSED = DatasetPaths(Path("unused"))
@@ -63,30 +62,13 @@ def test_the_transport_section_sets_the_source_and_the_retry_budgets(
 def test_a_resumed_stream_checks_the_frozen_source_before_fetching(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    counts = {"Account": 10}
     header = {"ready": True, "source_id": "snapshot", "split_seed": 42}
-    policy = {"scope_unowned": "linked"}
-    conn = SimpleNamespace(
-        getVertexCount=lambda *args, **kwargs: dict(counts),
-        getVerticesById=lambda *args: [{"attributes": dict(header)}],
-    )
-    policy_calls: list[dict[str, Any]] = []
-
-    def run(name: str, params: dict[str, Any], **_: Any) -> list[dict[str, Any]]:
-        assert name == SCOPE_POLICY_QUERY
-        policy_calls.append(params)
-        return [{"status": "ok", **scope_counts(policy["scope_unowned"])}]
-
-    executor = SimpleNamespace(
-        client=SimpleNamespace(conn=conn), run=run, call=lambda operation, what: operation(conn)
-    )
-    checked = []
-    monkeypatch.setattr(provenance, "verify_sources", lambda client: checked.append(client))
+    graph = FakeTigerGraph(counts={"Account": 10}, scopes={"scope": header})
     budgets: list[tuple[int, int]] = []
 
     def connected(transport: TransportConfig) -> Any:
         budgets.append((transport.max_query_attempts, transport.max_outage_s))
-        return executor
+        return graph
 
     monkeypatch.setattr(connect, "connect", connected)
     config = DEFAULT_CONFIG.with_changes(
@@ -98,23 +80,28 @@ def test_a_resumed_stream_checks_the_frozen_source_before_fetching(
     )
     manifest = {
         "source": {
-            "source_counts": dict(counts),
+            "source_counts": {"Account": 10},
             "settings": dataset_settings("snapshot", config),
         },
     }
     backend = connect.open_context_source(UNUSED, manifest, config)
     backend.close()
-    assert checked == [executor] and budgets == [(3, 60)]
-    assert policy_calls == [{"scope_id": "scope"}]
+    assert budgets == [(3, 60)]
+    assert graph.calls == [(SCOPE_POLICY_QUERY, {"scope_id": "scope"})]
+    # Queries whose installed text differs from the repository's are refused.
+    graph.stale = frozenset({SCOPE_POLICY_QUERY})
+    with pytest.raises(ValueError, match="mule install"):
+        connect.open_context_source(UNUSED, manifest, config)
+    graph.stale = frozenset()
     # A scope created with another scope.unowned rule than the configured one is refused.
-    policy["scope_unowned"] = "independent"
+    graph.scope_policy = "independent"
     with pytest.raises(ValueError, match="no longer valid.*scope.unowned = 'independent'"):
         connect.open_context_source(UNUSED, manifest, config)
-    policy["scope_unowned"] = "linked"
-    counts["Account"] += 1
+    graph.scope_policy = "linked"
+    graph.counts["Account"] += 1
     with pytest.raises(ValueError, match="counts changed"):
         connect.open_context_source(UNUSED, manifest, config)
-    counts["Account"] -= 1
-    header["ready"] = False
+    graph.counts["Account"] -= 1
+    graph.scopes["scope"]["ready"] = False
     with pytest.raises(ValueError, match="no longer valid"):
         connect.open_context_source(UNUSED, manifest, config)

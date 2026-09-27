@@ -1,11 +1,14 @@
 """In-memory stand-ins for TigerGraph and for context sources.
 
-`FakeTigerGraph` answers the read-only training queries the way the repository GSQL
-does: context requests carry 1..64 keys and exactly the query's parameters,
-messages are cut to the requested hop pool, Fourier vectors are printed only when
-`emit_encodings` is set, every request index gets exactly one row, and per-request
-failures are status rows. The smaller fakes answer one query each, as the tests
-that use them need.
+`FakeTigerGraph` is a ConnectionExecutor of the repository's queries. `run` answers them
+the way the repository GSQL does: context requests carry 1..64 keys and exactly the
+query's parameters, messages are cut to the requested hop pool, Fourier vectors are
+printed only when `emit_encodings` is set, every request index gets exactly one row,
+per-request failures are status rows, account queries page by account id, and the
+queries that write run with one attempt. `call` and `gsql` run on its connection
+(FakeConnection), which answers SHOW QUERY with the installed text, lists the installed
+endpoints and reports the schema, the vertex counts and the scope headers. The smaller
+fakes answer one query each, as the tests that use them need.
 """
 
 from __future__ import annotations
@@ -15,7 +18,6 @@ from collections.abc import Callable, Iterable
 from copy import deepcopy
 import threading
 import time
-from types import SimpleNamespace
 from typing import Any
 
 import pandas as pd
@@ -27,6 +29,7 @@ from mule_pattern_learner.contract.feature_groups import FeaturePlan, extraction
 from mule_pattern_learner.contract.graph_schema import PAYMENT_RELATIONS, ContextKey
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
 from mule_pattern_learner.contract.server import (
+    ANALYTICS_QUERY_FILES,
     CONTEXT_QUERY,
     CONTEXT_QUERY_FILE,
     CREATE_SCOPE_QUERY,
@@ -36,6 +39,9 @@ from mule_pattern_learner.contract.server import (
     HUB_QUERY,
     POPULATION_QUERY,
     SCOPE_POLICY_QUERY,
+    SCOPE_VERTEX,
+    TRAINING_QUERY_FILES,
+    TRUTH_QUERY,
 )
 from mule_pattern_learner.data.contexts import ContextCounts
 from mule_pattern_learner.paths import GSQL_DIR
@@ -48,7 +54,12 @@ from mule_pattern_learner.testing.builders import (
     fake_context,
     synthetic_row,
 )
-from mule_pattern_learner.tigergraph.gsql_text import definitions, parameter_names
+from mule_pattern_learner.testing.fake_connection import FakeClient
+from mule_pattern_learner.tigergraph.gsql_text import (
+    definitions,
+    parameter_names,
+    repository_queries,
+)
 
 
 def signature(path: str, name: str) -> frozenset[str]:
@@ -60,6 +71,11 @@ CONTEXT_PARAMETERS = signature(CONTEXT_QUERY_FILE, CONTEXT_QUERY)
 HUB_PARAMETERS = signature("queries/hub_accounts.gsql", HUB_QUERY)
 SCOPE_POLICY_PARAMETERS = signature("queries/training_scope.gsql", SCOPE_POLICY_QUERY)
 POPULATION_PARAMETERS = signature("queries/training_scope.gsql", POPULATION_QUERY)
+CREATE_SCOPE_PARAMETERS = signature("queries/training_scope.gsql", CREATE_SCOPE_QUERY)
+FINALIZE_SCOPE_PARAMETERS = signature("queries/training_scope.gsql", FINALIZE_SCOPE_QUERY)
+TRUTH_PARAMETERS = signature("evaluation/ground_truth.gsql", TRUTH_QUERY)
+# The queries FakeTigerGraph answers that write to the graph: they must run once.
+WRITE_QUERIES = frozenset({CREATE_SCOPE_QUERY, FINALIZE_SCOPE_QUERY})
 
 
 def pooled(messages: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
@@ -89,7 +105,7 @@ def request_keys(params: dict[str, Any]) -> list[ContextKey]:
 
 
 class FakeTigerGraph:
-    """In-memory QueryExecutor for the read-only training queries.
+    """In-memory ConnectionExecutor of the repository's queries (see the module docstring).
 
     `rows` maps keys to fixed contexts; other keys come from `factory` (default: an
     ok context without messages). `statuses` maps a ContextKey or a node ID to a
@@ -98,11 +114,19 @@ class FakeTigerGraph:
     phase 3 for an unscoped call, once per phase 1, 2 and 3 for a scoped one.
     `last_visible(index, cutoff_ms)` answers the cutoff query.
     `scope_policy` names the scope.unowned rule the scope policy query reports
-    for every scope (default "linked", the configuration default). `population`
-    holds the rows the scope population query pages through (see scope_population);
-    without include_observed their labels are withheld. Subclasses add the other
-    population queries a test needs.
+    for every scope (default "linked", the configuration default; policy_counts).
+    `population` holds the rows the scope population query pages through;
+    without include_observed their labels are withheld. `truth` holds the rows the
+    ground-truth query pages through, with its field names (ground_truth_rows).
+
+    The connection's state: `scopes` maps scope ids to the attributes of their scope
+    vertex, which the scope creation queries add; `counts` are the vertex counts by
+    type (default: the population's accounts); the installed queries are the
+    repository's, except those `stale` names, whose installed text differs; and
+    `scope_vertex` says whether the schema has the scope vertex type.
     """
+
+    graph_name = GRAPH_NAME
 
     def __init__(
         self,
@@ -114,23 +138,36 @@ class FakeTigerGraph:
         last_visible: Callable[[int, int], int] = lambda index, ms: 100 + index,
         scope_policy: str = "linked",
         population: Iterable[dict[str, Any]] = (),
+        truth: Iterable[dict[str, Any]] = (),
+        scopes: dict[str, dict[str, Any]] | None = None,
+        counts: dict[str, int] | None = None,
+        stale: Iterable[str] = (),
+        scope_vertex: bool = True,
     ) -> None:
         self.rows = rows or {}
         self.scope_policy = scope_policy
         self.population = sorted(population, key=lambda row: str(row["account_id"]))
+        self.truth = sorted(truth, key=lambda row: str(row["account_id"]))
         self.factory = factory or context
         self.statuses = statuses or {}
         self.hubs = list(hubs)
         self.last_visible = last_visible
+        self.scopes = {scope_id: dict(header) for scope_id, header in (scopes or {}).items()}
+        self.counts = dict(counts) if counts is not None else {"Account": len(self.population)}
+        self.stale = frozenset(stale)
+        self.scope_vertex = scope_vertex
+        self.client = FakeClient(FakeConnection(self))
         self.requested: list[ContextKey] = []
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.pools: Counter[tuple[int, ...]] = Counter()
         self.encoded_requests = 0
         self.lock = threading.Lock()
 
-    def run(self, name: str, params: dict[str, Any], **_: Any) -> list[dict[str, Any]]:
+    def run(self, name: str, params: dict[str, Any], **options: Any) -> list[dict[str, Any]]:
         with self.lock:
             self.calls.append((name, deepcopy(params)))
+        if name in WRITE_QUERIES:
+            assert options.get("attempts") == 1, f"{name} writes, so it must run once"
         if name == CONTEXT_QUERY:
             return self.context_rows(params)
         if name == HUB_QUERY:
@@ -139,6 +176,12 @@ class FakeTigerGraph:
             return self.scope_policy_rows(params)
         if name == POPULATION_QUERY:
             return self.population_rows(params)
+        if name == TRUTH_QUERY:
+            return self.truth_rows(params)
+        if name == CREATE_SCOPE_QUERY:
+            return self.create_scope(params)
+        if name == FINALIZE_SCOPE_QUERY:
+            return self.finalize_scope(params)
         if name == CUTOFF_QUERY:
             return [
                 {
@@ -150,6 +193,13 @@ class FakeTigerGraph:
                 }
             ]
         raise AssertionError(f"Unexpected query {name}")
+
+    def call(self, operation: Callable[[Any], Any], *, what: str, **_: Any) -> Any:
+        """A connection operation, run once (the real executor would retry it)."""
+        return operation(self.client.conn)
+
+    def gsql(self, text: str, *, what: str = "gsql") -> str:
+        return self.client.conn.gsql(text)
 
     def names(self) -> list[str]:
         return [name for name, _ in self.calls]
@@ -217,40 +267,94 @@ class FakeTigerGraph:
     def scope_policy_rows(self, params: dict[str, Any]) -> list[dict[str, Any]]:
         """Membership classes a scope created with `scope_policy` would report."""
         assert set(params) == SCOPE_POLICY_PARAMETERS, set(params) ^ SCOPE_POLICY_PARAMETERS
-        return [{"status": "ok", "scope_id": params["scope_id"], **scope_counts(self.scope_policy)}]
+        counts = policy_counts(self.scope_policy)
+        return [{"status": "ok", "scope_id": params["scope_id"], **counts}]
 
     def population_rows(self, params: dict[str, Any]) -> list[dict[str, Any]]:
         """One page of `population` after after_id; labels only with include_observed."""
         assert set(params) == POPULATION_PARAMETERS, set(params) ^ POPULATION_PARAMETERS
         labels = bool(params["include_observed"])
         withheld = {} if labels else {"observed_positive": False, "known_from_ms": 0}
-        page = [
-            {**row, **withheld}
-            for row in self.population
-            if str(row["account_id"]) > params["after_id"]
-        ]
-        return [{"status": "ok"}, {"accounts": page[: params["batch_size"]]}]
+        rows = [{**row, **withheld} for row in self.population]
+        return [{"status": "ok"}, {"accounts": page(rows, params)}]
+
+    def truth_rows(self, params: dict[str, Any]) -> list[dict[str, Any]]:
+        """One page of `truth` after after_id, in the ground-truth query's fields."""
+        assert set(params) == TRUTH_PARAMETERS, set(params) ^ TRUTH_PARAMETERS
+        return [{"status": "ok"}, {"accounts": page(self.truth, params)}]
+
+    def create_scope(self, params: dict[str, Any]) -> list[dict[str, Any]]:
+        """A scope vertex that is not ready yet, with the rule its membership follows."""
+        # max_iterations has a default, which the pipeline keeps.
+        assert set(params) <= CREATE_SCOPE_PARAMETERS, set(params) - CREATE_SCOPE_PARAMETERS
+        if params["scope_id"] in self.scopes:
+            return [{"status": "scope_already_exists"}]
+        self.scope_policy = params["unowned_policy"]
+        header = {"source_id": params["source_id"], "split_seed": params["split_seed"]}
+        self.scopes[params["scope_id"]] = {"ready": False, **header}
+        return [{"status": "ok", "expected_members": len(self.population)}]
+
+    def finalize_scope(self, params: dict[str, Any]) -> list[dict[str, Any]]:
+        """Mark a created scope ready once its membership count is the expected one."""
+        assert set(params) == FINALIZE_SCOPE_PARAMETERS, set(params) ^ FINALIZE_SCOPE_PARAMETERS
+        members = len(self.population)
+        if params["scope_id"] not in self.scopes or params["expected_members"] != members:
+            return [{"status": "invalid_scope"}]
+        self.scopes[params["scope_id"]]["ready"] = True
+        return [{"status": "ok", "members": members}]
 
 
-def scope_counts(policy: str) -> dict[str, int]:
-    """Scope policy counts of a small scope created with one scope.unowned rule."""
-    counts = {
-        "members": 12,
-        "unowned_accounts": 4,
-        "shared_internal": 0,
-        "shared_external": 0,
-        "independent_internal": 2,
-        "independent_external": 2,
-        "linked_internal": 0,
-        "linked_external": 0,
-        "shared_ledger": 0,
-        "ledger_accounts": 0,
-    }
-    if policy in ("shared", "linked"):
-        counts.update(shared_external=2, independent_external=0)
-    if policy == "linked":
-        counts.update(linked_internal=1, independent_internal=1)
-    return counts
+def page(rows: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
+    """The rows after params' after_id, at most its batch_size: one page of an account query."""
+    after = [row for row in rows if str(row["account_id"]) > params["after_id"]]
+    return after[: params["batch_size"]]
+
+
+class FakeConnection:
+    """The pyTigerGraph connection of a FakeTigerGraph: schema, counts and installed queries.
+
+    GSQL other than SHOW QUERY fails: the fake graph runs no GSQL that writes.
+    """
+
+    def __init__(self, graph: FakeTigerGraph) -> None:
+        self.graph = graph
+
+    def getVerticesById(self, vertex_type: str, ids: list[str]) -> list[dict[str, Any]]:
+        assert vertex_type == SCOPE_VERTEX, vertex_type
+        found = [self.graph.scopes[i] for i in ids if i in self.graph.scopes]
+        if not found:
+            raise TigerGraphException("vertex not found", "601")
+        return [{"attributes": dict(header)} for header in found]
+
+    def getVertexCount(self, vertex_type: str, realtime: bool = False) -> dict[str, int]:
+        assert vertex_type == "*", vertex_type
+        return {**self.graph.counts, SCOPE_VERTEX: len(self.graph.scopes)}
+
+    def getSchema(self, force: bool = False) -> dict[str, Any]:
+        names = ["Account", *([SCOPE_VERTEX] if self.graph.scope_vertex else [])]
+        return {"VertexTypes": [{"Name": name} for name in names]}
+
+    def installed(self) -> dict[str, str]:
+        """The installed text of every repository query; a stale one differs."""
+        queries = repository_queries((*TRAINING_QUERY_FILES, *ANALYTICS_QUERY_FILES))
+        shown = {name: text for name, (_, text) in queries.items()}
+        for name in self.graph.stale:
+            shown[name] = shown[name].replace("{", "{ INT stale_marker = 0;", 1)
+        return shown
+
+    def getInstalledQueries(self) -> dict[str, dict[str, Any]]:
+        builtin = {"query", "read_committed"}
+        return {
+            f"GET /query/{GRAPH_NAME}/{name}": {
+                "enabled": True,
+                "parameters": {key: {} for key in parameter_names(text) | builtin},
+            }
+            for name, text in self.installed().items()
+        }
+
+    def gsql(self, text: str) -> str:
+        assert "SHOW QUERY" in text, "the fake graph runs no GSQL that writes"
+        return self.installed().get(text.rsplit(" ", 1)[1], "Query not found")
 
 
 class ContextServer:
@@ -339,39 +443,6 @@ def policy_counts(policy: str) -> dict[str, int]:
             "shared_ledger": 0,
         }
     return {**LINKED_COUNTS, "shared_internal": 97, "linked_internal": 0}  # a retired draft
-
-
-class ScopeServer:
-    """A TigerGraph fake for scope headers, scope creation and the scope policy query."""
-
-    graph_name = GRAPH_NAME
-
-    def __init__(self, header: dict[str, Any] | None, policy: str) -> None:
-        self.header, self.policy = header, policy
-        self.calls: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
-        self.client = SimpleNamespace(
-            conn=SimpleNamespace(getVerticesById=self.vertices), graphname=GRAPH_NAME
-        )
-
-    def call(self, operation: Callable[[Any], Any], *, what: str) -> Any:
-        """A connection operation, run once (the executor would retry it)."""
-        return operation(self.client.conn)
-
-    def vertices(self, *args: Any) -> list[dict[str, Any]]:
-        if self.header is None:
-            raise TigerGraphException("vertex not found", "601")
-        return [{"attributes": dict(self.header)}]
-
-    def run(self, name: str, params: dict[str, Any], **kwargs: Any) -> list[dict[str, Any]]:
-        self.calls.append((name, params, kwargs))
-        if name == SCOPE_POLICY_QUERY:
-            return [{"status": "ok", "scope_id": params["scope_id"], **policy_counts(self.policy)}]
-        if name == CREATE_SCOPE_QUERY:
-            self.policy = params["unowned_policy"]
-            return [{"status": "ok", "expected_members": 3}]
-        if name == FINALIZE_SCOPE_QUERY:
-            self.header = {"ready": True, "source_id": "unit_snapshot", "split_seed": 42}
-        return [{"status": "ok"}]
 
 
 class FakeStore:
