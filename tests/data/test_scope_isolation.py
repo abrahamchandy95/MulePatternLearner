@@ -135,6 +135,7 @@ def test_new_account_scoring_needs_neither_training_dataset_nor_labels(tmp_path:
         (f"never_trained_{i}" for i in range(13)),
         "2025-01-01",
         output,
+        rejected_output=tmp_path / "new_rejected.txt",
         cutoffs=TigerGraphCutoffs(executor),
         hub_reader=TigerGraphHubs(executor),
         fetcher=TigerGraphContextFetcher(executor),

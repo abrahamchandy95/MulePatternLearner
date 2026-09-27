@@ -54,6 +54,7 @@ def test_a_run_directory_names_every_file_of_the_run_directory_table(tmp_path: P
         run.audit_scores("test"),
         run.audit_rejected("test"),
         run.scores("new_accounts", "2025-01-01"),
+        run.scores_rejected("new_accounts", "2025-01-01"),
         run.plots,
         run.report,
     ]
@@ -70,6 +71,7 @@ def test_a_run_directory_names_every_file_of_the_run_directory_table(tmp_path: P
         "audit/test.parquet",
         "audit/test_rejected.txt",
         "scores/new_accounts_2025-01-01.parquet",
+        "scores/new_accounts_2025-01-01_rejected.txt",
         "plots",
         "report.md",
     ]
