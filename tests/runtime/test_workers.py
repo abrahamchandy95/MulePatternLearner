@@ -1,4 +1,4 @@
-"""The batch prefetcher: order, bounded work, errors and shutdown."""
+"""The worker pool and the batch prefetcher: order, bounded work, errors and shutdown."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from mule_pattern_learner.runtime.workers import BatchPrefetcher
+from mule_pattern_learner.runtime.workers import BatchPrefetcher, DaemonPool
 
 
 def _prefetch_threads() -> int:
@@ -126,3 +126,28 @@ def test_prefetcher_cancels_queued_work_on_early_exit_and_runs_inline() -> None:
     assert inline == [(v, threading.current_thread()) for v in range(3)]
     with pytest.raises(ValueError):
         BatchPrefetcher(build, range(1), depth=9)
+
+
+def test_pool_runs_on_bounded_daemon_threads_and_cancels_queued_calls() -> None:
+    entered, release = threading.Semaphore(0), threading.Event()
+
+    def call(value: int) -> int:
+        entered.release()
+        release.wait(30)
+        return value
+
+    pool = DaemonPool(2, "test-pool")
+    futures = [pool.submit(call, value) for value in range(5)]
+    assert entered.acquire(timeout=5) and entered.acquire(timeout=5)
+    workers = [t for t in threading.enumerate() if t.name.startswith("test-pool")]
+    assert len(workers) == 2 and all(t.daemon for t in workers)
+    started = time.perf_counter()
+    pool.shutdown(wait=False, cancel_futures=True)
+    assert time.perf_counter() - started < 5
+    with pytest.raises(RuntimeError, match="after shutdown"):
+        pool.submit(print)
+    release.set()
+    pool.shutdown()
+    assert [f.result() for f in futures[:2]] == [0, 1]
+    assert all(f.cancelled() for f in futures[2:])
+    assert not any(t.is_alive() for t in workers)
