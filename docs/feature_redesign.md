@@ -83,7 +83,7 @@ typed/time-qualified tensor IDs. No full-graph export or ID table was added. The
 preparation records the sampler pools, independent of the model seed and the feature
 groups: it stores no contexts, and each model requests its own groups, so feature-only
 ablations share one preparation. Different candidate pools require fresh preparation. This
-change does **not** silently build the union of both samplers' neighborhoods or
+change does **not** silently build the union of several pools' neighborhoods or
 stage the entire population. Prepared labels/manifests remain immutable.
 
 Checkpoints store the selected input fingerprint and sampler. Old query responses
@@ -138,13 +138,12 @@ sets only the keys it changes (tables such as `[sampler]` merge key by key).
 ```
 
 Run parity and cost qualification first, then nnPU/noise-floor comparisons, then
-summary-only, legacy single/split, event-core/zero-node, individual groups and
+summary-only, event-core/zero-node, individual groups and
 combined winners. `feature_experiments()` builds these configurations while holding
 source/labels/clocks fixed. Its feature-group arms run without `slot_sum`, the model
 they were designed on; the `built_in` arms measure the built-in run against itself
 without `slot_sum`, without the pool groups, without `pool_internal_inflows`, and as a
-summary-only model on the same root inputs (`built_in_tabular`). Repeat the event and hybrid comparisons under both
-samplers, with separately prepared contexts where necessary. The utility does not
+summary-only model on the same root inputs (`built_in_tabular`). The utility does not
 launch expensive runs automatically. No synthetic results are promoted as mule
 results.
 

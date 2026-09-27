@@ -57,8 +57,9 @@ a controlled stress test. They are different from recovering masked labels on
 training accounts. Inspect source coverage first: a generator that creates every
 mule account before the training cutoff may provide no positive cold-start test
 cohort. Change the simulation or observation period rather than silently moving
-old accounts into a supposedly new-account cohort. The third remains useful, but
-must be reported by its own name.
+old accounts into a supposedly new-account cohort. The pipeline no longer
+implements the third (its `shared_history` protocol was removed); a separate run of
+it must be reported by its own name.
 
 The implementation stores withheld-group membership in the dedicated
 `Temporal_Training_Scope` vertex and `Entity_In_Training_Scope` relation.
