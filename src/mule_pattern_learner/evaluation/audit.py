@@ -43,7 +43,7 @@ def evaluate_predictions(
     threshold = saved.threshold
     result: dict[str, Any] = {
         "evaluated": len(observed),
-        "evaluation_cohort": "supplied_prediction_rows_unweighted",
+        "evaluation_sample": "supplied_prediction_rows_unweighted",
         "population_performance_claim": False,
         "unknown_or_missing_truth": len(frame) - len(observed),
         "selection": saved.selected_on,
@@ -77,7 +77,7 @@ def evaluate_weighted(frame: pd.DataFrame, threshold: float) -> dict[str, Any]:
         raise ValueError("Invalid prediction probabilities")
     return {
         **weighted_metrics(y, score, 1 / p, threshold),
-        "evaluation_cohort": "all_test_positives_plus_uniform_negatives_inverse_probability_weighted",
+        "evaluation_sample": "all_test_positives_plus_uniform_negatives_inverse_probability_weighted",
     }
 
 
@@ -142,7 +142,7 @@ def evaluate_final_population(
     ``runtime.max_rejected_root_fraction`` (default 0), fails the audit before anything is
     written: the weighted metrics would silently describe a censored population.
     Rejected negatives within the limit are listed in audit/test_rejected.txt and
-    the metrics' ``evaluation_cohort`` says that they were dropped.
+    the metrics' ``evaluation_sample`` says that they were dropped.
     """
     from ..contract.graph_schema import SPLIT_PHASE
     from ..data.accounts import scope_accounts
@@ -210,7 +210,7 @@ def evaluate_final_population(
         )
     metrics = evaluate_weighted(scored, saved.threshold)
     if len(unscored):
-        metrics["evaluation_cohort"] += "_minus_rejected_negatives"
+        metrics["evaluation_sample"] += "_minus_rejected_negatives"
     result = {
         "selection": saved.selected_on,
         "test_date": date,

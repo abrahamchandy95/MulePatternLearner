@@ -163,7 +163,7 @@ substitutes its real label feed; no masking dependency is required.
 negative. Full synthetic 0/1 truth has different semantics. Unknown evaluation
 truth must be absent or -1, not silently converted into a legitimate account.
 
-## Bounded cohorts and nnPU
+## Bounded datasets and nnPU
 
 TigerGraph pages preassigned partition metadata in pages of at most 10,000 rows.
 Python keeps deterministic, label-blind seed reservoirs: by default 20,000 train,
@@ -182,7 +182,7 @@ that assumption remains part of the experiment.
 Checkpoint and threshold selection use validation observed-positive/unlabeled
 proxy metrics. They are not true-label detection metrics. Evaluation retains
 known positives and a bounded unlabeled sample, so AP/precision describe that
-cohort, not population prevalence. Test results do not select the checkpoint.
+sample, not population prevalence. Test results do not select the checkpoint.
 A representative evaluation or appropriate sampling weights is necessary for
 population claims, including when using complete synthetic truth.
 
@@ -271,7 +271,7 @@ carry base metadata; the intermediate contexts carry the requested node features
 Learned account embeddings are outputs of these layers, not persisted time
 encodings from GSQL.
 
-Client memory is bounded by cohort and batch limits, but server work still needs
+Client memory is bounded by dataset and batch limits, but server work still needs
 measurement. Scope setup scans ownership, cutoff resolution scans event clocks,
 and context aggregation can scan long adjacency histories. Time buckets/rollups,
 better sampling access and shared staging near GPUs are later production work;
@@ -332,7 +332,7 @@ The built-in run adds two groups that `DEFAULT_GROUPS` lacks, `pool_activity` an
 first-time inflows, rapid pass-throughs and more; see the
 [catalog](gsql_feature_catalog.md#client-computed-groups)), fed to the split model's
 summary branch. Like `hub_indicator` they are computed on the client and never
-requested, so the query and a prepared cohort are unchanged. Their definitions are part of the model's input fingerprint, not the
+requested, so the query and a prepared dataset are unchanged. Their definitions are part of the model's input fingerprint, not the
 contract fingerprint.
 
 ### Hub accounts and rejected contexts
@@ -549,7 +549,7 @@ This command streams ID batches and writes scores/embeddings incrementally. It
 uses history available before the requested date without the experimental scope,
 as an operational scorer would, and computes the hub registry for that cutoff (a
 date before the graph's first visible event is refused). It needs neither the
-training cohort nor labels. IDs that TigerGraph rejects
+training dataset nor labels. IDs that TigerGraph rejects
 (missing, not yet visible, over capacity) are not scored; they go to
 `<output>.rejected.txt`, and the result reports root and child rejections apart
 (see [hub accounts and rejected contexts](#hub-accounts-and-rejected-contexts)).
@@ -582,7 +582,7 @@ scored sample) into the run directory, and refuses a run that already has them. 
 fails before writing anything when a test positive is rejected or the rejected
 fraction exceeds the model's `max_rejected_root_fraction`, because weighted metrics
 would then describe a censored population. Rejected negatives within the limit are
-listed in `audit/test_rejected.txt`, and the metrics' `evaluation_cohort` ends in
+listed in `audit/test_rejected.txt`, and the metrics' `evaluation_sample` ends in
 `_minus_rejected_negatives`.
 
 The report's `metrics` estimate the whole test population, each sampled account

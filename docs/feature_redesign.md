@@ -18,7 +18,7 @@ of them to compare against the built-in groups.
 | `event_channel` | Channel embedding | Includes P2P, ATM withdrawal and card purchase. Unrecognized source values use an explicit `other` category. Audit coverage before interpreting this feature. |
 | `device_ip_context` | Device/IP age at payment time, presence | Optional. Uses event participation edges and entity first observation; chooses the youngest eligible observation if multiple endpoints exist. Does not claim association tenure age. |
 | `entity_meta` | Entity type, external/deposit indicators | Can be removed entirely in the zero-node-input arm. |
-| `entity_age` | Age at assessment | Optional legacy control, absent from the new default. No claim that the current cohort tests cold starts. |
+| `entity_age` | Age at assessment | Optional legacy control, absent from the new default. No claim that the current dataset tests cold starts. |
 | `history_support` | Visible payment participations, fewer-than-five flag | Optional; self-transfers participate in both directions. Counts only visible USD history. |
 | `decayed_activity` | Incoming/outgoing counts and amounts at half-lives 1, 7, 30, 90 days | Optional smooth summaries: contribution is `value * 2**(-age/half_life)`. These half-lives still need sensitivity tests. |
 | `identity_order` | Starts/ends of owner, token and device tenures since the tenth most recent payment | Ordinal, not hours or days. With fewer than ten payments, starts at the earliest available payment; with none, absent/zero. Never converts sequence differences to time. |

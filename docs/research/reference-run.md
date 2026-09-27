@@ -1,6 +1,6 @@
 # Reference runs
 
-Three full training runs on the CUDA host, on the same cohort and the same revealed labels.
+Three full training runs on the CUDA host, on the same dataset and the same revealed labels.
 They record where the model stood before the restructuring and why the built-in settings are
 what they are. The checkpoints of runs 1 and 2 load only with the code at the `pre-restructure`
 tag. The scripts and notes of the diagnostic study that sits between runs 2 and 3 are

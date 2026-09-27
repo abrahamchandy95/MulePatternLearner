@@ -860,7 +860,7 @@ def prepared_dataset(
     manifest = {
         "status": "ready",
         "cutoff_seqs": dict(CUTOFFS),
-        "cohort": "bounded_internal_deposit_seeds",
+        "account_selection": "bounded_internal_deposit_seeds",
         "observed_labels_sha256": file_digest(dataset.observed_labels),
         "source": {
             "source_id": RUNTIME_SOURCE,

@@ -52,7 +52,7 @@ def _check_label_fields(row: dict[str, Any], graph_labels: bool) -> None:
         )
 
 
-def scoped_cohort(
+def select_accounts(
     scope: ScopeReader,
     scope_id: str,
     dataset: DatasetConfig,
@@ -91,6 +91,8 @@ def scoped_cohort(
         if row["first_seen_ts_ms"] >= min(timestamp(d) for d in dataset.dates[split]):
             continue
         row["in_marginal"] = True
+        # The salt of the reservoir ranks. It feeds the seeded draw, so it keeps the name
+        # it had before the layered restructure, and a dataset selects the same accounts.
         rank = stable_score(account, seed, "marginal_cohort")
         entry = (-rank, account, row)
         heap = heaps[split]
@@ -100,7 +102,7 @@ def scoped_cohort(
             heapq.heapreplace(heap, entry)
         if account in known_ids or (graph_labels and row["observed_positive"]):
             if len(positives) >= POSITIVE_POOL:
-                raise ValueError("Observed-positive pool exceeds bounded cohort capacity")
+                raise ValueError("Observed-positive pool exceeds the bounded dataset capacity")
             positives[account] = {**row, "in_marginal": False}
     selected = dict(positives)
     selected.update({row["account_id"]: row for heap in heaps.values() for _, _, row in heap})

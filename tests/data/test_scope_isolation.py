@@ -21,7 +21,7 @@ from mule_pattern_learner.contract.feature_groups import (
 )
 from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.contract.time_basis import BASIS_ID
-from mule_pattern_learner.data.accounts import scoped_cohort
+from mule_pattern_learner.data.accounts import select_accounts
 from mule_pattern_learner.data.contexts import StreamingContextSource
 from mule_pattern_learner.inference.score_accounts import score_new_accounts
 from mule_pattern_learner.model.build import build_model
@@ -183,7 +183,7 @@ def test_bounded_seed_reservoir_does_not_enrich_the_nnpu_marginal() -> None:
     known = pd.DataFrame(
         {"account_id": ["A00000", "A00001", "A00002"], "known_positive": True, "known_from_ms": 1}
     )
-    selected, counts = scoped_cohort(
+    selected, counts = select_accounts(
         TigerGraphScope(Executor()), "strict", dataset, FrameObservedLabels(known)
     )
     assert len(calls) == 2 and sum(counts.values()) == len(rows)

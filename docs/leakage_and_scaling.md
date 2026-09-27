@@ -18,9 +18,9 @@ label separation, bounded seed selection and batch-local IDs. These checks do no
 establish production-scale performance or rule out missing source availability data.
 
 The model has no per-account learned parameters. `score-new` can score new IDs
-without a prepared training cohort, using history before the requested cutoff.
+without a prepared training dataset, using history before the requested cutoff.
 Successful inference demonstrates architectural induction; measured quality on
-newly arriving accounts requires its own chronological evaluation cohort.
+newly arriving accounts requires its own chronological evaluation sample.
 
 ## Leakage is broader than target labels
 
@@ -56,8 +56,8 @@ Recommend the first as the primary operational inductive test, and the second as
 a controlled stress test. They are different from recovering masked labels on
 training accounts. Inspect source coverage first: a generator that creates every
 mule account before the training cutoff may provide no positive cold-start test
-cohort. Change the simulation or observation period rather than silently moving
-old accounts into a supposedly new-account cohort. The pipeline no longer
+sample. Change the simulation or observation period rather than silently moving
+old accounts into a supposedly new-account sample. The pipeline no longer
 implements the third (its `shared_history` protocol was removed); a separate run of
 it must be reported by its own name.
 
@@ -137,7 +137,7 @@ membership, cutoff resolution scans event clocks, and GSQL scans adjacency
 histories. Indexed cutoff watermarks, time-organized adjacency and scalable
 partition/seed selection remain production work. Per-epoch step limits and fixed
 evaluation samples bound work but do not prove population performance. Oracle
-AP on a cohort enriched with revealed positives is still cohort-specific unless
+AP on a sample enriched with revealed positives is still specific to that sample unless
 corrected for selection probability.
 
 Current architecture, with future indexing/staging options below:

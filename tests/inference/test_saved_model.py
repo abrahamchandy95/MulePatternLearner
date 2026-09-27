@@ -100,7 +100,7 @@ CHANGES: dict[str, Any] = {
 }
 SOURCE = "load_fixture"
 # What that commit's inference.score gave the dataset's test accounts with built_in.pt.
-COHORT_SCORES = {
+DATASET_SCORES = {
     "S0009": 0.5007370076392473,
     "S0014": 0.5002217446308491,
     "S0019": 0.4998289155840587,
@@ -183,9 +183,9 @@ def test_the_dataset_prepared_before_the_restructure_scores_as_it_did(tmp_path: 
     contexts = fixture_source(saved.config)
     assert score(saved, dataset, "2025-01-01", "test", output, contexts=contexts)["accounts"] == 19
     frame = pd.read_parquet(output)
-    assert frame.account_id.tolist() == list(COHORT_SCORES)
+    assert frame.account_id.tolist() == list(DATASET_SCORES)
     for account, have in zip(frame.account_id, frame.score, strict=True):
-        assert math.isclose(have, COHORT_SCORES[account], rel_tol=RELATIVE), account
+        assert math.isclose(have, DATASET_SCORES[account], rel_tol=RELATIVE), account
 
 
 def test_the_same_settings_prepare_the_dataset_of_the_old_code(tmp_path: Path) -> None:
