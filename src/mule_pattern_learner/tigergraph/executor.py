@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Protocol, TypeVar
 
 from ..config import DEFAULT_CONFIG
 from ..contract.bounds import OUTAGE_SECONDS, QUERY_ATTEMPTS
+from ..contract.server import GRAPH_NAME
 
 if TYPE_CHECKING:
     from pyTigerGraph import TigerGraphConnection
@@ -22,9 +23,6 @@ if TYPE_CHECKING:
 
 LOGGER = logging.getLogger(__name__)
 T = TypeVar("T")
-
-# The graph every training query is installed on.
-GRAPH = "Mule_Pattern_Learner"
 
 
 class TransientQueryError(RuntimeError):
@@ -236,8 +234,8 @@ class TigerGraphExecutor:
 
             client = self._retry(lambda: Client(settings), what="connect", attempts=None)
         self.client = client
-        if self.client.graphname != GRAPH:
-            raise ValueError(f"Training queries require {GRAPH}")
+        if self.client.graphname != GRAPH_NAME:
+            raise ValueError(f"Training queries require {GRAPH_NAME}")
 
     def delay(self, attempt: int) -> float:
         """Exponential backoff with equal jitter, capped at max_delay_s."""

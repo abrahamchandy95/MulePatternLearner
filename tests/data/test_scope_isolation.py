@@ -20,6 +20,12 @@ from mule_pattern_learner.contract.feature_groups import (
     extraction_plan,
 )
 from mule_pattern_learner.contract.graph_schema import ContextKey
+from mule_pattern_learner.contract.server import (
+    CONTEXT_QUERY,
+    HUB_QUERY,
+    POPULATION_QUERY,
+    TRUTH_QUERY,
+)
 from mule_pattern_learner.contract.time_basis import BASIS_ID
 from mule_pattern_learner.data.accounts import select_accounts
 from mule_pattern_learner.data.contexts import ContextSource
@@ -124,7 +130,7 @@ def test_new_account_scoring_needs_neither_training_dataset_nor_labels(tmp_path:
 
     class Executor(FakeTigerGraph):
         def run(self, name: str, params: dict[str, Any], **kwargs: Any) -> list[dict[str, Any]]:
-            if name == "temporal_training_context":
+            if name == CONTEXT_QUERY:
                 assert params["scope_id"] == "" and params["per_relation"] == 1
             return super().run(name, params, **kwargs)
 
@@ -149,7 +155,7 @@ def test_new_account_scoring_needs_neither_training_dataset_nor_labels(tmp_path:
     assert not (tmp_path / "new.parquet.pending").exists()
     assert not {"is_mule", "known_positive", "pu_label"} & set(frame.columns)
     # The hub registry was computed for the requested cutoff only (one past the last event).
-    hubs = [params for name, params in executor.calls if name == "temporal_hub_registry"]
+    hubs = [params for name, params in executor.calls if name == HUB_QUERY]
     assert [params["cutoff_seqs"] for params in hubs] == [[100]]
     assert result["rejected"] == 0 and result["rejected_output"] is None
 
@@ -171,7 +177,7 @@ def test_bounded_seed_reservoir_does_not_enrich_the_nnpu_marginal() -> None:
 
     class Executor:
         def run(self, name: str, params: dict[str, Any], **_: Any) -> list[dict[str, Any]]:
-            assert name == "temporal_scope_population" and not params["include_observed"]
+            assert name == POPULATION_QUERY and not params["include_observed"]
             calls.append(params["after_id"])
             page = [r for r in rows if r["account_id"] > params["after_id"]][:10000]
             return [{"status": "ok", "accounts": page}]
@@ -210,7 +216,7 @@ def test_the_graph_truth_pages_the_label_contract() -> None:
 
     class Executor:
         def run(self, name: str, params: dict[str, Any], **_: Any) -> list[dict[str, Any]]:
-            assert name == "temporal_get_account_supervision"
+            assert name == TRUTH_QUERY
             calls.append(params)
             page = [{"attributes": r} for r in rows if r["account_id"] > params["after_id"]]
             return [{"status": "ok"}, {"accounts": page[: params["batch_size"]]}]
@@ -253,10 +259,10 @@ def test_strict_preparation_and_nnpu_use_the_correct_phase_end_to_end(tmp_path: 
 
     class Executor(FakeTigerGraph):
         def run(self, name: str, params: dict[str, Any], **kwargs: Any) -> list[dict[str, Any]]:
-            if name == "temporal_scope_population":
+            if name == POPULATION_QUERY:
                 assert params["include_observed"] is False
                 return [{"status": "ok", "accounts": rows.to_dict("records")}]
-            if name == "temporal_training_context":
+            if name == CONTEXT_QUERY:
                 assert params["scope_id"] == "unit_strict"
                 phases.append(params["visibility_phase"])
                 if params["visibility_phase"] == 3:

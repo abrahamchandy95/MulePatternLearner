@@ -30,6 +30,7 @@ from mule_pattern_learner.config import RunConfig
 from mule_pattern_learner.contract.feature_groups import DEFAULT_GROUPS, extraction_plan
 from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
+from mule_pattern_learner.contract.server import CONTEXT_QUERY, HUB_QUERY
 from mule_pattern_learner.data.contexts import ContextSource
 from mule_pattern_learner.data.hub_registry import HubRegistry, load_hub_registry, warn_hub_stubs
 from mule_pattern_learner.data.manifest import dataset_id, load_prepared
@@ -690,7 +691,7 @@ class PreparedExecutor(FakeTigerGraph):
         self.dataset = dataset
 
     def run(self, name: str, params: dict[str, Any], **kwargs: Any) -> list[dict[str, Any]]:
-        if name == "temporal_training_context":
+        if name == CONTEXT_QUERY:
             # A label mask must already be frozen when the first feature query starts.
             frozen = pd.read_parquet(self.dataset.observed_labels)
             assert label_summary(frozen) == {"train": 20, "validation": 20, "test": 20}
@@ -718,7 +719,7 @@ def prepared(
 def test_hidden_truth_cannot_change_updates_or_checkpoint_selection(tmp_path: Path) -> None:
     c = example_config()
     dataset, executor = prepared(tmp_path, c)
-    assert executor.names().count("temporal_hub_registry") == 1
+    assert executor.names().count(HUB_QUERY) == 1
     first = train(
         c, dataset, RunPaths(tmp_path / "first"), contexts=build_context_source(executor, c)
     )

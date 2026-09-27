@@ -13,9 +13,10 @@ from __future__ import annotations
 import pytest
 
 from mule_pattern_learner.config import DEFAULT_CONFIG
+from mule_pattern_learner.contract.server import REVEAL_QUERY
 from mule_pattern_learner.reference.label_reveal import INPUTS_QUERY, dry_run_differences, plan
 from mule_pattern_learner.tigergraph.executor import TigerGraphExecutor, merged_rows
-from mule_pattern_learner.tigergraph.reveal import REVEAL_QUERY, reveal_parameters
+from mule_pattern_learner.tigergraph.reveal import reveal_parameters
 
 pytestmark = pytest.mark.graph
 

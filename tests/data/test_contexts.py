@@ -19,6 +19,7 @@ from pyTigerGraph.common.exception import TigerGraphException
 from mule_pattern_learner.batching.assemble import build_batch, build_root_batch
 from mule_pattern_learner.contract.feature_groups import FeaturePlan
 from mule_pattern_learner.contract.graph_schema import ContextKey
+from mule_pattern_learner.contract.server import CONTEXT_QUERY
 from mule_pattern_learner.data.contexts import ContextSource, context_hash
 from mule_pattern_learner.data.hub_registry import HubRegistry
 from mule_pattern_learner.reference.batch_features import node_features
@@ -273,7 +274,7 @@ def test_timed_out_blocks_are_bisected_and_a_single_slow_key_is_fatal() -> None:
             with self.lock:
                 self.sizes.append(len(params["node_ids"]))
             if len(params["node_ids"]) > self.limit or self.slow_ids & set(params["node_ids"]):
-                raise ServerTimeoutError("temporal_training_context timed out")
+                raise ServerTimeoutError(f"{CONTEXT_QUERY} timed out")
             return super().run(name, params)
 
     keys = [root(i) for i in range(8)]
@@ -379,9 +380,9 @@ def test_hops_use_their_own_pools_and_only_spot_checks_carry_encodings() -> None
     children_pool = (2, 0, 0, 0, 2048)
     assert set(executor.pools) == {roots_pool, children_pool}
     assert executor.encoded_requests == 1
-    first = next(params for name, params in executor.calls if name == "temporal_training_context")
+    first = next(params for name, params in executor.calls if name == CONTEXT_QUERY)
     assert first["emit_encodings"] is True and "include_hub_indicator" not in first
-    children = [p for n, p in executor.calls if n == "temporal_training_context"][1:]
+    children = [p for n, p in executor.calls if n == CONTEXT_QUERY][1:]
     assert all(not p["emit_encodings"] and not p["include_pair_window_counts"] for p in children)
 
 

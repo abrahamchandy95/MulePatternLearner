@@ -11,6 +11,7 @@ from typing import Any
 
 import pandas as pd
 
+from ..contract.server import LABEL_CONTRACT_QUERY
 from ..data.observed_labels import align_observed_labels
 from .executor import QueryExecutor, merged_rows
 
@@ -57,14 +58,13 @@ def check_graph_label_rows(rows: pd.DataFrame) -> None:
         )
 
 
-VALIDATE_QUERY = "temporal_validate_account_supervision"
-# Contract violations temporal_validate_account_supervision counts; all must be zero.
+# Contract violations the label-contract query counts; all must be zero.
 VIOLATIONS = ("invalid_mule", "invalid_pu", "invalid_unknown", "invalid_clocks", "invalid_ring")
 
 
 def validate_supervision(executor: QueryExecutor) -> dict[str, Any]:
     """Label-contract audit counts; raises if any violation counter is nonzero."""
-    counts = merged_rows(executor.run(VALIDATE_QUERY, {}, timeout_s=900.0))
+    counts = merged_rows(executor.run(LABEL_CONTRACT_QUERY, {}, timeout_s=900.0))
     bad = {name: int(counts.get(name, 0)) for name in VIOLATIONS if int(counts.get(name, 0))}
     if bad:
         raise ValueError(f"Account label contract violated after the reveal: {bad}")

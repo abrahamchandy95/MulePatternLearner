@@ -1,7 +1,7 @@
 """Read-only readiness of the graph and the built-in run, which `mule check` prints.
 
 check connects with the run's transport section (the connection refuses a graph other
-than contract GRAPH) and reports whether the scope vertex type exists, which training
+than contract.server.GRAPH_NAME) and reports whether the scope vertex type exists, which training
 queries are installed with the repository text and, on a CUDA host, what the cuGraph
 probe found. When all of them are ready and the run's dataset is prepared in data/, it
 builds the first training batch the way train() builds it and runs one optimizer step
@@ -26,6 +26,7 @@ import torch
 
 from ..batching.assemble import RootBatch, batch_device, build_root_batch, tensor_digests, to_device
 from ..config import DEFAULT_CONFIG, RunConfig
+from ..contract.server import TRAINING_QUERY_FILES
 from ..data.contexts import ContextReader, ContextSource, close_source
 from ..data.hub_registry import load_hub_registry
 from ..data.manifest import dataset_mismatches, load_prepared
@@ -39,7 +40,7 @@ from ..sampling.cugraph_sampler import cugraph_usable
 from ..tigergraph.context_query import TigerGraphContextFetcher
 from ..tigergraph.executor import TigerGraphExecutor
 from ..tigergraph.gsql_text import repository_queries
-from ..tigergraph.installer import TRAINING_QUERY_FILES, has_scope_vertex, query_problems
+from ..tigergraph.installer import has_scope_vertex, query_problems
 from ..training.objective import nnpu_objective, nnpu_step
 from ..training.schedule import TrainingStep, epoch_schedule
 from ..training.trainer import build_optimizer, check_limits, training_samples

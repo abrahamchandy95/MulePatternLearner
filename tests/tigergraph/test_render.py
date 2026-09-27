@@ -10,6 +10,7 @@ from mule_pattern_learner.contract.feature_groups import (
     FEATURE_GROUPS,
     FeaturePlan,
 )
+from mule_pattern_learner.contract.server import FOURIER_QUERY
 from mule_pattern_learner.paths import GSQL_DIR
 from mule_pattern_learner.tigergraph.render import as_interpreted, render_context_query
 
@@ -23,7 +24,7 @@ def test_query_renderer_matches_reviewed_source_and_uses_no_labels() -> None:
     )
     for field in ("is_mule", "fraud_label", "pu_label", "ring_id", "pair_time_encoding"):
         assert field not in text
-    assert "temporal_fourier64_values" in text
+    assert FOURIER_QUERY in text
     assert "e.valid_from_seq <= state_seq" in text
     assert "state_seq < e.valid_to_seq" in text
 
@@ -114,7 +115,7 @@ def test_no_per_event_point_selects(text: str) -> None:
 
 def test_encodings_only_on_request(text: str) -> None:
     lines = text.splitlines()
-    calls = [i for i, line in enumerate(lines) if "temporal_fourier64_values(" in line]
+    calls = [i for i, line in enumerate(lines) if f"{FOURIER_QUERY}(" in line]
     assert len(calls) == 2
     for i in calls:
         assert lines[i - 1].strip() == "IF include_time_encoding AND emit_encodings THEN"

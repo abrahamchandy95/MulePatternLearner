@@ -12,7 +12,12 @@ import pytest
 
 from mule_pattern_learner.config import RunConfig, TransportConfig
 from mule_pattern_learner.contract.feature_groups import extraction_plan
-from mule_pattern_learner.contract.server import SCOPE_VERTEX
+from mule_pattern_learner.contract.server import (
+    CUTOFF_QUERY,
+    GRAPH_NAME,
+    SCOPE_VERTEX,
+    TRAINING_QUERY_FILES,
+)
 from mule_pattern_learner.data.contexts import ContextSource
 from mule_pattern_learner.data.manifest import dataset_id
 from mule_pattern_learner.data.preparation import prepare
@@ -33,7 +38,6 @@ from mule_pattern_learner.tigergraph import gsql_text
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
 from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffs
 from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
-from mule_pattern_learner.tigergraph.installer import TRAINING_QUERY_FILES
 from mule_pattern_learner.tigergraph.scope import TigerGraphScope
 
 CONFIG = example_config(training={"batch_size": 32}, sampler={"fanouts": [8, 2]})
@@ -49,7 +53,7 @@ def graph_server(*, stale: str | None = None, scope_vertex: bool = True) -> Simp
     if stale is not None:
         shown[stale] = shown[stale].replace("{", "{ INT stale_marker = 0;", 1)
     endpoints: dict[str, dict[str, Any]] = {
-        f"GET /query/Mule_Pattern_Learner/{name}": {
+        f"GET /query/{GRAPH_NAME}/{name}": {
             "enabled": True,
             "parameters": {
                 name: {} for name in gsql_text.parameter_names(text) | {"query", "read_committed"}
@@ -115,7 +119,7 @@ def test_a_ready_graph_gets_one_batch_and_one_training_step(
     monkeypatch.setattr(pipeline_check, "open_context_source", open_source)
     report = pipeline_check.check(CONFIG, data)
     assert report["status"] == "ready" and report["problems"] == [] and opened == [dataset]
-    assert report["graph"] == "Mule_Pattern_Learner" and report["scope_schema"] == "present"
+    assert report["graph"] == GRAPH_NAME and report["scope_schema"] == "present"
     queries = gsql_text.repository_queries(TRAINING_QUERY_FILES)
     assert report["queries"] == {"up_to_date": list(queries), "stale": {}}
     assert report["dataset"] == dataset.root.name and report["graph_writes"] == 0
@@ -134,7 +138,7 @@ def test_a_ready_graph_gets_one_batch_and_one_training_step(
 def test_a_graph_that_is_not_ready_is_reported_without_a_batch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    server = graph_server(stale="temporal_training_cutoffs", scope_vertex=False)
+    server = graph_server(stale=CUTOFF_QUERY, scope_vertex=False)
     monkeypatch.setattr(pipeline_check, "connect", connecting(server))
 
     def refuse(*_: object) -> None:
@@ -144,10 +148,8 @@ def test_a_graph_that_is_not_ready_is_reported_without_a_batch(
     report = pipeline_check.check(CONFIG, tmp_path / "data")
     assert report["status"] == "not_ready" and "first_step" not in report
     assert report["scope_schema"] == "missing" and report["dataset"] is None
-    assert report["queries"]["stale"] == {
-        "temporal_training_cutoffs": ["differs from repository source"]
-    }
-    assert "temporal_training_cutoffs" not in report["queries"]["up_to_date"]
+    assert report["queries"]["stale"] == {CUTOFF_QUERY: ["differs from repository source"]}
+    assert CUTOFF_QUERY not in report["queries"]["up_to_date"]
     assert len(report["problems"]) == 3
     assert any("mule install" in problem for problem in report["problems"])
     assert any("mule train" in problem for problem in report["problems"])

@@ -1,7 +1,7 @@
 """Reveal the known mules in the graph once, through the Account label contract.
 
 A fresh PhantomLedger load masks every mule, so training would have no positives.
-The first run calls temporal_reveal_mule_labels (gsql/queries/label_reveal.gsql),
+The first run calls the reveal query (gsql/queries/label_reveal.gsql),
 which simulates when a bank would have discovered each mule (victim reports, network
 tracing, monitoring; see docs/label_reveal.md) and reveals up to
 `scope.reveal_per_split` discovered mules per split. Training then reads only the revealed positives and
@@ -16,12 +16,12 @@ from typing import Any
 from ..config import ScopeConfig, SplitDates
 from ..contract.clock import timestamp
 from ..contract.graph_schema import SPLIT_PHASE
+from ..contract.server import REVEAL_QUERY
 from ..runtime.progress import emit
 from .executor import QueryExecutor, merged_rows
 from .labels import validate_supervision
 
-REVEAL_QUERY = "temporal_reveal_mule_labels"
-# The defaults temporal_reveal_mule_labels declares (tests compare them with the GSQL).
+# The defaults the reveal query declares (tests compare them with the GSQL).
 # reveal_parameters sends the budget and salt; the model parameters stay the query's own.
 REVEAL_DEFAULTS: dict[str, float] = {
     "budget": 20,
@@ -38,7 +38,7 @@ _PRIME = 2147483647
 
 
 def reveal_uniforms(key: int, salt: int, n: int) -> list[float]:
-    """The uniforms temporal_reveal_uniforms returns (same modular mixer, exactly)."""
+    """The uniforms the reveal's draw query returns (same modular mixer, exactly)."""
     values = []
     for i in range(1, n + 1):
         x = ((key % _PRIME) + i * 1000003 + (salt % _PRIME) * 7919) % _PRIME

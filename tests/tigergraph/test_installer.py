@@ -12,7 +12,16 @@ from typing import Any
 import pytest
 import requests
 
-from mule_pattern_learner.contract.server import QUERY_FILES
+from mule_pattern_learner.contract.server import (
+    ANALYTICS_QUERY_FILES,
+    CONTEXT_QUERY,
+    CUTOFF_QUERY,
+    FOURIER_QUERY,
+    GRAPH_NAME,
+    HUB_QUERY,
+    QUERY_FILES,
+    TRAINING_QUERY_FILES,
+)
 from mule_pattern_learner.paths import GSQL_DIR
 from mule_pattern_learner.testing.fake_connection import executor
 from mule_pattern_learner.tigergraph import gsql_text, installer
@@ -33,7 +42,7 @@ def test_verify_sources_requires_matching_text_and_enabled_endpoints() -> None:
     for path in files:
         expected.update(gsql_text.definitions((GSQL_DIR / path).read_text()))
     params = {name: gsql_text.parameter_names(text) for name, text in expected.items()}
-    assert params["temporal_training_cutoffs"] == {"cutoff_times"}
+    assert params[CUTOFF_QUERY] == {"cutoff_times"}
 
     def conn(
         text_for: Callable[[str], str], endpoints: dict[str, dict[str, Any]]
@@ -41,8 +50,7 @@ def test_verify_sources_requires_matching_text_and_enabled_endpoints() -> None:
         return SimpleNamespace(
             gsql=lambda text: text_for(text.rsplit(" ", 1)[1]),
             getInstalledQueries=lambda: {
-                f"GET /query/Mule_Pattern_Learner/{name}": value
-                for name, value in endpoints.items()
+                f"GET /query/{GRAPH_NAME}/{name}": value for name, value in endpoints.items()
             },
         )
 
@@ -50,7 +58,7 @@ def test_verify_sources_requires_matching_text_and_enabled_endpoints() -> None:
     assert set(installer.verify_sources(executor(conn(expected.__getitem__, good)), files)) == set(
         expected
     )
-    disabled = {**good, "temporal_training_cutoffs": endpoint({"cutoff_times"}, False)}
+    disabled = {**good, CUTOFF_QUERY: endpoint({"cutoff_times"}, False)}
     renamed = {**good, "temporal_fourier64": endpoint({"other"})}
     cases = [
         (conn(expected.__getitem__, disabled), "not installed"),
@@ -125,7 +133,7 @@ class InstallServer:
         if self.pending and self.mode == "timeout" and self.listings > self.ready_after:
             self._enable()
         return {
-            f"GET /query/Mule_Pattern_Learner/{name}": endpoint(
+            f"GET /query/{GRAPH_NAME}/{name}": endpoint(
                 gsql_text.parameter_names(text), self.enabled[name]
             )
             for name, (_, text) in self.queries.items()
@@ -135,31 +143,29 @@ class InstallServer:
 def test_install_creates_and_installs_only_stale_queries(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(installer, "TRAINING_QUERY_FILES", INSTALL_FILES)
     names = list(gsql_text.repository_queries(INSTALL_FILES))
-    assert names == ["temporal_fourier64_values", "temporal_fourier64", "temporal_training_cutoffs"]
+    assert names == [FOURIER_QUERY, "temporal_fourier64", CUTOFF_QUERY]
     # Everything current: nothing is created or installed.
     server = InstallServer()
     logs = installer.install(executor(server))
     assert logs["installed"] == [] and logs["verified"] == names
     assert not server.created and not server.installs
     # A stale subquery is reinstalled together with its caller, nothing else.
-    server = InstallServer(stale=("temporal_fourier64_values",))
+    server = InstallServer(stale=(FOURIER_QUERY,))
     logs = installer.install(executor(server))
-    assert logs["installed"] == ["temporal_fourier64_values", "temporal_fourier64"]
-    assert logs["up_to_date"] == ["temporal_training_cutoffs"]
-    assert server.installs == [(["temporal_fourier64_values", "temporal_fourier64"], False)]
-    assert len(server.created) == 1 and "temporal_training_cutoffs" not in server.created[0]
-    assert server.created[0].startswith("USE GRAPH Mule_Pattern_Learner\n")
+    assert logs["installed"] == [FOURIER_QUERY, "temporal_fourier64"]
+    assert logs["up_to_date"] == [CUTOFF_QUERY]
+    assert server.installs == [([FOURIER_QUERY, "temporal_fourier64"], False)]
+    assert len(server.created) == 1 and CUTOFF_QUERY not in server.created[0]
+    assert server.created[0].startswith(f"USE GRAPH {GRAPH_NAME}\n")
     assert logs["verified"] == names
     # A disabled endpoint is stale even when the text matches.
     server = InstallServer()
-    server.enabled["temporal_training_cutoffs"] = False
-    assert installer.install(executor(server))["installed"] == ["temporal_training_cutoffs"]
+    server.enabled[CUTOFF_QUERY] = False
+    assert installer.install(executor(server))["installed"] == [CUTOFF_QUERY]
     # Callers are found in the repository queries too.
     queries = gsql_text.repository_queries(QUERY_FILES)
-    assert "temporal_training_context" in installer._with_callers(
-        {"temporal_fourier64_values"}, queries
-    )
-    assert installer._with_callers({"temporal_hub_registry"}, queries) == {"temporal_hub_registry"}
+    assert CONTEXT_QUERY in installer._with_callers({FOURIER_QUERY}, queries)
+    assert installer._with_callers({HUB_QUERY}, queries) == {HUB_QUERY}
 
 
 def test_install_polls_endpoints_when_the_install_request_times_out(
@@ -167,21 +173,21 @@ def test_install_polls_endpoints_when_the_install_request_times_out(
 ) -> None:
     monkeypatch.setattr(installer, "TRAINING_QUERY_FILES", INSTALL_FILES)
     # Listing 1 finds the stale query; listings 2 and 3 still see it compiling.
-    server = InstallServer(stale=("temporal_training_cutoffs",), mode="timeout", ready_after=3)
+    server = InstallServer(stale=(CUTOFF_QUERY,), mode="timeout", ready_after=3)
     tg = executor(server)
     logs = installer.install(tg, sleep=tg.clock.sleep, clock=tg.clock.time, poll_s=30)
-    assert logs["installed"] == ["temporal_training_cutoffs"] and logs["install"] is None
+    assert logs["installed"] == [CUTOFF_QUERY] and logs["install"] is None
     assert tg.sleeps == [30, 30] and all(server.enabled.values())
     # The install request waited up to the deadline for its answer.
     assert tg.client.timeouts == [installer.INSTALL_DEADLINE_S]
     # Still compiling at the deadline: an actionable timeout, and a later run installs
     # only what is still stale.
-    server = InstallServer(stale=("temporal_training_cutoffs",), mode="timeout", ready_after=99)
+    server = InstallServer(stale=(CUTOFF_QUERY,), mode="timeout", ready_after=99)
     tg = executor(server)
     with pytest.raises(TimeoutError, match="still not installed.*re-run `mule install`"):
         installer.install(tg, sleep=tg.clock.sleep, clock=tg.clock.time, poll_s=30, deadline_s=100)
     # Other failures of the install request propagate.
-    server = InstallServer(stale=("temporal_training_cutoffs",))
+    server = InstallServer(stale=(CUTOFF_QUERY,))
     server.installQueries = lambda names, wait: (_ for _ in ()).throw(KeyError("bad"))
     with pytest.raises(KeyError):
         installer.install(executor(server))
@@ -189,23 +195,23 @@ def test_install_polls_endpoints_when_the_install_request_times_out(
 
 def test_install_follows_an_asynchronous_request(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(installer, "TRAINING_QUERY_FILES", INSTALL_FILES)
-    server = InstallServer(stale=("temporal_training_cutoffs",), mode="async")
+    server = InstallServer(stale=(CUTOFF_QUERY,), mode="async")
     server.statuses = [{"message": "RUNNING"}, {"message": "Query installation SUCCESS"}]
     sleeps: list[float] = []
     logs = installer.install(executor(server), sleep=sleeps.append, poll_s=5)
     assert logs["install"]["message"].endswith("SUCCESS") and sleeps == [5, 5]
-    server = InstallServer(stale=("temporal_training_cutoffs",), mode="async")
+    server = InstallServer(stale=(CUTOFF_QUERY,), mode="async")
     server.statuses = [{"message": "FAILED: type check"}]
     with pytest.raises(RuntimeError, match="failed"):
         installer.install(executor(server), sleep=sleeps.append)
-    server = InstallServer(stale=("temporal_training_cutoffs",), mode="async")
+    server = InstallServer(stale=(CUTOFF_QUERY,), mode="async")
     server.statuses = [{"message": "RUNNING"}] * 5
     clock = iter([0.0, 10.0, 99999.0])
     with pytest.raises(TimeoutError, match="still running"):
         installer.install(
             executor(server), sleep=sleeps.append, deadline_s=60, clock=lambda: next(clock)
         )
-    server = InstallServer(stale=("temporal_training_cutoffs",))
+    server = InstallServer(stale=(CUTOFF_QUERY,))
     server.gsql = lambda text: (
         "Semantic Check Error" if "SHOW QUERY" not in text else "Query not found"
     )
@@ -214,9 +220,9 @@ def test_install_follows_an_asynchronous_request(monkeypatch: pytest.MonkeyPatch
 
 
 def test_installed_queries_that_no_file_defines_are_listed_not_dropped() -> None:
-    files = (*installer.TRAINING_QUERY_FILES, *installer.ANALYTICS_QUERY_FILES)
+    files = (*TRAINING_QUERY_FILES, *ANALYTICS_QUERY_FILES)
     names = [*gsql_text.repository_queries(files), "temporal_training_population"]
-    listed = {f"GET /query/Mule_Pattern_Learner/{name}": endpoint(set()) for name in names}
+    listed = {f"GET /query/{GRAPH_NAME}/{name}": endpoint(set()) for name in names}
     gsql: list[str] = []
     conn = SimpleNamespace(getInstalledQueries=lambda: listed, gsql=gsql.append)
     assert installer.undefined_queries(executor(conn)) == ["temporal_training_population"]

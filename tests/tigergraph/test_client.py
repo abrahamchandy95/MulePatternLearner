@@ -12,6 +12,7 @@ import pytest
 from pyTigerGraph.common.exception import TigerGraphException
 import requests
 
+from mule_pattern_learner.contract.server import GRAPH_NAME
 from mule_pattern_learner.testing.fake_connection import executor
 from mule_pattern_learner.tigergraph.client import Client, _status_error, _TimeoutConnection
 from mule_pattern_learner.tigergraph.executor import ServerTimeoutError
@@ -30,7 +31,7 @@ def test_json_bodied_status_errors_keep_their_status_through_pytigergraph(
         return response
 
     monkeypatch.setattr(requests.Session, "request", fake)
-    conn = _TimeoutConnection(host="http://127.0.0.1", graphname="Mule_Pattern_Learner")
+    conn = _TimeoutConnection(host="http://127.0.0.1", graphname=GRAPH_NAME)
     ok = {"error": False, "message": "", "results": [{"status": "ok"}]}
     script[:] = [
         (503, {"error": True, "message": "The service is not ready", "code": "REST-0005"}),
@@ -69,7 +70,7 @@ def test_connection_default_timeout_is_effective_and_overridable(
         raise requests.ConnectionError("no network in tests")
 
     monkeypatch.setattr(requests.Session, "request", fake)
-    conn = _TimeoutConnection(host="http://127.0.0.1", graphname="Mule_Pattern_Learner")
+    conn = _TimeoutConnection(host="http://127.0.0.1", graphname=GRAPH_NAME)
     client = Client.__new__(Client)
     client.conn = conn
     for timeout in (None, 7):

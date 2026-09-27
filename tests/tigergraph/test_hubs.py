@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from mule_pattern_learner.contract.graph_schema import HUB_COLUMNS
+from mule_pattern_learner.contract.server import HUB_QUERY
 from mule_pattern_learner.data.hub_registry import (
     HubRegistry,
     hub_manifest,
@@ -31,9 +32,7 @@ def test_hub_registry_parse_save_load_and_stub_semantics(tmp_path: Path) -> None
 
     fake = Runner(run)
     registry = TigerGraphHubs(fake).hub_registry([2000, 1000], threshold=1024)
-    assert calls == [
-        ("temporal_hub_registry", {"cutoff_seqs": cutoffs, "threshold": 1024, "scope_id": ""})
-    ]
+    assert calls == [(HUB_QUERY, {"cutoff_seqs": cutoffs, "threshold": 1024, "scope_id": ""})]
     assert registry.is_stub("Account", "H1", 1000) and not registry.is_stub("Account", "H1", 2000)
     assert registry.is_stub("Account", "H2", 2000, 3)
     assert not registry.is_stub("Token", "H1", 1000)

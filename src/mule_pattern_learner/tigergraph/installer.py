@@ -7,32 +7,25 @@ import re
 import time
 from typing import Any
 
-from ..contract.server import QUERY_FILES, SCOPE_VERTEX
+from ..contract.server import (
+    ANALYTICS_QUERY_FILES,
+    GRAPH_NAME,
+    SCOPE_VERTEX,
+    TRAINING_QUERY_FILES,
+)
 from ..paths import GSQL_DIR
 from ..runtime.progress import emit
-from .executor import AVAILABILITY, GRAPH, SERVER_TIMEOUT, ConnectionExecutor, failure_class
+from .executor import AVAILABILITY, SERVER_TIMEOUT, ConnectionExecutor, failure_class
 from .gsql_text import definitions, normalized, parameter_names, repository_queries
 
-# Preparation queries (contract.server.QUERY_FILES) plus the oracle export for audits, the label-contract validation
-# and the one-time reveal job (the first run reveals known mules; see reveal.py).
-TRAINING_QUERY_FILES = (
-    *QUERY_FILES,
-    "evaluation/ground_truth.gsql",
-    "queries/label_contract.gsql",
-    "queries/label_reveal.gsql",
-)
-# Analytics queries: parity tools for the persisted pair encodings. Training never calls
-# them, so only the code that uses them installs them (install with analytics=True).
-ANALYTICS_QUERY_FILES = (
-    "analytics/zelle_pair_gaps.gsql",
-    "analytics/payment_pair_gaps.gsql",
-)
 BUILTIN_ENDPOINT_PARAMETERS = frozenset({"query", "read_committed"})
 INSTALL_DEADLINE_S = 45 * 60.0
 
 
 def _show_query(executor: ConnectionExecutor, name: str) -> str:
-    return str(executor.gsql(f"USE GRAPH {GRAPH}\nSHOW QUERY {name}", what="SHOW QUERY " + name))
+    return str(
+        executor.gsql(f"USE GRAPH {GRAPH_NAME}\nSHOW QUERY {name}", what="SHOW QUERY " + name)
+    )
 
 
 def undefined_queries(executor: ConnectionExecutor) -> list[str]:
@@ -49,7 +42,7 @@ def installed_endpoints(executor: ConnectionExecutor) -> dict[str, dict[str, Any
     raw = executor.call(lambda conn: conn.getInstalledQueries(), what="getInstalledQueries")
     if not isinstance(raw, dict):
         raise ValueError("TigerGraph did not return installed query endpoints")
-    prefix = f"GET /query/{GRAPH}/"
+    prefix = f"GET /query/{GRAPH_NAME}/"
     return {
         endpoint[len(prefix) :]: info
         for endpoint, info in raw.items()
@@ -157,7 +150,7 @@ def install(
     A query is stale when SHOW QUERY differs from the repository, its endpoint is
     missing or disabled, or its endpoint parameters differ (see query_problems);
     ``analytics`` also installs the analytics queries. Queries that call a stale query
-    (temporal_training_context calls temporal_fourier64_values) are installed
+    (the context query calls the Fourier query) are installed
     with it. Only stale definitions are re-created, because CREATE OR REPLACE
     disables an installed endpoint until the query is installed again.
 
@@ -191,7 +184,7 @@ def install(
         chosen = [queries[name][1] for name in names if queries[name][0] == relative]
         if not chosen:
             continue
-        output = str(conn.gsql(f"USE GRAPH {GRAPH}\n" + "\n\n".join(chosen) + "\n"))
+        output = str(conn.gsql(f"USE GRAPH {GRAPH_NAME}\n" + "\n\n".join(chosen) + "\n"))
         if not _created(output):
             raise RuntimeError(output)
         logs[relative] = output

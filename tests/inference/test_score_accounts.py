@@ -12,6 +12,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+from mule_pattern_learner.contract.server import HUB_QUERY
 from mule_pattern_learner.data.hub_registry import HubRegistry
 from mule_pattern_learner.inference import score_accounts
 from mule_pattern_learner.inference.rejections import rejection_summary
@@ -54,7 +55,7 @@ def test_score_new_writes_only_ok_rows_and_lists_rejected_ids(tmp_path: Path) ->
     assert result["rejected_roots_by_status"] == {"missing_entity": len(rejected_ids)}
     assert result["rejected_children"] == 0 and result["rejected_children_by_status"] == {}
     assert result["rejection_events_by_status"] == {"missing_entity": len(rejected_ids)}
-    hub_call = next(p for name, p in executor.calls if name == "temporal_hub_registry")
+    hub_call = next(p for name, p in executor.calls if name == HUB_QUERY)
     assert hub_call["cutoff_seqs"] == [30_000] and hub_call["threshold"] == 2048
     assert source.closed and not (tmp_path / "scores.parquet.pending").exists()
 

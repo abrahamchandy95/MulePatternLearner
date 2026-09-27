@@ -13,6 +13,7 @@ import pytest
 from pyTigerGraph.common.exception import TigerGraphException
 import requests
 
+from mule_pattern_learner.contract.server import CONTEXT_QUERY, CREATE_SCOPE_QUERY, CUTOFF_QUERY
 from mule_pattern_learner.testing.fake_connection import FakeClock, FakeConn, executor
 from mule_pattern_learner.tigergraph.executor import (
     AVAILABILITY,
@@ -56,9 +57,9 @@ def test_availability_failures_are_retried_with_capped_exponential_backoff() -> 
         ]
     )
     tg = executor(conn, base_delay_s=4, max_delay_s=10)
-    assert tg.run("temporal_training_cutoffs", {"cutoff_times": [1]}) == [{"status": "ok"}]
+    assert tg.run(CUTOFF_QUERY, {"cutoff_times": [1]}) == [{"status": "ok"}]
     assert len(conn.calls) == 6
-    assert tg.retries["temporal_training_cutoffs"] == 5 and tg.calls == 1
+    assert tg.retries[CUTOFF_QUERY] == 5 and tg.calls == 1
     bases = [4, 8, 10, 10, 10]  # capped at max_delay_s
     assert all(b / 2 <= s <= b for b, s in zip(bases, tg.sleeps, strict=True))
     kwargs = conn.calls[0][2]
@@ -120,7 +121,7 @@ def test_suspected_deterministic_failures_are_retried_once() -> None:
         conn = FakeConn([error, error, [{"status": "ok"}]])
         tg = executor(conn, max_attempts=20)
         with pytest.raises(raised, match="after 2 attempt"):
-            tg.run("temporal_training_context", {"node_ids": ["a", "b"]})
+            tg.run(CONTEXT_QUERY, {"node_ids": ["a", "b"]})
         assert len(conn.calls) == 2 and len(tg.sleeps) == 1, error
         # One failure followed by success recovers.
         conn = FakeConn([error, [{"status": "ok"}]])
@@ -187,7 +188,7 @@ def test_permanent_errors_and_writes_are_not_retried() -> None:
     # Writes use a single attempt.
     conn = FakeConn([requests.ConnectionError("down"), [{"status": "ok"}]])
     with pytest.raises(TransientQueryError):
-        executor(conn).run("temporal_create_training_scope", {}, attempts=1)
+        executor(conn).run(CREATE_SCOPE_QUERY, {}, attempts=1)
     assert len(conn.calls) == 1
 
 

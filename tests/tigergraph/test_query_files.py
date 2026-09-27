@@ -7,11 +7,19 @@ import re
 import pytest
 
 from mule_pattern_learner.contract.feature_groups import ARCHITECTURES, FeaturePlan
+from mule_pattern_learner.contract.server import (
+    CONTEXT_QUERY,
+    CREATE_SCOPE_QUERY,
+    FINALIZE_SCOPE_QUERY,
+    HUB_QUERY,
+    POPULATION_QUERY,
+    SCOPE_POLICY_QUERY,
+)
 from mule_pattern_learner.data.contexts import ContextSource
 from mule_pattern_learner.paths import GSQL_DIR
 from mule_pattern_learner.testing.builders import PLAN, SAMPLER, hub_rows, root
 from mule_pattern_learner.testing.fake_graph import ContextServer, Runner
-from mule_pattern_learner.tigergraph import gsql_text, scope
+from mule_pattern_learner.tigergraph import gsql_text
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
 from mule_pattern_learner.tigergraph.gsql_text import definitions, parameter_names
 from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
@@ -38,7 +46,7 @@ PER_REQUEST = (
     "invalid_event_roles",
 )
 CALL_LEVEL = ("invalid_parameters", "invalid_visibility_phase", "scope_not_ready")
-POPULATION_QUERIES = ("temporal_scope_population",)
+POPULATION_QUERIES = (POPULATION_QUERY,)
 CONTRACT_ROWS = {
     # name: (pu_label, is_mule, mule_label_known, is_mule_masked), label contract states
     "revealed": (1, 1, True, False),
@@ -66,7 +74,7 @@ def test_sent_parameters_match_the_repository_query_signatures() -> None:
         text = gsql_text.definitions((GSQL_DIR / path).read_text())[name]
         return gsql_text.parameter_names(text)
 
-    context = signature("queries/training_context.gsql", "temporal_training_context")
+    context = signature("queries/training_context.gsql", CONTEXT_QUERY)
     windows = (FeaturePlan(DEFAULT_FLAG_GROUPS, a) for a in ARCHITECTURES)
     for plan in (PLAN, *windows):
         server = ContextServer()
@@ -79,10 +87,10 @@ def test_sent_parameters_match_the_repository_query_signatures() -> None:
     TigerGraphHubs(Runner(lambda n, p: calls.append(p) or hub_rows([1000, 2000]))).hub_registry(
         [1000, 2000], threshold=1024
     )
-    assert set(calls[0]) == signature("queries/hub_accounts.gsql", "temporal_hub_registry")
-    creation = signature("queries/training_scope.gsql", "temporal_create_training_scope")
+    assert set(calls[0]) == signature("queries/hub_accounts.gsql", HUB_QUERY)
+    creation = signature("queries/training_scope.gsql", CREATE_SCOPE_QUERY)
     assert {"scope_id", "source_id", "split_seed", "unowned_policy"} <= creation
-    policy = signature("queries/training_scope.gsql", scope.SCOPE_POLICY_QUERY)
+    policy = signature("queries/training_scope.gsql", SCOPE_POLICY_QUERY)
     assert policy == {"scope_id"}
 
 
@@ -131,10 +139,10 @@ def test_training_queries_read_no_oracle_attributes(text: str) -> None:
             assert not [field for field in ORACLE if field in query], query_name
             checked.add(query_name)
     assert {
-        "temporal_hub_registry",
-        "temporal_create_training_scope",
-        "temporal_finalize_training_scope",
-        "temporal_scope_policy",
+        HUB_QUERY,
+        CREATE_SCOPE_QUERY,
+        FINALIZE_SCOPE_QUERY,
+        SCOPE_POLICY_QUERY,
     } <= checked
 
 
@@ -191,13 +199,13 @@ def test_cutoffs_report_every_requested_key() -> None:
 
 
 def hub_query() -> str:
-    return query_texts("hub_accounts.gsql")["temporal_hub_registry"]
+    return query_texts("hub_accounts.gsql")[HUB_QUERY]
 
 
 def test_hub_registry_contract() -> None:
     query = hub_query()
     assert (
-        "CREATE OR REPLACE QUERY temporal_hub_registry(\n"
+        f"CREATE OR REPLACE QUERY {HUB_QUERY}(\n"
         '  LIST<UINT> cutoff_seqs, UINT threshold = 2048, STRING scope_id = ""\n)'
     ) in query
     assert parameter_names(query) == {"cutoff_seqs", "threshold", "scope_id"}
@@ -296,8 +304,8 @@ def scope_queries() -> dict[str, str]:
 
 
 def test_scope_unowned_policy_keeps_party_partitions() -> None:
-    create = scope_queries()["temporal_create_training_scope"]
-    params = create.split("CREATE OR REPLACE QUERY temporal_create_training_scope(", 1)[1]
+    create = scope_queries()[CREATE_SCOPE_QUERY]
+    params = create.split(f"CREATE OR REPLACE QUERY {CREATE_SCOPE_QUERY}(", 1)[1]
     params = params.split(")", 1)[0]
     assert params.rstrip().endswith('STRING unowned_policy = "independent"')
     assert "shared_unowned" not in create
@@ -338,7 +346,7 @@ def test_scope_unowned_policy_keeps_party_partitions() -> None:
 
 
 def test_scope_linked_policy_attaches_only_single_counterparty_internal_accounts() -> None:
-    create = scope_queries()["temporal_create_training_scope"]
+    create = scope_queries()[CREATE_SCOPE_QUERY]
     linked = create.split('IF unowned_policy == "linked" THEN', 1)[1].split("\n  END;", 1)[0]
     assert create.index("WHILE @@changed") < create.index('IF unowned_policy == "linked"')
     # Ledger accounts are shared, so only unowned internal customer accounts can be linked.
@@ -383,8 +391,8 @@ def test_scope_linked_policy_attaches_only_single_counterparty_internal_accounts
 
 def test_scope_policy_query_classifies_unowned_accounts() -> None:
     queries = scope_queries()
-    policy = queries["temporal_scope_policy"]
-    assert "CREATE OR REPLACE QUERY temporal_scope_policy(STRING scope_id)\n" in policy
+    policy = queries[SCOPE_POLICY_QUERY]
+    assert f"CREATE OR REPLACE QUERY {SCOPE_POLICY_QUERY}(STRING scope_id)\n" in policy
     for write in ("INSERT", "UPDATE", "DELETE", ".ready ="):
         assert write not in policy
     assert re.search(r'PRINT "scope_not_ready" AS status; RETURN;', policy)
@@ -402,7 +410,7 @@ def test_scope_policy_query_classifies_unowned_accounts() -> None:
             assert f"@@{kind}_{side} += 1" in policy
     assert "@@members AS members" in printed
     # The classes match what the create query writes for a singleton unowned component.
-    create = queries["temporal_create_training_scope"]
+    create = queries[CREATE_SCOPE_QUERY]
     assert "s.@component = getvid(s)" in create
     assert '"shared:" + to_string(s.@component)' in create
     assert "          to_string(s.@component))" in create

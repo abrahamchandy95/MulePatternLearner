@@ -1,4 +1,4 @@
-"""The temporal_training_context request protocol: requests, bisection and validation.
+"""The context query's request protocol: requests, bisection and validation.
 
 render.py renders the query; this module is its client side. It validates every
 returned context against its key, clocks and the feature contract, and splits a
@@ -24,13 +24,12 @@ from ..contract.feature_groups import (
 )
 from ..contract.graph_schema import CHANNELS, NODE_TYPES, RAILS, RELATIONS, STRATA, ContextKey
 from ..contract.sampler_plan import SamplerPlan
-from ..contract.server import CONTEXT_CONTRACT
+from ..contract.server import CONTEXT_CONTRACT, CONTEXT_QUERY
 from ..contract.time_basis import BASIS_ID, fourier64
 from .executor import CONVERSION_ERRORS, QueryExecutor, ServerTimeoutError, error_summary
 
 LOGGER = logging.getLogger(__name__)
 
-CONTEXT_QUERY = "temporal_training_context"
 # Per-request statuses: the query continues with the next request and the
 # client receives None for that key. Every other non-ok status is call-level.
 PER_REQUEST_STATUSES = frozenset(

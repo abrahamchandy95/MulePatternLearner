@@ -20,11 +20,11 @@ from mule_pattern_learner.config import DEFAULT_CONFIG
 from mule_pattern_learner.contract.feature_groups import FEATURE_GROUPS, FeaturePlan
 from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.contract.sampler_plan import PoolPlan, SamplerPlan
-from mule_pattern_learner.contract.server import CONTEXT_QUERY_FILE
+from mule_pattern_learner.contract.server import CONTEXT_QUERY, CONTEXT_QUERY_FILE, GRAPH_NAME
 from mule_pattern_learner.data.splits import resolve_cutoff
 from mule_pattern_learner.paths import GSQL_DIR
 from mule_pattern_learner.reference.gsql_features import payment_features, stratify, visible_history
-from mule_pattern_learner.tigergraph.context_query import CONTEXT_QUERY, validate_context
+from mule_pattern_learner.tigergraph.context_query import validate_context
 from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffs
 from mule_pattern_learner.tigergraph.executor import TigerGraphExecutor, checked_rows
 from mule_pattern_learner.tigergraph.render import as_interpreted
@@ -48,7 +48,7 @@ SAMPLER = SamplerPlan(roots=PoolPlan(recent=4, older=3, distinct=2))
 def audit_history(graph: TigerGraphExecutor, key: ContextKey) -> list[dict[str, Any]]:
     """Every payment of the account before the cutoff, read without the context query."""
     parts = [
-        f"""INTERPRET QUERY () FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {{
+        f"""INTERPRET QUERY () FOR GRAPH {GRAPH_NAME} SYNTAX V2 {{
     TYPEDEF TUPLE<STRING event_id, UINT event_seq, UINT event_ts_ms, STRING relation,
                   STRING node_type, STRING node_id, STRING rail, STRING currency,
                   DOUBLE amount, BOOL amount_present> Event;

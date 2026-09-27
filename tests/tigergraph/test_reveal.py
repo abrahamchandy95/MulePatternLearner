@@ -8,11 +8,17 @@ import pytest
 
 from mule_pattern_learner.config import DEFAULT_CONFIG, ScopeConfig, SplitDates
 from mule_pattern_learner.contract.clock import timestamp
+from mule_pattern_learner.contract.server import (
+    LABEL_CONTRACT_QUERY,
+    REVEAL_QUERY,
+    REVEAL_UNIFORMS_QUERY,
+    TRAINING_QUERY_FILES,
+    TRUTH_QUERY,
+)
 from mule_pattern_learner.paths import GSQL_DIR
 from mule_pattern_learner.tigergraph import labels as tigergraph_labels
 from mule_pattern_learner.tigergraph import reveal as tigergraph_reveal
 from mule_pattern_learner.tigergraph.gsql_text import definitions, repository_queries
-from mule_pattern_learner.tigergraph.installer import TRAINING_QUERY_FILES
 
 REVEAL_FILE = GSQL_DIR / "queries/label_reveal.gsql"
 # The built-in run's scope and split dates, which the reveal reads.
@@ -67,7 +73,7 @@ def test_reveal_parameters_follow_the_run_dates_budget_and_salt() -> None:
 
 
 def test_reveal_defaults_are_the_query_defaults() -> None:
-    query = definitions(REVEAL_FILE.read_text())[tigergraph_reveal.REVEAL_QUERY]
+    query = definitions(REVEAL_FILE.read_text())[REVEAL_QUERY]
     header = query.split("(", 1)[1].split(") FOR GRAPH", 1)[0]
     declared = re.findall(r"\b(?:INT|DOUBLE)\s+(\w+)\s*=\s*([-\d.]+)", header)
     assert {name: float(value) for name, value in declared} == tigergraph_reveal.REVEAL_DEFAULTS
@@ -82,9 +88,9 @@ class RevealServer:
 
     def run(self, name: str, params: dict[str, Any], **kwargs: Any) -> list[dict[str, Any]]:
         self.calls.append((name, params, kwargs))
-        if name == tigergraph_reveal.REVEAL_QUERY:
+        if name == REVEAL_QUERY:
             return [self.reveal, {"revealed_mules": []}]
-        assert name == tigergraph_labels.VALIDATE_QUERY
+        assert name == LABEL_CONTRACT_QUERY
         return [self.audit]
 
 
@@ -104,11 +110,7 @@ def test_first_run_reveals_once_and_reports_the_shortfall(
     server = RevealServer(reveal, CLEAN)
     summary = tigergraph_reveal.ensure_revealed_labels(server, *REVEAL_SETTINGS)
     name, params, options = server.calls[0]
-    assert (
-        name == tigergraph_reveal.REVEAL_QUERY
-        and params["apply"] is True
-        and options["attempts"] == 1
-    )
+    assert name == REVEAL_QUERY and params["apply"] is True and options["attempts"] == 1
     assert summary["labels"] == "revealed now" and summary["revealed"] == reveal["revealed"]
     # Validation had only 14 mules a bank would have found by 1 October: never padded.
     assert summary["shortfall_discovered_by_cutoff"] == {"validation": 14}
@@ -134,10 +136,8 @@ def test_existing_labels_are_kept_and_contract_violations_fail() -> None:
 
 def test_reveal_queries_are_installed_with_training_and_read_truth_only_there() -> None:
     queries = repository_queries(TRAINING_QUERY_FILES)
-    assert {"temporal_reveal_uniforms", "temporal_reveal_mule_labels"} <= set(queries)
-    assert {"temporal_get_account_supervision", "temporal_validate_account_supervision"} <= set(
-        queries
-    )
+    assert {REVEAL_UNIFORMS_QUERY, REVEAL_QUERY} <= set(queries)
+    assert {TRUTH_QUERY, LABEL_CONTRACT_QUERY} <= set(queries)
     text = REVEAL_FILE.read_text()
     # The reveal simulates report delays; it never treats the instant oracle as a report.
     assert "z.label_available_ts_ms + (report_days + notify_days)" in text

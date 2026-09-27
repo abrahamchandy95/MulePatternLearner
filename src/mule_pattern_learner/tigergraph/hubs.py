@@ -9,10 +9,9 @@ import pandas as pd
 
 from ..contract.bounds import HUB_CUTOFFS
 from ..contract.graph_schema import HUB_COLUMNS, HUB_REASONS
+from ..contract.server import HUB_QUERY
 from ..data.hub_registry import HubRegistry, registry_phases
 from .executor import CONVERSION_ERRORS, QueryExecutor, checked_rows
-
-HUB_QUERY = "temporal_hub_registry"
 
 
 def _parse_hubs(
@@ -58,7 +57,7 @@ def _parse_hubs(
 
 
 class TigerGraphHubs:
-    """The HubReader of data.ports: the read-only temporal_hub_registry query."""
+    """The HubReader of data.ports: the read-only hub query (contract.server.HUB_QUERY)."""
 
     def __init__(self, executor: QueryExecutor, *, timeout_s: float = 1800.0) -> None:
         self.executor, self.timeout_s = executor, timeout_s

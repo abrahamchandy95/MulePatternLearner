@@ -20,6 +20,7 @@ import subprocess
 import tomllib
 
 from mule_pattern_learner import cli
+from mule_pattern_learner.contract import server
 from mule_pattern_learner.paths import (
     BASELINE_VARIANT,
     DATA_DIR,
@@ -224,6 +225,14 @@ def test_query_names_start_with_a_verb_or_wait_for_the_server_step() -> None:
     assert set(INSTALLED_QUERIES) <= names
     renamed = [new for new in INSTALLED_QUERIES.values() if new is not None]
     assert [name for name in renamed if not good_query_name(name)] == []
+
+
+def test_the_server_contract_names_every_installed_query_once() -> None:
+    # Adapters, fakes and tests take the names from contract.server, so the server step
+    # renames each there; a retired query has no name there.
+    names = [value for key, value in vars(server).items() if key.endswith("_QUERY")]
+    assert len(names) == len(set(names))
+    assert set(names) == {name for name, new in INSTALLED_QUERIES.items() if new is not None}
 
 
 def test_the_command_line_is_mule_with_five_commands() -> None:
