@@ -2,7 +2,8 @@
 
 Three full training runs on the CUDA host, on the same cohort and the same revealed labels.
 They record where the model stood before the restructuring and why the built-in settings are
-what they are. The scripts and notes of the diagnostic study that sits between runs 2 and 3 are
+what they are. The checkpoints of runs 1 and 2 load only with the code at the `pre-restructure`
+tag. The scripts and notes of the diagnostic study that sits between runs 2 and 3 are
 on the branch `archive/diagnostic-study`, under `research-archive/` (start with its
 `README.md`).
 
@@ -66,9 +67,15 @@ for analysis only.
 - The strongest mule signals are counts over the account's candidate pool, the payments
   TigerGraph already returns for it: distinct payers, incoming payments, and inflows from
   first-time payers.
-- Logistic regression on pool counts, trained on the 20 revealed training mules, reached test
-  ROC AUC 0.945, AP 0.20 to 0.24 and recall 0.65 in the top 1%.
-- Logistic regression on k random training mules gives this label-count curve:
+- Logistic regression on the study's 16 pool features, trained on the 20 revealed training
+  mules, reached test ROC AUC 0.946 to 0.947, AP 0.20 to 0.26 and recall 0.675 to 0.70 in the
+  top 1%, depending on how the unlabelled training accounts were treated. The study scored all
+  40 test mules against 3,000 uniform non-mules drawn with seed 7, not the audit's 2,000 drawn
+  with seed 42, so these numbers are not paired with the runs' audits.
+- Logistic regression on the 165 account-level features of the baselines (not the pool
+  features), trained on k random training mules (revealed or hidden) against 3,000 training
+  non-mules, gives this label-count curve on the same test sample (the mean of 5 draws, and a
+  single run at k = 160):
 
   | k | 10 | 20 | 40 | 80 | 160 |
   |---|---|---|---|---|---|
