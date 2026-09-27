@@ -1,17 +1,28 @@
-"""The built-in run needs no flag, file or identifier."""
+"""The built-in run needs no flag, file or identifier, and writes the files of its tables."""
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
+import pandas as pd
 import pytest
 
+from mule_pattern_learner.artifacts import read_epochs, read_events, read_history
 from mule_pattern_learner.cli import build_parser
-from mule_pattern_learner.config import DEFAULT_CONFIG
-from mule_pattern_learner.paths import RESULTS_DIR, DatasetPaths, RunPaths
+from mule_pattern_learner.config import DEFAULT_CONFIG, TransportConfig
+from mule_pattern_learner.data.manifest import dataset_id
+from mule_pattern_learner.inference.saved_model import SavedModel
+from mule_pattern_learner.paths import BASELINE_VARIANT, RESULTS_DIR, DatasetPaths, RunPaths
+from mule_pattern_learner.pipeline import connect as pipeline_connect
+from mule_pattern_learner.pipeline import evaluate as pipeline_evaluate
+from mule_pattern_learner.pipeline import prepare as pipeline_prepare
 from mule_pattern_learner.pipeline.connect import open_context_source
+from mule_pattern_learner.pipeline.evaluate import final_audit
 from mule_pattern_learner.pipeline.train import BASELINE_RUN, run
+from mule_pattern_learner.testing.builders import neighbourhood, scope_population
+from mule_pattern_learner.testing.fake_graph import FakeExecutor
 
 
 def test_minimal_command_and_run_defaults(tmp_path: Path) -> None:
@@ -45,3 +56,106 @@ def test_minimal_command_and_run_defaults(tmp_path: Path) -> None:
         assert prep.call_count == 1
         run(output, data=tmp_path / "data", resume=True)
         assert fit.call_args.kwargs["resume"] is True
+
+
+# The source id of the fake graph's data, and its accounts.
+FAKE_SOURCE = "end_to_end_fixture"
+POPULATION = 200
+
+
+def fake_graph(monkeypatch: pytest.MonkeyPatch) -> FakeExecutor:
+    """The fake graph behind every connection of the pipeline; its graph writes are no-ops.
+
+    It holds a frozen scope whose known mules are revealed, so preparation only reads.
+    """
+    executor = FakeExecutor(
+        factory=neighbourhood,
+        hubs=[("N3", cutoff) for cutoff in (101, 102, 103)],
+        statuses={"N5": "history_capacity_exceeded"},
+        population=scope_population(POPULATION),
+    )
+
+    def connect(transport: TransportConfig) -> FakeExecutor:
+        return executor
+
+    def nothing(*args: Any, **kwargs: Any) -> None:
+        return None
+
+    def source_counts(executor: Any) -> dict[str, int]:
+        return {"Account": POPULATION}
+
+    def resolve_source_id(*args: Any) -> str:
+        return FAKE_SOURCE
+
+    for module in (pipeline_prepare, pipeline_connect, pipeline_evaluate):
+        monkeypatch.setattr(module, "connect", connect)
+    for module in (pipeline_connect, pipeline_evaluate):
+        monkeypatch.setattr(module, "verify_frozen_source", nothing)
+    for name in ("install", "ensure_scope", "ensure_revealed_labels"):
+        monkeypatch.setattr(pipeline_prepare, name, nothing)
+    monkeypatch.setattr(pipeline_prepare, "source_counts", source_counts)
+    monkeypatch.setattr(pipeline_prepare, "resolve_source_id", resolve_source_id)
+    return executor
+
+
+def files(directory: Path) -> set[str]:
+    return {p.relative_to(directory).as_posix() for p in directory.rglob("*") if p.is_file()}
+
+
+def test_train_then_audit_write_exactly_the_files_of_the_run_and_dataset_tables(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_graph(monkeypatch)
+    config = DEFAULT_CONFIG.with_changes(
+        {
+            "dataset": {"seed_limits": {"train": 64, "validation": 24, "test": 24}},
+            "training": {"epochs": 2, "steps_per_epoch": 3, "batch_size": 16},
+            "runtime": {"device": "cpu", "threads": 1},
+        }
+    )
+    data, results = tmp_path / "data", tmp_path / "results"
+    output = RunPaths.of(BASELINE_VARIANT, config.training.seed, results)
+    result = run(output, config=config, data=data)
+    assert result["status"] == "complete"
+    # The dataset is data/<dataset id>/, and nothing else is written there.
+    identity = dataset_id(FAKE_SOURCE, config)
+    prepared = {
+        f"{identity}/manifest.json",
+        f"{identity}/accounts.parquet",
+        f"{identity}/observed_labels.parquet",
+        f"{identity}/hubs.parquet",
+    }
+    assert result["dataset_id"] == identity and files(data) == prepared
+    trained = {
+        "config.json",
+        "model.pt",
+        "resume.pt",
+        "history.csv",
+        "epochs.csv",
+        "events.jsonl",
+        "metrics.json",
+        "predictions/validation.parquet",
+        "predictions/test.parquet",
+    }
+    assert output.root == results / "baseline" / "seed-42"
+    assert files(results) == {f"baseline/seed-42/{name}" for name in trained}
+    assert SavedModel.load(output.model).dataset(data) == DatasetPaths.of(identity, data)
+    events = [event["event"] for event in read_events(output.events)]
+    assert events[0] == "start" and events[-1] == "complete"
+    # log_every_steps is above the 3 steps of an epoch: one interval per epoch.
+    assert read_history(output.history)[["epoch", "step"]].to_numpy().tolist() == [[1, 3], [2, 3]]
+    assert read_epochs(output.epochs).epoch.tolist() == [1, 2]
+    # A complete run is reported, and left as it was.
+    written = {name: (output.root / name).stat().st_mtime_ns for name in trained}
+    with pytest.raises(FileExistsError, match="already complete"):
+        run(output, config=config, data=data, resume=True)
+    assert {name: (output.root / name).stat().st_mtime_ns for name in trained} == written
+    # The audit adds its files to the run's audit/ and reads the model's own dataset.
+    truth = pd.DataFrame(scope_population(POPULATION))[["account_id"]]
+    truth["is_mule"] = (truth.index % 3 == 0).astype(int)
+    truth_path = tmp_path / "truth.parquet"
+    truth.to_parquet(truth_path, index=False)
+    audit = final_audit(output, truth_path, data=data)
+    assert audit["rejected_accounts"] == 0
+    assert files(output.root) == trained | {"audit/test.json", "audit/test.parquet"}
+    assert files(data) == prepared
