@@ -10,9 +10,11 @@ import pandas as pd
 import pytest
 import torch
 
+from mule_pattern_learner.artifacts import read_audit_scores, read_json
 from mule_pattern_learner.batching import assemble
 from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.evaluation.audit import evaluate_final_population, evaluate_weighted
+from mule_pattern_learner.paths import RunPaths
 from mule_pattern_learner.testing.builders import (
     CUTOFFS,
     base_config,
@@ -41,7 +43,8 @@ def test_final_population_audit_scores_through_the_dataset_clock_and_hubs(
 ) -> None:
     config = base_config(runtime={"max_rejected_root_fraction": 0.1})
     dataset, _, accounts = prepared_dataset(tmp_path / "dataset", config, monkeypatch)
-    model = checkpoint(tmp_path / "model.pt", config, dataset)
+    run = RunPaths(tmp_path / "run")
+    checkpoint(run.model, config, dataset)
     test_accounts = accounts[accounts.split == "test"]
     truth = test_accounts[["account_id"]].assign(is_mule=(np.arange(len(test_accounts)) % 4 == 0))
     truth["is_mule"] = truth.is_mule.astype(int)
@@ -60,9 +63,8 @@ def test_final_population_audit_scores_through_the_dataset_clock_and_hubs(
             return truth
 
     result = evaluate_final_population(
-        model,
+        run,
         Truth(),
-        tmp_path / "final.json",
         scope=TigerGraphScope(ScoringExecutor(test_accounts)),
         contexts=source,
         hubs=hub_registry(),
@@ -75,10 +77,19 @@ def test_final_population_audit_scores_through_the_dataset_clock_and_hubs(
     for pct in (1, 5, 10):
         assert 0 <= result["metrics"][f"recall_at_{pct}pct"] <= 1
         assert 0 <= result["metrics"][f"precision_at_{pct}pct"] <= 1
-    assert pd.read_parquet(tmp_path / "final.parquet").score.dtype == np.float64
-    assert (tmp_path / "final.rejected.txt").read_text().split() == [
-        test_accounts.account_id.iloc[1]
-    ]
+    assert read_json(run.audit_metrics("test")) == result
+    scores = read_audit_scores(run.audit_scores("test"))
+    assert scores.score.dtype == np.float64 and len(scores) == len(test_accounts) - 1
+    assert run.audit_rejected("test").read_text().split() == [test_accounts.account_id.iloc[1]]
+    # An audit the run already has is never overwritten.
+    with pytest.raises(FileExistsError, match="test.json"):
+        evaluate_final_population(
+            run,
+            Truth(),
+            scope=TigerGraphScope(ScoringExecutor(test_accounts)),
+            contexts=source,
+            hubs=hub_registry(),
+        )
 
 
 @pytest.mark.parametrize(("limit", "rejected_index"), [(1.0, 0), (0.0, 1)])
@@ -87,7 +98,8 @@ def test_final_population_audit_fails_on_censored_rejections(
 ) -> None:
     config = base_config(runtime={"max_rejected_root_fraction": limit})
     dataset, _, accounts = prepared_dataset(tmp_path / "dataset", config, monkeypatch)
-    model = checkpoint(tmp_path / "model.pt", config, dataset)
+    run = RunPaths(tmp_path / "run")
+    checkpoint(run.model, config, dataset)
     test_accounts = accounts[accounts.split == "test"]
     truth = test_accounts[["account_id"]].assign(
         is_mule=(np.arange(len(test_accounts)) % 4 == 0).astype(int)
@@ -102,14 +114,13 @@ def test_final_population_audit_fails_on_censored_rejections(
     match = "1 test positives" if rejected_index == 0 else "0 test positives"
     with pytest.raises(ValueError, match=match):
         evaluate_final_population(
-            model,
+            run,
             Truth(),
-            tmp_path / "final.json",
             scope=TigerGraphScope(ScoringExecutor(test_accounts)),
             contexts=source,
             hubs=hub_registry(),
         )
-    assert not list(tmp_path.glob("final*"))
+    assert not (run.root / "audit").exists()
 
 
 def audit_frame() -> pd.DataFrame:

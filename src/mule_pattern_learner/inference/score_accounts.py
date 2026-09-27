@@ -11,7 +11,7 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from ..artifacts import atomic_write, pending_path
+from ..artifacts import atomic_write, pending_path, write_rejected
 from ..contract.graph_schema import SPLITS, ContextKey
 from ..contract.sampler_plan import SamplerPlan
 from ..data.contexts import ContextOpener, ContextSource, close_source
@@ -132,11 +132,6 @@ def read_account_ids(path: Path) -> Iterator[str]:
 
 def rejected_path(output: Path) -> Path:
     return output.with_name(output.name + ".rejected.txt")
-
-
-def write_rejected(path: Path, ids: list[str]) -> None:
-    """One rejected root ID per line."""
-    path.write_text("".join(value + "\n" for value in ids))
 
 
 def check_new_outputs(output: Path) -> None:

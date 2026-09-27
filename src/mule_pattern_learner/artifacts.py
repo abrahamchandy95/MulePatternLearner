@@ -57,6 +57,9 @@ EPOCH_COLUMNS: tuple[str, ...] = (
 )
 # predictions/<split>.parquet: the scored observed-label rows of a split (float64 scores).
 PREDICTION_COLUMNS = ("account_id", "group_id", "date", "observed_label", "score")
+# audit/<split>.parquet: the scored accounts of a split's audit sample, with their truth
+# and the probability that the sample includes each one.
+AUDIT_COLUMNS = ("account_id", "split", "is_mule", "inclusion_probability", "score")
 
 
 def file_digest(path: Path) -> str:
@@ -207,3 +210,23 @@ def read_predictions(path: Path) -> pd.DataFrame:
     if tuple(frame.columns) != PREDICTION_COLUMNS:
         raise ValueError(f"{path} has the columns {list(frame.columns)}")
     return frame
+
+
+def write_audit_scores(path: Path, frame: pd.DataFrame) -> None:
+    """Write an audit sample's scored accounts (AUDIT_COLUMNS, in that order)."""
+    if tuple(frame.columns) != AUDIT_COLUMNS:
+        raise ValueError(f"Audit scores have the columns {list(frame.columns)}")
+    with atomic_write(path) as pending:
+        frame.to_parquet(pending, index=False)
+
+
+def read_audit_scores(path: Path) -> pd.DataFrame:
+    frame = pd.read_parquet(path)
+    if tuple(frame.columns) != AUDIT_COLUMNS:
+        raise ValueError(f"{path} has the columns {list(frame.columns)}")
+    return frame
+
+
+def write_rejected(path: Path, ids: Iterable[str]) -> None:
+    """The accounts TigerGraph rejected, one ID per line."""
+    path.write_text("".join(value + "\n" for value in ids))

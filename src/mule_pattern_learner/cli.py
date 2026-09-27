@@ -16,12 +16,12 @@ from .config import DEFAULT_CONFIG
 from .data.manifest import read_manifest
 from .inference.saved_model import ModelCheckpoint
 from .inference.score_accounts import read_account_ids, score
-from .paths import DatasetPaths
+from .paths import DatasetPaths, RunPaths
 from .pipeline.connect import connect, open_context_source
 from .pipeline.evaluate import evaluate, final_audit
 from .pipeline.prepare import prepare_live
 from .pipeline.score import score_new
-from .pipeline.train import run
+from .pipeline.train import BASELINE_RUN, run
 from .runtime.device import reserve_deterministic_cublas
 from .tigergraph.installer import install
 
@@ -77,13 +77,19 @@ def build_parser() -> argparse.ArgumentParser:
     evaluation.add_argument("--output", type=Path, required=True)
     final = commands.add_parser(
         "evaluate-final",
-        help="Frozen-model audit: all test positives and weighted sampled negatives",
+        help="Frozen-model audit: all test positives and weighted sampled negatives, "
+        "written to the run's audit/",
     )
-    final.add_argument("--checkpoint", type=Path, required=True)
-    final.add_argument("--truth", type=Path, help="Truth parquet (default: the graph)")
-    final.add_argument("--output", type=Path, required=True)
     final.add_argument(
-        "--dataset", type=Path, help="Prepared dataset (default: recorded in the checkpoint)"
+        "run",
+        nargs="?",
+        type=Path,
+        default=BASELINE_RUN.root,
+        help="Run directory (default: results/baseline/seed-42)",
+    )
+    final.add_argument("--truth", type=Path, help="Truth parquet (default: the graph)")
+    final.add_argument(
+        "--dataset", type=Path, help="Prepared dataset (default: recorded in the model)"
     )
     return parser
 
@@ -114,7 +120,7 @@ def main() -> None:
         )
     elif args.command == "evaluate-final":
         dataset = None if args.dataset is None else DatasetPaths(args.dataset)
-        result = final_audit(args.checkpoint, args.truth, args.output, dataset=dataset)
+        result = final_audit(RunPaths(args.run), args.truth, dataset=dataset)
     elif args.command == "evaluate":
         if args.output.exists():
             raise FileExistsError(args.output)

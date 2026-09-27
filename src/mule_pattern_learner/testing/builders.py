@@ -904,5 +904,6 @@ def checkpoint(
     if dataset is not None:
         payload["dataset_manifest_sha256"] = file_digest(dataset.manifest)
         payload["dataset"] = str(dataset.root)
+    path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(payload, path)
     return path

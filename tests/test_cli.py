@@ -72,8 +72,11 @@ def test_cli_needs_no_config_truth_or_dataset() -> None:
     for command in (["train"], ["prepare"]):
         with pytest.raises(SystemExit):
             parser.parse_args([*command, "--config", "overrides.toml"])
-    final = parser.parse_args(["evaluate-final", "--checkpoint", "m.pt", "--output", "o.json"])
+    final = parser.parse_args(["evaluate-final"])
     assert final.dataset is None and final.truth is None
+    # The audit goes into the baseline run, or the run directory named.
+    assert final.run == pipeline_train.BASELINE_RUN.root
+    assert parser.parse_args(["evaluate-final", "results/x/seed-1"]).run == Path("results/x/seed-1")
     scoring = parser.parse_args(
         ["score", "--checkpoint", "m.pt", "--date", "2025-01-01", "--output", "s.parquet"]
     )
