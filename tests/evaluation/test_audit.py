@@ -21,6 +21,7 @@ from mule_pattern_learner.testing.builders import (
     prepared_dataset,
 )
 from mule_pattern_learner.testing.fake_graph import FakeSource, ScoringExecutor
+from mule_pattern_learner.tigergraph.scope import TigerGraphScope
 
 TOP_KEYS = [f"{kind}_at_{pct}pct" for pct in (1, 5, 10) for kind in ("precision", "recall")]
 # Top 1% is 0.5 accounts: half of 01. Top 5% is 2.5: 01 and half of the tied block, so
@@ -62,7 +63,7 @@ def test_final_population_audit_scores_through_the_dataset_clock_and_hubs(
         model,
         Truth(),
         tmp_path / "final.json",
-        executor=ScoringExecutor(test_accounts),
+        scope=TigerGraphScope(ScoringExecutor(test_accounts)),
         contexts=source,
         hubs=hub_registry(),
     )
@@ -104,7 +105,7 @@ def test_final_population_audit_fails_on_censored_rejections(
             model,
             Truth(),
             tmp_path / "final.json",
-            executor=ScoringExecutor(test_accounts),
+            scope=TigerGraphScope(ScoringExecutor(test_accounts)),
             contexts=source,
             hubs=hub_registry(),
         )

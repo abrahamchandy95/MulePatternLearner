@@ -14,12 +14,11 @@ from ..config import validate_config
 from ..contract.fingerprints import fingerprint
 from ..contract.graph_schema import context_scope
 from ..contract.sampler_plan import SamplerPlan
-from ..tigergraph.executor import QueryExecutor
-from ..tigergraph.hubs import query_hub_registry
 from .accounts import scoped_cohort
 from .hub_registry import HUB_FILE, hub_manifest, hub_threshold
 from .manifest import MANIFEST, preparation_view, query_hashes, read_manifest, write_manifest
-from .observed_labels import ORACLE_COLUMNS, ObservedLabelSource, label_summary
+from .observed_labels import ORACLE_COLUMNS, label_summary
+from .ports import CutoffReader, HubReader, ObservedLabelReader, ScopeReader
 from .splits import resolve_cutoffs, validate_dates
 
 
@@ -33,8 +32,8 @@ def _stage_population(
     config: dict[str, Any],
     output: Path,
     manifest: dict[str, Any],
-    executor: QueryExecutor,
-    labels: ObservedLabelSource,
+    scope: ScopeReader,
+    labels: ObservedLabelReader,
 ) -> None:
     """Select and write accounts.parquet unless the manifest records it.
 
@@ -43,7 +42,7 @@ def _stage_population(
     """
     accounts_path = output / "accounts.parquet"
     if not accounts_path.exists() or "accounts_sha256" not in manifest:
-        accounts, manifest["population_by_split"] = scoped_cohort(executor, config, labels)
+        accounts, manifest["population_by_split"] = scoped_cohort(scope, config, labels)
         if ORACLE_COLUMNS & set(accounts.columns):
             raise ValueError(
                 "Population query returned oracle fields; install the observed-only query"
@@ -57,7 +56,7 @@ def _stage_population(
 
 
 def _stage_labels(
-    output: Path, manifest: dict[str, Any], labels: ObservedLabelSource, accounts: pd.DataFrame
+    output: Path, manifest: dict[str, Any], labels: ObservedLabelReader, accounts: pd.DataFrame
 ) -> None:
     """Resolve observed labels without exposing any oracle columns to the trainer."""
     labels_path = output / "observed_labels.parquet"
@@ -72,12 +71,12 @@ def _stage_labels(
 
 
 def _stage_cutoffs(
-    config: dict[str, Any], output: Path, manifest: dict[str, Any], executor: QueryExecutor
+    config: dict[str, Any], output: Path, manifest: dict[str, Any], cutoffs: CutoffReader
 ) -> None:
     """Resolve the cutoff sequence of every configured date."""
     if "cutoff_seqs" not in manifest:
         dates = sorted({date for values in config["dates"].values() for date in values})
-        manifest["cutoff_seqs"] = resolve_cutoffs(executor, dates)
+        manifest["cutoff_seqs"] = resolve_cutoffs(cutoffs, dates)
         write_manifest(output, manifest)
 
 
@@ -85,14 +84,13 @@ def _stage_hubs(
     config: dict[str, Any],
     output: Path,
     manifest: dict[str, Any],
-    executor: QueryExecutor,
+    hubs: HubReader,
     sampler: SamplerPlan,
 ) -> None:
     """Query and save the hub registry of the prepared cutoffs and scope."""
     hubs_path = output / HUB_FILE
     if "hubs_sha256" not in manifest:
-        registry = query_hub_registry(
-            executor,
+        registry = hubs.hub_registry(
             manifest["cutoff_seqs"].values(),
             threshold=hub_threshold(sampler),
             scope_id=context_scope(config),
@@ -106,16 +104,20 @@ def _stage_hubs(
 def prepare(
     config: dict[str, Any],
     output: Path,
-    executor: QueryExecutor,
     source_counts: dict[str, int],
-    labels: ObservedLabelSource,
+    labels: ObservedLabelReader,
+    *,
+    scope: ScopeReader,
+    cutoffs: CutoffReader,
+    hubs: HubReader,
 ) -> dict[str, Any]:
     """Resumable preparation: cohort, observed labels, cutoffs and hub registry.
 
-    Contexts are not stored: training requests them from TigerGraph. `labels` is the
-    pipeline's label source, the labels revealed in the graph for every run. Each
-    stage writes the manifest when it is done, and a resumed preparation skips the
-    stages the manifest records.
+    Contexts are not stored: training requests them from TigerGraph. It reads the
+    graph only through its ports: the scope population, the cutoff clocks and the hub
+    registry. `labels` is the pipeline's label source, the labels revealed in the graph
+    for every run. Each stage writes the manifest when it is done, and a resumed
+    preparation skips the stages the manifest records.
     """
     config = validate_config(config)
     sampler = SamplerPlan.from_config(config)
@@ -147,14 +149,14 @@ def prepare(
             "created_at_utc": datetime.now(timezone.utc).isoformat(),
         }
         write_manifest(output, manifest)
-    _stage_population(config, output, manifest, executor, labels)
+    _stage_population(config, output, manifest, scope, labels)
     accounts_path = output / "accounts.parquet"
     accounts = pd.read_parquet(accounts_path)
     if file_digest(accounts_path) != manifest["accounts_sha256"]:
         raise ValueError("Prepared account file changed")
     _stage_labels(output, manifest, labels, accounts)
-    _stage_cutoffs(config, output, manifest, executor)
-    _stage_hubs(config, output, manifest, executor, sampler)
+    _stage_cutoffs(config, output, manifest, cutoffs)
+    _stage_hubs(config, output, manifest, hubs, sampler)
     manifest["status"] = "ready"
     write_manifest(output, manifest)
     return manifest

@@ -2,27 +2,50 @@
 
 ensure_scope creates a scope on first use; every later preparation and every
 streamed run verifies its header (ready, source, split seed) and the scope_unowned
-rule its membership was created with.
+rule its membership was created with. TigerGraphScope reads the scope's accounts.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 import json
 from typing import Any
 
 from ..config import OPERATIONAL_DEFAULTS
-from .executor import QueryExecutor, checked_rows, connection_call, merged_rows, printed
+from .executor import (
+    ConnectionExecutor,
+    QueryExecutor,
+    account_pages,
+    checked_rows,
+    merged_rows,
+    printed,
+)
+
+POPULATION_QUERY = "temporal_scope_population"
 
 
-def scope_header(executor: Any, scope_id: str) -> dict[str, Any] | None:
+class TigerGraphScope:
+    """The ScopeReader of data.ports: temporal_scope_population, paged by account."""
+
+    def __init__(self, executor: QueryExecutor) -> None:
+        self.executor = executor
+
+    def population_pages(
+        self, scope_id: str, *, include_observed: bool
+    ) -> Iterator[list[dict[str, Any]]]:
+        """Pages of the scope's accounts; rows carry labels only with include_observed."""
+        params = {"scope_id": scope_id, "include_observed": include_observed}
+        return account_pages(self.executor, POPULATION_QUERY, params)
+
+
+def scope_header(executor: ConnectionExecutor, scope_id: str) -> dict[str, Any] | None:
     """Attributes of the Temporal_Training_Scope vertex, or None when it does not exist."""
     from pyTigerGraph.common.exception import TigerGraphException
 
     try:
-        rows = connection_call(
-            executor,
-            "getVerticesById",
+        rows = executor.call(
             lambda conn: conn.getVerticesById("Temporal_Training_Scope", [scope_id]),
+            what="getVerticesById",
         )
     except TigerGraphException as error:
         if str(error.code) != "601":
@@ -59,7 +82,7 @@ SCOPE_POLICY_COUNTS = (
 )
 
 
-def scope_policy_counts(executor: Any, scope_id: str) -> dict[str, int]:
+def scope_policy_counts(executor: QueryExecutor, scope_id: str) -> dict[str, int]:
     """Membership classes of the scope's unowned Accounts, plus `members` (read-only)."""
     merged = merged_rows(
         checked_rows(executor.run(SCOPE_POLICY_QUERY, {"scope_id": scope_id}, timeout_s=900.0))
@@ -126,7 +149,7 @@ def check_scope_policy(counts: dict[str, int], config: dict[str, Any]) -> str:
     )
 
 
-def verify_scope(executor: Any, config: dict[str, Any]) -> dict[str, int]:
+def verify_scope(executor: ConnectionExecutor, config: dict[str, Any]) -> dict[str, int]:
     """Header (ready, source, split seed) and scope_unowned rule of an existing scope."""
     check_scope(scope_header(executor, config["scope_id"]), config)
     counts = scope_policy_counts(executor, config["scope_id"])
@@ -134,7 +157,7 @@ def verify_scope(executor: Any, config: dict[str, Any]) -> dict[str, int]:
     return counts
 
 
-def ensure_scope(executor: QueryExecutor, config: dict[str, Any]) -> None:
+def ensure_scope(executor: ConnectionExecutor, config: dict[str, Any]) -> None:
     """Use the frozen scope, creating it on first use unless create_scope = false.
 
     Creation writes a Temporal_Training_Scope vertex and one membership edge per

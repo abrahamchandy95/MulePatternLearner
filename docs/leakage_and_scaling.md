@@ -83,7 +83,7 @@ Regression requirements (source arrival-time replay still needs arrival-time dat
 
 ## Observed labels and evaluation truth are different interfaces
 
-The trainer depends on `ObservedLabelSource`, not a generator or masking
+The trainer depends on `ObservedLabelReader`, not a generator or masking
 algorithm. Its rows contain `account_id`, `known_positive`, `known_from_ms`.
 Unlisted/zero accounts are unlabeled, not confirmed legitimate accounts.
 Production's graph adapter maps confirmed `is_mule=1` plus an explicit known-label

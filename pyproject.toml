@@ -123,28 +123,6 @@ ignore_imports = [
     # run_config reads an overrides file with paths.load_config; removed with run_config and the
     # loaders in the typed configuration step
     "mule_pattern_learner.config -> mule_pattern_learner.paths",
-    # scope_accounts pages the scope population with account_pages; removed by consumer-owned
-    # ports
-    "mule_pattern_learner.data.accounts -> mule_pattern_learner.tigergraph.executor",
-    # scoped_cohort asks whether its label source is the graph's; removed by consumer-owned
-    # ports
-    "mule_pattern_learner.data.accounts -> mule_pattern_learner.tigergraph.labels",
-    # the streaming source runs the context query itself; removed by consumer-owned ports
-    "mule_pattern_learner.data.contexts -> mule_pattern_learner.tigergraph.context_query",
-    # the streaming source takes an executor; removed by consumer-owned ports
-    "mule_pattern_learner.data.contexts -> mule_pattern_learner.tigergraph.executor",
-    # preparation takes the executor; removed by consumer-owned ports
-    "mule_pattern_learner.data.preparation -> mule_pattern_learner.tigergraph.executor",
-    # preparation runs the hub query; removed by consumer-owned ports
-    "mule_pattern_learner.data.preparation -> mule_pattern_learner.tigergraph.hubs",
-    # resolve_cutoffs runs the cutoff query; removed by consumer-owned ports
-    "mule_pattern_learner.data.splits -> mule_pattern_learner.tigergraph.executor",
-    # the predictor opens a source from an executor; removed by consumer-owned ports
-    "mule_pattern_learner.inference.predictor -> mule_pattern_learner.tigergraph.executor",
-    # scoring new accounts takes an executor; removed by consumer-owned ports
-    "mule_pattern_learner.inference.score_accounts -> mule_pattern_learner.tigergraph.executor",
-    # scoring new accounts runs the hub query; removed by consumer-owned ports
-    "mule_pattern_learner.inference.score_accounts -> mule_pattern_learner.tigergraph.hubs",
 ]
 
 [[tool.importlinter.contracts]]
@@ -162,30 +140,6 @@ source_modules = [
     "mule_pattern_learner.reporting.**",
 ]
 forbidden_modules = ["mule_pattern_learner.tigergraph", "pyTigerGraph"]
-ignore_imports = [
-    # scope_accounts pages the scope population with account_pages; removed by consumer-owned
-    # ports
-    "mule_pattern_learner.data.accounts -> mule_pattern_learner.tigergraph.executor",
-    # scoped_cohort asks whether its label source is the graph's; removed by consumer-owned
-    # ports
-    "mule_pattern_learner.data.accounts -> mule_pattern_learner.tigergraph.labels",
-    # the streaming source runs the context query itself; removed by consumer-owned ports
-    "mule_pattern_learner.data.contexts -> mule_pattern_learner.tigergraph.context_query",
-    # the streaming source takes an executor; removed by consumer-owned ports
-    "mule_pattern_learner.data.contexts -> mule_pattern_learner.tigergraph.executor",
-    # preparation takes the executor; removed by consumer-owned ports
-    "mule_pattern_learner.data.preparation -> mule_pattern_learner.tigergraph.executor",
-    # preparation runs the hub query; removed by consumer-owned ports
-    "mule_pattern_learner.data.preparation -> mule_pattern_learner.tigergraph.hubs",
-    # resolve_cutoffs runs the cutoff query; removed by consumer-owned ports
-    "mule_pattern_learner.data.splits -> mule_pattern_learner.tigergraph.executor",
-    # the predictor opens a source from an executor; removed by consumer-owned ports
-    "mule_pattern_learner.inference.predictor -> mule_pattern_learner.tigergraph.executor",
-    # scoring new accounts takes an executor; removed by consumer-owned ports
-    "mule_pattern_learner.inference.score_accounts -> mule_pattern_learner.tigergraph.executor",
-    # scoring new accounts runs the hub query; removed by consumer-owned ports
-    "mule_pattern_learner.inference.score_accounts -> mule_pattern_learner.tigergraph.hubs",
-]
 
 [[tool.importlinter.contracts]]
 name = "Training never reads ground truth"

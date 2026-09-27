@@ -11,7 +11,7 @@ from typing import Any
 
 import pandas as pd
 
-from ..data.observed_labels import ObservedLabelSource, align_observed_labels
+from ..data.observed_labels import align_observed_labels
 from .executor import QueryExecutor, merged_rows
 
 
@@ -24,6 +24,9 @@ class GraphObservedLabels:
     discovery time; every other account has observed_positive false and
     known_from_ms 0.
     """
+
+    # The ObservedLabelReader of data.ports whose labels are the graph's.
+    from_graph = True
 
     def positive_ids(self) -> set[str]:
         return set()  # Graph-provided positives are discovered while paging.
@@ -52,11 +55,6 @@ def check_graph_label_rows(rows: pd.DataFrame) -> None:
             f"(for example {stale.iloc[0]!r}): the installed population query predates the "
             "masked-label predicate. Run `mule-temporal install` and prepare again."
         )
-
-
-def reads_graph_labels(labels: ObservedLabelSource) -> bool:
-    """Whether population queries may read observed labels (include_observed)."""
-    return isinstance(labels, GraphObservedLabels)
 
 
 VALIDATE_QUERY = "temporal_validate_account_supervision"

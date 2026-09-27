@@ -22,6 +22,8 @@ from mule_pattern_learner.testing.builders import (
     prepared_dataset,
 )
 from mule_pattern_learner.testing.fake_graph import FakeSource, ScoringExecutor
+from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffs
+from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
 
 
 def test_score_new_writes_only_ok_rows_and_lists_rejected_ids(tmp_path: Path) -> None:
@@ -34,7 +36,13 @@ def test_score_new_writes_only_ok_rows_and_lists_rejected_ids(tmp_path: Path) ->
     rejected_ids = ["ghost_1", "ghost_2"]
     output = tmp_path / "scores.parquet"
     result = score_accounts.score_new_accounts(
-        model, iter(ids), "2025-01-01", output, executor=executor, contexts=source
+        model,
+        iter(ids),
+        "2025-01-01",
+        output,
+        cutoffs=TigerGraphCutoffs(executor),
+        hub_reader=TigerGraphHubs(executor),
+        contexts=source,
     )
     frame = pd.read_parquet(output)
     assert frame.account_id.tolist() == [v for v in ids if v not in rejected_ids]
@@ -60,7 +68,8 @@ def test_score_new_keeps_float64_resolution_near_one(tmp_path: Path) -> None:
         iter([f"new_{i}" for i in range(12)]),
         "2025-01-01",
         output,
-        executor=ScoringExecutor(),
+        cutoffs=TigerGraphCutoffs(ScoringExecutor()),
+        hub_reader=TigerGraphHubs(ScoringExecutor()),
         contexts=FakeSource(config),
     )
     assert pq.read_schema(output).field("score").type == pa.float64()
@@ -80,7 +89,8 @@ def test_score_new_reports_root_and_child_rejections_separately(tmp_path: Path) 
         iter(ids),
         "2025-01-01",
         tmp_path / "scores.parquet",
-        executor=ScoringExecutor(),
+        cutoffs=TigerGraphCutoffs(ScoringExecutor()),
+        hub_reader=TigerGraphHubs(ScoringExecutor()),
         contexts=source,
     )
     assert result["accounts"] == 12 and result["rejected"] == 1
@@ -88,10 +98,10 @@ def test_score_new_reports_root_and_child_rejections_separately(tmp_path: Path) 
     children = result["rejected_children_by_status"]["missing_entity"]
     assert result["rejected_children"] > 0 and children > 0
     assert result["rejection_events_by_status"] == {"missing_entity": 1 + children}
-    # Without per-hop counts the root statuses are unknown, never the mixed counter.
-    del source.rejections_by_hop
+    # The root statuses are the source's hop-1 counts, never the mixed counter.
     plain = rejection_summary(source, 1, Counter({"rejected_children": 3}))
-    assert plain["rejected_roots_by_status"] is None and plain["rejected_children"] == 3
+    assert plain["rejected_roots_by_status"] == {"missing_entity": 1}
+    assert plain["rejected_children"] == 3
 
 
 def test_inference_score_uses_the_dataset_hub_registry(

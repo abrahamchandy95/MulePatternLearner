@@ -11,6 +11,7 @@ import pytest
 from mule_pattern_learner.testing.builders import FrameObservedLabels, unit_config
 from mule_pattern_learner.testing.fake_graph import Runner
 from mule_pattern_learner.tigergraph.labels import GraphObservedLabels
+from mule_pattern_learner.tigergraph.scope import TigerGraphScope
 
 # A table source with no labels: population queries then run without include_observed.
 NO_LABELS = pd.DataFrame(columns=["account_id", "known_positive", "known_from_ms"])
@@ -40,11 +41,11 @@ def test_only_graph_labels_read_labels_from_the_graph(tmp_path: Path) -> None:
 
     fake = Runner(run)
     config = unit_config(tmp_path)
-    scoped_cohort(fake, config, FrameObservedLabels(NO_LABELS))
-    frame, _ = scoped_cohort(fake, config, GraphObservedLabels())
+    scoped_cohort(TigerGraphScope(fake), config, FrameObservedLabels(NO_LABELS))
+    frame, _ = scoped_cohort(TigerGraphScope(fake), config, GraphObservedLabels())
     assert seen == [False, True] and frame.in_marginal.tolist() == [True]
     with pytest.raises(ValueError, match="explicit"):
-        scoped_cohort(fake, config, None)
+        scoped_cohort(TigerGraphScope(fake), config, None)
 
 
 @pytest.mark.legacy
@@ -55,11 +56,11 @@ def test_stale_population_queries_fail_fast(tmp_path: Path) -> None:
     # An old query emits the discovery time of hidden or negative labels.
     stale = Runner(lambda n, p: [{"status": "ok", "accounts": [population_row("A1", False, 5)]}])
     with pytest.raises(ValueError, match="predates the masked-label predicate"):
-        scoped_cohort(stale, config, GraphObservedLabels())
+        scoped_cohort(TigerGraphScope(stale), config, GraphObservedLabels())
     # Without include_observed the query must return no label information.
     leaky = Runner(lambda n, p: [{"status": "ok", "accounts": [population_row("A1", True, 5)]}])
     with pytest.raises(ValueError, match="include_observed is false"):
-        scoped_cohort(leaky, config, FrameObservedLabels(NO_LABELS))
+        scoped_cohort(TigerGraphScope(leaky), config, FrameObservedLabels(NO_LABELS))
     metadata = pd.DataFrame(
         {
             "account_id": ["A1", "A2", "A3"],

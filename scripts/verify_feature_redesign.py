@@ -22,6 +22,7 @@ from mule_pattern_learner.data.splits import resolve_cutoff
 from mule_pattern_learner.pipeline.connect import connect
 from mule_pattern_learner.reference.gsql_features import payment_features, stratify, visible_history
 from mule_pattern_learner.tigergraph.context_query import validate_context
+from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffs
 from mule_pattern_learner.tigergraph.executor import TigerGraphExecutor, checked_rows
 from mule_pattern_learner.tigergraph.render import as_interpreted
 
@@ -93,7 +94,7 @@ def main() -> None:
     )
     args = parser.parse_args()
     executor = connect(run_config())
-    seq, ms = resolve_cutoff(executor, args.date)
+    seq, ms = resolve_cutoff(TigerGraphCutoffs(executor), args.date)
     groups = tuple(
         g
         for g in FEATURE_GROUPS

@@ -37,6 +37,7 @@ from mule_pattern_learner.testing.fake_connection import FakeConn, executor
 from mule_pattern_learner.testing.fake_graph import ContextServer, FakeExecutor
 from mule_pattern_learner.tigergraph.context_query import (
     ContextTimeoutError,
+    TigerGraphContextFetcher,
     query_context_split,
     validate_context,
 )
@@ -46,7 +47,9 @@ from mule_pattern_learner.tigergraph.executor import ServerTimeoutError
 def test_per_request_failures_become_none_and_are_counted() -> None:
     keys = [root(i) for i in range(5)]
     server = ContextServer({keys[1]: "history_capacity_exceeded", keys[3]: "missing_entity"})
-    store = StreamingContextSource(server, plan=PLAN, sampler=SAMPLER, request_batch_size=16)
+    store = StreamingContextSource(
+        TigerGraphContextFetcher(server), plan=PLAN, sampler=SAMPLER, request_batch_size=16
+    )
     rows = store.fetch(keys + [keys[1]])
     assert [row is None for row in rows] == [False, True, False, True, False, True]
     assert store.rejections == Counter({"history_capacity_exceeded": 1, "missing_entity": 1})
@@ -68,7 +71,9 @@ def test_per_request_failures_become_none_and_are_counted() -> None:
 def test_hop_pools_and_flags_are_sent_and_lru_is_keyed_by_hop() -> None:
     plan = FeaturePlan(("entity_meta", "message_core", "time_encoding", "rolling_windows"), "split")
     server = ContextServer()
-    store = StreamingContextSource(server, plan=plan, sampler=SAMPLER, capacity=8)
+    store = StreamingContextSource(
+        TigerGraphContextFetcher(server), plan=plan, sampler=SAMPLER, capacity=8
+    )
     key = root(0)
     store.fetch([key], hop=1)
     store.fetch([key], hop=2)
@@ -86,7 +91,9 @@ def test_hop_pools_and_flags_are_sent_and_lru_is_keyed_by_hop() -> None:
 
 
 def test_lru_is_bounded_and_close_releases_it() -> None:
-    store = StreamingContextSource(ContextServer(), plan=PLAN, sampler=SAMPLER, capacity=8)
+    store = StreamingContextSource(
+        TigerGraphContextFetcher(ContextServer()), plan=PLAN, sampler=SAMPLER, capacity=8
+    )
     for start in range(0, 64, 16):
         store.fetch([root(i) for i in range(start, start + 16)])
         assert len(store.memory) <= 8
@@ -107,7 +114,12 @@ def test_lru_is_bounded_and_close_releases_it() -> None:
 def test_concurrent_fetches_share_requests_and_respect_concurrency() -> None:
     server = ContextServer(delay=0.01)
     store = StreamingContextSource(
-        server, plan=PLAN, sampler=SAMPLER, capacity=4096, request_batch_size=4, concurrency=3
+        TigerGraphContextFetcher(server),
+        plan=PLAN,
+        sampler=SAMPLER,
+        capacity=4096,
+        request_batch_size=4,
+        concurrency=3,
     )
     shared = [root(i) for i in range(40)]
     results: dict[int, list[dict[str, Any] | None]] = {}
@@ -140,7 +152,9 @@ def test_failed_request_propagates_to_every_waiting_fetch() -> None:
             time.sleep(0.05)
             raise ValueError("contract violation")
 
-    store = StreamingContextSource(Failing(), plan=PLAN, sampler=SAMPLER, concurrency=2)
+    store = StreamingContextSource(
+        TigerGraphContextFetcher(Failing()), plan=PLAN, sampler=SAMPLER, concurrency=2
+    )
     errors: list[BaseException] = []
 
     def worker() -> None:
@@ -171,7 +185,11 @@ def test_close_without_wait_cancels_queued_requests_and_leaves_daemon_workers() 
 
     server = Blocking()
     store = StreamingContextSource(
-        server, plan=PLAN, sampler=SAMPLER, request_batch_size=1, concurrency=1
+        TigerGraphContextFetcher(server),
+        plan=PLAN,
+        sampler=SAMPLER,
+        request_batch_size=1,
+        concurrency=1,
     )
     started = threading.Event()
     errors: list[BaseException] = []
@@ -222,14 +240,18 @@ def test_timed_out_blocks_are_bisected_and_a_single_slow_key_is_fatal() -> None:
 
     keys = [root(i) for i in range(8)]
     server = Slow(limit=2, slow_ids=set())
-    store = StreamingContextSource(server, plan=PLAN, sampler=SAMPLER, request_batch_size=8)
+    store = StreamingContextSource(
+        TigerGraphContextFetcher(server), plan=PLAN, sampler=SAMPLER, request_batch_size=8
+    )
     rows = store.fetch(keys)
     assert [row and row["node_id"] for row in rows] == [key.node_id for key in keys]
     assert server.sizes == [8, 4, 2, 2, 4, 2, 2]
     assert store.query_calls == 4 and store.diagnostics["timeout_splits"] == 3
     store.close()
     server = Slow(limit=8, slow_ids={keys[5].node_id})
-    store = StreamingContextSource(server, plan=PLAN, sampler=SAMPLER, request_batch_size=8)
+    store = StreamingContextSource(
+        TigerGraphContextFetcher(server), plan=PLAN, sampler=SAMPLER, request_batch_size=8
+    )
     with pytest.raises(ContextTimeoutError, match="A0005") as caught:
         store.fetch(keys)
     assert caught.value.key == keys[5] and caught.value.hop == 1
@@ -255,7 +277,7 @@ def test_timed_out_blocks_are_bisected_and_a_single_slow_key_is_fatal() -> None:
 def test_encoding_spot_checks_follow_the_cadence_and_are_stripped() -> None:
     server = ContextServer()
     store = StreamingContextSource(
-        server, plan=PLAN, sampler=SAMPLER, request_batch_size=1, concurrency=1,
+        TigerGraphContextFetcher(server), plan=PLAN, sampler=SAMPLER, request_batch_size=1, concurrency=1,
         encoding_check_every=3,
     )  # fmt: skip
     rows = store.fetch([root(i) for i in range(7)])
@@ -272,7 +294,7 @@ def test_corrupted_or_missing_spot_check_vectors_fail() -> None:
         (ContextServer(corrupt=True), "shared basis"),
         (ContextServer(omit_encodings=True), "do not cover"),
     ):
-        store = StreamingContextSource(server, plan=PLAN, sampler=SAMPLER)
+        store = StreamingContextSource(TigerGraphContextFetcher(server), plan=PLAN, sampler=SAMPLER)
         with pytest.raises(ValueError, match=expected):
             store.fetch([root(0)])
         store.close()
@@ -286,7 +308,7 @@ def test_corrupted_or_missing_spot_check_vectors_fail() -> None:
 
 def test_streaming_source_serves_repeats_from_its_bounded_lru() -> None:
     keys = [ContextKey("Account", str(i), 100, 1000) for i in range(80)]
-    memory = StreamingContextSource(FakeExecutor({}), capacity=3)
+    memory = StreamingContextSource(TigerGraphContextFetcher(FakeExecutor({})), capacity=3)
     rows = memory.fetch(keys)
     assert len(memory.memory) == 3
     calls = memory.query_calls
@@ -299,7 +321,10 @@ def test_hops_use_their_own_pools_and_only_spot_checks_carry_encodings() -> None
     many = [message(99 - i, 990 - 10 * i, root, node_id=f"p{i}") for i in range(12)]
     executor = FakeExecutor({root: context(root, many)})
     with StreamingContextSource(
-        executor, plan=DEFAULT_SPLIT_PLAN, sampler=SMALL_SAMPLER, encoding_check_every=1000
+        TigerGraphContextFetcher(executor),
+        plan=DEFAULT_SPLIT_PLAN,
+        sampler=SMALL_SAMPLER,
+        encoding_check_every=1000,
     ) as source:
         batch = make_live_batch(
             source,
@@ -325,7 +350,9 @@ def test_hops_use_their_own_pools_and_only_spot_checks_carry_encodings() -> None
 def test_same_context_in_two_scopes_or_hops_is_never_shared() -> None:
     key = ContextKey("Account", "a", 100, 1000, "strict", 1)
     executor = FakeExecutor()
-    store = StreamingContextSource(executor, plan=DEFAULT_SPLIT_PLAN, sampler=SMALL_SAMPLER)
+    store = StreamingContextSource(
+        TigerGraphContextFetcher(executor), plan=DEFAULT_SPLIT_PLAN, sampler=SMALL_SAMPLER
+    )
     store.fetch([key], hop=1)
     store.fetch([key], hop=2)
     store.fetch([replace(key, visibility_phase=2)], hop=1)

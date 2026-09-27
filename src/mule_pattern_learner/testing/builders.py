@@ -32,6 +32,7 @@ from mule_pattern_learner.contract.fingerprints import hash64, stable_score
 from mule_pattern_learner.contract.graph_schema import (
     ASSOCIATION_TARGETS,
     ASSOCIATIONS,
+    HUB_COLUMNS,
     RAILS,
     RELATIONS,
     SPLIT_PHASE,
@@ -41,7 +42,6 @@ from mule_pattern_learner.contract.sampler_plan import PoolPlan, SamplerPlan
 from mule_pattern_learner.contract.server import CONTRACT_VERSION
 from mule_pattern_learner.contract.time_basis import BASIS_ID, fourier64
 from mule_pattern_learner.data import manifest as data_manifest
-from mule_pattern_learner.contract.graph_schema import HUB_COLUMNS
 from mule_pattern_learner.data.hub_registry import HubRegistry
 from mule_pattern_learner.data.manifest import preparation_view
 from mule_pattern_learner.data.observed_labels import align_observed_labels, validate_label_table
@@ -137,11 +137,12 @@ def scoped_accounts() -> list[dict[str, Any]]:
 class FrameObservedLabels:
     """Observed labels from a table: a label source for prepare() other than the graph.
 
-    Population queries run without include_observed for it, as for any source that is
-    not GraphObservedLabels.
+    Population queries run without include_observed for it: its labels are not the
+    graph's.
     """
 
     labels: pd.DataFrame
+    from_graph = False
 
     def positive_ids(self) -> set[str]:
         validate_label_table(self.labels)

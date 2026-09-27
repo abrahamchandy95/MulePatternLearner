@@ -76,12 +76,12 @@ def test_dataset_identity_comes_from_the_scope_or_the_graph(tmp_path: Path) -> N
     header = {"ready": True, "source_id": "unit_snapshot", "split_seed": 42}
     config = {k: v for k, v in unit_config(tmp_path).items() if k != "dataset_id"}
     server = ScopeServer(header, "linked")
-    server.client.conn.graphname = "G"
+    server.client.graphname = "G"
     assert pipeline_prepare.resolve_identity(cast(Any, server), config, counts)["dataset_id"] == (
         "unit_snapshot"
     )
     fresh = ScopeServer(None, "linked")
-    fresh.client.conn.graphname = "G"
+    fresh.client.graphname = "G"
     derived = pipeline_prepare.resolve_identity(cast(Any, fresh), config, counts)["dataset_id"]
     assert derived == pipeline_prepare.derived_dataset_id("G", counts) and derived.startswith("G_")
     assert derived != pipeline_prepare.derived_dataset_id("G", {**counts, "Account": 11})

@@ -12,8 +12,9 @@ from mule_pattern_learner.paths import REPOSITORY_ROOT
 from mule_pattern_learner.testing.builders import PLAN, SAMPLER, hub_rows, root
 from mule_pattern_learner.testing.fake_graph import ContextServer, Runner
 from mule_pattern_learner.tigergraph import gsql_text, scope
+from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
 from mule_pattern_learner.tigergraph.gsql_text import definitions, parameter_names
-from mule_pattern_learner.tigergraph.hubs import query_hub_registry
+from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
 from mule_pattern_learner.tigergraph.render import DEFAULT_FLAG_GROUPS
 
 GSQL = REPOSITORY_ROOT / "gsql/queries"
@@ -69,16 +70,14 @@ def test_sent_parameters_match_the_repository_query_signatures() -> None:
     windows = (FeaturePlan(DEFAULT_FLAG_GROUPS, a) for a in ("split", "summary"))
     for plan in (PLAN, *windows):
         server = ContextServer()
-        store = StreamingContextSource(server, plan=plan, sampler=SAMPLER)
+        store = StreamingContextSource(TigerGraphContextFetcher(server), plan=plan, sampler=SAMPLER)
         store.fetch([root(0)], hop=1)
         store.fetch([root(0)], hop=2)
         store.close()
         assert all(set(call) == context for call in server.calls)
     calls = []
-    query_hub_registry(
-        Runner(lambda n, p: calls.append(p) or hub_rows([1000, 2000])),
-        [1000, 2000],
-        threshold=1024,
+    TigerGraphHubs(Runner(lambda n, p: calls.append(p) or hub_rows([1000, 2000]))).hub_registry(
+        [1000, 2000], threshold=1024
     )
     assert set(calls[0]) == signature("gsql/queries/hub_accounts.gsql", "temporal_hub_registry")
     creation = signature("gsql/queries/training_scope.gsql", "temporal_create_training_scope")

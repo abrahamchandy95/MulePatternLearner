@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -35,7 +36,7 @@ from mule_pattern_learner.reference import batch_features
 from mule_pattern_learner.reference.batch_features import node_features
 from mule_pattern_learner.testing.builders import association, context, message
 from mule_pattern_learner.testing.fake_graph import FakeExecutor
-from mule_pattern_learner.tigergraph.context_query import validate_context
+from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher, validate_context
 
 ROOT = ContextKey("Account", "root", 1000, 100_000_000)
 CONFIG = run_config()
@@ -122,9 +123,14 @@ class RawRows:
 
     def __init__(self, rows: dict[tuple[int, ContextKey], dict[str, Any]]) -> None:
         self.rows = rows
+        self.plan, self.sampler, self.query_calls = PLAN, SAMPLER, 0
+        self.rejections: Counter[str] = Counter()
+        self.rejections_by_hop: dict[int, Counter[str]] = {}
 
     def fetch(self, keys: list[ContextKey], *, hop: int = 1) -> list[dict[str, Any] | None]:
         return [self.rows[hop, key] for key in keys]
+
+    def close(self, *, wait: bool = True) -> None: ...
 
 
 def test_pool_activity_counts_the_candidate_pool_exactly() -> None:
@@ -179,7 +185,9 @@ def test_built_in_batches_feed_root_pool_counts_to_the_summary_branch() -> None:
     }
     roots = [ROOT, other, ROOT]
     executor = FakeExecutor(rows)
-    with StreamingContextSource(executor, plan=extraction_plan(CONFIG), sampler=SAMPLER) as source:
+    with StreamingContextSource(
+        TigerGraphContextFetcher(executor), plan=extraction_plan(CONFIG), sampler=SAMPLER
+    ) as source:
         for _ in range(2):  # the second batch is served from the source's cache
             batch = make_live_batch(
                 source, roots, fanouts=(16, 4), plan=PLAN, sampler=SAMPLER, hubs=Hubs({"F"})
@@ -216,7 +224,9 @@ def test_pool_groups_feed_models_that_read_them_for_roots_only() -> None:
     plan = FeaturePlan.from_config(tabular)
     assert plan.architecture == "summary" and plan.names("summary") == POOL_NAMES
     executor = FakeExecutor({ROOT: context(ROOT, POOL)})
-    with StreamingContextSource(executor, plan=extraction_plan(tabular), sampler=SAMPLER) as source:
+    with StreamingContextSource(
+        TigerGraphContextFetcher(executor), plan=extraction_plan(tabular), sampler=SAMPLER
+    ) as source:
         batch = make_live_batch(source, [ROOT, ROOT], plan=plan, sampler=SAMPLER)
     expected = node_matrix([context(ROOT, POOL)], plan)
     np.testing.assert_allclose(batch["x"].numpy(), np.repeat(expected, 2, axis=0))

@@ -257,6 +257,34 @@ def query_context_rows(
     return rows
 
 
+class TigerGraphContextFetcher:
+    """The ContextFetcher of data.ports: the context query, validated and bisected."""
+
+    def __init__(self, executor: QueryExecutor) -> None:
+        self.executor = executor
+
+    def request(
+        self,
+        keys: list[ContextKey],
+        *,
+        plan: FeaturePlan,
+        sampler: SamplerPlan,
+        hop: int,
+        emit_encodings: bool,
+        diagnostics: Counter[str],
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Rows of one block of keys in key order, and the REST calls they took."""
+        return query_context_split(
+            self.executor,
+            keys,
+            plan=plan,
+            sampler=sampler,
+            hop=hop,
+            emit_encodings=emit_encodings,
+            diagnostics=diagnostics,
+        )
+
+
 def query_context_split(
     executor: QueryExecutor,
     batch: list[ContextKey],

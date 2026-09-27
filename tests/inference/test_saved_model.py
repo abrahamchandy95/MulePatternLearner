@@ -40,6 +40,7 @@ from mule_pattern_learner.inference.score_accounts import score
 from mule_pattern_learner.pipeline import prepare
 from mule_pattern_learner.testing.builders import neighbourhood
 from mule_pattern_learner.testing.fake_graph import FakeExecutor
+from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
 from mule_pattern_learner.training.trainer import train
 
 FIXTURES = Path(__file__).parent / "fixtures" / "saved_models"
@@ -123,7 +124,8 @@ def test_models_saved_before_the_restructure_score_as_they_did(name: str) -> Non
         ContextKey("Account", account, 103, cutoff_ms("2025-01-01"), saved.config["scope_id"], 3)
         for account in ACCOUNTS
     ]
-    predictor = TemporalPredictor(saved, executor=FakeExecutor(factory=neighbourhood))
+    fetcher = TigerGraphContextFetcher(FakeExecutor(factory=neighbourhood))
+    predictor = TemporalPredictor(saved, fetcher=fetcher)
     try:
         frame = predictor.predict(keys)
     finally:
@@ -172,7 +174,10 @@ def test_a_cohort_prepared_before_the_restructure_is_reused(
     def source() -> Any:
         executor = FakeExecutor(factory=neighbourhood)
         return streaming_source(
-            executor, extraction_plan(config), SamplerPlan.from_config(config), config
+            TigerGraphContextFetcher(executor),
+            extraction_plan(config),
+            SamplerPlan.from_config(config),
+            config,
         )
 
     # The model trained on it scores its test accounts as it did.

@@ -31,11 +31,11 @@ from ..contract.graph_schema import ContextKey
 from ..contract.sampler_plan import SamplerPlan
 from ..data.contexts import ContextSource, check_coverage, streaming_source
 from ..data.hub_registry import HubRegistry, warn_hub_stubs
+from ..data.ports import ContextFetcher
 from ..model.build import build_model, probabilities_from_logits
 from ..model.tgat import LiveTGAT
 from ..runtime.device import choose_device
 from ..runtime.workers import BatchPrefetcher
-from ..tigergraph.executor import QueryExecutor
 from .saved_model import ModelCheckpoint
 
 
@@ -118,6 +118,8 @@ class TemporalPredictor:
     Scoring uses the deterministic evaluation sampler. ``hubs`` must be the registry
     for the scored cutoff (training's dataset registry or ``query_hubs``); without
     it no child is stubbed and hub children are masked out when TigerGraph rejects them.
+    Without ``contexts`` the predictor streams them through ``fetcher`` with the
+    checkpoint's plan, pools and transport settings.
     """
 
     def __init__(
@@ -126,7 +128,7 @@ class TemporalPredictor:
         contexts: ContextSource | None = None,
         device: str = "auto",
         *,
-        executor: QueryExecutor | None = None,
+        fetcher: ContextFetcher | None = None,
         hubs: HubRegistry | None = None,
     ) -> None:
         saved = ModelCheckpoint.of(checkpoint)
@@ -138,9 +140,9 @@ class TemporalPredictor:
         self.threshold = saved.threshold
         created = contexts is None
         if contexts is None:
-            if executor is None:
-                raise ValueError("Provide a context source or query executor")
-            contexts = streaming_source(executor, self.plan, self.sampler, self.config)
+            if fetcher is None:
+                raise ValueError("Provide a context source or a context fetcher")
+            contexts = streaming_source(fetcher, self.plan, self.sampler, self.config)
         try:
             check_coverage(contexts, self.plan, self.sampler)
             self.contexts = contexts

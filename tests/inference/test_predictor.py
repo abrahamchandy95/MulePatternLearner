@@ -18,6 +18,7 @@ from mule_pattern_learner.inference.predictor import (
 )
 from mule_pattern_learner.testing.builders import checkpoint, live_config, neighbourhood
 from mule_pattern_learner.testing.fake_graph import FakeExecutor
+from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
 
 
 def test_embeddings_leave_the_logits_unchanged_and_rejected_roots_are_listed(
@@ -26,7 +27,7 @@ def test_embeddings_leave_the_logits_unchanged_and_rejected_roots_are_listed(
     config = live_config()
     path = checkpoint(tmp_path / "model.pt", config)
     executor = FakeExecutor(factory=neighbourhood, statuses={"A0002": "missing_entity"})
-    predictor = TemporalPredictor(path, executor=executor, device="cpu")
+    predictor = TemporalPredictor(path, fetcher=TigerGraphContextFetcher(executor), device="cpu")
     ms = cutoff_ms("2024-07-01")
     keys = [ContextKey("Account", f"A{i:04}", 103, ms, config["scope_id"], 3) for i in range(5)]
     try:

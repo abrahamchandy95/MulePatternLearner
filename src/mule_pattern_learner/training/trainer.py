@@ -165,13 +165,9 @@ def check_source(
     store: ContextSource, prepared: FeaturePlan, model: FeaturePlan, sampler: SamplerPlan
 ) -> None:
     """The source extracts the prepared plan, covers the model inputs and uses its sampler."""
-    source_plan = getattr(store, "plan", None)
-    if (
-        not isinstance(source_plan, FeaturePlan)
-        or source_plan.fingerprint() != prepared.fingerprint()
-    ):
+    if store.plan.fingerprint() != prepared.fingerprint():
         raise ValueError("Context source extraction plan differs from the prepared extraction plan")
-    if getattr(store, "sampler", None) != sampler:
+    if store.sampler != sampler:
         raise ValueError("Context source sampler differs from the training sampler")
     check_coverage(store, model, sampler)
 

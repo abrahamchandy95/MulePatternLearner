@@ -49,6 +49,10 @@ from mule_pattern_learner.testing.builders import (
     supplied_labels,
 )
 from mule_pattern_learner.testing.fake_graph import FakeExecutor, FakeSource
+from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
+from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffs
+from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
+from mule_pattern_learner.tigergraph.scope import TigerGraphScope
 from mule_pattern_learner.training import trainer
 from mule_pattern_learner.training.schedule import step_seed
 from mule_pattern_learner.training.trainer import train
@@ -520,7 +524,10 @@ def test_averaged_run_validates_and_saves_the_average(
 def streaming_source(executor: FakeExecutor, config: dict[str, Any], **kwargs: Any):
     """The source a prepared run opens: prepared extraction plan and training sampler."""
     return StreamingContextSource(
-        executor, plan=extraction_plan(config), sampler=SamplerPlan.from_config(config), **kwargs
+        TigerGraphContextFetcher(executor),
+        plan=extraction_plan(config),
+        sampler=SamplerPlan.from_config(config),
+        **kwargs,
     )
 
 
@@ -548,9 +555,11 @@ def prepared(tmp_path: Path, config: dict[str, Any], **kwargs: Any) -> tuple[Pat
     prepare(
         config,
         dataset,
-        executor,
         {"Account": 1000},
-        labels=FrameObservedLabels(supplied_labels()),
+        FrameObservedLabels(supplied_labels()),
+        scope=TigerGraphScope(executor),
+        cutoffs=TigerGraphCutoffs(executor),
+        hubs=TigerGraphHubs(executor),
     )
     return dataset, executor
 

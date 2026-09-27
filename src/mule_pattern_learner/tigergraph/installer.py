@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from contextlib import nullcontext
 import json
 import re
 import time
@@ -11,7 +10,7 @@ from typing import Any
 
 from ..contract.server import QUERY_FILES
 from ..paths import REPOSITORY_ROOT
-from .executor import AVAILABILITY, GRAPH, SERVER_TIMEOUT, connection_call, failure_class
+from .executor import AVAILABILITY, GRAPH, SERVER_TIMEOUT, ConnectionExecutor, failure_class
 from .gsql_text import definitions, normalized, parameter_names, repository_queries
 
 # Preparation queries (contract.server.QUERY_FILES) plus the oracle export for audits, the label-contract validation
@@ -32,17 +31,13 @@ BUILTIN_ENDPOINT_PARAMETERS = frozenset({"query", "read_committed"})
 INSTALL_DEADLINE_S = 45 * 60.0
 
 
-def _show_query(executor: Any, name: str) -> str:
-    text = f"USE GRAPH {GRAPH}\nSHOW QUERY {name}"
-    gsql = getattr(executor, "gsql", None)
-    if gsql is not None:
-        return str(gsql(text, what="SHOW QUERY " + name))
-    return str(executor.client.conn.gsql(text))
+def _show_query(executor: ConnectionExecutor, name: str) -> str:
+    return str(executor.gsql(f"USE GRAPH {GRAPH}\nSHOW QUERY {name}", what="SHOW QUERY " + name))
 
 
-def installed_endpoints(executor: Any) -> dict[str, dict[str, Any]]:
+def installed_endpoints(executor: ConnectionExecutor) -> dict[str, dict[str, Any]]:
     """Installed-query endpoint metadata by query name (includes `enabled`)."""
-    raw = connection_call(executor, "getInstalledQueries", lambda conn: conn.getInstalledQueries())
+    raw = executor.call(lambda conn: conn.getInstalledQueries(), what="getInstalledQueries")
     if not isinstance(raw, dict):
         raise ValueError("TigerGraph did not return installed query endpoints")
     prefix = f"GET /query/{GRAPH}/"
@@ -54,7 +49,7 @@ def installed_endpoints(executor: Any) -> dict[str, dict[str, Any]]:
 
 
 def query_problems(
-    executor: Any, files: tuple[str, ...] = TRAINING_QUERY_FILES
+    executor: ConnectionExecutor, files: tuple[str, ...] = TRAINING_QUERY_FILES
 ) -> dict[str, list[str]]:
     """Per query: why the server copy is not the installed repository query (empty if it is).
 
@@ -83,7 +78,9 @@ def query_problems(
     return problems
 
 
-def verify_sources(executor: Any, files: tuple[str, ...] = TRAINING_QUERY_FILES) -> list[str]:
+def verify_sources(
+    executor: ConnectionExecutor, files: tuple[str, ...] = TRAINING_QUERY_FILES
+) -> list[str]:
     """Every training query must match the repository text and be installed and enabled."""
     problems = query_problems(executor, files)
     if problems:
@@ -132,7 +129,7 @@ def _created(output: str) -> bool:
 
 
 def install(
-    executor: Any,
+    executor: ConnectionExecutor,
     *,
     force: bool = False,
     include_optional: bool = False,
@@ -187,9 +184,8 @@ def install(
         logs[relative] = output
     started = clock()
     status: Any = None
-    timeout = getattr(executor.client, "request_timeout", None)
     try:
-        with timeout(read_s=deadline_s) if timeout is not None else nullcontext():
+        with executor.client.request_timeout(read_s=deadline_s):
             status = conn.installQueries(names, wait=False)
     except Exception as error:
         if failure_class(error) not in (AVAILABILITY, SERVER_TIMEOUT):
@@ -218,10 +214,9 @@ def install(
             flush=True,
         )
         sleep(poll_s)
-        status = connection_call(
-            executor,
-            "getQueryInstallationStatus",
+        status = executor.call(
             lambda conn: conn.getQueryInstallationStatus(str(request_id)),
+            what="getQueryInstallationStatus",
         )
     state = _installation_state(status)
     if state == "failed":
@@ -234,7 +229,7 @@ def install(
 
 
 def _await_enabled(
-    executor: Any,
+    executor: ConnectionExecutor,
     names: list[str],
     started: float,
     deadline_s: float,

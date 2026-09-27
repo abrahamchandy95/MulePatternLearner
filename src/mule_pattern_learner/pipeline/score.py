@@ -8,6 +8,9 @@ from typing import Any
 
 from ..inference.saved_model import ModelCheckpoint
 from ..inference.score_accounts import check_new_outputs, score_new_accounts
+from ..tigergraph.context_query import TigerGraphContextFetcher
+from ..tigergraph.cutoffs import TigerGraphCutoffs
+from ..tigergraph.hubs import TigerGraphHubs
 from ..tigergraph.installer import verify_sources
 from .connect import connect
 
@@ -24,4 +27,12 @@ def score_new(
     saved = ModelCheckpoint.of(checkpoint)
     executor = connect(saved.validated_config())
     verify_sources(executor)
-    return score_new_accounts(saved, account_ids, date, output, executor=executor)
+    return score_new_accounts(
+        saved,
+        account_ids,
+        date,
+        output,
+        cutoffs=TigerGraphCutoffs(executor),
+        hub_reader=TigerGraphHubs(executor),
+        fetcher=TigerGraphContextFetcher(executor),
+    )

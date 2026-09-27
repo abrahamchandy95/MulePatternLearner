@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
@@ -12,11 +12,16 @@ from ..contract.clock import cutoff_ms
 from ..inference.saved_model import ModelCheckpoint
 from ..metrics import evaluate, weighted_metrics
 from .sample import final_evaluation_sample
-from .truth import EvaluationTruthSource
+from .truth import TruthReader
+
+if TYPE_CHECKING:
+    from ..data.contexts import ContextSource
+    from ..data.hub_registry import HubRegistry
+    from ..data.ports import ContextFetcher, ScopeReader
 
 
 def evaluate_predictions(
-    predictions: Path, checkpoint: Path | ModelCheckpoint, truth: EvaluationTruthSource
+    predictions: Path, checkpoint: Path | ModelCheckpoint, truth: TruthReader
 ) -> dict[str, Any]:
     """Apply the frozen checkpoint threshold; never choose an epoch or threshold."""
     saved = ModelCheckpoint.of(checkpoint)
@@ -104,22 +109,24 @@ def audit_inputs(
 
 def evaluate_final_population(
     checkpoint: Path | ModelCheckpoint,
-    truth: EvaluationTruthSource,
+    truth: TruthReader,
     output: Path,
     *,
-    executor: Any,
+    scope: ScopeReader,
+    fetcher: ContextFetcher | None = None,
     negative_limit: int = 2000,
     dataset: Path | None = None,
-    contexts: Any = None,
-    hubs: Any = None,
+    contexts: ContextSource | None = None,
+    hubs: HubRegistry | None = None,
 ) -> dict[str, Any]:
     """Score a fresh final-only sample from the entire frozen test partition.
 
     This POC audit bounds host metadata to one million test accounts. It never
     changes a checkpoint and refuses to overwrite an existing final report. The
     prepared dataset (``dataset`` or the path recorded in the checkpoint) supplies
-    the test cutoff clock and the hub registry, so scoring matches training.
-    ``executor`` is the pipeline's, on a frozen source it has verified
+    the test cutoff clock and the hub registry, so scoring matches training. The test
+    population comes from ``scope`` and the contexts from ``fetcher`` (``contexts``
+    replaces them); the pipeline builds both on a frozen source it has verified
     (pipeline.evaluate.final_audit).
 
     Accounts TigerGraph rejects are not scored. A rejected test positive, or a
@@ -146,7 +153,7 @@ def evaluate_final_population(
     date = config["dates"]["test"][0]
     last_ms = cutoff_ms(date)
     population: list[dict[str, Any]] = []
-    for row in scope_accounts(executor, config["scope_id"], include_observed=False):
+    for row in scope_accounts(scope, config["scope_id"], include_observed=False):
         if row["partition"] == SPLIT_PHASE["test"] and row["first_seen_ts_ms"] <= last_ms:
             population.append({"account_id": row["account_id"], "split": "test"})
             if len(population) > AUDIT_POPULATION:
@@ -167,7 +174,7 @@ def evaluate_final_population(
     if len(selected) > AUDIT_SAMPLE:
         raise ValueError("Final scoring sample exceeds audit budget")
     registry = hubs if hubs is not None else load_hub_registry(dataset, manifest)
-    predictor = TemporalPredictor(saved, contexts, executor=executor, hubs=registry)
+    predictor = TemporalPredictor(saved, contexts, fetcher=fetcher, hubs=registry)
     failed = True
     try:
         size = predictor.batch_size
@@ -192,7 +199,7 @@ def evaluate_final_population(
         raise ValueError(
             f"TigerGraph rejected {len(unscored)} of {len(selected)} final audit accounts "
             f"({rejected_positives} test positives; max_rejected_root_fraction={limit}); "
-            f"statuses {dict(getattr(predictor.contexts, 'rejections', {}) or {})}; "
+            f"statuses {dict(predictor.contexts.rejections)}; "
             f"first {examples}. Weighted metrics over the remaining accounts would describe "
             "a censored population, so no report was written"
         )

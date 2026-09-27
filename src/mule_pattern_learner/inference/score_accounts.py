@@ -17,9 +17,8 @@ from ..contract.sampler_plan import SamplerPlan
 from ..data.contexts import ContextOpener, ContextSource, close_source
 from ..data.hub_registry import HubRegistry, hub_threshold, load_hub_registry, warn_hub_stubs
 from ..data.manifest import load_prepared
+from ..data.ports import ContextFetcher, CutoffReader, HubReader
 from ..data.splits import eligible_mask, resolve_cutoff, sample_keys
-from ..tigergraph.executor import QueryExecutor
-from ..tigergraph.hubs import query_hub_registry
 from .predictor import TemporalPredictor
 from .rejections import rejection_summary
 from .saved_model import ModelCheckpoint
@@ -106,14 +105,12 @@ SCORE_SCHEMA = pa.schema(
 )
 
 
-def query_hubs(
-    executor: QueryExecutor, cutoff_seqs: list[int], sampler: SamplerPlan
-) -> HubRegistry:
+def query_hubs(reader: HubReader, cutoff_seqs: list[int], sampler: SamplerPlan) -> HubRegistry:
     """Unscoped hub registry for arbitrary cutoffs, with the checkpoint's threshold.
 
     Score-new runs unscoped, so its rows carry visibility phase 3.
     """
-    return query_hub_registry(executor, cutoff_seqs, threshold=hub_threshold(sampler))
+    return reader.hub_registry(cutoff_seqs, threshold=hub_threshold(sampler))
 
 
 def id_batches(ids: Iterable[str], size: int) -> Iterator[list[str]]:
@@ -155,7 +152,9 @@ def score_new_accounts(
     date: str,
     output: Path,
     *,
-    executor: QueryExecutor,
+    cutoffs: CutoffReader,
+    hub_reader: HubReader,
+    fetcher: ContextFetcher | None = None,
     contexts: ContextSource | None = None,
     hubs: HubRegistry | None = None,
 ) -> dict[str, Any]:
@@ -167,13 +166,16 @@ def score_new_accounts(
     they are listed in ``<output>.rejected.txt``. The result reports rejected roots and
     masked child contexts separately (see ``rejection_summary``). A date before the
     first visible event is refused, since no account could be scored at it.
-    ``executor`` is the pipeline's, whose installed queries it has verified.
+    The date's cutoff comes from ``cutoffs``, the unscoped hub registry from
+    ``hub_reader`` (``hubs`` replaces it) and the contexts from ``fetcher`` (``contexts``
+    replaces them); the pipeline builds them on a connection whose installed queries
+    it has verified.
     """
     check_new_outputs(output)
     rejected_output = rejected_path(output)
     saved = ModelCheckpoint.of(checkpoint)
-    seq, ms = resolve_cutoff(executor, date)
-    predictor = TemporalPredictor(saved, contexts, executor=executor, hubs=hubs)
+    seq, ms = resolve_cutoff(cutoffs, date)
+    predictor = TemporalPredictor(saved, contexts, fetcher=fetcher, hubs=hubs)
     source = predictor.contexts
     output.parent.mkdir(parents=True, exist_ok=True)
     count = rejected = supplied = 0
@@ -181,7 +183,7 @@ def score_new_accounts(
     failed = True
     try:
         if hubs is None:
-            predictor.hubs = query_hubs(executor, [seq], predictor.sampler)
+            predictor.hubs = query_hubs(hub_reader, [seq], predictor.sampler)
             warn_hub_stubs(predictor.hubs, predictor.plan)
         # The scores replace output first, then the rejected IDs (if any) their file.
         with atomic_write(rejected_output) as rejected_pending:
