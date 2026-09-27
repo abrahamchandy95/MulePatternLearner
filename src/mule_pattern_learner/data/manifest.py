@@ -70,9 +70,11 @@ def dataset_settings(source_id: str, config: RunConfig) -> dict[str, Any]:
     The source id names the data loaded into the graph. The scope's id and its rule
     for accounts no party owns decide the split partitions, the dataset section gives
     the cutoffs and seed reservoirs, and sampler_pools is what TigerGraph returns per
-    hop. Feature groups are not a dataset setting: a dataset stores no contexts, and
-    the source requests each training model's groups, so variants of any groups and
-    architecture share one dataset.
+    hop. The scope's other settings (create, reveal_per_split, reveal_salt) act once on
+    the graph, when a missing scope is created and in the one-time reveal, so they name
+    no other dataset. Feature groups are not a dataset setting: a dataset stores no
+    contexts, and the source requests each training model's groups, so variants of any
+    groups and architecture share one dataset.
     """
     settings = {
         "source_id": source_id,
