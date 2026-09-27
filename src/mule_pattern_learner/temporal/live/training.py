@@ -1010,7 +1010,7 @@ class _TrainingRun:
         return {
             "status": "complete",
             "cohort": self.manifest["cohort"],
-            "label_policy": self.config.get("label_policy"),
+            "label_policy": "graph_observed",
             "variant": self.model.variant,
             "seed": self.settings.seed,
             "known_mules": label_summary(self.mask),

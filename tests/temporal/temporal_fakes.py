@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Callable, Iterable
 from copy import deepcopy
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 import threading
 from typing import Any, cast
@@ -31,6 +31,10 @@ from mule_pattern_learner.temporal.live.contract import (
     ContextKey,
 )
 from mule_pattern_learner.temporal.live.installation import definitions, parameter_names
+from mule_pattern_learner.temporal.live.supervision import (
+    align_observed_labels,
+    validate_label_table,
+)
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 CONTEXT_QUERY = "temporal_training_context"
@@ -55,7 +59,6 @@ SCOPE_POPULATION_PARAMETERS = signature("gsql/temporal/training_scope.gsql", SCO
 # are absent. Only a raw configuration can omit them; run_config fills them in. Tests of
 # this profile are marked legacy.
 LEGACY_PROFILE: dict[str, Any] = {
-    "label_policy": "observed",
     "evaluation_unlabeled_limit": 2000,
     "fanouts": [8, 4],
     "per_relation": 2,
@@ -167,6 +170,24 @@ def scoped_accounts() -> list[dict[str, Any]]:
     rows = accounts.drop(columns=["owner_ids", "split"])
     records = rows.assign(partition=accounts.split.map(SPLIT_PHASE)).to_dict("records")
     return cast(list[dict[str, Any]], records)
+
+
+@dataclass
+class FrameObservedLabels:
+    """Observed labels from a table: a label source for prepare() other than the graph.
+
+    Population queries run without include_observed for it, as for any source that is
+    not GraphObservedLabels.
+    """
+
+    labels: pd.DataFrame
+
+    def positive_ids(self) -> set[str]:
+        validate_label_table(self.labels)
+        return set(self.labels.loc[self.labels.known_positive.astype(bool), "account_id"])
+
+    def read(self, metadata: pd.DataFrame) -> pd.DataFrame:
+        return align_observed_labels(metadata, self.labels)
 
 
 def supplied_labels(per_split: int = 20) -> pd.DataFrame:

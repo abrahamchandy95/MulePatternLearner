@@ -123,8 +123,8 @@ actually populate them.
 
 ## Production training and the label reveal
 
-The live trainer reads the revealed positives of this contract
-(`label_policy = "graph_observed"`). A PhantomLedger load masks every mule, so the
+The live trainer reads the revealed positives of this contract. A PhantomLedger load
+masks every mule, so the
 first run writes the contract once with `temporal_reveal_mule_labels`: every
 internal Account becomes a known label, and up to 20 mules per split that a bank
 would have discovered before the split's cutoff are revealed with their discovery

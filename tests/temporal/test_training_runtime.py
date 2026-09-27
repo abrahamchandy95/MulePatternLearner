@@ -552,7 +552,6 @@ def base_config(**overrides: Any) -> dict[str, Any]:
     value = {
         "dataset_id": "unit_runtime",
         "scope_id": "unit_scope",
-        "label_policy": "observed",
         "dates": deepcopy(DATES),
         "feature_groups": list(DEFAULT_GROUPS),
         "architecture": "split",

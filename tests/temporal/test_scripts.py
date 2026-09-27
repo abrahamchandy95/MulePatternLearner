@@ -18,10 +18,10 @@ from mule_pattern_learner.temporal.live.contract import SamplerPlan, extraction_
 from mule_pattern_learner.temporal.live.dataset import prepare
 from mule_pattern_learner.temporal.live.experiments import feature_experiments
 from mule_pattern_learner.temporal.live.source import StreamingContextSource
-from mule_pattern_learner.temporal.live.supervision import FrameObservedLabels
 from temporal_fakes import (
     REPOSITORY,
     FakeExecutor,
+    FrameObservedLabels,
     live_config,
     neighbourhood,
     reveal_inputs,

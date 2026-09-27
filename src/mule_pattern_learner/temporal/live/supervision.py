@@ -1,8 +1,11 @@
-"""Production observed-label interfaces. This module never reads oracle truth."""
+"""Observed-label interfaces: the graph's revealed labels. This module never reads oracle truth.
+
+Labels come from the graph (GraphObservedLabels). prepare() accepts any
+ObservedLabelSource, so tests can supply a table of labels instead.
+"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -10,7 +13,6 @@ import numpy as np
 import pandas as pd
 
 from ..common import timestamp
-from .config_schema import setting
 from .contract import SPLITS
 
 LABEL_COLUMNS = ("account_id", "known_positive", "known_from_ms")
@@ -25,38 +27,8 @@ class ObservedLabelSource(Protocol):
     def positive_ids(self) -> set[str]: ...
 
 
-@dataclass
-class FrameObservedLabels:
-    """Adapter for externally supplied observed labels, including experiments."""
-
-    labels: pd.DataFrame
-
-    def positive_ids(self) -> set[str]:
-        validate_label_table(self.labels)
-        return set(self.labels.loc[self.labels.known_positive.astype(bool), "account_id"])
-
-    def read(self, metadata: pd.DataFrame) -> pd.DataFrame:
-        return align_observed_labels(metadata, self.labels)
-
-
-@dataclass
-class ParquetObservedLabels:
-    path: Path
-
-    def _frame(self) -> pd.DataFrame:
-        return read_bounded_parquet(
-            self.path, "Observed-label source exceeds the 100000-row bounded pool"
-        )
-
-    def positive_ids(self) -> set[str]:
-        return FrameObservedLabels(self._frame()).positive_ids()
-
-    def read(self, metadata: pd.DataFrame) -> pd.DataFrame:
-        return align_observed_labels(metadata, self._frame())
-
-
 class GraphObservedLabels:
-    """Observed labels paged from the graph (`label_policy = "graph_observed"`).
+    """Observed labels paged from the graph, the label source of every run.
 
     This is the only label source for which population queries run with
     include_observed = TRUE. The queries report the revealed positive of the
@@ -92,46 +64,6 @@ def check_graph_label_rows(rows: pd.DataFrame) -> None:
             f"(for example {stale.iloc[0]!r}): the installed population query predates the "
             "masked-label predicate. Run `mule-temporal install` and prepare again."
         )
-
-
-def label_source(config: dict[str, Any]) -> ObservedLabelSource:
-    """The explicitly configured observed-label source; there is no implicit default.
-
-    `label_policy = "graph_observed"` (the built-in run) reads the labels revealed
-    in the graph. `observed_labels = <parquet>` (relative to the repository root)
-    overrides it, for experiments or an external label feed.
-    """
-    from mule_pattern_learner.configuration import resolve_path
-
-    policy = setting(config, "label_policy")
-    path = config.get("observed_labels")
-    if policy == "graph_observed":
-        if path:
-            raise ValueError(
-                'label_policy = "graph_observed" conflicts with observed_labels; keep one'
-            )
-        return GraphObservedLabels()
-    if policy != "observed":
-        raise ValueError('label_policy must be "observed" or "graph_observed"')
-    if not path:
-        raise ValueError(
-            "No observed-label source configured. Set observed_labels = <parquet with "
-            "account_id, known_positive, known_from_ms>, or set label_policy = "
-            '"graph_observed" to page observed labels from the graph'
-        )
-    resolved = resolve_path(path)
-    if not resolved.is_file():
-        raise ValueError(missing_label_source(resolved))
-    return ParquetObservedLabels(resolved)
-
-
-def missing_label_source(path: Path) -> str:
-    """The error for a configured observed-label file that does not exist."""
-    return (
-        f"Observed-label source file not found at {path}: point observed_labels at an "
-        "existing file (paths are relative to the repository root), or remove "
-        "observed_labels to use the labels revealed in the graph"
-    )
 
 
 def reads_graph_labels(labels: ObservedLabelSource) -> bool:
@@ -185,9 +117,14 @@ def align_observed_labels(metadata: pd.DataFrame, labels: pd.DataFrame) -> pd.Da
 def load_observed_labels(
     accounts: pd.DataFrame, dataset: Path, manifest: dict[str, Any]
 ) -> pd.DataFrame:
+    """The prepared observed labels, aligned with the prepared accounts."""
     if "observed_labels_sha256" not in manifest:
         raise ValueError("Legacy simulated-label cache: prepare with an observed-label provider")
-    return ParquetObservedLabels(dataset / "observed_labels.parquet").read(accounts)
+    labels = read_bounded_parquet(
+        dataset / "observed_labels.parquet",
+        "Observed-label source exceeds the 100000-row bounded pool",
+    )
+    return align_observed_labels(accounts, labels)
 
 
 def visible_labels(labels: pd.DataFrame, date: str) -> np.ndarray:

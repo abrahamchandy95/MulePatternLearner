@@ -10,12 +10,6 @@ from typing import Any
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
 
-def resolve_path(value: str | Path) -> Path:
-    """Resolve a configured path; relative paths are relative to the repository root."""
-    path = Path(value).expanduser()
-    return path if path.is_absolute() else REPOSITORY_ROOT / path
-
-
 def load_config(path: Path) -> dict[str, Any]:
     """Read a TOML or JSON table as written, without any schema.
 
