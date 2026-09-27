@@ -1,6 +1,9 @@
-"""Imbalance-aware, threshold-locked evaluation, weighted audit metrics and grouped uncertainty.
+"""Threshold-locked proxy metrics and the weighted metrics of an audit sample.
 
-Everything here is pure numpy and scikit-learn: arrays in, numbers out.
+Everything here is pure numpy and scikit-learn: arrays in, numbers out. The proxy
+metrics score observed labels as they are; the weighted metrics estimate population
+values from a sample in which each account stands for ``weight`` accounts. Both share
+the thresholded precision, recall and F1 (threshold_metrics).
 """
 
 from __future__ import annotations
@@ -20,13 +23,23 @@ def select_threshold(y: NDArray[np.int64], score: NDArray[np.float64]) -> float:
     return float(thresholds[int(np.argmax(f1))])
 
 
+def threshold_metrics(
+    y: NDArray[Any], score: NDArray[Any], weight: NDArray[Any], threshold: float
+) -> dict[str, float]:
+    """Weighted precision, recall and F1 of the accounts scored at or above threshold."""
+    predicted = score >= threshold
+    positives, tp = float(weight[y == 1].sum()), float(weight[(y == 1) & predicted].sum())
+    precision, recall = tp / max(float(weight[predicted].sum()), 1), tp / max(positives, 1)
+    return {
+        "precision": precision,
+        "recall": recall,
+        "f1": 2 * precision * recall / max(precision + recall, 1e-12),
+    }
+
+
 def evaluate(y: NDArray[np.int64], score: NDArray[np.float64], threshold: float) -> dict[str, Any]:
     if not len(y):
         return {"n": 0, "positives": 0, "average_precision": None, "roc_auc": None}
-    prediction = score >= threshold
-    tp = int(((y == 1) & prediction).sum())
-    precision = tp / max(int(prediction.sum()), 1)
-    recall = tp / max(int(y.sum()), 1)
     order = np.argsort(-score, kind="stable")
     result: dict[str, Any] = {
         "n": len(y),
@@ -35,9 +48,7 @@ def evaluate(y: NDArray[np.int64], score: NDArray[np.float64], threshold: float)
         "average_precision": float(average_precision_score(y, score)) if y.sum() else None,
         "roc_auc": float(roc_auc_score(y, score)) if len(np.unique(y)) == 2 else None,
         "threshold": threshold,
-        "precision": precision,
-        "recall": recall,
-        "f1": 2 * precision * recall / max(precision + recall, 1e-12),
+        **threshold_metrics(y, score, np.ones(len(y)), threshold),
     }
     for fraction in (0.01, 0.05):
         k = max(1, int(np.ceil(fraction * len(y))))
@@ -109,9 +120,7 @@ def weighted_metrics(
     (``capture_at_budgets``) share a budget that ends among tied scores evenly
     across them, so row order does not matter.
     """
-    predicted = score >= threshold
-    positives, tp = float(weight[y == 1].sum()), float(weight[(y == 1) & predicted].sum())
-    precision, recall = tp / max(float(weight[predicted].sum()), 1), tp / max(positives, 1)
+    positives = float(weight[y == 1].sum())
     return {
         "sample_accounts": len(y),
         "sample_positives": int(y.sum()),
@@ -124,28 +133,6 @@ def weighted_metrics(
         if len(np.unique(y)) == 2
         else None,
         "threshold": threshold,
-        "precision": precision,
-        "recall": recall,
-        "f1": 2 * precision * recall / max(precision + recall, 1e-12),
+        **threshold_metrics(y, score, weight, threshold),
         **capture_at_budgets(y, score, weight),
     }
-
-
-def bootstrap_interval(
-    y: NDArray[np.int64],
-    scores: NDArray[np.float64],
-    groups: NDArray[Any],
-    seed: int = 42,
-    draws: int = 200,
-) -> list[float] | None:
-    unique = np.unique(groups)
-    if y.sum() == 0 or len(unique) < 2:
-        return None
-    indices = [np.flatnonzero(groups == group) for group in unique]
-    rng = np.random.default_rng(seed)
-    values = []
-    for _ in range(draws):
-        sample = np.concatenate([indices[i] for i in rng.integers(0, len(unique), len(unique))])
-        if len(np.unique(y[sample])) == 2:
-            values.append(average_precision_score(y[sample], scores[sample]))
-    return np.quantile(values, [0.025, 0.975]).tolist() if values else None
