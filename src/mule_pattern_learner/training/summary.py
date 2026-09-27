@@ -1,4 +1,4 @@
-"""What a run records: its provenance, the model.pt payload, the predictions and metrics."""
+"""What a run records: its provenance, the predictions and the metrics (model.pt is SavedModel's)."""
 
 from __future__ import annotations
 
@@ -12,13 +12,9 @@ import pandas as pd
 import torch
 
 from ..config import RunConfig, RuntimeConfig
-from ..contract.feature_groups import FeaturePlan, contract_fingerprint
+from ..contract.feature_groups import FeaturePlan
 from ..contract.graph_schema import EVALUATION_PROTOCOL
-from ..contract.sampler_plan import SamplerPlan
-from ..contract.time_basis import BASIS_ID
-from ..data.manifest import manifest_digest
-from ..inference.saved_model import SavedModel
-from ..paths import REPOSITORY_ROOT, DatasetPaths
+from ..paths import REPOSITORY_ROOT
 from .history import RunTotals
 from .objective import objective_name
 from .schedule import EvaluationSample
@@ -78,41 +74,6 @@ def provenance(host: dict[str, Any], backend: str, dataset_id: str) -> dict[str,
         "sampler_backend": backend,
         "dataset_id": dataset_id,
         "started": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-    }
-
-
-def model_payload(
-    *,
-    state: dict[str, torch.Tensor],
-    config: RunConfig,
-    dataset: DatasetPaths,
-    dataset_id: str,
-    threshold: float,
-    plan: FeaturePlan,
-    sampler: SamplerPlan,
-    known_mules: dict[str, int],
-    device: torch.device,
-    backend: str,
-) -> dict[str, Any]:
-    """The model.pt payload of the selected state (read by inference.saved_model.SavedModel)."""
-    return {
-        "format": SavedModel.FORMAT,
-        "state_dict": state,
-        "config": config.to_dict(),
-        "basis_id": BASIS_ID,
-        "contract": contract_fingerprint(),
-        "dataset_id": dataset_id,
-        "dataset_manifest_sha256": manifest_digest(dataset),
-        "threshold": threshold,
-        "feature_dim": len(plan.node_names),
-        "input_fingerprint": plan.fingerprint(),
-        "sampler": sampler.query_params(),
-        "sampler_fingerprint": sampler.fingerprint(),
-        "selected_on": "validation_observed_label_proxy_ap",
-        "evaluation_protocol": EVALUATION_PROTOCOL,
-        "known_mules": known_mules,
-        "training_device": str(device),
-        "sampler_backend": backend,
     }
 
 

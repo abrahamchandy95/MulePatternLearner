@@ -1,9 +1,10 @@
-"""model.pt: the selected model, as scoring and audits read it.
+"""model.pt: the selected model, as training writes it and scoring and audits read it.
 
-`training.summary.model_payload` builds its payload: the selected weights, the
-configuration (RunConfig.to_dict()), the fingerprint of the feature plan, the
-threshold, the id and manifest digest of the dataset and SavedModel.FORMAT. Readers
-load it once and pass the SavedModel on; each checks only what it relies on.
+SavedModel.selected builds its payload: the selected weights, the configuration
+(RunConfig.to_dict()), the fingerprint of the feature plan, the threshold, the id and
+manifest digest of the dataset and SavedModel.FORMAT, with what the run was trained on
+for the record. Readers load it once and pass the SavedModel on; each checks only what
+it relies on.
 
 A model saved before FORMAT 1 records no format, and names its dataset by directory
 instead of by dataset id. One saved before the typed configuration also holds a flat
@@ -23,6 +24,7 @@ import torch
 from ..artifacts import atomic_write
 from ..config import DEFAULT_CONFIG, RunConfig
 from ..contract.feature_groups import BUILT_IN_GROUPS, FeaturePlan, contract_fingerprint
+from ..contract.graph_schema import EVALUATION_PROTOCOL
 from ..contract.sampler_plan import PoolPlan
 from ..contract.time_basis import BASIS_ID
 from ..data.manifest import manifest_digest
@@ -208,6 +210,48 @@ class SavedModel:
 
     path: Path
     payload: dict[str, Any]
+
+    @classmethod
+    def selected(
+        cls,
+        path: Path,
+        *,
+        state: dict[str, torch.Tensor],
+        config: RunConfig,
+        dataset: DatasetPaths,
+        dataset_id: str,
+        threshold: float,
+        known_mules: dict[str, int],
+        device: torch.device,
+        backend: str,
+    ) -> SavedModel:
+        """The model a run selected, to be saved at path.
+
+        ``state`` holds the selected weights and ``threshold`` the validation threshold;
+        the feature plan and sampler are config's. The known mules per split, the
+        training device and the sampler backend are recorded, not read.
+        """
+        plan, sampler = config.feature_plan(), config.sampler
+        payload = {
+            "format": cls.FORMAT,
+            "state_dict": state,
+            "config": config.to_dict(),
+            "basis_id": BASIS_ID,
+            "contract": contract_fingerprint(),
+            "dataset_id": dataset_id,
+            "dataset_manifest_sha256": manifest_digest(dataset),
+            "threshold": threshold,
+            "feature_dim": len(plan.node_names),
+            "input_fingerprint": plan.fingerprint(),
+            "sampler": sampler.query_params(),
+            "sampler_fingerprint": sampler.fingerprint(),
+            "selected_on": "validation_observed_label_proxy_ap",
+            "evaluation_protocol": EVALUATION_PROTOCOL,
+            "known_mules": known_mules,
+            "training_device": str(device),
+            "sampler_backend": backend,
+        }
+        return cls(path, payload)
 
     @classmethod
     def load(cls, path: Path) -> SavedModel:

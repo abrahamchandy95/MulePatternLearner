@@ -89,7 +89,7 @@ from .schedule import (
     epoch_schedule,
     evaluation_indices,
 )
-from .summary import host_settings, model_payload, prediction_frame, provenance, run_summary
+from .summary import host_settings, prediction_frame, provenance, run_summary
 
 Batch = dict[str, torch.Tensor]
 BatchRequest = tuple[list[ContextKey], str, int]
@@ -657,20 +657,18 @@ class _TrainingRun:
         threshold = select_threshold(labels, validation["score"].to_numpy())
         selection = proxy_metrics(labels, validation["score"].to_numpy(), threshold)
         known_mules = label_summary(self.mask)
-        payload = model_payload(
+        # Save the selected model before any test context is requested.
+        SavedModel.selected(
+            self.run.model,
             state=self.best_state,
             config=self.config,
             dataset=self.dataset,
             dataset_id=self.dataset_id,
             threshold=threshold,
-            plan=self.plan,
-            sampler=self.sampler,
             known_mules=known_mules,
             device=self.device,
             backend=self.backend,
-        )
-        # Save the selected model before any test context is requested.
-        SavedModel(self.run.model, payload).save()
+        ).save()
         test, rejected_roots["test"] = self._score_test()
         results = {}
         for split, frame in (("validation", validation), ("test", test)):
