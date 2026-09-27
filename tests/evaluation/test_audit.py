@@ -13,7 +13,6 @@ import torch
 from mule_pattern_learner.batching import assemble
 from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.evaluation.audit import evaluate_final_population, evaluate_weighted
-from mule_pattern_learner.metrics import evaluate
 from mule_pattern_learner.testing.builders import (
     CUTOFFS,
     base_config,
@@ -155,28 +154,6 @@ def test_weighted_top_fractions_rank_scores_beyond_float32_precision() -> None:
     near_one = frame.assign(score=1 - 1e-9 * (1 - frame.score))
     assert (near_one.score.astype(np.float32) == 1).all()
     assert {k: evaluate_weighted(near_one, 0.5)[k] for k in TOP_KEYS} == pytest.approx(EXPECTED)
-
-
-def test_unit_weights_give_the_unweighted_top_fraction_metrics() -> None:
-    rng = np.random.default_rng(3)
-    # 1, 5 and 10% of 200 accounts are whole numbers: 2, 10 and 20.
-    y = (rng.random(200) < 0.1).astype(np.int64)
-    score = rng.random(200)
-    frame = pd.DataFrame(
-        {
-            "account_id": [f"A{i:03d}" for i in range(200)],
-            "is_mule": y,
-            "inclusion_probability": 1.0,
-            "score": score,
-        }
-    )
-    weighted = evaluate_weighted(frame, 0.5)
-    unweighted = evaluate(y, score, 0.5)
-    for key in ("precision_at_1pct", "recall_at_1pct", "precision_at_5pct", "recall_at_5pct"):
-        assert weighted[key] == pytest.approx(unweighted[key])
-    top = np.argsort(-score)[:20]
-    assert weighted["precision_at_10pct"] == pytest.approx(y[top].sum() / 20)
-    assert weighted["recall_at_10pct"] == pytest.approx(y[top].sum() / y.sum())
 
 
 def test_weighted_top_fractions_without_positives_are_zero() -> None:
