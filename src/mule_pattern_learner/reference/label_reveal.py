@@ -4,8 +4,9 @@
 revealed set for every internal mule from the rows INPUTS_QUERY prints, with the
 job's own hash (tigergraph.reveal.reveal_uniforms) and parameter defaults
 (tigergraph.reveal.REVEAL_DEFAULTS). It reads nothing itself:
-scripts/verify_label_reveal.py compares it with the installed job, and
-scripts/simulate_label_reveal.py runs it over many salts.
+tests/integration/test_label_reveal.py compares it with a dry run of the installed
+job (dry_run_differences), and scripts/simulate_label_reveal.py runs it over many
+salts.
 """
 
 from __future__ import annotations
@@ -200,3 +201,36 @@ def counts_by_split(result: dict[str, Any], accounts: str) -> dict[int, int]:
         part: sum(1 for k in result[accounts] if result["mules"][k]["part"] == part)
         for part in PHASE_SPLIT
     }
+
+
+def dry_run_differences(expected: dict[str, Any], dry_run: dict[str, Any]) -> list[str]:
+    """Where a dry run of the installed job disagrees with plan's result; empty if nowhere.
+
+    ``dry_run`` is the job's merged output with apply = FALSE: its revealed mules with
+    their discovery channel and availability clock (``known_ts_ms``), the data end
+    and the eligible mules per split. The job's map has no entry for a split without
+    eligible mules.
+    """
+    actual = {row["account_id"]: row for row in dry_run["revealed_mules"]}
+    failures: list[str] = []
+    if set(actual) != expected["revealed"]:
+        failures.append(
+            f"revealed sets differ: only GSQL {sorted(set(actual) - expected['revealed'])[:5]}, "
+            f"only Python {sorted(expected['revealed'] - set(actual))[:5]}"
+        )
+    data_end = int(dry_run["data_end_ts_ms"])
+    for account, row in actual.items():
+        mule = expected["mules"].get(account)
+        if mule is None:
+            continue
+        known = available_ms(mule, data_end)
+        if row["channel"] != mule["channel"] or row["known_ts_ms"] != known:
+            failures.append(
+                f"{account}: GSQL {row['channel']} {row['known_ts_ms']}, "
+                f"Python {mule['channel']} {known}"
+            )
+    eligible = counts_by_split(expected, "eligible")
+    gsql_eligible = {part: int(dry_run["eligible"].get(str(part), 0)) for part in eligible}
+    if eligible != gsql_eligible:
+        failures.append(f"eligible counts differ: GSQL {gsql_eligible}, Python {eligible}")
+    return failures

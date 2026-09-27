@@ -114,14 +114,22 @@ The end-to-end guide describes
 .venv/bin/python scripts/render_queries.py --check
 ```
 
-The tests never connect to TigerGraph. Tests marked `cuda` need a GPU and are deselected
-by default; run them on a CUDA host with `.venv/bin/python -m pytest tests -m cuda`.
+The tests never connect to TigerGraph unless a marker selects them. The integration
+tests in `tests/integration/` are deselected by default: `-m graph` runs the read-only
+checks against the graph in `.env`, `-m cuda` the cuGraph checks on a CUDA host, and
+`-m graph_write --allow-graph-writes` the scope isolation test, which writes temporary
+fixture vertices and removes them again:
 
-The scripts in `scripts/` run experiments and live checks against the graph;
-each prints its purpose with `--help` without connecting. The verification scripts that
-record a report write it under `artifacts/temporal/` (git-ignored); `--output` chooses
-another path. The one-time schema installer scripts, already run against the live graph,
-are kept in git history.
+```bash
+.venv/bin/python -m pytest -m graph
+.venv/bin/python -m pytest -m cuda
+.venv/bin/python -m pytest -m graph_write --allow-graph-writes
+```
+
+`scripts/render_queries.py` regenerates the context query, and
+`scripts/simulate_label_reveal.py` shows how the label reveal varies with its salt; each
+prints its purpose with `--help` without connecting. The one-time schema installer
+scripts, already run against the live graph, are kept in git history.
 
 ## License
 

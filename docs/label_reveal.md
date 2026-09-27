@@ -90,8 +90,9 @@ discovered before each cutoff and of those revealed:
 python scripts/simulate_label_reveal.py --runs 1000
 ```
 
-`scripts/verify_label_reveal.py` checks the installed job against the same
-mirror: it runs the job with `apply = FALSE` and compares the revealed set, the
+`tests/integration/test_label_reveal.py` (marker `graph`, read-only) checks the
+installed job against the same mirror: it runs the job with `apply = FALSE` and
+compares the revealed set, the
 channel and availability clock of every revealed mule, and the eligible count per
 split. It passes `force = TRUE` so the check also
 runs on a graph whose labels were already revealed; with `apply = FALSE` the job

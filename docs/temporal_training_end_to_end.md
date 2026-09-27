@@ -634,17 +634,13 @@ instance, shrink the child pool, or move to the future work listed below.
 
 3. **Copy `.env`** (`HOST`, `GRAPHNAME`, `SECRET`). Nothing else is copied: settings are
    built in, the known mules are in TigerGraph, and the run prepares its own dataset.
-4. **Check cuGraph** (exit code 0 means every check passed, 2 means cuGraph cannot run):
+4. **Check cuGraph** on the GPU: the probe, exact counts, strict cutoffs, uniform
+   inclusion and determinism on synthetic tables, then (once `mule train` has prepared
+   the dataset) one real batch per backend and a deterministic CUDA step run twice. The
+   tests skip when cuGraph cannot run on the host:
 
    ```bash
-   python scripts/verify_cugraph_sampler.py
-   ```
-
-   Then build one real batch per backend and run a deterministic CUDA step twice (this
-   prepares the default run's dataset first, which `train` then reuses):
-
-   ```bash
-   python scripts/verify_cugraph_sampler.py --live
+   .venv/bin/python -m pytest -m cuda tests/integration/test_cugraph_sampler.py
    ```
 
 5. **Qualify the graph and one real batch** with the configured transport (read-only):
@@ -712,15 +708,15 @@ dataset; different dataset settings name another dataset, prepared beside it.
 | Scope rule mismatch | The scope was created with another `scope.unowned`; use the stored rule or a new `scope.id` |
 | `Live graph counts changed; freeze the source and prepare a new dataset` | The graph was modified after preparation; freeze it and prepare a new dataset |
 | `TigerGraph rejected ... training roots so far` or `validation: TigerGraph rejected ... roots` | Roots failed a per-request check beyond `max_rejected_root_fraction`, or an observed positive was rejected; the statuses name why (for example `history_capacity_exceeded`) |
-| cuGraph probe warning | pylibcugraph or the GPU failed the probe; training continues with the torch sampler; run `verify_cugraph_sampler.py` |
+| cuGraph probe warning | pylibcugraph or the GPU failed the probe; training continues with the torch sampler; run `mule check` and `pytest -m cuda tests/integration/test_cugraph_sampler.py` |
 | Retries in the log | TigerGraph was briefly unavailable or resuming; the run waits up to `max_outage_s` |
 | `Run is already complete` | The run directory holds a finished run; its `metrics.json` is the result. Move the directory aside to train it again |
 | `The model's input groups or pool definitions differ from its configuration` | The model was trained with a pool group whose definition (amount bands, pass-through thresholds, `POOL_ACTIVITY_VERSION`) has changed since; score with a model trained under the current definition |
 
 ## Limitations and future work
 
-- The cuGraph path has not run on real hardware yet; run the verification script on the
-  CUDA machine first. At these batch sizes cuGraph's per-call overhead may exceed the torch
+- The cuGraph path has not run on real hardware yet; run its integration tests
+  (`pytest -m cuda`) on the CUDA machine first. At these batch sizes cuGraph's per-call overhead may exceed the torch
   sampler's; `backend = "torch"` is always a safe choice.
 - Hub histories are withheld (the model sees only the flag and the connecting payments).
 - 20,709 unowned internal accounts could not be linked to a single holder and keep

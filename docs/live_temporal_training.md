@@ -529,16 +529,14 @@ torch cu129) or `pip install -e '.[dev,cuda13]'`
 check it before relying on `backend = "auto"`:
 
 ```bash
-.venv/bin/python scripts/verify_cugraph_sampler.py
-.venv/bin/python scripts/verify_cugraph_sampler.py --live
+.venv/bin/python -m pytest -m cuda tests/integration/test_cugraph_sampler.py
 ```
 
-The script starts with the functional probe that `backend = "auto"` runs, then
-compares cuGraph with the torch sampler on a synthetic table (exact counts,
-temporal validity, uniform inclusion, determinism and latency). Exit code 0 means
-every check passed, 1 a failed check, 2 that cuGraph cannot run on the host.
-`--live` builds one real batch per backend from the prepared dataset (read-only
-queries) and runs one deterministic CUDA training step twice.
+The tests start with the functional probe that `backend = "auto"` runs, then compare
+cuGraph with the torch sampler on a synthetic table (exact counts, temporal validity,
+uniform inclusion and determinism). They skip when cuGraph cannot run on the host. The
+last one also reads the graph: it builds one real batch per backend from the prepared
+dataset (read-only queries) and runs one deterministic CUDA training step twice.
 
 Score IDs absent from training, using an ID text file with one account per line
 (the date defaults to the model's test cutoff):

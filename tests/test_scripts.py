@@ -1,4 +1,8 @@
-"""The live temporal scripts import, show help without side effects, and run offline."""
+"""The scripts import, show help without side effects, and run offline.
+
+The live checks are integration tests now (tests/integration); two scripts remain:
+render_queries.py and simulate_label_reveal.py.
+"""
 
 from __future__ import annotations
 
@@ -14,28 +18,13 @@ from typing import Any
 
 import pytest
 
-from mule_pattern_learner.contract.feature_groups import FeaturePlan
-from mule_pattern_learner.data.contexts import ContextSource, check_coverage
 from mule_pattern_learner.paths import REPOSITORY_ROOT
 from mule_pattern_learner.reference import label_reveal
-from mule_pattern_learner.testing.builders import (
-    reveal_inputs,
-)
-from mule_pattern_learner.testing.fake_graph import FakeExecutor
-from mule_pattern_learner.tigergraph import reveal
-from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
+from mule_pattern_learner.testing.builders import reveal_inputs
 
 SCRIPTS = REPOSITORY_ROOT / "scripts"
-# Every script that talks to the live path; each must parse --help before connecting.
-LIVE_SCRIPTS = (
-    "render_queries",
-    "simulate_label_reveal",
-    "verify_cugraph_sampler",
-    "verify_feature_redesign",
-    "verify_label_reveal",
-    "verify_strict_isolation",
-    "verify_training",
-)
+# Every script; each must parse --help before connecting.
+SCRIPT_NAMES = ("render_queries", "simulate_label_reveal")
 
 
 def load(name: str) -> ModuleType:
@@ -44,13 +33,6 @@ def load(name: str) -> ModuleType:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
-
-
-# The scripts that load torch; each reserves the cuBLAS workspace before anything else.
-TORCH_SCRIPTS = (
-    "verify_cugraph_sampler",
-    "verify_strict_isolation",
-)
 
 
 def environment_at_import(path: Path) -> list[int]:
@@ -74,24 +56,24 @@ def test_no_module_or_script_reads_the_environment_when_imported() -> None:
     assert {str(path): environment_at_import(path) for path in modules} == {
         str(path): [] for path in modules
     }
+    assert {path.stem for path in SCRIPTS.glob("*.py")} == set(SCRIPT_NAMES)
 
 
-def test_entry_points_reserve_the_cublas_workspace_first() -> None:
+def test_the_command_line_reserves_the_cublas_workspace_first() -> None:
     cli = REPOSITORY_ROOT / "src/mule_pattern_learner/cli.py"
-    for path in (cli, *(SCRIPTS / f"{name}.py" for name in TORCH_SCRIPTS)):
-        (main,) = (
-            node
-            for node in ast.parse(path.read_text()).body
-            if isinstance(node, ast.FunctionDef) and node.name == "main"
-        )
-        first = main.body[0]
-        assert isinstance(first, ast.Expr) and isinstance(first.value, ast.Call), path.name
-        assert ast.unparse(first.value.func) == "reserve_deterministic_cublas", path.name
-    # The other scripts never load torch, so they have no CUDA work to prepare for.
-    others = [str(SCRIPTS / f"{name}.py") for name in LIVE_SCRIPTS if name not in TORCH_SCRIPTS]
+    (main,) = (
+        node
+        for node in ast.parse(cli.read_text()).body
+        if isinstance(node, ast.FunctionDef) and node.name == "main"
+    )
+    first = main.body[0]
+    assert isinstance(first, ast.Expr) and isinstance(first.value, ast.Call)
+    assert ast.unparse(first.value.func) == "reserve_deterministic_cublas"
+    # The scripts never load torch, so they have no CUDA work to prepare for.
+    paths = [str(SCRIPTS / f"{name}.py") for name in SCRIPT_NAMES]
     code = (
         "import importlib.util, sys\n"
-        f"for path in {others!r}:\n"
+        f"for path in {paths!r}:\n"
         "    spec = importlib.util.spec_from_file_location('script', path)\n"
         "    spec.loader.exec_module(importlib.util.module_from_spec(spec))\n"
         "print('torch' in sys.modules)\n"
@@ -103,8 +85,8 @@ def test_entry_points_reserve_the_cublas_workspace_first() -> None:
     assert result.stdout.strip() == "False"
 
 
-@pytest.mark.parametrize("name", LIVE_SCRIPTS)
-def test_live_scripts_import_and_print_help_without_connecting(
+@pytest.mark.parametrize("name", SCRIPT_NAMES)
+def test_scripts_import_and_print_help_without_connecting(
     name: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     from mule_pattern_learner.tigergraph.executor import TigerGraphExecutor
@@ -121,111 +103,29 @@ def test_live_scripts_import_and_print_help_without_connecting(
     assert "usage:" in capsys.readouterr().out
 
 
-def test_strict_isolation_fixture_needs_explicit_write_consent(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    module = load("verify_strict_isolation")
-    monkeypatch.setattr(module, "connect", lambda config: pytest.fail("connected"))
-    monkeypatch.setattr(sys, "argv", ["verify_strict_isolation"])
-    with pytest.raises(SystemExit) as stopped:
-        module.main()
-    assert stopped.value.code == 2
-
-
-def test_strict_isolation_source_requests_what_the_fixture_checks_and_the_model_reads(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    module = load("verify_strict_isolation")
-    built: list[dict[str, Any]] = []
-
-    class Built(Exception):
-        pass
-
-    def record(executor: object, **options: Any) -> None:
-        built.append(options)
-        raise Built  # before the fixture writes anything
-
-    graph = SimpleNamespace(client=SimpleNamespace(conn=None))
-    monkeypatch.setattr(module, "connect", lambda config: graph)
-    monkeypatch.setattr(module, "ContextSource", record)
-    monkeypatch.setattr(sys, "argv", ["verify_strict_isolation", "--write-fixture"])
-    with pytest.raises(Built):
-        module.main()
-    (options,) = built
-    # Without a plan the source requests its default groups.
-    plan: FeaturePlan = options.get("plan", FeaturePlan())
-    # The values the fixture asserts on: first-hop root features and message fields.
-    checked = {
-        "1h_out_count",
-        "1h_out_amount",
-        "1d_out_in_amount_ratio",
-        "7d_out_in_amount_ratio",
-        "pair_count_1h",
-        "pair_count_1d",
-        "pair_count_7d",
-    }
-    assert checked <= set(plan.node_names + plan.edge_names)
-    flags = plan.query_flags(1)
-    for group in ("rolling_windows", "amount_ratios", "pair_window_counts"):
-        assert flags["include_" + group], group
-    # The model it trains and the predictor that scores it read nothing the source skips.
-    config = module.model_config()
-    with ContextSource(TigerGraphContextFetcher(FakeExecutor()), **options) as source:
-        check_coverage(source, config.feature_plan(), config.sampler)
-
-
-class RevealGraph:
-    """The reveal's read-only inputs, and a dry run that agrees with the Python mirror."""
+class RevealInputs:
+    """The reveal's read-only inputs; the job itself must never run."""
 
     def __init__(self) -> None:
         self.client = SimpleNamespace(conn=SimpleNamespace(runInterpretedQuery=self.inputs))
-        self.calls: list[tuple[str, dict[str, Any]]] = []
 
     def inputs(self, text: str, params: dict[str, Any]) -> list[dict[str, Any]]:
         assert text == label_reveal.INPUTS_QUERY and set(params) == {"scope_id"}
         return reveal_inputs()
 
     def run(self, name: str, params: dict[str, Any], **kwargs: Any) -> list[dict[str, Any]]:
-        self.calls.append((name, params))
-        result = label_reveal.plan(reveal_inputs(), params)
-        mules = result["mules"]
-        rows = [
-            {
-                "account_id": k,
-                "channel": mules[k]["channel"],
-                "known_ts_ms": label_reveal.available_ms(mules[k], 10**13),
-            }
-            for k in result["revealed"]
-        ]
-        eligible = label_reveal.counts_by_split(result, "eligible")
-        return [
-            {
-                "status": "dry_run",
-                "data_end_ts_ms": 10**13,
-                "eligible": {str(part): n for part, n in eligible.items() if n},
-            },
-            {"revealed_mules": rows},
-        ]
+        raise AssertionError(f"the simulation ran {name}")
 
 
-def test_label_reveal_scripts_run_offline(
+def test_the_reveal_simulation_runs_offline(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    graph = RevealGraph()
-    verify = load("verify_label_reveal")
-    monkeypatch.setattr(verify, "connect", lambda config: graph)
-    monkeypatch.setattr(sys, "argv", ["verify_label_reveal"])
-    assert verify.main() == 0
-    ((name, params),) = graph.calls
-    # force only skips the already-revealed check; apply = FALSE writes nothing.
-    assert name == reveal.REVEAL_QUERY and params["apply"] is False and params["force"] is True
-    capsys.readouterr()
     simulate = load("simulate_label_reveal")
-    monkeypatch.setattr(simulate, "connect", lambda config: graph)
+    monkeypatch.setattr(simulate, "connect", lambda config: RevealInputs())
     monkeypatch.setattr(sys, "argv", ["simulate_label_reveal", "--runs", "3"])
     simulate.main()
     report = json.loads(capsys.readouterr().out)
-    assert report["salts"] == [0, 2] and len(graph.calls) == 1  # never runs the job
+    assert report["salts"] == [0, 2]
     assert {name: split["mules"] for name, split in report["splits"].items()} == {
         "train": 2,
         "validation": 1,
