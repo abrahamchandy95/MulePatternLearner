@@ -34,7 +34,7 @@ from mule_pattern_learner.evaluation.audit import evaluate_predictions
 from mule_pattern_learner.evaluation.truth import ParquetEvaluationTruth
 from mule_pattern_learner.model.loss import NonNegativePULoss
 from mule_pattern_learner.model.tgat import LiveTGAT
-from mule_pattern_learner.paths import DatasetPaths
+from mule_pattern_learner.paths import DatasetPaths, RunPaths
 from mule_pattern_learner.testing.builders import (
     UNIT_SOURCE,
     FrameObservedLabels,
@@ -68,7 +68,7 @@ def fit(
     return trainer.train(
         config,
         DatasetPaths(tmp_path / "dataset"),
-        tmp_path / f"{name}.pt",
+        RunPaths(tmp_path / name),
         contexts=source or FakeSource(config),
         hubs=hub_registry(),
         resume=resume,
@@ -80,18 +80,16 @@ def saved_model(path: Path) -> dict[str, torch.Tensor]:
 
 
 def assert_same_run(tmp_path: Path, left: str, right: str) -> None:
-    for name, value in saved_model(tmp_path / f"{left}.pt").items():
-        torch.testing.assert_close(
-            value, saved_model(tmp_path / f"{right}.pt")[name], rtol=0, atol=0
-        )
-    a = json.loads((tmp_path / f"{left}_run/metrics.json").read_text())
-    b = json.loads((tmp_path / f"{right}_run/metrics.json").read_text())
+    one, other = RunPaths(tmp_path / left), RunPaths(tmp_path / right)
+    for name, value in saved_model(one.model).items():
+        torch.testing.assert_close(value, saved_model(other.model)[name], rtol=0, atol=0)
+    a = json.loads(one.metrics.read_text())
+    b = json.loads(other.metrics.read_text())
     for key in ("history", "best_epoch", "validation_proxy", "observed_label_proxy"):
         assert a[key] == b[key], key
     for split in ("validation", "test"):
         pd.testing.assert_frame_equal(
-            pd.read_parquet(tmp_path / f"{left}_run/{split}_predictions.parquet"),
-            pd.read_parquet(tmp_path / f"{right}_run/{split}_predictions.parquet"),
+            pd.read_parquet(one.predictions(split)), pd.read_parquet(other.predictions(split))
         )
 
 
@@ -116,21 +114,21 @@ def test_two_epochs_equal_one_epoch_plus_resume(
     fit(tmp_path, "straight", config)
     with pytest.raises(RuntimeError, match="injected"):
         fit(tmp_path, "resumed", config, source=FakeSource(config, fail=after_validation(1)))
-    state = torch.load(tmp_path / "resumed_run/checkpoint_last.pt", weights_only=True)
+    state = torch.load(RunPaths(tmp_path / "resumed").resume, weights_only=True)
     assert (state["epoch"], state["step"]) == (1, 0)
-    assert not (tmp_path / "resumed.pt").exists()
+    assert not RunPaths(tmp_path / "resumed").model.exists()
     with pytest.raises(FileExistsError):
         fit(tmp_path, "resumed", config)
     result = fit(tmp_path, "resumed", config, resume=True)
     assert result["status"] == "complete"
     assert_same_run(tmp_path, "straight", "resumed")
-    straight = json.loads((tmp_path / "straight_run/metrics.json").read_text())
+    straight = json.loads(RunPaths(tmp_path / "straight").metrics.read_text())
     # Reported totals cover both segments of the resumed run.
     for key in ("sampler_totals", "database_calls_during_training", "rejected_roots", "contexts"):
         assert result[key] == straight[key], key
     events = [
         json.loads(line)["event"]
-        for line in (tmp_path / "resumed_run/progress.jsonl").read_text().splitlines()
+        for line in RunPaths(tmp_path / "resumed").events.read_text().splitlines()
     ]
     assert events.count("start") == 1 and events.count("resume") == 1
     with pytest.raises(FileExistsError, match="complete"):
@@ -149,13 +147,13 @@ def test_mid_epoch_step_checkpoint_resumes_exactly(
     fit(tmp_path, "straight", config)
     with pytest.raises(RuntimeError, match="injected"):
         fit(tmp_path, "resumed", config, source=FakeSource(config, fail=after_validation(3)))
-    state = torch.load(tmp_path / "resumed_run/checkpoint_last.pt", weights_only=True)
+    state = torch.load(RunPaths(tmp_path / "resumed").resume, weights_only=True)
     assert state["epoch"] == 1 and 1 <= state["step"] < 4
     # Runtime-only settings may change on resume; results must not.
     runtime = {"prefetch_batches": 0, "log_every_steps": 1}
     resumed = fit(tmp_path, "resumed", config.with_changes({"runtime": runtime}), resume=True)
     assert_same_run(tmp_path, "straight", "resumed")
-    straight = json.loads((tmp_path / "straight_run/metrics.json").read_text())
+    straight = json.loads(RunPaths(tmp_path / "straight").metrics.read_text())
     # Steps replayed after the step checkpoint are counted once.
     assert resumed["sampler_totals"] == straight["sampler_totals"]
     assert resumed["rejected_roots"] == straight["rejected_roots"]
@@ -222,9 +220,9 @@ def test_batches_use_train_mode_step_seeds_and_the_hub_registry(
     result = fit(tmp_path, "run", config)
     # One resolution per run, on the main thread; every batch gets its result.
     assert resolved == [threading.main_thread()] and backends == {"torch"}
-    state = torch.load(tmp_path / "run_run/checkpoint_last.pt", weights_only=True)
+    state = torch.load(RunPaths(tmp_path / "run").resume, weights_only=True)
     assert state["sampler_backend"] == "torch" and "cuda_rng" not in state
-    model = torch.load(tmp_path / "run.pt", weights_only=True)
+    model = torch.load(RunPaths(tmp_path / "run").model, weights_only=True)
     assert model["sampler_backend"] == "torch"
     train_calls = [c for c in calls if c[0] == "train"]
     assert all(phase == 1 for _, _, phase, _ in train_calls)
@@ -234,7 +232,7 @@ def test_batches_use_train_mode_step_seeds_and_the_hub_registry(
     assert sum(stubs for *_, stubs in train_calls) > 0, "the hub child must become a stub"
     assert result["sampler_backend"] == "torch"
     records = [
-        json.loads(line) for line in (tmp_path / "run_run/progress.jsonl").read_text().splitlines()
+        json.loads(line) for line in RunPaths(tmp_path / "run").events.read_text().splitlines()
     ]
     train_records = [r for r in records if r["event"] == "train"]
     counters = {"query_calls", "rejections", "stub_children", "seconds_per_step", "cache_hits"}
@@ -271,7 +269,7 @@ def test_rejected_roots_are_dropped_and_reported(
     assert train["requested"] == 48 and train["positive"] == 0
     assert train["rejected"] == train["unlabeled"] >= 2
     for split in ("validation", "test"):
-        frame = pd.read_parquet(tmp_path / f"run_run/{split}_predictions.parquet")
+        frame = pd.read_parquet(RunPaths(tmp_path / "run").predictions(split))
         assert not set(frame.account_id) & rejected
         assert frame.score.notna().all()
 
@@ -284,7 +282,7 @@ def test_rejected_roots_fail_closed_by_default(
     # Default limit 0: one rejected unlabeled validation root fails epoch 1.
     with pytest.raises(ValueError, match=r"validation: TigerGraph rejected 1 of 23 roots"):
         fit(tmp_path, "one", config, source=FakeSource(config, reject=frozenset({"A001"})))
-    assert not (tmp_path / "one.pt").exists()
+    assert not RunPaths(tmp_path / "one").model.exists()
     # A rejected observed positive always fails, whatever the limit.
     loose = base_config(
         training={"proxy_unlabeled_limit": 100}, runtime={"max_rejected_root_fraction": 1.0}
@@ -308,7 +306,8 @@ def test_test_split_rejections_fail_after_the_model_is_saved(
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     with pytest.raises(ValueError, match=r"test: TigerGraph rejected 1 of 22 roots"):
         fit(tmp_path, "run", config, source=FakeSource(config, reject=frozenset({"A002"})))
-    assert (tmp_path / "run.pt").exists() and not (tmp_path / "run_run/metrics.json").exists()
+    run = RunPaths(tmp_path / "run")
+    assert run.model.exists() and not run.metrics.exists()
     # The limit is a runtime key: raising it lets the run finish from its checkpoint.
     result = fit(
         tmp_path,
@@ -334,7 +333,7 @@ def test_no_finite_validation_ap_refuses_to_save(
     monkeypatch.setattr(trainer, "evaluate", no_ap)
     with pytest.raises(ValueError, match="refusing to save untrained weights"):
         fit(tmp_path, "run", config)
-    assert not (tmp_path / "run.pt").exists()
+    assert not RunPaths(tmp_path / "run").model.exists()
 
 
 def test_non_finite_evaluation_scores_raise_instead_of_counting_as_rejections(
@@ -371,7 +370,7 @@ def test_evaluation_scores_keep_float64_resolution_near_one(
     # The validation F1 threshold falls between scores that float32 would tie at 1.
     assert 0.99 < fit(tmp_path, "run", config)["validation_proxy"]["threshold"] < 1
     for split in ("validation", "test"):
-        path = tmp_path / f"run_run/{split}_predictions.parquet"
+        path = RunPaths(tmp_path / "run").predictions(split)
         assert pq.read_schema(path).field("score").type == pa.float64()
         frame = pd.read_parquet(path)
         assert (frame.score < 1).all() and (frame.score.astype(np.float32) == 1).all()
@@ -405,7 +404,7 @@ def test_resume_refuses_a_different_sampler_backend_unless_configured(
     fit(tmp_path, "straight", config)
     with pytest.raises(RuntimeError, match="injected"):
         fit(tmp_path, "run", config, source=FakeSource(config, fail=after_validation(1)))
-    path = tmp_path / "run_run/checkpoint_last.pt"
+    path = RunPaths(tmp_path / "run").resume
     state = torch.load(path, weights_only=True)
     # As if the first segment ran on a cuGraph host.
     torch.save({**state, "sampler_backend": "cugraph"}, path)
@@ -446,16 +445,16 @@ def test_run_directory_is_created_only_after_the_source_opens(
         trainer.train(
             config,
             DatasetPaths(tmp_path / "dataset"),
-            tmp_path / "m.pt",
+            RunPaths(tmp_path / "m"),
             open_contexts=refuse,
             hubs=hub_registry(),
         )
-    assert not (tmp_path / "m_run").exists() and not (tmp_path / "m.pt").exists()
+    assert not RunPaths(tmp_path / "m").root.exists()
     # A source built with another sampler is rejected before anything is written.
     other = base_config(sampler={"relation_fanouts": [3, 2]})
     with pytest.raises(ValueError, match="sampler"):
         fit(tmp_path, "m", config, source=FakeSource(other))
-    assert not (tmp_path / "m_run").exists()
+    assert not RunPaths(tmp_path / "m").root.exists()
 
 
 def test_non_finite_loss_stops_before_any_checkpoint(
@@ -472,7 +471,7 @@ def test_non_finite_loss_stops_before_any_checkpoint(
     monkeypatch.setattr(NonNegativePULoss, "forward", poisoned)
     with pytest.raises(ValueError, match="Non-finite"):
         fit(tmp_path, "run", config)
-    assert not (tmp_path / "run_run/checkpoint_last.pt").exists()
+    assert not RunPaths(tmp_path / "run").resume.exists()
 
 
 def test_train_restores_global_torch_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -498,7 +497,9 @@ def test_fake_end_to_end_training_on_mps(tmp_path: Path, monkeypatch: pytest.Mon
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     result = fit(tmp_path, "mps", config)
     assert result["device"] == "mps" and result["status"] == "complete"
-    assert all(v.device.type == "cpu" for v in saved_model(tmp_path / "mps.pt").values())
+    assert all(
+        v.device.type == "cpu" for v in saved_model(RunPaths(tmp_path / "mps").model).values()
+    )
 
 
 @pytest.mark.cuda
@@ -518,9 +519,9 @@ def test_averaged_run_validates_and_saves_the_average(
     result = fit(tmp_path, "averaged", config)
     assert result["best_epoch"] == 1
     assert 0.0 <= result["history"][0]["validation_proxy_roc_auc"] <= 1.0
-    state = torch.load(tmp_path / "averaged_run/checkpoint_last.pt", weights_only=True)
+    state = torch.load(RunPaths(tmp_path / "averaged").resume, weights_only=True)
     averaged, raw = state["weight_average"]["state"], state["model"]
-    saved = saved_model(tmp_path / "averaged.pt")
+    saved = saved_model(RunPaths(tmp_path / "averaged").model)
     assert all(torch.equal(saved[k], averaged[k]) for k in saved)
     assert all(torch.equal(state["best_state"][k], averaged[k]) for k in saved)
     assert any(not torch.equal(averaged[k], raw[k]) for k in raw)
@@ -574,8 +575,8 @@ def test_hidden_truth_cannot_change_updates_or_checkpoint_selection(tmp_path: Pa
     c = live_config()
     dataset, executor = prepared(tmp_path, c)
     assert executor.names().count("temporal_hub_registry") == 1
-    first = train(c, dataset, tmp_path / "first.pt", contexts=streaming_source(executor, c))
-    saved_first = torch.load(tmp_path / "first.pt", weights_only=True)
+    first = train(c, dataset, RunPaths(tmp_path / "first"), contexts=streaming_source(executor, c))
+    saved_first = torch.load(RunPaths(tmp_path / "first").model, weights_only=True)
     # The oracle is a separate file that is never opened by training.
     a = pd.read_parquet(dataset.accounts)
     assert "is_mule" not in a.columns
@@ -583,20 +584,22 @@ def test_hidden_truth_cannot_change_updates_or_checkpoint_selection(tmp_path: Pa
     truth_path = tmp_path / "evaluation_truth.parquet"
     truth.to_parquet(truth_path, index=False)
     before = evaluate_predictions(
-        tmp_path / "first_run/test_predictions.parquet",
-        tmp_path / "first.pt",
+        RunPaths(tmp_path / "first").predictions("test"),
+        RunPaths(tmp_path / "first").model,
         ParquetEvaluationTruth(truth_path),
     )
     truth["is_mule"] = 1 - truth.is_mule
     truth.to_parquet(truth_path, index=False)
     after = evaluate_predictions(
-        tmp_path / "first_run/test_predictions.parquet",
-        tmp_path / "first.pt",
+        RunPaths(tmp_path / "first").predictions("test"),
+        RunPaths(tmp_path / "first").model,
         ParquetEvaluationTruth(truth_path),
     )
     assert before != after
-    second = train(c, dataset, tmp_path / "second.pt", contexts=streaming_source(executor, c))
-    saved_second = torch.load(tmp_path / "second.pt", weights_only=True)
+    second = train(
+        c, dataset, RunPaths(tmp_path / "second"), contexts=streaming_source(executor, c)
+    )
+    saved_second = torch.load(RunPaths(tmp_path / "second").model, weights_only=True)
     assert first["history"] == second["history"]
     assert first["best_epoch"] == second["best_epoch"]
     assert first["validation_proxy"] == second["validation_proxy"]
@@ -614,7 +617,7 @@ def test_preparation_requests_no_context_and_training_keeps_a_bounded_lru(tmp_pa
     load_prepared(dataset)
     assert not executor.requested
     source = streaming_source(executor, c, capacity=4)
-    result = train(c, dataset, tmp_path / "model.pt", contexts=source)
+    result = train(c, dataset, RunPaths(tmp_path / "model"), contexts=source)
     assert result["database_calls_during_training"] > 0
     assert len(source.memory) <= 4
 
@@ -664,7 +667,7 @@ def test_training_end_to_end_with_v5_neighbour_messages(tmp_path: Path) -> None:
         assert module.weight.grad is not None and torch.count_nonzero(module.weight.grad) > 0
 
     source = streaming_source(executor, c, capacity=64)
-    result = train(c, dataset, tmp_path / "model.pt", contexts=source)
+    result = train(c, dataset, RunPaths(tmp_path / "model"), contexts=source)
     assert result["status"] == "complete"
     assert all(math.isfinite(epoch["loss"]) for epoch in result["history"])
     assert result["sampler_backend"] == "torch"
@@ -675,7 +678,7 @@ def test_training_end_to_end_with_v5_neighbour_messages(tmp_path: Path) -> None:
     # Roots and children were requested with their own pools; hubs were never fetched.
     assert set(executor.pools) == {tuple(sampler.query_params(hop).values()) for hop in (1, 2)}
     assert "N3" not in {k.node_id for k in executor.requested}
-    progress = (tmp_path / "model_run/progress.jsonl").read_text().splitlines()
+    progress = RunPaths(tmp_path / "model").events.read_text().splitlines()
     assert json.loads(progress[-1])["event"] == "complete"
 
 
@@ -693,7 +696,7 @@ def test_rejected_roots_within_the_limit_are_dropped_and_counted(tmp_path: Path)
         factory=neighbourhood,
         statuses={"N5": "history_capacity_exceeded", rejected_root: "invisible_entity"},
     )
-    result = train(c, dataset, tmp_path / "model.pt", contexts=streaming_source(executor, c))
+    result = train(c, dataset, RunPaths(tmp_path / "model"), contexts=streaming_source(executor, c))
     assert result["sampler_totals"]["rejected_children"] > 0
     assert result["rejections"]["invisible_entity"] >= 1
     assert result["rejected_roots"]["validation"]["rejected"] == 1
@@ -708,5 +711,5 @@ def test_rejected_roots_fail_the_run_under_the_default_limit(tmp_path: Path) -> 
         tmp_path, c, factory=neighbourhood, statuses={str(validation.iloc[20]): "invisible_entity"}
     )
     with pytest.raises(ValueError, match="validation: TigerGraph rejected 1 of"):
-        train(c, dataset, tmp_path / "model.pt", contexts=streaming_source(executor, c))
-    assert not (tmp_path / "model.pt").exists()
+        train(c, dataset, RunPaths(tmp_path / "model"), contexts=streaming_source(executor, c))
+    assert not RunPaths(tmp_path / "model").model.exists()

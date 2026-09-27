@@ -25,7 +25,7 @@ from mule_pattern_learner.data.accounts import scoped_cohort
 from mule_pattern_learner.data.contexts import StreamingContextSource
 from mule_pattern_learner.inference.score_accounts import score_new_accounts
 from mule_pattern_learner.model.build import build_model
-from mule_pattern_learner.paths import DatasetPaths
+from mule_pattern_learner.paths import DatasetPaths, RunPaths
 from mule_pattern_learner.testing.builders import (
     UNIT_SOURCE,
     FrameObservedLabels,
@@ -247,7 +247,7 @@ def test_strict_preparation_and_nnpu_use_the_correct_phase_end_to_end(tmp_path: 
     rows = assigned_accounts().drop(columns="owner_ids").copy()
     rows["partition"] = rows["split"].map({"train": 1, "validation": 2, "test": 3})
     rows = rows.drop(columns="split")
-    checkpoint = tmp_path / "model.pt"
+    run = RunPaths(tmp_path / "run")
     phases = []
 
     class Executor(FakeExecutor):
@@ -259,7 +259,7 @@ def test_strict_preparation_and_nnpu_use_the_correct_phase_end_to_end(tmp_path: 
                 assert params["scope_id"] == "unit_strict"
                 phases.append(params["visibility_phase"])
                 if params["visibility_phase"] == 3:
-                    assert checkpoint.exists(), "Test evaluation happened before checkpoint froze"
+                    assert run.model.exists(), "Test evaluation happened before the model froze"
             return super().run(name, params, **kwargs)
 
     executor = Executor({}, last_visible=lambda index, ms: 100)
@@ -280,7 +280,7 @@ def test_strict_preparation_and_nnpu_use_the_correct_phase_end_to_end(tmp_path: 
         plan=extraction_plan(cfg.feature_plan()),
         sampler=cfg.sampler,
     )
-    result = train(cfg, dataset, checkpoint, contexts=source)
+    result = train(cfg, dataset, run, contexts=source)
     assert set(phases) == {1, 2, 3}
     assert result["known_mules"] == {"train": 20, "validation": 20, "test": 20}
     assert result["evaluation_protocol"] == "strict_inductive"

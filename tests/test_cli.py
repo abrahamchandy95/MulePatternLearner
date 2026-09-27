@@ -13,7 +13,7 @@ import pytest
 
 from mule_pattern_learner import cli
 from mule_pattern_learner.config import DEFAULT_CONFIG, RunConfig
-from mule_pattern_learner.paths import DATA_DIR, REPOSITORY_ROOT, DatasetPaths
+from mule_pattern_learner.paths import DATA_DIR, REPOSITORY_ROOT, DatasetPaths, RunPaths
 from mule_pattern_learner.pipeline import train as pipeline_train
 from mule_pattern_learner.pipeline.connect import open_context_source
 
@@ -108,7 +108,7 @@ def test_train_command_prepares_then_trains_or_resumes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     prepared: list[tuple[RunConfig, Path]] = []
-    trained: list[tuple[RunConfig, DatasetPaths, Path, dict[str, Any]]] = []
+    trained: list[tuple[RunConfig, DatasetPaths, RunPaths, dict[str, Any]]] = []
     dataset = DatasetPaths.of("id", tmp_path / "data")
 
     def prepare(c: RunConfig, data: Path) -> DatasetPaths:
@@ -118,17 +118,16 @@ def test_train_command_prepares_then_trains_or_resumes(
     # `mule-temporal train` is pipeline.run with resume: patch the pipeline's steps.
     monkeypatch.setattr(pipeline_train, "prepare_live", prepare)
 
-    def train(c: RunConfig, d: DatasetPaths, o: Path, **kwargs: Any) -> dict[str, Any]:
+    def train(c: RunConfig, d: DatasetPaths, o: RunPaths, **kwargs: Any) -> dict[str, Any]:
         trained.append((c, d, o, kwargs))
         return {}
 
     monkeypatch.setattr(pipeline_train, "train", train)
-    output = tmp_path / "model.pt"
-    cli.train_command(cli.build_parser().parse_args(["train", "--output", str(output)]))
-    # One command prepares the built-in run's dataset in data/, then trains it
-    # (resuming if interrupted).
+    cli.train_command()
+    # One command prepares the built-in run's dataset in data/, then trains it into
+    # results/baseline/seed-42/ (resuming if interrupted).
     assert prepared[-1] == (DEFAULT_CONFIG, DATA_DIR)
     c, d, o, kwargs = trained[-1]
-    assert c is DEFAULT_CONFIG and d == dataset and o == output
+    assert c is DEFAULT_CONFIG and d == dataset and o == pipeline_train.BASELINE_RUN
     # The trainer opens the live source through the pipeline once its checks passed.
     assert kwargs == {"open_contexts": open_context_source, "resume": True}

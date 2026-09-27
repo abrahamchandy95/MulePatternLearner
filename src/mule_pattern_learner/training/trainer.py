@@ -1,11 +1,12 @@
 """nnPU with observed-label selection over an injected temporal context source.
 
-A run is resumable. ``run_dir/checkpoint_last.pt`` holds the model, optimizer,
-weight average, RNG and schedule position plus the selection state, written every epoch and every
-``runtime.checkpoint_every_steps`` steps. ``train(..., resume=True)`` continues from it and
-reproduces the uninterrupted run exactly: every epoch schedule is drawn up front
-from the saved generator state, and every step reseeds torch from a stable hash
-of (seed, epoch, step), so dropout and sampler draws never depend on history.
+A run writes its files into its own directory (paths.RunPaths). It is resumable:
+resume.pt holds the model, optimizer, weight average, RNG and schedule position plus the
+selection state, written every epoch and every ``runtime.checkpoint_every_steps`` steps.
+``train(..., resume=True)`` continues from it and reproduces the uninterrupted run
+exactly: every epoch schedule is drawn up front from the saved generator state, and
+every step reseeds torch from a stable hash of (seed, epoch, step), so dropout and
+sampler draws never depend on history.
 The sampler backend is resolved once per run and stored in the checkpoint; a
 resume that would sample with another backend is refused unless the sampler section
 names that backend explicitly. Reported REST calls, rejections and batch totals are
@@ -27,7 +28,6 @@ from collections import Counter
 from collections.abc import Iterator, Mapping
 import contextlib
 import json
-from pathlib import Path
 import time
 from typing import Any
 
@@ -53,12 +53,12 @@ from ..inference.rejections import exceeds_rejection_limit
 from ..metrics import evaluate, select_threshold
 from ..model.build import build_model
 from ..model.loss import NonNegativePULoss
-from ..paths import DatasetPaths, output_paths
+from ..paths import DatasetPaths, RunPaths
 from ..runtime.device import choose_device, torch_runtime
 from ..runtime.workers import BatchPrefetcher
 from ..sampling.backend import resolve_backend
 from .averaging import WeightAverage, evaluated_weights
-from .checkpoint import CHECKPOINT_FORMAT, RUN_STATE_FILES, load_resume_state, restore_cuda_rng
+from .checkpoint import CHECKPOINT_FORMAT, load_resume_state, restore_cuda_rng, run_started
 from .history import LogInterval, Progress, epoch_record, plain
 from .objective import StepLoss, nnpu_objective, nnpu_step
 from .schedule import (
@@ -118,7 +118,7 @@ def build_optimizer(model: nn.Module, training: TrainingConfig) -> torch.optim.A
 def train(
     config: RunConfig,
     dataset: DatasetPaths,
-    output: Path,
+    run: RunPaths,
     *,
     contexts: ContextSource | None = None,
     open_contexts: ContextOpener | None = None,
@@ -127,23 +127,20 @@ def train(
 ) -> dict[str, Any]:
     """Train, select on observed validation labels, save the model, then score test.
 
-    Without ``contexts``, ``open_contexts`` opens the dataset's live source once the
-    settings and the prepared dataset passed their checks (the pipeline passes
+    The run's files go into its directory, run. Without ``contexts``,
+    ``open_contexts`` opens the dataset's live source once the settings and the
+    prepared dataset passed their checks (the pipeline passes
     pipeline.connect.open_context_source). ``contexts`` and ``hubs`` replace the
-    dataset's source and hub registry (tests, offline replays). With ``resume`` an
-    existing run directory continues from its last checkpoint; without it an existing
-    run is an error.
+    dataset's source and hub registry (tests, offline replays). With ``resume`` a
+    started run continues from its resume.pt; without it a started run is an error.
     """
     plan = config.feature_plan()
     # Fails fast on per-hop candidate pools too, before any database work.
     check_limits(config, plan)
-    checkpoint_path, run_dir = output_paths(output)
-    # A run has started once training wrote its own state into its directory.
-    started = any((run_dir / name).exists() for name in RUN_STATE_FILES)
-    resuming = resume and started
-    if not resuming and (checkpoint_path.exists() or started):
-        raise FileExistsError(f"Experiment already exists: {output}; resume it or pick a new one")
-    state = load_resume_state(config, run_dir) if resuming else None
+    started = run_started(run)
+    if started and not resume:
+        raise FileExistsError(f"Run already exists: {run.root}; resume it or pick a new one")
+    state = load_resume_state(config, run) if started else None
     manifest, accounts = load_prepared(dataset)
     differences = dataset_mismatches(config, manifest)
     if differences:
@@ -167,7 +164,7 @@ def train(
     try:
         check_source(store, source_plan, plan, config.sampler)
         with torch_runtime(device, deterministic=runtime.deterministic, threads=runtime.threads):
-            run = _TrainingRun(
+            training_run = _TrainingRun(
                 config=config,
                 dataset=dataset,
                 manifest=manifest,
@@ -181,10 +178,9 @@ def train(
                 positive_weight=positive_weight,
                 training=training,
                 evaluation=evaluation,
-                checkpoint_path=checkpoint_path,
-                run_dir=run_dir,
+                run=run,
             )
-            result = run.execute(state)
+            result = training_run.execute(state)
         failed = False
         return result
     finally:
@@ -252,8 +248,7 @@ class _TrainingRun:
         positive_weight: float,
         training: list[PUSample],
         evaluation: dict[str, list[EvaluationSample]],
-        checkpoint_path: Path,
-        run_dir: Path,
+        run: RunPaths,
     ) -> None:
         self.config, self.dataset = config, dataset
         self.training_config, self.runtime = config.training, config.runtime
@@ -262,8 +257,7 @@ class _TrainingRun:
         self.device, self.prior, self.positive_weight = device, prior, positive_weight
         self.loss = NonNegativePULoss(prior=prior, positive_weight=positive_weight)
         self.training, self.evaluation = training, evaluation
-        self.checkpoint_path, self.run_dir = checkpoint_path, run_dir
-        self.last_path = run_dir / "checkpoint_last.pt"
+        self.run = run
         self.batch_device = batch_device(device)
         self.prefetch = config.runtime.prefetch_batches
         # Resolved once here, on the main thread, before any prefetch worker starts
@@ -364,7 +358,7 @@ class _TrainingRun:
         if self.device.type == "cuda":
             # The training device only: a resume may see a different number of GPUs.
             state["cuda_rng"] = torch.cuda.get_rng_state(self.device)
-        with atomic_write(self.last_path) as pending:
+        with atomic_write(self.run.resume) as pending:
             torch.save(state, pending)
 
     def restore(self, state: dict[str, Any]) -> None:
@@ -411,21 +405,17 @@ class _TrainingRun:
     def execute(self, state: dict[str, Any] | None) -> dict[str, Any]:
         if state is not None:
             self.restore(state)
-        self.run_dir.mkdir(parents=True, exist_ok=True)
-        self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-        if not (self.run_dir / "config.json").exists():
-            (self.run_dir / "config.json").write_text(
-                json.dumps(self.config.to_dict(), indent=2) + "\n"
-            )
-            self.mask.to_parquet(self.run_dir / "observed_labels.parquet", index=False)
-        self.progress.path = self.run_dir / "progress.jsonl"
+        self.run.root.mkdir(parents=True, exist_ok=True)
+        if not self.run.config.exists():
+            self.run.config.write_text(json.dumps(self.config.to_dict(), indent=2) + "\n")
+        self.progress.path = self.run.events
         self.progress.emit(
             {
                 "event": "resume" if state is not None else "start",
                 "device": str(self.device),
                 "known_mules": label_summary(self.mask),
                 "loss": "nnPU",
-                "model": str(self.checkpoint_path),
+                "run": str(self.run.root),
                 "epoch": self.epoch,
                 "step": self.step,
                 "prefetch_batches": self.prefetch,
@@ -660,12 +650,14 @@ class _TrainingRun:
             backend=self.backend,
         )
         # Save the selected model before any test context is requested.
-        with atomic_write(self.checkpoint_path) as pending:
+        with atomic_write(self.run.model) as pending:
             torch.save(payload, pending)
         test, rejected_roots["test"] = self._score_test()
         results = {}
         for split, frame in (("validation", validation), ("test", test)):
-            frame.to_parquet(self.run_dir / (split + "_predictions.parquet"), index=False)
+            path = self.run.predictions(split)
+            path.parent.mkdir(exist_ok=True)
+            frame.to_parquet(path, index=False)
             results[split] = evaluate(
                 frame["observed_label"].to_numpy(), frame["score"].to_numpy(), threshold
             )
@@ -683,16 +675,14 @@ class _TrainingRun:
             history=self.history,
             results=results,
             selection=selection,
-            checkpoint=self.checkpoint_path,
+            checkpoint=self.run.model,
             progress=self.progress,
             rejected_rows=self.rejected_rows,
             rejected_roots=rejected_roots,
             limit=self.limit,
         )
         self.progress.emit({"event": "complete", "best_epoch": self.best_epoch}, echo=False)
-        (self.run_dir / "metrics.json").write_text(
-            json.dumps(result, indent=2, allow_nan=False) + "\n"
-        )
+        self.run.metrics.write_text(json.dumps(result, indent=2, allow_nan=False) + "\n")
         return result
 
     def _score_test(self) -> tuple[pd.DataFrame, dict[str, int]]:

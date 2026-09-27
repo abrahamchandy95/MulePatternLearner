@@ -1,6 +1,6 @@
 """The run's history: its events, log intervals and epochs, as they happen.
 
-Progress appends every record to run_dir/progress.jsonl and echoes selected records
+Progress appends every record to the run's events.jsonl and echoes selected records
 to stdout. It also sums the batch statistics and counts the REST calls, rejections and
 contexts of every segment of a resumed run. LogInterval keeps one log interval's losses on the
 device, so the host reads them once per interval.
@@ -27,7 +27,7 @@ def plain(stats: dict[str, Any]) -> dict[str, Any]:
 
 
 class Progress:
-    """Append JSON lines to run_dir/progress.jsonl; echo selected records to stdout."""
+    """Append JSON lines to the run's events.jsonl; echo selected records to stdout."""
 
     def __init__(self, started: float, store: ContextSource, backend: str) -> None:
         self.started, self.store = started, store
