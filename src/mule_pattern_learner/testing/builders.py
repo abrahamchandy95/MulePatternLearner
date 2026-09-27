@@ -845,11 +845,14 @@ def hub_registry() -> HubRegistry:
 
 
 def prepared_dataset(
-    path: Path, config: RunConfig, monkeypatch: pytest.MonkeyPatch
+    path: Path,
+    config: RunConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    source_id: str = RUNTIME_SOURCE,
 ) -> tuple[DatasetPaths, dict[str, Any], pd.DataFrame]:
     """A prepared dataset in directory path; load_prepared is replaced by its in-memory copy.
 
-    Its manifest records config's dataset settings for the source RUNTIME_SOURCE.
+    Its manifest records config's dataset settings for the source source_id.
     """
     dataset = DatasetPaths(path)
     path.mkdir(parents=True, exist_ok=True)
@@ -863,8 +866,8 @@ def prepared_dataset(
         "account_selection": "bounded_internal_deposit_seeds",
         "observed_labels_sha256": file_digest(dataset.observed_labels),
         "source": {
-            "source_id": RUNTIME_SOURCE,
-            "settings": dataset_settings(RUNTIME_SOURCE, config),
+            "source_id": source_id,
+            "settings": dataset_settings(source_id, config),
             "scope_id": config.scope.id,
         },
     }

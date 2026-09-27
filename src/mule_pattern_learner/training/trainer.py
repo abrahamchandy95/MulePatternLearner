@@ -51,7 +51,7 @@ from ..contract.graph_schema import ContextKey
 from ..contract.sampler_plan import SamplerPlan
 from ..data.contexts import ContextOpener, ContextReader, check_coverage, close_source
 from ..data.hub_registry import HubRegistry, load_hub_registry, warn_hub_stubs
-from ..data.manifest import dataset_id, dataset_mismatches, load_prepared
+from ..data.manifest import dataset_id, dataset_mismatches, load_prepared, manifest_digest
 from ..data.observed_labels import label_summary, load_observed_labels, visible_labels
 from ..data.splits import eligible_mask, marginal_mask, sample_keys
 from ..inference.predictor import accepted_scores, score_batches
@@ -70,7 +70,13 @@ from ..runtime.progress import emit, recording
 from ..runtime.workers import BatchPrefetcher
 from ..sampling.backend import resolve_backend
 from .averaging import WeightAverage, evaluated_weights
-from .checkpoint import ResumeState, load_resume_state, restore_cuda_rng, run_started
+from .checkpoint import (
+    ResumeState,
+    check_run_dataset,
+    load_resume_state,
+    restore_cuda_rng,
+    run_started,
+)
 from .history import LogInterval, Progress, epoch_record, plain
 from .objective import StepLoss, nnpu_objective, nnpu_step
 from .schedule import (
@@ -131,7 +137,8 @@ def train(
     prepared dataset passed their checks (the pipeline passes
     pipeline.connect.open_context_source). ``contexts`` and ``hubs`` replace the
     dataset's source and hub registry (tests, offline replays). With ``resume`` a
-    started run continues from its resume.pt; without it a started run is an error.
+    started run continues from its resume.pt, but only on the dataset it trained on;
+    without it a started run is an error.
     """
     plan = config.feature_plan()
     # Fails fast on per-hop candidate pools too, before any database work.
@@ -144,6 +151,9 @@ def train(
     differences = dataset_mismatches(config, manifest)
     if differences:
         raise ValueError(f"Training settings differ from the prepared dataset: {differences}")
+    identity = dataset_id(manifest["source"]["source_id"], config)
+    if started:
+        check_run_dataset(run, state, identity, manifest_digest(dataset))
     # The source requests this model's groups; its hop-2 flags follow the architecture.
     source_plan = extraction_plan(plan)
     mask = load_observed_labels(accounts, dataset)
@@ -178,6 +188,7 @@ def train(
                 training=training,
                 evaluation=evaluation,
                 run=run,
+                dataset_id=identity,
             )
             result = training_run.execute(state)
         failed = False
@@ -248,9 +259,10 @@ class _TrainingRun:
         training: list[PUSample],
         evaluation: dict[str, list[EvaluationSample]],
         run: RunPaths,
+        dataset_id: str,
     ) -> None:
         self.config, self.dataset = config, dataset
-        self.dataset_id = dataset_id(manifest["source"]["source_id"], config)
+        self.dataset_id, self.dataset_sha256 = dataset_id, manifest_digest(dataset)
         self.training_config, self.runtime = config.training, config.runtime
         self.manifest, self.accounts, self.mask = manifest, accounts, mask
         self.plan, self.sampler, self.contexts, self.hubs = plan, config.sampler, contexts, hubs
@@ -343,6 +355,8 @@ class _TrainingRun:
             best_accepted=None if best_accepted is None else torch.from_numpy(best_accepted),
             epoch_rows=self.epoch_rows,
             sampler_backend=self.backend,
+            dataset_id=self.dataset_id,
+            dataset_manifest_sha256=self.dataset_sha256,
             progress=self.progress.saved(),
             rejections=self.rejections.saved(),
         ).save(self.run.resume, self.config)

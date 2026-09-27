@@ -1,11 +1,12 @@
 """resume.pt: the resume state of an interrupted run.
 
 `_TrainingRun.save_last` writes it as a ResumeState. A run resumes from it only when
-every setting that can change results matches (config.RunConfig.fingerprint); the
-transport and runtime sections, and the sampler backend, may change between segments
-(for example a lower query concurrency after server trouble, or a higher rejection
-limit to resume a run that stopped on rejected roots). A complete run is reported
-from its metrics.json under the same check (completed_run).
+every setting that can change results matches (config.RunConfig.fingerprint) and the
+dataset is the one it trained on (check_run_dataset); the transport and runtime
+sections, and the sampler backend, may change between segments (for example a lower
+query concurrency after server trouble, or a higher rejection limit to resume a run
+that stopped on rejected roots). A complete run is reported from its metrics.json
+under the settings check (completed_run).
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from typing import Any, ClassVar
 
 import torch
 
-from ..artifacts import atomic_write, read_json, read_run_config
+from ..artifacts import atomic_write, read_json, read_run_config, read_run_provenance
 from ..config import RunConfig, differing_settings
 from ..paths import RunPaths
 
@@ -58,6 +59,9 @@ class ResumeState:
     epoch_rows: list[dict[str, Any]]
     # The sampler backend the run resolved.
     sampler_backend: str
+    # The dataset the run trains on: its id and its manifest's sha256.
+    dataset_id: str
+    dataset_manifest_sha256: str
     # history.Progress.saved(): the totals of every segment so far.
     progress: dict[str, Any]
     # inference.rejections.TrainingRejections.saved().
@@ -138,6 +142,35 @@ def check_resumable(config: RunConfig, run: RunPaths) -> None:
         changed = changed_settings(config, run)
         if changed:
             raise ValueError(f"Resumed configuration differs from the run: {changed}")
+
+
+def check_run_dataset(
+    run: RunPaths, state: ResumeState | None, dataset_id: str, manifest_sha256: str
+) -> None:
+    """Refuse to continue a started run on a dataset other than the one it trained on.
+
+    ``dataset_id`` and ``manifest_sha256`` name the dataset given now. The resume state
+    names the run's dataset by both; a run stopped before its first checkpoint names
+    its dataset id in config.json's provenance. A run that wrote neither has nothing
+    to compare.
+    """
+    if state is not None:
+        recorded = {"id": state.dataset_id, "manifest sha256": state.dataset_manifest_sha256}
+    elif run.config.exists():
+        recorded = {"id": read_run_provenance(run.config).get("dataset_id")}
+    else:
+        return
+    current = {"id": dataset_id, "manifest sha256": manifest_sha256}
+    changed = [
+        f"{name} {recorded[name]} (given {current[name]})"
+        for name in recorded
+        if recorded[name] != current[name]
+    ]
+    if changed:
+        raise ValueError(
+            f"The run in {run.root} trained on another dataset: dataset {'; '.join(changed)}. "
+            "Resume it on its own dataset, or train these settings into a new run"
+        )
 
 
 def load_resume_state(config: RunConfig, run: RunPaths) -> ResumeState | None:
