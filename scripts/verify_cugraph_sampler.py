@@ -292,12 +292,12 @@ def live(config_path: Path | None, roots: int) -> None:
     from mule_pattern_learner.config import fanouts as configured_fanouts
     from mule_pattern_learner.config import run_config
     from mule_pattern_learner.contract.feature_groups import FeaturePlan
-    from mule_pattern_learner.data.contexts import open_context_source
     from mule_pattern_learner.data.hub_registry import load_hub_registry
     from mule_pattern_learner.data.manifest import load_prepared
     from mule_pattern_learner.data.splits import sample_keys
     from mule_pattern_learner.model.build import build_model
     from mule_pattern_learner.paths import dataset_path
+    from mule_pattern_learner.pipeline.connect import open_context_source
     from mule_pattern_learner.pipeline.prepare import prepare_live
     from mule_pattern_learner.pipeline.train import prepared_config
     from mule_pattern_learner.runtime.device import torch_runtime

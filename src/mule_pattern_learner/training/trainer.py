@@ -45,7 +45,7 @@ from ..contract.bounds import PREFETCH_BATCHES
 from ..contract.feature_groups import FeaturePlan, extraction_plan
 from ..contract.graph_schema import ContextKey, context_scope
 from ..contract.sampler_plan import SamplerPlan
-from ..data.contexts import ContextSource, check_coverage, close_source, open_context_source
+from ..data.contexts import ContextOpener, ContextSource, check_coverage, close_source
 from ..data.hub_registry import HubRegistry, load_hub_registry, warn_hub_stubs
 from ..data.manifest import load_prepared, preparation_mismatches
 from ..data.observed_labels import label_summary, load_observed_labels, visible_labels
@@ -190,14 +190,18 @@ def train(
     output: Path,
     *,
     contexts: ContextSource | None = None,
+    open_contexts: ContextOpener | None = None,
     hubs: HubRegistry | None = None,
     resume: bool = False,
 ) -> dict[str, Any]:
     """Train, select on observed validation labels, save the model, then score test.
 
-    ``contexts`` and ``hubs`` replace the dataset's live source and hub registry
-    (tests, offline replays). With ``resume`` an existing run directory continues
-    from its last checkpoint; without it an existing run is an error.
+    Without ``contexts``, ``open_contexts`` opens the dataset's live source once the
+    settings and the prepared dataset passed their checks (the pipeline passes
+    pipeline.connect.open_context_source). ``contexts`` and ``hubs`` replace the
+    dataset's source and hub registry (tests, offline replays). With ``resume`` an
+    existing run directory continues from its last checkpoint; without it an existing
+    run is an error.
     """
     config = validate_config(config)
     context_scope(config)
@@ -226,7 +230,12 @@ def train(
     device = choose_device(settings.device)
     registry = hubs if hubs is not None else load_hub_registry(dataset, manifest)
     warn_hub_stubs(registry, plan)
-    store = contexts if contexts is not None else open_context_source(dataset, manifest, config)
+    if contexts is not None:
+        store = contexts
+    elif open_contexts is not None:
+        store = open_contexts(dataset, manifest, config)
+    else:
+        raise ValueError("Training needs contexts, or open_contexts to open the dataset's source")
     failed = True
     try:
         check_source(store, source_plan, plan, sampler)

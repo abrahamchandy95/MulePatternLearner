@@ -19,16 +19,15 @@ from pathlib import Path  # noqa: E402
 from typing import Any  # noqa: E402
 
 from .config import run_config  # noqa: E402
-from .evaluation.audit import evaluate_final_population, evaluate_predictions  # noqa: E402
-from .evaluation.truth import ParquetEvaluationTruth  # noqa: E402
 from .inference.saved_model import ModelCheckpoint  # noqa: E402
-from .inference.score_accounts import read_account_ids, score, score_new_accounts  # noqa: E402
+from .inference.score_accounts import read_account_ids, score  # noqa: E402
 from .paths import DEFAULT_MODEL, dataset_path  # noqa: E402
+from .pipeline.connect import connect, open_context_source  # noqa: E402
+from .pipeline.evaluate import evaluate, final_audit  # noqa: E402
 from .pipeline.prepare import prepare_live  # noqa: E402
+from .pipeline.score import score_new  # noqa: E402
 from .pipeline.train import run  # noqa: E402
-from .tigergraph.executor import TigerGraphExecutor  # noqa: E402
 from .tigergraph.installer import install  # noqa: E402
-from .tigergraph.oracle import GraphEvaluationTruth  # noqa: E402
 
 CONFIG_HELP = "Optional TOML/JSON file whose keys override the built-in settings"
 
@@ -99,11 +98,6 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def truth_source(path: Path | None) -> GraphEvaluationTruth | ParquetEvaluationTruth:
-    """Oracle truth for evaluation only: a supplied parquet, else the graph's labels."""
-    return ParquetEvaluationTruth(path) if path is not None else GraphEvaluationTruth()
-
-
 def checkpoint_dataset(checkpoint: ModelCheckpoint) -> Path:
     """The prepared dataset a checkpoint was trained on."""
     if checkpoint.dataset is None:
@@ -120,27 +114,31 @@ def train_command(args: argparse.Namespace) -> dict[str, Any]:
 def main() -> None:
     args = build_parser().parse_args()
     if args.command == "install":
+        # The built-in run's retry budgets.
         result = install(
-            TigerGraphExecutor(), include_optional=args.include_optional, force=args.force
+            connect(run_config()), include_optional=args.include_optional, force=args.force
         )
     elif args.command == "evaluate-final":
-        result = evaluate_final_population(
-            args.checkpoint, truth_source(args.truth), args.output, dataset=args.dataset
-        )
+        result = final_audit(args.checkpoint, args.truth, args.output, dataset=args.dataset)
     elif args.command == "evaluate":
         if args.output.exists():
             raise FileExistsError(args.output)
-        result = evaluate_predictions(args.predictions, args.checkpoint, truth_source(args.truth))
+        result = evaluate(args.predictions, args.checkpoint, args.truth)
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(result, indent=2) + "\n")
     elif args.command == "score-new":
-        result = score_new_accounts(
-            args.checkpoint, read_account_ids(args.accounts), args.date, args.output
-        )
+        result = score_new(args.checkpoint, read_account_ids(args.accounts), args.date, args.output)
     elif args.command == "score":
         checkpoint = ModelCheckpoint.load(args.checkpoint)
         dataset = args.dataset or checkpoint_dataset(checkpoint)
-        result = score(checkpoint, dataset, args.date, args.split, args.output)
+        result = score(
+            checkpoint,
+            dataset,
+            args.date,
+            args.split,
+            args.output,
+            open_contexts=open_context_source,
+        )
     elif args.command == "prepare":
         config = run_config(args.config)
         result = prepare_live(config, dataset_path(config, args.output))

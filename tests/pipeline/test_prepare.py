@@ -51,7 +51,7 @@ def test_prepare_live_checks_query_hashes_before_reusing_a_ready_dataset(
     def no_connection(config: dict[str, Any]) -> None:
         raise AssertionError("prepare_live must not connect for a ready dataset")
 
-    monkeypatch.setattr(pipeline_prepare, "live_executor", no_connection)
+    monkeypatch.setattr(pipeline_prepare, "connect", no_connection)
     assert pipeline_prepare.prepare_live(config, out) == manifest
     # A query file preparation no longer uses cannot change the cohort.
     retired = write_manifest(
@@ -97,7 +97,7 @@ def test_first_preparation_creates_the_scope_and_reveals_labels(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     steps: list[str] = []
-    monkeypatch.setattr(pipeline_prepare, "live_executor", lambda config: SimpleNamespace())
+    monkeypatch.setattr(pipeline_prepare, "connect", lambda config: SimpleNamespace())
     monkeypatch.setattr(pipeline_prepare, "install", lambda executor: steps.append("install"))
     monkeypatch.setattr(pipeline_prepare, "source_counts", lambda executor: {"Account": 10})
     monkeypatch.setattr(
@@ -128,7 +128,7 @@ def test_ready_pipeline_reuses_cache_without_connecting(tmp_path: Path) -> None:
         "source": {"query_hashes": query_hashes(), "preparation": preparation_view(c)},
     }
     (tmp_path / "manifest.json").write_text(json.dumps(manifest))
-    with patch("mule_pattern_learner.pipeline.prepare.live_executor") as client:
+    with patch("mule_pattern_learner.pipeline.prepare.connect") as client:
         assert prepare_live(c, tmp_path) == manifest
         # Model settings may change; preparation settings may not, and nothing connects.
         assert prepare_live({**c, "hidden": 32, "learning_rate": 0.01}, tmp_path) == manifest

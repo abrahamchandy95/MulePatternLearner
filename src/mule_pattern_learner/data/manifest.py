@@ -13,8 +13,8 @@ from ..config import validate_config, without_retired_keys
 from ..contract.fingerprints import fingerprint
 from ..contract.graph_schema import context_scope
 from ..contract.sampler_plan import SamplerPlan, sampler_pools
+from ..contract.server import QUERY_FILES
 from ..paths import REPOSITORY_ROOT
-from ..tigergraph.installer import QUERY_FILES
 from .accounts import cohort_seed
 from .hub_registry import HUB_FILE
 from .observed_labels import ORACLE_COLUMNS, read_bounded_parquet

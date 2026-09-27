@@ -77,7 +77,7 @@ def test_strict_isolation_fixture_needs_explicit_write_consent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     module = load("verify_strict_isolation")
-    monkeypatch.setattr(module, "TigerGraphExecutor", lambda: pytest.fail("connected"))
+    monkeypatch.setattr(module, "connect", lambda config: pytest.fail("connected"))
     monkeypatch.setattr(sys, "argv", ["verify_strict_isolation"])
     with pytest.raises(SystemExit) as stopped:
         module.main()
@@ -98,7 +98,7 @@ def test_strict_isolation_source_requests_what_the_fixture_checks_and_the_model_
         raise Built  # before the fixture writes anything
 
     graph = SimpleNamespace(client=SimpleNamespace(conn=None))
-    monkeypatch.setattr(module, "TigerGraphExecutor", lambda: graph)
+    monkeypatch.setattr(module, "connect", lambda config: graph)
     monkeypatch.setattr(module, "StreamingContextSource", record)
     monkeypatch.setattr(sys, "argv", ["verify_strict_isolation", "--write-fixture"])
     with pytest.raises(Built):
@@ -212,7 +212,7 @@ def test_label_reveal_scripts_run_offline(
 ) -> None:
     graph = RevealGraph()
     verify = load("verify_label_reveal")
-    monkeypatch.setattr(verify, "TigerGraphExecutor", lambda: graph)
+    monkeypatch.setattr(verify, "connect", lambda config: graph)
     monkeypatch.setattr(sys, "argv", ["verify_label_reveal"])
     assert verify.main() == 0
     ((name, params),) = graph.calls
@@ -220,7 +220,7 @@ def test_label_reveal_scripts_run_offline(
     assert name == reveal.REVEAL_QUERY and params["apply"] is False and params["force"] is True
     capsys.readouterr()
     simulate = load("simulate_label_reveal")
-    monkeypatch.setattr(simulate, "TigerGraphExecutor", lambda: graph)
+    monkeypatch.setattr(simulate, "connect", lambda config: graph)
     monkeypatch.setattr(sys, "argv", ["simulate_label_reveal", "--runs", "3"])
     simulate.main()
     report = json.loads(capsys.readouterr().out)

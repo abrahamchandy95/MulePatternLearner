@@ -18,7 +18,6 @@ from mule_pattern_learner.contract.feature_groups import (
 from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
 from mule_pattern_learner.contract.time_basis import BASIS_ID
-from mule_pattern_learner.data import contexts
 from mule_pattern_learner.data.accounts import scoped_cohort
 from mule_pattern_learner.data.contexts import StreamingContextSource
 from mule_pattern_learner.inference.score_accounts import score_new_accounts
@@ -31,8 +30,7 @@ from mule_pattern_learner.testing.builders import (
     message,
     supplied_labels,
 )
-from mule_pattern_learner.testing.fake_graph import FakeExecutor, scope_counts
-from mule_pattern_learner.tigergraph import provenance
+from mule_pattern_learner.testing.fake_graph import FakeExecutor
 from mule_pattern_learner.tigergraph.context_query import validate_context
 from mule_pattern_learner.tigergraph.oracle import GraphEvaluationTruth
 from mule_pattern_learner.training.schedule import pu_batches
@@ -256,58 +254,3 @@ def test_strict_preparation_and_nnpu_use_the_correct_phase_end_to_end(tmp_path: 
     assert set(phases) == {1, 2, 3}
     assert result["known_mules"] == {"train": 20, "validation": 20, "test": 20}
     assert result["evaluation_protocol"] == "strict_inductive"
-
-
-def test_resumed_stream_checks_live_source_before_fetching(monkeypatch: pytest.MonkeyPatch) -> None:
-    from types import SimpleNamespace
-
-    pass
-    from mule_pattern_learner.tigergraph.executor import transport_settings
-
-    counts = {"Account": 10}
-    header = {"ready": True, "source_id": "snapshot", "split_seed": 42}
-    policy = {"scope_unowned": "linked"}
-    conn = SimpleNamespace(
-        getVertexCount=lambda *args, **kwargs: dict(counts),
-        getVerticesById=lambda *args: [{"attributes": dict(header)}],
-    )
-    policy_calls: list[dict[str, Any]] = []
-
-    def run(name: str, params: dict[str, Any], **_: Any) -> list[dict[str, Any]]:
-        assert name == "temporal_scope_policy"
-        policy_calls.append(params)
-        return [{"status": "ok", **scope_counts(policy["scope_unowned"])}]
-
-    executor = SimpleNamespace(client=SimpleNamespace(conn=conn), run=run)
-    checked = []
-    monkeypatch.setattr(provenance, "verify_sources", lambda client: checked.append(client))
-    budgets: list[tuple[int, int]] = []
-
-    def live_executor(config: dict[str, Any]) -> Any:
-        transport = transport_settings(config)
-        budgets.append((transport["max_query_attempts"], transport["max_outage_s"]))
-        return executor
-
-    monkeypatch.setattr(contexts, "live_executor", live_executor)
-    manifest = {
-        "config": {"dataset_id": "snapshot", "scope_id": "scope", "split_seed": 42},
-        "source": {"source_counts": dict(counts)},
-    }
-    backend = contexts.open_context_source(
-        Path("unused"), manifest, {"max_query_attempts": 3, "max_outage_s": 60}
-    )
-    backend.close()
-    assert checked == [executor] and budgets == [(3, 60)]
-    assert policy_calls == [{"scope_id": "scope"}]
-    # A scope created with another scope_unowned rule than the configured one is refused.
-    policy["scope_unowned"] = "independent"
-    with pytest.raises(ValueError, match="no longer valid.*scope_unowned = 'independent'"):
-        contexts.open_context_source(Path("unused"), manifest)
-    policy["scope_unowned"] = "linked"
-    counts["Account"] += 1
-    with pytest.raises(ValueError, match="counts changed"):
-        contexts.open_context_source(Path("unused"), manifest)
-    counts["Account"] -= 1
-    header["ready"] = False
-    with pytest.raises(ValueError, match="no longer valid"):
-        contexts.open_context_source(Path("unused"), manifest)

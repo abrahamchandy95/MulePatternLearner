@@ -7,13 +7,15 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 
+from mule_pattern_learner.config import run_config
 from mule_pattern_learner.contract.feature_groups import FeaturePlan
 from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
 from mule_pattern_learner.data.manifest import query_hashes
 from mule_pattern_learner.data.splits import resolve_cutoff
+from mule_pattern_learner.pipeline.connect import connect
 from mule_pattern_learner.tigergraph.context_query import validate_context
-from mule_pattern_learner.tigergraph.executor import TigerGraphExecutor, checked_rows
+from mule_pattern_learner.tigergraph.executor import checked_rows
 from mule_pattern_learner.tigergraph.installer import verify_sources
 from mule_pattern_learner.tigergraph.render import DEFAULT_FLAG_GROUPS
 
@@ -28,7 +30,7 @@ def main() -> None:
     parser.add_argument("--account", required=True, help="Account ID to audit; no oracle selection")
     parser.add_argument("--date", required=True, help="Exclusive UTC scoring date")
     args = parser.parse_args()
-    executor = TigerGraphExecutor()
+    executor = connect(run_config())
     conn = executor.client.conn
     schema = conn.getSchema(force=True)
     attrs = {

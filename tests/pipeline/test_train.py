@@ -8,6 +8,7 @@ from unittest.mock import patch
 from mule_pattern_learner.cli import build_parser
 from mule_pattern_learner.config import DEFAULT_RUN
 from mule_pattern_learner.paths import DEFAULT_MODEL
+from mule_pattern_learner.pipeline.connect import open_context_source
 from mule_pattern_learner.pipeline.train import run
 
 
@@ -29,6 +30,7 @@ def test_minimal_command_and_run_defaults(tmp_path: Path) -> None:
         fit.assert_called_once()
         config, dataset, output = fit.call_args.args
         assert output == tmp_path / "model.pt" and dataset == tmp_path / "model_run" / "prepared"
+        assert fit.call_args.kwargs["open_contexts"] is open_context_source
         assert config["dataset_id"] == "graph_snapshot"
         assert config["device"] == "auto"
         assert config["scope_id"] == DEFAULT_RUN["scope_id"]

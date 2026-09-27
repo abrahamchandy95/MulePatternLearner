@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 import requests
 
+from mule_pattern_learner.contract.server import QUERY_FILES
 from mule_pattern_learner.paths import REPOSITORY_ROOT
 from mule_pattern_learner.testing.fake_connection import executor
 from mule_pattern_learner.tigergraph import gsql_text, installer
@@ -158,7 +159,7 @@ def test_install_creates_and_installs_only_stale_queries(monkeypatch: pytest.Mon
     server.enabled["temporal_training_cutoffs"] = False
     assert installer.install(executor(server))["installed"] == ["temporal_training_cutoffs"]
     # Callers are found in the repository queries too.
-    queries = gsql_text.repository_queries(installer.QUERY_FILES)
+    queries = gsql_text.repository_queries(QUERY_FILES)
     assert "temporal_training_context" in installer._with_callers(
         {"temporal_fourier64_values"}, queries
     )

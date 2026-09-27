@@ -19,7 +19,7 @@ import numpy as np
 from mule_pattern_learner.config import run_config
 from mule_pattern_learner.contract.graph_schema import PHASE_SPLIT
 from mule_pattern_learner.reference.label_reveal import INPUTS_QUERY, counts_by_split, plan
-from mule_pattern_learner.tigergraph.executor import TigerGraphExecutor
+from mule_pattern_learner.pipeline.connect import connect
 from mule_pattern_learner.tigergraph.reveal import reveal_parameters
 
 
@@ -41,7 +41,7 @@ def main() -> None:
     params = reveal_parameters(run_config(), apply=False)
     if args.budget is not None:
         params["budget"] = args.budget
-    executor = TigerGraphExecutor()
+    executor = connect(run_config())
     inputs = executor.client.conn.runInterpretedQuery(
         INPUTS_QUERY, {"scope_id": params["scope_id"]}
     )

@@ -15,8 +15,8 @@ from mule_pattern_learner.testing.builders import (
     supplied_labels,
     unit_config,
 )
+from mule_pattern_learner.contract.server import QUERY_FILES
 from mule_pattern_learner.testing.fake_graph import FakeExecutor
-from mule_pattern_learner.tigergraph.installer import QUERY_FILES
 
 
 def test_preparation_keys_fingerprint_only_preparation_settings(tmp_path: Path) -> None:

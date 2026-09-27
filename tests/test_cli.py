@@ -14,6 +14,7 @@ import pytest
 from mule_pattern_learner import cli
 from mule_pattern_learner.paths import REPOSITORY_ROOT
 from mule_pattern_learner.pipeline import train as pipeline_train
+from mule_pattern_learner.pipeline.connect import open_context_source
 from mule_pattern_learner.testing.builders import base_config
 
 
@@ -69,8 +70,6 @@ def test_cli_needs_no_config_truth_or_dataset() -> None:
     assert parser.parse_args(["prepare"]).config is None
     final = parser.parse_args(["evaluate-final", "--checkpoint", "m.pt", "--output", "o.json"])
     assert final.dataset is None and final.truth is None
-    assert isinstance(cli.truth_source(None), cli.GraphEvaluationTruth)
-    assert isinstance(cli.truth_source(Path("t.parquet")), cli.ParquetEvaluationTruth)
     scoring = parser.parse_args(
         ["score", "--checkpoint", "m.pt", "--date", "2025-01-01", "--output", "s.parquet"]
     )
@@ -87,7 +86,7 @@ def test_cli_install_passes_force_and_optional(
         return {"installed": []}
 
     monkeypatch.setattr(cli, "install", install)
-    monkeypatch.setattr(cli, "TigerGraphExecutor", lambda: object())
+    monkeypatch.setattr(cli, "connect", lambda config: object())
     for argv, expected in (
         (["install"], {"include_optional": False, "force": False}),
         (["install", "--force", "--include-optional"], {"include_optional": True, "force": True}),
@@ -112,12 +111,17 @@ def test_train_command_prepares_then_trains_or_resumes(
     # `mule-temporal train` is pipeline.run with resume: patch the pipeline's steps.
     monkeypatch.setattr(pipeline_train, "run_config", lambda path: dict(config))
     monkeypatch.setattr(pipeline_train, "prepare_live", prepare)
-    monkeypatch.setattr(
-        pipeline_train, "train", lambda c, d, o, *, resume: trained.append((c, d, o, resume)) or {}
-    )
+
+    def train(c: dict[str, Any], d: Path, o: Path, **kwargs: Any) -> dict[str, Any]:
+        trained.append((c, d, o, kwargs))
+        return {}
+
+    monkeypatch.setattr(pipeline_train, "train", train)
     output = tmp_path / "model.pt"
     cli.train_command(cli.build_parser().parse_args(["train", "--output", str(output)]))
     # One command prepares into the run directory, then trains (resuming if interrupted).
     assert prepared[-1][1] == tmp_path / "model_run" / "prepared"
-    c, d, o, resume = trained[-1]
-    assert c["dataset_id"] == "derived" and d == prepared[-1][1] and o == output and resume
+    c, d, o, kwargs = trained[-1]
+    assert c["dataset_id"] == "derived" and d == prepared[-1][1] and o == output
+    # The trainer opens the live source through the pipeline once its checks passed.
+    assert kwargs == {"open_contexts": open_context_source, "resume": True}

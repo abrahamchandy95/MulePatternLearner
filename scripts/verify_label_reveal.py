@@ -25,7 +25,8 @@ from mule_pattern_learner.reference.label_reveal import (
     counts_by_split,
     plan,
 )
-from mule_pattern_learner.tigergraph.executor import TigerGraphExecutor, merged_rows
+from mule_pattern_learner.pipeline.connect import connect
+from mule_pattern_learner.tigergraph.executor import merged_rows
 from mule_pattern_learner.tigergraph.reveal import REVEAL_QUERY, reveal_parameters
 
 
@@ -43,7 +44,7 @@ def main() -> int:
         params["salt"] = args.salt
     if args.budget is not None:
         params["budget"] = args.budget
-    executor = TigerGraphExecutor()
+    executor = connect(config)
     inputs = executor.client.conn.runInterpretedQuery(
         INPUTS_QUERY, {"scope_id": params["scope_id"]}
     )
