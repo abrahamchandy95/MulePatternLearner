@@ -1,1 +1,1 @@
-"""Definitions shared with the GSQL queries; no I/O and no torch."""
+"""Definitions shared with the GSQL queries; nothing here imports torch or calls TigerGraph."""

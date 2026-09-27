@@ -31,7 +31,7 @@ from mule_pattern_learner.data.manifest import preparation_mismatches, preparati
 from mule_pattern_learner.inference.saved_model import ModelCheckpoint
 from mule_pattern_learner.model.build import build_model
 from mule_pattern_learner.model.tgat import LiveTGAT
-from mule_pattern_learner.reference import batch_features as batch_reference
+from mule_pattern_learner.reference import batch_features
 from mule_pattern_learner.reference.batch_features import node_features
 from mule_pattern_learner.testing.builders import association, context, message
 from mule_pattern_learner.testing.fake_graph import FakeExecutor
@@ -314,7 +314,7 @@ def test_plans_without_pool_groups_are_unaffected(
         raise AssertionError("pool counts computed for a plan without a pool group")
 
     monkeypatch.setattr(features, "pool_activity", refuse)
-    monkeypatch.setattr(batch_reference, "pool_activity", refuse)
+    monkeypatch.setattr(batch_features, "pool_activity", refuse)
     row = context(ROOT, POOL)
     np.testing.assert_allclose(node_features(row, plan), node_matrix([row], plan)[0])
     if architecture == "split":
