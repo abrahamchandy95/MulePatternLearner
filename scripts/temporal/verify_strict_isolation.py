@@ -36,6 +36,37 @@ from mule_pattern_learner.temporal.live.predictor import TemporalPredictor
 from mule_pattern_learner.temporal.live.source import StreamingContextSource
 from mule_pattern_learner.device import choose_device
 
+# The fixture's own checks read the window counts and amounts, their ratios and the pair
+# window counts, and its invariance checks also cover the age, recency and association
+# groups, so the source requests these besides what the model reads.
+CHECKED_GROUPS = (
+    "entity_age",
+    "rolling_windows",
+    "amount_ratios",
+    "recency",
+    "association_counts",
+    "pair_window_counts",
+)
+
+
+def model_config() -> dict[str, Any]:
+    """A small built-in model with the default pools, which the source uses too."""
+    return validate_config(
+        {
+            "hidden": 16,
+            "heads": 4,
+            "dropout": 0.0,
+            "fanouts": [2, 2],
+            "batch_size": 16,
+            "sampler": SamplerPlan().to_config(),
+        }
+    )
+
+
+def source_plan(model: FeaturePlan) -> FeaturePlan:
+    """What the fixture's source requests: the checked groups and every model input."""
+    return FeaturePlan(tuple(dict.fromkeys((*model.groups, *CHECKED_GROUPS))), model.architecture)
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -114,7 +145,10 @@ def main() -> None:
         link(kind, event, stem + "_To_" + target, target, recipient, clock)
         return event
 
-    source = StreamingContextSource(executor, capacity=0)
+    config = model_config()
+    plan, sampler = FeaturePlan.from_config(config), SamplerPlan.from_config(config)
+    # The predictor below reads from this source, so it requests the model's inputs too.
+    source = StreamingContextSource(executor, plan=source_plan(plan), sampler=sampler, capacity=0)
 
     def fetch_all(keys: list[ContextKey]) -> list[dict[str, Any]]:
         rows = source.fetch(keys)
@@ -217,21 +251,11 @@ def main() -> None:
             raise AssertionError("Held-out account accepted as a training root")
         # Real accelerator update, then inductive prediction for B with unchanged weights.
         device = choose_device()
-        # The source's default pools, so the predictor below can read from it.
-        config = validate_config(
-            {
-                "hidden": 16,
-                "heads": 4,
-                "dropout": 0.0,
-                "fanouts": [2, 2],
-                "batch_size": 16,
-                "sampler": SamplerPlan().to_config(),
-            }
-        )
-        plan = FeaturePlan.from_config(config)
         model = build_model(config, plan).to(device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=0.001)
-        batch = make_live_batch(source, keys[:1], fanouts=(2, 2), device=device, plan=plan)
+        batch = make_live_batch(
+            source, keys[:1], fanouts=(2, 2), device=device, plan=plan, sampler=sampler
+        )
         loss = torch.nn.functional.binary_cross_entropy_with_logits(
             model(batch), torch.ones(1, device=device)
         )
