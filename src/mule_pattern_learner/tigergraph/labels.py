@@ -19,18 +19,11 @@ from .executor import QueryExecutor, merged_rows
 class TigerGraphObservedLabels:
     """Observed labels paged from the graph, the label source of every run.
 
-    This is the only label source for which population queries run with
-    include_observed = TRUE. The queries report the revealed positive of the
-    account label contract (pu_label = 1: known, is_mule = 1, not masked) and its
-    discovery time; every other account has observed_positive false and
-    known_from_ms 0.
+    Preparation runs the population queries with include_observed = TRUE. They report
+    the revealed positive of the account label contract (pu_label = 1: known,
+    is_mule = 1, not masked) and its discovery time; every other account has
+    observed_positive false and known_from_ms 0.
     """
-
-    # The ObservedLabelReader of data.ports whose labels are the graph's.
-    from_graph = True
-
-    def positive_ids(self) -> set[str]:
-        return set()  # Graph-provided positives are discovered while paging.
 
     def read(self, metadata: pd.DataFrame) -> pd.DataFrame:
         check_graph_label_rows(metadata)

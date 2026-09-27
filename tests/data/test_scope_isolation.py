@@ -37,17 +37,16 @@ from mule_pattern_learner.paths import DatasetPaths, RunPaths
 from mule_pattern_learner.pipeline.connect import context_source
 from mule_pattern_learner.testing.builders import (
     UNIT_SOURCE,
-    FrameObservedLabels,
-    assigned_accounts,
     context,
     example_config,
     message,
-    supplied_labels,
+    scoped_accounts,
 )
 from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher, validate_context
 from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffs
 from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
+from mule_pattern_learner.tigergraph.labels import TigerGraphObservedLabels
 from mule_pattern_learner.tigergraph.oracle import TigerGraphTruth
 from mule_pattern_learner.tigergraph.scope import TigerGraphScope
 from mule_pattern_learner.training.schedule import pu_batches
@@ -175,14 +174,16 @@ def test_new_account_scoring_needs_neither_training_dataset_nor_labels(tmp_path:
 
 def test_bounded_seed_reservoir_does_not_enrich_the_nnpu_marginal() -> None:
     # Server has already assigned ownership groups; the client never holds all owners.
+    # The graph revealed the first three accounts, discovered at 1 ms.
+    known = ["A00000", "A00001", "A00002"]
     rows = [
         {
             "account_id": f"A{i:05}",
             "partition": i % 3 + 1,
             "group_id": str(i),
             "first_seen_ts_ms": 1,
-            "observed_positive": False,
-            "known_from_ms": 0,
+            "observed_positive": i < len(known),
+            "known_from_ms": int(i < len(known)),
         }
         for i in range(10050)
     ]
@@ -190,7 +191,7 @@ def test_bounded_seed_reservoir_does_not_enrich_the_nnpu_marginal() -> None:
 
     class Executor:
         def run(self, name: str, params: dict[str, Any], **_: Any) -> list[dict[str, Any]]:
-            assert name == POPULATION_QUERY and not params["include_observed"]
+            assert name == POPULATION_QUERY and params["include_observed"]
             calls.append(params["after_id"])
             page = [r for r in rows if r["account_id"] > params["after_id"]][:10000]
             return [{"status": "ok", "accounts": page}]
@@ -200,16 +201,11 @@ def test_bounded_seed_reservoir_does_not_enrich_the_nnpu_marginal() -> None:
         seed_limits=SeedLimits(10, 10, 10),
         seed=42,
     )
-    known = pd.DataFrame(
-        {"account_id": ["A00000", "A00001", "A00002"], "known_positive": True, "known_from_ms": 1}
-    )
-    selected, counts = select_accounts(
-        TigerGraphScope(Executor()), "strict", dataset, FrameObservedLabels(known)
-    )
+    selected, counts = select_accounts(TigerGraphScope(Executor()), "strict", dataset)
     assert len(calls) == 2 and sum(counts.values()) == len(rows)
     assert len(selected) <= 33 and selected.in_marginal.sum() == 30
-    assert set(known.account_id) <= set(selected.account_id)
-    observed = selected.account_id.isin(known.account_id).to_numpy()
+    assert set(known) <= set(selected.account_id)
+    observed = selected.account_id.isin(known).to_numpy()
     train = selected.split.eq("train").to_numpy()
     marginal = np.flatnonzero(train & selected.in_marginal.to_numpy())
     positive = np.flatnonzero(train & observed)
@@ -264,17 +260,12 @@ def test_strict_preparation_and_nnpu_use_the_correct_phase_end_to_end(tmp_path: 
         scope={"id": "unit_strict"},
         dataset={"seed_limits": {"train": 10, "validation": 10, "test": 10}},
     )
-    rows = assigned_accounts().drop(columns="owner_ids").copy()
-    rows["partition"] = rows["split"].map({"train": 1, "validation": 2, "test": 3})
-    rows = rows.drop(columns="split")
+    rows = scoped_accounts()
     run = RunPaths(tmp_path / "run")
     phases = []
 
     class Executor(FakeTigerGraph):
         def run(self, name: str, params: dict[str, Any], **kwargs: Any) -> list[dict[str, Any]]:
-            if name == POPULATION_QUERY:
-                assert params["include_observed"] is False
-                return [{"status": "ok", "accounts": rows.to_dict("records")}]
             if name == CONTEXT_QUERY:
                 assert params["scope_id"] == "unit_strict"
                 phases.append(params["visibility_phase"])
@@ -282,14 +273,14 @@ def test_strict_preparation_and_nnpu_use_the_correct_phase_end_to_end(tmp_path: 
                     assert run.model.exists(), "Test evaluation happened before the model froze"
             return super().run(name, params, **kwargs)
 
-    executor = Executor({}, last_visible=lambda index, ms: 100)
+    executor = Executor({}, last_visible=lambda index, ms: 100, population=rows)
     dataset = DatasetPaths(tmp_path / "dataset")
     manifest = prepare(
         cfg,
         UNIT_SOURCE,
         dataset,
         {"Account": len(rows)},
-        FrameObservedLabels(supplied_labels()),
+        TigerGraphObservedLabels(),
         scope=TigerGraphScope(executor),
         cutoffs=TigerGraphCutoffs(executor),
         hub_reader=TigerGraphHubs(executor),

@@ -88,17 +88,17 @@ The trainer depends on `ObservedLabelReader`, not a generator or masking
 algorithm. Its rows contain `account_id`, `known_positive`, `known_from_ms`.
 Unlisted/zero accounts are unlabeled, not confirmed legitimate accounts.
 Production's graph adapter maps confirmed `is_mule=1` plus an explicit known-label
-flag and discovery timestamp to this contract. If production uses a different
-label table or only an `is_mule` field, implement an adapter and supply the
-availability semantics there; the model and loss need no rewrite.
+flag and discovery timestamp to this contract. Every run reads the labels revealed in
+the graph, so a production system with a different label table or only an `is_mule`
+field writes its known positives and their discovery times into the graph's label
+contract; the model and loss need no rewrite.
 
 Complete simulation `is_mule` values are oracle truth. Only the one-time
 [label reveal](label_reveal.md) reads them before training: it writes the observed
 positives and their discovery clocks into the graph's label contract, which the
 trainer reads through `TigerGraphObservedLabels`. Evaluation reads truth separately,
 through `TigerGraphTruth`, after checkpoint selection. The trainer rejects
-oracle columns. When an external observed-label provider is used, the population
-query skips reading graph label attributes.
+oracle columns.
 
 A separate `evaluate` command joins truth with saved predictions and applies the
 checkpoint's already selected threshold. Do not interpret an unknown production

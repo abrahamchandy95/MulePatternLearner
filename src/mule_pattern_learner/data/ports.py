@@ -69,12 +69,8 @@ class HubReader(Protocol):
 class ObservedLabelReader(Protocol):
     """Known positives and their discovery times; zero means unlabeled.
 
-    ``from_graph`` is true for the labels revealed in the graph, which the scope
-    population then reports too (include_observed); a table of labels reads none.
+    The labels are those revealed in the graph, which the scope population reports
+    with include_observed; ``metadata`` holds its rows.
     """
 
-    @property
-    def from_graph(self) -> bool: ...
-
     def read(self, metadata: pd.DataFrame) -> pd.DataFrame: ...
-    def positive_ids(self) -> set[str]: ...

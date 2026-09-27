@@ -131,10 +131,10 @@ The trainer depends on `ObservedLabelReader`, not on a masking implementation.
 Its table contains `account_id`, `known_positive`, `known_from_ms`. Unlisted
 accounts are unlabeled; usable positives must be known before the scoring cutoff.
 Oracle `is_mule`, mask and ring columns are rejected from this interface. Every
-run reads its labels from the graph through `TigerGraphObservedLabels`, the only source
-that runs the population queries with `include_observed = TRUE`; tests may hand
-preparation a table of labels instead, and the population queries then skip graph
-label reads completely.
+run reads its labels from the graph through `TigerGraphObservedLabels`: preparation
+runs the population queries with `include_observed = TRUE`, and the model trains only
+on the revealed positives (`pu_label`). Tests serve their labels through the fake
+graph's population the same way.
 
 - An observed positive is the revealed positive of the
   [account label contract](account_mule_labels.md):
@@ -144,10 +144,9 @@ label reads completely.
   with `observed_positive` false and `known_from_ms` 0. The client fails fast when
   any other row carries `known_from_ms > 0`, which means an older population query
   that also revealed masked labels is still installed. Strict preparation checks
-  this on every population page, and there any label information in a page
-  requested without `include_observed` is refused too. On a fresh load the first
-  run fills those fields with the [label reveal](label_reveal.md), which simulates
-  when a bank would have discovered each mule.
+  this on every population page. On a fresh load the first run fills those fields
+  with the [label reveal](label_reveal.md), which simulates when a bank would have
+  discovered each mule.
   Datasets prepared before the masked-label predicate counted masked mules as
   positives and must be prepared again.
 
