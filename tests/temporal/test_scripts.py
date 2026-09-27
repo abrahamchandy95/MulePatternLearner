@@ -187,37 +187,3 @@ def test_label_reveal_scripts_run_offline(
         "validation": 1,
         "test": 1,
     }
-
-
-# One-time schema installers and label-contract migrations. They parse --help in their
-# __main__ block before main() connects, so --help never changes the graph.
-SCHEMA_SCRIPTS = (
-    "convert_mule_label_to_integer",
-    "install_account_supervision",
-    "install_time_encoding",
-    "verify_account_supervision",
-    "verify_time_encoding",
-)
-
-
-@pytest.mark.parametrize("name", SCHEMA_SCRIPTS)
-def test_schema_scripts_print_help_before_connecting(
-    name: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    import runpy
-
-    from pyTigerGraph import TigerGraphConnection
-
-    from mule_pattern_learner.tigergraph.client import Client
-
-    def refuse(*args: Any, **kwargs: Any) -> None:
-        raise AssertionError("--help must not connect to TigerGraph")
-
-    monkeypatch.setattr(Client, "__init__", refuse)
-    monkeypatch.setattr(TigerGraphConnection, "__init__", refuse)
-    monkeypatch.syspath_prepend(str(SCRIPTS))
-    monkeypatch.setattr(sys, "argv", [name, "--help"])
-    with pytest.raises(SystemExit) as stopped:
-        runpy.run_path(str(SCRIPTS / f"{name}.py"), run_name="__main__")
-    assert stopped.value.code == 0
-    assert "usage:" in capsys.readouterr().out

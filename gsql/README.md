@@ -12,19 +12,20 @@ belongs to it. The schema, loading and encoding files are:
 | `features/payment_pair_time64.gsql` | Equivalent calculations for other payment rails |
 | `temporal/account_supervision.gsql` | Paginated truth/mask export and label-contract validation |
 
-For existing graphs, use the scripts in `scripts/temporal/` and each migration's
-stated prerequisites. Do not run fresh graph DDL or the original empty-graph
-migration on the populated instance. Schema changes may invalidate compiled
-queries and positional loading jobs; verify and restore both afterwards.
+The populated instance reached this schema through one-off migrations that were
+applied once and are kept in git history; only the training scope schema change
+under `schema/migrations/` remains, because the installer still applies it. Do not
+run fresh graph DDL on the populated instance. Schema changes may invalidate
+compiled queries and positional loading jobs; verify and restore both afterwards.
 
 The pair queries default to `persist=false`. Their `max_events` limit bounds
 pair results and sorting, but still requires traversing the sender's candidate
-history. They are POC extraction queries, not a batched temporal training
-sampler. The live trainer uses the separate context sampler described below.
+history. They are POC extraction queries for analysis, not a batched temporal
+training sampler, and are installed only with `install --include-optional`. The
+live trainer uses the separate context sampler described below.
 
-See [encoding semantics](../docs/temporal_encoding.md),
-[account labels](../docs/account_mule_labels.md), and the
-[live MCP review](../docs/temporal_gsql_review.md).
+See [encoding semantics](../docs/temporal_encoding.md) and
+[account labels](../docs/account_mule_labels.md).
 
 ## Live temporal training queries
 

@@ -191,10 +191,10 @@ features, not learned model embeddings.
 ## Deployment artifacts
 
 - [Canonical fresh-graph DDL](../gsql/schema/temporal_schema.gsql).
-- [Applied migration](../gsql/schema/migrations/temporal_valid_time.gsql), scoped
-  to the empty previous schema; it does not drop the graph or database.
-- [Additive encoding migration](../gsql/schema/migrations/temporal_encoding_attributes.gsql).
-- [Account supervision migration](../gsql/schema/migrations/account_mule_supervision.gsql).
+- [Training scope schema change](../gsql/schema/migrations/temporal_training_scope.gsql),
+  which the query installer applies when the graph has no `Temporal_Training_Scope`.
 
-Do not rerun the fresh-graph DDL or the empty-graph migration on a populated
-graph.
+The populated graph reached this schema through three one-off migrations: the
+empty-graph valid-time upgrade, the additive encoding attributes and the Account
+supervision fields. Each was applied once and is kept in git history, not in the
+tree. Do not run the fresh-graph DDL on a populated graph.

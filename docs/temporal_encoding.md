@@ -140,29 +140,20 @@ returns no rows and performs no writes; the query never silently truncates away
 the predecessor. High-degree or long-lived accounts need staged temporal indexes
 and a batch pipeline; do not call this once per pair per training epoch at scale.
 
-Installation uses the project's `.env`, without printing credentials:
+Training never calls the pair queries, so the training installer adds them only
+on request. Installation uses the project's `.env`, without printing credentials:
 
 ```sh
-.venv/bin/python scripts/temporal/install_time_encoding.py
+.venv/bin/python -m mule_pattern_learner.temporal.live.cli install --include-optional
 ```
 
-The installer adds attributes once, checks for running loading jobs, repairs the
-affected payment loading definitions, and installs the shared encoder plus the
-three public queries. The fresh schema file includes the same attributes. Do not
-rerun the earlier empty-graph migration against this populated graph.
-
-Explicit live verification creates isolated synthetic records and deletes only
-those records in a `finally` block:
-
-```sh
-.venv/bin/python scripts/temporal/verify_time_encoding.py
-```
-
-The script writes its verification record to
-`artifacts/temporal/reports/temporal_encoding_deployment.json` (git-ignored; pass
-`--output` to choose another path).
-The live graph's application data is not bulk materialized by installation or
-verification. Save mode is available when running the pair queries.
+This installs the shared encoder, its public wrapper and the training queries as
+usual, plus the two pair queries. The fresh schema file includes the pair-gap
+attributes. The one-off migration that added them to the populated graph was
+applied once; it, its installer and its live verification script are kept in git
+history. Do not run the fresh schema file against the populated graph.
+The live graph's application data is not bulk materialized by installation.
+Save mode is available when running the pair queries.
 
 References: [GSQL mathematical functions](https://www.tigergraph.com/docs/gsql-ref/4.2/querying/func/mathematical-functions),
 [subqueries](https://www.tigergraph.com/docs/gsql-ref/4.2/querying/operators-and-expressions),

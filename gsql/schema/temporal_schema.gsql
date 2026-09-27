@@ -1,7 +1,7 @@
 /*
 Temporal mule detection and Zelle transfer schema. Target: TigerGraph 4.2.5.
-Fresh-graph DDL only. Existing-graph changes live in migrations/; the original
-temporal_valid_time migration requires an empty graph and must not be rerun.
+Fresh-graph DDL only; never run it on a populated graph. The one-off migrations
+that brought the populated graph to this schema are kept in git history.
 
 One Zelle_Transfer vertex represents one individual Zelle payment. Other rails
 use Payment_Transaction; never duplicate a Zelle transfer in both event types.
