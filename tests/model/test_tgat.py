@@ -159,7 +159,11 @@ def test_the_sum_counts_slots_that_a_mean_cannot_tell_apart() -> None:
     # Slots {a, b} and {a, a, b, b}: the same mean, twice the count.
     batch = slot_batch(PLAN, [[0, 1], [0, 1, 0, 1]])
     seen: dict[str, torch.Tensor] = {}
-    slot_mlp(model).register_forward_hook(lambda _m, _i, output: seen.update(values=output))
+
+    def keep(module: nn.Module, inputs: Any, output: torch.Tensor) -> None:
+        seen["values"] = output
+
+    slot_mlp(model).register_forward_hook(keep)
     embedding = model.encode(batch)
     values, mask = seen["values"], batch["first_mask"]
     torch.testing.assert_close(values[0][mask[0]].mean(0), values[1][mask[1]].mean(0))

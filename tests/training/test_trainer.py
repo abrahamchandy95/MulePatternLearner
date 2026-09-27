@@ -270,10 +270,10 @@ def test_batches_use_train_mode_step_seeds_and_the_hub_registry(
         resolved.append(threading.current_thread())
         return real_resolve(sampler, device)
 
-    def record(store: Any, roots: list[ContextKey], **kwargs: Any) -> dict[str, torch.Tensor]:
+    def record(contexts: Any, roots: list[ContextKey], **kwargs: Any) -> dict[str, torch.Tensor]:
         assert isinstance(kwargs["hubs"], HubRegistry) and len(kwargs["hubs"]) == 1
         stats = kwargs["stats"]
-        batch = real(store, roots, **kwargs)
+        batch = real(contexts, roots, **kwargs)
         with lock:
             backends.add(kwargs["sampler_backend"])
             calls.append(
@@ -311,10 +311,10 @@ def test_batches_use_train_mode_step_seeds_and_the_hub_registry(
     assert train_records and all(counters <= set(r) for r in train_records)
     assert 0 < train_records[-1]["contexts_distinct"] <= train_records[-1]["contexts_requested"]
     # The unclamped risk is logged beside the loss; they agree on steps without a correction.
-    for record in train_records:
-        assert 0 <= record["corrected_steps"] <= 2 and math.isfinite(record["objective"])
-        if record["corrected_steps"] == 0:
-            assert record["objective"] == pytest.approx(record["loss"])
+    for logged in train_records:
+        assert 0 <= logged["corrected_steps"] <= 2 and math.isfinite(logged["objective"])
+        if logged["corrected_steps"] == 0:
+            assert logged["objective"] == pytest.approx(logged["loss"])
     assert {r["event"] for r in records} >= {"start", "train", "evaluate", "epoch", "complete"}
 
 

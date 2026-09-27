@@ -186,10 +186,14 @@ def test_built_in_batches_feed_root_pool_counts_to_the_summary_branch() -> None:
     with ContextSource(
         TigerGraphContextFetcher(executor), plan=extraction_plan(PLAN), sampler=SAMPLER
     ) as source:
-        for _ in range(2):  # the second batch is served from the source's cache
-            batch = build_batch(
+        # The second batch is served from the source's cache.
+        batches = [
+            build_batch(
                 source, roots, fanouts=(16, 4), plan=PLAN, sampler=SAMPLER, hubs=Hubs({"F"})
             )
+            for _ in range(2)
+        ]
+    batch = batches[-1]
     x = batch["x"]
     assert x.shape[1] == len(PLAN.node_names) == 9 + len(POOL_NAMES)
     columns = [PLAN.node_names.index(name) for name in POOL_NAMES]
