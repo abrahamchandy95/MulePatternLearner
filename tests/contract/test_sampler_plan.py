@@ -10,7 +10,12 @@ import pytest
 
 from mule_pattern_learner.config import DEFAULT_CONFIG
 from mule_pattern_learner.contract.fingerprints import fingerprint
-from mule_pattern_learner.contract.sampler_plan import SELECTION_KEYS_VERSION, PoolPlan, SamplerPlan
+from mule_pattern_learner.contract.sampler_plan import (
+    SELECTION_KEYS_VERSION,
+    PoolPlan,
+    SamplerPlan,
+    sampler_pools,
+)
 from mule_pattern_learner.testing.builders import RESAMPLE
 
 
@@ -54,10 +59,8 @@ def test_sampler_fingerprints_ignore_backend_and_keep_recorded_values() -> None:
     assert RESAMPLE.fingerprint() != replace(RESAMPLE, association_slots=1).fingerprint()
     assert RESAMPLE.fingerprint() == replace(RESAMPLE, backend="torch").fingerprint()
     assert RESAMPLE.fingerprint() != replace(RESAMPLE, evaluation_seed=1).fingerprint()
-    assert (
-        RESAMPLE.pool_fingerprint() == replace(RESAMPLE, relation_fanouts=(1, 1)).pool_fingerprint()
-    )
-    assert SamplerPlan().pool_fingerprint() != RESAMPLE.pool_fingerprint()
+    assert sampler_pools(RESAMPLE) == sampler_pools(replace(RESAMPLE, relation_fanouts=(1, 1)))
+    assert sampler_pools(SamplerPlan()) != sampler_pools(RESAMPLE)
     # The key scheme is versioned, and the policy name stays in the value.
     assert SELECTION_KEYS_VERSION == 2
     unversioned = {
@@ -78,6 +81,6 @@ def test_sampler_fingerprints_ignore_backend_and_keep_recorded_values() -> None:
     assert built_in.fingerprint() == (
         "44c3e909304a808a4052c2f8ab2111c5f7d35aa96446e5a7904927ba7f0c13e6"
     )
-    assert built_in.pool_fingerprint() == (
+    assert fingerprint(sampler_pools(built_in)) == (
         "28ef7d452dfbc97e974976997ffaf475c78ea7b0ae36660ecee1d3611f27a660"
     )

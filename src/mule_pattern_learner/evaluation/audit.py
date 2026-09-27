@@ -15,7 +15,7 @@ from ..artifacts import write_audit_scores, write_json, write_rejected
 from ..contract.bounds import AUDIT_POPULATION, AUDIT_SAMPLE
 from ..contract.clock import cutoff_ms
 from ..inference.saved_model import SavedModel
-from ..metrics import evaluate, weighted_metrics
+from ..metrics import weighted_metrics
 from ..paths import DATA_DIR, DatasetPaths, RunPaths
 from ..runtime.progress import emit
 from .sample import audit_sample
@@ -25,39 +25,6 @@ if TYPE_CHECKING:
     from ..data.contexts import ContextReader
     from ..data.hub_registry import HubRegistry
     from ..data.ports import ScopeReader
-
-
-def evaluate_predictions(
-    predictions: Path, model: Path | SavedModel, truth: TruthReader
-) -> dict[str, Any]:
-    """Apply the frozen model's threshold; never choose an epoch or threshold."""
-    saved = SavedModel.of(model)
-    frame = pd.read_parquet(predictions)
-    answer = truth.read()
-    if "is_mule" not in answer or not answer.is_mule.isin([-1, 0, 1]).all():
-        raise ValueError("Evaluation truth requires integer is_mule (-1 unknown, 0 or 1)")
-    keys = ["account_id", "date"] if "date" in answer else ["account_id"]
-    if answer.duplicated(keys).any():
-        raise ValueError("Duplicate evaluation truth keys")
-    frame = frame.merge(answer[keys + ["is_mule"]], on=keys, how="left", validate="many_to_one")
-    observed = frame[frame.is_mule.isin([0, 1])]
-    threshold = saved.threshold
-    result: dict[str, Any] = {
-        "evaluated": len(observed),
-        "evaluation_sample": "supplied_prediction_rows_unweighted",
-        "population_performance_claim": False,
-        "unknown_or_missing_truth": len(frame) - len(observed),
-        "selection": saved.selected_on,
-        "all": evaluate(
-            observed.is_mule.to_numpy(dtype="int64"), observed.score.to_numpy(), threshold
-        ),
-    }
-    if "observed_label" in observed:
-        hidden = observed[observed.observed_label == 0]
-        result["unlabeled_accounts"] = evaluate(
-            hidden.is_mule.to_numpy(dtype="int64"), hidden.score.to_numpy(), threshold
-        )
-    return result
 
 
 def audit_metrics(frame: pd.DataFrame, threshold: float) -> dict[str, Any]:

@@ -167,10 +167,6 @@ class Predictor:
             mode="eval",
         )
 
-    def infer(self, prepared: RootBatch) -> pd.DataFrame:
-        """Scores and embeddings for the accepted roots only; CPU outputs."""
-        return self.frame(score_batch(self.model, prepared, self.device, embeddings=True))
-
     def frame(self, scored: ScoredBatch) -> pd.DataFrame:
         """The rows of a scored batch's accepted roots."""
         if scored.logits is None or scored.embeddings is None:
@@ -191,10 +187,6 @@ class Predictor:
                 "predicted_mule": probabilities >= self.threshold,
             }
         )
-
-    def predict(self, keys: list[ContextKey]) -> pd.DataFrame:
-        """Rows for accepted keys only; rejected keys are counted on the source."""
-        return self.infer(self.prepare(keys))
 
     def stream(
         self, batches: Iterable[list[ContextKey]]

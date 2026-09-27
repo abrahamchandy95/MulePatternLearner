@@ -134,6 +134,3 @@ ACCOUNT_LOAD_COLUMNS = [
     "mule_ring_id",
     "mule_label_source",
 ]
-# The integer migration appends is_mule in graph storage. CSV/PSV input order
-# stays unchanged; the loading job maps named columns to storage positions.
-ACCOUNT_STORAGE_COLUMNS = [name for name in ACCOUNT_LOAD_COLUMNS if name != "is_mule"] + ["is_mule"]

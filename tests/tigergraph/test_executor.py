@@ -23,7 +23,6 @@ from mule_pattern_learner.tigergraph.executor import (
     TigerGraphExecutor,
     TransientQueryError,
     failure_class,
-    is_transient,
 )
 
 
@@ -106,7 +105,7 @@ def test_availability_failures_are_retried_with_capped_exponential_backoff() -> 
 )
 def test_failure_classes(error: BaseException, kind: str | None) -> None:
     assert failure_class(error) == kind
-    assert is_transient(error) is (kind is not None)
+    assert (failure_class(error) is not None) is (kind is not None)
 
 
 def test_suspected_deterministic_failures_are_retried_once() -> None:
@@ -221,8 +220,8 @@ def test_resume_page_in_gsql_output_is_transient() -> None:
     tg = executor(conn)
     assert tg.gsql("SHOW QUERY q") == "CREATE QUERY q() {}"
     assert len(tg.sleeps) == 1
-    assert is_transient(json.JSONDecodeError("x", "<html>", 0))
-    assert not is_transient(ValueError("Returned context differs"))
+    assert failure_class(json.JSONDecodeError("x", "<html>", 0)) is not None
+    assert failure_class(ValueError("Returned context differs")) is None
 
 
 def test_executor_connects_only_with_the_settings_it_is_given() -> None:

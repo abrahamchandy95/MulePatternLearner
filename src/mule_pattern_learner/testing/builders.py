@@ -45,7 +45,6 @@ from mule_pattern_learner.data import manifest as data_manifest
 from mule_pattern_learner.data.hub_registry import HubRegistry
 from mule_pattern_learner.data.manifest import dataset_settings
 from mule_pattern_learner.data.observed_labels import align_observed_labels, validate_label_table
-from mule_pattern_learner.inference import score_accounts
 from mule_pattern_learner.inference.saved_model import SavedModel
 from mule_pattern_learner.model.build import build_model
 from mule_pattern_learner.paths import DatasetPaths
@@ -877,7 +876,7 @@ def prepared_dataset(
         assert loaded == dataset
         return deepcopy(manifest), accounts.copy()
 
-    for module in (trainer, score_accounts, data_manifest):
+    for module in (trainer, data_manifest):
         monkeypatch.setattr(module, "load_prepared", load)
     return dataset, manifest, accounts
 

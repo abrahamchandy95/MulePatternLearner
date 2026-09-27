@@ -1,25 +1,20 @@
-"""Scoring new accounts and prepared splits: outputs, precision and rejections."""
+"""Scoring new accounts: outputs, precision and rejections."""
 
 from __future__ import annotations
 
 from collections import Counter
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
-import pytest
 
 from mule_pattern_learner.contract.server import HUB_QUERY
-from mule_pattern_learner.data.hub_registry import HubRegistry
 from mule_pattern_learner.inference import score_accounts
 from mule_pattern_learner.inference.rejections import rejection_summary
 from mule_pattern_learner.testing.builders import (
     base_config,
-    hub_registry,
-    prepared_dataset,
     saved_model,
 )
 from mule_pattern_learner.testing.fake_graph import FakeSource, ScoringExecutor
@@ -106,28 +101,3 @@ def test_score_new_reports_root_and_child_rejections_separately(tmp_path: Path) 
     plain = rejection_summary(source, 1, Counter({"rejected_children": 3}))
     assert plain["rejected_roots_by_status"] == {"missing_entity": 1}
     assert plain["rejected_children"] == 3
-
-
-def test_inference_score_uses_the_dataset_hub_registry(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    config = base_config()
-    dataset, _, _ = prepared_dataset(tmp_path / "dataset", config, monkeypatch)
-    model = saved_model(tmp_path / "model.pt", config, dataset)
-    loaded = []
-
-    def registry(path: Path, manifest: dict[str, Any]) -> HubRegistry:
-        loaded.append(path)
-        return hub_registry()
-
-    monkeypatch.setattr(score_accounts, "load_hub_registry", registry)
-    source = FakeSource(config, reject=frozenset({"A002"}))
-    output, rejected = tmp_path / "test.parquet", tmp_path / "test_rejected.txt"
-    result = score_accounts.score(
-        model, dataset, "2025-01-01", "test", output, rejected_output=rejected, contexts=source
-    )
-    frame = pd.read_parquet(output)
-    assert loaded == [dataset]
-    assert len(frame) == 23 and "A002" not in set(frame.account_id)
-    assert frame.score.dtype == np.float64
-    assert result["rejected"] == 1 and rejected.read_text().split() == ["A002"]

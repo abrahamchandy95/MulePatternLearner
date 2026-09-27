@@ -1,4 +1,4 @@
-"""Score the accounts of a prepared split, or arbitrary accounts at a date."""
+"""Score arbitrary accounts at a date with a run's model."""
 
 from __future__ import annotations
 
@@ -7,91 +7,20 @@ from itertools import islice
 from pathlib import Path
 from typing import Any
 
-import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from ..artifacts import atomic_write, pending_path, write_rejected
-from ..contract.graph_schema import SPLITS, ContextKey
+from ..artifacts import atomic_write, pending_path
+from ..contract.graph_schema import ContextKey
 from ..contract.sampler_plan import SamplerPlan
-from ..data.contexts import ContextOpener, ContextReader, close_source
-from ..data.hub_registry import HubRegistry, hub_threshold, load_hub_registry, warn_hub_stubs
-from ..data.manifest import load_prepared
+from ..data.contexts import ContextReader, close_source
+from ..data.hub_registry import HubRegistry, hub_threshold, warn_hub_stubs
 from ..data.ports import CutoffReader, HubReader
-from ..data.splits import eligible_mask, resolve_cutoff, sample_keys
-from ..paths import DatasetPaths
+from ..data.splits import resolve_cutoff
 from ..runtime.progress import emit
 from .predictor import Predictor
 from .rejections import rejection_summary
 from .saved_model import SavedModel
-
-
-def score(
-    model: Path | SavedModel,
-    dataset: DatasetPaths,
-    date: str,
-    split: str,
-    output: Path,
-    *,
-    rejected_output: Path,
-    contexts: ContextReader | None = None,
-    open_contexts: ContextOpener | None = None,
-    hubs: HubRegistry | None = None,
-) -> dict[str, Any]:
-    """Score every eligible account of one prepared split and cutoff.
-
-    Roots that TigerGraph rejects are not scored; their IDs go to ``rejected_output``.
-    Rejected roots and masked child contexts are reported separately (see
-    ``rejections.rejection_summary``). Without ``contexts``, ``open_contexts`` opens the dataset's live source once the inputs passed their
-    checks (pipeline.connect.open_context_source). ``contexts``/``hubs`` replace the
-    dataset's source and hub registry (tests, offline replays).
-    """
-    for path in (output, rejected_output):
-        if path.exists():
-            raise FileExistsError(path)
-    saved = SavedModel.of(model)
-    config = saved.config
-    manifest, accounts = load_prepared(dataset)
-    saved.check_dataset(dataset)
-    if split not in SPLITS or date not in config.dataset.dates[split]:
-        raise ValueError("Requested split/cutoff was not prepared")
-    accounts = accounts[eligible_mask(accounts, split, date)]
-    if accounts.empty:
-        raise ValueError("No eligible accounts at this cutoff")
-    registry = hubs if hubs is not None else load_hub_registry(dataset, manifest)
-    if contexts is None:
-        if open_contexts is None:
-            raise ValueError(
-                "Scoring needs contexts, or open_contexts to open the dataset's source"
-            )
-        contexts = open_contexts(dataset, manifest, config)
-    failed = True
-    try:
-        predictor = Predictor(saved, contexts, hubs=registry)
-        size = predictor.batch_size
-        frames, rejected = predictor.score_keys(
-            sample_keys(accounts.iloc[start : start + size], date, manifest)
-            for start in range(0, len(accounts), size)
-        )
-        failed = False
-    finally:
-        close_source(contexts, failed=failed)
-    result = pd.concat(frames, ignore_index=True)
-    result["date"] = date
-    result["cutoff_utc"] = date
-    output.parent.mkdir(parents=True, exist_ok=True)
-    result.to_parquet(output, index=False)
-    if rejected:
-        write_rejected(rejected_output, rejected)
-    return {
-        "accounts": len(result),
-        **rejection_summary(contexts, len(rejected), predictor.totals),
-        "rejected_output": str(rejected_output) if rejected else None,
-        "device": str(predictor.device),
-        "embedding_dimensions": predictor.model.head[0].in_features,
-        "output": str(output),
-    }
-
 
 SCORE_SCHEMA = pa.schema(
     [
