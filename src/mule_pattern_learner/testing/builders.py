@@ -90,7 +90,7 @@ def fixture_accounts(count: int = 1000, date: str = "2024-07-01") -> pd.DataFram
 
 
 def scope_population(count: int = 200) -> list[dict[str, Any]]:
-    """Scope members as temporal_scope_population prints them with include_observed.
+    """Scope members as the scope population query prints them with include_observed.
 
     Partitions repeat 1, 1, 1, 2, 3 (train, validation, test). Every seventh account is
     a revealed mule, discovered on 2024-03-01, so every split has revealed mules. Every
@@ -129,7 +129,7 @@ def assigned_accounts() -> pd.DataFrame:
 
 
 def scoped_accounts() -> list[dict[str, Any]]:
-    """assigned_accounts as temporal_scope_population rows, the split as the partition."""
+    """assigned_accounts as scope population rows, the split as the partition."""
     accounts = assigned_accounts()
     rows = accounts.drop(columns=["owner_ids", "split"])
     records = rows.assign(partition=accounts.split.map(SPLIT_PHASE)).to_dict("records")

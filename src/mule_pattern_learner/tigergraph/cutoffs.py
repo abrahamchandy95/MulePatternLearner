@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
+from ..contract.server import CUTOFF_QUERY
 from .executor import QueryExecutor, checked_rows, printed
-
-CUTOFF_QUERY = "temporal_training_cutoffs"
 
 
 class TigerGraphCutoffs:
-    """The CutoffReader of data.ports: temporal_training_cutoffs."""
+    """The CutoffReader of data.ports: the cutoff query (contract.server.CUTOFF_QUERY)."""
 
     def __init__(self, executor: QueryExecutor) -> None:
         self.executor = executor

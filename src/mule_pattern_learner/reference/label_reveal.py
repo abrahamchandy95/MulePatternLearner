@@ -15,6 +15,7 @@ import math
 from typing import Any
 
 from ..contract.graph_schema import PHASE_SPLIT
+from ..contract.server import GRAPH_NAME
 from ..tigergraph.reveal import REVEAL_DEFAULTS, reveal_uniforms
 
 DAY = 86400000.0
@@ -23,16 +24,16 @@ NEVER = 1.0e15
 # The first result holds the mules (split, draw key, first observation and the
 # "event_seq:label_available_ts_ms" fraud-labelled Zelle inflows), the next two the
 # Zelle and payment events between two mules.
-INPUTS_QUERY = """
-INTERPRET QUERY (STRING scope_id) FOR GRAPH Mule_Pattern_Learner {
+INPUTS_QUERY = f"""
+INTERPRET QUERY (STRING scope_id) FOR GRAPH {GRAPH_NAME} {{
   MaxAccum<INT> @part;
   MinAccum<INT> @key;
   OrAccum @mule;
   ListAccum<STRING> @inflows;
   SetAccum<STRING> @ends;
-  Scopes = {Temporal_Training_Scope.*};
+  Scopes = {{Temporal_Training_Scope.*}};
   Ready = SELECT r FROM Scopes:r WHERE r.scope_id == scope_id;
-  M = {Account.*};
+  M = {{Account.*}};
   M = SELECT a FROM M:a WHERE a.is_mule == 1 AND NOT a.is_external POST-ACCUM a.@mule += TRUE;
   S = SELECT a FROM Ready:r -(Training_Scope_Has_Entity>:e)- Account:a WHERE a.@mule ACCUM a.@part += e.partition;
   K1 = SELECT t FROM M:a -(Account_Initiated_Transaction>:e)- Payment_Transaction:t ACCUM a.@key += t.event_seq;
@@ -49,7 +50,7 @@ INTERPRET QUERY (STRING scope_id) FOR GRAPH Mule_Pattern_Learner {
   PRINT M[M.id, M.first_seen_ts_ms, M.@part, M.@key, M.@inflows];
   PRINT LZ[LZ.event_seq, LZ.event_ts_ms, LZ.@ends] AS zelle_links;
   PRINT LP[LP.event_seq, LP.event_ts_ms, LP.@ends] AS payment_links;
-}
+}}
 """
 
 

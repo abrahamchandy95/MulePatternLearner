@@ -15,8 +15,9 @@ from mule_pattern_learner.config import DEFAULT_CONFIG
 from mule_pattern_learner.contract.feature_groups import FeaturePlan
 from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
+from mule_pattern_learner.contract.server import CONTEXT_QUERY, PAYMENT_PAIR_QUERY, ZELLE_PAIR_QUERY
 from mule_pattern_learner.data.splits import resolve_cutoff
-from mule_pattern_learner.tigergraph.context_query import CONTEXT_QUERY, validate_context
+from mule_pattern_learner.tigergraph.context_query import validate_context
 from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffs
 from mule_pattern_learner.tigergraph.executor import TigerGraphExecutor, checked_rows
 from mule_pattern_learner.tigergraph.installer import (
@@ -147,8 +148,8 @@ def test_pair_gaps_match_the_analytics_queries(
             "persist": False,
             "max_events": 10000,
         }
-        name = "zelle_pair_time64" if relation.startswith("zelle") else "payment_pair_time64"
-        if name == "payment_pair_time64":
+        name = ZELLE_PAIR_QUERY if relation.startswith("zelle") else PAYMENT_PAIR_QUERY
+        if name == PAYMENT_PAIR_QUERY:
             params["payment_rail"] = message["rail"]
         history = checked_rows(graph.run(name, params))
         event = next(v for v in history if v.get("event_id") == message["event_id"])

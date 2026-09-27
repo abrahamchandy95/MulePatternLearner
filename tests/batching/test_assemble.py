@@ -14,6 +14,7 @@ from mule_pattern_learner.batching.assemble import build_batch, build_root_batch
 from mule_pattern_learner.contract.feature_groups import DEFAULT_GROUPS, FeaturePlan
 from mule_pattern_learner.contract.graph_schema import HUB_COLUMNS, RELATIONS, ContextKey
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
+from mule_pattern_learner.contract.server import CONTEXT_QUERY
 from mule_pattern_learner.data.contexts import ContextSource
 from mule_pattern_learner.data.hub_registry import HubRegistry
 from mule_pattern_learner.model.tgat import TGAT
@@ -321,7 +322,7 @@ def test_rejected_roots_raise_in_batches_and_are_dropped_by_root_batches() -> No
     ) as source:
         with pytest.raises(ValueError, match="rejected 1 of 64 root contexts"):
             build_batch(source, roots, plan=DEFAULT_TGAT_PLAN, sampler=SMALL_SAMPLER)
-        assert executor.names().count("temporal_training_context") == 1  # one 64-key request
+        assert executor.names().count(CONTEXT_QUERY) == 1  # one 64-key request
         prepared = build_root_batch(
             source,
             roots,

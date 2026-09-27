@@ -10,6 +10,7 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Any
 
+from mule_pattern_learner.contract.server import GRAPH_NAME
 from mule_pattern_learner.tigergraph.executor import TigerGraphExecutor
 
 
@@ -61,7 +62,7 @@ class FakeClient:
     ``timeouts`` records the read timeouts set with ``request_timeout``.
     """
 
-    graphname = "Mule_Pattern_Learner"
+    graphname = GRAPH_NAME
 
     def __init__(self, conn: Any) -> None:
         self.conn = conn

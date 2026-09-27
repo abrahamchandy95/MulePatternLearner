@@ -26,7 +26,7 @@ from mule_pattern_learner.config import DEFAULT_CONFIG, RunConfig
 from mule_pattern_learner.contract.feature_groups import FeaturePlan, contract_fingerprint
 from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
-from mule_pattern_learner.contract.server import SCOPE_VERTEX
+from mule_pattern_learner.contract.server import GRAPH_NAME, SCOPE_VERTEX
 from mule_pattern_learner.contract.time_basis import BASIS_ID
 from mule_pattern_learner.data.contexts import ContextSource
 from mule_pattern_learner.inference.predictor import Predictor
@@ -97,7 +97,7 @@ class TemporaryVertices:
         assert a.startswith(self.prefix) and b.startswith(self.prefix)
         if "valid_from_seq" in attrs:
             query = (
-                "USE GRAPH Mule_Pattern_Learner\nINTERPRET QUERY () FOR GRAPH Mule_Pattern_Learner { "
+                f"USE GRAPH {GRAPH_NAME}\nINTERPRET QUERY () FOR GRAPH {GRAPH_NAME} {{ "
                 f"INSERT INTO {edge} VALUES ({json.dumps(a)} {a_type}, "
                 f"{json.dumps(b)} {b_type}, {attrs['valid_from_seq']}, "
                 f'{attrs["valid_to_seq"]}, 1.0, ""); PRINT "ok" AS status; }}'

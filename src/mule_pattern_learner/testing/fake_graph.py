@@ -26,7 +26,17 @@ from mule_pattern_learner.contract.bounds import REQUEST_KEYS
 from mule_pattern_learner.contract.feature_groups import FeaturePlan, extraction_plan
 from mule_pattern_learner.contract.graph_schema import RELATIONS, ContextKey
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
-from mule_pattern_learner.contract.server import CONTEXT_QUERY_FILE
+from mule_pattern_learner.contract.server import (
+    CONTEXT_QUERY,
+    CONTEXT_QUERY_FILE,
+    CREATE_SCOPE_QUERY,
+    CUTOFF_QUERY,
+    FINALIZE_SCOPE_QUERY,
+    GRAPH_NAME,
+    HUB_QUERY,
+    POPULATION_QUERY,
+    SCOPE_POLICY_QUERY,
+)
 from mule_pattern_learner.data.contexts import ContextCounts
 from mule_pattern_learner.paths import GSQL_DIR
 from mule_pattern_learner.testing.builders import (
@@ -38,11 +48,7 @@ from mule_pattern_learner.testing.builders import (
     fake_context,
     synthetic_row,
 )
-from mule_pattern_learner.tigergraph.context_query import CONTEXT_QUERY
-from mule_pattern_learner.tigergraph.cutoffs import CUTOFF_QUERY
 from mule_pattern_learner.tigergraph.gsql_text import definitions, parameter_names
-from mule_pattern_learner.tigergraph.hubs import HUB_QUERY
-from mule_pattern_learner.tigergraph.scope import POPULATION_QUERY, SCOPE_POLICY_QUERY
 
 PAYMENT_RELATIONS = frozenset(RELATIONS[:4])
 
@@ -90,12 +96,12 @@ class FakeTigerGraph:
     `rows` maps keys to fixed contexts; other keys come from `factory` (default: an
     ok context without messages). `statuses` maps a ContextKey or a node ID to a
     per-request status such as history_capacity_exceeded. `hubs` lists
-    (account_id, cutoff_seq) pairs that temporal_hub_registry reports: once at
+    (account_id, cutoff_seq) pairs that the hub query reports: once at
     phase 3 for an unscoped call, once per phase 1, 2 and 3 for a scoped one.
-    `last_visible(index, cutoff_ms)` answers temporal_training_cutoffs.
-    `scope_policy` names the scope.unowned rule temporal_scope_policy reports
+    `last_visible(index, cutoff_ms)` answers the cutoff query.
+    `scope_policy` names the scope.unowned rule the scope policy query reports
     for every scope (default "linked", the configuration default). `population`
-    holds the rows temporal_scope_population pages through (see scope_population);
+    holds the rows the scope population query pages through (see scope_population);
     without include_observed their labels are withheld. Subclasses add the other
     population queries a test needs.
     """
@@ -229,7 +235,7 @@ class FakeTigerGraph:
 
 
 def scope_counts(policy: str) -> dict[str, int]:
-    """temporal_scope_policy counts of a small scope created with one scope.unowned rule."""
+    """Scope policy counts of a small scope created with one scope.unowned rule."""
     counts = {
         "members": 12,
         "unowned_accounts": 4,
@@ -250,7 +256,7 @@ def scope_counts(policy: str) -> dict[str, int]:
 
 
 class ContextServer:
-    """Fake temporal_training_context endpoint with per-request statuses."""
+    """Fake context query endpoint with per-request statuses."""
 
     def __init__(
         self,
@@ -268,7 +274,7 @@ class ContextServer:
         self.active = self.peak = 0
 
     def run(self, name: str, params: dict[str, Any], **_: Any) -> list[dict[str, Any]]:
-        assert name == "temporal_training_context"
+        assert name == CONTEXT_QUERY
         hop = 1 if params["k_assoc"] else 2
         keys = request_keys(params)
         with self.lock:
@@ -338,13 +344,13 @@ def policy_counts(policy: str) -> dict[str, int]:
 
 
 class ScopeServer:
-    """A TigerGraph fake for scope headers, scope creation and temporal_scope_policy."""
+    """A TigerGraph fake for scope headers, scope creation and the scope policy query."""
 
     def __init__(self, header: dict[str, Any] | None, policy: str) -> None:
         self.header, self.policy = header, policy
         self.calls: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
         self.client = SimpleNamespace(
-            conn=SimpleNamespace(getVerticesById=self.vertices), graphname="Mule_Pattern_Learner"
+            conn=SimpleNamespace(getVerticesById=self.vertices), graphname=GRAPH_NAME
         )
 
     def call(self, operation: Callable[[Any], Any], *, what: str) -> Any:
@@ -358,12 +364,12 @@ class ScopeServer:
 
     def run(self, name: str, params: dict[str, Any], **kwargs: Any) -> list[dict[str, Any]]:
         self.calls.append((name, params, kwargs))
-        if name == "temporal_scope_policy":
+        if name == SCOPE_POLICY_QUERY:
             return [{"status": "ok", "scope_id": params["scope_id"], **policy_counts(self.policy)}]
-        if name == "temporal_create_training_scope":
+        if name == CREATE_SCOPE_QUERY:
             self.policy = params["unowned_policy"]
             return [{"status": "ok", "expected_members": 3}]
-        if name == "temporal_finalize_training_scope":
+        if name == FINALIZE_SCOPE_QUERY:
             self.header = {"ready": True, "source_id": "unit_snapshot", "split_seed": 42}
         return [{"status": "ok"}]
 

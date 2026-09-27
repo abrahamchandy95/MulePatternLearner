@@ -12,7 +12,13 @@ import json
 from typing import Any
 
 from ..config import ScopeConfig
-from ..contract.server import SCOPE_VERTEX
+from ..contract.server import (
+    CREATE_SCOPE_QUERY,
+    FINALIZE_SCOPE_QUERY,
+    POPULATION_QUERY,
+    SCOPE_POLICY_QUERY,
+    SCOPE_VERTEX,
+)
 from ..runtime.progress import emit
 from .executor import (
     ConnectionExecutor,
@@ -23,11 +29,9 @@ from .executor import (
     printed,
 )
 
-POPULATION_QUERY = "temporal_scope_population"
-
 
 class TigerGraphScope:
-    """The ScopeReader of data.ports: temporal_scope_population, paged by account."""
+    """The ScopeReader of data.ports: the scope population query, paged by account."""
 
     def __init__(self, executor: QueryExecutor) -> None:
         self.executor = executor
@@ -67,8 +71,7 @@ def check_scope(
         raise ValueError("Scope is incomplete or belongs to a different source/partition")
 
 
-SCOPE_POLICY_QUERY = "temporal_scope_policy"
-# Unowned member Accounts by membership class and side, as temporal_scope_policy prints them.
+# Unowned member Accounts by membership class and side, as the scope policy query prints them.
 SCOPE_POLICY_COUNTS = (
     "shared_internal",
     "shared_external",
@@ -178,7 +181,7 @@ def ensure_scope(
       only owned internal deposit counterparty is one account joins that
       account's ownership group and partition.
     An existing scope must have been created with the configured rule; it is
-    inferred from the membership (temporal_scope_policy) and a mismatch raises.
+    inferred from the membership (the scope policy query) and a mismatch raises.
     """
     scope_id = scope.id
 
@@ -200,7 +203,7 @@ def ensure_scope(
     emit({"scope": scope_id, "creating": True})
     created = checked_rows(
         executor.run(
-            "temporal_create_training_scope",
+            CREATE_SCOPE_QUERY,
             {
                 "scope_id": scope_id,
                 "source_id": source_id,
@@ -214,7 +217,7 @@ def ensure_scope(
     expected = printed(created, "expected_members")
     checked_rows(
         executor.run(
-            "temporal_finalize_training_scope",
+            FINALIZE_SCOPE_QUERY,
             {"scope_id": scope_id, "expected_members": expected},
             timeout_s=3600.0,
             attempts=1,

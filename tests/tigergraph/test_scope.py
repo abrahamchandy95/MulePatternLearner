@@ -8,6 +8,11 @@ from typing import Any, cast
 import pytest
 
 from mule_pattern_learner.config import ScopeConfig
+from mule_pattern_learner.contract.server import (
+    CREATE_SCOPE_QUERY,
+    FINALIZE_SCOPE_QUERY,
+    SCOPE_POLICY_QUERY,
+)
 from mule_pattern_learner.paths import GSQL_DIR
 from mule_pattern_learner.testing.builders import SNAPSHOT_SOURCE, unit_config
 from mule_pattern_learner.testing.fake_graph import Runner, ScopeServer, policy_counts
@@ -28,9 +33,9 @@ def test_missing_scope_is_created_unless_forbidden() -> None:
     ensure(server, config)
     names = [call[0] for call in server.calls]
     assert names == [
-        "temporal_create_training_scope",
-        "temporal_finalize_training_scope",
-        "temporal_scope_policy",
+        CREATE_SCOPE_QUERY,
+        FINALIZE_SCOPE_QUERY,
+        SCOPE_POLICY_QUERY,
     ]
     create = server.calls[0]
     assert create[1]["unowned_policy"] == "linked" and create[2]["attempts"] == 1
@@ -50,7 +55,7 @@ def test_existing_scope_must_have_the_configured_unowned_policy() -> None:
         assert scope.inferred_scope_policy(policy_counts(policy)) == policy
         server = ScopeServer(header, policy)
         ensure(server, replace(config, unowned=policy))
-        assert [call[0] for call in server.calls] == ["temporal_scope_policy"]
+        assert [call[0] for call in server.calls] == [SCOPE_POLICY_QUERY]
     assert scope.inferred_scope_policy(policy_counts("retired")) is None
     # Without unowned external accounts a linked scope is still recognised by its links.
     no_external = {**policy_counts("linked"), "shared_external": 0, "independent_external": 0}
@@ -83,10 +88,10 @@ def test_existing_scope_must_have_the_configured_unowned_policy() -> None:
 def test_scope_policy_query_prints_what_the_client_reads() -> None:
     text = (GSQL_DIR / "queries/training_scope.gsql").read_text()
     queries = gsql_text.definitions(text)
-    assert scope.SCOPE_POLICY_QUERY in queries
-    query = queries[scope.SCOPE_POLICY_QUERY]
+    assert SCOPE_POLICY_QUERY in queries
+    query = queries[SCOPE_POLICY_QUERY]
     assert gsql_text.parameter_names(query) == {"scope_id"}
     for name in (*scope.SCOPE_POLICY_COUNTS, "members"):
         assert f"AS {name}" in query, name
-    create = gsql_text.parameter_names(queries["temporal_create_training_scope"])
+    create = gsql_text.parameter_names(queries[CREATE_SCOPE_QUERY])
     assert "unowned_policy" in create and "shared_unowned" not in create

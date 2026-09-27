@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 
 from mule_pattern_learner.config import DEFAULT_CONFIG, TransportConfig
+from mule_pattern_learner.contract.server import SCOPE_POLICY_QUERY
 from mule_pattern_learner.data.manifest import dataset_settings
 from mule_pattern_learner.paths import DatasetPaths
 from mule_pattern_learner.pipeline import connect
@@ -72,7 +73,7 @@ def test_a_resumed_stream_checks_the_frozen_source_before_fetching(
     policy_calls: list[dict[str, Any]] = []
 
     def run(name: str, params: dict[str, Any], **_: Any) -> list[dict[str, Any]]:
-        assert name == "temporal_scope_policy"
+        assert name == SCOPE_POLICY_QUERY
         policy_calls.append(params)
         return [{"status": "ok", **scope_counts(policy["scope_unowned"])}]
 
