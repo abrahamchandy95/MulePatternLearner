@@ -54,14 +54,13 @@ SCOPE_POLICY_QUERY = "temporal_scope_policy"
 SCOPE_POLICY_PARAMETERS = signature("gsql/temporal/training_scope.gsql", SCOPE_POLICY_QUERY)
 SCOPE_POPULATION_QUERY = "temporal_scope_population"
 SCOPE_POPULATION_PARAMETERS = signature("gsql/temporal/training_scope.gsql", SCOPE_POPULATION_QUERY)
-# The legacy control profile: the recent sampler, legacy feature groups and the single
-# architecture, which components choose when sampler, feature_groups and architecture
-# are absent. Only a raw configuration can omit them; run_config fills them in. Tests of
-# this profile are marked legacy.
+# The legacy control profile: the legacy feature groups and the single architecture,
+# which components choose when feature_groups and architecture are absent, and the
+# default candidate pools. Only a raw configuration can omit them; run_config fills them
+# in. Tests of this profile are marked legacy.
 LEGACY_PROFILE: dict[str, Any] = {
     "evaluation_unlabeled_limit": 2000,
     "fanouts": [8, 4],
-    "per_relation": 2,
     "prepare_batch_size": 16,
     "hidden": 64,
     "heads": 4,

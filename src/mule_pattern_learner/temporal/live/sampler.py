@@ -1,9 +1,9 @@
 """Per-step neighbor resampling from bounded, cutoff-safe candidate pools.
 
-TigerGraph returns a bounded candidate pool per context (`PoolPlan`). The `resample`
-policy draws, per context and relation, a uniform subset without replacement and
-merges it into the fanout slots with the association reserve of the stratified
-policy. Two interchangeable subset samplers exist:
+TigerGraph returns a bounded candidate pool per context (`PoolPlan`). The client
+draws, per context and relation, a uniform subset without replacement and merges it
+into the fanout slots, reserving a few for associations. Two interchangeable subset
+samplers exist:
 
 - `TorchGroupedSampler`: random keys plus a segmented rank; runs on CPU, MPS or CUDA.
 - `CuGraphSampler`: pylibcugraph's heterogeneous temporal sampler on one CUDA GPU.
@@ -527,7 +527,7 @@ def probe_cugraph(device: str | torch.device, engine: CuGraphSampler | None = No
     try:
         engine = engine if engine is not None else default_cugraph_sampler()
         table = _probe_table()
-        plan = SamplerPlan("resample")
+        plan = SamplerPlan()
         for hop in (1, 2):
             quotas = relation_quotas(plan, hop)
             seed = hop_seed(PROBE_SEED, hop)
@@ -569,9 +569,9 @@ def cugraph_usable(device_index: int = 0) -> CuGraphProbe:
 
 
 def resolve_backend(sampler: SamplerPlan, device: str | torch.device) -> str:
-    """The subset backend of a run: "deterministic", "torch" or "cugraph".
+    """The subset backend of a run: "torch" or "cugraph".
 
-    Policies other than resample are "deterministic". `torch` is always torch.
+    `torch` is always torch.
     `auto` is cugraph only on a CUDA device whose cached functional probe
     (`cugraph_usable`) passed; otherwise torch, with a warning when cuGraph is
     installed but failed the probe. Explicit `cugraph` raises with the probe's
@@ -579,8 +579,6 @@ def resolve_backend(sampler: SamplerPlan, device: str | torch.device) -> str:
     seed, so resolve once per run on the main thread and pass the result to every
     `make_live_batch(sampler_backend=...)` call.
     """
-    if sampler.policy != "resample":
-        return "deterministic"
     if sampler.backend == "torch":
         return "torch"
     device = torch.device(device)

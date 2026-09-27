@@ -319,7 +319,7 @@ sequenceDiagram
 
 ### Resampling the fanout
 
-The sampler policy is `resample`. For every context and relation it keeps a uniform random
+The client resamples. For every context and relation it keeps a uniform random
 subset of at most `relation_fanouts[hop - 1]` payment candidates (8 at hop 1, 4 at hop 2),
 or `association_fanout` (1) per association relation, then fills the fixed slots:
 
@@ -333,9 +333,6 @@ and step), so the model sees different neighbours of the same account in every e
 without extra queries beyond the per-step REST calls. Evaluation, validation and scoring
 use device-independent hash keys (`splitmix64` of an evaluation seed, the hop, the context
 and the candidate), so every machine produces the same scores.
-
-The deterministic `recent` and `stratified` policies of the legacy profile remain
-available and unchanged.
 
 ### cuGraph on CUDA
 
@@ -678,16 +675,14 @@ The run settings are `DEFAULT_RUN` in
 [config_schema.py](../src/mule_pattern_learner/temporal/live/config_schema.py) plus the
 operational defaults beside it. An optional `--config` TOML or JSON file overrides keys.
 Tables merge key by key, so `[sampler] backend = "torch"` or `[dates] train = [...]`
-changes only that key; lists and scalars replace the default; a `[sampler]` table that
-names another `policy` replaces the whole sampler table, because pool settings of one
-policy do not apply to another. Unknown keys are rejected.
+changes only that key; lists and scalars replace the default. Unknown keys are rejected.
 
 | Group | Keys (built-in value) |
 |---|---|
 | Scope | `scope_id` (strict_mule_v2), `scope_unowned` (linked), `create_scope` (true: created on first use); `dataset_id` is derived from the scope or the graph (a pinned value must match the prepared dataset) |
 | Labels | `reveal_per_split` (20), `reveal_salt` (defaults to `seed`), `evaluation_unlabeled_limit` (2000) |
 | Dates | `[dates]` train 2024-07-01, validation 2024-10-01, test 2025-01-01; `[seed_limits]` 20000 / 2000 / 2000 |
-| Sampler | `[sampler]` policy resample, recent 8, older 4, distinct 4, associations 2, max_history 2048, relation_fanouts [8, 4], association_fanout 1, association_slots 2, backend auto, evaluation_seed 0; `[sampler.children]` 4 / 2 / 2 / 0 / 2048 |
+| Sampler | `[sampler]` recent 8, older 4, distinct 4, associations 2, max_history 2048, relation_fanouts [8, 4], association_fanout 1, association_slots 2, backend auto, evaluation_seed 0; `[sampler.children]` 4 / 2 / 2 / 0 / 2048 |
 | Model | `fanouts` [16, 4], `feature_groups`, `architecture` split, `slot_sum` true, `hidden` 64, `heads` 4, `dropout` 0.15 |
 | Optimisation | `batch_size` 64, `epochs` 30, `steps_per_epoch` 100, `patience` 6, `learning_rate` 0.001, `weight_decay` 0.0001, `class_prior` 0.001, `positive_weight` balanced, `weight_average_decay` 0.99, `seed` 42 |
 | Runtime | `device` auto, `threads` 4, `deterministic` true, `prefetch_batches` 2, `checkpoint_every_steps` 0, `log_every_steps` 10, `max_rejected_root_fraction` 0.0 |

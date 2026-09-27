@@ -55,10 +55,6 @@ def _check_source_limits(keys: list[ContextKey], hop: int) -> None:
         raise ValueError("Context hop must be 1 (roots) or 2 (children)")
 
 
-def _default_sampler(per_relation: int | None) -> SamplerPlan:
-    return SamplerPlan.from_config({} if per_relation is None else {"per_relation": per_relation})
-
-
 class _EncodingCadence:
     """Requests 0, n, 2n, ... carry emit_encodings=True and are verified."""
 
@@ -209,19 +205,18 @@ class StreamingContextSource:
         executor: QueryExecutor,
         *,
         plan: FeaturePlan = FeaturePlan(),
-        sampler: SamplerPlan | None = None,
+        sampler: SamplerPlan = SamplerPlan(),
         capacity: int = TRANSPORT_DEFAULTS["context_lru_capacity"],
         request_batch_size: int = TRANSPORT_DEFAULTS["request_batch_size"],
         concurrency: int = TRANSPORT_DEFAULTS["query_concurrency"],
         encoding_check_every: int = TRANSPORT_DEFAULTS["encoding_check_every"],
-        per_relation: int | None = None,
     ) -> None:
         if not 1 <= concurrency <= 16:
             raise ValueError("Query concurrency must be in [1,16]")
         if not 0 <= capacity <= 4096 or not 1 <= request_batch_size <= 64:
             raise ValueError("Invalid context source capacity or query size")
         self.plan = plan
-        self.sampler = sampler or _default_sampler(per_relation)
+        self.sampler = sampler
         self.executor = executor
         self.capacity, self.request_batch_size = capacity, request_batch_size
         self.concurrency = concurrency

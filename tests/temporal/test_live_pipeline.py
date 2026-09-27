@@ -39,7 +39,6 @@ from temporal_fakes import FakeExecutor, association, context, message
 V5_PLAN = FeaturePlan(DEFAULT_GROUPS, "split")
 ASSOCIATED = "Account_Owned_By_Party"
 V5_SAMPLER = SamplerPlan(
-    "resample",
     roots=PoolPlan(recent=4, older=1, distinct=1, associations=1),
     children=PoolPlan(recent=2, associations=0),
     relation_fanouts=(3, 2),

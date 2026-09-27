@@ -1,6 +1,6 @@
 # Training from the live temporal graph
 
-The [feature-group redesign](feature_redesign.md) documents the window-free feature groups, optional summaries and migration. Fixed 83/135 dimensions below describe the legacy control profile (the recent sampler, legacy feature groups and the single architecture). The built-in v5 run (`DEFAULT_RUN` in `config_schema.py`) adds per-hop candidate pools, per-step resampling and a hub registry; see [candidate pools and resampling](#candidate-pools-and-resampling).
+The [feature-group redesign](feature_redesign.md) documents the window-free feature groups, optional summaries and migration. Fixed 83/135 dimensions below describe the legacy control profile (legacy feature groups and the single architecture). The built-in v5 run (`DEFAULT_RUN` in `config_schema.py`) adds per-hop candidate pools, per-step resampling and a hub registry; see [candidate pools and resampling](#candidate-pools-and-resampling).
 
 The live path is `mule_pattern_learner.temporal.live`: cutoff-aware GSQL features,
 two layers of temporal attention and nnPU learning. Source belongs in Git, and the
@@ -285,11 +285,10 @@ the client selects the fanout from it. `[sampler]` pool keys (`recent`, `older`,
 `[sampler.children]` describes the children pool (hop 2). A context returns at
 most `4*(recent+older+distinct) + 14*associations` messages.
 
-The `recent` and `stratified` policies are the deterministic legacy selections
-and keep their exact outputs. The `resample` policy draws, per context and payment
-relation, at most `relation_fanouts[0]` candidates (hop 1) or `relation_fanouts[1]`
-(hop 2) uniformly without replacement, and at most `association_fanout` per
-association relation at hop 1. It then merges them into the `K` fanout slots:
+The client resamples: per context and payment relation it draws at most
+`relation_fanouts[0]` candidates (hop 1) or `relation_fanouts[1]` (hop 2) uniformly
+without replacement, and at most `association_fanout` per association relation at
+hop 1. It then merges them into the `K` fanout slots:
 payments interleaved by position across the four payment relations, associations
 across the association relations, `reserve = min(association_slots, n_assoc, K // 4)`,
 `chosen = P[:K - reserve] + A[:reserve]`, then backfill from the remaining payments
@@ -409,8 +408,7 @@ supply the TigerGraph connection in the repository `.env`; environment variables
 override it. That is the only input: the settings are built in (`DEFAULT_RUN` in
 `config_schema.py`), and an optional `--config overrides.toml` changes only the
 keys it sets. Tables merge key by key (`[sampler] backend = "torch"` keeps every
-other sampler setting), lists and scalars replace the default, and a `[sampler]`
-table that names another `policy` replaces the whole sampler table. Every command
+other sampler setting), and lists and scalars replace the default. Every command
 validates the result and rejects unknown keys by name.
 
 `train` installs stale queries itself. To install them ahead of time:

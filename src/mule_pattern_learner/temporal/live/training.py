@@ -516,7 +516,6 @@ class _TrainingRun:
         self.prefetch = settings.prefetch_batches
         # Resolved once here, on the main thread, before any prefetch worker starts
         # (the cuGraph probe runs at most once), then passed to every batch.
-        # "deterministic" for policies other than resample.
         self.backend = resolve_backend(sampler, self.batch_device)
         self.limit = settings.max_rejected_root_fraction
         self.observed = {sample.date: sample.observed for sample in training}

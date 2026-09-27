@@ -257,7 +257,7 @@ def test_training_end_to_end_with_v5_neighbour_messages(tmp_path: Path) -> None:
     )
     manifest, accounts = load_prepared(dataset)
     plan, sampler = FeaturePlan.from_config(c), SamplerPlan.from_config(c)
-    assert plan.architecture == "split" and sampler.policy == "resample"
+    assert plan.architecture == "split"
     hubs = load_hub_registry(dataset, manifest)
     train_rows = accounts[accounts.split == "train"].iloc[:16]
     keys = sample_keys(train_rows, c["dates"]["train"][0], manifest)

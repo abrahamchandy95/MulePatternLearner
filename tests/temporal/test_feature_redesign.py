@@ -8,7 +8,7 @@ import torch
 from mule_pattern_learner.temporal.live.contract import (
     ContextKey,
     FeaturePlan,
-    SamplerPlan,
+    PoolPlan,
     FEATURE_GROUPS,
     DEFAULT_GROUPS,
     LEGACY_GROUPS,
@@ -16,7 +16,6 @@ from mule_pattern_learner.temporal.live.contract import (
 from mule_pattern_learner.temporal.live.batching import (
     make_live_batch,
     node_features,
-    select_messages,
 )
 from mule_pattern_learner.temporal.live.history_reference import payment_features, stratify
 from mule_pattern_learner.temporal.live.evaluation import final_evaluation_sample, evaluate_weighted
@@ -89,21 +88,17 @@ def test_decay_is_smooth_and_missing_amount_is_not_invented():
     assert 0 < payment_features([e], later)[1]["decay_1d_in_count"] < 0.5
 
 
-@pytest.mark.legacy
 def test_rank_and_peer_strata_survive_a_recent_burst_without_duplicate_events():
-    sampler = SamplerPlan("stratified", 4, 3, 2, 2, 2048)
+    pool = PoolPlan(4, 3, 2, 2, 2048)
     old = [event(i, i * 1000, peer=f"p{i}") for i in range(1, 61)]
     burst = [event(i, 61000 + i, peer="burst") for i in range(61, 101)]
-    rows = stratify(old + burst, sampler)
+    rows = stratify(old + burst, pool)
     assert len({e["event_id"] for e in rows}) == len(rows) == 9
     assert {e["stratum"] for e in rows} == {"recent", "older", "distinct"}
     assert any(e["event_seq"] < 61 for e in rows)
-    selected = select_messages({"messages": rows}, 8, sampler)
-    assert any(e["stratum"] == "older" for e in selected)
-    assert any(e["stratum"] == "distinct" for e in selected)
-    assert stratify(list(reversed(old + burst)), sampler) == rows
+    assert stratify(list(reversed(old + burst)), pool) == rows
     with pytest.raises(ValueError, match="capacity"):
-        stratify(old + burst, SamplerPlan("stratified", 4, 3, 2, 2, 32))
+        stratify(old + burst, PoolPlan(4, 3, 2, 2, 32))
 
 
 @pytest.mark.parametrize("group", list(FEATURE_GROUPS))

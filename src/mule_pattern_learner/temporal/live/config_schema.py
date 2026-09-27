@@ -138,7 +138,6 @@ DEFAULT_RUN: dict[str, Any] = {
     "dates": {"train": ["2024-07-01"], "validation": ["2024-10-01"], "test": ["2025-01-01"]},
     "seed_limits": {"train": 20000, "validation": 2000, "test": 2000},
     "sampler": {
-        "policy": "resample",
         "recent": 8,
         "older": 4,
         "distinct": 4,
@@ -161,13 +160,14 @@ DEFAULT_RUN: dict[str, Any] = {
 }
 # Keys that configurations written before the layered restructure hold (saved models,
 # prepared cohorts and run directories), each with the one value this code still
-# implements. validate_config drops them, so those files keep loading; any other value
-# names a removed path and is refused.
+# implements; a dot names a key of a table. validate_config drops them, so those files
+# keep loading; any other value names a removed path and is refused.
 RETIRED_KEYS: dict[str, Any] = {
     "context_storage": "stream",
     "evaluation_protocol": "strict_inductive",
     "label_policy": "graph_observed",
     "observed_labels": None,
+    "sampler.policy": "resample",
 }
 # Identifiers that become directory names or server-side scope metadata.
 IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -193,7 +193,6 @@ class PoolConfig(_Strict):
 class SamplerConfig(PoolConfig):
     """`[sampler]`: flat keys are the roots pool, `[sampler.children]` the second hop."""
 
-    policy: Literal["recent", "stratified", "resample"] | None = None
     children: PoolConfig | None = None
     relation_fanouts: (
         Annotated[list[Annotated[int, Field(ge=1, le=64)]], Field(min_length=2, max_length=2)]
@@ -266,7 +265,6 @@ class LiveConfig(_Strict):
         Annotated[list[Annotated[int, Field(ge=1, le=64)]], Field(min_length=2, max_length=2)]
         | None
     ) = None
-    per_relation: Annotated[int, Field(ge=1, le=32)] | None = None
     sampler: SamplerConfig | None = None
     hidden: Positive | None = None
     heads: Positive | None = None
@@ -335,11 +333,22 @@ KNOWN_KEYS = frozenset(LiveConfig.model_fields)
 
 def without_retired_keys(config: dict[str, Any]) -> dict[str, Any]:
     """config without RETIRED_KEYS; a retired key with another value is refused."""
-    for key, value in RETIRED_KEYS.items():
-        if key in config and config[key] != value:
-            remains = "" if value is None else f": only {value!r} remains"
-            raise ValueError(f"{key} = {config[key]!r} is no longer supported{remains}")
-    return {key: value for key, value in config.items() if key not in RETIRED_KEYS}
+    result = dict(config)
+    for name, value in RETIRED_KEYS.items():
+        *parents, key = name.split(".")
+        table: Any = result
+        for parent in parents:
+            if not isinstance(table.get(parent), dict):
+                break
+            table[parent] = table = dict(table[parent])
+        else:
+            if key not in table:
+                continue
+            if table[key] != value:
+                remains = "" if value is None else f": only {value!r} remains"
+                raise ValueError(f"{name} = {table[key]!r} is no longer supported{remains}")
+            del table[key]
+    return result
 
 
 def validate_config(config: dict[str, Any]) -> dict[str, Any]:
@@ -406,9 +415,7 @@ def run_config(path: Path | None = None) -> dict[str, Any]:
 
     Tables merge recursively, so `[sampler] backend = "torch"` changes only the
     backend and `[dates] train = [...]` keeps the default validation and test dates.
-    Lists and scalars replace the default. A `[sampler]` table that names another
-    policy replaces the whole default sampler table, because pool settings of one
-    policy do not apply to another.
+    Lists and scalars replace the default.
     """
     import copy
 
@@ -416,11 +423,5 @@ def run_config(path: Path | None = None) -> dict[str, Any]:
     if path is not None:
         from mule_pattern_learner.configuration import load_config
 
-        overrides = load_config(path)
-        sampler = overrides.get("sampler")
-        if isinstance(sampler, dict):
-            policy = cast(dict[str, Any], sampler).get("policy", config["sampler"]["policy"])
-            if policy != config["sampler"]["policy"]:
-                del config["sampler"]
-        config = merged(config, overrides)
+        config = merged(config, load_config(path))
     return validate_config(config)

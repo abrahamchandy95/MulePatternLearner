@@ -63,7 +63,7 @@ markers = [
     "graph: reads from the live TigerGraph named in .env; excluded by default (-m graph)",
     "graph_write: writes to the live TigerGraph named in .env; excluded by default (-m graph_write)",
     "cuda: needs a CUDA device; excluded by default (-m cuda)",
-    "legacy: exercises a path the layered restructure removes (the recent and stratified samplers, the single architecture, model variants, legacy feature groups, extraction_groups, FALLBACKS and back-compat guards); runs by default",
+    "legacy: exercises a path the layered restructure removes (the single architecture, model variants, legacy feature groups, extraction_groups, FALLBACKS and back-compat guards); runs by default",
 ]
 
 [tool.basedpyright]

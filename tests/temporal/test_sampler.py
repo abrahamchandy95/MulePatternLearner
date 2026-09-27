@@ -24,7 +24,6 @@ from mule_pattern_learner.temporal.live.batching import (
     edge_features,
     make_live_batch,
     node_features,
-    select_messages,
 )
 from mule_pattern_learner.temporal.live.contract import (
     ASSOCIATIONS,
@@ -45,6 +44,7 @@ from mule_pattern_learner.temporal.live.contract import (
     SamplerPlan,
     fingerprint,
 )
+from mule_pattern_learner.temporal.live.config_schema import run_config
 from mule_pattern_learner.temporal.live.memory import BatchCapacityError, BatchIndex, BatchLimits
 from mule_pattern_learner.temporal.live.model import LiveTGAT
 from mule_pattern_learner.temporal.live import sampler as sampling
@@ -80,10 +80,11 @@ PAYMENTS = RELATIONS[:4]
 # Every group a single model may read (FeaturePlan keeps the pool groups out of it).
 V4_GROUPS = tuple(g for g in FEATURE_GROUPS if g not in ("sampler_meta", *POOL_GROUPS))
 RESAMPLE = SamplerPlan(
-    "resample",
     roots=PoolPlan(recent=4, older=3, distinct=2, associations=2),
     relation_fanouts=(3, 2),
 )
+# The roots pool of the built-in run's shape, drawn into the default relation fan-outs.
+POOLED = SamplerPlan(roots=PoolPlan(recent=4, older=3, distinct=2, associations=2))
 
 
 # Synthetic rows ------------------------------------------------------------------
@@ -278,23 +279,55 @@ def roots(n: int = 8, cutoff: int = 400, scope: str = "s", phase: int = 1) -> li
     ]
 
 
+def slots(
+    keys: list[ContextKey],
+    rows: list[dict[str, Any]],
+    sampler: SamplerPlan,
+    fanout: int,
+    hop: int = 1,
+    *,
+    mode: str = "eval",
+    step_seed: int = 0,
+) -> list[list[dict[str, Any]]]:
+    """The messages resampling puts in each context's slots, as batches draw them."""
+    return batching._select(  # pyright: ignore[reportPrivateUsage]
+        keys,
+        rows,
+        hop=hop,
+        fanout=fanout,
+        sampler=sampler,
+        mode=mode,
+        step_seed=step_seed,
+        backend="torch",
+        device=torch.device("cpu"),
+    )
+
+
 def reference_batch(
     store: FakeStore,
     keys: list[ContextKey],
     fanouts: tuple[int, int],
     plan: FeaturePlan,
     sampler: SamplerPlan,
+    *,
+    mode: str = "eval",
+    step_seed: int = 0,
 ) -> dict[str, np.ndarray]:
-    """The previous per-message assembly loop, on the scalar feature functions."""
+    """The previous per-message assembly loop, on the scalar feature functions.
+
+    Neighbours are drawn by the batches' own resampling; the loop checks how the
+    vectorised assembly turns them into tensors.
+    """
+    draw = {"sampler": sampler, "mode": mode, "step_seed": step_seed}
     root_rows = [store.row(k) for k in keys]
-    first = [select_messages(row, fanouts[0], sampler) for row in root_rows]
+    first = slots(keys, root_rows, fanout=fanouts[0], **draw)
     lookup = BatchIndex(
         keys + [child_key(m, k) for k, msgs in zip(keys, first) for m in msgs], capacity=4096
     )
     unique = lookup.keys
     root_set = set(keys)
     contexts = [store.row(k) if k in root_set else store.row(k, 2) for k in unique]
-    second = [select_messages(row, fanouts[1], sampler, second_hop=True) for row in contexts]
+    second = slots(unique, contexts, fanout=fanouts[1], hop=2, **draw)
     arrays = {
         "root_positions": np.asarray([lookup[k] for k in keys], dtype=np.int64),
         "x": np.stack([node_features(row, plan) for row in contexts]),
@@ -362,48 +395,36 @@ def test_query_flags_skip_child_summaries_only_for_split_models() -> None:
         split.query_flags(3)
 
 
-@pytest.mark.legacy
-def test_sampler_plan_legacy_forms_properties_and_bounds() -> None:
-    legacy = SamplerPlan("stratified", 4, 3, 2, 2, 2048)
-    assert legacy == SamplerPlan("stratified", roots=PoolPlan(4, 3, 2, 2, 2048))
-    assert legacy.children == legacy.roots
-    assert (legacy.recent, legacy.older, legacy.distinct) == (4, 3, 2)
-    assert (legacy.associations, legacy.max_history) == (2, 2048)
-    assert legacy.response_bound == 64 and legacy.response_bound(2) == 64
-    assert legacy.response_bound + 0 == 64 and not legacy.response_bound < 64
-    assert legacy.query_params() == {
+def test_sampler_plan_pools_bounds_and_values() -> None:
+    plan = SamplerPlan(roots=PoolPlan(4, 3, 2, 2, 2048))
+    assert plan.children == PoolPlan(4, 3, 2, 0, 2048)
+    assert plan.response_bound() == 64 and plan.response_bound(2) == 36
+    assert plan.query_params() == {
         "per_relation": 4,
         "k_old": 3,
         "k_div": 2,
         "k_assoc": 2,
         "max_history": 2048,
     }
-    assert SamplerPlan(recent=5).roots == PoolPlan(recent=5)
+    assert SamplerPlan().roots == PoolPlan() and SamplerPlan().children == PoolPlan(associations=0)
     assert RESAMPLE.children == replace(RESAMPLE.roots, associations=0)
     assert RESAMPLE.query_params(2)["k_assoc"] == 0 and RESAMPLE.response_bound(2) == 36
     assert RESAMPLE.pool(1) is RESAMPLE.roots and RESAMPLE.pool(2) is RESAMPLE.children
-    with pytest.raises(ValueError, match="Recent sampler"):
-        SamplerPlan("recent", roots=PoolPlan(older=1))
-    with pytest.raises(ValueError, match="do not apply"):
-        SamplerPlan("stratified", relation_fanouts=(2, 2))
-    with pytest.raises(ValueError, match="history sampler"):
-        SamplerPlan("random")
     with pytest.raises(ValueError, match="recent"):
         PoolPlan(recent=33)
     with pytest.raises(ValueError, match="backend"):
-        SamplerPlan("resample", backend="gpu")
+        SamplerPlan(backend="gpu")
+    with pytest.raises(ValueError, match="one value per hop"):
+        SamplerPlan(relation_fanouts=(2,))
     assert PoolPlan(associations=0).response_bound == 8
-    restored = pickle.loads(pickle.dumps((RESAMPLE, RESAMPLE.response_bound)))
-    assert restored == (RESAMPLE, 64) and type(restored[1]) is int
+    assert pickle.loads(pickle.dumps(RESAMPLE)) == RESAMPLE
     assert copy.deepcopy(RESAMPLE) == RESAMPLE and hash(copy.deepcopy(RESAMPLE)) == hash(RESAMPLE)
 
 
-@pytest.mark.legacy
 def test_sampler_from_config_children_unknown_keys_and_round_trip() -> None:
     config = {
-        "per_relation": 3,
         "sampler": {
-            "policy": "resample",
+            "recent": 3,
             "older": 2,
             "relation_fanouts": [5, 2],
             "evaluation_seed": 11,
@@ -415,54 +436,63 @@ def test_sampler_from_config_children_unknown_keys_and_round_trip() -> None:
     assert plan.children == PoolPlan(2, 2, 0, 0, 1024)
     assert plan.relation_fanouts == (5, 2) and plan.evaluation_seed == 11
     assert SamplerPlan.from_config({"sampler": plan.to_config()}) == plan
-    assert SamplerPlan.from_config({"per_relation": 4}) == SamplerPlan(recent=4)
+    assert SamplerPlan.from_config({}) == SamplerPlan()
+    # Configurations saved while other policies existed name the one that remains.
+    saved = {"sampler": {**config["sampler"], "policy": "resample"}}
+    assert SamplerPlan.from_config(saved) == plan
+    with pytest.raises(ValueError, match="'stratified': only resample remains"):
+        SamplerPlan.from_config({"sampler": {"policy": "stratified"}})
     with pytest.raises(ValueError, match="fanuots"):
         SamplerPlan.from_config({"sampler": {"fanuots": 1}})
     with pytest.raises(ValueError, match="sampler.children.*nope"):
         SamplerPlan.from_config({"sampler": {"children": {"nope": 1}}})
 
 
-@pytest.mark.legacy
-def test_sampler_fingerprints_ignore_backend_and_unused_resample_fields() -> None:
-    legacy = SamplerPlan("stratified", 4, 3, 2)
-    assert legacy.fingerprint() == SamplerPlan("stratified", 4, 3, 2).fingerprint()
-    assert legacy.fingerprint() != replace(legacy, association_slots=1).fingerprint()
+def test_sampler_fingerprints_ignore_backend_and_keep_recorded_values() -> None:
+    assert RESAMPLE.fingerprint() != replace(RESAMPLE, association_slots=1).fingerprint()
     assert RESAMPLE.fingerprint() == replace(RESAMPLE, backend="torch").fingerprint()
     assert RESAMPLE.fingerprint() != replace(RESAMPLE, evaluation_seed=1).fingerprint()
     assert (
         RESAMPLE.pool_fingerprint() == replace(RESAMPLE, relation_fanouts=(1, 1)).pool_fingerprint()
     )
-    assert legacy.pool_fingerprint() != RESAMPLE.pool_fingerprint()
-    # The resample key scheme is versioned; the legacy policies do not use it.
+    assert SamplerPlan().pool_fingerprint() != RESAMPLE.pool_fingerprint()
+    # The key scheme is versioned, and the policy name stays in the value.
     assert SELECTION_KEYS_VERSION == 2
     unversioned = RESAMPLE.to_config() | {"children": asdict(RESAMPLE.children)}
     unversioned.pop("backend")
-    assert RESAMPLE.fingerprint() == fingerprint(unversioned | {"selection_keys": 2})
+    versioned = unversioned | {"policy": "resample", "selection_keys": 2}
+    assert RESAMPLE.fingerprint() == fingerprint(versioned)
     assert RESAMPLE.fingerprint() != fingerprint(unversioned)
-    legacy_value = legacy.to_config() | {"children": asdict(legacy.children)}
-    assert legacy.fingerprint() == fingerprint(legacy_value)
+    # The built-in sampler's fingerprints as saved models and prepared cohorts record them.
+    built_in = SamplerPlan.from_config(run_config())
+    assert built_in.fingerprint() == (
+        "44c3e909304a808a4052c2f8ab2111c5f7d35aa96446e5a7904927ba7f0c13e6"
+    )
+    assert built_in.pool_fingerprint() == (
+        "28ef7d452dfbc97e974976997ffaf475c78ea7b0ae36660ecee1d3611f27a660"
+    )
 
 
 # Legacy parity and assembly ------------------------------------------------------
 
 
 @pytest.mark.legacy
-@pytest.mark.parametrize("policy", ["recent", "stratified"])
+@pytest.mark.parametrize("mode", ["eval", "train"])
 @pytest.mark.parametrize(
     "plan",
     [FeaturePlan(), FeaturePlan(DEFAULT_GROUPS, "split"), FeaturePlan(V4_GROUPS, "single")],
     ids=["legacy", "v5-split", "all-single"],
 )
-def test_legacy_policies_match_the_previous_assembly_bit_for_bit(
-    policy: str, plan: FeaturePlan
+def test_vectorised_assembly_matches_the_scalar_features_bit_for_bit(
+    mode: str, plan: FeaturePlan
 ) -> None:
-    sampler = (
-        SamplerPlan("stratified", 4, 3, 2, 2) if policy == "stratified" else SamplerPlan(recent=3)
-    )
+    sampler = POOLED
     store = FakeStore(sampler)
     keys = roots(12) + roots(2)  # duplicate roots, as PU batches draw with replacement
-    batch = make_live_batch(store, keys, fanouts=(8, 4), plan=plan, sampler=sampler)
-    expected = reference_batch(store, keys, (8, 4), plan, sampler)
+    batch = make_live_batch(
+        store, keys, fanouts=(8, 4), plan=plan, sampler=sampler, mode=mode, step_seed=5
+    )
+    expected = reference_batch(store, keys, (8, 4), plan, sampler, mode=mode, step_seed=5)
     assert set(batch) == set(expected)
     for name, value in expected.items():
         assert batch[name].dtype == torch.from_numpy(value).dtype, name
@@ -472,7 +502,7 @@ def test_legacy_policies_match_the_previous_assembly_bit_for_bit(
 
 @pytest.mark.legacy
 def test_fourier_columns_come_from_scalar_deltas_on_every_device() -> None:
-    sampler = SamplerPlan("stratified", 4, 3, 2, 2)
+    sampler = POOLED
     plan = FeaturePlan(DEFAULT_GROUPS, "split")
     store = FakeStore(sampler, encodings=True)
     cpu = make_live_batch(store, roots(4), fanouts=(8, 4), plan=plan, sampler=sampler)
@@ -521,7 +551,7 @@ def test_torch_fourier_matches_numpy(device: str) -> None:
 
 @pytest.mark.legacy
 def test_missing_required_message_fields_raise_instead_of_defaulting() -> None:
-    sampler = SamplerPlan(recent=3)
+    sampler = SamplerPlan(roots=PoolPlan(recent=3))
     plan = FeaturePlan(DEFAULT_GROUPS, "split")
     key = roots(1)[0]
     rng = _rng(key)
@@ -722,7 +752,6 @@ def test_eval_is_deterministic_and_device_independent() -> None:
 
 
 V5_RESAMPLE = SamplerPlan(
-    "resample",
     roots=PoolPlan(recent=8, older=4, distinct=4, associations=2),
     children=PoolPlan(recent=4, older=2, distinct=2, associations=0),
     relation_fanouts=(8, 4),
@@ -865,12 +894,17 @@ def test_subset_is_uniform_without_replacement() -> None:
 def _first_children(
     store: FakeStore, keys: list[ContextKey], sampler: SamplerPlan, fanout: int = 8
 ) -> set[ContextKey]:
-    return {child_key(m, k) for k in keys for m in select_messages(store.row(k), fanout, sampler)}
+    rows = [store.row(k) for k in keys]
+    return {
+        child_key(m, k)
+        for k, msgs in zip(keys, slots(keys, rows, sampler, fanout), strict=True)
+        for m in msgs
+    }
 
 
 @pytest.mark.legacy
 def test_hub_children_become_local_stubs_and_mark_outer_peers() -> None:
-    sampler = SamplerPlan("stratified", 4, 3, 2, 2)
+    sampler = POOLED
     plan = FeaturePlan((*DEFAULT_GROUPS, "entity_age"), "split")
     store = FakeStore(sampler)
     keys = roots(6)
@@ -895,12 +929,13 @@ def test_hub_children_become_local_stubs_and_mark_outer_peers() -> None:
     stub_rows = torch.nonzero(withheld == 1).flatten()
     assert not batch["second_mask"][stub_rows].any()
     reached: dict[ContextKey, dict[str, Any]] = {}
-    slots = []
-    for i, root in enumerate(keys):
-        for j, m in enumerate(select_messages(store.row(root), 8, sampler)):
+    reaching = []
+    first = slots(keys, [store.row(k) for k in keys], sampler, 8)
+    for i, (root, msgs) in enumerate(zip(keys, first, strict=True)):
+        for j, m in enumerate(msgs):
             reached.setdefault(child_key(m, root), m)
-            slots.append((i, j, child_key(m, root)))
-    for i, j, key in slots:
+            reaching.append((i, j, child_key(m, root)))
+    for i, j, key in reaching:
         if key not in stubbed:
             continue
         message = reached[key]  # the first message that reaches a stub supplies its metadata
@@ -918,13 +953,9 @@ def test_hub_children_become_local_stubs_and_mark_outer_peers() -> None:
     # Outermost peers get the same flag in second_x.
     base = plan.names("node").index("history_withheld")
     flagged = batch["second_x"][..., base][batch["second_mask"]]
-    peers = [
-        m
-        for k in [*keys, *(c for c in children if c not in stubbed)]
-        for m in select_messages(
-            store.row(k, 2 if k not in keys else 1), 4, sampler, second_hop=True
-        )
-    ]
+    outer = [*keys, *(c for c in children if c not in stubbed)]
+    rows = [store.row(k, 2 if k not in keys else 1) for k in outer]
+    peers = [m for msgs in slots(outer, rows, sampler, 4, hop=2) for m in msgs]
     assert int(flagged.sum()) == sum(m["node_id"] == hub for m in peers) > 0
     reference = make_live_batch(store, keys, fanouts=(8, 4), plan=plan, sampler=sampler)
     assert torch.equal(reference["first_mask"], batch["first_mask"])
@@ -938,7 +969,7 @@ def test_hub_children_become_local_stubs_and_mark_outer_peers() -> None:
     ids=["train", "validation", "test", "unscoped", "unscoped-phase-ignored"],
 )
 def test_hub_lookups_use_the_batch_visibility_phase(scope: str, phase: int, expected: int) -> None:
-    sampler = SamplerPlan("stratified", 4, 3, 2, 2)
+    sampler = POOLED
     plan = FeaturePlan(DEFAULT_GROUPS, "split")
     store = FakeStore(sampler)
     keys = roots(4, scope=scope, phase=phase)
@@ -951,7 +982,7 @@ def test_hub_lookups_use_the_batch_visibility_phase(scope: str, phase: int, expe
 
 @pytest.mark.legacy
 def test_rejected_children_are_masked_and_rejected_roots_raise() -> None:
-    sampler = SamplerPlan("stratified", 4, 3, 2, 2)
+    sampler = POOLED
     plan = FeaturePlan(DEFAULT_GROUPS, "split")
     keys = roots(6)
     clean = FakeStore(sampler)
@@ -964,7 +995,7 @@ def test_rejected_children_are_masked_and_rejected_roots_raise() -> None:
     good = make_live_batch(clean, keys, fanouts=(8, 4), plan=plan, sampler=sampler)
     assert stats["rejected_children"] == len(bad)
     assert stats["contexts"] == good["x"].shape[0] - len(bad) == batch["x"].shape[0]
-    first = [select_messages(clean.row(k), 8, sampler) for k in keys]
+    first = slots(keys, [clean.row(k) for k in keys], sampler, 8)
     for i, (key, msgs) in enumerate(zip(keys, first)):
         for j, m in enumerate(msgs):
             assert bool(batch["first_mask"][i, j]) == (child_key(m, key) not in bad)
@@ -980,7 +1011,7 @@ def test_rejected_children_are_masked_and_rejected_roots_raise() -> None:
 
 @pytest.mark.legacy
 def test_tigergraph_cannot_supply_client_features() -> None:
-    sampler = SamplerPlan("stratified", 4, 3, 2, 2)
+    sampler = POOLED
     plan = FeaturePlan(DEFAULT_GROUPS, "split")
     keys = roots(3)
     store = FakeStore(sampler)
@@ -995,7 +1026,7 @@ def test_tigergraph_cannot_supply_client_features() -> None:
 
 
 def test_batch_limits_bound_candidate_pools_before_fetching() -> None:
-    wide = SamplerPlan("resample", roots=PoolPlan(32, 16, 16, 8), relation_fanouts=(8, 4))
+    wide = SamplerPlan(roots=PoolPlan(32, 16, 16, 8), relation_fanouts=(8, 4))
     store = FakeStore(wide)
     with pytest.raises(BatchCapacityError, match="Candidate pools"):
         make_live_batch(store, roots(120), fanouts=(16, 4), sampler=wide)
@@ -1345,25 +1376,13 @@ def test_real_probe_without_cupy_reports_the_missing_module(
     assert sampling.cugraph_usable(0) is probe
 
 
-@pytest.mark.legacy
 def test_backend_resolution_without_cuda() -> None:
     assert resolve_backend(RESAMPLE, "cpu") == "torch"
     assert resolve_backend(replace(RESAMPLE, backend="torch"), "cuda") == "torch"
-    assert resolve_backend(SamplerPlan("stratified", 4, 3, 2), "cuda") == "deterministic"
     with pytest.raises(RuntimeError, match="cugraph needs a CUDA device"):
         resolve_backend(replace(RESAMPLE, backend="cugraph"), "cpu")
-    stats: dict[str, Any] = {}
-    make_live_batch(
-        FakeStore(RESAMPLE),
-        roots(2),
-        plan=FeaturePlan(DEFAULT_GROUPS, "split"),
-        sampler=SamplerPlan("stratified", 4, 3, 2),
-        stats=stats,
-    )
-    assert stats["sampler_backend"] == "deterministic"
 
 
-@pytest.mark.legacy
 def test_make_live_batch_uses_the_run_backend_without_resolving(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1386,23 +1405,10 @@ def test_make_live_batch_uses_the_run_backend_without_resolving(
     with pytest.raises(ValueError, match="cugraph needs a CUDA batch device"):
         make_live_batch(store, keys, mode="train", sampler_backend="cugraph", **options)
     with pytest.raises(ValueError, match="does not fit"):
-        make_live_batch(store, keys, mode="train", sampler_backend="deterministic", **options)
+        make_live_batch(store, keys, mode="train", sampler_backend="numpy", **options)
     pinned: dict[str, Any] = options | {"sampler": replace(RESAMPLE, backend="torch")}
     with pytest.raises(ValueError, match="does not fit"):
         make_live_batch(store, keys, mode="eval", sampler_backend="cugraph", **pinned)
-    stratified = SamplerPlan("stratified", 4, 3, 2)
-    stats = {}
-    make_live_batch(
-        FakeStore(stratified),
-        keys,
-        plan=plan,
-        sampler=stratified,
-        sampler_backend="deterministic",
-        stats=stats,
-    )
-    assert stats["sampler_backend"] == "deterministic"
-    with pytest.raises(ValueError, match="does not fit"):
-        make_live_batch(FakeStore(stratified), keys, sampler=stratified, sampler_backend="torch")
     # The resolved backend gives the same batch as resolving per call.
     monkeypatch.undo()
     a = make_live_batch(store, keys, mode="train", **options)

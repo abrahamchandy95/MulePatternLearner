@@ -76,7 +76,7 @@ class ContextTimeoutError(RuntimeError):
 
 def response_bound(sampler: SamplerPlan, hop: int) -> int:
     """Largest message count a context may contain at this hop."""
-    return int(sampler.pool(hop).response_bound)
+    return sampler.response_bound(hop)
 
 
 def validate_context(

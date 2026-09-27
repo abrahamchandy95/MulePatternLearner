@@ -574,7 +574,6 @@ def base_config(**overrides: Any) -> dict[str, Any]:
         "log_every_steps": 2,
         "prefetch_batches": 2,
         "sampler": {
-            "policy": "resample",
             "recent": 3,
             "older": 1,
             "distinct": 1,
