@@ -23,7 +23,7 @@ from ..contract.feature_groups import (
     WINDOWS,
     FeaturePlan,
 )
-from ..contract.graph_schema import ASSOCIATIONS, NODE_TYPES
+from ..contract.graph_schema import ASSOCIATION_TARGETS, ASSOCIATIONS, NODE_TYPES
 from ..contract.server import CONTRACT_VERSION
 
 MAX_REQUESTS = 64
@@ -42,16 +42,6 @@ DEFAULT_FLAG_GROUPS = (
     "pair_window_counts",
 )
 PRIMARY_KEYS = {"Token": "token_id", "Address": "address_id"}
-# Target types of each (forward, reverse) association pair, aligned with ASSOCIATIONS.
-ASSOCIATION_TARGETS = (
-    ("Account", "Party"),
-    ("Token", "Party"),
-    ("Account", "Token"),
-    ("Device", "Party"),
-    ("Device", "Account"),
-    ("IP", "Party"),
-    ("Address", "Party"),
-)
 IDENTITY_ORDER_RELATIONS = (
     "Account_Owned_By_Party",
     "Account_Bound_From_Token",
