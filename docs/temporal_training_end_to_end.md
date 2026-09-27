@@ -114,12 +114,12 @@ stubs](#hubs-and-stubs)).
 
 `mule-temporal` is `python -m mule_pattern_learner` (the entry point exists
 after `pip install -e .`; the project needs an editable install because it reads `gsql/`
-from the repository). Every setting is built in (`DEFAULT_RUN` in
+from the repository). Every setting is built in (`DEFAULT_CONFIG` in
 [config.py](../src/mule_pattern_learner/config.py)), so no
-command needs a configuration file; `--config overrides.toml` changes only the keys it
-sets. The dataset identity is the scope's recorded source (or, for a new scope, the graph
-name plus a hash of its vertex counts), and the prepared cohort is written to
-`<run>/prepared/` inside the run directory. Only `.env` is required.
+command reads a configuration file. The source id is the scope's recorded source (or,
+for a new scope, the graph name plus a hash of its vertex counts), and the prepared
+dataset is written to `<run>/prepared/` inside the run directory. Only `.env` is
+required.
 
 ## The queries and the data they pull
 
@@ -132,15 +132,15 @@ feature contract drift apart.
 
 ### temporal_create_training_scope (once per experiment)
 
-- **When:** the first `train` or `prepare`, only if the configured `scope_id` does not
-  exist (set `create_scope = false` to forbid the write).
+- **When:** the first `train` or `prepare`, only if the configured `scope.id` does not
+  exist (`scope.create = False` forbids the write).
 - **Reads:** every Account and Party, all `Party_Owns_Account` tenures (all time), and,
   for the `linked` rule, every Payment_Transaction and Zelle_Transfer of unowned internal
   accounts with their counterparty accounts. Never reads labels.
 - **Computes:** ownership components (label propagation of the minimum internal vertex ID
   over ownership edges). Each component gets partition 1 (train, 70%), 2 (validation,
   15%) or 3 (test, 15%) from a seeded hash of the component ID.
-- **Unowned accounts** (`unowned_policy`, config `scope_unowned`):
+- **Unowned accounts** (`unowned_policy`, config `scope.unowned`):
   - `independent`: each unowned account is its own component (the old rule; `strict_mule_v1`).
   - `shared`: unowned external accounts and unowned bank ledger accounts
     (`account_type = "gl"`, the bank's income books for fees and interest) get partition 1
@@ -167,7 +167,7 @@ feature contract drift apart.
 - `temporal_scope_policy(scope_id)` (read-only, about 0.7 s) counts unowned member
   accounts by class (shared, independent, linked) and side (internal, external). The
   client infers the stored rule from these counts and refuses to run when it differs from
-  `scope_unowned`. It runs at preparation and at the start of every streamed run.
+  `scope.unowned`. It runs at preparation and at the start of every streamed run.
 
 ### temporal_scope_population (preparation)
 
@@ -670,28 +670,30 @@ changes made while a run is in progress are not detected.
 
 ## Configuration reference
 
-The run settings are `DEFAULT_RUN` in
-[config.py](../src/mule_pattern_learner/config.py) plus the
-operational defaults beside it. An optional `--config` TOML or JSON file overrides keys.
-Tables merge key by key, so `[sampler] backend = "torch"` or `[dates] train = [...]`
-changes only that key; lists and scalars replace the default. Unknown keys are rejected.
+The run settings are `DEFAULT_CONFIG` in
+[config.py](../src/mule_pattern_learner/config.py): a frozen `RunConfig` with one
+section per concern, each of which checks its values when it is built. Another run
+is built in Python with `dataclasses.replace` or `RunConfig.with_changes`, which
+changes only the settings it names; unknown keys are rejected.
 
-| Group | Keys (built-in value) |
+| Section | Settings (built-in value) |
 |---|---|
-| Scope | `scope_id` (strict_mule_v2), `scope_unowned` (linked), `create_scope` (true: created on first use); `dataset_id` is derived from the scope or the graph (a pinned value must match the prepared dataset) |
-| Labels | `reveal_per_split` (20), `reveal_salt` (defaults to `seed`), `evaluation_unlabeled_limit` (2000) |
-| Dates | `[dates]` train 2024-07-01, validation 2024-10-01, test 2025-01-01; `[seed_limits]` 20000 / 2000 / 2000 |
-| Sampler | `[sampler]` recent 8, older 4, distinct 4, associations 2, max_history 2048, relation_fanouts [8, 4], association_fanout 1, association_slots 2, backend auto, evaluation_seed 0; `[sampler.children]` 4 / 2 / 2 / 0 / 2048 |
-| Model | `fanouts` [16, 4], `feature_groups`, `architecture` split, `slot_sum` true, `hidden` 64, `heads` 4, `dropout` 0.15 |
-| Optimisation | `batch_size` 64, `epochs` 30, `steps_per_epoch` 100, `patience` 6, `learning_rate` 0.001, `weight_decay` 0.0001, `class_prior` 0.001, `positive_weight` balanced, `weight_average_decay` 0.99, `seed` 42 |
-| Runtime | `device` auto, `threads` 4, `deterministic` true, `prefetch_batches` 2, `checkpoint_every_steps` 0, `log_every_steps` 10, `max_rejected_root_fraction` 0.0 |
-| Transport | `request_batch_size` 8, `query_concurrency` 16, `context_lru_capacity` 256, `encoding_check_every` 64, `max_query_attempts` 6, `max_outage_s` 900 |
+| `scope` | `id` (strict_mule_v2), `unowned` (linked), `create` (true: created on first use), `reveal_per_split` (20), `reveal_salt` (42) |
+| `dataset` | `dates` train 2024-07-01, validation 2024-10-01, test 2025-01-01; `seed_limits` 20000 / 2000 / 2000; `seed` (42, the seed reservoirs); `split_seed` (42) |
+| `sampler` | `fanouts` [16, 4]; `roots` recent 8, older 4, distinct 4, associations 2, max_history 2048; `children` 4 / 2 / 2 / 0 / 2048; `relation_fanouts` [8, 4], `association_fanout` 1, `association_slots` 2, `backend` auto, `evaluation_seed` 0 |
+| `features` | the built-in feature groups |
+| `model` | `architecture` split, `hidden` 64, `heads` 4, `dropout` 0.15, `slot_sum` true |
+| `loss` | `class_prior` 0.001, `positive_weight` balanced |
+| `training` | `seed` 42, `epochs` 30, `steps_per_epoch` 100, `batch_size` 64, `patience` 6, `learning_rate` 0.001, `weight_decay` 0.0001, `weight_average_decay` 0.99, `proxy_unlabeled_limit` 2000 |
+| `transport` | `request_batch_size` 8, `query_concurrency` 16, `context_lru_capacity` 256, `encoding_check_every` 64, `max_query_attempts` 6, `max_outage_s` 900 |
+| `runtime` | `device` auto, `threads` 4, `deterministic` true, `prefetch_batches` 2, `checkpoint_every_steps` 0, `log_every_steps` 10, `max_rejected_root_fraction` 0.0 |
 
-Preparation keys (the derived dataset_id, an optional shared `prepared_id`, scope_id,
-scope_unowned, dates, seed_limits, split_seed, cohort_seed and the candidate pools) must
-match between preparation and training; other settings, feature groups included, may
-change between runs. A new `--output` prepares its own
-cohort; `--dataset <run>_run/prepared` reuses another run's.
+The source id is derived from the scope or the graph, never configured. The dataset
+settings (the source id, `scope.id`, `scope.unowned`, the `dataset` section and the
+sampler's candidate pools) must match between preparation and training; their
+fingerprint is the dataset id. Other settings, feature groups and the training seed
+included, may change between runs. A new `--output` prepares its own dataset;
+`--dataset <run>_run/prepared` reuses another run's.
 
 ## Troubleshooting
 
@@ -700,7 +702,7 @@ cohort; `--dataset <run>_run/prepared` reuses another run's.
 | `Installed query differs from repository source or is not installed` | Run `mule-temporal install`; it recompiles only the stale queries (the context query alone takes most of the roughly 50 minutes a full install needs) |
 | `Prepared dataset ... was built from different GSQL sources` | The GSQL changed after preparation; train into a new `--output` (the first run installs the current queries) |
 | `Account label contract violated after the reveal` | The label attributes are inconsistent; see [label reveal](label_reveal.md) and run `temporal_validate_account_supervision` |
-| Scope rule mismatch | The scope was created with another `scope_unowned`; use the stored rule or a new `scope_id` |
+| Scope rule mismatch | The scope was created with another `scope.unowned`; use the stored rule or a new `scope.id` |
 | `Live graph counts changed; freeze the source and prepare a new dataset` | The graph was modified after preparation; freeze it and prepare a new dataset |
 | `TigerGraph rejected ... training roots so far` or `validation: TigerGraph rejected ... roots` | Roots failed a per-request check beyond `max_rejected_root_fraction`, or an observed positive was rejected; the statuses name why (for example `history_capacity_exceeded`) |
 | cuGraph probe warning | pylibcugraph or the GPU failed the probe; training continues with the torch sampler; run `verify_cugraph_sampler.py` |
