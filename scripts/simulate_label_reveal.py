@@ -1,10 +1,11 @@
 """Simulate the label reveal over many salts to show how its outcome varies.
 
-Read-only. Fetches the reveal's inputs once (the query verify_label_reveal.py uses),
-then runs reference.label_reveal.plan, the Python mirror of temporal_reveal_mule_labels
-with the job's own hash and defaults, once per salt. Prints, per split, the mules and the
-median and 5th to 95th percentile of the mules discovered before the split's cutoff
-(eligible) and of those revealed. It never calls the reveal job and writes nothing.
+Read-only. Fetches the reveal's inputs once (reference.label_reveal.INPUTS_QUERY, which
+tests/integration/test_label_reveal.py also runs), then runs reference.label_reveal.plan,
+the Python mirror of temporal_reveal_mule_labels with the job's own hash and defaults,
+once per salt. Prints, per split, the mules and the median and 5th to 95th percentile
+of the mules discovered before the split's cutoff (eligible) and of those revealed. It
+never calls the reveal job and writes nothing.
 
   python scripts/simulate_label_reveal.py [--runs 1000] [--first-salt 0]
 """
