@@ -131,7 +131,7 @@ The trainer depends on `ObservedLabelReader`, not on a masking implementation.
 Its table contains `account_id`, `known_positive`, `known_from_ms`. Unlisted
 accounts are unlabeled; usable positives must be known before the scoring cutoff.
 Oracle `is_mule`, mask and ring columns are rejected from this interface. Every
-run reads its labels from the graph through `GraphObservedLabels`, the only source
+run reads its labels from the graph through `TigerGraphObservedLabels`, the only source
 that runs the population queries with `include_observed = TRUE`; tests may hand
 preparation a table of labels instead, and the population queries then skip graph
 label reads completely.

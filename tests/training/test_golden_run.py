@@ -50,11 +50,11 @@ from mule_pattern_learner.data.preparation import prepare
 from mule_pattern_learner.paths import DatasetPaths, RunPaths
 from mule_pattern_learner.pipeline.check import first_step
 from mule_pattern_learner.testing.builders import neighbourhood, scope_population
-from mule_pattern_learner.testing.fake_graph import FakeExecutor
+from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
 from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffs
 from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
-from mule_pattern_learner.tigergraph.labels import GraphObservedLabels
+from mule_pattern_learner.tigergraph.labels import TigerGraphObservedLabels
 from mule_pattern_learner.tigergraph.render import render_context_query
 from mule_pattern_learner.tigergraph.scope import TigerGraphScope
 from mule_pattern_learner.training import trainer
@@ -71,7 +71,7 @@ GOLDEN_CHANGES: dict[str, Any] = {
 }
 # The source id of the fake graph's data.
 GOLDEN_SOURCE = "golden_fixture"
-# Accounts in the fake scope, and its three split cutoffs (FakeExecutor.last_visible).
+# Accounts in the fake scope, and its three split cutoffs (FakeTigerGraph.last_visible).
 POPULATION = 200
 CUTOFF_SEQS = (101, 102, 103)
 
@@ -80,9 +80,9 @@ def golden_config() -> RunConfig:
     return DEFAULT_CONFIG.with_changes(GOLDEN_CHANGES)
 
 
-def golden_executor() -> FakeExecutor:
+def golden_executor() -> FakeTigerGraph:
     """The fake graph: v5 neighbourhoods, one hub and one child over its history capacity."""
-    return FakeExecutor(
+    return FakeTigerGraph(
         factory=neighbourhood,
         hubs=[("N3", cutoff) for cutoff in CUTOFF_SEQS],
         statuses={"N5": "history_capacity_exceeded"},
@@ -90,7 +90,7 @@ def golden_executor() -> FakeExecutor:
     )
 
 
-def golden_source(executor: FakeExecutor, config: RunConfig) -> ContextSource:
+def golden_source(executor: FakeTigerGraph, config: RunConfig) -> ContextSource:
     """The source open_context_source builds for a streamed preparation."""
     return build_context_source(
         TigerGraphContextFetcher(executor),
@@ -100,7 +100,7 @@ def golden_source(executor: FakeExecutor, config: RunConfig) -> ContextSource:
     )
 
 
-def prepare_golden(directory: Path) -> tuple[RunConfig, DatasetPaths, FakeExecutor]:
+def prepare_golden(directory: Path) -> tuple[RunConfig, DatasetPaths, FakeTigerGraph]:
     """Prepare the golden dataset with the built-in label source (graph_observed)."""
     config = golden_config()
     executor = golden_executor()
@@ -110,7 +110,7 @@ def prepare_golden(directory: Path) -> tuple[RunConfig, DatasetPaths, FakeExecut
         GOLDEN_SOURCE,
         dataset,
         {"Account": POPULATION},
-        GraphObservedLabels(),
+        TigerGraphObservedLabels(),
         scope=TigerGraphScope(executor),
         cutoffs=TigerGraphCutoffs(executor),
         hubs=TigerGraphHubs(executor),

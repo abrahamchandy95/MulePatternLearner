@@ -35,7 +35,7 @@ from mule_pattern_learner.model.tgat import TGAT
 from mule_pattern_learner.reference import batch_features
 from mule_pattern_learner.reference.batch_features import node_features
 from mule_pattern_learner.testing.builders import association, context, message
-from mule_pattern_learner.testing.fake_graph import FakeExecutor
+from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher, validate_context
 
 ROOT = ContextKey("Account", "root", 1000, 100_000_000)
@@ -182,7 +182,7 @@ def test_built_in_batches_feed_root_pool_counts_to_the_summary_branch() -> None:
         payer: context(payer, [inflow]),
     }
     roots = [ROOT, other, ROOT]
-    executor = FakeExecutor(rows)
+    executor = FakeTigerGraph(rows)
     with ContextSource(
         TigerGraphContextFetcher(executor), plan=extraction_plan(PLAN), sampler=SAMPLER
     ) as source:
@@ -225,7 +225,7 @@ def test_pool_groups_feed_models_that_read_them_for_roots_only() -> None:
     tabular = CONFIG.with_changes({"model": {"architecture": "summary"}})
     plan = tabular.feature_plan()
     assert plan.architecture == "summary" and plan.names("summary") == POOL_NAMES
-    executor = FakeExecutor({ROOT: context(ROOT, POOL)})
+    executor = FakeTigerGraph({ROOT: context(ROOT, POOL)})
     with ContextSource(
         TigerGraphContextFetcher(executor), plan=extraction_plan(plan), sampler=SAMPLER
     ) as source:

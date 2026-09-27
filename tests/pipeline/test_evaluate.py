@@ -14,7 +14,7 @@ from mule_pattern_learner.evaluation.truth import ParquetTruth
 from mule_pattern_learner.paths import RunPaths
 from mule_pattern_learner.pipeline import evaluate as pipeline_evaluate
 from mule_pattern_learner.runtime.progress import emit
-from mule_pattern_learner.testing.builders import base_config, checkpoint, prepared_dataset
+from mule_pattern_learner.testing.builders import base_config, prepared_dataset, saved_model
 from mule_pattern_learner.tigergraph.oracle import TigerGraphTruth
 
 
@@ -24,7 +24,7 @@ def test_evaluate_run_connects_after_its_checks_and_reads_truth_on_that_connecti
     config = base_config()
     dataset, _, _ = prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     run = RunPaths(tmp_path / "run")
-    checkpoint(run.model, config, dataset)
+    saved_model(run.model, config, dataset)
     executor = SimpleNamespace()
     connected: list[TransportConfig] = []
     verified: list[Any] = []
@@ -49,7 +49,7 @@ def test_evaluate_run_connects_after_its_checks_and_reads_truth_on_that_connecti
     existing.unlink()
     # The dataset is the model's own: its dataset id's directory in data.
     result = pipeline_evaluate.evaluate_run(run, data=tmp_path)
-    # The checkpoint's retry budgets, the frozen source checked, the graph's truth on it.
+    # The model's retry budgets, the frozen source checked, the graph's truth on it.
     assert connected == [config.transport]
     assert verified == [executor]
     assert result["scope"].executor is executor and result["fetcher"].executor is executor

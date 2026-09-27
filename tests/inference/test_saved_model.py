@@ -45,11 +45,11 @@ from mule_pattern_learner.inference.saved_model import SavedModel, saved_run_con
 from mule_pattern_learner.inference.score_accounts import score
 from mule_pattern_learner.paths import DATA_DIR, DatasetPaths, RunPaths
 from mule_pattern_learner.testing.builders import neighbourhood, scope_population
-from mule_pattern_learner.testing.fake_graph import FakeExecutor
+from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
 from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffs
 from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
-from mule_pattern_learner.tigergraph.labels import GraphObservedLabels
+from mule_pattern_learner.tigergraph.labels import TigerGraphObservedLabels
 from mule_pattern_learner.tigergraph.scope import TigerGraphScope
 from mule_pattern_learner.training.trainer import train
 
@@ -130,7 +130,7 @@ def test_models_saved_before_the_restructure_score_as_they_did(name: str) -> Non
         ContextKey("Account", account, 103, cutoff_ms("2025-01-01"), saved.config.scope.id, 3)
         for account in ACCOUNTS
     ]
-    fetcher = TigerGraphContextFetcher(FakeExecutor(factory=neighbourhood))
+    fetcher = TigerGraphContextFetcher(FakeTigerGraph(factory=neighbourhood))
     predictor = Predictor(saved, fetcher=fetcher)
     try:
         frame = predictor.predict(keys)
@@ -165,7 +165,7 @@ def test_models_whose_columns_moved_are_refused(tmp_path: Path) -> None:
 
 
 def fixture_source(config: RunConfig) -> ContextSource:
-    executor = FakeExecutor(factory=neighbourhood)
+    executor = FakeTigerGraph(factory=neighbourhood)
     return build_context_source(
         TigerGraphContextFetcher(executor),
         extraction_plan(config.feature_plan()),
@@ -190,14 +190,14 @@ def test_the_dataset_prepared_before_the_restructure_scores_as_it_did(tmp_path: 
 
 def test_the_same_settings_prepare_the_dataset_of_the_old_code(tmp_path: Path) -> None:
     config = DEFAULT_CONFIG.with_changes(CHANGES)
-    executor = FakeExecutor(factory=neighbourhood, population=scope_population(200))
+    executor = FakeTigerGraph(factory=neighbourhood, population=scope_population(200))
     dataset = DatasetPaths(tmp_path / "dataset")
     prepare(
         config,
         SOURCE,
         dataset,
         {"Account": 200},
-        GraphObservedLabels(),
+        TigerGraphObservedLabels(),
         scope=TigerGraphScope(executor),
         cutoffs=TigerGraphCutoffs(executor),
         hubs=TigerGraphHubs(executor),

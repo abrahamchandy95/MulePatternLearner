@@ -36,7 +36,7 @@ from mule_pattern_learner.testing.builders import (
     root,
 )
 from mule_pattern_learner.testing.fake_connection import FakeConn, executor
-from mule_pattern_learner.testing.fake_graph import ContextServer, FakeExecutor
+from mule_pattern_learner.testing.fake_graph import ContextServer, FakeTigerGraph
 from mule_pattern_learner.tigergraph.context_query import (
     ContextTimeoutError,
     TigerGraphContextFetcher,
@@ -110,7 +110,7 @@ def test_sources_count_requested_distinct_and_cached_contexts() -> None:
     # Each context of a batch is asked for once: the roots it pins are not counted again.
     roots = [ContextKey("Account", f"R{i:02}", 100, 1000) for i in range(8)]
     with ContextSource(
-        TigerGraphContextFetcher(FakeExecutor(factory=neighbourhood)),
+        TigerGraphContextFetcher(FakeTigerGraph(factory=neighbourhood)),
         plan=DEFAULT_TGAT_PLAN,
         sampler=SMALL_SAMPLER,
     ) as source:
@@ -346,7 +346,7 @@ def test_corrupted_or_missing_spot_check_vectors_fail() -> None:
 
 def test_the_context_source_serves_repeats_from_its_bounded_lru() -> None:
     keys = [ContextKey("Account", str(i), 100, 1000) for i in range(80)]
-    memory = ContextSource(TigerGraphContextFetcher(FakeExecutor({})), capacity=3)
+    memory = ContextSource(TigerGraphContextFetcher(FakeTigerGraph({})), capacity=3)
     rows = memory.fetch(keys)
     assert len(memory.memory) == 3
     calls = memory.query_calls
@@ -357,7 +357,7 @@ def test_the_context_source_serves_repeats_from_its_bounded_lru() -> None:
 def test_hops_use_their_own_pools_and_only_spot_checks_carry_encodings() -> None:
     root = ContextKey("Account", "root", 100, 1000)
     many = [message(99 - i, 990 - 10 * i, root, node_id=f"p{i}") for i in range(12)]
-    executor = FakeExecutor({root: context(root, many)})
+    executor = FakeTigerGraph({root: context(root, many)})
     with ContextSource(
         TigerGraphContextFetcher(executor),
         plan=DEFAULT_TGAT_PLAN,
@@ -387,7 +387,7 @@ def test_hops_use_their_own_pools_and_only_spot_checks_carry_encodings() -> None
 
 def test_same_context_in_two_scopes_or_hops_is_never_shared() -> None:
     key = ContextKey("Account", "a", 100, 1000, "strict", 1)
-    executor = FakeExecutor()
+    executor = FakeTigerGraph()
     store = ContextSource(
         TigerGraphContextFetcher(executor), plan=DEFAULT_TGAT_PLAN, sampler=SMALL_SAMPLER
     )

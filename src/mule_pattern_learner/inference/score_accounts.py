@@ -27,7 +27,7 @@ from .saved_model import SavedModel
 
 
 def score(
-    checkpoint: Path | SavedModel,
+    model: Path | SavedModel,
     dataset: DatasetPaths,
     date: str,
     split: str,
@@ -50,7 +50,7 @@ def score(
     for path in (output, rejected_output):
         if path.exists():
             raise FileExistsError(path)
-    saved = SavedModel.of(checkpoint)
+    saved = SavedModel.of(model)
     config = saved.config
     manifest, accounts = load_prepared(dataset)
     saved.check_dataset(dataset)
@@ -108,7 +108,7 @@ SCORE_SCHEMA = pa.schema(
 
 
 def query_hubs(reader: HubReader, cutoff_seqs: list[int], sampler: SamplerPlan) -> HubRegistry:
-    """Unscoped hub registry for arbitrary cutoffs, with the checkpoint's threshold.
+    """Unscoped hub registry for arbitrary cutoffs, with the saved model's threshold.
 
     Scoring arbitrary accounts runs unscoped, so its rows carry visibility phase 3.
     """
@@ -144,7 +144,7 @@ def check_new_outputs(output: Path) -> None:
 
 
 def score_new_accounts(
-    checkpoint: Path | SavedModel,
+    model: Path | SavedModel,
     account_ids: Iterable[str],
     date: str,
     output: Path,
@@ -170,7 +170,7 @@ def score_new_accounts(
     """
     check_new_outputs(output)
     rejected_output = rejected_path(output)
-    saved = SavedModel.of(checkpoint)
+    saved = SavedModel.of(model)
     seq, ms = resolve_cutoff(cutoffs, date)
     predictor = Predictor(saved, contexts, fetcher=fetcher, hubs=hubs)
     contexts = predictor.contexts

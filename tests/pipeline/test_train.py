@@ -23,7 +23,7 @@ from mule_pattern_learner.pipeline.connect import open_context_source
 from mule_pattern_learner.pipeline.evaluate import evaluate_run
 from mule_pattern_learner.pipeline.train import BASELINE_RUN, train_run
 from mule_pattern_learner.testing.builders import neighbourhood, scope_population
-from mule_pattern_learner.testing.fake_graph import FakeExecutor
+from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
 
 
 def test_minimal_command_and_run_defaults(tmp_path: Path) -> None:
@@ -64,19 +64,19 @@ FAKE_SOURCE = "end_to_end_fixture"
 POPULATION = 200
 
 
-def fake_graph(monkeypatch: pytest.MonkeyPatch) -> FakeExecutor:
+def fake_graph(monkeypatch: pytest.MonkeyPatch) -> FakeTigerGraph:
     """The fake graph behind every connection of the pipeline; its graph writes are no-ops.
 
     It holds a frozen scope whose known mules are revealed, so preparation only reads.
     """
-    executor = FakeExecutor(
+    executor = FakeTigerGraph(
         factory=neighbourhood,
         hubs=[("N3", cutoff) for cutoff in (101, 102, 103)],
         statuses={"N5": "history_capacity_exceeded"},
         population=scope_population(POPULATION),
     )
 
-    def connect(transport: TransportConfig) -> FakeExecutor:
+    def connect(transport: TransportConfig) -> FakeTigerGraph:
         return executor
 
     def nothing(*args: Any, **kwargs: Any) -> None:

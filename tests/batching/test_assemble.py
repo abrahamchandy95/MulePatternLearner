@@ -28,7 +28,7 @@ from mule_pattern_learner.testing.builders import (
     roots,
     slots,
 )
-from mule_pattern_learner.testing.fake_graph import FakeExecutor, FakeStore
+from mule_pattern_learner.testing.fake_graph import FakeStore, FakeTigerGraph
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
 
 MPS = torch.backends.mps.is_available()
@@ -241,7 +241,7 @@ def test_summary_models_fetch_only_roots() -> None:
 def test_recursive_context_keeps_same_neighbor_at_two_different_event_times() -> None:
     root = ContextKey("Account", "root", 100, 1000)
     messages = [message(90, 900, root), message(80, 800, root)]
-    source = FakeExecutor({root: context(root, messages)})
+    source = FakeTigerGraph({root: context(root, messages)})
     store = ContextSource(TigerGraphContextFetcher(source))
     batch = build_batch(store, [root], fanouts=(2, 2))
     assert child_key(messages[0]) in source.requested
@@ -278,7 +278,7 @@ def test_one_hub_or_rejected_child_no_longer_aborts_the_batch() -> None:
         message(70, 700, root, node_id="fine", relation="zelle_in"),
         association(root),
     ]
-    executor = FakeExecutor(
+    executor = FakeTigerGraph(
         {root: context(root, messages)}, statuses={"busy": "history_capacity_exceeded"}
     )
     stats: dict[str, Any] = {}
@@ -312,7 +312,7 @@ def test_one_hub_or_rejected_child_no_longer_aborts_the_batch() -> None:
 
 def test_rejected_roots_raise_in_batches_and_are_dropped_by_root_batches() -> None:
     roots = [ContextKey("Account", f"R{i:02}", 100, 1000) for i in range(64)]
-    executor = FakeExecutor(statuses={"R07": "missing_entity"})
+    executor = FakeTigerGraph(statuses={"R07": "missing_entity"})
     with ContextSource(
         TigerGraphContextFetcher(executor),
         plan=DEFAULT_TGAT_PLAN,

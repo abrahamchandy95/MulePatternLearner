@@ -27,7 +27,7 @@ from mule_pattern_learner.model.build import build_model
 from mule_pattern_learner.model.summary_mlp import SummaryMLP
 from mule_pattern_learner.model.tgat import TGAT
 from mule_pattern_learner.testing.builders import context, message
-from mule_pattern_learner.testing.fake_graph import FakeExecutor
+from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
 
 CONFIG = DEFAULT_CONFIG
@@ -45,7 +45,7 @@ PAYMENTS = [
 
 def test_isolated_entities_score_under_both_architectures() -> None:
     key = ContextKey("Token", "alone", 100, 1000)
-    store = ContextSource(TigerGraphContextFetcher(FakeExecutor({})))
+    store = ContextSource(TigerGraphContextFetcher(FakeTigerGraph({})))
     batch = build_batch(store, [key])
     assert not batch["first_mask"].any()
     tgat = TGAT(16, 4, 0, plan=FeaturePlan(), slot_sum=False, first_fanout=8)
@@ -138,7 +138,7 @@ def test_output_shapes(groups: tuple[str, ...]) -> None:
 
 
 def test_built_in_batches_fit_the_slot_sum_and_train_it() -> None:
-    executor = FakeExecutor({ROOT: context(ROOT, PAYMENTS)})
+    executor = FakeTigerGraph({ROOT: context(ROOT, PAYMENTS)})
     with ContextSource(
         TigerGraphContextFetcher(executor), plan=extraction_plan(PLAN), sampler=SAMPLER
     ) as source:
@@ -243,7 +243,7 @@ def test_saved_models_with_the_slot_sum_score_like_the_trained_model(tmp_path: P
     torch.save(
         payload(CONFIG, new, contract_fingerprint(), PLAN.fingerprint()), tmp_path / "new.pt"
     )
-    executor = FakeExecutor({ROOT: context(ROOT, PAYMENTS)})
+    executor = FakeTigerGraph({ROOT: context(ROOT, PAYMENTS)})
     with ContextSource(
         TigerGraphContextFetcher(executor), plan=extraction_plan(PLAN), sampler=SAMPLER
     ) as source:
@@ -287,7 +287,7 @@ def test_nonsense_options_are_rejected() -> None:
 def test_zero_node_features_have_no_unused_projection() -> None:
     root = ContextKey("Account", "root", 100, 1000)
     zero = FeaturePlan(("message_core", "time_encoding"), "tgat")
-    source = ContextSource(TigerGraphContextFetcher(FakeExecutor({})), plan=zero)
+    source = ContextSource(TigerGraphContextFetcher(FakeTigerGraph({})), plan=zero)
     batch = build_batch(source, [root], plan=zero)
     assert batch["x"].shape[-1] == batch["second_x"].shape[-1] == 0
     model = TGAT(16, 4, 0, plan=zero, slot_sum=False, first_fanout=8)

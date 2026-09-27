@@ -1,7 +1,7 @@
 """Observed labels: the revealed positives and their discovery times, never truth.
 
 prepare() accepts any ports.ObservedLabelReader, so tests can supply a table of labels
-instead of the graph's (tigergraph.labels.GraphObservedLabels).
+instead of the graph's (tigergraph.labels.TigerGraphObservedLabels).
 """
 
 from __future__ import annotations

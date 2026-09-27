@@ -9,7 +9,7 @@ import pytest
 
 from mule_pattern_learner.testing.builders import FrameObservedLabels, unit_config
 from mule_pattern_learner.testing.fake_graph import Runner
-from mule_pattern_learner.tigergraph.labels import GraphObservedLabels
+from mule_pattern_learner.tigergraph.labels import TigerGraphObservedLabels
 from mule_pattern_learner.tigergraph.scope import TigerGraphScope
 
 # A table source with no labels: population queries then run without include_observed.
@@ -44,7 +44,7 @@ def test_only_graph_labels_read_labels_from_the_graph() -> None:
         TigerGraphScope(fake), config.scope.id, config.dataset, FrameObservedLabels(NO_LABELS)
     )
     frame, _ = select_accounts(
-        TigerGraphScope(fake), config.scope.id, config.dataset, GraphObservedLabels()
+        TigerGraphScope(fake), config.scope.id, config.dataset, TigerGraphObservedLabels()
     )
     assert seen == [False, True] and frame.in_marginal.tolist() == [True]
     with pytest.raises(ValueError, match="explicit"):
@@ -59,7 +59,7 @@ def test_stale_population_queries_fail_fast() -> None:
     stale = Runner(lambda n, p: [{"status": "ok", "accounts": [population_row("A1", False, 5)]}])
     with pytest.raises(ValueError, match="predates the masked-label predicate"):
         select_accounts(
-            TigerGraphScope(stale), config.scope.id, config.dataset, GraphObservedLabels()
+            TigerGraphScope(stale), config.scope.id, config.dataset, TigerGraphObservedLabels()
         )
     # Without include_observed the query must return no label information.
     leaky = Runner(lambda n, p: [{"status": "ok", "accounts": [population_row("A1", True, 5)]}])
@@ -76,8 +76,8 @@ def test_stale_population_queries_fail_fast() -> None:
         }
     )
     with pytest.raises(ValueError, match="1 account.*'A3'.*mule install"):
-        GraphObservedLabels().read(metadata)
+        TigerGraphObservedLabels().read(metadata)
     metadata.loc[2, "known_from_ms"] = 0
-    labels = GraphObservedLabels().read(metadata)
+    labels = TigerGraphObservedLabels().read(metadata)
     assert labels.known_positive.tolist() == [True, False, False]
     assert labels.pu_label.tolist() == [1, 0, 0]

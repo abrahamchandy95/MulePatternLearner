@@ -35,7 +35,7 @@ from mule_pattern_learner.testing.builders import (
     message,
     supplied_labels,
 )
-from mule_pattern_learner.testing.fake_graph import FakeExecutor
+from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher, validate_context
 from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffs
 from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
@@ -57,7 +57,7 @@ def test_batch_ids_are_dense_per_type_cutoff_and_scope_and_never_global() -> Non
 
 
 def test_budget_rejects_before_database_calls_and_tensor_allocation() -> None:
-    executor = FakeExecutor({})
+    executor = FakeTigerGraph({})
     source = ContextSource(TigerGraphContextFetcher(executor))
     roots = [ContextKey("Account", str(i), 100, 1000) for i in range(129)]
     with pytest.raises(BatchCapacityError):
@@ -70,7 +70,7 @@ def test_budget_rejects_before_database_calls_and_tensor_allocation() -> None:
 def test_scope_follows_recursive_events_and_cache_never_crosses_scope() -> None:
     a = ContextKey("Account", "a", 100, 1000, "strict", 1)
     msg = message(90, 900, a)
-    source = FakeExecutor({a: context(a, [msg])})
+    source = FakeTigerGraph({a: context(a, [msg])})
     backend = ContextSource(TigerGraphContextFetcher(source))
     build_batch(backend, [a], fanouts=(2, 2))
     assert child_key(msg, a) in source.requested
@@ -84,7 +84,7 @@ def test_scope_follows_recursive_events_and_cache_never_crosses_scope() -> None:
 
 def test_stream_retention_is_bounded_across_many_disjoint_batches() -> None:
     backend = ContextSource(
-        TigerGraphContextFetcher(FakeExecutor({})), capacity=8, request_batch_size=16
+        TigerGraphContextFetcher(FakeTigerGraph({})), capacity=8, request_batch_size=16
     )
     for start in range(0, 512, 16):
         backend.fetch([ContextKey("Account", str(i), 100, 1000) for i in range(start, start + 16)])
@@ -109,7 +109,7 @@ def test_new_account_scoring_needs_neither_training_dataset_nor_labels(tmp_path:
     )
     plan = config.feature_plan()
     model = build_model(config.model, plan, config.sampler.fanouts[0])
-    checkpoint = tmp_path / "model.pt"
+    model_file = tmp_path / "model.pt"
     torch.save(
         {
             "state_dict": model.state_dict(),
@@ -119,10 +119,10 @@ def test_new_account_scoring_needs_neither_training_dataset_nor_labels(tmp_path:
             "config": config.to_dict(),
             "input_fingerprint": plan.fingerprint(),
         },
-        checkpoint,
+        model_file,
     )
 
-    class Executor(FakeExecutor):
+    class Executor(FakeTigerGraph):
         def run(self, name: str, params: dict[str, Any], **kwargs: Any) -> list[dict[str, Any]]:
             if name == "temporal_training_context":
                 assert params["scope_id"] == "" and params["per_relation"] == 1
@@ -131,7 +131,7 @@ def test_new_account_scoring_needs_neither_training_dataset_nor_labels(tmp_path:
     executor = Executor({}, last_visible=lambda index, ms: 99)
     output = tmp_path / "new.parquet"
     result = score_new_accounts(
-        checkpoint,
+        model_file,
         (f"never_trained_{i}" for i in range(13)),
         "2025-01-01",
         output,
@@ -250,7 +250,7 @@ def test_strict_preparation_and_nnpu_use_the_correct_phase_end_to_end(tmp_path: 
     run = RunPaths(tmp_path / "run")
     phases = []
 
-    class Executor(FakeExecutor):
+    class Executor(FakeTigerGraph):
         def run(self, name: str, params: dict[str, Any], **kwargs: Any) -> list[dict[str, Any]]:
             if name == "temporal_scope_population":
                 assert params["include_observed"] is False

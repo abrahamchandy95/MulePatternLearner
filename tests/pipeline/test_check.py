@@ -28,7 +28,7 @@ from mule_pattern_learner.testing.builders import (
 )
 from mule_pattern_learner.testing.fake_connection import RecordingExecutor
 from mule_pattern_learner.testing.fake_connection import executor as recording_executor
-from mule_pattern_learner.testing.fake_graph import FakeExecutor
+from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
 from mule_pattern_learner.tigergraph import gsql_text
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
 from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffs
@@ -78,9 +78,9 @@ def connecting(server: SimpleNamespace) -> Callable[[TransportConfig], Recording
     return connect
 
 
-def prepared(data: Path, config: RunConfig) -> tuple[DatasetPaths, FakeExecutor]:
+def prepared(data: Path, config: RunConfig) -> tuple[DatasetPaths, FakeTigerGraph]:
     """config's dataset of the fake graph, prepared in its directory under data."""
-    fake = FakeExecutor(factory=neighbourhood, hubs=[("N3", 101)], population=scoped_accounts())
+    fake = FakeTigerGraph(factory=neighbourhood, hubs=[("N3", 101)], population=scoped_accounts())
     dataset = DatasetPaths.of(dataset_id(UNIT_SOURCE, config), data)
     prepare(
         config,
