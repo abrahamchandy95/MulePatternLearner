@@ -3,10 +3,12 @@
 A run writes its files into its own directory (paths.RunPaths). It is resumable:
 resume.pt holds the model, optimizer, weight average, RNG and schedule position plus the
 selection state, written every epoch and every ``runtime.checkpoint_every_steps`` steps.
-``train(..., resume=True)`` continues from it and reproduces the uninterrupted run
-exactly: every epoch schedule is drawn up front from the saved generator state, and
-every step reseeds torch from a stable hash of (seed, epoch, step), so dropout and
-sampler draws never depend on history.
+``train(..., resume=True)`` continues from it and, on the same device with the same
+threads and determinism, reproduces the uninterrupted run exactly: every epoch
+schedule is drawn up front from the saved generator state, and every step reseeds
+torch from a stable hash of (seed, epoch, step), so dropout and sampler draws never
+depend on history. A resumed segment may change those three host settings; events.jsonl
+then records the change, since floating-point results may differ from there on.
 The sampler backend is resolved once per run and stored in resume.pt; a resume that
 would sample with another backend is refused unless the sampler section names that
 backend explicitly. Reported database calls, rejections and batch totals are saved
@@ -38,6 +40,7 @@ from ..artifacts import (
     HISTORY_COLUMNS,
     append_history,
     keep_history,
+    read_run_provenance,
     write_epochs,
     write_json,
     write_predictions,
@@ -86,7 +89,7 @@ from .schedule import (
     epoch_schedule,
     evaluation_indices,
 )
-from .summary import model_payload, prediction_frame, provenance, run_summary
+from .summary import host_settings, model_payload, prediction_frame, provenance, run_summary
 
 Batch = dict[str, torch.Tensor]
 BatchRequest = tuple[list[ContextKey], str, int]
@@ -406,9 +409,13 @@ class _TrainingRun:
         with recording(self.run.events):
             if state is not None:
                 self.restore(state)
-            if not self.run.config.exists():
-                run_provenance = provenance(self.device, self.backend, self.dataset_id)
+            host = host_settings(self.device, self.runtime)
+            if state is None or not self.run.config.exists():
+                # Without a resume state the run trains from its first step on this host.
+                run_provenance = provenance(host, self.backend, self.dataset_id)
                 write_run_config(self.run.config, self.config, run_provenance)
+            else:
+                self.note_host_changes(host)
             # The intervals after the resume position are logged again.
             keep_history(self.run.history, self.epoch, self.step)
             if self.epoch_rows:
@@ -416,7 +423,7 @@ class _TrainingRun:
             self.emit_event(
                 {
                     "event": "resume" if state is not None else "start",
-                    "device": str(self.device),
+                    **host,
                     "known_mules": label_summary(self.mask),
                     "loss": "nnPU",
                     "run": str(self.run.root),
@@ -429,6 +436,25 @@ class _TrainingRun:
             while self.epoch < self.training_config.epochs and not self.stopped:
                 self.run_epoch()
             return self.finish()
+
+    def note_host_changes(self, host: dict[str, Any]) -> None:
+        """Record in events.jsonl the host settings a resumed segment changes.
+
+        config.json's provenance holds those the run started with. The fingerprint
+        leaves them out, so a resume may change them, but then the remaining steps may
+        give other floating-point results than an uninterrupted run.
+        """
+        recorded = read_run_provenance(self.run.config)
+        changed = sorted(k for k, v in host.items() if k in recorded and recorded[k] != v)
+        if changed:
+            emit(
+                {
+                    "event": "host_settings",
+                    "saved": {k: recorded[k] for k in changed},
+                    "resumed": {k: host[k] for k in changed},
+                    "note": "the remaining steps may not reproduce an uninterrupted run",
+                }
+            )
 
     def emit_event(self, record: dict[str, Any]) -> dict[str, Any]:
         """Print record with the run's totals, recording it in events.jsonl; return it."""

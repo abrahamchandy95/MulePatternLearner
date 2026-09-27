@@ -170,6 +170,29 @@ def test_mid_epoch_step_checkpoint_resumes_exactly(
     assert resumed["contexts"]["distinct"] == straight["contexts"]["distinct"] > 0
 
 
+def test_a_resume_records_changed_host_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = base_config()
+    prepared_dataset(tmp_path / "dataset", config, monkeypatch)
+    with pytest.raises(RuntimeError, match="injected"):
+        fit(tmp_path, "run", config, contexts=FakeSource(config, fail=after_validation(1)))
+    run = RunPaths(tmp_path / "run")
+    started = read_run_config(run.config), json.loads(run.config.read_text())["provenance"]
+    faster = config.with_changes({"runtime": {"threads": 2, "deterministic": False}})
+    fit(tmp_path, "run", faster, resume=True)
+    events = read_events(run.events)
+    (change,) = [e for e in events if e["event"] == "host_settings"]
+    assert change["saved"] == {"deterministic": True, "threads": 1}
+    assert change["resumed"] == {"deterministic": False, "threads": 2}
+    (resumed,) = [e for e in events if e["event"] == "resume"]
+    assert (resumed["device"], resumed["threads"], resumed["deterministic"]) == ("cpu", 2, False)
+    # config.json keeps the settings and host the run started with.
+    assert (read_run_config(run.config), json.loads(run.config.read_text())["provenance"]) == (
+        started
+    )
+
+
 def test_a_resumed_run_logs_each_interval_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -212,12 +235,15 @@ def test_the_run_records_its_settings_provenance_and_epochs(
         "git_dirty",
         "versions",
         "device",
+        "threads",
+        "deterministic",
         "sampler_backend",
         "dataset_id",
         "started",
     }
     assert set(provenance["versions"]) == set(PACKAGES) and provenance["versions"]["torch"]
     assert (provenance["device"], provenance["sampler_backend"]) == ("cpu", "torch")
+    assert (provenance["threads"], provenance["deterministic"]) == (1, True)
     assert provenance["dataset_id"] == dataset_id(RUNTIME_SOURCE, config) == result["dataset_id"]
     # The metrics hold no history: its intervals and epochs have their own files.
     assert "history" not in json.loads(run.metrics.read_text())

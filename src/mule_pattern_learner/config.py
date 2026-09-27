@@ -373,8 +373,11 @@ class RuntimeConfig:
         _set(self, "max_rejected_root_fraction", fraction)
 
 
-# The sections fingerprint() leaves out: they never change a run's numbers. Provenance
-# records the device, threads and determinism a run used.
+# The sections fingerprint() leaves out, so a resumed run may change them. The transport
+# section and the runtime's prefetch, checkpoint, log and rejection settings never change
+# a run's numbers. The device, threads and determinism can change its floating-point
+# results: config.json's provenance records those the run started with, and a resumed
+# segment that changes them says so in events.jsonl.
 RUNTIME_SECTIONS = ("transport", "runtime")
 
 
