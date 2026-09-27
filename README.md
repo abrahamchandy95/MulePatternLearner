@@ -108,11 +108,11 @@ The other commands (`install`, `prepare`, `score`, `score-new`, `evaluate` and
 The tests never connect to TigerGraph. Tests marked `cuda` need a GPU and are deselected
 by default; run them on a CUDA host with `.venv/bin/python -m pytest tests -m cuda`.
 
-The scripts in `scripts/temporal/` install schema additions and run live checks against
-the graph; each prints its purpose with `--help` without connecting. The verification
-scripts that record a report write it under `artifacts/temporal/` (git-ignored);
-`--output` chooses another path. The one-time schema installers keep their preflight
-backup next to their documentation in `docs/`.
+The scripts in `scripts/temporal/` run experiments and live checks against the graph;
+each prints its purpose with `--help` without connecting. The verification scripts that
+record a report write it under `artifacts/temporal/` (git-ignored); `--output` chooses
+another path. The one-time schema installer scripts, already run against the live graph,
+are kept in git history.
 
 ## License
 

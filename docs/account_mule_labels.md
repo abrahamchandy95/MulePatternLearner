@@ -102,23 +102,21 @@ values outside 0/1. Every violation counter should be zero. The paginated export
 is an oracle-supervision endpoint, not a feature
 endpoint. Use the last returned `account_id` as `after_id` for the next page.
 
-The additive live migration preserves existing data and leaves old accounts
-unknown/masked until the new load supplies truth. It does not relabel the old
-corpus as legitimate and does not invent labels. The old five-column
+The live graph reached this contract through two one-off migrations. Both were
+applied once and are kept in git history, not in the tree. The first added the
+fields and left existing accounts unknown and masked until a new load supplied
+truth; it did not relabel the old corpus as legitimate or invent labels. The
+second converted the earlier boolean label to the integer `is_mule`. TigerGraph
+appends a replacement attribute in storage, so `is_mule` is stored last; the
+loader maps the unchanged CSV column order to that storage order, and the
+canonical schema uses the same final order. The old five-column
 `mt_load_account` job is preserved for compatibility and skips the new fields;
 use the new account loader or update the regenerated exporter's loading job to
 actually populate them.
 
-The earlier boolean deployment is converted with
-`scripts/temporal/convert_mule_label_to_integer.py`. It backs up supervision before
-replacing the attribute and verifies every label afterwards. TigerGraph appends
-the replacement integer attribute in storage; the loader maps the unchanged CSV
-column order to that storage order. The canonical schema uses the same final order.
-
 ## Files
 
 - [Canonical schema](../gsql/schema/temporal_schema.gsql)
-- [Existing-graph migration](../gsql/schema/migrations/account_mule_supervision.gsql)
 - [Account loading job](../gsql/schema/temporal_account_loading.gsql)
 - [Supervision export and validation queries](../gsql/temporal/account_supervision.gsql)
 

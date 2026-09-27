@@ -1,7 +1,7 @@
 # Temporal feature redesign
 
-This implements the first feature experiment stage of the
-[feature plan v4 draft](feature_plan_v4.md). The built-in run (`DEFAULT_RUN` in
+This implements the first feature experiment stage of the feature plan v4 draft
+(retired; the draft is in git history). The built-in run (`DEFAULT_RUN` in
 `config_schema.py`) keeps memoryless TGAT and removes every hard-window input.
 Features are hypotheses; no mule-detection lift has been established. The legacy
 feature profile is what the components choose when a raw configuration has no
