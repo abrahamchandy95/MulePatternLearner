@@ -13,7 +13,7 @@ from typing import Generic, TypeVar
 
 import numpy as np
 
-from ..common import hash64
+from ...contract.fingerprints import hash64
 
 T = TypeVar("T")
 R = TypeVar("R")

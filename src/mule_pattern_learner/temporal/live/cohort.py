@@ -8,8 +8,9 @@ from typing import Any
 
 import pandas as pd
 
-from ..common import stable_score, timestamp
-from .contract import PHASE_SPLIT, SPLITS
+from ...contract.clock import timestamp
+from ...contract.fingerprints import stable_score
+from ...contract.graph_schema import PHASE_SPLIT, SPLITS
 from .executor import QueryExecutor, account_pages
 from .supervision import ORACLE_COLUMNS, ObservedLabelSource, reads_graph_labels
 

@@ -13,8 +13,7 @@ import re
 import time
 from typing import Any
 
-from mule_pattern_learner.configuration import REPOSITORY_ROOT
-
+from ...paths import REPOSITORY_ROOT
 from .executor import AVAILABILITY, GRAPH, SERVER_TIMEOUT, connection_call, failure_class
 from .scope import verify_scope
 

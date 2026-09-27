@@ -15,26 +15,23 @@ from dataclasses import replace
 import json
 from pathlib import Path
 import tempfile
-from uuid import uuid4
 from typing import Any
-from pyTigerGraph.common.exception import TigerGraphException
+from uuid import uuid4
 
+from pyTigerGraph.common.exception import TigerGraphException
 import torch
 
-from mule_pattern_learner.temporal.encoding import BASIS_ID
+from mule_pattern_learner.config import validate_config
+from mule_pattern_learner.contract.feature_groups import FeaturePlan, contract_fingerprint
+from mule_pattern_learner.contract.graph_schema import ContextKey
+from mule_pattern_learner.contract.sampler_plan import SamplerPlan
+from mule_pattern_learner.contract.time_basis import BASIS_ID
+from mule_pattern_learner.runtime.device import choose_device
 from mule_pattern_learner.temporal.live.batching import make_live_batch
-from mule_pattern_learner.temporal.live.config_schema import validate_config
-from mule_pattern_learner.temporal.live.contract import (
-    ContextKey,
-    FeaturePlan,
-    SamplerPlan,
-    contract_fingerprint,
-)
 from mule_pattern_learner.temporal.live.executor import TigerGraphExecutor
 from mule_pattern_learner.temporal.live.model import build_model
 from mule_pattern_learner.temporal.live.predictor import TemporalPredictor
 from mule_pattern_learner.temporal.live.source import StreamingContextSource
-from mule_pattern_learner.device import choose_device
 
 # The fixture's own checks read the window counts and amounts, their ratios and the pair
 # window counts, and its invariance checks also cover the age, recency and association

@@ -11,9 +11,9 @@ from typing import Any
 
 import numpy as np
 
-from ..encoding import fourier64
+from ...contract.feature_groups import FEATURE_GROUPS, POOL_GROUPS, FeaturePlan
+from ...contract.time_basis import fourier64
 from .batching import DAY_MS, child_key, pool_activity
-from .contract import FEATURE_GROUPS, POOL_GROUPS, FeaturePlan
 
 # Columns kept as they are; every other column gets log1p.
 IDENTITY = frozenset(

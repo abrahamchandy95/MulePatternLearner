@@ -26,9 +26,19 @@ import pyarrow.parquet as pq
 import pytest
 import torch
 
-from mule_pattern_learner.device import torch_runtime
-from mule_pattern_learner.temporal.common import digest, timestamp
-from mule_pattern_learner.temporal.encoding import BASIS_ID
+from mule_pattern_learner.config import validate_config
+from mule_pattern_learner.contract.clock import timestamp
+from mule_pattern_learner.contract.feature_groups import (
+    DEFAULT_GROUPS,
+    FeaturePlan,
+    contract_fingerprint,
+    extraction_plan,
+)
+from mule_pattern_learner.contract.fingerprints import digest
+from mule_pattern_learner.contract.graph_schema import RELATIONS, ContextKey
+from mule_pattern_learner.contract.sampler_plan import SamplerPlan
+from mule_pattern_learner.contract.time_basis import BASIS_ID
+from mule_pattern_learner.runtime.device import torch_runtime
 from mule_pattern_learner.temporal.live import (
     batching,
     cli,
@@ -39,16 +49,6 @@ from mule_pattern_learner.temporal.live import (
 )
 from mule_pattern_learner.temporal.live import dataset as dataset_module
 from mule_pattern_learner.temporal.live.checkpoint import restore_cuda_rng
-from mule_pattern_learner.temporal.live.config_schema import validate_config
-from mule_pattern_learner.temporal.live.contract import (
-    DEFAULT_GROUPS,
-    RELATIONS,
-    ContextKey,
-    FeaturePlan,
-    SamplerPlan,
-    contract_fingerprint,
-    extraction_plan,
-)
 from mule_pattern_learner.temporal.live.dataset import preparation_view
 from mule_pattern_learner.temporal.live.evaluation import evaluate_final_population
 from mule_pattern_learner.temporal.live.hubs import HUB_COLUMNS, HubRegistry, warn_hub_stubs

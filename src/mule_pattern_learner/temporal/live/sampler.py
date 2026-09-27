@@ -42,7 +42,8 @@ import warnings
 import numpy as np
 import torch
 
-from .contract import ContextKey, RELATIONS, SamplerPlan
+from ...contract.graph_schema import RELATIONS, ContextKey
+from ...contract.sampler_plan import SamplerPlan
 
 PAYMENT_RELATIONS = 4
 NUM_RELATIONS = len(RELATIONS)

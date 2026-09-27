@@ -1,6 +1,7 @@
 """The frozen scope every run samples in, and the rejected-root limit."""
 
 from __future__ import annotations
+
 from typing import Any
 
 # Every run keeps its splits in disjoint scope partitions (strict inductive); outputs

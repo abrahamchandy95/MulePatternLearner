@@ -34,11 +34,14 @@ import pandas as pd
 import torch
 from torch import nn
 
-from mule_pattern_learner.device import choose_device, torch_runtime
-
-from ..encoding import BASIS_ID
+from ...config import fanouts, validate_config
+from ...contract.feature_groups import FeaturePlan, contract_fingerprint, extraction_plan
+from ...contract.graph_schema import ContextKey
+from ...contract.sampler_plan import SamplerPlan
+from ...contract.time_basis import BASIS_ID
+from ...metrics import evaluate, select_threshold
+from ...runtime.device import choose_device, torch_runtime
 from ..loss import NonNegativePULoss
-from ..metrics import evaluate, select_threshold
 from .batching import RootBatch, build_root_batch
 from .checkpoint import (
     CHECKPOINT_FORMAT,
@@ -48,14 +51,6 @@ from .checkpoint import (
     load_resume_state,
     restore_cuda_rng,
     resume_fingerprint,
-)
-from .config_schema import fanouts, validate_config
-from .contract import (
-    ContextKey,
-    FeaturePlan,
-    SamplerPlan,
-    contract_fingerprint,
-    extraction_plan,
 )
 from .dataset import (
     eligible_mask,

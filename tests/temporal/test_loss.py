@@ -81,7 +81,7 @@ def test_confident_positives_lower_risk() -> None:
 def test_grouped_ap_interval_bootstraps_whole_groups() -> None:
     import numpy as np
 
-    from mule_pattern_learner.temporal.metrics import grouped_ap_interval
+    from mule_pattern_learner.metrics import grouped_ap_interval
 
     y = np.array([1, 0, 0, 1, 0, 0, 0, 1], dtype=np.int64)
     scores = np.array([0.9, 0.2, 0.1, 0.8, 0.3, 0.4, 0.2, 0.7])

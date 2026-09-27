@@ -4,8 +4,8 @@ import argparse
 import json
 from pathlib import Path
 
-from mule_pattern_learner.temporal.live.config_schema import run_config
-from mule_pattern_learner.temporal.live.contract import FeaturePlan
+from mule_pattern_learner.config import run_config
+from mule_pattern_learner.contract.feature_groups import FeaturePlan
 from mule_pattern_learner.temporal.live.experiments import feature_experiments
 from mule_pattern_learner.temporal.live.model import build_model
 

@@ -18,7 +18,7 @@ import argparse
 import json
 import sys
 
-from mule_pattern_learner.temporal.live.config_schema import run_config
+from mule_pattern_learner.config import run_config
 from mule_pattern_learner.temporal.live.executor import TigerGraphExecutor, merged_rows
 from mule_pattern_learner.temporal.live.labels import REVEAL_QUERY, reveal_parameters
 from mule_pattern_learner.temporal.live.reveal_model import (

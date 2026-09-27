@@ -21,9 +21,10 @@ from typing import Any
 
 import torch
 
-from ..encoding import BASIS_ID
-from .config_schema import validate_config
-from .contract import FeaturePlan, contract_fingerprint, fingerprint
+from ...config import validate_config
+from ...contract.feature_groups import FeaturePlan, contract_fingerprint
+from ...contract.fingerprints import fingerprint
+from ...contract.time_basis import BASIS_ID
 from .dataset import manifest_digest
 
 CHECKPOINT_FORMAT = "temporal_live_checkpoint_v1"

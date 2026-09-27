@@ -14,12 +14,13 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import torch
 
-from mule_pattern_learner.device import choose_device
-
+from ...config import fanouts
+from ...contract.feature_groups import FeaturePlan
+from ...contract.graph_schema import ContextKey
+from ...contract.sampler_plan import SamplerPlan
+from ...runtime.device import choose_device
 from .batching import RootBatch, build_root_batch
 from .checkpoint import ModelCheckpoint
-from .config_schema import fanouts
-from .contract import ContextKey, FeaturePlan, SamplerPlan
 from .dataset import resolve_cutoff
 from .executor import QueryExecutor, live_executor
 from .hubs import HubRegistry, hub_threshold, query_hub_registry, warn_hub_stubs

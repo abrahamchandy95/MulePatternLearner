@@ -33,12 +33,13 @@ import warnings
 
 import pandas as pd
 
-from ..common import digest
+from ...contract.fingerprints import digest
 from .executor import CONVERSION_ERRORS, QueryExecutor, checked_rows
 from .policy import context_scope
 
 if TYPE_CHECKING:
-    from .contract import FeaturePlan, SamplerPlan
+    from ...contract.feature_groups import FeaturePlan
+    from ...contract.sampler_plan import SamplerPlan
 
 HUB_FILE = "hubs.parquet"
 HUB_QUERY = "temporal_hub_registry"

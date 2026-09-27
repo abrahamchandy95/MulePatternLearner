@@ -3,23 +3,19 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import pytest
+from temporal_fakes import FakeExecutor, context, message
 import torch
 
-from mule_pattern_learner.temporal.live.contract import (
-    ContextKey,
-    FeaturePlan,
-    PoolPlan,
-    FEATURE_GROUPS,
-    DEFAULT_GROUPS,
-)
+from mule_pattern_learner.contract.feature_groups import DEFAULT_GROUPS, FEATURE_GROUPS, FeaturePlan
+from mule_pattern_learner.contract.graph_schema import ContextKey
+from mule_pattern_learner.contract.sampler_plan import PoolPlan
 from mule_pattern_learner.temporal.live.batch_reference import node_features
 from mule_pattern_learner.temporal.live.batching import make_live_batch
+from mule_pattern_learner.temporal.live.evaluation import evaluate_weighted, final_evaluation_sample
 from mule_pattern_learner.temporal.live.history_reference import payment_features, stratify
-from mule_pattern_learner.temporal.live.evaluation import final_evaluation_sample, evaluate_weighted
 from mule_pattern_learner.temporal.live.model import LiveTGAT
-from mule_pattern_learner.temporal.live.source import StreamingContextSource
 from mule_pattern_learner.temporal.live.queries import render_context_query
-from temporal_fakes import FakeExecutor, context, message
+from mule_pattern_learner.temporal.live.source import StreamingContextSource
 
 
 def event(

@@ -5,25 +5,6 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import pytest
-import torch
-
-from mule_pattern_learner.temporal.encoding import BASIS_ID
-from mule_pattern_learner.temporal.live.batching import make_live_batch, child_key
-from mule_pattern_learner.temporal.live.config_schema import validate_config
-from mule_pattern_learner.temporal.live.contract import (
-    ContextKey,
-    FeaturePlan,
-    contract_fingerprint,
-)
-from mule_pattern_learner.temporal.live.evaluation import GraphEvaluationTruth
-from mule_pattern_learner.temporal.live.memory import BatchIndex, BatchCapacityError
-from mule_pattern_learner.temporal.live.model import build_model
-from mule_pattern_learner.temporal.live.contract import SamplerPlan, extraction_plan
-from mule_pattern_learner.temporal.live.context_query import validate_context
-from mule_pattern_learner.temporal.live.source import StreamingContextSource
-from mule_pattern_learner.temporal.live.predictor import score_new_accounts
-from mule_pattern_learner.temporal.live.cohort import scoped_cohort
-from mule_pattern_learner.temporal.live.sampling import pu_batches
 from temporal_fakes import (
     FakeExecutor,
     FrameObservedLabels,
@@ -34,6 +15,26 @@ from temporal_fakes import (
     scope_counts,
     supplied_labels,
 )
+import torch
+
+from mule_pattern_learner.config import validate_config
+from mule_pattern_learner.contract.feature_groups import (
+    FeaturePlan,
+    contract_fingerprint,
+    extraction_plan,
+)
+from mule_pattern_learner.contract.graph_schema import ContextKey
+from mule_pattern_learner.contract.sampler_plan import SamplerPlan
+from mule_pattern_learner.contract.time_basis import BASIS_ID
+from mule_pattern_learner.temporal.live.batching import child_key, make_live_batch
+from mule_pattern_learner.temporal.live.cohort import scoped_cohort
+from mule_pattern_learner.temporal.live.context_query import validate_context
+from mule_pattern_learner.temporal.live.evaluation import GraphEvaluationTruth
+from mule_pattern_learner.temporal.live.memory import BatchCapacityError, BatchIndex
+from mule_pattern_learner.temporal.live.model import build_model
+from mule_pattern_learner.temporal.live.predictor import score_new_accounts
+from mule_pattern_learner.temporal.live.sampling import pu_batches
+from mule_pattern_learner.temporal.live.source import StreamingContextSource
 
 
 def test_batch_ids_are_dense_scoped_and_temporal_and_never_global() -> None:
@@ -258,6 +259,7 @@ def test_strict_preparation_and_nnpu_use_the_correct_phase_end_to_end(tmp_path: 
 
 def test_resumed_stream_checks_live_source_before_fetching(monkeypatch: pytest.MonkeyPatch) -> None:
     from types import SimpleNamespace
+
     from mule_pattern_learner.temporal.live import installation, source
     from mule_pattern_learner.temporal.live.executor import transport_settings
 

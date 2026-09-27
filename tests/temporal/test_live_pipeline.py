@@ -11,8 +11,12 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import pytest
+from temporal_fakes import FakeExecutor, association, context, message
 import torch
 
+from mule_pattern_learner.contract.feature_groups import DEFAULT_GROUPS, FeaturePlan
+from mule_pattern_learner.contract.graph_schema import RELATIONS, ContextKey
+from mule_pattern_learner.contract.sampler_plan import PoolPlan, SamplerPlan
 from mule_pattern_learner.temporal.live.batch_reference import node_features
 from mule_pattern_learner.temporal.live.batching import (
     build_root_batch,
@@ -20,20 +24,11 @@ from mule_pattern_learner.temporal.live.batching import (
     make_live_batch,
 )
 from mule_pattern_learner.temporal.live.context_query import validate_context
-from mule_pattern_learner.temporal.live.contract import (
-    DEFAULT_GROUPS,
-    ContextKey,
-    RELATIONS,
-    FeaturePlan,
-    PoolPlan,
-    SamplerPlan,
-)
 from mule_pattern_learner.temporal.live.dataset import validate_dates
 from mule_pattern_learner.temporal.live.hubs import HUB_COLUMNS, HubRegistry
 from mule_pattern_learner.temporal.live.model import LiveTGAT
 from mule_pattern_learner.temporal.live.queries import render_context_query
 from mule_pattern_learner.temporal.live.source import StreamingContextSource
-from temporal_fakes import FakeExecutor, association, context, message
 
 V5_PLAN = FeaturePlan(DEFAULT_GROUPS, "split")
 ASSOCIATED = "Account_Owned_By_Party"
@@ -280,7 +275,7 @@ WINDOW_GROUPS = (
 
 
 def test_extraction_plan_is_the_model_groups_without_the_client_groups() -> None:
-    from mule_pattern_learner.temporal.live.contract import extraction_plan
+    from mule_pattern_learner.contract.feature_groups import extraction_plan
 
     split = extraction_plan({"feature_groups": [*DEFAULT_GROUPS, "rolling_windows"]})
     assert set(split.groups) == set(DEFAULT_GROUPS) - {"hub_indicator"} | {"rolling_windows"}
@@ -292,10 +287,11 @@ def test_extraction_plan_is_the_model_groups_without_the_client_groups() -> None
 
 
 def test_feature_arms_and_model_seeds_share_one_preparation() -> None:
-    from mule_pattern_learner.temporal.live.config_schema import validate_config
+    from temporal_fakes import live_config
+
+    from mule_pattern_learner.config import validate_config
     from mule_pattern_learner.temporal.live.dataset import preparation_view
     from mule_pattern_learner.temporal.live.experiments import feature_experiments
-    from temporal_fakes import live_config
 
     base = live_config()
     views = {json_key(preparation_view(arm)) for arm in feature_experiments(base).values()}
