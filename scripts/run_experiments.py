@@ -19,7 +19,8 @@ from mule_pattern_learner.data.accounts import cohort_seed
 from mule_pattern_learner.data.manifest import read_manifest
 from mule_pattern_learner.inference.saved_model import ModelCheckpoint
 from mule_pattern_learner.pipeline.train import prepared_config
-from mule_pattern_learner.training.trainer import TRAINING_PROTOCOL, train
+from mule_pattern_learner.training.summary import TRAINING_PROTOCOL
+from mule_pattern_learner.training.trainer import train
 
 VARIANTS = ("temporal", "no_fourier", "tabular")
 

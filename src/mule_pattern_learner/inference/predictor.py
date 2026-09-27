@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Generator, Iterable, Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 import pandas as pd
 import torch
+from torch import nn
 
-from ..batching.assemble import RootBatch, build_root_batch
+from ..batching.assemble import RootBatch, build_root_batch, to_device
 from ..batching.limits import BatchLimits
 from ..config import fanouts
 from ..contract.feature_groups import FeaturePlan
@@ -24,6 +25,64 @@ from ..runtime.device import choose_device
 from ..runtime.workers import BatchPrefetcher
 from ..tigergraph.executor import QueryExecutor
 from .saved_model import ModelCheckpoint
+
+
+class ScoredBatch(NamedTuple):
+    """One assembled batch and the logits of its accepted roots (None when none was)."""
+
+    prepared: RootBatch
+    logits: torch.Tensor | None
+
+
+def score_batch(model: nn.Module, prepared: RootBatch, device: torch.device) -> ScoredBatch:
+    """The logits of one assembled batch, on ``device``; the model must be in eval mode."""
+    if prepared.batch is None:
+        return ScoredBatch(prepared, None)
+    with torch.inference_mode():
+        return ScoredBatch(prepared, model(to_device(prepared.batch, device)))
+
+
+def score_batches(
+    model: nn.Module,
+    build: Callable[[list[ContextKey]], RootBatch],
+    batches: Iterable[list[ContextKey]],
+    *,
+    device: torch.device,
+    prefetch: int,
+) -> Generator[ScoredBatch]:
+    """Score key batches in order, building the next ``prefetch`` ones on worker threads.
+
+    ``build`` fetches and assembles one batch; it runs on the workers. Close the
+    iterator (``contextlib.closing``) when its consumer fails, so the workers stop
+    without waiting for the builds in flight.
+    """
+    with BatchPrefetcher(build, batches, depth=prefetch) as prepared:
+        for item in prepared:
+            yield score_batch(model, item, device)
+
+
+def accepted_scores(
+    logits: list[torch.Tensor], accepted: list[np.ndarray], label: str
+) -> tuple[np.ndarray, np.ndarray]:
+    """Probabilities of every requested root, in order, and the accepted mask.
+
+    Probabilities are float64 (see ``probabilities_from_logits``), so high scores do
+    not tie. Roots that TigerGraph rejects are False in the mask (their score is NaN).
+    A non-finite probability for an accepted root is an error, never a rejection;
+    ``label`` names the scored roots in its message.
+    """
+    mask = np.concatenate(accepted) if accepted else np.zeros(0, dtype=bool)
+    scores = np.full(len(mask), np.nan)
+    if logits:
+        # One device-to-host copy per call.
+        probabilities = probabilities_from_logits(torch.cat(logits))
+        if not np.isfinite(probabilities).all():
+            raise ValueError(
+                f"Non-finite model probability for {int((~np.isfinite(probabilities)).sum())}"
+                f" accepted {label} roots"
+            )
+        scores[mask] = probabilities
+    return scores, mask
 
 
 class TemporalPredictor:

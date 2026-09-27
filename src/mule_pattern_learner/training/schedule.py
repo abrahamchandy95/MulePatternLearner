@@ -1,4 +1,4 @@
-"""Positive oversampling, label-blind marginal coverage and the batch schedule for nnPU."""
+"""Positive oversampling, label-blind marginal coverage, the nnPU schedule, evaluation samples."""
 
 from __future__ import annotations
 
@@ -85,6 +85,15 @@ class PUSample:
     marginal: np.ndarray
     observed: np.ndarray
     positives: np.ndarray
+
+
+@dataclass(frozen=True)
+class EvaluationSample:
+    """One validation or test cutoff: its chosen rows and their observed labels."""
+
+    date: str
+    indices: np.ndarray
+    labels: np.ndarray
 
 
 @dataclass(frozen=True)

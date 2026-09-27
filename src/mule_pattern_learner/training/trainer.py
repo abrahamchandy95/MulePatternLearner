@@ -15,6 +15,10 @@ Roots that TigerGraph rejects are dropped from a batch, but only within
 ``max_rejected_root_fraction`` (default 0: any rejection fails). A rejected
 observed positive always fails the epoch or evaluation, and validation must keep
 both observed classes after its rejections.
+
+The run drives the other training modules: the nnPU step (objective), the weight
+average (averaging), the progress records (history) and what a finished run writes
+(summary). Validation and test go through the scoring loop of inference.predictor.
 """
 
 from __future__ import annotations
@@ -26,34 +30,34 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 import time
-from typing import Any, NamedTuple
+from typing import Any
 
 import numpy as np
 import pandas as pd
 import torch
 from torch import nn
 
-from ..batching.assemble import RootBatch, build_root_batch
+from ..batching.assemble import RootBatch, batch_device, build_root_batch, to_device
 from ..batching.limits import BatchLimits
 from ..config import fanouts, validate_config
-from ..contract.feature_groups import FeaturePlan, contract_fingerprint, extraction_plan
-from ..contract.graph_schema import EVALUATION_PROTOCOL, ContextKey, context_scope
+from ..contract.feature_groups import FeaturePlan, extraction_plan
+from ..contract.graph_schema import ContextKey, context_scope
 from ..contract.sampler_plan import SamplerPlan
-from ..contract.time_basis import BASIS_ID
 from ..data.contexts import ContextSource, check_coverage, close_source, open_context_source
 from ..data.hub_registry import HubRegistry, load_hub_registry, warn_hub_stubs
-from ..data.manifest import load_prepared, manifest_digest, preparation_mismatches
+from ..data.manifest import load_prepared, preparation_mismatches
 from ..data.observed_labels import label_summary, load_observed_labels, visible_labels
 from ..data.splits import eligible_mask, marginal_mask, sample_keys
+from ..inference.predictor import accepted_scores, score_batches
 from ..inference.rejections import exceeds_rejection_limit
 from ..metrics import evaluate, select_threshold
-from ..model.build import build_model, probabilities_from_logits
+from ..model.build import build_model
 from ..model.loss import NonNegativePULoss
 from ..paths import output_paths
 from ..runtime.device import choose_device, torch_runtime
 from ..runtime.workers import MAX_PREFETCH, BatchPrefetcher
 from ..sampling.backend import resolve_backend
-from .averaging import WeightAverage
+from .averaging import WeightAverage, evaluated_weights
 from .checkpoint import (
     CHECKPOINT_FORMAT,
     RUN_STATE_FILES,
@@ -63,10 +67,17 @@ from .checkpoint import (
     restore_cuda_rng,
     resume_fingerprint,
 )
-from .objective import nnpu_objective, objective_name
-from .schedule import PUSample, TrainingStep, epoch_schedule, evaluation_indices
+from .history import LogInterval, Progress, epoch_record, plain
+from .objective import StepLoss, nnpu_objective, nnpu_step
+from .schedule import (
+    EvaluationSample,
+    PUSample,
+    TrainingStep,
+    epoch_schedule,
+    evaluation_indices,
+)
+from .summary import model_payload, prediction_frame, run_summary
 
-TRAINING_PROTOCOL = "scoped_observed_label_nnpu_v5"
 Batch = dict[str, torch.Tensor]
 BatchRequest = tuple[list[ContextKey], str, int]
 
@@ -134,13 +145,6 @@ class RunSettings:
         BatchLimits().validate_model(self.batch_size, self.fanouts, self.hidden, plan, sampler)
 
 
-@dataclass(frozen=True)
-class EvaluationSample:
-    date: str
-    indices: np.ndarray
-    labels: np.ndarray
-
-
 def rejection_counts(labels: np.ndarray, accepted: np.ndarray) -> dict[str, int]:
     """Requested and rejected roots, split into observed positives and unlabeled."""
     lost = ~accepted
@@ -175,41 +179,6 @@ def build_optimizer(model: nn.Module, config: dict[str, Any]) -> torch.optim.Ada
         lr=float(config["learning_rate"]),
         weight_decay=float(config["weight_decay"]),
     )
-
-
-class StepLoss(NamedTuple):
-    """One step's backpropagated nnPU loss and its unclamped risk estimate (detached).
-
-    They differ exactly when the non-negative correction fired, which a model that
-    memorises its few revealed positives makes frequent.
-    """
-
-    value: torch.Tensor
-    objective: torch.Tensor
-
-
-def nnpu_step(
-    model: nn.Module,
-    optimizer: torch.optim.Optimizer,
-    loss: NonNegativePULoss,
-    batch: Batch,
-    positives: int,
-    seed: int,
-) -> StepLoss:
-    """One optimizer step; the batch's leading ``positives`` rows are observed positives.
-
-    Dropout masks depend only on ``seed`` (the step seed), never on earlier history.
-    """
-    torch.manual_seed(seed)
-    logits = model(batch)
-    targets = torch.zeros_like(logits)
-    targets[:positives] = 1
-    value, objective = loss(logits, targets)
-    optimizer.zero_grad(set_to_none=True)
-    value.backward()
-    nn.utils.clip_grad_norm_(model.parameters(), 5)
-    optimizer.step()
-    return StepLoss(value.detach(), objective.detach())
 
 
 def train(
@@ -329,58 +298,6 @@ def _samples(
     return training, evaluation
 
 
-def _plain(stats: dict[str, Any]) -> dict[str, Any]:
-    """JSON-safe copy of batch statistics (numpy scalars become Python numbers)."""
-    return {k: v.item() if isinstance(v, np.generic) else v for k, v in stats.items()}
-
-
-class _Progress:
-    """Append JSON lines to run_dir/progress.jsonl; echo selected records to stdout."""
-
-    def __init__(self, started: float, store: ContextSource, backend: str) -> None:
-        self.started, self.store = started, store
-        self.path: Path | None = None
-        self.totals: Counter[str] = Counter()
-        # The backend resolved once for the run (batch statistics name the same one).
-        self.backend = backend
-        # Counts of earlier segments of a resumed run; the source counts this one.
-        self.base_calls = 0
-        self.base_rejections: Counter[str] = Counter()
-
-    def add(self, stats: dict[str, Any]) -> None:
-        for key, value in _plain(stats).items():
-            # Batch statistics are counts; the sampler backend is the only string.
-            if isinstance(value, int) and not isinstance(value, bool):
-                self.totals[key] += value
-
-    def calls(self) -> int:
-        """REST calls of every segment of the run."""
-        return self.base_calls + int(getattr(self.store, "query_calls", 0))
-
-    def rejections(self) -> dict[str, int]:
-        """Rejected rows served by the source (both hops) in every segment, by status."""
-        current: Counter[str] = Counter(getattr(self.store, "rejections", {}) or {})
-        return dict(self.base_rejections + current)
-
-    def emit(self, record: dict[str, Any], *, echo: bool = True) -> dict[str, Any]:
-        record = {
-            **record,
-            "query_calls": self.calls(),
-            "rejections": self.rejections(),
-            "stub_children": int(self.totals["stub_children"]),
-            "rejected_children": int(self.totals["rejected_children"]),
-            "sampler_backend": self.backend,
-            "elapsed_seconds": round(time.perf_counter() - self.started, 3),
-        }
-        line = json.dumps(record, allow_nan=False)
-        if self.path is not None:
-            with self.path.open("a") as stream:
-                stream.write(line + "\n")
-        if echo:
-            print(line, flush=True)
-        return record
-
-
 class _TrainingRun:
     def __init__(
         self,
@@ -411,16 +328,14 @@ class _TrainingRun:
         self.training, self.evaluation = training, evaluation
         self.checkpoint_path, self.run_dir = checkpoint_path, run_dir
         self.last_path = run_dir / "checkpoint_last.pt"
-        # CUDA batches are built (and resampled) on the device by the prefetch workers.
-        # Other devices build on the CPU and copy on the training thread.
-        self.batch_device = device if device.type == "cuda" else torch.device("cpu")
+        self.batch_device = batch_device(device)
         self.prefetch = settings.prefetch_batches
         # Resolved once here, on the main thread, before any prefetch worker starts
         # (the cuGraph probe runs at most once), then passed to every batch.
         self.backend = resolve_backend(sampler, self.batch_device)
         self.limit = settings.max_rejected_root_fraction
         self.observed = {sample.date: sample.observed for sample in training}
-        self.progress = _Progress(time.perf_counter(), store, self.backend)
+        self.progress = Progress(time.perf_counter(), store, self.backend)
         # Seeded right before the model is built: initial weights depend only on the seed.
         torch.manual_seed(settings.seed)
         self.model = build_model(config, plan).to(device)
@@ -445,13 +360,10 @@ class _TrainingRun:
     def _state_copy(self) -> dict[str, torch.Tensor]:
         return {k: v.detach().cpu().clone() for k, v in self.model.state_dict().items()}
 
-    def _evaluated(self) -> contextlib.AbstractContextManager[None]:
-        """The weights validation scores and selection keeps: the average, if any."""
-        if self.average is None:
-            return contextlib.nullcontext()
-        return self.average.applied(self.model)
-
     # Batches -----------------------------------------------------------------
+
+    def build_eval(self, keys: list[ContextKey]) -> RootBatch:
+        return self.build((keys, "eval", 0))
 
     def build(self, request: BatchRequest) -> RootBatch:
         keys, mode, seed = request
@@ -467,12 +379,6 @@ class _TrainingRun:
             step_seed=seed,
             sampler_backend=self.backend,
         )
-
-    def to_device(self, batch: Batch) -> Batch:
-        # CUDA batches already live on the device; others copy synchronously.
-        if self.batch_device == self.device:
-            return batch
-        return {k: v.to(self.device) for k, v in batch.items()}
 
     def keys(self, indices: np.ndarray, date: str) -> list[ContextKey]:
         return sample_keys(self.accounts.iloc[indices], date, self.manifest)
@@ -613,16 +519,12 @@ class _TrainingRun:
         remaining = schedule[self.step :]
         self.model.train()
         requests = ((self.keys(s.indices, s.date), "train", s.seed) for s in remaining)
-        interval = torch.zeros((), device=self.device)
-        objective = torch.zeros((), device=self.device)
-        corrected = torch.zeros((), device=self.device)
-        finite = torch.ones((), dtype=torch.bool, device=self.device)
+        interval = LogInterval(self.device)
         every = self.settings.checkpoint_every_steps
-        clock = mark = time.perf_counter()
-        waited, count = 0.0, 0
+        mark = interval.started
         with self.batches(requests) as batches:
             for step, prepared in zip(remaining, batches, strict=True):
-                waited += time.perf_counter() - mark
+                interval.waited += time.perf_counter() - mark
                 stats = prepared.stats
                 used = stats.get("sampler_backend")
                 if used is not None and used != self.backend:
@@ -635,34 +537,29 @@ class _TrainingRun:
                 if prepared.batch is not None:
                     # Rejected roots were dropped; the leading accepted rows are positives.
                     positives = int(prepared.accepted[: len(step.positives)].sum())
-                    value, risk = self.train_step(step, positives, self.to_device(prepared.batch))
+                    value, risk = self.train_step(
+                        step, positives, to_device(prepared.batch, self.device)
+                    )
                     if self.average is not None:
                         self.average.update(self.model)
                     # Losses stay on the device; the host reads them once per log interval.
                     self.loss_sum += value
-                    interval += value
-                    objective += risk
-                    corrected += (value != risk).to(corrected.dtype)
-                    finite &= torch.isfinite(value)
+                    interval.add(value, risk)
                     self.loss_steps += 1
-                    count += 1
                 self.step = step.step + 1
                 logged = (
                     self.step == len(schedule) or self.step % self.settings.log_every_steps == 0
                 )
                 saved = bool(every) and self.step % every == 0
                 if logged or saved:
-                    loss, risk, corrections, ok = torch.stack(
-                        (interval, objective, corrected, finite.to(interval.dtype))
-                    ).tolist()
-                    if not ok:
+                    loss, risk, corrections, finite = interval.totals()
+                    if not finite:
                         # Raised before any checkpoint can persist non-finite weights.
                         raise ValueError(
                             f"Non-finite training loss at or before epoch {epoch + 1} "
                             f"step {self.step}"
                         )
                     now = time.perf_counter()
-                    trained = max(count, 1)
                     self.progress.emit(
                         {
                             "event": "train",
@@ -670,44 +567,28 @@ class _TrainingRun:
                             "step": self.step,
                             "steps": len(schedule),
                             "date": step.date,
-                            "loss": loss / trained,
-                            # The unclamped risk and the steps whose nnPU correction fired.
-                            "objective": risk / trained,
-                            "corrected_steps": int(corrections),
-                            "seconds_per_step": (now - clock) / trained,
-                            "batch_wait_seconds": waited / trained,
+                            **interval.record(loss, risk, corrections, now),
                             "batch": {
-                                k: v for k, v in _plain(stats).items() if k != "sampler_backend"
+                                k: v for k, v in plain(stats).items() if k != "sampler_backend"
                             },
                         },
                         echo=logged,
                     )
-                    interval = torch.zeros((), device=self.device)
-                    objective = torch.zeros((), device=self.device)
-                    corrected = torch.zeros((), device=self.device)
-                    clock, waited, count = now, 0.0, 0
+                    interval.start(now)
                     if saved:
                         self.save_last()
                 mark = time.perf_counter()
 
     def _select_epoch(self, epoch: int) -> None:
         """Score validation, keep the best state, apply patience and checkpoint the epoch."""
-        with self._evaluated():
+        with evaluated_weights(self.model, self.average):
             scores, accepted = self.score("validation")
             selected = self._state_copy()
         labels = self.labels("validation")
         self.check_rejections("validation", labels, accepted)
         metrics = evaluate(labels[accepted].astype(np.int64), scores[accepted], 0.5)
         ap = metrics["average_precision"]
-        self.history.append(
-            {
-                "epoch": epoch + 1,
-                "loss": float(self.loss_sum.item() / self.loss_steps),
-                "steps": self.loss_steps,
-                "validation_proxy_ap": ap,
-                "validation_proxy_roc_auc": metrics["roc_auc"],
-            }
-        )
+        self.history.append(epoch_record(epoch + 1, self.loss_sum, self.loss_steps, metrics))
         if ap is not None and ap > self.best_ap:
             self.best_ap, self.best_epoch = ap, epoch + 1
             self.best_state, self.best_scores = selected, scores
@@ -771,61 +652,38 @@ class _TrainingRun:
     def score(self, split: str) -> tuple[np.ndarray, np.ndarray]:
         """Probabilities and the accepted mask for the split's rows (sample, then row order).
 
-        Probabilities are float64 (see ``probabilities_from_logits``), so high scores do
-        not tie. Roots that TigerGraph rejects are False in the mask (their score is NaN)
-        and are left out of metrics and outputs. A non-finite probability for an accepted
-        root is an error, never a rejection.
+        Rejected roots (NaN scores) are left out of metrics and outputs; see
+        ``predictor.accepted_scores``.
         """
         self.model.eval()
         size = self.settings.batch_size
         samples = self.evaluation[split]
         chunks = [(s, start) for s in samples for start in range(0, len(s.indices), size)]
-        requests = (
-            (self.keys(s.indices[start : start + size], s.date), "eval", 0) for s, start in chunks
-        )
+        requests = (self.keys(s.indices[start : start + size], s.date) for s, start in chunks)
         logits: list[torch.Tensor] = []
         accepted: list[np.ndarray] = []
         total = sum(len(s.indices) for s in samples)
         done = 0
-        with self.batches(requests) as batches, torch.inference_mode():
-            for number, ((sample, start), prepared) in enumerate(
-                zip(chunks, batches, strict=True), 1
-            ):
-                self.progress.add(prepared.stats)
-                accepted.append(prepared.accepted)
-                if prepared.batch is not None:
-                    logits.append(self.model(self.to_device(prepared.batch)))
+        scored = score_batches(
+            self.model, self.build_eval, requests, device=self.device, prefetch=self.prefetch
+        )
+        with contextlib.closing(scored):
+            for number, ((sample, start), item) in enumerate(zip(chunks, scored, strict=True), 1):
+                self.progress.add(item.prepared.stats)
+                accepted.append(item.prepared.accepted)
+                if item.logits is not None:
+                    logits.append(item.logits)
                 done += min(size, len(sample.indices) - start)
                 if number % self.settings.log_every_steps == 0 or number == len(chunks):
                     self.progress.emit(
                         {"event": "evaluate", "split": split, "accounts": done, "total": total}
                     )
-        mask = np.concatenate(accepted) if accepted else np.zeros(0, dtype=bool)
-        scores = np.full(total, np.nan)
-        if logits:
-            # One device-to-host copy per split.
-            probabilities = probabilities_from_logits(torch.cat(logits))
-            if not np.isfinite(probabilities).all():
-                raise ValueError(
-                    f"Non-finite model probability for {int((~np.isfinite(probabilities)).sum())}"
-                    f" accepted {split} roots"
-                )
-            scores[mask] = probabilities
-        return scores, mask
+        return accepted_scores(logits, accepted, split)
 
     def frame(self, split: str, scores: np.ndarray, accepted: np.ndarray) -> pd.DataFrame:
-        frames = []
-        offset = 0
-        for sample in self.evaluation[split]:
-            frame = self.accounts.iloc[sample.indices][["account_id", "group_id"]].copy()
-            frame["date"] = sample.date
-            frame["observed_label"] = sample.labels.astype(np.int64)
-            frame["score"] = scores[offset : offset + len(sample.indices)]
-            offset += len(sample.indices)
-            frames.append(frame)
-        result = pd.concat(frames, ignore_index=True)
+        frame = prediction_frame(self.accounts, self.evaluation[split], scores, accepted)
         self.rejected_rows[split] = int((~accepted).sum())
-        return result[accepted].reset_index(drop=True)
+        return frame
 
     def finish(self) -> dict[str, Any]:
         """Save the selected model, then score test and write metrics.json."""
@@ -845,8 +703,20 @@ class _TrainingRun:
         labels = validation["observed_label"].to_numpy()
         threshold = select_threshold(labels, validation["score"].to_numpy())
         selection = evaluate(labels, validation["score"].to_numpy(), threshold)
+        known_mules = label_summary(self.mask)
+        payload = model_payload(
+            state=self.best_state,
+            config=self.config,
+            dataset=self.dataset,
+            threshold=threshold,
+            plan=self.plan,
+            sampler=self.sampler,
+            known_mules=known_mules,
+            device=self.device,
+            backend=self.backend,
+        )
         # Save the selected model before any test context is requested.
-        atomic_save(self._model_payload(threshold), self.checkpoint_path)
+        atomic_save(payload, self.checkpoint_path)
         test, rejected_roots["test"] = self._score_test()
         results = {}
         for split, frame in (("validation", validation), ("test", test)):
@@ -854,34 +724,31 @@ class _TrainingRun:
             results[split] = evaluate(
                 frame["observed_label"].to_numpy(), frame["score"].to_numpy(), threshold
             )
-        result = self._metrics(results, selection, rejected_roots)
+        result = run_summary(
+            config=self.config,
+            manifest=self.manifest,
+            seed=self.settings.seed,
+            known_mules=known_mules,
+            device=self.device,
+            prior=self.prior,
+            positive_weight=self.positive_weight,
+            plan=self.plan,
+            parameter_count=sum(p.numel() for p in self.model.parameters()),
+            best_epoch=self.best_epoch,
+            history=self.history,
+            results=results,
+            selection=selection,
+            checkpoint=self.checkpoint_path,
+            progress=self.progress,
+            rejected_rows=self.rejected_rows,
+            rejected_roots=rejected_roots,
+            limit=self.limit,
+        )
         self.progress.emit({"event": "complete", "best_epoch": self.best_epoch}, echo=False)
         (self.run_dir / "metrics.json").write_text(
             json.dumps(result, indent=2, allow_nan=False) + "\n"
         )
         return result
-
-    def _model_payload(self, threshold: float) -> dict[str, Any]:
-        """The model.pt payload of the selected state (read by saved_model.ModelCheckpoint)."""
-        return {
-            "state_dict": self.best_state,
-            "config": self.config,
-            "basis_id": BASIS_ID,
-            "contract": contract_fingerprint(),
-            "dataset": str(self.dataset.resolve()),
-            "dataset_manifest_sha256": manifest_digest(self.dataset),
-            "threshold": threshold,
-            "feature_dim": len(self.plan.node_names),
-            "input_fingerprint": self.plan.fingerprint(),
-            "sampler": self.sampler.query_params(),
-            "sampler_fingerprint": self.sampler.fingerprint(),
-            "selected_on": "validation_observed_label_proxy_ap",
-            "training_protocol": TRAINING_PROTOCOL,
-            "evaluation_protocol": EVALUATION_PROTOCOL,
-            "known_mules": label_summary(self.mask),
-            "training_device": str(self.device),
-            "sampler_backend": self.backend,
-        }
 
     def _score_test(self) -> tuple[pd.DataFrame, dict[str, int]]:
         """Test predictions of the accepted roots, and the test split's rejection counts."""
@@ -890,43 +757,3 @@ class _TrainingRun:
         self.check_rejections("test", labels, accepted)
         counts = rejection_counts(labels, accepted)
         return self.frame("test", scores, accepted), counts
-
-    def _metrics(
-        self,
-        results: dict[str, Any],
-        selection: dict[str, Any],
-        rejected_roots: dict[str, dict[str, int]],
-    ) -> dict[str, Any]:
-        """The metrics.json record of a complete run."""
-        prior, positive_weight = self.prior, self.positive_weight
-        return {
-            "status": "complete",
-            "cohort": self.manifest["cohort"],
-            "label_policy": "graph_observed",
-            "seed": self.settings.seed,
-            "known_mules": label_summary(self.mask),
-            "device": str(self.device),
-            "loss": "nnPU",
-            "class_prior": prior,
-            "positive_weight": positive_weight,
-            "objective": objective_name(prior, positive_weight),
-            "input_fingerprint": self.plan.fingerprint(),
-            "parameter_count": sum(p.numel() for p in self.model.parameters()),
-            "revealed_training_accounts": label_summary(self.mask)["train"],
-            "best_epoch": self.best_epoch,
-            "history": self.history,
-            "observed_label_proxy": results,
-            "evaluation_protocol": EVALUATION_PROTOCOL,
-            "validation_proxy": selection,
-            "checkpoint": str(self.checkpoint_path),
-            "database_calls_during_training": self.progress.calls(),
-            "rejections": self.progress.rejections(),
-            "sampler_backend": self.backend,
-            "sampler_totals": dict(self.progress.totals),
-            "rejected_evaluation_rows": self.rejected_rows,
-            "rejected_roots": rejected_roots,
-            "max_rejected_root_fraction": self.limit,
-            "performance_claim": EVALUATION_PROTOCOL + "_observed_label_proxy_only",
-            "evaluation_unlabeled_limit": self.config.get("evaluation_unlabeled_limit"),
-            "training_protocol": TRAINING_PROTOCOL,
-        }

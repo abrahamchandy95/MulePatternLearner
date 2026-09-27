@@ -1,6 +1,6 @@
 """model.pt: the selected model, as scoring and audits read it.
 
-`_TrainingRun._model_payload` builds its payload. Readers load it once and pass the
+`training.summary.model_payload` builds its payload. Readers load it once and pass the
 ModelCheckpoint on; each checks only what it relies on (the configuration is
 validated where TemporalPredictor, score_new_accounts and evaluate_final_population
 use it, never on load).
