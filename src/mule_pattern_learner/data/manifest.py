@@ -8,8 +8,9 @@ from typing import Any
 
 import pandas as pd
 
+from ..artifacts import atomic_write, file_digest
 from ..config import validate_config, without_retired_keys
-from ..contract.fingerprints import digest, fingerprint
+from ..contract.fingerprints import fingerprint
 from ..contract.graph_schema import context_scope
 from ..contract.sampler_plan import SamplerPlan, sampler_pools
 from ..paths import REPOSITORY_ROOT
@@ -41,18 +42,17 @@ def read_manifest(dataset: Path) -> dict[str, Any]:
 
 def write_manifest(dataset: Path, manifest: dict[str, Any]) -> None:
     """Replace the manifest atomically, so a crash never leaves a truncated file."""
-    pending = (dataset / MANIFEST).with_suffix(".pending.json")
-    pending.write_text(json.dumps(manifest, indent=2) + "\n")
-    pending.replace(dataset / MANIFEST)
+    with atomic_write(dataset / MANIFEST) as pending:
+        pending.write_text(json.dumps(manifest, indent=2) + "\n")
 
 
 def manifest_digest(dataset: Path) -> str:
     """The manifest's sha256; a checkpoint records it to name its prepared dataset."""
-    return digest(dataset / MANIFEST)
+    return file_digest(dataset / MANIFEST)
 
 
 def query_hashes() -> dict[str, str]:
-    return {name: digest(ROOT / name) for name in QUERY_FILES}
+    return {name: file_digest(ROOT / name) for name in QUERY_FILES}
 
 
 def changed_query_files(manifest: dict[str, Any]) -> list[str]:
@@ -128,7 +128,7 @@ def load_prepared(dataset: Path) -> tuple[dict[str, Any], pd.DataFrame]:
         (HUB_FILE, "hubs_sha256"),
     ]
     for name, field in required:
-        if digest(dataset / name) != manifest[field]:
+        if file_digest(dataset / name) != manifest[field]:
             raise ValueError(f"Prepared artifact changed: {name}")
     accounts = read_bounded_parquet(
         dataset / "accounts.parquet",

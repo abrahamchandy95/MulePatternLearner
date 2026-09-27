@@ -9,8 +9,9 @@ from typing import Any
 
 import pandas as pd
 
+from ..artifacts import atomic_write, file_digest
 from ..config import validate_config
-from ..contract.fingerprints import digest, fingerprint
+from ..contract.fingerprints import fingerprint
 from ..contract.graph_schema import context_scope
 from ..contract.sampler_plan import SamplerPlan
 from ..tigergraph.executor import QueryExecutor
@@ -25,9 +26,8 @@ from .splits import resolve_cutoffs, validate_dates
 
 def _write_parquet(frame: pd.DataFrame, path: Path) -> None:
     """Write a pending file, then rename it, so a crash never leaves a truncated file."""
-    temporary = path.with_suffix(".pending.parquet")
-    frame.to_parquet(temporary, index=False)
-    temporary.replace(path)
+    with atomic_write(path) as pending:
+        frame.to_parquet(pending, index=False)
 
 
 def _stage_population(
@@ -52,7 +52,7 @@ def _stage_population(
         manifest["population_accounts"] = len(accounts)
         accounts = accounts.sort_values("account_id").reset_index(drop=True)
         _write_parquet(accounts, accounts_path)
-        manifest["accounts_sha256"] = digest(accounts_path)
+        manifest["accounts_sha256"] = file_digest(accounts_path)
         manifest["cohort"] = "bounded_internal_deposit_seeds"
         write_manifest(output, manifest)
 
@@ -65,10 +65,10 @@ def _stage_labels(
     if "observed_labels_sha256" not in manifest:
         observed = labels.read(accounts)
         _write_parquet(observed, labels_path)
-        manifest["observed_labels_sha256"] = digest(labels_path)
+        manifest["observed_labels_sha256"] = file_digest(labels_path)
         manifest["known_mules"] = label_summary(observed)
         write_manifest(output, manifest)
-    elif digest(labels_path) != manifest["observed_labels_sha256"]:
+    elif file_digest(labels_path) != manifest["observed_labels_sha256"]:
         raise ValueError("Observed label artifact changed")
 
 
@@ -151,7 +151,7 @@ def prepare(
     _stage_population(config, output, manifest, executor, labels)
     accounts_path = output / "accounts.parquet"
     accounts = pd.read_parquet(accounts_path)
-    if digest(accounts_path) != manifest["accounts_sha256"]:
+    if file_digest(accounts_path) != manifest["accounts_sha256"]:
         raise ValueError("Prepared account file changed")
     _stage_labels(output, manifest, labels, accounts)
     _stage_cutoffs(config, output, manifest, executor)

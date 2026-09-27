@@ -99,8 +99,8 @@ include_external_packages = true
 # The contracts of the Layering rules in docs/restructure-plan.md. Each ignored import is
 # one the layered tree still has, and its comment names the later step that removes it; an
 # ignored import that no longer exists fails the check, so each removal deletes its line.
-# Packages that do not exist yet (reporting, diagnostics, artifacts) are optional layers,
-# or match no module, until they are created.
+# Packages that do not exist yet (reporting, diagnostics) are optional layers, or match no
+# module, until they are created.
 
 [[tool.importlinter.contracts]]
 name = "Layers run one way"
@@ -115,7 +115,7 @@ layers = [
     "batching",
     "data | sampling | model",
     "runtime",
-    "(artifacts) | metrics",
+    "artifacts | metrics",
     "config | paths",
     "contract",
 ]
@@ -242,6 +242,7 @@ source_modules = [
     "mule_pattern_learner.cli",
     "mule_pattern_learner.config",
     "mule_pattern_learner.paths",
+    "mule_pattern_learner.artifacts",
     "mule_pattern_learner.metrics",
     "mule_pattern_learner.contract",
     "mule_pattern_learner.runtime",
@@ -282,6 +283,7 @@ source_modules = [
     "mule_pattern_learner.cli",
     "mule_pattern_learner.config",
     "mule_pattern_learner.paths",
+    "mule_pattern_learner.artifacts",
     "mule_pattern_learner.metrics",
     "mule_pattern_learner.contract",
     "mule_pattern_learner.runtime",
@@ -307,6 +309,7 @@ source_modules = [
     "mule_pattern_learner.cli",
     "mule_pattern_learner.config",
     "mule_pattern_learner.paths",
+    "mule_pattern_learner.artifacts",
     "mule_pattern_learner.metrics",
     "mule_pattern_learner.contract",
     "mule_pattern_learner.runtime",

@@ -8,7 +8,6 @@ between segments.
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Any
 
@@ -76,13 +75,6 @@ def restore_cuda_rng(saved: torch.Tensor | None, device: torch.device) -> None:
     if saved is None or device.type != "cuda":
         return
     torch.cuda.set_rng_state(saved, device)
-
-
-def atomic_save(value: dict[str, Any], path: Path) -> None:
-    """Write a torch payload atomically, so a crash never leaves a truncated file."""
-    temporary = path.with_name(path.name + ".tmp")
-    torch.save(value, temporary)
-    os.replace(temporary, path)
 
 
 def load_resume_state(config: dict[str, Any], run_dir: Path) -> dict[str, Any] | None:
