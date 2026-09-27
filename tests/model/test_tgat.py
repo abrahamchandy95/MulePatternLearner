@@ -19,6 +19,7 @@ from mule_pattern_learner.contract.feature_groups import (
     extraction_plan,
 )
 from mule_pattern_learner.contract.graph_schema import RAILS, RELATIONS, ContextKey
+from mule_pattern_learner.contract.sampler_plan import SamplerPlan
 from mule_pattern_learner.contract.time_basis import BASIS_ID
 from mule_pattern_learner.data.contexts import ContextSource
 from mule_pattern_learner.inference.predictor import Predictor, score_batch
@@ -45,8 +46,10 @@ PAYMENTS = [
 
 def test_isolated_entities_score_under_both_architectures() -> None:
     key = ContextKey("Token", "alone", 100, 1000)
-    store = ContextSource(TigerGraphContextFetcher(FakeTigerGraph({})))
-    batch = build_batch(store, [key])
+    store = ContextSource(
+        TigerGraphContextFetcher(FakeTigerGraph({})), plan=FeaturePlan(), sampler=SamplerPlan()
+    )
+    batch = build_batch(store, [key], fanouts=(8, 4), plan=FeaturePlan(), sampler=SamplerPlan())
     assert not batch["first_mask"].any()
     tgat = TGAT(16, 4, 0, plan=FeaturePlan(), slot_sum=False, first_fanout=8)
     summary = SummaryMLP(16, 0, plan=FeaturePlan(architecture="summary"))
@@ -288,8 +291,10 @@ def test_nonsense_options_are_rejected() -> None:
 def test_zero_node_features_have_no_unused_projection() -> None:
     root = ContextKey("Account", "root", 100, 1000)
     zero = FeaturePlan(("message_core", "time_encoding"), "tgat")
-    source = ContextSource(TigerGraphContextFetcher(FakeTigerGraph({})), plan=zero)
-    batch = build_batch(source, [root], plan=zero)
+    source = ContextSource(
+        TigerGraphContextFetcher(FakeTigerGraph({})), plan=zero, sampler=SamplerPlan()
+    )
+    batch = build_batch(source, [root], plan=zero, fanouts=(8, 4), sampler=SamplerPlan())
     assert batch["x"].shape[-1] == batch["second_x"].shape[-1] == 0
     model = TGAT(16, 4, 0, plan=zero, slot_sum=False, first_fanout=8)
     assert model.node is None and model.base is None

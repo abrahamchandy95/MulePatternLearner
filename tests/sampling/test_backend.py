@@ -78,7 +78,7 @@ def test_build_batch_uses_the_run_backend_without_resolving(
     plan = FeaturePlan(CORE_GROUPS, "tgat")
     store = FakeStore(RESAMPLE)
     keys = roots(4)
-    options: dict[str, Any] = {"plan": plan, "sampler": RESAMPLE, "step_seed": 3}
+    options: dict[str, Any] = {"plan": plan, "sampler": RESAMPLE, "fanouts": (8, 4), "step_seed": 3}
     for mode, given, used in (
         ("train", "torch", "torch"),
         ("eval", "torch", "torch"),

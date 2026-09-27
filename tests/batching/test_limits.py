@@ -18,7 +18,7 @@ def test_batch_limits_bound_candidate_pools_before_fetching() -> None:
     wide = SamplerPlan(roots=PoolPlan(32, 16, 16, 8), relation_fanouts=(8, 4))
     store = FakeStore(wide)
     with pytest.raises(BatchCapacityError, match="Candidate pools"):
-        build_batch(store, roots(120), fanouts=(16, 4), sampler=wide)
+        build_batch(store, roots(120), fanouts=(16, 4), sampler=wide, plan=FeaturePlan())
     assert not store.calls
     BatchLimits().validate(120, (16, 4), FeaturePlan(), SamplerPlan())
     BatchLimits().validate(120, (16, 4), FeaturePlan(), replace(wide, children=PoolPlan()))

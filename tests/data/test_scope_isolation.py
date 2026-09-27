@@ -16,10 +16,12 @@ from mule_pattern_learner.config import (
     SplitDates,
 )
 from mule_pattern_learner.contract.feature_groups import (
+    FeaturePlan,
     contract_fingerprint,
     extraction_plan,
 )
 from mule_pattern_learner.contract.graph_schema import ContextKey
+from mule_pattern_learner.contract.sampler_plan import SamplerPlan
 from mule_pattern_learner.contract.server import (
     CONTEXT_QUERY,
     HUB_QUERY,
@@ -65,12 +67,14 @@ def test_batch_ids_are_dense_per_type_cutoff_and_scope_and_never_global() -> Non
 
 def test_budget_rejects_before_database_calls_and_tensor_allocation() -> None:
     executor = FakeTigerGraph({})
-    source = ContextSource(TigerGraphContextFetcher(executor))
+    source = ContextSource(
+        TigerGraphContextFetcher(executor), plan=FeaturePlan(), sampler=SamplerPlan()
+    )
     roots = [ContextKey("Account", str(i), 100, 1000) for i in range(129)]
     with pytest.raises(BatchCapacityError):
-        build_batch(source, roots)
+        build_batch(source, roots, fanouts=(8, 4), plan=FeaturePlan(), sampler=SamplerPlan())
     with pytest.raises(BatchCapacityError):
-        build_batch(source, roots[:64], fanouts=(64, 64))
+        build_batch(source, roots[:64], fanouts=(64, 64), plan=FeaturePlan(), sampler=SamplerPlan())
     assert executor.requested == []
 
 
@@ -78,20 +82,28 @@ def test_scope_follows_recursive_events_and_cache_never_crosses_scope() -> None:
     a = ContextKey("Account", "a", 100, 1000, "strict", 1)
     msg = message(90, 900, a)
     source = FakeTigerGraph({a: context(a, [msg])})
-    backend = ContextSource(TigerGraphContextFetcher(source))
-    build_batch(backend, [a], fanouts=(2, 2))
+    backend = ContextSource(
+        TigerGraphContextFetcher(source), plan=FeaturePlan(), sampler=SamplerPlan()
+    )
+    build_batch(backend, [a], fanouts=(2, 2), plan=FeaturePlan(), sampler=SamplerPlan())
     assert child_key(msg, a) in source.requested
     assert all(key.scope_id == "strict" and key.visibility_phase == 1 for key in source.requested)
     previous = backend.database_calls
     backend.fetch([replace(a, visibility_phase=3)])
     assert backend.database_calls > previous
     with pytest.raises(ValueError, match="differs"):
-        validate_context(a, context(replace(a, visibility_phase=3)))
+        validate_context(
+            a, context(replace(a, visibility_phase=3)), plan=FeaturePlan(), sampler=SamplerPlan()
+        )
 
 
 def test_stream_retention_is_bounded_across_many_disjoint_batches() -> None:
     backend = ContextSource(
-        TigerGraphContextFetcher(FakeTigerGraph({})), capacity=8, request_batch_size=16
+        TigerGraphContextFetcher(FakeTigerGraph({})),
+        capacity=8,
+        request_batch_size=16,
+        plan=FeaturePlan(),
+        sampler=SamplerPlan(),
     )
     for start in range(0, 512, 16):
         backend.fetch([ContextKey("Account", str(i), 100, 1000) for i in range(start, start + 16)])

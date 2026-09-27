@@ -15,6 +15,7 @@ from mule_pattern_learner.contract.feature_groups import (
     FeaturePlan,
 )
 from mule_pattern_learner.contract.graph_schema import CHANNELS, ContextKey
+from mule_pattern_learner.contract.sampler_plan import SamplerPlan
 from mule_pattern_learner.contract.server import CONTEXT_CONTRACT
 from mule_pattern_learner.data.contexts import ContextSource
 from mule_pattern_learner.model.tgat import TGAT
@@ -104,9 +105,9 @@ def test_each_group_has_consistent_transport_batch_and_model_width(group: str) -
         stratum="recent",
     )
     executor = FakeTigerGraph({root: context(root, [msg])})
-    source = ContextSource(TigerGraphContextFetcher(executor), plan=plan)
+    source = ContextSource(TigerGraphContextFetcher(executor), plan=plan, sampler=SamplerPlan())
     try:
-        batch = build_batch(source, [root], fanouts=(2, 2), plan=plan)
+        batch = build_batch(source, [root], fanouts=(2, 2), plan=plan, sampler=SamplerPlan())
         assert batch["x"].shape[1] == len(plan.node_names)
         assert batch["first_edge"].shape[-1] == len(plan.edge_names)
         model = TGAT(16, 4, 0, plan=plan, slot_sum=False, first_fanout=8)
