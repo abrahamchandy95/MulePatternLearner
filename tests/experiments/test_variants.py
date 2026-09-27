@@ -1,58 +1,64 @@
-"""Feature arms share one preparation and state their slot sum."""
+"""Feature variants share one dataset and state their slot sum."""
 
 from __future__ import annotations
 
-from mule_pattern_learner.config import run_config
-from mule_pattern_learner.contract.feature_groups import DEFAULT_GROUPS, FeaturePlan
+from typing import Any
+
+from mule_pattern_learner.config import DEFAULT_CONFIG, RunConfig
+from mule_pattern_learner.contract.feature_groups import DEFAULT_GROUPS
+from mule_pattern_learner.data.manifest import dataset_id
 from mule_pattern_learner.experiments.variants import feature_experiments
+from mule_pattern_learner.inference.saved_model import saved_run_config
 from mule_pattern_learner.model.build import build_model
+from mule_pattern_learner.testing.builders import live_config
 
-CONFIG = run_config()
+CONFIG = DEFAULT_CONFIG
 
 
-def test_feature_arms_and_model_seeds_share_one_preparation() -> None:
-    from mule_pattern_learner.config import validate_config
-    from mule_pattern_learner.data.manifest import preparation_view
-    from mule_pattern_learner.experiments.variants import feature_experiments
-    from mule_pattern_learner.testing.builders import live_config
-
+def test_feature_variants_and_model_seeds_share_one_dataset() -> None:
     base = live_config()
-    views = {json_key(preparation_view(arm)) for arm in feature_experiments(base).values()}
-    assert len(views) == 1  # arms of any groups and architecture fit the same preparation
+    ids = {dataset_id("source", variant) for variant in feature_experiments(base).values()}
+    assert ids == {dataset_id("source", base)}  # any groups and architecture fit one dataset
     # So do models saved with a variant, and ones that named extraction groups.
-    saved = [{**base, "variant": v} for v in ("no_fourier", "tabular")]
-    saved.append({**base, "extraction_groups": [*base["feature_groups"], "rolling_windows"]})
-    assert {json_key(preparation_view(validate_config(c))) for c in saved} == views
-    reseeded = {**base, "seed": 7, "cohort_seed": base["seed"]}
-    assert preparation_view(reseeded) == preparation_view(base)
-    assert preparation_view({**base, "seed": 7})["cohort_seed"] == 7
+    saved = [saved_run_config({"variant": v}) for v in ("no_fourier", "tabular")]
+    saved.append(saved_run_config({"extraction_groups": [*CONFIG.features, "rolling_windows"]}))
+    assert {dataset_id("source", config) for config in saved} == {dataset_id("source", CONFIG)}
+    # And other model seeds: the reservoir seed is the dataset's own.
+    reseeded = base.with_changes({"training": {"seed": 7}})
+    assert dataset_id("source", reseeded) == dataset_id("source", base)
+    other = base.with_changes({"dataset": {"seed": 7}})
+    assert dataset_id("source", other) != dataset_id("source", base)
 
 
-def json_key(value: object) -> str:
-    import json
+def model_keys(config: RunConfig) -> dict[str, Any]:
+    return {
+        "features": config.features,
+        "architecture": config.model.architecture,
+        "slot_sum": config.model.slot_sum,
+    }
 
-    return json.dumps(value, sort_keys=True)
 
-
-def test_every_ablation_arm_states_its_slot_sum() -> None:
-    arms = feature_experiments(CONFIG)
-    for name, arm in arms.items():
-        model = build_model(arm, FeaturePlan.from_config(arm))
-        assert (model.slot_sum is not None) == arm["slot_sum"], name
-    # The feature-group arms keep the model they were designed on.
-    assert not any(arm["slot_sum"] for name, arm in arms.items() if not name.startswith("built_in"))
-    keys = ("feature_groups", "architecture", "slot_sum")
-    assert {k: arms["built_in"][k] for k in keys} == {k: CONFIG[k] for k in keys}
+def test_every_ablation_variant_states_its_slot_sum() -> None:
+    variants = feature_experiments(CONFIG)
+    for name, variant in variants.items():
+        model = build_model(variant.model, variant.feature_plan(), variant.sampler.fanouts[0])
+        assert (model.slot_sum is not None) == variant.model.slot_sum, name
+    # The feature-group variants keep the model they were designed on.
+    assert not any(
+        v.model.slot_sum for name, v in variants.items() if not name.startswith("built_in")
+    )
+    built_in = model_keys(CONFIG)
+    assert model_keys(variants["built_in"]) == built_in
     differences = {
-        name: {k for k in keys if arm[k] != CONFIG[k]}
-        for name, arm in arms.items()
+        name: {k for k, v in model_keys(variant).items() if v != built_in[k]}
+        for name, variant in variants.items()
         if name.startswith("built_in_")
     }
     assert differences == {
         "built_in_no_slot_sum": {"slot_sum"},
-        "built_in_no_pool": {"feature_groups"},
-        "built_in_no_internal": {"feature_groups"},
+        "built_in_no_pool": {"features"},
+        "built_in_no_internal": {"features"},
         "built_in_tabular": {"architecture", "slot_sum"},
     }
-    assert arms["built_in_no_pool"]["feature_groups"] == list(DEFAULT_GROUPS)
-    assert "pool_internal_inflows" not in arms["built_in_no_internal"]["feature_groups"]
+    assert variants["built_in_no_pool"].features == DEFAULT_GROUPS
+    assert "pool_internal_inflows" not in variants["built_in_no_internal"].features

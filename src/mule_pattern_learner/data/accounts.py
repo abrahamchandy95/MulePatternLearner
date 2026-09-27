@@ -9,7 +9,8 @@ from typing import Any
 
 import pandas as pd
 
-from ..contract.bounds import ID_BYTES, POSITIVE_POOL, SEED_LIMIT
+from ..config import DatasetConfig
+from ..contract.bounds import ID_BYTES, POSITIVE_POOL
 from ..contract.clock import timestamp
 from ..contract.fingerprints import stable_score
 from ..contract.graph_schema import PHASE_SPLIT, SPLITS
@@ -27,15 +28,6 @@ def scope_accounts(
     """
     for page in scope.population_pages(scope_id, include_observed=include_observed):
         yield from page
-
-
-def cohort_seed(config: dict[str, Any]) -> int:
-    """Seed of the label-blind seed reservoirs: `cohort_seed`, else the model `seed`.
-
-    Pin `cohort_seed` to train several model seeds on one prepared cohort.
-    """
-    value = config.get("cohort_seed")
-    return int(config["seed"] if value is None else value)
 
 
 def _check_label_fields(row: dict[str, Any], graph_labels: bool) -> None:
@@ -61,32 +53,29 @@ def _check_label_fields(row: dict[str, Any], graph_labels: bool) -> None:
 
 
 def scoped_cohort(
-    scope: ScopeReader, config: dict[str, Any], labels: ObservedLabelReader | None
+    scope: ScopeReader,
+    scope_id: str,
+    dataset: DatasetConfig,
+    labels: ObservedLabelReader | None,
 ) -> tuple[pd.DataFrame, dict[str, int]]:
     """Keep uniform hash reservoirs plus observed positives, never all account IDs.
 
-    in_marginal records membership in the label-blind reservoir. Positives retained
-    outside it belong only to the separately sampled positive pool, not the nnPU
-    marginal. Full graph neighborhoods are filtered server-side by scope, not by
-    this statistical seed sample. Graph labels are read only for a label source whose
-    labels are the graph's (``from_graph``).
+    The reservoirs hold dataset.seed_limits accounts per split, ranked by a hash seeded
+    with dataset.seed. in_marginal records membership in the label-blind reservoir.
+    Positives retained outside it belong only to the separately sampled positive pool,
+    not the nnPU marginal. Full graph neighborhoods are filtered server-side by scope,
+    not by this statistical seed sample. Graph labels are read only for a label source
+    whose labels are the graph's (``from_graph``).
     """
     if labels is None:
         raise ValueError("An explicit observed-label source is required")
     graph_labels = labels.from_graph
-    limits = config["seed_limits"]
-    if set(limits) != set(SPLITS) or any(
-        type(n) is not int or not SEED_LIMIT.holds(n) for n in limits.values()
-    ):
-        raise ValueError(
-            f"seed_limits needs three integer capacities in [{SEED_LIMIT.low},{SEED_LIMIT.high}]"
-        )
-    seed = cohort_seed(config)
+    limits, seed = dataset.seed_limits, dataset.seed
     known_ids = labels.positive_ids()
-    heaps: dict[str, list[tuple[float, str, dict[str, Any]]]] = {s: [] for s in limits}
+    heaps: dict[str, list[tuple[float, str, dict[str, Any]]]] = {s: [] for s in SPLITS}
     positives: dict[str, dict[str, Any]] = {}
     counts: Counter[str] = Counter()
-    for row in scope_accounts(scope, config["scope_id"], include_observed=graph_labels):
+    for row in scope_accounts(scope, scope_id, include_observed=graph_labels):
         if ORACLE_COLUMNS & set(row):
             raise ValueError("Oracle fields cannot enter population metadata")
         _check_label_fields(row, graph_labels)
@@ -99,7 +88,7 @@ def scoped_cohort(
         split = PHASE_SPLIT[row.pop("partition")]
         row["split"] = split
         counts[split] += 1
-        if row["first_seen_ts_ms"] >= min(timestamp(d) for d in config["dates"][split]):
+        if row["first_seen_ts_ms"] >= min(timestamp(d) for d in dataset.dates[split]):
             continue
         row["in_marginal"] = True
         rank = stable_score(account, seed, "marginal_cohort")

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -28,7 +27,7 @@ def population_row(account: str, positive: bool, known: int) -> dict[str, Any]:
     }
 
 
-def test_only_graph_labels_read_labels_from_the_graph(tmp_path: Path) -> None:
+def test_only_graph_labels_read_labels_from_the_graph() -> None:
     from mule_pattern_learner.data.accounts import scoped_cohort
 
     seen = []
@@ -40,27 +39,35 @@ def test_only_graph_labels_read_labels_from_the_graph(tmp_path: Path) -> None:
         return [{"status": "ok", "accounts": [row]}]
 
     fake = Runner(run)
-    config = unit_config(tmp_path)
-    scoped_cohort(TigerGraphScope(fake), config, FrameObservedLabels(NO_LABELS))
-    frame, _ = scoped_cohort(TigerGraphScope(fake), config, GraphObservedLabels())
+    config = unit_config()
+    scoped_cohort(
+        TigerGraphScope(fake), config.scope.id, config.dataset, FrameObservedLabels(NO_LABELS)
+    )
+    frame, _ = scoped_cohort(
+        TigerGraphScope(fake), config.scope.id, config.dataset, GraphObservedLabels()
+    )
     assert seen == [False, True] and frame.in_marginal.tolist() == [True]
     with pytest.raises(ValueError, match="explicit"):
-        scoped_cohort(TigerGraphScope(fake), config, None)
+        scoped_cohort(TigerGraphScope(fake), config.scope.id, config.dataset, None)
 
 
 @pytest.mark.legacy
-def test_stale_population_queries_fail_fast(tmp_path: Path) -> None:
+def test_stale_population_queries_fail_fast() -> None:
     from mule_pattern_learner.data.accounts import scoped_cohort
 
-    config = unit_config(tmp_path)
+    config = unit_config()
     # An old query emits the discovery time of hidden or negative labels.
     stale = Runner(lambda n, p: [{"status": "ok", "accounts": [population_row("A1", False, 5)]}])
     with pytest.raises(ValueError, match="predates the masked-label predicate"):
-        scoped_cohort(TigerGraphScope(stale), config, GraphObservedLabels())
+        scoped_cohort(
+            TigerGraphScope(stale), config.scope.id, config.dataset, GraphObservedLabels()
+        )
     # Without include_observed the query must return no label information.
     leaky = Runner(lambda n, p: [{"status": "ok", "accounts": [population_row("A1", True, 5)]}])
     with pytest.raises(ValueError, match="include_observed is false"):
-        scoped_cohort(TigerGraphScope(leaky), config, FrameObservedLabels(NO_LABELS))
+        scoped_cohort(
+            TigerGraphScope(leaky), config.scope.id, config.dataset, FrameObservedLabels(NO_LABELS)
+        )
     metadata = pd.DataFrame(
         {
             "account_id": ["A1", "A2", "A3"],

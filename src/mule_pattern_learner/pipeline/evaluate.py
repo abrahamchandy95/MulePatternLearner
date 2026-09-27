@@ -25,7 +25,7 @@ def evaluate(predictions: Path, checkpoint: Path, truth: Path | None) -> dict[st
     if truth is not None:
         reader = ParquetEvaluationTruth(truth)
     else:
-        reader = GraphEvaluationTruth(connect(saved.validated_config()))
+        reader = GraphEvaluationTruth(connect(saved.config.transport))
     return evaluate_predictions(predictions, saved, reader)
 
 
@@ -39,7 +39,7 @@ def final_audit(
     graph's oracle truth.
     """
     saved, dataset, manifest = audit_inputs(checkpoint, output, dataset)
-    executor = connect(saved.validated_config())
+    executor = connect(saved.config.transport)
     verify_frozen_source(executor, manifest)
     reader: TruthReader
     if truth is not None:

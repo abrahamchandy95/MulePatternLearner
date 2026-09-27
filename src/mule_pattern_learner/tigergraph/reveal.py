@@ -3,8 +3,8 @@
 A fresh PhantomLedger load masks every mule, so training would have no positives.
 The first run calls temporal_reveal_mule_labels (gsql/queries/label_reveal.gsql),
 which simulates when a bank would have discovered each mule (victim reports, network
-tracing, monitoring; see docs/label_reveal.md) and reveals up to `reveal_per_split`
-discovered mules per split. Training then reads only the revealed positives and
+tracing, monitoring; see docs/label_reveal.md) and reveals up to
+`scope.reveal_per_split` discovered mules per split. Training then reads only the revealed positives and
 their discovery clocks; ground truth stays in the
 graph for the oracle audit.
 """
@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from ..config import ScopeConfig, SplitDates
 from ..contract.clock import timestamp
 from ..contract.graph_schema import SPLIT_PHASE
 from .executor import QueryExecutor, merged_rows
@@ -50,27 +51,22 @@ def reveal_uniforms(key: int, salt: int, n: int) -> list[float]:
     return values
 
 
-def reveal_parameters(config: dict[str, Any], *, apply: bool) -> dict[str, Any]:
-    """Query parameters: the scope, each split's latest cutoff, budget and salt.
-
-    An absent or null reveal_per_split takes the query's default budget; an absent
-    or null reveal_salt takes the run's seed.
-    """
-    dates = config["dates"]
-    budget = config.get("reveal_per_split")
-    salt = config.get("reveal_salt")
+def reveal_parameters(scope: ScopeConfig, dates: SplitDates, *, apply: bool) -> dict[str, Any]:
+    """Query parameters: the scope, each split's latest cutoff, the budget and the salt."""
     return {
-        "scope_id": config["scope_id"],
-        "train_cutoff_ms": max(timestamp(d) for d in dates["train"]),
-        "validation_cutoff_ms": max(timestamp(d) for d in dates["validation"]),
-        "test_cutoff_ms": max(timestamp(d) for d in dates["test"]),
-        "budget": int(REVEAL_DEFAULTS["budget"] if budget is None else budget),
-        "salt": int(config["seed"] if salt is None else salt),
+        "scope_id": scope.id,
+        "train_cutoff_ms": max(timestamp(d) for d in dates.train),
+        "validation_cutoff_ms": max(timestamp(d) for d in dates.validation),
+        "test_cutoff_ms": max(timestamp(d) for d in dates.test),
+        "budget": scope.reveal_per_split,
+        "salt": scope.reveal_salt,
         "apply": apply,
     }
 
 
-def ensure_revealed_labels(executor: QueryExecutor, config: dict[str, Any]) -> dict[str, Any]:
+def ensure_revealed_labels(
+    executor: QueryExecutor, scope: ScopeConfig, dates: SplitDates
+) -> dict[str, Any]:
     """Reveal known mules on first use; a graph that already has known labels is kept.
 
     Prints the reveal plan (mules, eligible and revealed per split, and channels) or
@@ -78,7 +74,7 @@ def ensure_revealed_labels(executor: QueryExecutor, config: dict[str, Any]) -> d
     """
     result = merged_rows(
         executor.run(
-            REVEAL_QUERY, reveal_parameters(config, apply=True), timeout_s=3600.0, attempts=1
+            REVEAL_QUERY, reveal_parameters(scope, dates, apply=True), timeout_s=3600.0, attempts=1
         )
     )
     status = result.get("status")

@@ -6,7 +6,7 @@ from typing import Any
 import numpy as np
 import pytest
 
-from mule_pattern_learner.config import DEFAULT_RUN, run_config, validate_config
+from mule_pattern_learner.config import DEFAULT_CONFIG, ScopeConfig, SplitDates
 from mule_pattern_learner.contract.clock import timestamp
 from mule_pattern_learner.paths import REPOSITORY_ROOT
 from mule_pattern_learner.tigergraph import labels as tigergraph_labels
@@ -15,6 +15,8 @@ from mule_pattern_learner.tigergraph.gsql_text import definitions, repository_qu
 from mule_pattern_learner.tigergraph.installer import TRAINING_QUERY_FILES
 
 REVEAL_FILE = REPOSITORY_ROOT / "gsql/queries/label_reveal.gsql"
+# The built-in run's scope and split dates, which the reveal reads.
+REVEAL_SETTINGS = (DEFAULT_CONFIG.scope, DEFAULT_CONFIG.dataset.dates)
 CLEAN = {
     "known_labels": 752623,
     "true_mules": 233,
@@ -42,11 +44,11 @@ def test_hash_mirror_is_pinned_uniform_and_stream_independent() -> None:
     assert (2147483647 - 1) ** 2 + 1013904223 < 2**63
 
 
-def test_reveal_parameters_follow_the_run_dates_budget_and_seed() -> None:
-    config = run_config()
-    params = tigergraph_reveal.reveal_parameters(config, apply=True)
+def test_reveal_parameters_follow_the_run_dates_budget_and_salt() -> None:
+    scope, dates = DEFAULT_CONFIG.scope, DEFAULT_CONFIG.dataset.dates
+    params = tigergraph_reveal.reveal_parameters(scope, dates, apply=True)
     assert params == {
-        "scope_id": DEFAULT_RUN["scope_id"],
+        "scope_id": scope.id,
         "train_cutoff_ms": timestamp("2024-07-01"),
         "validation_cutoff_ms": timestamp("2024-10-01"),
         "test_cutoff_ms": timestamp("2025-01-01"),
@@ -54,17 +56,14 @@ def test_reveal_parameters_follow_the_run_dates_budget_and_seed() -> None:
         "salt": 42,
         "apply": True,
     }
-    several = {**config, "dates": {**config["dates"], "train": ["2024-05-01", "2024-07-01"]}}
-    assert tigergraph_reveal.reveal_parameters(several, apply=False)[
+    several = SplitDates(train=("2024-05-01", "2024-07-01"))
+    assert tigergraph_reveal.reveal_parameters(scope, several, apply=False)[
         "train_cutoff_ms"
     ] == timestamp("2024-07-01")
-    assert (
-        tigergraph_reveal.reveal_parameters({**config, "reveal_salt": 7}, apply=False)["salt"] == 7
+    other = ScopeConfig(reveal_salt=7, reveal_per_split=5)
+    assert tigergraph_reveal.reveal_parameters(other, dates, apply=False) | {"apply": True} == (
+        params | {"salt": 7, "budget": 5}
     )
-    # A JSON override may write null; it means "not set", like cohort_seed.
-    unset = validate_config({**config, "reveal_salt": None, "reveal_per_split": None, "seed": 5})
-    assert tigergraph_reveal.reveal_parameters(unset, apply=False)["salt"] == 5
-    assert tigergraph_reveal.reveal_parameters(unset, apply=False)["budget"] == 20
 
 
 def test_reveal_defaults_are_the_query_defaults() -> None:
@@ -72,7 +71,8 @@ def test_reveal_defaults_are_the_query_defaults() -> None:
     header = query.split("(", 1)[1].split(") FOR GRAPH", 1)[0]
     declared = re.findall(r"\b(?:INT|DOUBLE)\s+(\w+)\s*=\s*([-\d.]+)", header)
     assert {name: float(value) for name, value in declared} == tigergraph_reveal.REVEAL_DEFAULTS
-    assert DEFAULT_RUN["reveal_per_split"] == tigergraph_reveal.REVEAL_DEFAULTS["budget"]
+    assert DEFAULT_CONFIG.scope.reveal_per_split == tigergraph_reveal.REVEAL_DEFAULTS["budget"]
+    assert DEFAULT_CONFIG.scope.reveal_salt == tigergraph_reveal.REVEAL_DEFAULTS["salt"]
 
 
 class RevealServer:
@@ -102,7 +102,7 @@ def test_first_run_reveals_once_and_reports_the_shortfall(
         "revealed_by_channel": {"victim_report": 40, "monitoring": 9, "network_trace": 5},
     }
     server = RevealServer(reveal, CLEAN)
-    summary = tigergraph_reveal.ensure_revealed_labels(server, run_config())
+    summary = tigergraph_reveal.ensure_revealed_labels(server, *REVEAL_SETTINGS)
     name, params, options = server.calls[0]
     assert (
         name == tigergraph_reveal.REVEAL_QUERY
@@ -121,14 +121,15 @@ def test_existing_labels_are_kept_and_contract_violations_fail() -> None:
         {"status": "already_revealed", "known_labels": 9, "revealed_labels": 3}, CLEAN
     )
     assert (
-        tigergraph_reveal.ensure_revealed_labels(kept, run_config())["labels"] == "already revealed"
+        tigergraph_reveal.ensure_revealed_labels(kept, *REVEAL_SETTINGS)["labels"]
+        == "already revealed"
     )
     broken = RevealServer({"status": "already_revealed"}, {**CLEAN, "invalid_clocks": 2})
     with pytest.raises(ValueError, match="invalid_clocks"):
-        tigergraph_reveal.ensure_revealed_labels(broken, run_config())
+        tigergraph_reveal.ensure_revealed_labels(broken, *REVEAL_SETTINGS)
     refused = RevealServer({"status": "scope_not_ready"}, CLEAN)
     with pytest.raises(ValueError, match="scope_not_ready"):
-        tigergraph_reveal.ensure_revealed_labels(refused, run_config())
+        tigergraph_reveal.ensure_revealed_labels(refused, *REVEAL_SETTINGS)
 
 
 def test_reveal_queries_are_installed_with_training_and_read_truth_only_there() -> None:

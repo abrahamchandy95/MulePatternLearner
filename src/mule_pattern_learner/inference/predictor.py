@@ -10,7 +10,7 @@ from collections import Counter
 from collections.abc import Callable, Generator, Iterable, Iterator
 import contextlib
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -24,11 +24,8 @@ from ..batching.assemble import (
     to_device,
 )
 from ..batching.limits import BatchLimits
-from ..config import fanouts
 from ..contract.bounds import BATCH_ROOTS
-from ..contract.feature_groups import FeaturePlan
 from ..contract.graph_schema import ContextKey
-from ..contract.sampler_plan import SamplerPlan
 from ..data.contexts import ContextSource, check_coverage, streaming_source
 from ..data.hub_registry import HubRegistry, warn_hub_stubs
 from ..data.ports import ContextFetcher
@@ -119,7 +116,7 @@ class TemporalPredictor:
     for the scored cutoff (training's dataset registry or ``query_hubs``); without
     it no child is stubbed and hub children are masked out when TigerGraph rejects them.
     Without ``contexts`` the predictor streams them through ``fetcher`` with the
-    checkpoint's plan, pools and transport settings.
+    checkpoint's plan, pools and transport section.
     """
 
     def __init__(
@@ -133,16 +130,16 @@ class TemporalPredictor:
     ) -> None:
         saved = ModelCheckpoint.of(checkpoint)
         saved.check_contract()
-        self.config: dict[str, Any] = saved.validated_config()
-        self.plan = FeaturePlan.from_config(self.config)
-        self.sampler = SamplerPlan.from_config(self.config)
+        self.config = config = saved.config
+        self.plan = config.feature_plan()
+        self.sampler = config.sampler
         saved.check_inputs(self.plan)
         self.threshold = saved.threshold
         created = contexts is None
         if contexts is None:
             if fetcher is None:
                 raise ValueError("Provide a context source or a context fetcher")
-            contexts = streaming_source(fetcher, self.plan, self.sampler, self.config)
+            contexts = streaming_source(fetcher, self.plan, self.sampler, config.transport)
         try:
             check_coverage(contexts, self.plan, self.sampler)
             self.contexts = contexts
@@ -152,18 +149,18 @@ class TemporalPredictor:
             self.totals: Counter[str] = Counter()
             self.device = choose_device(device)
             self.batch_device = batch_device(self.device)
-            # Read like RunSettings reads them, so scoring samples training's neighbourhoods.
-            self.fanouts = fanouts(self.config)
-            self.hidden = int(self.config["hidden"])
-            self.batch_size = min(int(self.config["batch_size"]), BATCH_ROOTS.high)
+            # The fan-outs training sampled, so scoring samples training's neighbourhoods.
+            self.fanouts = self.sampler.fanouts
+            self.hidden = config.model.hidden
+            self.batch_size = min(config.training.batch_size, BATCH_ROOTS.high)
             BatchLimits().validate_model(
                 self.batch_size, self.fanouts, self.hidden, self.plan, self.sampler
             )
-            self.prefetch = int(self.config["prefetch_batches"])
-            self.model = build_model(self.config, self.plan).to(self.device)
+            self.prefetch = config.runtime.prefetch_batches
+            self.model = build_model(config.model, self.plan, self.fanouts[0]).to(self.device)
             self.model.load_state_dict(saved.state_dict)
             self.model.eval()
-            torch.set_num_threads(int(self.config["threads"]))
+            torch.set_num_threads(config.runtime.threads)
         except BaseException:
             if created:
                 contexts.close()

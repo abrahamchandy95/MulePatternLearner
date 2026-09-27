@@ -210,7 +210,7 @@ DEFAULT_GROUPS = (
     "pair_history",
     "flow_timing",
 )
-# The groups of the built-in run (config.DEFAULT_RUN): the defaults plus the pool
+# The groups of the built-in run (config.DEFAULT_CONFIG): the defaults plus the pool
 # groups.
 BUILT_IN_GROUPS = (*DEFAULT_GROUPS, *POOL_GROUPS)
 # Columns follow registry order. Before the layered restructure a fixed list placed the
@@ -294,19 +294,12 @@ class FeaturePlan:
             if spec.path != "categorical" and name != "message_core" and name not in CLIENT_GROUPS
         }
 
-    @classmethod
-    def from_config(cls, config: dict[str, Any]) -> FeaturePlan:
-        """feature_groups and architecture, each the built-in run's when absent."""
-        groups = tuple(config.get("feature_groups", BUILT_IN_GROUPS))
-        return cls(groups, config.get("architecture", "split"))
 
-
-def extraction_plan(config: dict[str, Any]) -> FeaturePlan:
+def extraction_plan(model: FeaturePlan) -> FeaturePlan:
     """What the context source asks TigerGraph for: the model's groups but the client ones.
 
     Client groups are computed locally. The architecture is the model's, so a split
     model skips summary groups at hop 2.
     """
-    model = FeaturePlan.from_config(config)
     groups = tuple(g for g in model.groups if g not in CLIENT_GROUPS)
     return FeaturePlan(groups, model.architecture)

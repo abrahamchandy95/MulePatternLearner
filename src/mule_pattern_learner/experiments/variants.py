@@ -1,23 +1,23 @@
 """A label-blind ablation matrix. It describes runs; it does not start training."""
 
-from copy import deepcopy
-from typing import Any
+from dataclasses import replace
 
-from ..contract.feature_groups import BUILT_IN_GROUPS, DEFAULT_GROUPS, POOL_GROUPS, FeaturePlan
+from ..config import RunConfig
+from ..contract.feature_groups import BUILT_IN_GROUPS, DEFAULT_GROUPS, POOL_GROUPS
 
 
-def feature_experiments(base: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    """Keep dates, scope, revealed labels and prior fixed across feature arms.
+def feature_experiments(base: RunConfig) -> dict[str, RunConfig]:
+    """Keep dates, scope, revealed labels and prior fixed across feature variants.
 
-    Feature groups are not a preparation setting, so all arms train on one prepared
-    cohort whatever their groups and architecture: the source requests each arm's
-    groups and hop-2 flags. train() checks that the source covers each arm's inputs at
-    both hops.
+    Feature groups are not a dataset setting, so all variants train on one prepared
+    dataset whatever their groups and architecture: the source requests each variant's
+    groups and hop-2 flags. train() checks that the source covers each variant's inputs
+    at both hops.
 
-    Every arm sets ``slot_sum``. The feature-group arms keep it off, the model they
-    were designed on. The ``built_in`` arms measure the built-in run's own additions:
-    the slot sum, the pool groups, the internal-payer counts alone, and a summary
-    model on the same root inputs (the tabular control, no attention or slots).
+    Every variant sets ``model.slot_sum``. The feature-group variants keep it off, the
+    model they were designed on. The ``built_in`` variants measure the built-in run's own
+    additions: the slot sum, the pool groups, the internal-payer counts alone, and a
+    summary model on the same root inputs (the tabular control, no attention or slots).
     """
     cases = {
         "windows_only": (
@@ -67,8 +67,8 @@ def feature_experiments(base: dict[str, Any]) -> dict[str, dict[str, Any]]:
     }
     result = {}
     for name, (groups, architecture, slot_sum) in cases.items():
-        config = deepcopy(base)
-        config.update(feature_groups=list(groups), architecture=architecture, slot_sum=slot_sum)
-        FeaturePlan.from_config(config)
+        model = replace(base.model, architecture=architecture, slot_sum=slot_sum)
+        config = replace(base, features=groups, model=model)
+        config.feature_plan()
         result[name] = config
     return result

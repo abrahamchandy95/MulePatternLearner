@@ -2,17 +2,17 @@
 
 A run is resumable. ``run_dir/checkpoint_last.pt`` holds the model, optimizer,
 weight average, RNG and schedule position plus the selection state, written every epoch and every
-``checkpoint_every_steps`` steps. ``train(..., resume=True)`` continues from it and
+``runtime.checkpoint_every_steps`` steps. ``train(..., resume=True)`` continues from it and
 reproduces the uninterrupted run exactly: every epoch schedule is drawn up front
 from the saved generator state, and every step reseeds torch from a stable hash
 of (seed, epoch, step), so dropout and sampler draws never depend on history.
 The sampler backend is resolved once per run and stored in the checkpoint; a
-resume that would sample with another backend is refused unless the config names
-that backend explicitly. Reported REST calls, rejections and batch totals are
+resume that would sample with another backend is refused unless the sampler section
+names that backend explicitly. Reported REST calls, rejections and batch totals are
 checkpointed too, so they cover every segment of a resumed run.
 
 Roots that TigerGraph rejects are dropped from a batch, but only within
-``max_rejected_root_fraction`` (default 0: any rejection fails). A rejected
+``runtime.max_rejected_root_fraction`` (default 0: any rejection fails). A rejected
 observed positive always fails the epoch or evaluation, and validation must keep
 both observed classes after its rejections.
 
@@ -26,7 +26,6 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Iterator, Mapping
 import contextlib
-from dataclasses import dataclass
 import json
 from pathlib import Path
 import time
@@ -40,14 +39,13 @@ from torch import nn
 from ..artifacts import atomic_write
 from ..batching.assemble import RootBatch, batch_device, build_root_batch, to_device
 from ..batching.limits import BatchLimits
-from ..config import fanouts, validate_config
-from ..contract.bounds import PREFETCH_BATCHES
+from ..config import RunConfig, SplitDates, TrainingConfig
 from ..contract.feature_groups import FeaturePlan, extraction_plan
-from ..contract.graph_schema import ContextKey, context_scope
+from ..contract.graph_schema import ContextKey
 from ..contract.sampler_plan import SamplerPlan
 from ..data.contexts import ContextOpener, ContextSource, check_coverage, close_source
 from ..data.hub_registry import HubRegistry, load_hub_registry, warn_hub_stubs
-from ..data.manifest import load_prepared, preparation_mismatches
+from ..data.manifest import dataset_mismatches, load_prepared
 from ..data.observed_labels import label_summary, load_observed_labels, visible_labels
 from ..data.splits import eligible_mask, marginal_mask, sample_keys
 from ..inference.predictor import accepted_scores, score_batches
@@ -60,14 +58,7 @@ from ..runtime.device import choose_device, torch_runtime
 from ..runtime.workers import BatchPrefetcher
 from ..sampling.backend import resolve_backend
 from .averaging import WeightAverage, evaluated_weights
-from .checkpoint import (
-    CHECKPOINT_FORMAT,
-    RUN_STATE_FILES,
-    explicit_backend,
-    load_resume_state,
-    restore_cuda_rng,
-    resume_fingerprint,
-)
+from .checkpoint import CHECKPOINT_FORMAT, RUN_STATE_FILES, load_resume_state, restore_cuda_rng
 from .history import LogInterval, Progress, epoch_record, plain
 from .objective import StepLoss, nnpu_objective, nnpu_step
 from .schedule import (
@@ -83,69 +74,15 @@ Batch = dict[str, torch.Tensor]
 BatchRequest = tuple[list[ContextKey], str, int]
 
 
-@dataclass(frozen=True)
-class RunSettings:
-    batch_size: int
-    fanouts: tuple[int, int]
-    hidden: int
-    epochs: int
-    steps_per_epoch: int | None
-    patience: int
-    seed: int
-    split_seed: int
-    device: str
-    threads: int
-    deterministic: bool | str
-    prefetch_batches: int
-    checkpoint_every_steps: int
-    log_every_steps: int
-    # Largest fraction of an epoch's (or evaluation split's) roots TigerGraph may reject.
-    max_rejected_root_fraction: float = 0.0
-    # 0 validates and saves the raw weights; d in (0, 1) their moving average (WeightAverage).
-    weight_average_decay: float = 0.0
-
-    def __post_init__(self) -> None:
-        # patience = 0 disables early stopping; n > 0 stops after n epochs without a
-        # better validation AP.
-        if len(self.fanouts) != 2 or self.epochs < 1 or self.patience < 0:
-            raise ValueError("Training needs two fanouts, epochs >= 1 and patience >= 0")
-        if not 0.0 <= self.max_rejected_root_fraction <= 1.0:
-            raise ValueError("max_rejected_root_fraction must be in [0,1]")
-        if not PREFETCH_BATCHES.holds(self.prefetch_batches):
-            raise ValueError(
-                f"prefetch_batches must be in [{PREFETCH_BATCHES.low},{PREFETCH_BATCHES.high}]"
-            )
-        if self.checkpoint_every_steps < 0 or self.log_every_steps < 1:
-            raise ValueError("checkpoint_every_steps must be >= 0 and log_every_steps >= 1")
-        if not 0.0 <= self.weight_average_decay < 1.0:
-            raise ValueError("weight_average_decay must be in [0,1)")
-
-    @classmethod
-    def from_config(cls, config: dict[str, Any]) -> RunSettings:
-        """The settings of a validated configuration."""
-        steps = config["steps_per_epoch"]
-        return cls(
-            batch_size=int(config["batch_size"]),
-            fanouts=fanouts(config),
-            hidden=int(config["hidden"]),
-            epochs=int(config["epochs"]),
-            steps_per_epoch=None if steps is None else int(steps),
-            patience=int(config["patience"]),
-            seed=int(config["seed"]),
-            split_seed=int(config["split_seed"]),
-            device=str(config["device"]),
-            threads=int(config["threads"]),
-            deterministic=config["deterministic"],
-            prefetch_batches=int(config["prefetch_batches"]),
-            checkpoint_every_steps=int(config["checkpoint_every_steps"]),
-            log_every_steps=int(config["log_every_steps"]),
-            max_rejected_root_fraction=float(config["max_rejected_root_fraction"]),
-            weight_average_decay=float(config["weight_average_decay"]),
-        )
-
-    def check_limits(self, plan: FeaturePlan, sampler: SamplerPlan) -> None:
-        """Raise when a training batch of these settings would exceed the memory limits."""
-        BatchLimits().validate_model(self.batch_size, self.fanouts, self.hidden, plan, sampler)
+def check_limits(config: RunConfig, plan: FeaturePlan) -> None:
+    """Raise when a training batch of these settings would exceed the memory limits."""
+    BatchLimits().validate_model(
+        config.training.batch_size,
+        config.sampler.fanouts,
+        config.model.hidden,
+        plan,
+        config.sampler,
+    )
 
 
 def rejection_counts(labels: np.ndarray, accepted: np.ndarray) -> dict[str, int]:
@@ -172,16 +109,14 @@ def check_source(
     check_coverage(store, model, sampler)
 
 
-def build_optimizer(model: nn.Module, config: dict[str, Any]) -> torch.optim.AdamW:
+def build_optimizer(model: nn.Module, training: TrainingConfig) -> torch.optim.AdamW:
     return torch.optim.AdamW(
-        model.parameters(),
-        lr=float(config["learning_rate"]),
-        weight_decay=float(config["weight_decay"]),
+        model.parameters(), lr=training.learning_rate, weight_decay=training.weight_decay
     )
 
 
 def train(
-    config: dict[str, Any],
+    config: RunConfig,
     dataset: Path,
     output: Path,
     *,
@@ -199,13 +134,9 @@ def train(
     existing run directory continues from its last checkpoint; without it an existing
     run is an error.
     """
-    config = validate_config(config)
-    context_scope(config)
-    plan = FeaturePlan.from_config(config)
-    sampler = SamplerPlan.from_config(config)
-    settings = RunSettings.from_config(config)
+    plan = config.feature_plan()
     # Fails fast on per-hop candidate pools too, before any database work.
-    settings.check_limits(plan, sampler)
+    check_limits(config, plan)
     checkpoint_path, run_dir = output_paths(output)
     # The run directory may already hold the prepared cache (run_dir/prepared); a run
     # has started once training wrote its own state there.
@@ -215,15 +146,16 @@ def train(
         raise FileExistsError(f"Experiment already exists: {output}; resume it or pick a new one")
     state = load_resume_state(config, run_dir) if resuming else None
     manifest, accounts = load_prepared(dataset)
-    differences = preparation_mismatches(config, manifest)
+    differences = dataset_mismatches(config, manifest)
     if differences:
-        raise ValueError(f"Training settings differ from preparation: {differences}")
+        raise ValueError(f"Training settings differ from the prepared dataset: {differences}")
     # The source requests this model's groups; its hop-2 flags follow the architecture.
-    source_plan = extraction_plan(config)
+    source_plan = extraction_plan(plan)
     mask = load_observed_labels(accounts, dataset)
-    training, evaluation = _samples(config, settings, accounts, mask)
-    prior, positive_weight = nnpu_objective(config)
-    device = choose_device(settings.device)
+    training, evaluation = _samples(config, accounts, mask)
+    prior, positive_weight = nnpu_objective(config.loss)
+    runtime = config.runtime
+    device = choose_device(runtime.device)
     registry = hubs if hubs is not None else load_hub_registry(dataset, manifest)
     warn_hub_stubs(registry, plan)
     if contexts is not None:
@@ -234,17 +166,15 @@ def train(
         raise ValueError("Training needs contexts, or open_contexts to open the dataset's source")
     failed = True
     try:
-        check_source(store, source_plan, plan, sampler)
-        with torch_runtime(device, deterministic=settings.deterministic, threads=settings.threads):
+        check_source(store, source_plan, plan, config.sampler)
+        with torch_runtime(device, deterministic=runtime.deterministic, threads=runtime.threads):
             run = _TrainingRun(
                 config=config,
-                settings=settings,
                 dataset=dataset,
                 manifest=manifest,
                 accounts=accounts,
                 mask=mask,
                 plan=plan,
-                sampler=sampler,
                 store=store,
                 hubs=registry,
                 device=device,
@@ -264,12 +194,12 @@ def train(
 
 
 def training_samples(
-    config: dict[str, Any], accounts: pd.DataFrame, mask: pd.DataFrame
+    dates: SplitDates, accounts: pd.DataFrame, mask: pd.DataFrame
 ) -> list[PUSample]:
     """The PUSample of every train cutoff with visible positives, as train() schedules them."""
     marginal = marginal_mask(accounts)
     samples: list[PUSample] = []
-    for date in config["dates"]["train"]:
+    for date in dates.train:
         eligible = np.flatnonzero(eligible_mask(accounts, "train", date))
         observed = visible_labels(mask, date)
         if observed[eligible].any():
@@ -280,20 +210,20 @@ def training_samples(
 
 
 def _samples(
-    config: dict[str, Any], settings: RunSettings, accounts: pd.DataFrame, mask: pd.DataFrame
+    config: RunConfig, accounts: pd.DataFrame, mask: pd.DataFrame
 ) -> tuple[list[PUSample], dict[str, list[EvaluationSample]]]:
-    training = training_samples(config, accounts, mask)
+    training = training_samples(config.dataset.dates, accounts, mask)
     marginal = marginal_mask(accounts)
     evaluation: dict[str, list[EvaluationSample]] = {"validation": [], "test": []}
     for name, samples in evaluation.items():
-        for date in config["dates"][name]:
+        for date in config.dataset.dates[name]:
             eligible = np.flatnonzero(eligible_mask(accounts, name, date))
             observed = visible_labels(mask, date)
             chosen = evaluation_indices(
                 eligible,
                 observed,
-                limit=config.get("evaluation_unlabeled_limit"),
-                seed=settings.split_seed,
+                limit=config.training.proxy_unlabeled_limit,
+                seed=config.dataset.split_seed,
                 marginal=marginal,
             )
             samples.append(EvaluationSample(date, chosen, observed[chosen]))
@@ -310,14 +240,12 @@ class _TrainingRun:
     def __init__(
         self,
         *,
-        config: dict[str, Any],
-        settings: RunSettings,
+        config: RunConfig,
         dataset: Path,
         manifest: dict[str, Any],
         accounts: pd.DataFrame,
         mask: pd.DataFrame,
         plan: FeaturePlan,
-        sampler: SamplerPlan,
         store: ContextSource,
         hubs: HubRegistry,
         device: torch.device,
@@ -328,29 +256,30 @@ class _TrainingRun:
         checkpoint_path: Path,
         run_dir: Path,
     ) -> None:
-        self.config, self.settings, self.dataset = config, settings, dataset
+        self.config, self.dataset = config, dataset
+        self.training_config, self.runtime = config.training, config.runtime
         self.manifest, self.accounts, self.mask = manifest, accounts, mask
-        self.plan, self.sampler, self.store, self.hubs = plan, sampler, store, hubs
+        self.plan, self.sampler, self.store, self.hubs = plan, config.sampler, store, hubs
         self.device, self.prior, self.positive_weight = device, prior, positive_weight
         self.loss = NonNegativePULoss(prior=prior, positive_weight=positive_weight)
         self.training, self.evaluation = training, evaluation
         self.checkpoint_path, self.run_dir = checkpoint_path, run_dir
         self.last_path = run_dir / "checkpoint_last.pt"
         self.batch_device = batch_device(device)
-        self.prefetch = settings.prefetch_batches
+        self.prefetch = config.runtime.prefetch_batches
         # Resolved once here, on the main thread, before any prefetch worker starts
         # (the cuGraph probe runs at most once), then passed to every batch.
-        self.backend = resolve_backend(sampler, self.batch_device)
-        self.limit = settings.max_rejected_root_fraction
+        self.backend = resolve_backend(self.sampler, self.batch_device)
+        self.limit = config.runtime.max_rejected_root_fraction
         self.observed = {sample.date: sample.observed for sample in training}
         self.progress = Progress(time.perf_counter(), store, self.backend)
         # Seeded right before the model is built: initial weights depend only on the seed.
-        torch.manual_seed(settings.seed)
-        self.model = build_model(config, plan).to(device)
-        self.optimizer = build_optimizer(self.model, config)
-        decay = settings.weight_average_decay
+        torch.manual_seed(config.training.seed)
+        self.model = build_model(config.model, plan, self.sampler.fanouts[0]).to(device)
+        self.optimizer = build_optimizer(self.model, config.training)
+        decay = config.training.weight_average_decay
         self.average = WeightAverage(self.model, decay) if decay > 0 else None
-        self.rng = np.random.default_rng(settings.seed)
+        self.rng = np.random.default_rng(config.training.seed)
         self.epoch, self.step, self.stopped = 0, 0, False
         self.best_ap, self.best_epoch = -1.0, 0
         self.best_state = self._state_copy()
@@ -378,7 +307,7 @@ class _TrainingRun:
         return build_root_batch(
             self.store,
             keys,
-            fanouts=self.settings.fanouts,
+            fanouts=self.sampler.fanouts,
             device=self.batch_device,
             plan=self.plan,
             sampler=self.sampler,
@@ -400,7 +329,7 @@ class _TrainingRun:
     def save_last(self) -> None:
         state: dict[str, Any] = {
             "format": CHECKPOINT_FORMAT,
-            "config_fingerprint": resume_fingerprint(self.config),
+            "config_fingerprint": self.config.fingerprint(),
             "model": self._state_copy(),
             "optimizer": self.optimizer.state_dict(),
             "numpy_rng": self.epoch_rng_state,
@@ -437,10 +366,10 @@ class _TrainingRun:
     def restore(self, state: dict[str, Any]) -> None:
         saved = state["sampler_backend"]
         if saved != self.backend:
-            if explicit_backend(self.config) != self.backend:
+            if self.sampler.backend != self.backend:
                 raise ValueError(
                     f"Checkpoint was sampled with the {saved} backend but this host resolves "
-                    f"{self.backend}; resume on a matching host, or set [sampler] backend = "
+                    f"{self.backend}; resume on a matching host, or set sampler.backend = "
                     f'"{self.backend}" to accept a different sampling stream from here on'
                 )
             print(
@@ -479,7 +408,9 @@ class _TrainingRun:
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
         if not (self.run_dir / "config.json").exists():
-            (self.run_dir / "config.json").write_text(json.dumps(self.config, indent=2) + "\n")
+            (self.run_dir / "config.json").write_text(
+                json.dumps(self.config.to_dict(), indent=2) + "\n"
+            )
             self.mask.to_parquet(self.run_dir / "observed_labels.parquet", index=False)
         self.progress.path = self.run_dir / "progress.jsonl"
         self.progress.emit(
@@ -495,7 +426,7 @@ class _TrainingRun:
                 "max_rejected_root_fraction": self.limit,
             }
         )
-        while self.epoch < self.settings.epochs and not self.stopped:
+        while self.epoch < self.training_config.epochs and not self.stopped:
             self.run_epoch()
         return self.finish()
 
@@ -506,10 +437,10 @@ class _TrainingRun:
         schedule = epoch_schedule(
             self.training,
             self.rng,
-            self.settings.batch_size,
+            self.training_config.batch_size,
             epoch=epoch,
-            seed=self.settings.seed,
-            max_steps=self.settings.steps_per_epoch,
+            seed=self.training_config.seed,
+            max_steps=self.training_config.steps_per_epoch,
         )
         if self.step > len(schedule):
             raise ValueError("Checkpoint step lies beyond the epoch schedule")
@@ -529,7 +460,7 @@ class _TrainingRun:
         self.model.train()
         requests = ((self.keys(s.indices, s.date), "train", s.seed) for s in remaining)
         interval = LogInterval(self.device)
-        every = self.settings.checkpoint_every_steps
+        every = self.runtime.checkpoint_every_steps
         mark = interval.started
         with self.batches(requests) as batches:
             for step, prepared in zip(remaining, batches, strict=True):
@@ -556,9 +487,7 @@ class _TrainingRun:
                     interval.add(value, risk)
                     self.loss_steps += 1
                 self.step = step.step + 1
-                logged = (
-                    self.step == len(schedule) or self.step % self.settings.log_every_steps == 0
-                )
+                logged = self.step == len(schedule) or self.step % self.runtime.log_every_steps == 0
                 saved = bool(every) and self.step % every == 0
                 if logged or saved:
                     loss, risk, corrections, finite = interval.totals()
@@ -603,7 +532,7 @@ class _TrainingRun:
             self.best_state, self.best_scores = selected, scores
             self.best_accepted = accepted
         # patience = 0 disables early stopping.
-        patience = self.settings.patience
+        patience = self.training_config.patience
         self.stopped = patience > 0 and epoch + 1 - self.best_epoch >= patience
         self.epoch, self.step = epoch + 1, 0
         self.epoch_rng_state = self.rng.bit_generator.state
@@ -665,7 +594,7 @@ class _TrainingRun:
         ``predictor.accepted_scores``.
         """
         self.model.eval()
-        size = self.settings.batch_size
+        size = self.training_config.batch_size
         samples = self.evaluation[split]
         chunks = [(s, start) for s in samples for start in range(0, len(s.indices), size)]
         requests = (self.keys(s.indices[start : start + size], s.date) for s, start in chunks)
@@ -683,7 +612,7 @@ class _TrainingRun:
                 if item.logits is not None:
                     logits.append(item.logits)
                 done += min(size, len(sample.indices) - start)
-                if number % self.settings.log_every_steps == 0 or number == len(chunks):
+                if number % self.runtime.log_every_steps == 0 or number == len(chunks):
                     self.progress.emit(
                         {"event": "evaluate", "split": split, "accounts": done, "total": total}
                     )
@@ -737,7 +666,7 @@ class _TrainingRun:
         result = run_summary(
             config=self.config,
             manifest=self.manifest,
-            seed=self.settings.seed,
+            seed=self.training_config.seed,
             known_mules=known_mules,
             device=self.device,
             prior=self.prior,

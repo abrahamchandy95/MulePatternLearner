@@ -18,7 +18,7 @@ import argparse
 import json
 import sys
 
-from mule_pattern_learner.config import run_config
+from mule_pattern_learner.config import DEFAULT_CONFIG
 from mule_pattern_learner.pipeline.connect import connect
 from mule_pattern_learner.reference.label_reveal import (
     INPUTS_QUERY,
@@ -37,14 +37,14 @@ def main() -> int:
     parser.add_argument("--salt", type=int)
     parser.add_argument("--budget", type=int)
     args = parser.parse_args()
-    config = run_config()
-    params = reveal_parameters(config, apply=False)
+    config = DEFAULT_CONFIG
+    params = reveal_parameters(config.scope, config.dataset.dates, apply=False)
     params["force"] = True
     if args.salt is not None:
         params["salt"] = args.salt
     if args.budget is not None:
         params["budget"] = args.budget
-    executor = connect(config)
+    executor = connect(config.transport)
     inputs = executor.client.conn.runInterpretedQuery(
         INPUTS_QUERY, {"scope_id": params["scope_id"]}
     )

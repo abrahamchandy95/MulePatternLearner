@@ -3,20 +3,13 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MODEL = REPOSITORY_ROOT / "models/temporal/model.pt"
 
 
-def dataset_path(config: dict[str, Any], output: Path = DEFAULT_MODEL) -> Path:
-    """The prepared cache of a run: <run directory>/prepared.
-
-    An explicit prepared_id instead names a shared cache under artifacts/temporal,
-    for experiments that train several models on one preparation.
-    """
-    if config.get("prepared_id"):
-        return REPOSITORY_ROOT / "artifacts/temporal" / config["prepared_id"]
+def dataset_path(output: Path = DEFAULT_MODEL) -> Path:
+    """The prepared dataset of a run: <run directory>/prepared."""
     return output_paths(output)[1] / "prepared"
 
 

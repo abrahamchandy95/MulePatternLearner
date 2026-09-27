@@ -110,7 +110,7 @@ def resolve_backend(sampler: SamplerPlan, device: str | torch.device) -> str:
         if sampler.backend == "cugraph":
             raise RuntimeError(
                 f"Sampler backend cugraph needs a CUDA device, got {device}; "
-                'set [sampler] backend = "torch" or "auto" for this host'
+                'set sampler.backend = "torch" or "auto" for this host'
             )
         return "torch"
     # torch stubs type the index as int, but an unindexed CUDA device has None.
@@ -125,12 +125,12 @@ def resolve_backend(sampler: SamplerPlan, device: str | torch.device) -> str:
             f"Sampler backend cugraph cannot run on cuda:{index}: {probe.reason}. "
             f"Install {PYLIBCUGRAPH_PIN} and cupy, run "
             "scripts/verify_cugraph_sampler.py on the GPU host, "
-            'or set [sampler] backend = "torch"'
+            'or set sampler.backend = "torch"'
         )
     if probe.installed:
         warnings.warn(
             f"cuGraph probe failed on cuda:{index} ({probe.reason}); using the torch "
-            'sampler. Set [sampler] backend = "torch" to silence this, or "cugraph" '
+            'sampler. Set sampler.backend = "torch" to silence this, or "cugraph" '
             "to require cuGraph.",
             RuntimeWarning,
             stacklevel=2,

@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from mule_pattern_learner.config import TransportConfig
 from mule_pattern_learner.evaluation.truth import ParquetEvaluationTruth
 from mule_pattern_learner.pipeline import evaluate as pipeline_evaluate
 from mule_pattern_learner.testing.builders import base_config, checkpoint, prepared_dataset
@@ -21,11 +22,11 @@ def test_final_audit_connects_after_its_checks_and_reads_truth_on_that_connectio
     dataset, _, _ = prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     model = checkpoint(tmp_path / "model.pt", config, dataset / "manifest.json")
     executor = SimpleNamespace()
-    connected: list[dict[str, Any]] = []
+    connected: list[TransportConfig] = []
     verified: list[Any] = []
 
-    def connect(settings: dict[str, Any]) -> Any:
-        connected.append(settings)
+    def connect(transport: TransportConfig) -> Any:
+        connected.append(transport)
         return executor
 
     def audit(saved: Any, truth: Any, output: Path, **options: Any) -> dict[str, Any]:
@@ -41,7 +42,7 @@ def test_final_audit_connects_after_its_checks_and_reads_truth_on_that_connectio
     assert connected == [] and verified == []
     result = pipeline_evaluate.final_audit(model, None, tmp_path / "audit.json")
     # The checkpoint's retry budgets, the frozen source checked, the graph's truth on it.
-    assert [settings["scope_id"] for settings in connected] == [config["scope_id"]]
+    assert connected == [config.transport]
     assert verified == [executor]
     assert result["scope"].executor is executor and result["fetcher"].executor is executor
     truth = result["truth"]

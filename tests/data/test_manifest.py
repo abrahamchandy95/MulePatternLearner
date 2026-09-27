@@ -1,15 +1,16 @@
-"""The dataset manifest: its preparation keys and the GSQL sources it records."""
+"""The dataset manifest: the dataset's settings and id, and the GSQL sources it records."""
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
-from mule_pattern_learner.config import validate_config
 from mule_pattern_learner.contract.feature_groups import DEFAULT_GROUPS
 from mule_pattern_learner.contract.server import QUERY_FILES
 from mule_pattern_learner.data import manifest as data_manifest
 from mule_pattern_learner.data.preparation import prepare
 from mule_pattern_learner.testing.builders import (
+    UNIT_SOURCE,
     FrameObservedLabels,
     live_config,
     scoped_accounts,
@@ -22,41 +23,41 @@ from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
 from mule_pattern_learner.tigergraph.scope import TigerGraphScope
 
 
-def test_preparation_keys_fingerprint_only_preparation_settings(tmp_path: Path) -> None:
-    base = unit_config(tmp_path)
-    view = data_manifest.preparation_view(base)
-    assert tuple(view) == data_manifest.PREPARATION_KEYS
-    same = [
-        {"learning_rate": 0.5, "epochs": 3, "hidden": 8, "request_batch_size": 4},
-        {"scope_unowned": "linked", "max_outage_s": 60},
-        {"sampler": {**base["sampler"], "association_slots": 1}},  # selection, not pools
-        # A preparation stores no contexts, so feature groups and architecture do not count.
-        {"feature_groups": list(DEFAULT_GROUPS), "architecture": "summary"},
+def test_the_dataset_id_covers_only_the_dataset_settings() -> None:
+    base = unit_config()
+    settings = data_manifest.dataset_settings("source", base)
+    assert tuple(settings) == data_manifest.DATASET_SETTINGS
+    identity = data_manifest.dataset_id("source", base)
+    same: list[dict[str, Any]] = [
+        {"training": {"learning_rate": 0.5, "epochs": 3, "seed": 1}, "model": {"hidden": 8}},
+        {"transport": {"request_batch_size": 4, "max_outage_s": 60}},
+        {"scope": {"unowned": "linked", "create": False, "reveal_salt": 7}},
+        {"sampler": {"association_slots": 1, "fanouts": [8, 2]}},  # selection, not pools
+        # A dataset stores no contexts, so feature groups and architecture do not count.
+        {"features": list(DEFAULT_GROUPS), "model": {"architecture": "summary"}},
     ]
     for change in same:
-        assert data_manifest.preparation_fingerprint(
-            {**base, **change}
-        ) == data_manifest.preparation_fingerprint(base), change
-    assert data_manifest.preparation_fingerprint(
-        validate_config(base)
-    ) == data_manifest.preparation_fingerprint(base)
-    different = [
-        {"split_seed": 1},
-        {"seed": 1},
-        {"prepared_id": "again"},
-        {"dates": {**base["dates"], "test": ["2025-02-01"]}},
-        {"scope_unowned": "independent"},
-        {"scope_unowned": "shared"},
-        {"sampler": {**base["sampler"], "children": {"recent": 2, "associations": 0}}},
+        assert data_manifest.dataset_id("source", base.with_changes(change)) == identity, change
+    different: list[dict[str, Any]] = [
+        {"dataset": {"split_seed": 1}},
+        {"dataset": {"seed": 1}},
+        {"dataset": {"dates": {"test": ["2025-02-01"]}}},
+        {"dataset": {"seed_limits": {"train": 10}}},
+        {"scope": {"id": "other_scope"}},
+        {"scope": {"unowned": "independent"}},
+        {"scope": {"unowned": "shared"}},
+        {"sampler": {"children": {"recent": 2}}},
     ]
     for change in different:
-        assert data_manifest.preparation_fingerprint(
-            {**base, **change}
-        ) != data_manifest.preparation_fingerprint(base), change
-    manifest = {"source": {"preparation": view}}
-    assert data_manifest.preparation_mismatches({**base, "split_seed": 1}, manifest) == [
-        "split_seed"
-    ]
+        assert data_manifest.dataset_id("source", base.with_changes(change)) != identity, change
+    assert data_manifest.dataset_id("other_source", base) != identity
+    manifest = {"source": {"source_id": "source", "settings": settings}}
+    changed = base.with_changes({"dataset": {"split_seed": 1}})
+    assert data_manifest.dataset_mismatches(changed, manifest) == ["dataset.split_seed"]
+    # A manifest without settings differs in all of them.
+    assert data_manifest.dataset_mismatches(base, {"source": {}}) == list(
+        data_manifest.DATASET_SETTINGS
+    )
 
 
 def test_a_dataset_records_its_query_files_by_path_and_passes_its_own_check(
@@ -64,10 +65,11 @@ def test_a_dataset_records_its_query_files_by_path_and_passes_its_own_check(
 ) -> None:
     population = scoped_accounts()
     executor = FakeExecutor({}, population=population)
-    config = live_config(seed_limits={"train": 10, "validation": 10, "test": 10})
+    config = live_config(dataset={"seed_limits": {"train": 10, "validation": 10, "test": 10}})
     dataset = tmp_path / "dataset"
     manifest = prepare(
         config,
+        UNIT_SOURCE,
         dataset,
         {"Account": len(population)},
         FrameObservedLabels(supplied_labels()),

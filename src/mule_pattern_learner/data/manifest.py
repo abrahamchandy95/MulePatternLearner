@@ -1,4 +1,4 @@
-"""The prepared dataset's manifest, its preparation settings and the integrity gate."""
+"""The prepared dataset's manifest, the settings and id of the dataset, the integrity gate."""
 
 from __future__ import annotations
 
@@ -9,30 +9,19 @@ from typing import Any
 import pandas as pd
 
 from ..artifacts import atomic_write, file_digest
-from ..config import validate_config, without_retired_keys
+from ..config import RunConfig, as_json, differing_settings
 from ..contract.fingerprints import fingerprint
 from ..contract.graph_schema import context_scope
-from ..contract.sampler_plan import SamplerPlan, sampler_pools
+from ..contract.sampler_plan import sampler_pools
 from ..contract.server import QUERY_FILES
 from ..paths import REPOSITORY_ROOT
-from .accounts import cohort_seed
 from .hub_registry import HUB_FILE
 from .observed_labels import ORACLE_COLUMNS, read_bounded_parquet
 
 MANIFEST = "manifest.json"
-# Settings that change what preparation produces. Training compares exactly these;
-# model, optimisation and transport settings may change between runs.
-PREPARATION_KEYS = (
-    "dataset_id",
-    "prepared_id",
-    "dates",
-    "seed_limits",
-    "scope_id",
-    "split_seed",
-    "cohort_seed",
-    "sampler_pools",
-    "scope_unowned",
-)
+# The settings a dataset is prepared from (dataset_settings). Training compares exactly
+# these; model, optimisation, transport and runtime settings may change between runs.
+DATASET_SETTINGS = ("source_id", "scope", "dataset", "sampler_pools")
 
 
 def read_manifest(dataset: Path) -> dict[str, Any]:
@@ -77,42 +66,50 @@ def check_query_hashes(manifest: dict[str, Any], dataset: Path) -> None:
         )
 
 
-def preparation_view(config: dict[str, Any]) -> dict[str, Any]:
-    """Normalized values of PREPARATION_KEYS of the validated configuration.
+def dataset_settings(source_id: str, config: RunConfig) -> dict[str, Any]:
+    """What preparation reads, as JSON values: the input of the dataset id.
 
-    sampler_pools is what TigerGraph returns per hop. Feature groups are not a
-    preparation setting: a preparation stores no contexts, and the source requests each
-    training model's groups, so arms of any groups and architecture share one
-    preparation.
+    The source id names the data loaded into the graph. The scope's id and its rule
+    for accounts no party owns decide the split partitions, the dataset section gives
+    the cutoffs and seed reservoirs, and sampler_pools is what TigerGraph returns per
+    hop. Feature groups are not a dataset setting: a dataset stores no contexts, and
+    the source requests each training model's groups, so variants of any groups and
+    architecture share one dataset.
     """
-    config = validate_config(config)
-    sampler = SamplerPlan.from_config(config)
-    view = {
-        "dataset_id": config.get("dataset_id"),
-        "prepared_id": config.get("prepared_id"),
-        "dates": config["dates"],
-        "seed_limits": config["seed_limits"],
-        "scope_id": config["scope_id"],
-        "split_seed": config["split_seed"],
-        "cohort_seed": cohort_seed(config),
-        "sampler_pools": sampler_pools(sampler),
-        "scope_unowned": config["scope_unowned"],
+    settings = {
+        "source_id": source_id,
+        "scope": {"id": config.scope.id, "unowned": config.scope.unowned},
+        "dataset": as_json(config.dataset),
+        "sampler_pools": sampler_pools(config.sampler),
     }
-    assert tuple(view) == PREPARATION_KEYS
-    return json.loads(json.dumps(view))
+    assert tuple(settings) == DATASET_SETTINGS
+    return settings
 
 
-def preparation_fingerprint(config: dict[str, Any]) -> str:
-    return fingerprint(preparation_view(config))
+def dataset_id(source_id: str, config: RunConfig) -> str:
+    """The fingerprint of the dataset's settings (dataset_settings)."""
+    return fingerprint(dataset_settings(source_id, config))
 
 
-def preparation_mismatches(config: dict[str, Any], manifest: dict[str, Any]) -> list[str]:
-    """PREPARATION_KEYS whose value in config differs from the prepared manifest."""
-    recorded = manifest.get("source", {}).get("preparation")
-    if not isinstance(recorded, dict):
-        return list(PREPARATION_KEYS)
-    current = preparation_view(config)
-    return [key for key in PREPARATION_KEYS if current[key] != recorded.get(key)]
+def recorded_settings(manifest: dict[str, Any]) -> dict[str, Any]:
+    """The settings a dataset records (dataset_settings), or a ValueError without them."""
+    settings = manifest.get("source", {}).get("settings")
+    if not isinstance(settings, dict):
+        raise ValueError("The dataset records no dataset settings; prepare a new one")
+    return settings
+
+
+def dataset_mismatches(config: RunConfig, manifest: dict[str, Any]) -> list[str]:
+    """The dataset settings in which config differs from those the dataset records.
+
+    The source id is the dataset's own. A manifest that records no settings differs in
+    all of them.
+    """
+    source = manifest.get("source", {})
+    recorded = source.get("settings")
+    if not isinstance(recorded, dict) or not source.get("source_id"):
+        return list(DATASET_SETTINGS)
+    return differing_settings(dataset_settings(source["source_id"], config), recorded)
 
 
 def load_prepared(dataset: Path) -> tuple[dict[str, Any], pd.DataFrame]:
@@ -135,7 +132,5 @@ def load_prepared(dataset: Path) -> tuple[dict[str, Any], pd.DataFrame]:
     )
     if ORACLE_COLUMNS & set(accounts.columns):
         raise ValueError("Oracle columns are forbidden in prepared training metadata")
-    # A cohort prepared on a removed path is refused, not misread.
-    without_retired_keys(manifest["config"])
-    context_scope(manifest["config"])
+    context_scope(manifest["source"].get("scope_id"))
     return manifest, accounts

@@ -16,7 +16,7 @@ import json
 
 import numpy as np
 
-from mule_pattern_learner.config import run_config
+from mule_pattern_learner.config import DEFAULT_CONFIG
 from mule_pattern_learner.contract.graph_schema import PHASE_SPLIT
 from mule_pattern_learner.pipeline.connect import connect
 from mule_pattern_learner.reference.label_reveal import INPUTS_QUERY, counts_by_split, plan
@@ -34,14 +34,15 @@ def main() -> None:
     )
     parser.add_argument("--runs", type=int, default=1000, help="number of salts")
     parser.add_argument("--first-salt", type=int, default=0)
-    parser.add_argument("--budget", type=int, help="default: the run's reveal_per_split")
+    parser.add_argument("--budget", type=int, help="default: the run's scope.reveal_per_split")
     args = parser.parse_args()
     if args.runs < 1:
         parser.error("--runs must be at least 1")
-    params = reveal_parameters(run_config(), apply=False)
+    config = DEFAULT_CONFIG
+    params = reveal_parameters(config.scope, config.dataset.dates, apply=False)
     if args.budget is not None:
         params["budget"] = args.budget
-    executor = connect(run_config())
+    executor = connect(config.transport)
     inputs = executor.client.conn.runInterpretedQuery(
         INPUTS_QUERY, {"scope_id": params["scope_id"]}
     )

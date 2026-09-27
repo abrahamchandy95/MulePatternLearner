@@ -12,10 +12,10 @@ from typing import Any
 import pytest
 
 from mule_pattern_learner import cli
+from mule_pattern_learner.config import DEFAULT_CONFIG, RunConfig
 from mule_pattern_learner.paths import REPOSITORY_ROOT
 from mule_pattern_learner.pipeline import train as pipeline_train
 from mule_pattern_learner.pipeline.connect import open_context_source
-from mule_pattern_learner.testing.builders import base_config
 
 
 def test_python_m_runs_the_command_line() -> None:
@@ -66,8 +66,11 @@ def test_cli_reserves_the_cublas_workspace_first_and_keeps_user_values(
 def test_cli_needs_no_config_truth_or_dataset() -> None:
     parser = cli.build_parser()
     args = parser.parse_args(["train"])
-    assert args.config is None and args.dataset is None
-    assert parser.parse_args(["prepare"]).config is None
+    assert args.dataset is None
+    # The settings are built in: no command reads a configuration file.
+    for command in (["train"], ["prepare"]):
+        with pytest.raises(SystemExit):
+            parser.parse_args([*command, "--config", "overrides.toml"])
     final = parser.parse_args(["evaluate-final", "--checkpoint", "m.pt", "--output", "o.json"])
     assert final.dataset is None and final.truth is None
     scoring = parser.parse_args(
@@ -86,7 +89,8 @@ def test_cli_install_passes_force_and_optional(
         return {"installed": []}
 
     monkeypatch.setattr(cli, "install", install)
-    monkeypatch.setattr(cli, "connect", lambda config: object())
+    connected: list[object] = []
+    monkeypatch.setattr(cli, "connect", lambda transport: connected.append(transport))
     for argv, expected in (
         (["install"], {"include_optional": False, "force": False}),
         (["install", "--force", "--include-optional"], {"include_optional": True, "force": True}),
@@ -95,33 +99,34 @@ def test_cli_install_passes_force_and_optional(
         cli.main()
         assert calls[-1] == expected
     assert capsys.readouterr().out.count('"installed": []') == 2
+    # The built-in run's retry budgets.
+    assert connected == [DEFAULT_CONFIG.transport] * 2
 
 
 def test_train_command_prepares_then_trains_or_resumes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Like run_config, without a dataset_id: preparation resolves it.
-    config = {k: v for k, v in base_config().items() if k != "dataset_id"}
-    prepared, trained = [], []
+    prepared: list[tuple[RunConfig, Path]] = []
+    trained: list[tuple[RunConfig, Path, Path, dict[str, Any]]] = []
 
-    def prepare(c: dict[str, Any], path: Path) -> dict[str, Any]:
+    def prepare(c: RunConfig, path: Path) -> dict[str, Any]:
         prepared.append((c, path))
-        return {"source": {"dataset_id": "derived"}}
+        return {"source": {"source_id": "derived"}}
 
     # `mule-temporal train` is pipeline.run with resume: patch the pipeline's steps.
-    monkeypatch.setattr(pipeline_train, "run_config", lambda path: dict(config))
     monkeypatch.setattr(pipeline_train, "prepare_live", prepare)
 
-    def train(c: dict[str, Any], d: Path, o: Path, **kwargs: Any) -> dict[str, Any]:
+    def train(c: RunConfig, d: Path, o: Path, **kwargs: Any) -> dict[str, Any]:
         trained.append((c, d, o, kwargs))
         return {}
 
     monkeypatch.setattr(pipeline_train, "train", train)
     output = tmp_path / "model.pt"
     cli.train_command(cli.build_parser().parse_args(["train", "--output", str(output)]))
-    # One command prepares into the run directory, then trains (resuming if interrupted).
-    assert prepared[-1][1] == tmp_path / "model_run" / "prepared"
+    # One command prepares the built-in run into the run directory, then trains it
+    # (resuming if interrupted).
+    assert prepared[-1] == (DEFAULT_CONFIG, tmp_path / "model_run" / "prepared")
     c, d, o, kwargs = trained[-1]
-    assert c["dataset_id"] == "derived" and d == prepared[-1][1] and o == output
+    assert c is DEFAULT_CONFIG and d == prepared[-1][1] and o == output
     # The trainer opens the live source through the pipeline once its checks passed.
     assert kwargs == {"open_contexts": open_context_source, "resume": True}

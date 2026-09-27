@@ -9,20 +9,24 @@ import torch
 
 from mule_pattern_learner.batching.assemble import child_key, make_live_batch
 from mule_pattern_learner.batching.limits import BatchCapacityError, BatchIndex
-from mule_pattern_learner.config import validate_config
+from mule_pattern_learner.config import (
+    DEFAULT_CONFIG,
+    DatasetConfig,
+    SeedLimits,
+    SplitDates,
+)
 from mule_pattern_learner.contract.feature_groups import (
-    FeaturePlan,
     contract_fingerprint,
     extraction_plan,
 )
 from mule_pattern_learner.contract.graph_schema import ContextKey
-from mule_pattern_learner.contract.sampler_plan import SamplerPlan
 from mule_pattern_learner.contract.time_basis import BASIS_ID
 from mule_pattern_learner.data.accounts import scoped_cohort
 from mule_pattern_learner.data.contexts import StreamingContextSource
 from mule_pattern_learner.inference.score_accounts import score_new_accounts
 from mule_pattern_learner.model.build import build_model
 from mule_pattern_learner.testing.builders import (
+    UNIT_SOURCE,
     FrameObservedLabels,
     assigned_accounts,
     context,
@@ -90,12 +94,20 @@ def test_stream_retention_is_bounded_across_many_disjoint_batches() -> None:
 
 
 def test_new_account_scoring_needs_neither_training_dataset_nor_labels(tmp_path: Path) -> None:
-    config = validate_config(
-        {"hidden": 16, "heads": 4, "dropout": 0.0, "batch_size": 4, "fanouts": [2, 2]}
-        | {"sampler": {"recent": 1}}
+    pool = {"recent": 1, "older": 0, "distinct": 0}
+    config = DEFAULT_CONFIG.with_changes(
+        {
+            "model": {"hidden": 16, "heads": 4, "dropout": 0.0},
+            "training": {"batch_size": 4},
+            "sampler": {
+                "fanouts": [2, 2],
+                "roots": pool | {"associations": 2},
+                "children": pool | {"associations": 0},
+            },
+        }
     )
-    plan = FeaturePlan.from_config(config)
-    model = build_model(config, plan)
+    plan = config.feature_plan()
+    model = build_model(config.model, plan, config.sampler.fanouts[0])
     checkpoint = tmp_path / "model.pt"
     torch.save(
         {
@@ -103,7 +115,7 @@ def test_new_account_scoring_needs_neither_training_dataset_nor_labels(tmp_path:
             "contract": contract_fingerprint(),
             "basis_id": BASIS_ID,
             "threshold": 0.5,
-            "config": config,
+            "config": config.to_dict(),
             "input_fingerprint": plan.fingerprint(),
         },
         checkpoint,
@@ -162,16 +174,17 @@ def test_bounded_seed_reservoir_does_not_enrich_the_nnpu_marginal() -> None:
             page = [r for r in rows if r["account_id"] > params["after_id"]][:10000]
             return [{"status": "ok", "accounts": page}]
 
-    cfg = {
-        "scope_id": "strict",
-        "seed": 42,
-        "seed_limits": {"train": 10, "validation": 10, "test": 10},
-        "dates": {s: ["2024-01-01"] for s in ("train", "validation", "test")},
-    }
+    dataset = DatasetConfig(
+        dates=SplitDates(("2024-01-01",), ("2024-01-02",), ("2024-01-03",)),
+        seed_limits=SeedLimits(10, 10, 10),
+        seed=42,
+    )
     known = pd.DataFrame(
         {"account_id": ["A00000", "A00001", "A00002"], "known_positive": True, "known_from_ms": 1}
     )
-    selected, counts = scoped_cohort(TigerGraphScope(Executor()), cfg, FrameObservedLabels(known))
+    selected, counts = scoped_cohort(
+        TigerGraphScope(Executor()), "strict", dataset, FrameObservedLabels(known)
+    )
     assert len(calls) == 2 and sum(counts.values()) == len(rows)
     assert len(selected) <= 33 and selected.in_marginal.sum() == 30
     assert set(known.account_id) <= set(selected.account_id)
@@ -227,8 +240,8 @@ def test_strict_preparation_and_nnpu_use_the_correct_phase_end_to_end(tmp_path: 
     from mule_pattern_learner.training.trainer import train
 
     cfg = live_config(
-        scope_id="unit_strict",
-        seed_limits={"train": 10, "validation": 10, "test": 10},
+        scope={"id": "unit_strict"},
+        dataset={"seed_limits": {"train": 10, "validation": 10, "test": 10}},
     )
     rows = assigned_accounts().drop(columns="owner_ids").copy()
     rows["partition"] = rows["split"].map({"train": 1, "validation": 2, "test": 3})
@@ -252,6 +265,7 @@ def test_strict_preparation_and_nnpu_use_the_correct_phase_end_to_end(tmp_path: 
     dataset = tmp_path / "dataset"
     manifest = prepare(
         cfg,
+        UNIT_SOURCE,
         dataset,
         {"Account": len(rows)},
         FrameObservedLabels(supplied_labels()),
@@ -262,8 +276,8 @@ def test_strict_preparation_and_nnpu_use_the_correct_phase_end_to_end(tmp_path: 
     assert manifest["status"] == "ready" and not executor.requested
     source = StreamingContextSource(
         TigerGraphContextFetcher(executor),
-        plan=extraction_plan(cfg),
-        sampler=SamplerPlan.from_config(cfg),
+        plan=extraction_plan(cfg.feature_plan()),
+        sampler=cfg.sampler,
     )
     result = train(cfg, dataset, checkpoint, contexts=source)
     assert set(phases) == {1, 2, 3}

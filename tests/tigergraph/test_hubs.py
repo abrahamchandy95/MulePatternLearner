@@ -55,7 +55,7 @@ def test_hub_registry_parse_save_load_and_stub_semantics(tmp_path: Path) -> None
     assert tuple(pd.read_parquet(path).columns) == tuple(HUB_COLUMNS)
     manifest = {
         "cutoff_seqs": {"2024-07-01": 1000, "2024-10-01": 2000},
-        "config": {"scope_id": "scope"},
+        "source": {"scope_id": "scope"},
         **hub_manifest(scoped, path),
     }
     assert manifest["hub_scope_id"] == "scope"
@@ -66,7 +66,7 @@ def test_hub_registry_parse_save_load_and_stub_semantics(tmp_path: Path) -> None
     loaded = load_hub_registry(tmp_path, manifest)
     assert loaded.is_stub("Account", "H1", 1000, 2) and len(loaded) == 3
     with pytest.raises(ValueError, match="computed for scope 'scope'"):
-        load_hub_registry(tmp_path, {**manifest, "config": {"scope_id": "other"}})
+        load_hub_registry(tmp_path, {**manifest, "source": {"scope_id": "other"}})
     HubRegistry(loaded.frame.iloc[:1], cutoff_seqs=cutoffs, threshold=1, scope_id="scope").save(
         path
     )

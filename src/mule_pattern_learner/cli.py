@@ -1,7 +1,7 @@
 """Train from TigerGraph with graph-revealed labels, bounded contexts and CUDA by default.
 
 `mule-temporal train` needs nothing but the TigerGraph credentials in .env: settings
-are built in (config.DEFAULT_RUN), and the first run installs the queries,
+are built in (config.DEFAULT_CONFIG), and the first run installs the queries,
 creates the scope and reveals the known mules. Every flag is optional.
 """
 
@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .config import run_config
+from .config import DEFAULT_CONFIG
 from .inference.saved_model import ModelCheckpoint
 from .inference.score_accounts import read_account_ids, score
 from .paths import DEFAULT_MODEL, dataset_path
@@ -23,8 +23,6 @@ from .pipeline.score import score_new
 from .pipeline.train import run
 from .runtime.device import reserve_deterministic_cublas
 from .tigergraph.installer import install
-
-CONFIG_HELP = "Optional TOML/JSON file whose keys override the built-in settings"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -45,7 +43,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Reinstall every query, even those already installed with the repository text",
     )
     prep = commands.add_parser("prepare", help="Optionally stage the data ahead of training")
-    prep.add_argument("--config", type=Path, help=CONFIG_HELP)
     prep.add_argument(
         "--output", type=Path, default=DEFAULT_MODEL, help="Model .pt path whose run it prepares"
     )
@@ -53,9 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
         "train", help="Prepare as needed, train with nnPU and save (resumes an interrupted run)"
     )
     training.add_argument("--output", type=Path, default=DEFAULT_MODEL, help="Model .pt path")
-    advanced = training.add_argument_group("optional experiment overrides")
-    advanced.add_argument("--config", type=Path, help=CONFIG_HELP)
-    advanced.add_argument("--dataset", type=Path, help="Reuse an existing prepared dataset")
+    training.add_argument("--dataset", type=Path, help="Reuse an existing prepared dataset")
     scoring = commands.add_parser("score")
     scoring.add_argument("--checkpoint", type=Path, required=True)
     scoring.add_argument("--dataset", type=Path, help="Default: the checkpoint's prepared data")
@@ -103,7 +98,7 @@ def checkpoint_dataset(checkpoint: ModelCheckpoint) -> Path:
 def train_command(args: argparse.Namespace) -> dict[str, Any]:
     """Prepare when no dataset is given, then train (or resume) and save the model."""
     # An interrupted run continues from its checkpoint; a finished one is an error.
-    return run(args.output, config_path=args.config, dataset=args.dataset, resume=True)
+    return run(args.output, dataset=args.dataset, resume=True)
 
 
 def main() -> None:
@@ -113,7 +108,9 @@ def main() -> None:
     if args.command == "install":
         # The built-in run's retry budgets.
         result = install(
-            connect(run_config()), include_optional=args.include_optional, force=args.force
+            connect(DEFAULT_CONFIG.transport),
+            include_optional=args.include_optional,
+            force=args.force,
         )
     elif args.command == "evaluate-final":
         result = final_audit(args.checkpoint, args.truth, args.output, dataset=args.dataset)
@@ -137,8 +134,7 @@ def main() -> None:
             open_contexts=open_context_source,
         )
     elif args.command == "prepare":
-        config = run_config(args.config)
-        result = prepare_live(config, dataset_path(config, args.output))
+        result = prepare_live(DEFAULT_CONFIG, dataset_path(args.output))
     else:
         result = train_command(args)
     print(json.dumps(result, indent=2, allow_nan=False))

@@ -1,7 +1,7 @@
 """Experiment scopes: the frozen Temporal_Training_Scope a strict run samples in.
 
 ensure_scope creates a scope on first use; every later preparation and every
-streamed run verifies its header (ready, source, split seed) and the scope_unowned
+streamed run verifies its header (ready, source, split seed) and the scope.unowned
 rule its membership was created with. TigerGraphScope reads the scope's accounts.
 """
 
@@ -11,7 +11,7 @@ from collections.abc import Iterator
 import json
 from typing import Any
 
-from ..config import OPERATIONAL_DEFAULTS
+from ..config import ScopeConfig
 from .executor import (
     ConnectionExecutor,
     QueryExecutor,
@@ -56,14 +56,12 @@ def scope_header(executor: ConnectionExecutor, scope_id: str) -> dict[str, Any] 
     return dict(rows[0]["attributes"]) if rows else None
 
 
-def check_scope(attrs: dict[str, Any] | None, config: dict[str, Any]) -> None:
+def check_scope(
+    attrs: dict[str, Any] | None, scope_id: str, *, source_id: str, split_seed: int
+) -> None:
     if attrs is None:
-        raise ValueError(f"Prepared experiment scope is missing: {config['scope_id']}")
-    if (
-        not attrs["ready"]
-        or attrs["source_id"] != config["dataset_id"]
-        or attrs["split_seed"] != int(config["split_seed"])
-    ):
+        raise ValueError(f"Prepared experiment scope is missing: {scope_id}")
+    if not attrs["ready"] or attrs["source_id"] != source_id or attrs["split_seed"] != split_seed:
         raise ValueError("Scope is incomplete or belongs to a different source/partition")
 
 
@@ -98,7 +96,7 @@ def scope_policy_counts(executor: QueryExecutor, scope_id: str) -> dict[str, int
 
 
 def inferred_scope_policy(counts: dict[str, int]) -> str | None:
-    """The scope_unowned rule a scope was created with, from its membership classes.
+    """The scope.unowned rule a scope was created with, from its membership classes.
 
     Under every rule an unowned internal customer account is never shared and an
     unowned external account is never linked. Unowned bank ledger accounts (the
@@ -126,42 +124,51 @@ def inferred_scope_policy(counts: dict[str, int]) -> str | None:
     return "shared" if shared or shared_ledger else "independent"
 
 
-def check_scope_policy(counts: dict[str, int], config: dict[str, Any]) -> str:
-    """Raise unless the scope was created with the configured scope_unowned rule."""
-    configured = config.get("scope_unowned", OPERATIONAL_DEFAULTS["scope_unowned"])
+def check_scope_policy(counts: dict[str, int], scope_id: str, configured: str) -> str:
+    """Raise unless the scope was created with the configured scope.unowned rule."""
     stored = inferred_scope_policy(counts)
     if stored is not None and stored == configured:
         return stored
-    scope_id = config["scope_id"]
     if stored is None:
         raise ValueError(
-            f"Scope {scope_id!r} matches no scope_unowned rule (unowned member classes "
-            f"{json.dumps(counts, sort_keys=True)}). Create a new scope: set a new scope_id "
-            "(for example in an --config overrides file); the next `mule-temporal train` "
-            "(or `prepare`) creates it."
+            f"Scope {scope_id!r} matches no scope.unowned rule (unowned member classes "
+            f"{json.dumps(counts, sort_keys=True)}). Create a new scope: set a new scope.id "
+            "in config.ScopeConfig; the next `mule-temporal train` (or `prepare`) creates it."
         )
     raise ValueError(
-        f"Scope {scope_id!r} was created with scope_unowned = {stored!r}, but the "
+        f"Scope {scope_id!r} was created with scope.unowned = {stored!r}, but the "
         f"configuration says {configured!r} (unowned member classes "
-        f"{json.dumps(counts, sort_keys=True)}). Set scope_unowned = {stored!r} to use this "
-        "scope, or set a new scope_id; the next `mule-temporal train` (or `prepare`) "
+        f"{json.dumps(counts, sort_keys=True)}). Set scope.unowned = {stored!r} to use this "
+        "scope, or set a new scope.id; the next `mule-temporal train` (or `prepare`) "
         "creates it."
     )
 
 
-def verify_scope(executor: ConnectionExecutor, config: dict[str, Any]) -> dict[str, int]:
-    """Header (ready, source, split seed) and scope_unowned rule of an existing scope."""
-    check_scope(scope_header(executor, config["scope_id"]), config)
-    counts = scope_policy_counts(executor, config["scope_id"])
-    check_scope_policy(counts, config)
+def verify_scope(
+    executor: ConnectionExecutor,
+    scope_id: str,
+    *,
+    unowned: str,
+    source_id: str,
+    split_seed: int,
+) -> dict[str, int]:
+    """Header (ready, source, split seed) and scope.unowned rule of an existing scope."""
+    check_scope(
+        scope_header(executor, scope_id), scope_id, source_id=source_id, split_seed=split_seed
+    )
+    counts = scope_policy_counts(executor, scope_id)
+    check_scope_policy(counts, scope_id, unowned)
     return counts
 
 
-def ensure_scope(executor: ConnectionExecutor, config: dict[str, Any]) -> None:
-    """Use the frozen scope, creating it on first use unless create_scope = false.
+def ensure_scope(
+    executor: ConnectionExecutor, scope: ScopeConfig, *, source_id: str, split_seed: int
+) -> None:
+    """Use the frozen scope, creating it on first use unless scope.create is false.
 
     Creation writes a Temporal_Training_Scope vertex and one membership edge per
-    Account and Party. scope_unowned decides the accounts without an owning Party:
+    Account and Party, recording the source id and the split seed that partitions it.
+    scope.unowned decides the accounts without an owning Party:
     - "independent": each is its own ownership group with a hashed partition.
     - "shared": unowned external accounts and unowned bank ledger ("gl") accounts
       are visible in every phase (partition 1, group "shared:<component>"); other
@@ -172,16 +179,22 @@ def ensure_scope(executor: ConnectionExecutor, config: dict[str, Any]) -> None:
     An existing scope must have been created with the configured rule; it is
     inferred from the membership (temporal_scope_policy) and a mismatch raises.
     """
-    scope_id = config["scope_id"]
+    scope_id = scope.id
+
+    def verified() -> dict[str, int]:
+        return verify_scope(
+            executor, scope_id, unowned=scope.unowned, source_id=source_id, split_seed=split_seed
+        )
+
     attrs = scope_header(executor, scope_id)
     if attrs is not None:
-        counts = verify_scope(executor, config)
+        counts = verified()
         print(json.dumps({"scope": scope_id, "unowned_members": counts}), flush=True)
         return
-    if config.get("create_scope", OPERATIONAL_DEFAULTS["create_scope"]) is not True:
+    if not scope.create:
         raise ValueError(
-            f"Scope {scope_id!r} does not exist on TigerGraph and create_scope = false; "
-            "remove that override to let the first run create it"
+            f"Scope {scope_id!r} does not exist on TigerGraph and scope.create is false; "
+            "set it to true to let the first run create it"
         )
     print(json.dumps({"scope": scope_id, "creating": True}), flush=True)
     created = checked_rows(
@@ -189,11 +202,9 @@ def ensure_scope(executor: ConnectionExecutor, config: dict[str, Any]) -> None:
             "temporal_create_training_scope",
             {
                 "scope_id": scope_id,
-                "source_id": config["dataset_id"],
-                "split_seed": int(config["split_seed"]),
-                "unowned_policy": config.get(
-                    "scope_unowned", OPERATIONAL_DEFAULTS["scope_unowned"]
-                ),
+                "source_id": source_id,
+                "split_seed": split_seed,
+                "unowned_policy": scope.unowned,
             },
             timeout_s=3600.0,
             attempts=1,
@@ -208,5 +219,5 @@ def ensure_scope(executor: ConnectionExecutor, config: dict[str, Any]) -> None:
             attempts=1,
         )
     )
-    counts = verify_scope(executor, config)
+    counts = verified()
     print(json.dumps({"scope": scope_id, "created": True, "unowned_members": counts}), flush=True)

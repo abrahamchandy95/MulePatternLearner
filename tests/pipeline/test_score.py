@@ -22,7 +22,7 @@ def test_score_new_checks_outputs_then_verifies_the_installed_queries(
     executor = SimpleNamespace()
     steps: list[str] = []
 
-    def connect(settings: dict[str, Any]) -> Any:
+    def connect(transport: Any) -> Any:
         steps.append("connect")
         return executor
 

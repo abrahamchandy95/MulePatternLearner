@@ -7,6 +7,8 @@ from typing import Any
 
 import pytest
 
+from mule_pattern_learner.config import DEFAULT_CONFIG
+from mule_pattern_learner.data.manifest import dataset_settings
 from mule_pattern_learner.testing.fake_connection import executor
 from mule_pattern_learner.testing.fake_graph import policy_counts
 from mule_pattern_learner.tigergraph import provenance
@@ -23,19 +25,28 @@ def test_source_counts_ignore_experiment_scopes(monkeypatch: pytest.MonkeyPatch)
     tg = executor(conn)
     assert provenance.source_counts(tg) == {"Account": 10, "Party": 4}
     monkeypatch.setattr(provenance, "verify_sources", lambda executor: [])
+    config = DEFAULT_CONFIG.with_changes({"scope": {"id": "s"}, "dataset": {"split_seed": 42}})
     manifest: dict[str, Any] = {
-        "config": {"dataset_id": "snap", "scope_id": "s", "split_seed": 42},
         # Older manifests recorded the scope vertex count too.
-        "source": {"source_counts": {"Account": 10, "Party": 4, "Temporal_Training_Scope": 1}},
+        "source": {
+            "source_counts": {"Account": 10, "Party": 4, "Temporal_Training_Scope": 1},
+            "settings": dataset_settings("snap", config),
+        },
     }
     provenance.verify_frozen_source(tg, manifest)
     counts["Temporal_Training_Scope"] = 3  # another experiment created scopes
     provenance.verify_frozen_source(tg, manifest)
     # The scope's unowned rule is rechecked on every streamed run.
-    manifest["config"]["scope_unowned"] = "independent"
-    with pytest.raises(ValueError, match="no longer valid.*scope_unowned = 'linked'"):
+    settings = manifest["source"]["settings"]
+    settings["scope"]["unowned"] = "independent"
+    with pytest.raises(ValueError, match="no longer valid.*scope.unowned = 'linked'"):
         provenance.verify_frozen_source(tg, manifest)
-    manifest["config"]["scope_unowned"] = "linked"
+    settings["scope"]["unowned"] = "linked"
+    # So is the scope's source.
+    settings["source_id"] = "another"
+    with pytest.raises(ValueError, match="no longer valid.*different source"):
+        provenance.verify_frozen_source(tg, manifest)
+    settings["source_id"] = "snap"
     counts["Account"] = 11
     with pytest.raises(ValueError, match="counts changed"):
         provenance.verify_frozen_source(tg, manifest)

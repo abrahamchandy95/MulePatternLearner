@@ -21,6 +21,7 @@ from typing import Any
 import pandas as pd
 from pyTigerGraph.common.exception import TigerGraphException
 
+from mule_pattern_learner.config import RunConfig
 from mule_pattern_learner.contract.bounds import REQUEST_KEYS
 from mule_pattern_learner.contract.feature_groups import FeaturePlan, extraction_plan
 from mule_pattern_learner.contract.graph_schema import RELATIONS, ContextKey
@@ -90,7 +91,7 @@ class FakeExecutor:
     (account_id, cutoff_seq) pairs that temporal_hub_registry reports: once at
     phase 3 for an unscoped call, once per phase 1, 2 and 3 for a scoped one.
     `last_visible(index, cutoff_ms)` answers temporal_training_cutoffs.
-    `scope_policy` names the scope_unowned rule temporal_scope_policy reports
+    `scope_policy` names the scope.unowned rule temporal_scope_policy reports
     for every scope (default "linked", the configuration default). `population`
     holds the rows temporal_scope_population pages through (see scope_population);
     without include_observed their labels are withheld. Subclasses add the other
@@ -226,7 +227,7 @@ class FakeExecutor:
 
 
 def scope_counts(policy: str) -> dict[str, int]:
-    """temporal_scope_policy counts of a small scope created with one scope_unowned rule."""
+    """temporal_scope_policy counts of a small scope created with one scope.unowned rule."""
     counts = {
         "members": 12,
         "unowned_accounts": 4,
@@ -417,13 +418,13 @@ class FakeSource:
 
     def __init__(
         self,
-        config: dict[str, Any],
+        config: RunConfig,
         *,
         reject: frozenset[str] = frozenset(),
         fail: Callable[[list[ContextKey], int, Counter[str]], bool] | None = None,
     ) -> None:
-        self.plan = extraction_plan(config)
-        self.sampler = SamplerPlan.from_config(config)
+        self.plan = extraction_plan(config.feature_plan())
+        self.sampler = config.sampler
         self.reject, self.fail = reject, fail
         self.query_calls = 0
         self.rejections: Counter[str] = Counter()

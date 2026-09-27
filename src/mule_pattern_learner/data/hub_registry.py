@@ -177,14 +177,12 @@ def load_hub_registry(dataset: Path, manifest: dict[str, Any]) -> HubRegistry:
     path = dataset / HUB_FILE
     if not path.exists() or file_digest(path) != manifest["hubs_sha256"]:
         raise ValueError(f"Prepared hub registry changed or is missing: {path}")
-    config = manifest.get("config")
-    if isinstance(config, dict):
-        expected = context_scope(config)
-        if manifest["hub_scope_id"] != expected:
-            raise ValueError(
-                f"Prepared hub registry was computed for scope {manifest['hub_scope_id']!r}, "
-                f"but the dataset's contexts use scope {expected!r}; prepare it again"
-            )
+    expected = context_scope(manifest["source"]["scope_id"])
+    if manifest["hub_scope_id"] != expected:
+        raise ValueError(
+            f"Prepared hub registry was computed for scope {manifest['hub_scope_id']!r}, "
+            f"but the dataset's contexts use scope {expected!r}; prepare it again"
+        )
     registry = HubRegistry(
         pd.read_parquet(path),
         cutoff_seqs=[int(value) for value in manifest["cutoff_seqs"].values()],

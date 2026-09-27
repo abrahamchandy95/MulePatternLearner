@@ -22,7 +22,7 @@ from pyTigerGraph.common.exception import TigerGraphException
 import torch
 
 from mule_pattern_learner.batching.assemble import make_live_batch
-from mule_pattern_learner.config import run_config, validate_config
+from mule_pattern_learner.config import DEFAULT_CONFIG, RunConfig
 from mule_pattern_learner.contract.feature_groups import FeaturePlan, contract_fingerprint
 from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
@@ -47,18 +47,10 @@ CHECKED_GROUPS = (
 )
 
 
-def model_config() -> dict[str, Any]:
+def model_config() -> RunConfig:
     """A small built-in model with the default pools, which the source uses too."""
-    return validate_config(
-        {
-            "hidden": 16,
-            "heads": 4,
-            "dropout": 0.0,
-            "fanouts": [2, 2],
-            "batch_size": 16,
-            "sampler": SamplerPlan().to_config(),
-        }
-    )
+    small = {"model": {"hidden": 16, "heads": 4, "dropout": 0.0}, "training": {"batch_size": 16}}
+    return replace(DEFAULT_CONFIG.with_changes(small), sampler=SamplerPlan(fanouts=(2, 2)))
 
 
 def source_plan(model: FeaturePlan) -> FeaturePlan:
@@ -79,7 +71,7 @@ def main() -> None:
     )
     if not parser.parse_args().write_fixture:
         parser.error("this live test writes temporary vertices; pass --write-fixture to run it")
-    executor = connect(run_config())
+    executor = connect(DEFAULT_CONFIG.transport)
     conn = executor.client.conn
     prefix = "temporal_fixture_" + uuid4().hex + "_"
     scope = prefix + "scope"
@@ -146,7 +138,7 @@ def main() -> None:
         return event
 
     config = model_config()
-    plan, sampler = FeaturePlan.from_config(config), SamplerPlan.from_config(config)
+    plan, sampler = config.feature_plan(), config.sampler
     # The predictor below reads from this source, so it requests the model's inputs too.
     source = StreamingContextSource(
         TigerGraphContextFetcher(executor), plan=source_plan(plan), sampler=sampler, capacity=0
@@ -253,10 +245,10 @@ def main() -> None:
             raise AssertionError("Held-out account accepted as a training root")
         # Real accelerator update, then inductive prediction for B with unchanged weights.
         device = choose_device()
-        model = build_model(config, plan).to(device)
+        model = build_model(config.model, plan, sampler.fanouts[0]).to(device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=0.001)
         batch = make_live_batch(
-            source, keys[:1], fanouts=(2, 2), device=device, plan=plan, sampler=sampler
+            source, keys[:1], fanouts=sampler.fanouts, device=device, plan=plan, sampler=sampler
         )
         loss = torch.nn.functional.binary_cross_entropy_with_logits(
             model(batch), torch.ones(1, device=device)
@@ -269,7 +261,7 @@ def main() -> None:
             torch.save(
                 {
                     "state_dict": {n: v.cpu() for n, v in model.state_dict().items()},
-                    "config": config,
+                    "config": config.to_dict(),
                     "input_fingerprint": plan.fingerprint(),
                     "contract": contract_fingerprint(),
                     "basis_id": BASIS_ID,

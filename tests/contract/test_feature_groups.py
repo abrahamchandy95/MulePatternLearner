@@ -69,12 +69,12 @@ def test_query_flags_skip_child_summaries_only_for_split_models() -> None:
 def test_extraction_plan_is_the_model_groups_without_the_client_groups() -> None:
     from mule_pattern_learner.contract.feature_groups import extraction_plan
 
-    split = extraction_plan({"feature_groups": [*DEFAULT_GROUPS, "rolling_windows"]})
+    split = extraction_plan(FeaturePlan((*DEFAULT_GROUPS, "rolling_windows")))
     assert set(split.groups) == set(DEFAULT_GROUPS) - {"hub_indicator"} | {"rolling_windows"}
     assert split.architecture == "split" and not split.query_flags(2)["include_rolling_windows"]
-    summary = extraction_plan({"feature_groups": list(WINDOW_GROUPS), "architecture": "summary"})
+    summary = extraction_plan(FeaturePlan(WINDOW_GROUPS, "summary"))
     assert summary.architecture == "summary" and summary.query_flags(1)["include_rolling_windows"]
-    built_in = extraction_plan({})
+    built_in = extraction_plan(FeaturePlan())
     assert set(built_in.groups) == set(DEFAULT_GROUPS) - {"hub_indicator"}
 
 

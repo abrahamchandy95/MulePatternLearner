@@ -46,9 +46,8 @@ import pandas as pd
 import pytest
 
 from mule_pattern_learner.batching.assemble import RootBatch, tensor_digests
-from mule_pattern_learner.config import run_config, validate_config
+from mule_pattern_learner.config import DEFAULT_CONFIG, RunConfig
 from mule_pattern_learner.contract.feature_groups import extraction_plan
-from mule_pattern_learner.contract.sampler_plan import SamplerPlan
 from mule_pattern_learner.data.contexts import StreamingContextSource, streaming_source
 from mule_pattern_learner.data.preparation import prepare
 from mule_pattern_learner.paths import REPOSITORY_ROOT
@@ -64,26 +63,23 @@ from mule_pattern_learner.training import trainer
 from mule_pattern_learner.training.schedule import step_seed
 
 RELATIVE = 1e-5
-# The built-in run (run_config) with a smaller cohort, batch and run. Dropout is the one
-# modelling change (see the module docstring); log_every_steps = 1 logs every step.
+# The built-in run (DEFAULT_CONFIG) with a smaller dataset, batch and run. Dropout is the
+# one modelling change (see the module docstring); log_every_steps = 1 logs every step.
 GOLDEN_CHANGES: dict[str, Any] = {
-    "dataset_id": "golden_fixture",
-    "seed_limits": {"train": 64, "validation": 24, "test": 24},
-    "epochs": 2,
-    "steps_per_epoch": 4,
-    "batch_size": 16,
-    "dropout": 0.0,
-    "device": "cpu",
-    "threads": 1,
-    "log_every_steps": 1,
+    "dataset": {"seed_limits": {"train": 64, "validation": 24, "test": 24}},
+    "model": {"dropout": 0.0},
+    "training": {"epochs": 2, "steps_per_epoch": 4, "batch_size": 16},
+    "runtime": {"device": "cpu", "threads": 1, "log_every_steps": 1},
 }
+# The source id of the fake graph's data.
+GOLDEN_SOURCE = "golden_fixture"
 # Accounts in the fake scope, and its three split cutoffs (FakeExecutor.last_visible).
 POPULATION = 200
 CUTOFF_SEQS = (101, 102, 103)
 
 
-def golden_config() -> dict[str, Any]:
-    return validate_config({**run_config(), **GOLDEN_CHANGES})
+def golden_config() -> RunConfig:
+    return DEFAULT_CONFIG.with_changes(GOLDEN_CHANGES)
 
 
 def golden_executor() -> FakeExecutor:
@@ -96,23 +92,24 @@ def golden_executor() -> FakeExecutor:
     )
 
 
-def golden_source(executor: FakeExecutor, config: dict[str, Any]) -> StreamingContextSource:
+def golden_source(executor: FakeExecutor, config: RunConfig) -> StreamingContextSource:
     """The source open_context_source builds for a streamed preparation."""
     return streaming_source(
         TigerGraphContextFetcher(executor),
-        extraction_plan(config),
-        SamplerPlan.from_config(config),
-        config,
+        extraction_plan(config.feature_plan()),
+        config.sampler,
+        config.transport,
     )
 
 
-def prepare_golden(directory: Path) -> tuple[dict[str, Any], Path, FakeExecutor]:
+def prepare_golden(directory: Path) -> tuple[RunConfig, Path, FakeExecutor]:
     """Prepare the golden cohort with the built-in label source (graph_observed)."""
     config = golden_config()
     executor = golden_executor()
     dataset = directory / "dataset"
     prepare(
         config,
+        GOLDEN_SOURCE,
         dataset,
         {"Account": POPULATION},
         GraphObservedLabels(),
@@ -137,9 +134,9 @@ class Observed:
 
 
 @contextlib.contextmanager
-def first_training_batch(config: dict[str, Any]) -> Generator[list[RootBatch]]:
+def first_training_batch(config: RunConfig) -> Generator[list[RootBatch]]:
     """Record the batch of epoch 1, step 1, which a prefetch thread may build."""
-    seed = step_seed(int(config["seed"]), 0, 0)
+    seed = step_seed(config.training.seed, 0, 0)
     real = trainer.build_root_batch
     found: list[RootBatch] = []
     lock = threading.Lock()
@@ -308,19 +305,17 @@ def test_benchmark_reports_the_golden_first_batch_and_loss(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config, dataset, executor = prepare_golden(tmp_path)
-    overrides = tmp_path / "golden.json"
-    overrides.write_text(json.dumps(GOLDEN_CHANGES))
     module = load_benchmark()
 
-    def open_source(path: Path, manifest: dict[str, Any], settings: dict[str, Any]) -> Any:
+    def open_source(path: Path, manifest: dict[str, Any], settings: RunConfig) -> Any:
         assert path == dataset and settings == config
         return golden_source(executor, settings)
 
     monkeypatch.setattr(module, "open_context_source", open_source)
     report_path = tmp_path / "report.json"
-    argv = ["benchmark_batch", "--config", str(overrides), "--dataset", str(dataset)]
+    argv = ["benchmark_batch", "--dataset", str(dataset)]
     monkeypatch.setattr(sys, "argv", [*argv, "--output", str(report_path), "--train-step"])
-    module.main()
+    module.main(config)
     report = json.loads(report_path.read_text())
     assert digest_differences(report["tensor_digests"], GOLDEN_BATCH) == []
     assert {k: v for k, v in report["batch"].items() if k != "sampler_backend"} == (

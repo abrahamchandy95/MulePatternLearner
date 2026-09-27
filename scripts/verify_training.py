@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 
-from mule_pattern_learner.config import run_config
+from mule_pattern_learner.config import DEFAULT_CONFIG
 from mule_pattern_learner.contract.feature_groups import FeaturePlan
 from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
@@ -31,7 +31,7 @@ def main() -> None:
     parser.add_argument("--account", required=True, help="Account ID to audit; no oracle selection")
     parser.add_argument("--date", required=True, help="Exclusive UTC scoring date")
     args = parser.parse_args()
-    executor = connect(run_config())
+    executor = connect(DEFAULT_CONFIG.transport)
     conn = executor.client.conn
     schema = conn.getSchema(force=True)
     attrs = {

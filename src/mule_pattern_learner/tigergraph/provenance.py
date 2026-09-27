@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..data.manifest import recorded_settings
 from .executor import ConnectionExecutor
 from .installer import verify_sources
 from .scope import verify_scope
@@ -43,7 +44,14 @@ def verify_frozen_source(executor: ConnectionExecutor, manifest: dict[str, Any])
     }
     if source_counts(executor) != recorded:
         raise ValueError("Live graph counts changed; freeze the source and prepare a new dataset")
+    settings = recorded_settings(manifest)
     try:
-        verify_scope(executor, manifest["config"])
+        verify_scope(
+            executor,
+            settings["scope"]["id"],
+            unowned=settings["scope"]["unowned"],
+            source_id=settings["source_id"],
+            split_seed=settings["dataset"]["split_seed"],
+        )
     except ValueError as error:
         raise ValueError(f"Prepared experiment scope is no longer valid: {error}") from None

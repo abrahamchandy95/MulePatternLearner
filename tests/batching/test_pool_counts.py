@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +15,7 @@ from mule_pattern_learner.batching import assemble, features
 from mule_pattern_learner.batching.assemble import child_key, make_live_batch
 from mule_pattern_learner.batching.features import node_matrix
 from mule_pattern_learner.batching.pool_counts import pool_activity
-from mule_pattern_learner.config import DEFAULT_RUN, run_config
+from mule_pattern_learner.config import DEFAULT_CONFIG
 from mule_pattern_learner.contract import feature_groups
 from mule_pattern_learner.contract.feature_groups import (
     DEFAULT_GROUPS,
@@ -26,9 +27,8 @@ from mule_pattern_learner.contract.feature_groups import (
     extraction_plan,
 )
 from mule_pattern_learner.contract.graph_schema import ContextKey
-from mule_pattern_learner.contract.sampler_plan import SamplerPlan
 from mule_pattern_learner.data.contexts import StreamingContextSource
-from mule_pattern_learner.data.manifest import preparation_mismatches, preparation_view
+from mule_pattern_learner.data.manifest import dataset_mismatches, dataset_settings
 from mule_pattern_learner.inference.saved_model import ModelCheckpoint
 from mule_pattern_learner.model.build import build_model
 from mule_pattern_learner.model.tgat import LiveTGAT
@@ -39,14 +39,11 @@ from mule_pattern_learner.testing.fake_graph import FakeExecutor
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher, validate_context
 
 ROOT = ContextKey("Account", "root", 1000, 100_000_000)
-CONFIG = run_config()
-PLAN = FeaturePlan.from_config(CONFIG)
-SAMPLER = SamplerPlan.from_config(CONFIG)
+CONFIG = DEFAULT_CONFIG
+PLAN = CONFIG.feature_plan()
+SAMPLER = CONFIG.sampler
 POOL_NAMES = POOL_ACTIVITY_FEATURES + POOL_INTERNAL_FEATURES
-WITHOUT_POOLS = {
-    **CONFIG,
-    "feature_groups": [g for g in CONFIG["feature_groups"] if g not in POOL_GROUPS],
-}
+WITHOUT_POOLS = replace(CONFIG, features=tuple(g for g in CONFIG.features if g not in POOL_GROUPS))
 
 
 def payment(seq: int, relation: str, peer: str, **changes: Any) -> dict[str, Any]:
@@ -136,7 +133,7 @@ class RawRows:
 def test_pool_activity_counts_the_candidate_pool_exactly() -> None:
     row = context(ROOT, POOL)
     # The hand-built row is a valid response of the built-in extraction.
-    validate_context(ROOT, row, extraction_plan(CONFIG), SAMPLER)
+    validate_context(ROOT, row, extraction_plan(PLAN), SAMPLER)
     values = pool_activity(row)
     assert tuple(values) == POOL_NAMES
     assert values == EXPECTED
@@ -149,7 +146,7 @@ def test_pool_activity_counts_the_candidate_pool_exactly() -> None:
     assert not set(row["features"]) & set(POOL_NAMES)
     # Each group feeds only its own columns.
     for group, names in zip(POOL_GROUPS, (POOL_ACTIVITY_FEATURES, POOL_INTERNAL_FEATURES)):
-        plan = FeaturePlan((*WITHOUT_POOLS["feature_groups"], group), "split")
+        plan = FeaturePlan((*WITHOUT_POOLS.features, group), "split")
         assert plan.names("summary") == names
         vector = node_matrix([row], plan)[0]
         expected = [np.log1p(EXPECTED[name]) for name in names]
@@ -186,7 +183,7 @@ def test_built_in_batches_feed_root_pool_counts_to_the_summary_branch() -> None:
     roots = [ROOT, other, ROOT]
     executor = FakeExecutor(rows)
     with StreamingContextSource(
-        TigerGraphContextFetcher(executor), plan=extraction_plan(CONFIG), sampler=SAMPLER
+        TigerGraphContextFetcher(executor), plan=extraction_plan(PLAN), sampler=SAMPLER
     ) as source:
         for _ in range(2):  # the second batch is served from the source's cache
             batch = make_live_batch(
@@ -208,7 +205,7 @@ def test_built_in_batches_feed_root_pool_counts_to_the_summary_branch() -> None:
     assert not x[2:][:, columns].any()
     assert node_matrix([rows[payer]], PLAN)[0, columns].any()
     # The summary branch reads the root's pool columns and receives gradient.
-    model = build_model(CONFIG, PLAN, dropout=0.0)
+    model = build_model(CONFIG.model, PLAN, SAMPLER.fanouts[0], dropout=0.0)
     assert model.summary is not None
     assert list(model.summary_indices) == columns
     assert [PLAN.node_names[i] for i in model.node_indices] == list(PLAN.names("node"))
@@ -220,17 +217,17 @@ def test_built_in_batches_feed_root_pool_counts_to_the_summary_branch() -> None:
 
 def test_pool_groups_feed_models_that_read_them_for_roots_only() -> None:
     # The tabular control of the built-in run (summary architecture) scores roots only.
-    tabular = {**CONFIG, "architecture": "summary"}
-    plan = FeaturePlan.from_config(tabular)
+    tabular = CONFIG.with_changes({"model": {"architecture": "summary"}})
+    plan = tabular.feature_plan()
     assert plan.architecture == "summary" and plan.names("summary") == POOL_NAMES
     executor = FakeExecutor({ROOT: context(ROOT, POOL)})
     with StreamingContextSource(
-        TigerGraphContextFetcher(executor), plan=extraction_plan(tabular), sampler=SAMPLER
+        TigerGraphContextFetcher(executor), plan=extraction_plan(plan), sampler=SAMPLER
     ) as source:
         batch = make_live_batch(source, [ROOT, ROOT], plan=plan, sampler=SAMPLER)
     expected = node_matrix([context(ROOT, POOL)], plan)
     np.testing.assert_allclose(batch["x"].numpy(), np.repeat(expected, 2, axis=0))
-    assert build_model(tabular, plan)(batch).shape == (2,)
+    assert build_model(tabular.model, plan, SAMPLER.fanouts[0])(batch).shape == (2,)
     # node_matrix gives pool counts to the leading rows only when asked.
     rows = [context(ROOT, POOL)] * 3
     columns = [PLAN.node_names.index(name) for name in POOL_NAMES]
@@ -246,7 +243,7 @@ def test_tigergraph_cannot_supply_pool_counts() -> None:
     bad = context(ROOT, POOL)
     bad["features"]["pool_first_in"] = 1
     with pytest.raises(ValueError, match="Unknown node feature"):
-        validate_context(ROOT, bad, extraction_plan(CONFIG), SAMPLER)
+        validate_context(ROOT, bad, extraction_plan(PLAN), SAMPLER)
     with pytest.raises(ValueError, match=r"client-only feature \['pool_first_in'\]"):
         make_live_batch(RawRows({(1, ROOT): bad}), [ROOT], plan=PLAN, sampler=SAMPLER)
     link = message(80, 800_000, ROOT, node_id="N")
@@ -259,17 +256,18 @@ def test_tigergraph_cannot_supply_pool_counts() -> None:
 
 
 def test_client_groups_leave_the_wire_and_the_preparation_unchanged() -> None:
-    assert set(POOL_GROUPS) <= set(DEFAULT_RUN["feature_groups"])
+    assert set(POOL_GROUPS) <= set(DEFAULT_CONFIG.features)
     assert PLAN.architecture == "split" and PLAN.names("summary") == POOL_NAMES
-    assert extraction_plan(CONFIG) == extraction_plan(WITHOUT_POOLS)
+    assert extraction_plan(PLAN) == extraction_plan(WITHOUT_POOLS.feature_plan())
     for hop in (1, 2):
         flags = PLAN.query_flags(hop)
-        assert flags == FeaturePlan.from_config(WITHOUT_POOLS).query_flags(hop)
+        assert flags == WITHOUT_POOLS.feature_plan().query_flags(hop)
         assert not {"include_" + group for group in POOL_GROUPS} & set(flags)
     # A dataset prepared without the groups serves a run that adds them.
-    view = preparation_view(WITHOUT_POOLS)
-    assert preparation_view(CONFIG) == view
-    assert preparation_mismatches(CONFIG, {"source": {"preparation": view}}) == []
+    view = dataset_settings("unit_source", WITHOUT_POOLS)
+    assert dataset_settings("unit_source", CONFIG) == view
+    manifest = {"source": {"source_id": "unit_source", "settings": view}}
+    assert dataset_mismatches(CONFIG, manifest) == []
     # The counts read pair (and flow) fields, so the model must extract those groups.
     with pytest.raises(ValueError, match="dependencies for pool_activity"):
         FeaturePlan(("entity_meta", "message_core", "pair_history", "pool_activity"), "split")
@@ -283,9 +281,9 @@ def test_pool_definitions_are_part_of_the_input_fingerprint_only(
     contract, plan, without = (
         contract_fingerprint(),
         PLAN.fingerprint(),
-        FeaturePlan.from_config(WITHOUT_POOLS).fingerprint(),
+        WITHOUT_POOLS.feature_plan().fingerprint(),
     )
-    internal = FeaturePlan((*WITHOUT_POOLS["feature_groups"], "pool_internal_inflows"), "split")
+    internal = FeaturePlan((*WITHOUT_POOLS.features, "pool_internal_inflows"), "split")
     first = internal.fingerprint()
     changes: list[tuple[str, Any]] = [
         ("PASS_THROUGH_RATIO", (0.8, 1.0)),
@@ -299,7 +297,7 @@ def test_pool_definitions_are_part_of_the_input_fingerprint_only(
             # Checkpoints and caches of every model keep their contract, and models
             # without a pool group their inputs.
             assert contract_fingerprint() == contract
-            assert FeaturePlan.from_config(WITHOUT_POOLS).fingerprint() == without
+            assert WITHOUT_POOLS.feature_plan().fingerprint() == without
             # A model trained with the pool groups is refused once their meaning changes.
             assert PLAN.fingerprint() != plan, name
             assert internal.fingerprint() != first, name

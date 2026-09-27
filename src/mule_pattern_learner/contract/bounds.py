@@ -1,6 +1,6 @@
 """Every numeric bound of the pipeline, defined once.
 
-Configuration validation, the sampler plan, batch assembly and its limits, the model,
+The configuration sections, the sampler plan, batch assembly and its limits, the model,
 the dataset, the audit, the context source and the TigerGraph adapter read their ranges
 here. Some are also checked by a query: the context query renders REQUEST_KEYS and POOL
 into its text, and the hub and reveal queries refuse what HUB_CUTOFFS and
@@ -10,6 +10,7 @@ REVEAL_PER_SPLIT exclude.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import operator
 
 
 @dataclass(frozen=True)
@@ -21,6 +22,18 @@ class Bound:
 
     def holds(self, value: int) -> bool:
         return self.low <= value <= self.high
+
+    def check(self, name: str, value: object) -> int:
+        """value as an int; a ValueError names it when it is no integer in the range."""
+        try:
+            number = operator.index(value)  # type: ignore[arg-type]
+        except TypeError:
+            number = None
+        if isinstance(value, bool) or number is None or not self.holds(number):
+            raise ValueError(
+                f"{name} must be an integer in [{self.low},{self.high}], got {value!r}"
+            )
+        return number
 
 
 # Keys of one context request.

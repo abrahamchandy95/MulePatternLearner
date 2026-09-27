@@ -12,7 +12,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from ..artifacts import atomic_write, pending_path
-from ..contract.graph_schema import ContextKey
+from ..contract.graph_schema import SPLITS, ContextKey
 from ..contract.sampler_plan import SamplerPlan
 from ..data.contexts import ContextOpener, ContextSource, close_source
 from ..data.hub_registry import HubRegistry, hub_threshold, load_hub_registry, warn_hub_stubs
@@ -49,9 +49,10 @@ def score(
         if path.exists():
             raise FileExistsError(path)
     saved = ModelCheckpoint.of(checkpoint)
+    config = saved.config
     manifest, accounts = load_prepared(dataset)
     saved.check_dataset(dataset)
-    if date not in saved.config["dates"].get(split, []):
+    if split not in SPLITS or date not in config.dataset.dates[split]:
         raise ValueError("Requested split/cutoff was not prepared")
     accounts = accounts[eligible_mask(accounts, split, date)]
     if accounts.empty:
@@ -60,7 +61,7 @@ def score(
     if contexts is not None:
         store = contexts
     elif open_contexts is not None:
-        store = open_contexts(dataset, manifest, saved.validated_config())
+        store = open_contexts(dataset, manifest, config)
     else:
         raise ValueError("Scoring needs contexts, or open_contexts to open the dataset's source")
     failed = True

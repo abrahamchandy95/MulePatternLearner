@@ -9,11 +9,14 @@ scores that commit's TemporalPredictor gave eight test accounts; this code must 
 same scores. Floating point rounding differs between machines, hence the tolerance.
 
 `dataset/` is the dataset that commit prepared for the built-in model: its manifest
-records preparation keys and a query file the restructure retires.
+records preparation keys and a query file the restructure retires. The model still
+scores it as it did, and today's code prepares the same accounts and labels from the
+same settings.
 """
 
 from __future__ import annotations
 
+from dataclasses import asdict, replace
 import math
 from pathlib import Path
 import shutil
@@ -22,7 +25,7 @@ from typing import Any
 import pandas as pd
 import pytest
 
-from mule_pattern_learner.config import run_config, validate_config
+from mule_pattern_learner.config import BUILT_IN_SAMPLER, DEFAULT_CONFIG, RunConfig
 from mule_pattern_learner.contract.clock import cutoff_ms
 from mule_pattern_learner.contract.feature_groups import (
     DEFAULT_GROUPS,
@@ -32,15 +35,19 @@ from mule_pattern_learner.contract.feature_groups import (
 )
 from mule_pattern_learner.contract.fingerprints import fingerprint
 from mule_pattern_learner.contract.graph_schema import ContextKey
-from mule_pattern_learner.contract.sampler_plan import SamplerPlan
-from mule_pattern_learner.data.contexts import streaming_source
+from mule_pattern_learner.contract.sampler_plan import PoolPlan
+from mule_pattern_learner.data.contexts import StreamingContextSource, streaming_source
+from mule_pattern_learner.data.preparation import prepare
 from mule_pattern_learner.inference.predictor import TemporalPredictor
-from mule_pattern_learner.inference.saved_model import ModelCheckpoint
+from mule_pattern_learner.inference.saved_model import ModelCheckpoint, saved_run_config
 from mule_pattern_learner.inference.score_accounts import score
-from mule_pattern_learner.pipeline import prepare
-from mule_pattern_learner.testing.builders import neighbourhood
+from mule_pattern_learner.testing.builders import neighbourhood, scope_population
 from mule_pattern_learner.testing.fake_graph import FakeExecutor
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
+from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffs
+from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
+from mule_pattern_learner.tigergraph.labels import GraphObservedLabels
+from mule_pattern_learner.tigergraph.scope import TigerGraphScope
 from mule_pattern_learner.training.trainer import train
 
 FIXTURES = Path(__file__).parent / "fixtures" / "saved_models"
@@ -80,19 +87,15 @@ SCORES = {
     ],
 }
 
-# The settings the fixtures were trained and prepared with, over the built-in run.
-CHANGES = {
-    "dataset_id": "load_fixture",
-    "seed_limits": {"train": 40, "validation": 16, "test": 16},
-    "epochs": 1,
-    "steps_per_epoch": 2,
-    "batch_size": 8,
-    "hidden": 8,
-    "heads": 2,
-    "dropout": 0.0,
-    "device": "cpu",
-    "threads": 1,
+# The settings the fixtures were trained and prepared with, over the built-in run, and
+# the source id of the fake graph's data they name.
+CHANGES: dict[str, Any] = {
+    "dataset": {"seed_limits": {"train": 40, "validation": 16, "test": 16}},
+    "model": {"hidden": 8, "heads": 2, "dropout": 0.0},
+    "training": {"epochs": 1, "steps_per_epoch": 2, "batch_size": 8},
+    "runtime": {"device": "cpu", "threads": 1},
 }
+SOURCE = "load_fixture"
 # What that commit's inference.score gave the dataset's test accounts with built_in.pt.
 COHORT_SCORES = {
     "S0009": 0.5007370076392473,
@@ -121,7 +124,7 @@ COHORT_SCORES = {
 def test_models_saved_before_the_restructure_score_as_they_did(name: str) -> None:
     saved = ModelCheckpoint.load(FIXTURES / f"{name}.pt")
     keys = [
-        ContextKey("Account", account, 103, cutoff_ms("2025-01-01"), saved.config["scope_id"], 3)
+        ContextKey("Account", account, 103, cutoff_ms("2025-01-01"), saved.config.scope.id, 3)
         for account in ACCOUNTS
     ]
     fetcher = TigerGraphContextFetcher(FakeExecutor(factory=neighbourhood))
@@ -158,36 +161,106 @@ def test_models_whose_columns_moved_are_refused(tmp_path: Path) -> None:
         saved.check_inputs(plan)
 
 
-def test_a_cohort_prepared_before_the_restructure_is_reused(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def fixture_source(config: RunConfig) -> StreamingContextSource:
+    executor = FakeExecutor(factory=neighbourhood)
+    return streaming_source(
+        TigerGraphContextFetcher(executor),
+        extraction_plan(config.feature_plan()),
+        config.sampler,
+        config.transport,
+    )
+
+
+def test_the_dataset_prepared_before_the_restructure_scores_as_it_did(tmp_path: Path) -> None:
     dataset = tmp_path / "prepared"
     shutil.copytree(FIXTURES / "dataset", dataset)
-    config = validate_config({**run_config(), **CHANGES})
-
-    def refuse(config: dict[str, Any]) -> None:
-        raise AssertionError("a ready dataset is reused without connecting")
-
-    monkeypatch.setattr(prepare, "connect", refuse)
-    assert prepare.prepare_live(config, dataset)["status"] == "ready"
-
-    def source() -> Any:
-        executor = FakeExecutor(factory=neighbourhood)
-        return streaming_source(
-            TigerGraphContextFetcher(executor),
-            extraction_plan(config),
-            SamplerPlan.from_config(config),
-            config,
-        )
-
-    # The model trained on it scores its test accounts as it did.
     saved = ModelCheckpoint.load(FIXTURES / "built_in.pt")
+    assert saved.config == DEFAULT_CONFIG.with_changes(CHANGES)
     output = tmp_path / "scores.parquet"
-    assert score(saved, dataset, "2025-01-01", "test", output, contexts=source())["accounts"] == 19
+    contexts = fixture_source(saved.config)
+    assert score(saved, dataset, "2025-01-01", "test", output, contexts=contexts)["accounts"] == 19
     frame = pd.read_parquet(output)
     assert frame.account_id.tolist() == list(COHORT_SCORES)
     for account, have in zip(frame.account_id, frame.score, strict=True):
         assert math.isclose(have, COHORT_SCORES[account], rel_tol=RELATIVE), account
+
+
+def test_the_same_settings_prepare_the_dataset_of_the_old_code(tmp_path: Path) -> None:
+    config = DEFAULT_CONFIG.with_changes(CHANGES)
+    executor = FakeExecutor(factory=neighbourhood, population=scope_population(200))
+    dataset = tmp_path / "dataset"
+    prepare(
+        config,
+        SOURCE,
+        dataset,
+        {"Account": 200},
+        GraphObservedLabels(),
+        scope=TigerGraphScope(executor),
+        cutoffs=TigerGraphCutoffs(executor),
+        hubs=TigerGraphHubs(executor),
+    )
+    for name in ("accounts", "observed_labels"):
+        pd.testing.assert_frame_equal(
+            pd.read_parquet(dataset / f"{name}.parquet"),
+            pd.read_parquet(FIXTURES / "dataset" / f"{name}.parquet"),
+        )
     # And a new model trains on it.
-    result = train(config, dataset, tmp_path / "model.pt", contexts=source())
+    result = train(config, dataset, tmp_path / "model.pt", contexts=fixture_source(config))
     assert result["status"] == "complete"
+
+
+def test_old_configurations_convert_through_the_key_table() -> None:
+    built_in = saved_run_config({})
+    assert built_in == DEFAULT_CONFIG
+    # Settings of removed paths were saved with the one value that remains.
+    retired = {
+        "context_storage": "stream",
+        "evaluation_protocol": "strict_inductive",
+        "label_policy": "graph_observed",
+        "observed_labels": None,
+        "extraction_groups": ["entity_meta", "rolling_windows"],
+        "sampler": {**asdict(BUILT_IN_SAMPLER.roots), "policy": "resample"},
+        "dataset_id": "load_fixture",
+        "prepared_id": None,
+        "prepare_batch_size": 16,
+    }
+    converted = saved_run_config(retired)
+    assert converted.sampler.roots == BUILT_IN_SAMPLER.roots
+    assert converted.sampler.children == replace(BUILT_IN_SAMPLER.roots, associations=0)
+    assert replace(converted, sampler=DEFAULT_CONFIG.sampler) == DEFAULT_CONFIG
+    for key, value, message in (
+        ("context_storage", "sqlite", "context_storage = 'sqlite' is no longer supported"),
+        ("evaluation_protocol", "shared_history", "evaluation_protocol = 'shared_history'"),
+        ("label_policy", "observed", "label_policy = 'observed' is no longer supported"),
+        ("observed_labels", "x.parquet", "observed_labels = 'x.parquet' is no longer supported$"),
+        ("variant", "wide", "variant = 'wide' is no longer supported"),
+        ("stage", "offline", "Unknown saved configuration key"),
+    ):
+        with pytest.raises(ValueError, match=message):
+            saved_run_config({key: value})
+    with pytest.raises(ValueError, match="sampler.policy = 'recent' is no longer supported"):
+        saved_run_config({"sampler": {"policy": "recent"}})
+    # The model variants became settings.
+    assert saved_run_config({"variant": "temporal"}) == built_in
+    tabular = saved_run_config({"variant": "tabular"})
+    assert tabular == replace(built_in, model=replace(built_in.model, architecture="summary"))
+    no_fourier = saved_run_config({"variant": "no_fourier"}).features
+    assert no_fourier == tuple(g for g in built_in.features if g != "time_encoding")
+    # A [sampler] table's absent pool keys were those of PoolPlan(), and its children
+    # pool the roots pool without associations, changed by [sampler.children].
+    partial = saved_run_config({"sampler": {"recent": 4, "children": {"older": 1}}}).sampler
+    assert partial.roots == PoolPlan(recent=4)
+    assert partial.children == PoolPlan(recent=4, older=1, associations=0)
+    assert partial.relation_fanouts == BUILT_IN_SAMPLER.relation_fanouts
+    # The reservoir seed and the reveal salt defaulted to the training seed.
+    seeded = saved_run_config({"seed": 7, "reveal_salt": None, "reveal_per_split": None})
+    assert (seeded.training.seed, seeded.dataset.seed, seeded.scope.reveal_salt) == (7, 7, 7)
+    assert seeded.scope.reveal_per_split == built_in.scope.reveal_per_split
+    pinned = saved_run_config({"seed": 7, "cohort_seed": 3, "reveal_salt": 5})
+    assert (pinned.dataset.seed, pinned.scope.reveal_salt) == (3, 5)
+    # A null limit saved on purpose stays null.
+    unlimited = saved_run_config({"steps_per_epoch": None, "evaluation_unlabeled_limit": None})
+    assert unlimited.training.steps_per_epoch is None
+    assert unlimited.training.proxy_unlabeled_limit is None
+    # A model saved since the typed configuration holds RunConfig.to_dict().
+    assert saved_run_config(tabular.to_dict()) == tabular

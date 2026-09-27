@@ -1,4 +1,7 @@
-"""Split dates, the cutoff clocks they resolve to, and the context keys of a split."""
+"""The cutoff clocks split dates resolve to, and the context keys of a split.
+
+The dates themselves are checked where they are configured (config.SplitDates).
+"""
 
 from __future__ import annotations
 
@@ -10,20 +13,6 @@ import pandas as pd
 from ..contract.clock import cutoff_ms, timestamp
 from ..contract.graph_schema import SPLIT_PHASE, ContextKey, context_scope
 from .ports import CutoffReader
-
-
-def validate_dates(config: dict[str, Any]) -> None:
-    dates = config["dates"]
-    if not all(dates.get(split) for split in ("train", "validation", "test")):
-        raise ValueError("Three nonempty chronological splits are required")
-    clocks = {split: [timestamp(date) for date in dates[split]] for split in dates}
-    if (
-        not max(clocks["train"])
-        < min(clocks["validation"])
-        <= max(clocks["validation"])
-        < min(clocks["test"])
-    ):
-        raise ValueError("Train, validation and test cutoffs overlap or are out of order")
 
 
 def eligible_mask(accounts: pd.DataFrame, split: str, date: str) -> np.ndarray:
@@ -41,7 +30,7 @@ def marginal_mask(accounts: pd.DataFrame) -> np.ndarray:
 def sample_keys(accounts: pd.DataFrame, date: str, manifest: dict[str, Any]) -> list[ContextKey]:
     ms = cutoff_ms(date)
     seq = int(manifest["cutoff_seqs"][date])
-    scope = context_scope(manifest["config"])
+    scope = context_scope(manifest["source"]["scope_id"])
     return [
         ContextKey("Account", str(row.account_id), seq, ms, scope, SPLIT_PHASE[str(row.split)])
         for row in accounts.itertuples(index=False)
