@@ -362,14 +362,18 @@ name = "Use cases reach TigerGraph only through ports"
 type = "forbidden"
 source_modules = ["mule_pattern_learner.training", "mule_pattern_learner.evaluation", "mule_pattern_learner.data",
                   "mule_pattern_learner.batching", "mule_pattern_learner.inference", "mule_pattern_learner.sampling",
-                  "mule_pattern_learner.model", "mule_pattern_learner.reporting"]
+                  "mule_pattern_learner.model", "mule_pattern_learner.reporting", "mule_pattern_learner.diagnostics"]
 forbidden_modules = ["mule_pattern_learner.tigergraph", "pyTigerGraph"]
 
 [[tool.importlinter.contracts]]
 name = "Training never reads ground truth"
 type = "forbidden"
 source_modules = ["mule_pattern_learner.training", "mule_pattern_learner.data", "mule_pattern_learner.batching",
-                  "mule_pattern_learner.inference", "mule_pattern_learner.sampling", "mule_pattern_learner.model"]
+                  "mule_pattern_learner.inference", "mule_pattern_learner.sampling", "mule_pattern_learner.model",
+                  # the pipeline's preparing, training, checking and scoring use cases
+                  "mule_pattern_learner.pipeline.connect", "mule_pattern_learner.pipeline.prepare",
+                  "mule_pattern_learner.pipeline.train", "mule_pattern_learner.pipeline.check",
+                  "mule_pattern_learner.pipeline.score"]
 forbidden_modules = ["mule_pattern_learner.evaluation", "mule_pattern_learner.diagnostics",
                      "mule_pattern_learner.tigergraph.oracle"]
 
