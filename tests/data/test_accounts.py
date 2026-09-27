@@ -51,7 +51,6 @@ def test_only_graph_labels_read_labels_from_the_graph() -> None:
         select_accounts(TigerGraphScope(fake), config.scope.id, config.dataset, None)
 
 
-@pytest.mark.legacy
 def test_stale_population_queries_fail_fast() -> None:
     from mule_pattern_learner.data.accounts import select_accounts
 

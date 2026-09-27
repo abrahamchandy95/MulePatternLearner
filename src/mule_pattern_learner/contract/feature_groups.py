@@ -222,7 +222,7 @@ REORDERED_GROUPS = frozenset(
 
 
 # The model architectures: "tgat" is the graph model (model.tgat.TGAT), "summary" the
-# controls without attention (model.summary.SummaryMLP).
+# controls without attention (model.summary_mlp.SummaryMLP).
 ARCHITECTURES = ("tgat", "summary")
 # Each architecture as the input fingerprint records it. Saved models hold the
 # fingerprint, so the graph model keeps the name it had before the layered restructure.

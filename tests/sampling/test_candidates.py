@@ -31,7 +31,7 @@ from mule_pattern_learner.testing.builders import (
 from mule_pattern_learner.testing.fake_graph import FakeStore
 
 MPS = torch.backends.mps.is_available()
-V5_RESAMPLE = SamplerPlan(
+POOLED_RESAMPLE = SamplerPlan(
     roots=PoolPlan(recent=8, older=4, distinct=4, associations=2),
     children=PoolPlan(recent=4, older=2, distinct=2, associations=0),
     relation_fanouts=(8, 4),
@@ -165,31 +165,31 @@ def _is_prefix(table: CandidateTable, hop_one: np.ndarray, hop_two: np.ndarray) 
 def test_eval_keys_mix_the_hop_and_keep_hop_one_draws() -> None:
     keys = roots(32)
     table = CandidateTable.build(
-        keys, [synthetic_row(k, V5_RESAMPLE.roots, full=True) for k in keys]
+        keys, [synthetic_row(k, POOLED_RESAMPLE.roots, full=True) for k in keys]
     )
     for seed in (0, 7):
         # Hop 1 keeps the SplitMix64(seed, context, item) keys of the first scheme.
         state = splitmix64(splitmix64(np.uint64(seed)) ^ table.context_hash[table.context])
-        legacy = torch.from_numpy(
+        first_scheme = torch.from_numpy(
             (splitmix64(state ^ table.item_hash) >> np.uint64(1)).astype(np.int64)
         )
         options: dict[str, Any] = {"mode": "eval", "step_seed": 3, "evaluation_seed": seed}
-        assert torch.equal(selection_keys(table, hop=1, **options), legacy)
+        assert torch.equal(selection_keys(table, hop=1, **options), first_scheme)
         hop_two = selection_keys(table, hop=2, **options)
-        assert bool((hop_two >= 0).all()) and not bool((hop_two == legacy).any())
+        assert bool((hop_two >= 0).all()) and not bool((hop_two == first_scheme).any())
     # A root is selected at both hops (its hop-2 row is its hop-1 row); its eval hop-2
     # draw must not simply repeat its first hop-1 picks, as it does not in training.
-    first = select_resampled(table, hop=1, sampler=V5_RESAMPLE, fanout=16, mode="eval")
-    second = select_resampled(table, hop=2, sampler=V5_RESAMPLE, fanout=4, mode="eval")
+    first = select_resampled(table, hop=1, sampler=POOLED_RESAMPLE, fanout=16, mode="eval")
+    second = select_resampled(table, hop=2, sampler=POOLED_RESAMPLE, fanout=4, mode="eval")
     prefixes = sum(_is_prefix(table, a, b) for a, b in zip(first, second, strict=True))
     assert prefixes <= len(keys) // 4, prefixes
 
 
 def test_eval_batches_draw_root_hops_independently(monkeypatch: pytest.MonkeyPatch) -> None:
-    store = FakeStore(V5_RESAMPLE)
+    store = FakeStore(POOLED_RESAMPLE)
     keys = roots(16)
     for key in keys:
-        store.rows[1, key] = synthetic_row(key, V5_RESAMPLE.roots, encodings=False, full=True)
+        store.rows[1, key] = synthetic_row(key, POOLED_RESAMPLE.roots, encodings=False, full=True)
     draws: dict[int, list[list[dict[str, Any]]]] = {}
     select = assemble._select  # pyright: ignore[reportPrivateUsage]
 
@@ -204,7 +204,7 @@ def test_eval_batches_draw_root_hops_independently(monkeypatch: pytest.MonkeyPat
     plan = FeaturePlan(DEFAULT_GROUPS, "tgat")
     for mode in ("eval", "train"):
         build_batch(
-            store, keys, fanouts=(16, 4), plan=plan, sampler=V5_RESAMPLE, mode=mode, step_seed=5
+            store, keys, fanouts=(16, 4), plan=plan, sampler=POOLED_RESAMPLE, mode=mode, step_seed=5
         )
         prefixes = 0
         for root in range(len(keys)):  # roots come first in the hop-2 context order

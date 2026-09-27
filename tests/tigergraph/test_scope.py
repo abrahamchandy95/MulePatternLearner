@@ -43,7 +43,6 @@ def test_missing_scope_is_created_unless_forbidden() -> None:
         assert server.calls[0][1]["unowned_policy"] == policy
 
 
-@pytest.mark.legacy
 def test_existing_scope_must_have_the_configured_unowned_policy() -> None:
     header = {"ready": True, "source_id": SNAPSHOT_SOURCE, "split_seed": 42}
     config = unit_config().scope

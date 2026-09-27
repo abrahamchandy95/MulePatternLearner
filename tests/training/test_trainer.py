@@ -707,7 +707,7 @@ def test_preparation_requests_no_context_and_training_keeps_a_bounded_lru(tmp_pa
     assert len(source.memory) <= 4
 
 
-def test_training_end_to_end_with_v5_neighbour_messages(tmp_path: Path) -> None:
+def test_training_end_to_end_with_candidate_pool_neighbour_messages(tmp_path: Path) -> None:
     c = example_config()
     # N3 is a hub at every root cutoff; N5 always exceeds its history capacity.
     dataset, executor = prepared(

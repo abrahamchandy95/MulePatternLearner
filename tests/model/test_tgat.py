@@ -24,7 +24,7 @@ from mule_pattern_learner.data.contexts import ContextSource
 from mule_pattern_learner.inference.predictor import Predictor
 from mule_pattern_learner.inference.saved_model import SavedModel
 from mule_pattern_learner.model.build import build_model
-from mule_pattern_learner.model.summary import SummaryMLP
+from mule_pattern_learner.model.summary_mlp import SummaryMLP
 from mule_pattern_learner.model.tgat import TGAT
 from mule_pattern_learner.testing.builders import context, message
 from mule_pattern_learner.testing.fake_graph import FakeExecutor

@@ -7,7 +7,7 @@ import torch
 
 from ..config import ModelConfig
 from ..contract.feature_groups import FeaturePlan
-from .summary import SummaryMLP
+from .summary_mlp import SummaryMLP
 from .tgat import TGAT
 
 # The model of either architecture: the graph model, or the controls without attention.
