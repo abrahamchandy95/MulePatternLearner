@@ -2,8 +2,9 @@
 
 There are several because each feeds a value that is already persisted: `fingerprint`
 names configurations, plans and preparations, `hash64` seeds the per-step draws and
-the reservoir ranks (`stable_score`), and `stable_hash` keys the sampler's evaluation
-draws. Changing any of them changes recorded values or seeded draws.
+the reservoir ranks (`stable_score`) and names the contexts a resumable run has
+counted (`data.contexts.context_hash`), and `stable_hash` keys the sampler's
+evaluation draws. Changing any of them changes recorded values or seeded draws.
 """
 
 from __future__ import annotations

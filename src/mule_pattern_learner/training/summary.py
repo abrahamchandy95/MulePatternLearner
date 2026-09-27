@@ -120,6 +120,7 @@ def run_summary(
         "validation_proxy": selection,
         "checkpoint": str(checkpoint),
         "database_calls_during_training": progress.calls(),
+        "contexts": progress.contexts(),
         "rejections": progress.rejections(),
         "sampler_backend": progress.backend,
         "sampler_totals": dict(progress.totals),

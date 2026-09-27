@@ -16,10 +16,11 @@ import numpy as np
 import pytest
 from pyTigerGraph.common.exception import TigerGraphException
 
-from mule_pattern_learner.batching.assemble import make_live_batch
+from mule_pattern_learner.batching.assemble import build_root_batch, make_live_batch
 from mule_pattern_learner.contract.feature_groups import FeaturePlan
 from mule_pattern_learner.contract.graph_schema import ContextKey
-from mule_pattern_learner.data.contexts import StreamingContextSource
+from mule_pattern_learner.data.contexts import StreamingContextSource, context_hash
+from mule_pattern_learner.data.hub_registry import HubRegistry
 from mule_pattern_learner.reference.batch_features import node_features
 from mule_pattern_learner.testing.builders import (
     DEFAULT_SPLIT_PLAN,
@@ -30,6 +31,7 @@ from mule_pattern_learner.testing.builders import (
     context_row,
     event,
     message,
+    neighbourhood,
     query_context_batch,
     root,
 )
@@ -88,6 +90,44 @@ def test_hop_pools_and_flags_are_sent_and_lru_is_keyed_by_hop() -> None:
     with pytest.raises(ValueError, match="hop"):
         store.fetch([key], hop=3)
     store.close()
+
+
+def test_sources_count_requested_distinct_and_cached_contexts() -> None:
+    store = StreamingContextSource(
+        TigerGraphContextFetcher(ContextServer()), plan=PLAN, sampler=SAMPLER, capacity=8
+    )
+    keys = [root(i) for i in range(4)]
+    # A key repeated within one fetch is asked for once.
+    store.fetch([*keys, keys[0]])
+    store.fetch(keys[:2])
+    store.fetch(keys[:1], hop=2)
+    counts = store.counts
+    assert (counts.requested, counts.cache_hits, counts.distinct) == (7, 2, 5)
+    assert counts.seen == {context_hash(key, 1) for key in keys} | {context_hash(keys[0], 2)}
+    store.close()
+    # The hash is the same in every process, so a resumed run can restore it.
+    key = ContextKey("Account", "A1", 7, 8, "scope", 2)
+    assert context_hash(key, 1) == 7462442381914773116
+    assert 0 <= context_hash(key, 2) < 2**63 and context_hash(key, 2) != context_hash(key, 1)
+    # Each context of a batch is asked for once: the roots it pins are not counted again.
+    roots = [ContextKey("Account", f"R{i:02}", 100, 1000) for i in range(8)]
+    with StreamingContextSource(
+        TigerGraphContextFetcher(FakeExecutor(factory=neighbourhood)),
+        plan=DEFAULT_SPLIT_PLAN,
+        sampler=SMALL_SAMPLER,
+    ) as source:
+        prepared = build_root_batch(
+            source,
+            roots,
+            fanouts=(8, 4),
+            device="cpu",
+            plan=DEFAULT_SPLIT_PLAN,
+            sampler=SMALL_SAMPLER,
+            hubs=HubRegistry.empty(),
+            mode="eval",
+        )
+    assert prepared.stats["contexts"] > len(roots)
+    assert source.counts.requested == source.counts.distinct == prepared.stats["contexts"]
 
 
 def test_lru_is_bounded_and_close_releases_it() -> None:

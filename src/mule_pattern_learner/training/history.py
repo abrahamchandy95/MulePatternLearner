@@ -1,8 +1,8 @@
 """The run's history: its events, log intervals and epochs, as they happen.
 
 Progress appends every record to run_dir/progress.jsonl and echoes selected records
-to stdout. It also sums the batch statistics and counts the REST calls and rejections
-of every segment of a resumed run. LogInterval keeps one log interval's losses on the
+to stdout. It also sums the batch statistics and counts the REST calls, rejections and
+contexts of every segment of a resumed run. LogInterval keeps one log interval's losses on the
 device, so the host reads them once per interval.
 """
 
@@ -35,9 +35,11 @@ class Progress:
         self.totals: Counter[str] = Counter()
         # The backend resolved once for the run (batch statistics name the same one).
         self.backend = backend
-        # Counts of earlier segments of a resumed run; the source counts this one.
+        # Counts of earlier segments of a resumed run; the source counts this one. The
+        # source's own set of distinct contexts is restored instead (ContextCounts.seen).
         self.base_calls = 0
         self.base_rejections: Counter[str] = Counter()
+        self.base_contexts: Counter[str] = Counter()
 
     def add(self, stats: dict[str, Any]) -> None:
         self.totals.update(batch_counts(stats))
@@ -50,10 +52,23 @@ class Progress:
         """Rejected rows served by the source (both hops) in every segment, by status."""
         return dict(self.base_rejections + Counter(self.store.rejections))
 
+    def contexts(self) -> dict[str, int]:
+        """Contexts requested, distinct and served from memory in every segment."""
+        counts = self.store.counts
+        return {
+            "requested": self.base_contexts["requested"] + counts.requested,
+            "distinct": counts.distinct,
+            "cache_hits": self.base_contexts["cache_hits"] + counts.cache_hits,
+        }
+
     def emit(self, record: dict[str, Any], *, echo: bool = True) -> dict[str, Any]:
+        contexts = self.contexts()
         record = {
             **record,
             "query_calls": self.calls(),
+            "contexts_requested": contexts["requested"],
+            "contexts_distinct": contexts["distinct"],
+            "cache_hits": contexts["cache_hits"],
             "rejections": self.rejections(),
             "stub_children": int(self.totals["stub_children"]),
             "rejected_children": int(self.totals["rejected_children"]),

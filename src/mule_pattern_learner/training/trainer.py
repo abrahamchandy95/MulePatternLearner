@@ -353,6 +353,11 @@ class _TrainingRun:
             "progress_totals": dict(self.progress.totals),
             "query_calls": self.progress.calls(),
             "rejections": self.progress.rejections(),
+            "context_counts": {
+                k: v for k, v in self.progress.contexts().items() if k != "distinct"
+            },
+            # The distinct contexts asked for, as their context_hash values.
+            "context_keys": torch.tensor(sorted(self.store.counts.seen), dtype=torch.int64),
             "train_rejections": dict(self.train_rejections),
             "epoch_rejections": dict(self.epoch_rejections),
         }
@@ -396,6 +401,8 @@ class _TrainingRun:
         self.progress.totals = Counter(state["progress_totals"])
         self.progress.base_calls = int(state["query_calls"])
         self.progress.base_rejections = Counter(state["rejections"])
+        self.progress.base_contexts = Counter(state["context_counts"])
+        self.store.counts.seen.update(state["context_keys"].tolist())
         self.train_rejections = Counter(state["train_rejections"])
         self.epoch_rejections = Counter(state["epoch_rejections"])
 

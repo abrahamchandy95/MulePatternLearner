@@ -27,6 +27,7 @@ from mule_pattern_learner.contract.feature_groups import FeaturePlan, extraction
 from mule_pattern_learner.contract.graph_schema import RELATIONS, ContextKey
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
 from mule_pattern_learner.contract.server import CONTEXT_QUERY_FILE
+from mule_pattern_learner.data.contexts import ContextCounts
 from mule_pattern_learner.paths import GSQL_DIR
 from mule_pattern_learner.testing.builders import (
     HUB,
@@ -375,6 +376,7 @@ class FakeStore:
     query_calls: int
     rejections: Counter[str]
     rejections_by_hop: dict[int, Counter[str]]
+    counts: ContextCounts
 
     def __init__(
         self,
@@ -390,6 +392,7 @@ class FakeStore:
         self.calls: list[tuple[int, list[ContextKey]]] = []
         self.rejections = Counter()
         self.rejections_by_hop = {}
+        self.counts = ContextCounts()
         self.query_calls = 0
 
     def row(self, key: ContextKey, hop: int = 1) -> dict[str, Any]:
@@ -400,6 +403,7 @@ class FakeStore:
 
     def fetch(self, keys: list[ContextKey], *, hop: int = 1) -> list[dict[str, Any] | None]:
         self.calls.append((hop, list(keys)))
+        self.counts.ask(dict.fromkeys(keys), hop)
         self.query_calls += 1
         out: list[dict[str, Any] | None] = []
         for key in keys:
@@ -430,6 +434,7 @@ class FakeSource:
         self.query_calls = 0
         self.rejections: Counter[str] = Counter()
         self.rejections_by_hop: dict[int, Counter[str]] = {}
+        self.counts = ContextCounts()
         self.calls: Counter[str] = Counter()
         self.lock = threading.Lock()
         self.closed = False
@@ -442,6 +447,7 @@ class FakeSource:
             if self.fail is not None and self.fail(keys, hop, self.calls):
                 raise RuntimeError("injected source failure")
             self.query_calls += 1
+            self.counts.ask(dict.fromkeys(keys), hop)
             rows: list[dict[str, Any] | None] = []
             for key in keys:
                 if key.node_id in self.reject:
