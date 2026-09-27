@@ -890,6 +890,8 @@ The steps, in order:
    - Commits that fail the per-commit gate (the history is not rewritten, so bisect should skip them): `55bb769` and `90c0ed4` fail `ruff check --select I`, which `6ad436f` fixes; `519d897` and `455654e` fail `tests/test_naming.py`, which `17cbaf3` fixes.
 9. **Live parity with unchanged queries (owner-run, read-only).**
    - (a) `mule check` reports every query up to date. The text did not change, so nothing is installed.
+   - Then prepare the new dataset, which (b) compares and (c) needs: `mule check` refuses the batch without it, and `mule train` would go on to the hour-long baseline run, which waits for the server step. With the queries, the scope and the reveal already in place, preparing only reads the graph (about 6 minutes):
+     `python -c "from mule_pattern_learner.config import DEFAULT_CONFIG; from mule_pattern_learner.pipeline.prepare import prepare_dataset; print(prepare_dataset(DEFAULT_CONFIG).root)"`
    - (b) The new dataset's accounts and observed labels have the same rows as the old preparation's.
    - (c) `mule check` prints the same digests and first loss as `benchmark_live_batch.py --train-step` at `pre-restructure`, on the same machine and device.
    - (d) Optional: the first three log intervals of `mule train` equal those of `mule-temporal train` at the tag. Stop both after 30 steps, and write the old run's output under `results/parity/`.
