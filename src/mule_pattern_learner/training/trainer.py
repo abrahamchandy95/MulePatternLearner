@@ -37,6 +37,7 @@ import pandas as pd
 import torch
 from torch import nn
 
+from ..artifacts import atomic_write
 from ..batching.assemble import RootBatch, batch_device, build_root_batch, to_device
 from ..batching.limits import BatchLimits
 from ..config import fanouts, validate_config
@@ -61,7 +62,6 @@ from .averaging import WeightAverage, evaluated_weights
 from .checkpoint import (
     CHECKPOINT_FORMAT,
     RUN_STATE_FILES,
-    atomic_save,
     explicit_backend,
     load_resume_state,
     restore_cuda_rng,
@@ -423,7 +423,8 @@ class _TrainingRun:
         if self.device.type == "cuda":
             # The training device only: a resume may see a different number of GPUs.
             state["cuda_rng"] = torch.cuda.get_rng_state(self.device)
-        atomic_save(state, self.last_path)
+        with atomic_write(self.last_path) as pending:
+            torch.save(state, pending)
 
     def restore(self, state: dict[str, Any]) -> None:
         saved = state["sampler_backend"]
@@ -716,7 +717,8 @@ class _TrainingRun:
             backend=self.backend,
         )
         # Save the selected model before any test context is requested.
-        atomic_save(payload, self.checkpoint_path)
+        with atomic_write(self.checkpoint_path) as pending:
+            torch.save(payload, pending)
         test, rejected_roots["test"] = self._score_test()
         results = {}
         for split, frame in (("validation", validation), ("test", test)):

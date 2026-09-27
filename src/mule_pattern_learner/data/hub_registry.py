@@ -33,7 +33,7 @@ import warnings
 
 import pandas as pd
 
-from ..contract.fingerprints import digest
+from ..artifacts import atomic_write, file_digest
 from ..contract.graph_schema import context_scope
 
 if TYPE_CHECKING:
@@ -178,15 +178,14 @@ class HubRegistry:
             ]
         )
         table = pa.Table.from_pandas(self.frame, schema=schema, preserve_index=False)
-        pending = path.with_suffix(".pending.parquet")
-        pq.write_table(table, pending)
-        pending.replace(path)
+        with atomic_write(path) as pending:
+            pq.write_table(table, pending)
 
 
 def hub_manifest(registry: HubRegistry, path: Path) -> dict[str, Any]:
     """Manifest fields recorded next to a saved registry."""
     return {
-        "hubs_sha256": digest(path),
+        "hubs_sha256": file_digest(path),
         "hub_threshold": registry.threshold,
         "hub_scope_id": registry.scope_id,
         "hub_counts": registry.counts(),
@@ -196,7 +195,7 @@ def hub_manifest(registry: HubRegistry, path: Path) -> dict[str, Any]:
 def load_hub_registry(dataset: Path, manifest: dict[str, Any]) -> HubRegistry:
     """Load and verify the prepared registry for the dataset's cutoffs and scope."""
     path = dataset / HUB_FILE
-    if not path.exists() or digest(path) != manifest["hubs_sha256"]:
+    if not path.exists() or file_digest(path) != manifest["hubs_sha256"]:
         raise ValueError(f"Prepared hub registry changed or is missing: {path}")
     config = manifest.get("config")
     if isinstance(config, dict):

@@ -11,6 +11,7 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from ..artifacts import atomic_write, pending_path
 from ..contract.graph_schema import ContextKey
 from ..contract.sampler_plan import SamplerPlan
 from ..data.contexts import ContextSource, close_source, open_context_source
@@ -155,9 +156,8 @@ def score_new_accounts(
     first visible event is refused, since no account could be scored at it.
     """
     rejected_output = rejected_path(output)
-    pending = output.with_name(output.name + ".pending")
-    rejected_pending = rejected_output.with_name(rejected_output.name + ".pending")
-    for path in (output, rejected_output, pending, rejected_pending):
+    # A pending file is another scoring run's output in the making.
+    for path in (output, rejected_output, pending_path(output), pending_path(rejected_output)):
         if path.exists():
             raise FileExistsError(path)
     saved = ModelCheckpoint.of(checkpoint)
@@ -172,7 +172,6 @@ def score_new_accounts(
     predictor = TemporalPredictor(saved, contexts, executor=executor, hubs=hubs)
     source = predictor.contexts
     output.parent.mkdir(parents=True, exist_ok=True)
-    writer: pq.ParquetWriter | None = None
     count = rejected = supplied = 0
     examples: list[str] = []
     failed = True
@@ -180,40 +179,37 @@ def score_new_accounts(
         if hubs is None:
             predictor.hubs = query_hubs(executor, [seq], predictor.sampler)
             warn_hub_stubs(predictor.hubs, predictor.plan)
-        writer = pq.ParquetWriter(pending, SCORE_SCHEMA)
-        with rejected_pending.open("w") as rejected_stream:
-            batches = (
-                [ContextKey("Account", value, seq, ms) for value in ids]
-                for ids in id_batches(account_ids, predictor.batch_size)
-            )
-            for frame, bad in predictor.stream(batches):
-                supplied += len(frame) + len(bad)
-                for key in bad:
-                    rejected_stream.write(key.node_id + "\n")
-                    if len(examples) < 20:
-                        examples.append(key.node_id)
-                rejected += len(bad)
-                if len(frame):
-                    frame["date"] = date
-                    frame["cutoff_utc"] = date
-                    writer.write_table(
-                        pa.Table.from_pandas(frame, schema=SCORE_SCHEMA, preserve_index=False)
-                    )
-                    count += len(frame)
-        if not supplied:
-            raise ValueError("No account IDs supplied")
-        writer.close()
-        writer = None
-        pending.replace(output)
-        if rejected:
-            rejected_pending.replace(rejected_output)
+        # The scores replace output first, then the rejected IDs (if any) their file.
+        with atomic_write(rejected_output) as rejected_pending:
+            with (
+                atomic_write(output) as pending,
+                pq.ParquetWriter(pending, SCORE_SCHEMA) as writer,
+                rejected_pending.open("w") as rejected_stream,
+            ):
+                batches = (
+                    [ContextKey("Account", value, seq, ms) for value in ids]
+                    for ids in id_batches(account_ids, predictor.batch_size)
+                )
+                for frame, bad in predictor.stream(batches):
+                    supplied += len(frame) + len(bad)
+                    for key in bad:
+                        rejected_stream.write(key.node_id + "\n")
+                        if len(examples) < 20:
+                            examples.append(key.node_id)
+                    rejected += len(bad)
+                    if len(frame):
+                        frame["date"] = date
+                        frame["cutoff_utc"] = date
+                        writer.write_table(
+                            pa.Table.from_pandas(frame, schema=SCORE_SCHEMA, preserve_index=False)
+                        )
+                        count += len(frame)
+                if not supplied:
+                    raise ValueError("No account IDs supplied")
+            if not rejected:
+                rejected_pending.unlink()
         failed = False
     finally:
-        if writer is not None:
-            writer.close()
-        for path in (pending, rejected_pending):
-            if path.exists():
-                path.unlink()
         close_source(source, failed=failed)
     return {
         "accounts": count,

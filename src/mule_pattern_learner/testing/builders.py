@@ -19,6 +19,7 @@ import pandas as pd
 import pytest
 import torch
 
+from mule_pattern_learner.artifacts import file_digest
 from mule_pattern_learner.batching import assemble
 from mule_pattern_learner.config import run_config, validate_config
 from mule_pattern_learner.contract.clock import timestamp
@@ -28,7 +29,7 @@ from mule_pattern_learner.contract.feature_groups import (
     FeaturePlan,
     contract_fingerprint,
 )
-from mule_pattern_learner.contract.fingerprints import digest, stable_score
+from mule_pattern_learner.contract.fingerprints import stable_score
 from mule_pattern_learner.contract.graph_schema import (
     ASSOCIATIONS,
     RAILS,
@@ -863,7 +864,7 @@ def prepared_dataset(
         "config": config,
         "cutoff_seqs": dict(CUTOFFS),
         "cohort": "bounded_internal_deposit_seeds",
-        "observed_labels_sha256": digest(path / "observed_labels.parquet"),
+        "observed_labels_sha256": file_digest(path / "observed_labels.parquet"),
         "source": {"preparation": preparation_view(config)},
     }
     (path / "manifest.json").write_text(json.dumps(manifest))
@@ -901,7 +902,7 @@ def checkpoint(
         "selected_on": "validation_observed_label_proxy_ap",
     }
     if manifest_path is not None:
-        payload["dataset_manifest_sha256"] = digest(manifest_path)
+        payload["dataset_manifest_sha256"] = file_digest(manifest_path)
         payload["dataset"] = str(manifest_path.parent)
     torch.save(payload, path)
     return path
