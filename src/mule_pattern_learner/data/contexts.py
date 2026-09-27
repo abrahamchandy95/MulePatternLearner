@@ -9,24 +9,20 @@ ContextSource.
 from __future__ import annotations
 
 from collections import Counter, OrderedDict, deque
-from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, wait
 import inspect
 from pathlib import Path
-import queue
 import threading
-from typing import Any, Protocol, TypeVar
-import weakref
+from typing import Any, Protocol
 
 from ..config import TRANSPORT_DEFAULTS
 from ..contract.feature_groups import FeaturePlan, extraction_plan
 from ..contract.graph_schema import ContextKey
 from ..contract.sampler_plan import SamplerPlan, sampler_pools
+from ..runtime.workers import DaemonPool
 from ..tigergraph.context_query import query_context_split
 from ..tigergraph.executor import QueryExecutor, live_executor, transport_settings
 from ..tigergraph.provenance import verify_frozen_source
-
-T = TypeVar("T")
 
 MAX_FETCH_KEYS = 2048
 
@@ -79,88 +75,6 @@ def _resolve(
             rejections[str(status)] += 1
             by_hop.setdefault(hop, Counter())[str(status)] += 1
     return [rows[key] if rows[key].get("status") == "ok" else None for key in keys]
-
-
-_Work = tuple[Future[Any], Callable[..., Any], tuple[Any, ...]]
-
-
-def _pool_worker(work: queue.SimpleQueue[_Work | None]) -> None:
-    """Run submitted calls until the None sentinel; never holds a reference to the pool."""
-    while True:
-        item = work.get()
-        if item is None:
-            return
-        future, function, args = item
-        if not future.set_running_or_notify_cancel():
-            continue
-        try:
-            result = function(*args)
-        except BaseException as error:
-            future.set_exception(error)
-        else:
-            future.set_result(result)
-        del item, future, function, args
-
-
-def _stop_workers(work: queue.SimpleQueue[_Work | None], threads: list[threading.Thread]) -> None:
-    for _ in threads:
-        work.put(None)
-
-
-class _DaemonPool:
-    """At most `workers` daemon threads running submitted calls (a ThreadPoolExecutor subset).
-
-    ThreadPoolExecutor joins its workers when the interpreter exits, so a request
-    abandoned after an error or Ctrl-C (a REST retry chain may last max_outage_s)
-    would still hold up the exiting process. These workers are daemon threads:
-    `shutdown(wait=False, cancel_futures=True)` cancels queued calls and returns at
-    once, and the process may exit while a request is still in flight. Workers
-    start on demand and stop when the pool is shut down or garbage collected.
-    """
-
-    def __init__(self, workers: int, name: str) -> None:
-        self._workers, self._name = workers, name
-        self._queue: queue.SimpleQueue[_Work | None] = queue.SimpleQueue()
-        self._threads: list[threading.Thread] = []
-        self._lock = threading.Lock()
-        self._shutdown = False
-        self._release = weakref.finalize(self, _stop_workers, self._queue, self._threads)
-
-    def submit(self, function: Callable[..., T], /, *args: Any) -> Future[T]:
-        future: Future[T] = Future()
-        with self._lock:
-            if self._shutdown:
-                raise RuntimeError("cannot schedule new futures after shutdown")
-            self._queue.put((future, function, args))
-            if len(self._threads) < self._workers:
-                thread = threading.Thread(
-                    target=_pool_worker,
-                    args=(self._queue,),
-                    name=f"{self._name}_{len(self._threads)}",
-                    daemon=True,
-                )
-                thread.start()
-                self._threads.append(thread)
-        return future
-
-    def shutdown(self, wait: bool = True, *, cancel_futures: bool = False) -> None:
-        with self._lock:
-            if not self._shutdown:
-                self._shutdown = True
-                if cancel_futures:
-                    while True:
-                        try:
-                            item = self._queue.get_nowait()
-                        except queue.Empty:
-                            break
-                        if item is not None:
-                            item[0].cancel()
-                self._release()
-            threads = list(self._threads)
-        if wait:
-            for thread in threads:
-                if thread is not threading.current_thread():
-                    thread.join()
 
 
 class ContextSource(Protocol):
@@ -217,7 +131,7 @@ class StreamingContextSource:
         self.capacity, self.request_batch_size = capacity, request_batch_size
         self.concurrency = concurrency
         self._cadence = _EncodingCadence(encoding_check_every)
-        self.pool = _DaemonPool(concurrency, "temporal-context")
+        self.pool = DaemonPool(concurrency, "temporal-context")
         self.memory: OrderedDict[tuple[int, ContextKey], dict[str, Any]] = OrderedDict()
         self.query_calls = 0
         self.rejections: Counter[str] = Counter()

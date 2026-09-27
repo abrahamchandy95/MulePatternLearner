@@ -1,4 +1,9 @@
-"""Worker threads that build items ahead of their consumer."""
+"""The one worker pool: daemon threads for context requests and batch prefetch.
+
+DaemonPool runs submitted calls on at most a fixed number of daemon threads. The
+streaming context source sends its REST requests through one, and BatchPrefetcher
+builds batches ahead of their consumer on one.
+"""
 
 from __future__ import annotations
 
@@ -8,16 +13,98 @@ from concurrent.futures import Future
 import queue
 import threading
 from types import TracebackType
-from typing import Generic, TypeVar
+from typing import Any, Generic, TypeVar
+import weakref
 
 T = TypeVar("T")
 R = TypeVar("R")
 MAX_PREFETCH = 8
 _END = object()
 
+_Work = tuple[Future[Any], Callable[..., Any], tuple[Any, ...]]
+
+
+def _pool_worker(work: queue.SimpleQueue[_Work | None]) -> None:
+    """Run submitted calls until the None sentinel; never holds a reference to the pool."""
+    while True:
+        item = work.get()
+        if item is None:
+            return
+        future, function, args = item
+        if not future.set_running_or_notify_cancel():
+            continue
+        try:
+            result = function(*args)
+        except BaseException as error:
+            future.set_exception(error)
+        else:
+            future.set_result(result)
+        del item, future, function, args
+
+
+def _stop_workers(work: queue.SimpleQueue[_Work | None], threads: list[threading.Thread]) -> None:
+    for _ in threads:
+        work.put(None)
+
+
+class DaemonPool:
+    """At most `workers` daemon threads running submitted calls (a ThreadPoolExecutor subset).
+
+    ThreadPoolExecutor joins its workers when the interpreter exits, so a request
+    abandoned after an error or Ctrl-C (a REST retry chain may last max_outage_s)
+    would still hold up the exiting process. These workers are daemon threads:
+    `shutdown(wait=False, cancel_futures=True)` cancels queued calls and returns at
+    once, and the process may exit while a request is still in flight. Workers
+    start on demand and stop when the pool is shut down or garbage collected.
+    """
+
+    def __init__(self, workers: int, name: str) -> None:
+        self._workers, self._name = workers, name
+        self._queue: queue.SimpleQueue[_Work | None] = queue.SimpleQueue()
+        self._threads: list[threading.Thread] = []
+        self._lock = threading.Lock()
+        self._shutdown = False
+        self._release = weakref.finalize(self, _stop_workers, self._queue, self._threads)
+
+    def submit(self, function: Callable[..., T], /, *args: Any) -> Future[T]:
+        future: Future[T] = Future()
+        with self._lock:
+            if self._shutdown:
+                raise RuntimeError("cannot schedule new futures after shutdown")
+            self._queue.put((future, function, args))
+            if len(self._threads) < self._workers:
+                thread = threading.Thread(
+                    target=_pool_worker,
+                    args=(self._queue,),
+                    name=f"{self._name}_{len(self._threads)}",
+                    daemon=True,
+                )
+                thread.start()
+                self._threads.append(thread)
+        return future
+
+    def shutdown(self, wait: bool = True, *, cancel_futures: bool = False) -> None:
+        with self._lock:
+            if not self._shutdown:
+                self._shutdown = True
+                if cancel_futures:
+                    while True:
+                        try:
+                            item = self._queue.get_nowait()
+                        except queue.Empty:
+                            break
+                        if item is not None:
+                            item[0].cancel()
+                self._release()
+            threads = list(self._threads)
+        if wait:
+            for thread in threads:
+                if thread is not threading.current_thread():
+                    thread.join()
+
 
 class BatchPrefetcher(Generic[T, R]):
-    """Build items ahead of the consumer on worker threads and yield results in input order.
+    """Build items ahead of the consumer on a DaemonPool and yield results in input order.
 
     At most ``depth`` items are queued or being built, so host memory stays bounded.
     A build error is raised when the consumer reaches that item. ``depth=0`` builds
@@ -41,50 +128,24 @@ class BatchPrefetcher(Generic[T, R]):
     ) -> None:
         if not 0 <= depth <= MAX_PREFETCH:
             raise ValueError(f"prefetch_batches must be in [0,{MAX_PREFETCH}]")
-        self.build, self.depth, self.name = build, depth, name
+        self.build, self.depth = build, depth
         self.items = iter(items)
-        self.tasks: queue.SimpleQueue[tuple[Future[R], T] | None] = queue.SimpleQueue()
-        self.workers: list[threading.Thread] = []
+        self.pool = DaemonPool(depth, name)
         self.pending: deque[Future[R]] = deque()
         self.stopped = False
-
-    def _work(self) -> None:
-        while True:
-            task = self.tasks.get()
-            if task is None:
-                return
-            future, item = task
-            if not future.set_running_or_notify_cancel():
-                continue
-            try:
-                result = self.build(item)
-            except BaseException as error:  # delivered to the consumer by result()
-                future.set_exception(error)
-            else:
-                future.set_result(result)
-
-    def _start(self) -> None:
-        for index in range(self.depth):
-            worker = threading.Thread(target=self._work, name=f"{self.name}_{index}", daemon=True)
-            worker.start()
-            self.workers.append(worker)
 
     def _fill(self) -> None:
         while not self.stopped and len(self.pending) < self.depth:
             item = next(self.items, _END)
             if item is _END:
                 return
-            future: Future[R] = Future()
-            self.pending.append(future)
-            self.tasks.put((future, item))  # type: ignore[arg-type]
+            self.pending.append(self.pool.submit(self.build, item))
 
     def __iter__(self) -> Iterator[R]:
         if not self.depth:
             for item in self.items:
                 yield self.build(item)
             return
-        if not self.workers and not self.stopped:
-            self._start()
         try:
             self._fill()
             while self.pending:
@@ -106,15 +167,13 @@ class BatchPrefetcher(Generic[T, R]):
         for future in self.pending:
             future.cancel()
         self.pending.clear()
-        for _ in self.workers:
-            self.tasks.put(None)
+        self.pool.shutdown(wait=False, cancel_futures=True)
 
     def close(self, *, wait: bool = True) -> None:
         """Cancel queued work; with ``wait`` also join the workers (their running builds)."""
         self.cancel()
         if wait:
-            for worker in self.workers:
-                worker.join()
+            self.pool.shutdown(wait=True)
 
     def __enter__(self) -> BatchPrefetcher[T, R]:
         return self
