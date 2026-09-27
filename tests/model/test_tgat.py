@@ -21,7 +21,7 @@ from mule_pattern_learner.contract.feature_groups import (
 from mule_pattern_learner.contract.graph_schema import RAILS, RELATIONS, ContextKey
 from mule_pattern_learner.contract.time_basis import BASIS_ID
 from mule_pattern_learner.data.contexts import ContextSource
-from mule_pattern_learner.inference.predictor import Predictor
+from mule_pattern_learner.inference.predictor import Predictor, score_batch
 from mule_pattern_learner.inference.saved_model import SavedModel
 from mule_pattern_learner.model.build import build_model
 from mule_pattern_learner.model.summary_mlp import SummaryMLP
@@ -250,7 +250,8 @@ def test_saved_models_with_the_slot_sum_score_like_the_trained_model(tmp_path: P
         predictor = Predictor(SavedModel.load(tmp_path / "new.pt"), source, "cpu")
         assert predictor.model.slot_sum is not None
         prepared = predictor.prepare([ROOT])
-        frame = predictor.infer(prepared)
+        scored = score_batch(predictor.model, prepared, predictor.device, embeddings=True)
+        frame = predictor.frame(scored)
         assert prepared.batch is not None and len(frame.embedding[0]) == 3 * HIDDEN
         with torch.no_grad():
             expected = torch.sigmoid(new(prepared.batch))

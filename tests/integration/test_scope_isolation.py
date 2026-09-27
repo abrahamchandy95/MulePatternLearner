@@ -287,7 +287,7 @@ def test_held_out_and_future_data_never_change_training_inputs(
             saved,
         )
         predictor = Predictor(saved, source)
-        result = predictor.predict([ContextKey("Account", b, 1000, BASE + 100000)])
+        (result,), _ = predictor.score_keys([[ContextKey("Account", b, 1000, BASE + 100000)]])
         assert len(result) == 1 and 0 <= result.score.iloc[0] <= 1
         arrival = put(
             "Account",
@@ -299,5 +299,5 @@ def test_held_out_and_future_data_never_change_training_inputs(
                 "is_external": False,
             },
         )
-        fresh = predictor.predict([ContextKey("Account", arrival, 1600, BASE + 160000)])
+        (fresh,), _ = predictor.score_keys([[ContextKey("Account", arrival, 1600, BASE + 160000)]])
         assert len(fresh) == 1 and 0 <= fresh.score.iloc[0] <= 1

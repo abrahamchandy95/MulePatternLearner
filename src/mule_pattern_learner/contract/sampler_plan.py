@@ -153,10 +153,6 @@ class SamplerPlan:
             }
         )
 
-    def pool_fingerprint(self) -> str:
-        """Only what TigerGraph is asked for (preparation and cache identity)."""
-        return fingerprint({"roots": self.query_params(1), "children": self.query_params(2)})
-
 
 def sampler_pools(sampler: SamplerPlan) -> dict[str, dict[str, Any]]:
     """The query-relevant part of a sampler: what TigerGraph returns per hop."""

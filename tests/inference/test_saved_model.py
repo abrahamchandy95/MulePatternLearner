@@ -38,15 +38,16 @@ from mule_pattern_learner.contract.fingerprints import fingerprint
 from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.contract.sampler_plan import PoolPlan
 from mule_pattern_learner.data.contexts import ContextSource, build_context_source
-from mule_pattern_learner.data.manifest import dataset_id, read_manifest
+from mule_pattern_learner.data.hub_registry import load_hub_registry
+from mule_pattern_learner.data.manifest import dataset_id, load_prepared, read_manifest
 from mule_pattern_learner.data.preparation import prepare
+from mule_pattern_learner.data.splits import eligible_mask, sample_keys
 from mule_pattern_learner.inference.predictor import Predictor
 from mule_pattern_learner.inference.saved_model import (
     REQUIRED_SETTINGS,
     SavedModel,
     saved_run_config,
 )
-from mule_pattern_learner.inference.score_accounts import score
 from mule_pattern_learner.paths import DATA_DIR, DatasetPaths, RunPaths
 from mule_pattern_learner.testing.builders import neighbourhood, scope_population
 from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
@@ -103,7 +104,8 @@ CHANGES: dict[str, Any] = {
     "runtime": {"device": "cpu", "threads": 1},
 }
 SOURCE = "load_fixture"
-# What that commit's inference.score gave the dataset's test accounts with built_in.pt.
+# What that commit's inference.score gave the dataset's test accounts with built_in.pt: every
+# eligible test account at the test cutoff, scored with the dataset's hub registry.
 DATASET_SCORES = {
     "S0009": 0.5007370076392473,
     "S0014": 0.5002217446308491,
@@ -134,11 +136,12 @@ def test_models_saved_before_the_restructure_score_as_they_did(name: str) -> Non
         ContextKey("Account", account, 103, cutoff_ms("2025-01-01"), saved.config.scope.id, 3)
         for account in ACCOUNTS
     ]
-    predictor = Predictor(saved, fixture_source(saved.config))
+    contexts = fixture_source(saved.config)
     try:
-        frame = predictor.predict(keys)
+        (frame,), rejected = Predictor(saved, contexts).score_keys([keys])
     finally:
-        predictor.contexts.close()
+        contexts.close()
+    assert rejected == []
     assert frame.account_id.tolist() == list(ACCOUNTS)
     for have, want in zip(frame.score.tolist(), SCORES[name], strict=True):
         assert math.isclose(have, want, rel_tol=RELATIVE), (name, have, want)
@@ -182,14 +185,23 @@ def test_the_dataset_prepared_before_the_restructure_scores_as_it_did(tmp_path: 
     shutil.copytree(FIXTURES / "dataset", dataset.root)
     saved = SavedModel.load(FIXTURES / "built_in.pt")
     assert saved.config == DEFAULT_CONFIG.with_changes(CHANGES)
-    output, rejected = tmp_path / "scores.parquet", tmp_path / "scores_rejected.txt"
+    # Every eligible test account at the test cutoff, with the dataset's hub registry.
+    manifest, accounts = load_prepared(dataset)
+    saved.check_dataset(dataset)
+    date = "2025-01-01"
+    accounts = accounts[eligible_mask(accounts, "test", date)]
     contexts = fixture_source(saved.config)
-    result = score(
-        saved, dataset, "2025-01-01", "test", output, rejected_output=rejected, contexts=contexts
-    )
-    assert result["accounts"] == 19
-    frame = pd.read_parquet(output)
-    assert frame.account_id.tolist() == list(DATASET_SCORES)
+    try:
+        predictor = Predictor(saved, contexts, hubs=load_hub_registry(dataset, manifest))
+        size = predictor.batch_size
+        frames, rejected = predictor.score_keys(
+            sample_keys(accounts.iloc[start : start + size], date, manifest)
+            for start in range(0, len(accounts), size)
+        )
+    finally:
+        contexts.close()
+    frame = pd.concat(frames, ignore_index=True)
+    assert rejected == [] and frame.account_id.tolist() == list(DATASET_SCORES)
     for account, have in zip(frame.account_id, frame.score, strict=True):
         assert math.isclose(have, DATASET_SCORES[account], rel_tol=RELATIVE), account
 

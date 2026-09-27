@@ -24,10 +24,14 @@ def test_account_schema_contract_matches_canonical_ddl() -> None:
     fields = re.findall(
         r"^\s*(?:PRIMARY_ID )?(\w+)\s+(?:STRING|BOOL|UINT|INT)", block, re.MULTILINE
     )
-    assert fields == graph_schema.ACCOUNT_STORAGE_COLUMNS
+    # The integer migration appended is_mule in graph storage. CSV/PSV input order stays
+    # unchanged; the loading job maps named columns to storage positions.
+    load = graph_schema.ACCOUNT_LOAD_COLUMNS
+    storage = [name for name in load if name != "is_mule"] + ["is_mule"]
+    assert fields == storage
     assert re.search(r"is_mule INT DEFAULT 0", block)
     loader = (GSQL_DIR / "schema/account_loading.gsql").read_text()
     columns = re.findall(r'\$"(\w+)"', loader)
-    assert columns == graph_schema.ACCOUNT_STORAGE_COLUMNS
+    assert columns == storage
     header = loader.split("DEFINE HEADER account_header =", 1)[1].split(";", 1)[0]
     assert re.findall(r'"(\w+)"', header) == graph_schema.ACCOUNT_LOAD_COLUMNS

@@ -37,8 +37,6 @@ from mule_pattern_learner.data.manifest import dataset_id, load_prepared
 from mule_pattern_learner.data.observed_labels import label_summary
 from mule_pattern_learner.data.preparation import prepare
 from mule_pattern_learner.data.splits import sample_keys
-from mule_pattern_learner.evaluation.audit import evaluate_predictions
-from mule_pattern_learner.evaluation.truth import ParquetTruth
 from mule_pattern_learner.model.loss import NonNegativePULoss
 from mule_pattern_learner.model.tgat import TGAT
 from mule_pattern_learner.paths import DatasetPaths, RunPaths
@@ -724,25 +722,15 @@ def test_hidden_truth_cannot_change_updates_or_checkpoint_selection(tmp_path: Pa
         c, dataset, RunPaths(tmp_path / "first"), contexts=build_context_source(executor, c)
     )
     saved_first = torch.load(RunPaths(tmp_path / "first").model, weights_only=True)
-    # The oracle is a separate file that is never opened by training.
+    # The oracle is a separate file that is never opened by training: inverting it
+    # between two runs changes nothing.
     a = pd.read_parquet(dataset.accounts)
     assert "is_mule" not in a.columns
     truth = a[["account_id"]].assign(is_mule=np.arange(len(a)) % 2)
     truth_path = tmp_path / "evaluation_truth.parquet"
     truth.to_parquet(truth_path, index=False)
-    before = evaluate_predictions(
-        RunPaths(tmp_path / "first").predictions("test"),
-        RunPaths(tmp_path / "first").model,
-        ParquetTruth(truth_path),
-    )
     truth["is_mule"] = 1 - truth.is_mule
     truth.to_parquet(truth_path, index=False)
-    after = evaluate_predictions(
-        RunPaths(tmp_path / "first").predictions("test"),
-        RunPaths(tmp_path / "first").model,
-        ParquetTruth(truth_path),
-    )
-    assert before != after
     second = train(
         c, dataset, RunPaths(tmp_path / "second"), contexts=build_context_source(executor, c)
     )

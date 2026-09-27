@@ -129,11 +129,6 @@ def failure_class(error: BaseException) -> str | None:
     return None
 
 
-def is_transient(error: BaseException) -> bool:
-    """True for failures worth retrying; contract and validation errors never are."""
-    return failure_class(error) is not None
-
-
 def error_summary(error: BaseException) -> str:
     """The error's type and the first 200 characters of its message, on one line."""
     message = str(getattr(error, "message", None) or error)
