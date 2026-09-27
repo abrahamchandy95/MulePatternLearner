@@ -191,7 +191,7 @@ MulePatternLearner/
 │   ├── model/              torch modules; imports contract and config only
 │   │   ├── inputs.py           ModelInputs
 │   │   ├── tgat.py             TGAT-style attention over hop-1 and hop-2 slots, summary branch, slot sum
-│   │   ├── summary.py          SummaryMLP (the no_attention and no_graph controls)
+│   │   ├── summary_mlp.py      SummaryMLP (the no_attention and no_graph controls); not summary.py, which training/ has
 │   │   ├── loss.py             NonNegativePULoss
 │   │   └── build.py            build_model(), probabilities_from_logits()
 │   ├── batching/
@@ -728,7 +728,7 @@ No experiment writes to `/tmp`.
 | `L/memory.py` | `batching/limits.py` |
 | `L/sampler.py` | `sampling/candidates.py`, `torch_sampler.py`, `cugraph_sampler.py`, `backend.py` |
 | `L/sampling.py` | `training/schedule.py`; `BatchPrefetcher` merged into `runtime/workers.py` |
-| `L/model.py` | `model/inputs.py`, `tgat.py`, `summary.py`, `build.py` (submodule creation order preserved) |
+| `L/model.py` | `model/inputs.py`, `tgat.py`, `summary_mlp.py` (module names stay unique beside `training/summary.py`), `build.py` (submodule creation order preserved) |
 | `L/training.py` | `training/trainer.py`, `objective.py`, `averaging.py`, `history.py`, `summary.py`; scoring to `inference/predictor.py` |
 | `L/checkpoint.py` | `inference/saved_model.py`, `training/checkpoint.py`; `_result_view` deleted |
 | `L/predictor.py` | `inference/predictor.py`, `inference/score_accounts.py` |
