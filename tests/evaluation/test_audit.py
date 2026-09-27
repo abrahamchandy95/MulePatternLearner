@@ -1,4 +1,4 @@
-"""The ground-truth audit and its weighted review-budget metrics."""
+"""The ground-truth audit of a run's model."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ import torch
 from mule_pattern_learner.artifacts import read_audit_scores, read_json
 from mule_pattern_learner.batching import assemble
 from mule_pattern_learner.contract.graph_schema import ContextKey
-from mule_pattern_learner.evaluation.audit import audit, audit_metrics
+from mule_pattern_learner.evaluation.audit import audit
 from mule_pattern_learner.paths import RunPaths
 from mule_pattern_learner.testing.builders import (
     CUTOFFS,
@@ -24,18 +24,6 @@ from mule_pattern_learner.testing.builders import (
 )
 from mule_pattern_learner.testing.fake_graph import FakeSource, ScoringExecutor
 from mule_pattern_learner.tigergraph.scope import TigerGraphScope
-
-TOP_KEYS = [f"{kind}_at_{pct}pct" for pct in (1, 5, 10) for kind in ("precision", "recall")]
-# Top 1% is 0.5 accounts: half of 01. Top 5% is 2.5: 01 and half of the tied block, so
-# half of its one mule. Top 10% is 5: 01 to 04.
-EXPECTED = {
-    "precision_at_1pct": 0.5 / 0.5,
-    "recall_at_1pct": 0.5 / 4,
-    "precision_at_5pct": 1.5 / 2.5,
-    "recall_at_5pct": 1.5 / 4,
-    "precision_at_10pct": 3 / 5,
-    "recall_at_10pct": 3 / 4,
-}
 
 
 def test_the_audit_scores_through_the_dataset_clock_and_hubs(
@@ -124,54 +112,3 @@ def test_the_audit_fails_on_censored_rejections(
             hubs=hub_registry(),
         )
     assert not (run.root / "audit").exists()
-
-
-def audit_frame() -> pd.DataFrame:
-    """50 population accounts: 4 mules, all sampled, and 46 non-mules behind 5 sampled ones.
-
-    Ranked by score, the population accounts and mules found so far are: 01 (1, 1), then
-    the tied block of 03 and 02 (4, 2), 04 (5, 3), 05 (9, 3), 06 (10, 4), 07 (26, 4),
-    08 (42, 4), 09 (50, 4). The block holds 3 population accounts, one of them a mule.
-    """
-    rows = [
-        ("01", 1, 1.0, 0.99),
-        ("03", 1, 1.0, 0.97),
-        ("02", 0, 0.5, 0.97),
-        ("04", 1, 1.0, 0.90),
-        ("05", 0, 0.25, 0.80),
-        ("06", 1, 1.0, 0.70),
-        ("07", 0, 0.0625, 0.50),
-        ("08", 0, 0.0625, 0.30),
-        ("09", 0, 0.125, 0.20),
-    ]
-    return pd.DataFrame(rows, columns=["account_id", "is_mule", "inclusion_probability", "score"])
-
-
-def test_capture_at_budgets_count_population_accounts() -> None:
-    frame = audit_frame()
-    metrics = audit_metrics(frame, 0.5)
-    assert metrics["estimated_population"] == 50 and metrics["weighted_prevalence"] == 0.08
-    assert {k: metrics[k] for k in TOP_KEYS} == pytest.approx(EXPECTED)
-    # Neither row order nor account IDs break the tie: either order of 03 and 02 would
-    # find 2 or 1 mules in the top 5%, and the block counts their average.
-    shuffled = frame.sample(frac=1, random_state=1).reset_index(drop=True)
-    renamed = frame.assign(account_id=frame.account_id.replace({"02": "03", "03": "02"}))
-    for variant in (shuffled, renamed, frame.drop(columns="account_id")):
-        assert {k: audit_metrics(variant, 0.5)[k] for k in TOP_KEYS} == pytest.approx(EXPECTED)
-    # Untied, the order decides: 03 first holds its mule inside the top 5%.
-    untied = frame.assign(score=frame.score.where(frame.account_id != "03", 0.98))
-    assert audit_metrics(untied, 0.5)["recall_at_5pct"] == pytest.approx(2 / 4)
-
-
-def test_capture_at_budgets_rank_scores_beyond_float32_precision() -> None:
-    frame = audit_frame()
-    # The same ranking squeezed within 1e-9 of 1, where float32 rounds every score to 1.
-    near_one = frame.assign(score=1 - 1e-9 * (1 - frame.score))
-    assert (near_one.score.astype(np.float32) == 1).all()
-    assert {k: audit_metrics(near_one, 0.5)[k] for k in TOP_KEYS} == pytest.approx(EXPECTED)
-
-
-def test_capture_at_budgets_without_positives_are_zero() -> None:
-    frame = audit_frame().assign(is_mule=0)
-    metrics = audit_metrics(frame, 0.5)
-    assert all(metrics[k] == 0 for k in TOP_KEYS) and metrics["average_precision"] is None
