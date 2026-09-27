@@ -1,0 +1,373 @@
+"""The streaming context source: statuses, hop pools, LRU, concurrency, bisection, spot checks."""
+
+# Tests inspect transport internals (in-flight map, cadence, sessions) on purpose.
+# pyright: reportPrivateUsage=false
+
+from __future__ import annotations
+
+from collections import Counter
+from copy import deepcopy
+from dataclasses import replace
+from pathlib import Path
+import threading
+import time
+from typing import Any, cast
+
+import numpy as np
+import pytest
+from pyTigerGraph.common.exception import TigerGraphException
+
+from mule_pattern_learner.batching.assemble import make_live_batch
+from mule_pattern_learner.contract.feature_groups import FeaturePlan
+from mule_pattern_learner.contract.graph_schema import ContextKey
+from mule_pattern_learner.data import contexts
+from mule_pattern_learner.data.contexts import StreamingContextSource
+from mule_pattern_learner.reference.batch_features import node_features
+from mule_pattern_learner.testing.builders import (
+    DEFAULT_SPLIT_PLAN,
+    PLAN,
+    SAMPLER,
+    SMALL_SAMPLER,
+    context,
+    context_row,
+    event,
+    message,
+    query_context_batch,
+    root,
+)
+from mule_pattern_learner.testing.fake_connection import FakeConn, executor
+from mule_pattern_learner.testing.fake_graph import ContextServer, FakeExecutor
+from mule_pattern_learner.tigergraph.context_query import (
+    ContextTimeoutError,
+    query_context_split,
+    validate_context,
+)
+from mule_pattern_learner.tigergraph.executor import ServerTimeoutError
+
+
+def test_per_request_failures_become_none_and_are_counted() -> None:
+    keys = [root(i) for i in range(5)]
+    server = ContextServer({keys[1]: "history_capacity_exceeded", keys[3]: "missing_entity"})
+    store = StreamingContextSource(server, plan=PLAN, sampler=SAMPLER, request_batch_size=16)
+    rows = store.fetch(keys + [keys[1]])
+    assert [row is None for row in rows] == [False, True, False, True, False, True]
+    assert store.rejections == Counter({"history_capacity_exceeded": 1, "missing_entity": 1})
+    assert rows[0] is not None and rows[0]["node_id"] == keys[0].node_id
+    # Cached rejections are served without another call and counted again.
+    assert store.fetch([keys[3]]) == [None] and store.query_calls == 1
+    assert store.rejections["missing_entity"] == 2
+    assert query_context_batch(server, keys[:2], plan=PLAN, sampler=SAMPLER)[1] is None
+    # The same counts per hop: roots (hop 1) and children (hop 2) are reported apart.
+    assert store.fetch([keys[1]], hop=2) == [None]
+    assert store.rejections_by_hop == {
+        1: Counter({"history_capacity_exceeded": 1, "missing_entity": 2}),
+        2: Counter({"history_capacity_exceeded": 1}),
+    }
+    assert sum(store.rejections_by_hop.values(), Counter()) == store.rejections
+    store.close()
+
+
+def test_hop_pools_and_flags_are_sent_and_lru_is_keyed_by_hop() -> None:
+    plan = FeaturePlan(("entity_meta", "message_core", "time_encoding", "rolling_windows"), "split")
+    server = ContextServer()
+    store = StreamingContextSource(server, plan=plan, sampler=SAMPLER, capacity=8)
+    key = root(0)
+    store.fetch([key], hop=1)
+    store.fetch([key], hop=2)
+    store.fetch([key], hop=1)
+    assert store.query_calls == 2 and len(server.calls) == 2
+    first, second = server.calls
+    assert {k: first[k] for k in SAMPLER.query_params(1)} == SAMPLER.query_params(1)
+    assert {k: second[k] for k in SAMPLER.query_params(2)} == SAMPLER.query_params(2)
+    assert first["include_rolling_windows"] and not second["include_rolling_windows"]
+    assert {k for k in first if k.startswith("include_")} == set(plan.query_flags(1))
+    assert (1, key) in store.memory and (2, key) in store.memory
+    with pytest.raises(ValueError, match="hop"):
+        store.fetch([key], hop=3)
+    store.close()
+
+
+def test_lru_is_bounded_and_close_releases_it() -> None:
+    store = StreamingContextSource(ContextServer(), plan=PLAN, sampler=SAMPLER, capacity=8)
+    for start in range(0, 64, 16):
+        store.fetch([root(i) for i in range(start, start + 16)])
+        assert len(store.memory) <= 8
+    # Recency follows key order, not request completion order, and rows carry no
+    # request position, so a refetch in another grouping returns identical rows.
+    keys = [root(i) for i in range(100, 180)]
+    rows = store.fetch(keys)
+    assert list(store.memory) == [(1, key) for key in keys[-8:]]
+    calls = store.query_calls
+    assert store.fetch(keys[-8:]) == rows[-8:] and store.query_calls == calls
+    assert store.fetch(keys[:2]) == rows[:2] and "request_index" not in (rows[0] or {})
+    store.close()
+    assert not store.memory
+    with pytest.raises(RuntimeError, match="closed"):
+        store.fetch([root(0)])
+
+
+def test_concurrent_fetches_share_requests_and_respect_concurrency() -> None:
+    server = ContextServer(delay=0.01)
+    store = StreamingContextSource(
+        server, plan=PLAN, sampler=SAMPLER, capacity=4096, request_batch_size=4, concurrency=3
+    )
+    shared = [root(i) for i in range(40)]
+    results: dict[int, list[dict[str, Any] | None]] = {}
+    errors: list[BaseException] = []
+
+    def worker(n: int) -> None:
+        try:
+            keys = shared[n : n + 20] + [root(1000 + n)]
+            rows = store.fetch(keys, hop=1 + n % 2)
+            assert [(row or {}).get("node_id") for row in rows] == [key.node_id for key in keys]
+            results[n] = rows
+        except BaseException as error:  # pragma: no cover - surfaced below
+            errors.append(error)
+
+    threads = [threading.Thread(target=worker, args=(n,)) for n in range(12)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert not errors and len(results) == 12
+    assert server.peak <= 3
+    assert max(server.requested.values()) == 1  # each (hop, key) requested once
+    assert store.query_calls == len(server.calls)
+    store.close()
+
+
+def test_failed_request_propagates_to_every_waiting_fetch() -> None:
+    class Failing(ContextServer):
+        def run(self, name: str, params: dict[str, Any], **_: Any) -> list[dict[str, Any]]:
+            time.sleep(0.05)
+            raise ValueError("contract violation")
+
+    store = StreamingContextSource(Failing(), plan=PLAN, sampler=SAMPLER, concurrency=2)
+    errors: list[BaseException] = []
+
+    def worker() -> None:
+        try:
+            store.fetch([root(i) for i in range(8)])
+        except ValueError as error:
+            errors.append(error)
+
+    threads = [threading.Thread(target=worker) for _ in range(3)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert len(errors) == 3 and not store._inflight
+    store.close()
+
+
+def test_close_without_wait_cancels_queued_requests_and_leaves_daemon_workers() -> None:
+    release = threading.Event()
+
+    entered: list[int] = []
+
+    class Blocking(ContextServer):
+        def run(self, name: str, params: dict[str, Any], **_: Any) -> list[dict[str, Any]]:
+            entered.append(len(params["node_ids"]))
+            release.wait(10)
+            return super().run(name, params)
+
+    server = Blocking()
+    store = StreamingContextSource(
+        server, plan=PLAN, sampler=SAMPLER, request_batch_size=1, concurrency=1
+    )
+    started = threading.Event()
+    errors: list[BaseException] = []
+
+    def fetch() -> None:
+        started.set()
+        try:
+            store.fetch([root(i) for i in range(4)])
+        except BaseException as error:
+            errors.append(error)
+
+    fetcher = threading.Thread(target=fetch, daemon=True)
+    fetcher.start()
+    started.wait(5)
+    deadline = time.monotonic() + 5
+    while not entered and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert entered == [1]  # one request in flight, the others wait in the window
+    workers = [t for t in threading.enumerate() if t.name.startswith("temporal-context")]
+    assert workers and all(t.daemon for t in workers)
+    began = time.monotonic()
+    store.close(wait=False)
+    assert time.monotonic() - began < 1.0  # did not wait for the blocked request
+    release.set()
+    fetcher.join(5)
+    assert not fetcher.is_alive() and errors  # the fetch fails; nothing new is queued
+    assert entered == [1]
+    with pytest.raises(RuntimeError, match="closed"):
+        store.fetch([root(9)])
+    store.close()  # a second close waits for the (finished) workers and is harmless
+
+
+def test_timed_out_blocks_are_bisected_and_a_single_slow_key_is_fatal() -> None:
+    class Slow(ContextServer):
+        """Times out on any request with more than `limit` keys or with a slow key."""
+
+        def __init__(self, limit: int, slow_ids: set[str]) -> None:
+            super().__init__()
+            self.limit, self.slow_ids = limit, slow_ids
+            self.sizes: list[int] = []
+
+        def run(self, name: str, params: dict[str, Any], **_: Any) -> list[dict[str, Any]]:
+            with self.lock:
+                self.sizes.append(len(params["node_ids"]))
+            if len(params["node_ids"]) > self.limit or self.slow_ids & set(params["node_ids"]):
+                raise ServerTimeoutError("temporal_training_context timed out")
+            return super().run(name, params)
+
+    keys = [root(i) for i in range(8)]
+    server = Slow(limit=2, slow_ids=set())
+    store = StreamingContextSource(server, plan=PLAN, sampler=SAMPLER, request_batch_size=8)
+    rows = store.fetch(keys)
+    assert [row and row["node_id"] for row in rows] == [key.node_id for key in keys]
+    assert server.sizes == [8, 4, 2, 2, 4, 2, 2]
+    assert store.query_calls == 4 and store.diagnostics["timeout_splits"] == 3
+    store.close()
+    server = Slow(limit=8, slow_ids={keys[5].node_id})
+    store = StreamingContextSource(server, plan=PLAN, sampler=SAMPLER, request_batch_size=8)
+    with pytest.raises(ContextTimeoutError, match="A0005") as caught:
+        store.fetch(keys)
+    assert caught.value.key == keys[5] and caught.value.hop == 1
+    assert not store._inflight
+    store.close()
+    # Through the real executor a multi-key block is split at once (no repeat of the
+    # timed-out request) and a single key gets one retry before the fatal error.
+    responder = ContextServer()
+    timeout = TigerGraphException("Query timeout exceeded", "REST-3002")
+
+    def answer(name: str, params: dict[str, Any], kwargs: dict[str, Any]) -> Any:
+        return responder.run(name, params)
+
+    conn = FakeConn([timeout, answer, answer])
+    rows, calls = query_context_split(executor(conn), keys[:2], plan=PLAN, sampler=SAMPLER)
+    assert calls == 2 and [len(call[1]["node_ids"]) for call in conn.calls] == [2, 1, 1]
+    conn = FakeConn([timeout, timeout, answer])
+    with pytest.raises(ContextTimeoutError):
+        query_context_split(executor(conn), keys[:1], plan=PLAN, sampler=SAMPLER)
+    assert len(conn.calls) == 2
+
+
+def test_encoding_spot_checks_follow_the_cadence_and_are_stripped() -> None:
+    server = ContextServer()
+    store = StreamingContextSource(
+        server, plan=PLAN, sampler=SAMPLER, request_batch_size=1, concurrency=1,
+        encoding_check_every=3,
+    )  # fmt: skip
+    rows = store.fetch([root(i) for i in range(7)])
+    assert [call["emit_encodings"] for call in server.calls] == [
+        True, False, False, True, False, False, True,
+    ]  # fmt: skip
+    assert store.diagnostics["encoding_checks"] == 3
+    assert all(row and row["age_encoding"] == {} == row["gap_encoding"] for row in rows)
+    store.close()
+
+
+def test_corrupted_or_missing_spot_check_vectors_fail() -> None:
+    for server, expected in (
+        (ContextServer(corrupt=True), "shared basis"),
+        (ContextServer(omit_encodings=True), "do not cover"),
+    ):
+        store = StreamingContextSource(server, plan=PLAN, sampler=SAMPLER)
+        with pytest.raises(ValueError, match=expected):
+            store.fetch([root(0)])
+        store.close()
+    key = root(0)
+    row = context_row(key, [event(990, key)], encodings=True)
+    validate_context(key, row, PLAN, SAMPLER)  # optional vectors are verified when present
+    row["gap_encoding"]["payment_out:E990"][0] += 0.5
+    with pytest.raises(ValueError, match="encoding"):
+        validate_context(key, row, PLAN, SAMPLER)
+
+
+def test_transport_settings_come_from_the_training_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen = {}
+    monkeypatch.setattr(contexts, "verify_frozen_source", lambda executor, manifest: None)
+
+    class Executor:
+        def __init__(self, **kwargs: Any) -> None:
+            seen.update(kwargs)
+
+    monkeypatch.setattr("mule_pattern_learner.tigergraph.executor.TigerGraphExecutor", Executor)
+    prepared = {"dataset_id": "d", "scope_id": "scope"}
+    manifest = {"config": prepared, "source": {}}
+    training = {
+        **prepared,
+        "request_batch_size": 32,
+        "query_concurrency": 4,
+        "context_lru_capacity": 1024,
+        "encoding_check_every": 8,
+        "max_query_attempts": 3,
+        "max_outage_s": 120,
+    }
+    store = cast(
+        StreamingContextSource, contexts.open_context_source(Path("unused"), manifest, training)
+    )
+    assert seen == {"max_attempts": 3, "max_outage_s": 120}
+    assert (store.request_batch_size, store.concurrency, store.capacity) == (32, 4, 1024)
+    assert store._cadence.every == 8
+    store.close()
+    changed = {**training, "sampler": {"recent": 5}}
+    with pytest.raises(ValueError, match="pools differ"):
+        contexts.open_context_source(Path("unused"), manifest, changed)
+
+
+def test_streaming_source_serves_repeats_from_its_bounded_lru() -> None:
+    keys = [ContextKey("Account", str(i), 100, 1000) for i in range(80)]
+    memory = StreamingContextSource(FakeExecutor({}), capacity=3)
+    rows = memory.fetch(keys)
+    assert len(memory.memory) == 3
+    calls = memory.query_calls
+    assert memory.fetch(keys[-3:]) == rows[-3:]
+    assert memory.query_calls == calls
+
+
+def test_hops_use_their_own_pools_and_only_spot_checks_carry_encodings() -> None:
+    root = ContextKey("Account", "root", 100, 1000)
+    many = [message(99 - i, 990 - 10 * i, root, node_id=f"p{i}") for i in range(12)]
+    executor = FakeExecutor({root: context(root, many)})
+    with StreamingContextSource(
+        executor, plan=DEFAULT_SPLIT_PLAN, sampler=SMALL_SAMPLER, encoding_check_every=1000
+    ) as source:
+        batch = make_live_batch(
+            source,
+            [root],
+            fanouts=(8, 2),
+            plan=DEFAULT_SPLIT_PLAN,
+            sampler=SMALL_SAMPLER,
+            mode="train",
+        )
+        assert source.diagnostics["encoding_checks"] == 1
+    # The root pool returns 4 + 1 + 1 per payment relation; resampling keeps 3 of them.
+    assert batch["first_mask"][0].sum() == 3
+    roots_pool = (4, 1, 1, 1, 2048)
+    children_pool = (2, 0, 0, 0, 2048)
+    assert set(executor.pools) == {roots_pool, children_pool}
+    assert executor.encoded_requests == 1
+    first = next(params for name, params in executor.calls if name == "temporal_training_context")
+    assert first["emit_encodings"] is True and "include_hub_indicator" not in first
+    children = [p for n, p in executor.calls if n == "temporal_training_context"][1:]
+    assert all(not p["emit_encodings"] and not p["include_pair_window_counts"] for p in children)
+
+
+def test_same_context_in_two_scopes_or_hops_is_never_shared() -> None:
+    key = ContextKey("Account", "a", 100, 1000, "strict", 1)
+    executor = FakeExecutor()
+    store = StreamingContextSource(executor, plan=DEFAULT_SPLIT_PLAN, sampler=SMALL_SAMPLER)
+    store.fetch([key], hop=1)
+    store.fetch([key], hop=2)
+    store.fetch([replace(key, visibility_phase=2)], hop=1)
+    store.fetch([key], hop=1)
+    assert store.query_calls == 3
+    store.close()
+    bad = deepcopy(context(key))
+    bad["features"]["history_withheld"] = 1
+    with pytest.raises(ValueError, match="Unknown node feature"):
+        validate_context(key, bad, DEFAULT_SPLIT_PLAN, SMALL_SAMPLER)
+    assert np.isfinite(node_features(context(key), DEFAULT_SPLIT_PLAN)).all()

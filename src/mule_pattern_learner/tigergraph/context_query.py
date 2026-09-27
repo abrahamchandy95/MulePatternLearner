@@ -307,21 +307,3 @@ def query_context_split(
         right, right_calls = query_context_split(executor, batch[middle:], **options)
         return left + right, left_calls + right_calls
     return rows, 1
-
-
-def query_context_batch(
-    executor: QueryExecutor,
-    batch: list[ContextKey],
-    *,
-    plan: FeaturePlan = FeaturePlan(),
-    sampler: SamplerPlan = SamplerPlan(),
-    hop: int = 1,
-    emit_encodings: bool = False,
-) -> list[dict[str, Any] | None]:
-    """Validated contexts in key order; None where TigerGraph rejected one request."""
-    return [
-        row if row.get("status") == "ok" else None
-        for row in query_context_rows(
-            executor, batch, plan=plan, sampler=sampler, hop=hop, emit_encodings=emit_encodings
-        )
-    ]
