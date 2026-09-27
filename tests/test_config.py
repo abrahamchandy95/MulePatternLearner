@@ -11,11 +11,11 @@ from mule_pattern_learner.config import (
     DEFAULT_RUN,
     OPERATIONAL_DEFAULTS,
     LiveConfig,
+    load_config,
     run_config,
     validate_config,
 )
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
-from mule_pattern_learner.paths import load_config
 from mule_pattern_learner.testing.builders import unit_config
 
 

@@ -13,8 +13,10 @@ from __future__ import annotations
 
 import copy
 from datetime import datetime
+import json
 from pathlib import Path
 import re
+import tomllib
 from typing import Annotated, Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
@@ -413,6 +415,25 @@ def merged(base: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def load_config(path: Path) -> dict[str, Any]:
+    """Read a TOML or JSON table as written, without any schema.
+
+    Training reads override files through run_config, which merges them into the
+    built-in settings and validates the result.
+    """
+    if path.suffix.lower() == ".toml":
+        with path.open("rb") as stream:
+            value: object = tomllib.load(stream)
+    elif path.suffix.lower() == ".json":
+        value = json.loads(path.read_text())
+    else:
+        value = None
+    if not isinstance(value, dict):
+        raise ValueError("Configuration must be a TOML table or a local JSON object")
+    config: dict[str, Any] = value
+    return config
+
+
 def run_config(path: Path | None = None) -> dict[str, Any]:
     """DEFAULT_RUN with the keys of an optional TOML/JSON overrides file, validated.
 
@@ -422,7 +443,5 @@ def run_config(path: Path | None = None) -> dict[str, Any]:
     """
     config = copy.deepcopy(DEFAULT_RUN)
     if path is not None:
-        from .paths import load_config
-
         config = merged(config, load_config(path))
     return validate_config(config)
