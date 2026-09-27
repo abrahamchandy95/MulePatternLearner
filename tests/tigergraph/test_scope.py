@@ -74,7 +74,7 @@ def test_existing_scope_must_have_the_configured_unowned_policy(tmp_path: Path) 
 
 
 def test_scope_policy_query_prints_what_the_client_reads() -> None:
-    text = (REPOSITORY_ROOT / "gsql/temporal/training_scope.gsql").read_text()
+    text = (REPOSITORY_ROOT / "gsql/queries/training_scope.gsql").read_text()
     queries = gsql_text.definitions(text)
     assert scope.SCOPE_POLICY_QUERY in queries
     query = queries[scope.SCOPE_POLICY_QUERY]

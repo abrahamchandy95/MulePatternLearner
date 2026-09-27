@@ -120,7 +120,7 @@ def main() -> None:
         started = time.perf_counter()
         if args.interpreted:
             # The repository text runs under INTERPRET with only its header swapped.
-            query = as_interpreted(Path("gsql/temporal/training_context.gsql").read_text())
+            query = as_interpreted(Path("gsql/queries/training_context.gsql").read_text())
             row = checked_rows(executor.client.conn.runInterpretedQuery(query, params))[0]
         else:
             row = checked_rows(executor.run(args.query_name, params))[0]

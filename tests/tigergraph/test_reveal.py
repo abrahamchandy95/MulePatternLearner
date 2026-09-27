@@ -15,7 +15,7 @@ from mule_pattern_learner.tigergraph.gsql_text import definitions, repository_qu
 from mule_pattern_learner.tigergraph.installer import TRAINING_QUERY_FILES
 
 ROOT = Path(__file__).resolve().parents[2]
-REVEAL_FILE = ROOT / "gsql/temporal/label_reveal.gsql"
+REVEAL_FILE = ROOT / "gsql/queries/label_reveal.gsql"
 CLEAN = {
     "known_labels": 752623,
     "true_mules": 233,
@@ -143,8 +143,8 @@ def test_reveal_queries_are_installed_with_training_and_read_truth_only_there() 
     assert "z.label_available_ts_ms + (report_days + notify_days)" in text
     # Feature and preparation queries never read ground truth.
     for relative in (
-        "gsql/temporal/training_context.gsql",
-        "gsql/temporal/hub_registry.gsql",
-        "gsql/temporal/training_cutoffs.gsql",
+        "gsql/queries/training_context.gsql",
+        "gsql/queries/hub_accounts.gsql",
+        "gsql/queries/split_cutoffs.gsql",
     ):
         assert "is_mule" not in (ROOT / relative).read_text()

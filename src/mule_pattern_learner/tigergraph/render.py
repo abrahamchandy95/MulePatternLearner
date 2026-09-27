@@ -1,6 +1,6 @@
 """Render the temporal context query from the shared relation/window contract.
 
-The generated text is the single source of `gsql/temporal/training_context.gsql`
+The generated text is the single source of `gsql/queries/training_context.gsql`
 (re-render with `scripts/render_queries.py`). It runs unchanged
 through INTERPRET (see `as_interpreted`), so parity checks never need an install.
 
@@ -892,7 +892,7 @@ MESSAGES = """    FOREACH item IN @@events DO
 
 
 def render_context_query() -> str:
-    """The exact text of gsql/temporal/training_context.gsql."""
+    """The exact text of gsql/queries/training_context.gsql."""
     defaults = FeaturePlan(DEFAULT_FLAG_GROUPS, "split").query_flags()
     flags = ",\n  ".join(f"BOOL {name} = {str(value).upper()}" for name, value in defaults.items())
     parts = [_header(flags), _root_catalog(), _request_setup()]

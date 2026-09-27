@@ -56,13 +56,16 @@ def query_hashes() -> dict[str, str]:
 
 
 def changed_query_files(manifest: dict[str, Any]) -> list[str]:
-    """Query files preparation uses whose repository text differs from the one it used.
+    """Query files preparation uses whose text is none of the texts it used.
 
-    A recorded file that preparation no longer uses cannot affect the cohort, so it is
-    not compared: retiring a query file leaves existing cohorts usable.
+    The manifest records each file's digest by its path, and files are compared by
+    digest alone: a file that moved with its text unchanged still matches, as every
+    query file did in the layered restructure. A recorded file that preparation no
+    longer uses cannot affect the cohort, so it is not compared: retiring a query file
+    leaves existing cohorts usable.
     """
-    recorded = manifest.get("source", {}).get("query_hashes", {})
-    return sorted(name for name, current in query_hashes().items() if recorded.get(name) != current)
+    recorded = set(manifest.get("source", {}).get("query_hashes", {}).values())
+    return sorted(name for name, current in query_hashes().items() if current not in recorded)
 
 
 def check_query_hashes(manifest: dict[str, Any], dataset: Path) -> None:

@@ -1,33 +1,5 @@
 USE GRAPH Mule_Pattern_Learner
 
-/* Oracle supervision export, deliberately separate from feature queries.
-   A page is bounded; subsequent pages use the last returned account_id. */
-CREATE OR REPLACE QUERY temporal_get_account_supervision(
-  STRING after_id = "", INT batch_size = 1000
-) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
-  IF batch_size < 1 OR batch_size > 10000 THEN
-    PRINT "invalid_batch_size" AS status;
-    RETURN;
-  END;
-  result = SELECT a FROM Account:a
-    WHERE a.id > after_id
-    ORDER BY a.id ASC LIMIT batch_size;
-  PRINT "ok" AS status;
-  PRINT result[
-    result.id AS account_id,
-    result.is_mule AS is_mule,
-    result.mule_label_known AS mule_label_known,
-    result.is_mule_masked AS is_mule_masked,
-    result.pu_label AS pu_label,
-    result.mule_label_effective_seq AS mule_label_effective_seq,
-    result.mule_label_effective_ts_ms AS mule_label_effective_ts_ms,
-    result.mule_label_available_seq AS mule_label_available_seq,
-    result.mule_label_available_ts_ms AS mule_label_available_ts_ms,
-    result.mule_ring_id AS mule_ring_id,
-    result.mule_label_source AS mule_label_source
-  ] AS accounts;
-}
-
 /* Validate the raw load/mask contract. All counters are supervision audits,
    never model features. Clock visibility must additionally be checked at each
    training cutoff, even for an account whose current pu_label is 1. */

@@ -47,12 +47,12 @@ def signature(path: str, name: str) -> frozenset[str]:
     return frozenset(parameter_names(definitions((REPOSITORY_ROOT / path).read_text())[name]))
 
 
-CONTEXT_PARAMETERS = signature("gsql/temporal/training_context.gsql", CONTEXT_QUERY)
-HUB_PARAMETERS = signature("gsql/temporal/hub_registry.gsql", HUB_QUERY)
+CONTEXT_PARAMETERS = signature("gsql/queries/training_context.gsql", CONTEXT_QUERY)
+HUB_PARAMETERS = signature("gsql/queries/hub_accounts.gsql", HUB_QUERY)
 SCOPE_POLICY_QUERY = "temporal_scope_policy"
-SCOPE_POLICY_PARAMETERS = signature("gsql/temporal/training_scope.gsql", SCOPE_POLICY_QUERY)
+SCOPE_POLICY_PARAMETERS = signature("gsql/queries/training_scope.gsql", SCOPE_POLICY_QUERY)
 SCOPE_POPULATION_QUERY = "temporal_scope_population"
-SCOPE_POPULATION_PARAMETERS = signature("gsql/temporal/training_scope.gsql", SCOPE_POPULATION_QUERY)
+SCOPE_POPULATION_PARAMETERS = signature("gsql/queries/training_scope.gsql", SCOPE_POPULATION_QUERY)
 
 
 def pooled(messages: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:

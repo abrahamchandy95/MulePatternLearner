@@ -1,7 +1,7 @@
 """Reveal the known mules in the graph once, through the Account label contract.
 
 A fresh PhantomLedger load masks every mule, so training would have no positives.
-The first run calls temporal_reveal_mule_labels (gsql/temporal/label_reveal.gsql),
+The first run calls temporal_reveal_mule_labels (gsql/queries/label_reveal.gsql),
 which simulates when a bank would have discovered each mule (victim reports, network
 tracing, monitoring; see docs/label_reveal.md) and reveals up to `reveal_per_split`
 discovered mules per split. Training then reads only the revealed positives and

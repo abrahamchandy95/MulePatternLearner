@@ -15,23 +15,25 @@ from .gsql_text import definitions, normalized, parameter_names, repository_quer
 
 # The queries preparation runs; a prepared dataset records their source hashes.
 QUERY_FILES = (
-    "gsql/features/temporal_fourier64.gsql",
-    "gsql/temporal/training_context.gsql",
-    "gsql/temporal/training_scope.gsql",
-    "gsql/temporal/training_cutoffs.gsql",
-    "gsql/temporal/hub_registry.gsql",
+    "gsql/queries/fourier64.gsql",
+    "gsql/queries/training_context.gsql",
+    "gsql/queries/training_scope.gsql",
+    "gsql/queries/split_cutoffs.gsql",
+    "gsql/queries/hub_accounts.gsql",
 )
-# Preparation queries plus the label contract: the oracle audit export/validation and the
-# one-time reveal job (the first run reveals known mules; see reveal.py).
+# Preparation queries plus the oracle export for audits, the label-contract validation
+# and the one-time reveal job (the first run reveals known mules; see reveal.py).
 TRAINING_QUERY_FILES = (
     *QUERY_FILES,
-    "gsql/temporal/account_supervision.gsql",
-    "gsql/temporal/label_reveal.gsql",
+    "gsql/evaluation/ground_truth.gsql",
+    "gsql/queries/label_contract.gsql",
+    "gsql/queries/label_reveal.gsql",
 )
-# Parity tools for the persisted pair encodings; training never calls them.
+# Analytics queries: parity tools for the persisted pair encodings. Training never calls
+# them, so they are installed only when asked for (install --include-optional).
 OPTIONAL_QUERY_FILES = (
-    "gsql/features/zelle_pair_time64.gsql",
-    "gsql/features/payment_pair_time64.gsql",
+    "gsql/analytics/zelle_pair_gaps.gsql",
+    "gsql/analytics/payment_pair_gaps.gsql",
 )
 BUILTIN_ENDPOINT_PARAMETERS = frozenset({"query", "read_committed"})
 INSTALL_DEADLINE_S = 45 * 60.0
@@ -167,7 +169,7 @@ def install(
     logs: dict[str, Any] = {}
     schema = conn.getSchema(force=True)
     if "Temporal_Training_Scope" not in {v["Name"] for v in schema["VertexTypes"]}:
-        migration = REPOSITORY_ROOT / "gsql/schema/migrations/temporal_training_scope.gsql"
+        migration = REPOSITORY_ROOT / "gsql/schema/scope_vertex.gsql"
         result = str(conn.gsql(migration.read_text()))
         if "Local schema change succeeded" not in result:
             raise RuntimeError(result)

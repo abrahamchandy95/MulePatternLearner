@@ -16,7 +16,7 @@ from mule_pattern_learner.paths import REPOSITORY_ROOT
 from mule_pattern_learner.testing.fake_connection import executor
 from mule_pattern_learner.tigergraph import gsql_text, installer
 
-INSTALL_FILES = ("gsql/features/temporal_fourier64.gsql", "gsql/temporal/training_cutoffs.gsql")
+INSTALL_FILES = ("gsql/queries/fourier64.gsql", "gsql/queries/split_cutoffs.gsql")
 
 
 def endpoint(parameters: set[str], enabled: bool = True) -> dict[str, Any]:
@@ -27,7 +27,7 @@ def endpoint(parameters: set[str], enabled: bool = True) -> dict[str, Any]:
 
 
 def test_verify_sources_requires_matching_text_and_enabled_endpoints() -> None:
-    files = ("gsql/temporal/training_cutoffs.gsql", "gsql/features/temporal_fourier64.gsql")
+    files = ("gsql/queries/split_cutoffs.gsql", "gsql/queries/fourier64.gsql")
     expected: dict[str, str] = {}
     for path in files:
         expected.update(gsql_text.definitions((REPOSITORY_ROOT / path).read_text()))

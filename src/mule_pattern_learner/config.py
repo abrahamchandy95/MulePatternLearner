@@ -52,7 +52,7 @@ OPERATIONAL_DEFAULTS: dict[str, Any] = {
 DEFAULT_RUN: dict[str, Any] = {
     "scope_id": "strict_mule_v2",
     # Known mules the first run reveals per split, among those a bank would have
-    # discovered before the split's cutoff (gsql/temporal/label_reveal.gsql).
+    # discovered before the split's cutoff (gsql/queries/label_reveal.gsql).
     "reveal_per_split": 20,
     "evaluation_unlabeled_limit": 2000,
     "fanouts": [16, 4],
