@@ -111,6 +111,13 @@ SAVED_VALUES: dict[str, dict[object, object]] = {"architecture": {"split": "tgat
 # Saved settings whose null value took a default: the reveal's built-in budget, and the
 # training seed for the reservoir seed and the reveal salt.
 SEEDED_DEFAULTS = frozenset({"reveal_per_split", "reveal_salt", "cohort_seed"})
+# Saved settings that the old code filled in when a configuration left them absent or
+# null, with values the built-in run does not share, and that nothing else guards: its
+# fan-outs were (8, 4) and its sampler pools its own. A configuration without either is
+# refused. Other settings the old code filled in differently are guarded (strict
+# weight loading refuses another slot sum or architecture, the input fingerprint other
+# feature groups) or act only in training (the weight average and the positive weight).
+REQUIRED_SETTINGS = ("fanouts", "sampler")
 RETIRED_VALUES: dict[str, object] = {
     "context_storage": "stream",
     "evaluation_protocol": "strict_inductive",
@@ -135,13 +142,15 @@ def _flat(table: dict[str, Any], prefix: str = "") -> dict[str, Any]:
 def saved_run_config(saved: dict[str, Any]) -> RunConfig:
     """The RunConfig of a saved configuration: RunConfig.to_dict(), or the old flat table.
 
-    An old table goes through SAVED_SETTINGS, with the values SAVED_VALUES renames,
-    and what it leaves out takes the value the old code gave it: a setting it leaves absent is the built-in run's; a
-    [sampler] table's absent pool keys are those of PoolPlan() and its children pool
-    is the roots pool without associations, changed by [sampler.children]; an absent
-    or null reservoir seed and reveal salt are the training seed, and a null reveal
-    budget is the built-in one. The variant "tabular" is the summary architecture and
-    "no_fourier" the feature groups without time_encoding.
+    An old table goes through SAVED_SETTINGS, with the values SAVED_VALUES renames. It
+    must hold the REQUIRED_SETTINGS, which every model the old code saved does. A
+    setting it leaves absent takes the built-in run's value, except where the old code
+    gave it another rule, which this follows: a [sampler] table's absent pool keys are
+    those of PoolPlan() and its children pool is the roots pool without associations,
+    changed by [sampler.children]; an absent or null reservoir seed and reveal salt are
+    the training seed, and a null reveal budget is the built-in one. The variant
+    "tabular" is the summary architecture and "no_fourier" the feature groups without
+    time_encoding.
     """
     if set(saved) == {field.name for field in fields(RunConfig)}:
         return RunConfig.from_dict(saved)
@@ -153,6 +162,12 @@ def saved_run_config(saved: dict[str, Any]) -> RunConfig:
         if name in flat and flat[name] != value:
             remains = "" if value is None else f": only {value!r} remains"
             raise ValueError(f"{name} = {flat[name]!r} is no longer supported{remains}")
+    missing = [name for name in REQUIRED_SETTINGS if saved.get(name) is None]
+    if missing:
+        raise ValueError(
+            f"The saved configuration names no {' or '.join(missing)}; the code that saved "
+            "it assumed values other than the built-in run's, so it cannot be scored as trained"
+        )
     table: dict[str, Any] = {}
     for name, value in flat.items():
         target = SAVED_SETTINGS[name]
