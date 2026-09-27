@@ -34,10 +34,11 @@ from mule_pattern_learner.testing.builders import (
     fake_context,
     synthetic_row,
 )
+from mule_pattern_learner.tigergraph.context_query import CONTEXT_QUERY
 from mule_pattern_learner.tigergraph.gsql_text import definitions, parameter_names
+from mule_pattern_learner.tigergraph.hubs import HUB_QUERY
+from mule_pattern_learner.tigergraph.scope import SCOPE_POLICY_QUERY
 
-CONTEXT_QUERY = "temporal_training_context"
-HUB_QUERY = "temporal_hub_registry"
 PAYMENT_RELATIONS = frozenset(RELATIONS[:4])
 MAX_REQUEST_KEYS = 64
 
@@ -49,7 +50,6 @@ def signature(path: str, name: str) -> frozenset[str]:
 
 CONTEXT_PARAMETERS = signature("gsql/queries/training_context.gsql", CONTEXT_QUERY)
 HUB_PARAMETERS = signature("gsql/queries/hub_accounts.gsql", HUB_QUERY)
-SCOPE_POLICY_QUERY = "temporal_scope_policy"
 SCOPE_POLICY_PARAMETERS = signature("gsql/queries/training_scope.gsql", SCOPE_POLICY_QUERY)
 SCOPE_POPULATION_QUERY = "temporal_scope_population"
 SCOPE_POPULATION_PARAMETERS = signature("gsql/queries/training_scope.gsql", SCOPE_POPULATION_QUERY)
