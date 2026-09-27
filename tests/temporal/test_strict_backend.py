@@ -95,7 +95,7 @@ def test_new_account_scoring_needs_neither_training_dataset_nor_labels(tmp_path:
                 "dropout": 0.0,
                 "batch_size": 4,
                 "fanouts": [2, 2],
-                "per_relation": 1,
+                "sampler": {"recent": 1},
             },
         },
         checkpoint,

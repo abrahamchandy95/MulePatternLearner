@@ -284,7 +284,7 @@ def merged_slots(engine: CuGraphSampler, sampler: SamplerPlan, device: str = "cu
     )
 
 
-def live(config_path: Path | None, roots: int, sampler_override: dict[str, Any]) -> None:
+def live(config_path: Path | None, roots: int) -> None:
     from mule_pattern_learner.device import torch_runtime
     from mule_pattern_learner.temporal.live.config_schema import fanouts as configured_fanouts
     from mule_pattern_learner.temporal.live.config_schema import run_config
@@ -312,11 +312,6 @@ def live(config_path: Path | None, roots: int, sampler_override: dict[str, Any])
     config = run_config(config_path)
     plan = FeaturePlan.from_config(config)
     sampler = SamplerPlan.from_config(config)
-    if sampler.policy != "resample":
-        print(f"  config sampler policy is {sampler.policy}; using resample with the same pools")
-        sampler = SamplerPlan(
-            "resample", roots=sampler.roots, children=sampler.children, **sampler_override
-        )
     # The default run's prepared cache; preparing it here is what `train` would do first.
     dataset = dataset_path(config)
     prepare_live(config, dataset)
@@ -432,7 +427,7 @@ def main() -> int:
     latency(engine, sampler)
     if args.live:
         print("live batch:")
-        live(args.config, args.roots, {"relation_fanouts": sampler.relation_fanouts})
+        live(args.config, args.roots)
     print(f"{len(FAILURES)} failed checks" if FAILURES else "all checks passed")
     return 1 if FAILURES else 0
 

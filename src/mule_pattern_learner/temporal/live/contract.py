@@ -387,16 +387,15 @@ class FeaturePlan:
 
 
 POOL_KEYS = ("recent", "older", "distinct", "associations", "max_history")
-SAMPLER_POLICIES = ("recent", "stratified", "resample")
 SAMPLER_BACKENDS = ("auto", "cugraph", "torch")
-# Defaults of the fields that only the resample policy reads.
-RESAMPLE_DEFAULTS = {
-    "relation_fanouts": (8, 4),
-    "association_fanout": 1,
-    "backend": "auto",
-    "evaluation_seed": 0,
-}
-SAMPLER_KEYS = ("policy", "association_slots", *RESAMPLE_DEFAULTS)
+# The keys of a [sampler] table besides the roots pool and [sampler.children].
+SAMPLER_KEYS = (
+    "relation_fanouts",
+    "association_fanout",
+    "association_slots",
+    "backend",
+    "evaluation_seed",
+)
 # Version of the resample key scheme (sampler.selection_keys), part of the fingerprint.
 # 2: evaluation keys mix the hop in (hop 1 unchanged, hop 2 an independent stream).
 SELECTION_KEYS_VERSION = 2
@@ -453,43 +452,23 @@ class PoolPlan:
         }
 
 
-class HopBound(int):
-    """The hop-1 response bound; call it as `bound(hop)` for another hop."""
-
-    _plan: SamplerPlan
-
-    def __new__(cls, plan: SamplerPlan) -> HopBound:
-        bound = super().__new__(cls, plan.roots.response_bound)
-        bound._plan = plan
-        return bound
-
-    def __call__(self, hop: int = 1) -> int:
-        return self._plan.pool(hop).response_bound
-
-    def __reduce__(self) -> tuple[type[int], tuple[int]]:
-        # Pickles, copies and checkpoints store the plain hop-1 integer.
-        return int, (int(self),)
-
-
-def _default_children(policy: str, roots: PoolPlan) -> PoolPlan:
+def _default_children(roots: PoolPlan) -> PoolPlan:
     # The resampled second hop is payments-only, so children skip association candidates.
-    return replace(roots, associations=0) if policy == "resample" else roots
+    return replace(roots, associations=0)
 
 
 @dataclass(frozen=True, init=False)
 class SamplerPlan:
-    """Candidate pools per hop plus the client-side neighbor selection policy.
+    """Candidate pools per hop plus the client-side neighbour resampling.
 
-    `recent` and `stratified` are the deterministic legacy selections. `resample`
-    draws, per context and relation, at most `relation_fanouts[hop-1]` payment
+    TigerGraph returns each context's candidate pool (`PoolPlan`, one per hop). The
+    client draws, per context and relation, at most `relation_fanouts[hop-1]` payment
     candidates (`association_fanout` per association relation at hop 1) uniformly
-    without replacement, then merges them into the fanout slots. Hop 2 is
-    payments-only. The legacy forms `SamplerPlan("stratified", 4, 3, 2, 2, 2048)`
-    and `SamplerPlan(recent=4)` still describe the roots pool; children then
-    default to the roots pool (without associations under `resample`).
+    without replacement, then merges them into the fanout slots with at most
+    `association_slots` of them associations. Hop 2 is payments-only, so the children
+    pool defaults to the roots pool without associations.
     """
 
-    policy: str
     roots: PoolPlan
     children: PoolPlan
     relation_fanouts: tuple[int, int]
@@ -500,8 +479,7 @@ class SamplerPlan:
 
     def __init__(
         self,
-        policy: str = "recent",
-        *legacy: int,
+        *,
         roots: PoolPlan | None = None,
         children: PoolPlan | None = None,
         relation_fanouts: Sequence[int] = (8, 4),
@@ -509,31 +487,16 @@ class SamplerPlan:
         association_slots: int = 2,
         backend: str = "auto",
         evaluation_seed: int = 0,
-        **pool: int,
     ) -> None:
-        if len(legacy) > len(POOL_KEYS):
-            raise TypeError("SamplerPlan takes at most five legacy pool values")
-        pool = dict(zip(POOL_KEYS, legacy)) | pool
-        if set(pool) - set(POOL_KEYS):
-            raise TypeError(f"Unexpected sampler arguments: {sorted(set(pool) - set(POOL_KEYS))}")
-        if pool and roots is not None:
-            raise TypeError("Pass either roots=PoolPlan(...) or legacy pool values, not both")
-        roots = roots if roots is not None else PoolPlan(**pool)
-        if policy not in SAMPLER_POLICIES:
-            raise ValueError(f"Unknown history sampler {policy!r}")
-        children = children if children is not None else _default_children(policy, roots)
-        # Legacy callers are untyped; keep the runtime check.
-        if not isinstance(roots, PoolPlan) or not isinstance(children, PoolPlan):  # pyright: ignore[reportUnnecessaryIsInstance]
-            raise TypeError("Sampler pools must be PoolPlan values")
-        if policy == "recent" and any(p.older or p.distinct for p in (roots, children)):
-            raise ValueError("Recent sampler cannot request older/distinct strata")
+        roots = roots if roots is not None else PoolPlan()
         fanouts = tuple(relation_fanouts)
         if len(fanouts) != 2:
             raise ValueError("Sampler relation_fanouts must have one value per hop")
+        if backend not in SAMPLER_BACKENDS:
+            raise ValueError(f"Sampler backend must be one of {SAMPLER_BACKENDS}")
         values = {
-            "policy": policy,
             "roots": roots,
-            "children": children,
+            "children": children if children is not None else _default_children(roots),
             "relation_fanouts": tuple(
                 _bounded("Sampler", "relation_fanouts", v, 1, 64) for v in fanouts
             ),
@@ -546,14 +509,6 @@ class SamplerPlan:
                 "Sampler", "evaluation_seed", evaluation_seed, 0, 2**63 - 1
             ),
         }
-        if backend not in SAMPLER_BACKENDS:
-            raise ValueError(f"Sampler backend must be one of {SAMPLER_BACKENDS}")
-        if policy != "resample":
-            changed = [k for k, v in RESAMPLE_DEFAULTS.items() if values[k] != v]
-            if policy == "recent" and values["association_slots"] != 2:
-                changed.append("association_slots")
-            if changed:
-                raise ValueError(f"{', '.join(changed)} do not apply to the {policy} sampler")
         for name, value in values.items():
             object.__setattr__(self, name, value)
 
@@ -567,55 +522,37 @@ class SamplerPlan:
     def query_params(self, hop: int = 1) -> dict[str, int]:
         return self.pool(hop).query_params()
 
-    @property
-    def response_bound(self) -> HopBound:
-        """Hop-1 bound as an int; `response_bound(hop)` gives any hop."""
-        return HopBound(self)
-
-    # Legacy flat attributes describe the roots pool.
-    @property
-    def recent(self) -> int:
-        return self.roots.recent
-
-    @property
-    def older(self) -> int:
-        return self.roots.older
-
-    @property
-    def distinct(self) -> int:
-        return self.roots.distinct
-
-    @property
-    def associations(self) -> int:
-        return self.roots.associations
-
-    @property
-    def max_history(self) -> int:
-        return self.roots.max_history
+    def response_bound(self, hop: int = 1) -> int:
+        """Maximum messages in one context at this hop."""
+        return self.pool(hop).response_bound
 
     def to_config(self) -> dict[str, Any]:
         """The `[sampler]` table that `from_config` maps back to this plan."""
-        values: dict[str, Any] = {"policy": self.policy, **asdict(self.roots)}
-        if self.children != _default_children(self.policy, self.roots):
+        values: dict[str, Any] = asdict(self.roots)
+        if self.children != _default_children(self.roots):
             values["children"] = asdict(self.children)
-        if self.policy != "recent":
-            values["association_slots"] = self.association_slots
-        if self.policy == "resample":
-            values |= {k: getattr(self, k) for k in RESAMPLE_DEFAULTS}
-            values["relation_fanouts"] = list(self.relation_fanouts)
+        values |= {
+            "association_slots": self.association_slots,
+            "relation_fanouts": list(self.relation_fanouts),
+            "association_fanout": self.association_fanout,
+            "backend": self.backend,
+            "evaluation_seed": self.evaluation_seed,
+        }
         return values
 
     def fingerprint(self) -> str:
         """Selection semantics for manifest checks; the execution backend is excluded.
 
-        Resample plans include `selection_keys` (SELECTION_KEYS_VERSION), so manifests
-        and checkpoints drawn with an older key scheme are not treated as comparable.
+        It includes `selection_keys` (SELECTION_KEYS_VERSION), so manifests and
+        checkpoints drawn with an older key scheme are not treated as comparable. The
+        value keeps the policy name it had while other policies existed, so recorded
+        fingerprints still compare equal.
         """
         value = self.to_config()
-        value.pop("backend", None)
+        value.pop("backend")
         value["children"] = asdict(self.children)
-        if self.policy == "resample":
-            value["selection_keys"] = SELECTION_KEYS_VERSION
+        value["policy"] = "resample"
+        value["selection_keys"] = SELECTION_KEYS_VERSION
         return fingerprint(value)
 
     def pool_fingerprint(self) -> str:
@@ -624,16 +561,20 @@ class SamplerPlan:
 
     @classmethod
     def from_config(cls, config: dict[str, Any]) -> SamplerPlan:
-        """Flat `[sampler]` pool keys describe roots; `[sampler.children]` overrides them."""
+        """Flat `[sampler]` pool keys describe roots; `[sampler.children]` overrides them.
+
+        Configurations saved while other policies existed name this one, `policy =
+        "resample"`; any other policy is refused.
+        """
         values = dict(config.get("sampler") or {})
         children_values = values.pop("children", None)
+        policy = values.pop("policy", "resample")
+        if policy != "resample":
+            raise ValueError(f"Unknown history sampler {policy!r}: only resample remains")
         unknown = sorted(set(values) - set(POOL_KEYS) - set(SAMPLER_KEYS))
         if unknown:
             raise ValueError(f"Unknown [sampler] key(s): {', '.join(unknown)}")
-        pool = {"recent": int(config.get("per_relation", 2))}
-        pool |= {k: values.pop(k) for k in POOL_KEYS if k in values}
-        roots = PoolPlan(**pool)
-        policy = values.pop("policy", "recent")
+        roots = PoolPlan(**{k: values.pop(k) for k in POOL_KEYS if k in values})
         children = None
         if children_values is not None:
             if not isinstance(children_values, dict):
@@ -641,8 +582,8 @@ class SamplerPlan:
             unknown = sorted(set(children_values) - set(POOL_KEYS))
             if unknown:
                 raise ValueError(f"Unknown [sampler.children] key(s): {', '.join(unknown)}")
-            children = replace(_default_children(policy, roots), **children_values)
-        return cls(policy, roots=roots, children=children, **values)
+            children = replace(_default_children(roots), **children_values)
+        return cls(roots=roots, children=children, **values)
 
 
 def sampler_pools(sampler: SamplerPlan) -> dict[str, dict[str, Any]]:

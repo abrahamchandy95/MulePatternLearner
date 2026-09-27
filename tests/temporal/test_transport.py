@@ -70,7 +70,6 @@ from temporal_fakes import FrameObservedLabels, encode, request_keys
 
 PLAN = FeaturePlan(("entity_meta", "message_core", "time_encoding"), "split")
 SAMPLER = SamplerPlan(
-    "stratified",
     roots=PoolPlan(recent=4, older=2, distinct=1, associations=2, max_history=2048),
     children=PoolPlan(recent=2, associations=0, max_history=1024),
 )
@@ -1325,7 +1324,7 @@ def test_config_schema_rejects_unknown_keys_and_applies_operational_defaults(
     result = validate_config(base)
     for key, value in OPERATIONAL_DEFAULTS.items():
         assert result[key] == value
-    for key in ("fanouts", "feature_groups", "extraction_groups", "per_relation", "prepared_id"):
+    for key in ("fanouts", "feature_groups", "extraction_groups", "prepared_id"):
         assert key not in result
     assert result["sampler"] == base["sampler"] and base == live_config(tmp_path)
     with pytest.raises(ValueError, match="Unknown configuration key.*learnig_rate"):
@@ -1375,6 +1374,7 @@ def test_configurations_saved_before_the_restructure_still_validate() -> None:
         "context_storage": "stream",
         "evaluation_protocol": "strict_inductive",
         "label_policy": "graph_observed",
+        "sampler": {**run_config()["sampler"], "policy": "resample"},
     }
     assert validate_config(saved) == run_config()
     with pytest.raises(ValueError, match="context_storage = 'sqlite' is no longer supported"):
@@ -1413,14 +1413,14 @@ def test_override_tables_merge_into_the_built_in_run(tmp_path: Path) -> None:
     assert SamplerPlan.from_config(torch_only).fingerprint() == (
         SamplerPlan.from_config(default).fingerprint()
     )
-    # A pool setting keeps the default policy and every other sampler key.
+    # A pool setting keeps every other sampler key.
     fewer = overridden("[sampler]\nrecent = 4\n[sampler.children]\nolder = 1\n")
-    assert fewer["sampler"]["policy"] == "resample" and fewer["sampler"]["recent"] == 4
+    assert fewer["sampler"]["recent"] == 4 and fewer["sampler"]["older"] == 4
     assert fewer["sampler"]["children"] == {**DEFAULT_RUN["sampler"]["children"], "older": 1}
     assert fewer["sampler"]["relation_fanouts"] == DEFAULT_RUN["sampler"]["relation_fanouts"]
-    # Another policy starts from the override's table alone.
-    recent = overridden('[sampler]\npolicy = "recent"\nrecent = 4\n')
-    assert recent["sampler"] == {"policy": "recent", "recent": 4}
+    # Only the resample sampler remains.
+    with pytest.raises(ValueError, match="sampler.policy = 'recent' is no longer supported"):
+        overridden('[sampler]\npolicy = "recent"\nrecent = 4\n')
     dates = overridden('[dates]\ntrain = ["2024-05-01", "2024-07-01"]\n')
     assert dates["dates"] == {**DEFAULT_RUN["dates"], "train": ["2024-05-01", "2024-07-01"]}
     # Lists and scalars replace the default.

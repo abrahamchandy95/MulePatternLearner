@@ -1,9 +1,8 @@
 """Assemble two-hop batches without collapsing different times for the same node.
 
 Roots are fetched with the roots pool (hop 1) and first-hop children with the
-children pool (hop 2). Neighbors are chosen by a deterministic legacy policy
-(`recent`, `stratified`) or resampled per step (`sampler.select_resampled`). Hub
-children become local stubs instead of fetches, and a child that TigerGraph
+children pool (hop 2). Neighbors are resampled from those pools per step
+(`sampler.select_resampled`). Hub children become local stubs instead of fetches, and a child that TigerGraph
 rejects is masked out of the first hop. Tensors are assembled by column gathers;
 Fourier time features are computed on the target device from `age_ms` and
 `gap_ms` and never read from TigerGraph. `build_root_batch`, which training,
@@ -12,7 +11,6 @@ preparation and scoring share, drops the roots TigerGraph rejected first.
 
 from __future__ import annotations
 
-from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 import hashlib
@@ -83,72 +81,6 @@ def child_key(message: dict[str, Any], parent: ContextKey | None = None) -> Cont
         parent.scope_id if parent else "",
         parent.visibility_phase if parent else 3,
     )
-
-
-def select_messages(
-    context: dict[str, Any],
-    fanout: int,
-    sampler: SamplerPlan = SamplerPlan(),
-    *,
-    second_hop: bool = False,
-) -> list[dict[str, Any]]:
-    """Deterministic relation-interleaved recent history; no label-based selection."""
-    if fanout < 1:
-        raise ValueError("Fanout must be positive")
-    if sampler.policy == "resample":
-        raise ValueError("The resample policy selects with sampler.select_resampled")
-    if sampler.policy == "stratified":
-        return stratified_messages(
-            context, fanout, second_hop=second_hop, association_slots=sampler.association_slots
-        )
-    buckets: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for message in context["messages"]:
-        buckets[message["relation"]].append(message)
-    for messages in buckets.values():
-        messages.sort(key=lambda m: (-int(m["event_seq"]), m["event_id"], m["node_id"]))
-    selected = []
-    for position in range(max((len(v) for v in buckets.values()), default=0)):
-        for relation in RELATIONS:
-            if position < len(buckets[relation]):
-                selected.append(buckets[relation][position])
-                if len(selected) == fanout:
-                    return selected
-    return selected
-
-
-def stratified_messages(
-    context: dict[str, Any],
-    fanout: int,
-    *,
-    second_hop: bool = False,
-    association_slots: int = 2,
-) -> list[dict[str, Any]]:
-    """Reserve history strata before backfill; associations cannot crowd out payments."""
-    buckets: defaultdict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
-    for m in context["messages"]:
-        buckets[
-            (m["relation"], m.get("stratum", "recent" if m["event_id"] else "association"))
-        ].append(m)
-    for rows in buckets.values():
-        rows.sort(key=lambda m: (-int(m["event_seq"]), m["event_id"], m["node_id"]))
-    payments: list[dict[str, Any]] = []
-    associations: list[dict[str, Any]] = []
-    # First one recent per relation, then one older and one diverse, then refill.
-    for pos in range(max((len(v) for v in buckets.values()), default=0)):
-        for stratum in ("recent", "older", "distinct"):
-            for rel in RELATIONS[:4]:
-                rows = buckets[(rel, stratum)]
-                if pos < len(rows):
-                    payments.append(rows[pos])
-        for rel in RELATIONS[4:]:
-            rows = buckets[(rel, "association")]
-            if pos < len(rows):
-                associations.append(rows[pos])
-    reserve = min(association_slots, len(associations), fanout // 4) if not second_hop else 0
-    chosen = payments[: fanout - reserve] + associations[:reserve]
-    if not second_hop:
-        chosen += (payments[fanout - reserve :] + associations[reserve:])[: fanout - len(chosen)]
-    return chosen
 
 
 def _transform(name: str, value: float) -> float:
@@ -435,8 +367,6 @@ def _select(
     backend: str,
     device: torch.device,
 ) -> list[list[dict[str, Any]]]:
-    if sampler.policy != "resample":
-        return [select_messages(row, fanout, sampler, second_hop=hop == 2) for row in rows]
     table = CandidateTable.build(keys, rows)
     slots = select_resampled(
         table,
@@ -455,26 +385,19 @@ def _select(
 def batch_backend(
     sampler: SamplerPlan, device: torch.device, mode: str, resolved: str | None = None
 ) -> str:
-    """The backend one batch selects with: "deterministic", "torch" or "cugraph".
+    """The backend one batch selects with: "torch" or "cugraph".
 
     `resolved` is the run's `resolve_backend(sampler, device)` result; None resolves
     here (the probe is cached). Evaluation always runs the hash-keyed torch path, so
     there a resolved `cugraph` is accepted on any device and not used.
     """
     if resolved is not None:
-        if sampler.policy != "resample":
-            allowed: tuple[str, ...] = ("deterministic",)
-        elif sampler.backend == "auto":
-            allowed = ("torch", "cugraph")
-        else:
-            allowed = (sampler.backend,)
+        allowed = ("torch", "cugraph") if sampler.backend == "auto" else (sampler.backend,)
         if resolved not in allowed:
             raise ValueError(
-                f"sampler_backend {resolved!r} does not fit the {sampler.policy} sampler "
-                f"with backend {sampler.backend!r}; expected one of {allowed}"
+                f"sampler_backend {resolved!r} does not fit the sampler backend "
+                f"{sampler.backend!r}; expected one of {allowed}"
             )
-    if sampler.policy != "resample":
-        return "deterministic"
     if mode == "eval":
         return "torch"
     if resolved is None:

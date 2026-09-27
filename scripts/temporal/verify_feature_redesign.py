@@ -19,6 +19,7 @@ from mule_pattern_learner.temporal.live.contract import (
     ContextKey,
     FeaturePlan,
     FEATURE_GROUPS,
+    PoolPlan,
     SamplerPlan,
 )
 from mule_pattern_learner.temporal.live.dataset import resolve_cutoff
@@ -105,7 +106,7 @@ def main() -> None:
         if g not in ("rolling_windows", "amount_ratios", "pair_window_counts", "device_ip_context")
     )
     plan = FeaturePlan(groups, "split")
-    sampler = SamplerPlan("stratified", 4, 3, 2)
+    sampler = SamplerPlan(roots=PoolPlan(recent=4, older=3, distinct=2))
     reports = []
     for account in args.account:
         key = ContextKey("Account", account, seq, ms)
@@ -133,7 +134,7 @@ def main() -> None:
             row = checked_rows(executor.run(args.query_name, params))[0]
         validate_context(key, row, plan, sampler, require_encodings=True)
         actual = [m for m in row["messages"] if m["event_id"]]
-        selected = stratify(visible_history(history, key), sampler)
+        selected = stratify(visible_history(history, key), sampler.roots)
 
         def identity(m: dict[str, Any]) -> tuple[str, str, str]:
             return m["relation"], m["event_id"], m["stratum"]

@@ -11,7 +11,7 @@ from collections import defaultdict
 import math
 from typing import Any
 
-from .contract import ContextKey, HALF_LIVES, SamplerPlan
+from .contract import ContextKey, HALF_LIVES, PoolPlan
 
 Event = dict[str, Any]
 
@@ -29,15 +29,19 @@ def visible_history(events: list[Event], key: ContextKey) -> list[Event]:
     )
 
 
-def stratify(events: list[Event], sampler: SamplerPlan) -> list[Event]:
-    """Deterministic rank quantiles and additional distinct peers; no partial history."""
+def stratify(events: list[Event], pool: PoolPlan) -> list[Event]:
+    """The candidate pool of one relation's history, as the context query selects it.
+
+    The most recent events, deterministic rank quantiles of the older ones and
+    additional distinct peers; no partial history.
+    """
     result: list[Event] = []
     groups: defaultdict[str, list[Event]] = defaultdict(list)
     for event in events:
         groups[event["relation"]].append(event)
     for rows in groups.values():
         rows.sort(key=lambda e: (-e["event_seq"], e["event_id"]))
-        if len(rows) > sampler.max_history:
+        if len(rows) > pool.max_history:
             raise ValueError("history_capacity_exceeded")
         selected, peers = set(), set()
 
@@ -48,15 +52,15 @@ def stratify(events: list[Event], sampler: SamplerPlan) -> list[Event]:
                 selected.add(e["event_id"])
                 peers.add((e["node_type"], e["node_id"]))
 
-        for i in range(min(sampler.recent, len(rows))):
+        for i in range(min(pool.recent, len(rows))):
             add(i, "recent")
-        if len(rows) > sampler.recent:
-            for j in range(1, sampler.older + 1):
-                rank = sampler.recent + (len(rows) - sampler.recent - 1) * j // (sampler.older + 1)
+        if len(rows) > pool.recent:
+            for j in range(1, pool.older + 1):
+                rank = pool.recent + (len(rows) - pool.recent - 1) * j // (pool.older + 1)
                 add(rank, "older")
         diverse = 0
         for i, e in enumerate(rows):
-            if diverse < sampler.distinct and (e["node_type"], e["node_id"]) not in peers:
+            if diverse < pool.distinct and (e["node_type"], e["node_id"]) not in peers:
                 add(i, "distinct")
                 diverse += 1
     return result
