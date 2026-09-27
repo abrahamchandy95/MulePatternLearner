@@ -20,6 +20,16 @@ ASSOCIATIONS = (
     ("Party_Uses_IP", "IP_Used_By_Party"),
     ("Party_Has_Address", "Address_Used_By_Party"),
 )
+# Target types of each (forward, reverse) association pair, aligned with ASSOCIATIONS.
+ASSOCIATION_TARGETS = (
+    ("Account", "Party"),
+    ("Token", "Party"),
+    ("Account", "Token"),
+    ("Device", "Party"),
+    ("Device", "Account"),
+    ("IP", "Party"),
+    ("Address", "Party"),
+)
 RELATIONS = ("zelle_out", "zelle_in", "payment_out", "payment_in") + tuple(
     name for pair in ASSOCIATIONS for name in pair
 )

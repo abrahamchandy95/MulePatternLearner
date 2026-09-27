@@ -30,6 +30,7 @@ from mule_pattern_learner.contract.feature_groups import (
 )
 from mule_pattern_learner.contract.fingerprints import hash64, stable_score
 from mule_pattern_learner.contract.graph_schema import (
+    ASSOCIATION_TARGETS,
     ASSOCIATIONS,
     RAILS,
     RELATIONS,
@@ -467,17 +468,10 @@ SMALL_SAMPLER = SamplerPlan(
 
 # Synthetic candidate pools of the sampler and batch tests.
 MS_PER_SEQ = 3_600_000  # synthetic clocks: one event sequence number per hour
-TARGETS = (
-    ("Account", "Party"),
-    ("Token", "Party"),
-    ("Account", "Token"),
-    ("Device", "Party"),
-    ("Device", "Account"),
-    ("IP", "Party"),
-    ("Address", "Party"),
-)
 ASSOCIATION_TARGET = {
-    rel: typ for pair, types in zip(ASSOCIATIONS, TARGETS) for rel, typ in zip(pair, types)
+    rel: typ
+    for pair, types in zip(ASSOCIATIONS, ASSOCIATION_TARGETS)
+    for rel, typ in zip(pair, types)
 }
 PAYMENTS = RELATIONS[:4]
 RESAMPLE = SamplerPlan(
