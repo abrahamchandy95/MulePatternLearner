@@ -18,7 +18,7 @@ from mule_pattern_learner.tigergraph.hubs import query_hub_registry
 from mule_pattern_learner.tigergraph.render import DEFAULT_FLAG_GROUPS
 
 ROOT = Path(__file__).resolve().parents[2]
-GSQL = ROOT / "gsql/temporal"
+GSQL = ROOT / "gsql/queries"
 ORACLE = (
     "is_mule",
     "is_mule_masked",
@@ -67,7 +67,7 @@ def test_sent_parameters_match_the_repository_query_signatures() -> None:
         text = gsql_text.definitions((REPOSITORY_ROOT / path).read_text())[name]
         return gsql_text.parameter_names(text)
 
-    context = signature("gsql/temporal/training_context.gsql", "temporal_training_context")
+    context = signature("gsql/queries/training_context.gsql", "temporal_training_context")
     windows = (FeaturePlan(DEFAULT_FLAG_GROUPS, a) for a in ("split", "summary"))
     for plan in (PLAN, *windows):
         server = ContextServer()
@@ -82,10 +82,10 @@ def test_sent_parameters_match_the_repository_query_signatures() -> None:
         [1000, 2000],
         threshold=1024,
     )
-    assert set(calls[0]) == signature("gsql/temporal/hub_registry.gsql", "temporal_hub_registry")
-    creation = signature("gsql/temporal/training_scope.gsql", "temporal_create_training_scope")
+    assert set(calls[0]) == signature("gsql/queries/hub_accounts.gsql", "temporal_hub_registry")
+    creation = signature("gsql/queries/training_scope.gsql", "temporal_create_training_scope")
     assert {"scope_id", "source_id", "split_seed", "unowned_policy"} <= creation
-    policy = signature("gsql/temporal/training_scope.gsql", scope.SCOPE_POLICY_QUERY)
+    policy = signature("gsql/queries/training_scope.gsql", scope.SCOPE_POLICY_QUERY)
     assert policy == {"scope_id"}
 
 
@@ -127,7 +127,7 @@ def select_block(query: str, variable: str) -> str:
 def test_training_queries_read_no_oracle_attributes(text: str) -> None:
     assert not [field for field in ORACLE if field in text]
     checked = set()
-    for name in ("training_cutoffs.gsql", "hub_registry.gsql", "training_scope.gsql"):
+    for name in ("split_cutoffs.gsql", "hub_accounts.gsql", "training_scope.gsql"):
         for query_name, query in query_texts(name).items():
             if query_name in POPULATION_QUERIES:
                 continue
@@ -188,13 +188,13 @@ def test_observed_positive_is_the_revealed_contract_positive() -> None:
 
 
 def test_cutoffs_report_every_requested_key() -> None:
-    query = (GSQL / "training_cutoffs.gsql").read_text()
+    query = (GSQL / "split_cutoffs.gsql").read_text()
     init = query.index("@@sequences += (cutoff -> 0);")
     assert init < query.index("ScanEvents")
 
 
 def hub_query() -> str:
-    return query_texts("hub_registry.gsql")["temporal_hub_registry"]
+    return query_texts("hub_accounts.gsql")["temporal_hub_registry"]
 
 
 def test_hub_registry_contract() -> None:
@@ -415,9 +415,9 @@ def test_scope_policy_query_classifies_unowned_accounts() -> None:
     "name",
     [
         "training_context.gsql",
-        "hub_registry.gsql",
+        "hub_accounts.gsql",
         "training_scope.gsql",
-        "training_cutoffs.gsql",
+        "split_cutoffs.gsql",
     ],
 )
 def test_brackets_balance(name: str) -> None:

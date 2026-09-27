@@ -14,14 +14,14 @@ from mule_pattern_learner.contract.feature_groups import (
 from mule_pattern_learner.tigergraph.render import as_interpreted, render_context_query
 
 ROOT = Path(__file__).resolve().parents[2]
-GSQL = ROOT / "gsql/temporal"
+GSQL = ROOT / "gsql/queries"
 
 
 def test_query_renderer_matches_reviewed_source_and_uses_no_labels() -> None:
     root = Path(__file__).resolve().parents[2]
     text = render_context_query()
     assert re.sub(r"\s+", "", text) == re.sub(
-        r"\s+", "", (root / "gsql/temporal/training_context.gsql").read_text()
+        r"\s+", "", (root / "gsql/queries/training_context.gsql").read_text()
     )
     for field in ("is_mule", "fraud_label", "pu_label", "ring_id", "pair_time_encoding"):
         assert field not in text

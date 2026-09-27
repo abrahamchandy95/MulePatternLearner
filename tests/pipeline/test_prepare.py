@@ -20,7 +20,7 @@ from mule_pattern_learner.testing.fake_graph import ScopeServer
 
 @pytest.fixture
 def fixed_hashes(monkeypatch: pytest.MonkeyPatch):
-    hashes = {"gsql/temporal/training_context.gsql": "aaa", "gsql/temporal/hub_registry.gsql": "b"}
+    hashes = {"gsql/queries/training_context.gsql": "aaa", "gsql/queries/hub_accounts.gsql": "b"}
     monkeypatch.setattr(data_manifest, "query_hashes", lambda: dict(hashes))
     return hashes
 
@@ -55,7 +55,7 @@ def test_prepare_live_checks_query_hashes_before_reusing_a_ready_dataset(
     assert pipeline_prepare.prepare_live(config, out) == manifest
     # A query file preparation no longer uses cannot change the cohort.
     retired = write_manifest(
-        out, config, {**fixed_hashes, "gsql/temporal/retired_query.gsql": "old"}
+        out, config, {**fixed_hashes, "gsql/queries/retired_query.gsql": "old"}
     )
     assert pipeline_prepare.prepare_live(config, out) == retired
     # Model and transport settings are not preparation settings.
@@ -64,8 +64,8 @@ def test_prepare_live_checks_query_hashes_before_reusing_a_ready_dataset(
     )
     with pytest.raises(ValueError, match=r"split_seed.*new output"):
         pipeline_prepare.prepare_live({**config, "split_seed": 7}, out)
-    fixed_hashes["gsql/temporal/hub_registry.gsql"] = "changed"
-    with pytest.raises(ValueError, match=r"hub_registry\.gsql.*mule-temporal install.*new output"):
+    fixed_hashes["gsql/queries/hub_accounts.gsql"] = "changed"
+    with pytest.raises(ValueError, match=r"hub_accounts\.gsql.*mule-temporal install.*new output"):
         pipeline_prepare.prepare_live(config, out)
     with pytest.raises(ValueError, match="different GSQL sources"):
         data_manifest.load_prepared(out)

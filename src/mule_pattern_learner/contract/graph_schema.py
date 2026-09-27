@@ -90,7 +90,7 @@ def context_scope(config: dict[str, Any]) -> str:
     return str(scope)
 
 
-# Account CSV/PSV input columns (gsql/schema/temporal_account_loading.gsql): five
+# Account CSV/PSV input columns (gsql/schema/account_loading.gsql): five
 # account facts, then the ten supervision fields of the label contract.
 ACCOUNT_LOAD_COLUMNS = [
     "id",
