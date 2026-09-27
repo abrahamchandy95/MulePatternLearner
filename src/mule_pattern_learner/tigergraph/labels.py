@@ -53,7 +53,7 @@ def check_graph_label_rows(rows: pd.DataFrame) -> None:
         raise ValueError(
             f"{len(stale)} account(s) have known_from_ms > 0 but observed_positive false "
             f"(for example {stale.iloc[0]!r}): the installed population query predates the "
-            "masked-label predicate. Run `mule install` and prepare again."
+            "masked-label predicate. Run `mule install`, then `mule train` to prepare again."
         )
 
 
