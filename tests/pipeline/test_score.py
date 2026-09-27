@@ -13,7 +13,7 @@ from mule_pattern_learner.inference.saved_model import SavedModel
 from mule_pattern_learner.paths import RunPaths
 from mule_pattern_learner.pipeline import score as pipeline_score
 from mule_pattern_learner.runtime.progress import emit
-from mule_pattern_learner.testing.builders import base_config, checkpoint
+from mule_pattern_learner.testing.builders import base_config, saved_model
 
 
 def test_scoring_checks_inputs_and_outputs_then_verifies_the_installed_queries(
@@ -21,7 +21,7 @@ def test_scoring_checks_inputs_and_outputs_then_verifies_the_installed_queries(
 ) -> None:
     config = base_config()
     run = RunPaths(tmp_path / "run")
-    checkpoint(run.model, config)
+    saved_model(run.model, config)
     accounts = tmp_path / "new_accounts.txt"
     accounts.write_text("A1\nA2\n")
     executor = SimpleNamespace()

@@ -20,7 +20,7 @@ from mule_pattern_learner.data.contexts import ContextSource
 from mule_pattern_learner.model.tgat import TGAT
 from mule_pattern_learner.reference.batch_features import node_features
 from mule_pattern_learner.testing.builders import context, message
-from mule_pattern_learner.testing.fake_graph import FakeExecutor
+from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
 
 WINDOW_GROUPS = (
@@ -103,7 +103,7 @@ def test_each_group_has_consistent_transport_batch_and_model_width(group: str) -
         channel="p2p",
         stratum="recent",
     )
-    executor = FakeExecutor({root: context(root, [msg])})
+    executor = FakeTigerGraph({root: context(root, [msg])})
     source = ContextSource(TigerGraphContextFetcher(executor), plan=plan)
     try:
         batch = build_batch(source, [root], fanouts=(2, 2), plan=plan)

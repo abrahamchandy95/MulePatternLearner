@@ -17,9 +17,9 @@ from mule_pattern_learner.inference import score_accounts
 from mule_pattern_learner.inference.rejections import rejection_summary
 from mule_pattern_learner.testing.builders import (
     base_config,
-    checkpoint,
     hub_registry,
     prepared_dataset,
+    saved_model,
 )
 from mule_pattern_learner.testing.fake_graph import FakeSource, ScoringExecutor
 from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffs
@@ -28,7 +28,7 @@ from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
 
 def test_score_new_writes_only_ok_rows_and_lists_rejected_ids(tmp_path: Path) -> None:
     config = base_config()
-    model = checkpoint(tmp_path / "model.pt", config)
+    model = saved_model(tmp_path / "model.pt", config)
     executor = ScoringExecutor()
     source = FakeSource(config, reject=frozenset({"ghost_1", "ghost_2"}))
     ids = [f"new_{i}" for i in range(14)]
@@ -61,7 +61,7 @@ def test_score_new_writes_only_ok_rows_and_lists_rejected_ids(tmp_path: Path) ->
 def test_score_new_keeps_float64_resolution_near_one(tmp_path: Path) -> None:
     config = base_config()
     # Logits near 20, where a float32 probability is exactly 1 for every account.
-    model = checkpoint(tmp_path / "model.pt", config, logit_shift=20.0)
+    model = saved_model(tmp_path / "model.pt", config, logit_shift=20.0)
     output = tmp_path / "scores.parquet"
     score_accounts.score_new_accounts(
         model,
@@ -80,7 +80,7 @@ def test_score_new_keeps_float64_resolution_near_one(tmp_path: Path) -> None:
 
 def test_score_new_reports_root_and_child_rejections_separately(tmp_path: Path) -> None:
     config = base_config()
-    model = checkpoint(tmp_path / "model.pt", config)
+    model = saved_model(tmp_path / "model.pt", config)
     # P5 and P7 are peers (children) of the scored accounts, never roots.
     source = FakeSource(config, reject=frozenset({"ghost", "P5", "P7"}))
     ids = ["ghost", *(f"new_{i}" for i in range(12))]
@@ -109,7 +109,7 @@ def test_inference_score_uses_the_dataset_hub_registry(
 ) -> None:
     config = base_config()
     dataset, _, _ = prepared_dataset(tmp_path / "dataset", config, monkeypatch)
-    model = checkpoint(tmp_path / "model.pt", config, dataset)
+    model = saved_model(tmp_path / "model.pt", config, dataset)
     loaded = []
 
     def registry(path: Path, manifest: dict[str, Any]) -> HubRegistry:

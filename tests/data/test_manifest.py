@@ -18,7 +18,7 @@ from mule_pattern_learner.testing.builders import (
     supplied_labels,
     unit_config,
 )
-from mule_pattern_learner.testing.fake_graph import FakeExecutor
+from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
 from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffs
 from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
 from mule_pattern_learner.tigergraph.scope import TigerGraphScope
@@ -65,7 +65,7 @@ def test_a_dataset_records_its_query_files_by_path_and_passes_its_own_check(
     tmp_path: Path,
 ) -> None:
     population = scoped_accounts()
-    executor = FakeExecutor({}, population=population)
+    executor = FakeTigerGraph({}, population=population)
     config = example_config(dataset={"seed_limits": {"train": 10, "validation": 10, "test": 10}})
     dataset = DatasetPaths(tmp_path / "dataset")
     manifest = prepare(

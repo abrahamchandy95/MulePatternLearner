@@ -115,19 +115,19 @@ class Predictor:
     for the scored cutoff (training's dataset registry or ``query_hubs``); without
     it no child is stubbed and hub children are masked out when TigerGraph rejects them.
     Without ``contexts`` the predictor streams them through ``fetcher`` with the
-    checkpoint's plan, pools and transport section.
+    saved model's plan, pools and transport section.
     """
 
     def __init__(
         self,
-        checkpoint: Path | SavedModel,
+        model: Path | SavedModel,
         contexts: ContextReader | None = None,
         device: str = "auto",
         *,
         fetcher: ContextFetcher | None = None,
         hubs: HubRegistry | None = None,
     ) -> None:
-        saved = SavedModel.of(checkpoint)
+        saved = SavedModel.of(model)
         saved.check_contract()
         self.config = config = saved.config
         self.plan = config.feature_plan()

@@ -1,6 +1,6 @@
 """In-memory stand-ins for TigerGraph and for context sources.
 
-`FakeExecutor` answers the read-only training queries the way the repository GSQL
+`FakeTigerGraph` answers the read-only training queries the way the repository GSQL
 does: context requests carry 1..64 keys and exactly the query's parameters,
 messages are cut to the requested hop pool, Fourier vectors are printed only when
 `emit_encodings` is set, every request index gets exactly one row, and per-request
@@ -84,7 +84,7 @@ def request_keys(params: dict[str, Any]) -> list[ContextKey]:
     ]
 
 
-class FakeExecutor:
+class FakeTigerGraph:
     """In-memory QueryExecutor for the read-only training queries.
 
     `rows` maps keys to fixed contexts; other keys come from `factory` (default: an

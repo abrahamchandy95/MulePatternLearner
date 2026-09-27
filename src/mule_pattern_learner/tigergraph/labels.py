@@ -1,6 +1,6 @@
 """The graph's label contract: revealed labels for training and the contract audit.
 
-GraphObservedLabels is the label source of every run: population queries report the
+TigerGraphObservedLabels is the label source of every run: population queries report the
 revealed positives and their discovery times, never a hidden label. validate_supervision
 runs the contract audit, which returns only violation counts.
 """
@@ -15,7 +15,7 @@ from ..data.observed_labels import align_observed_labels
 from .executor import QueryExecutor, merged_rows
 
 
-class GraphObservedLabels:
+class TigerGraphObservedLabels:
     """Observed labels paged from the graph, the label source of every run.
 
     This is the only label source for which population queries run with

@@ -23,7 +23,7 @@ from ..tigergraph.cutoffs import TigerGraphCutoffs
 from ..tigergraph.executor import TigerGraphExecutor
 from ..tigergraph.hubs import TigerGraphHubs
 from ..tigergraph.installer import install, undefined_queries
-from ..tigergraph.labels import GraphObservedLabels
+from ..tigergraph.labels import TigerGraphObservedLabels
 from ..tigergraph.provenance import source_counts
 from ..tigergraph.reveal import ensure_revealed_labels
 from ..tigergraph.scope import TigerGraphScope, ensure_scope, scope_header
@@ -107,7 +107,7 @@ def prepare_dataset(config: RunConfig, data: Path = DATA_DIR) -> DatasetPaths:
         source_id,
         dataset,
         counts,
-        GraphObservedLabels(),
+        TigerGraphObservedLabels(),
         scope=TigerGraphScope(executor),
         cutoffs=TigerGraphCutoffs(executor),
         hubs=TigerGraphHubs(executor),

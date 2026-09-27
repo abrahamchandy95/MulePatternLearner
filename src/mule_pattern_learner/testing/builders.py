@@ -879,7 +879,7 @@ def prepared_dataset(
     return dataset, manifest, accounts
 
 
-def checkpoint(
+def saved_model(
     path: Path,
     config: RunConfig,
     dataset: DatasetPaths | None = None,

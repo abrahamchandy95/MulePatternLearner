@@ -28,10 +28,10 @@ if TYPE_CHECKING:
 
 
 def evaluate_predictions(
-    predictions: Path, checkpoint: Path | SavedModel, truth: TruthReader
+    predictions: Path, model: Path | SavedModel, truth: TruthReader
 ) -> dict[str, Any]:
-    """Apply the frozen checkpoint threshold; never choose an epoch or threshold."""
-    saved = SavedModel.of(checkpoint)
+    """Apply the frozen model's threshold; never choose an epoch or threshold."""
+    saved = SavedModel.of(model)
     frame = pd.read_parquet(predictions)
     answer = truth.read()
     if "is_mule" not in answer or not answer.is_mule.isin([-1, 0, 1]).all():

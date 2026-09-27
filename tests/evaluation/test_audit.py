@@ -18,9 +18,9 @@ from mule_pattern_learner.paths import RunPaths
 from mule_pattern_learner.testing.builders import (
     CUTOFFS,
     base_config,
-    checkpoint,
     hub_registry,
     prepared_dataset,
+    saved_model,
 )
 from mule_pattern_learner.testing.fake_graph import FakeSource, ScoringExecutor
 from mule_pattern_learner.tigergraph.scope import TigerGraphScope
@@ -44,7 +44,7 @@ def test_the_audit_scores_through_the_dataset_clock_and_hubs(
     config = base_config(runtime={"max_rejected_root_fraction": 0.1})
     dataset, _, accounts = prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     run = RunPaths(tmp_path / "run")
-    checkpoint(run.model, config, dataset)
+    saved_model(run.model, config, dataset)
     test_accounts = accounts[accounts.split == "test"]
     truth = test_accounts[["account_id"]].assign(is_mule=(np.arange(len(test_accounts)) % 4 == 0))
     truth["is_mule"] = truth.is_mule.astype(int)
@@ -101,7 +101,7 @@ def test_the_audit_fails_on_censored_rejections(
     config = base_config(runtime={"max_rejected_root_fraction": limit})
     dataset, _, accounts = prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     run = RunPaths(tmp_path / "run")
-    checkpoint(run.model, config, dataset)
+    saved_model(run.model, config, dataset)
     test_accounts = accounts[accounts.split == "test"]
     truth = test_accounts[["account_id"]].assign(
         is_mule=(np.arange(len(test_accounts)) % 4 == 0).astype(int)

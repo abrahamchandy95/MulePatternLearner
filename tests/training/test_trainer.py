@@ -54,7 +54,7 @@ from mule_pattern_learner.testing.builders import (
     scoped_accounts,
     supplied_labels,
 )
-from mule_pattern_learner.testing.fake_graph import FakeExecutor, FakeSource
+from mule_pattern_learner.testing.fake_graph import FakeSource, FakeTigerGraph
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
 from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffs
 from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
@@ -607,7 +607,7 @@ def test_averaged_run_validates_and_saves_the_average(
     assert any(not torch.equal(averaged[k], raw[k]) for k in raw)
 
 
-def build_context_source(executor: FakeExecutor, config: RunConfig, **kwargs: Any):
+def build_context_source(executor: FakeTigerGraph, config: RunConfig, **kwargs: Any):
     """The source a prepared run opens: prepared extraction plan and training sampler."""
     return ContextSource(
         TigerGraphContextFetcher(executor),
@@ -617,7 +617,7 @@ def build_context_source(executor: FakeExecutor, config: RunConfig, **kwargs: An
     )
 
 
-class PreparedExecutor(FakeExecutor):
+class PreparedExecutor(FakeTigerGraph):
     """The scope population, context, cutoff and hub queries.
 
     The scope population holds the fixture accounts with their splits as partitions.
@@ -635,7 +635,9 @@ class PreparedExecutor(FakeExecutor):
         return super().run(name, params, **kwargs)
 
 
-def prepared(tmp_path: Path, config: RunConfig, **kwargs: Any) -> tuple[DatasetPaths, FakeExecutor]:
+def prepared(
+    tmp_path: Path, config: RunConfig, **kwargs: Any
+) -> tuple[DatasetPaths, FakeTigerGraph]:
     dataset = DatasetPaths(tmp_path / "dataset")
     executor = PreparedExecutor(dataset, **kwargs)
     prepare(
