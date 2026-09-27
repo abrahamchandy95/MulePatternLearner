@@ -19,7 +19,6 @@ from .accounts import cohort_seed
 from .hub_registry import HUB_FILE
 from .observed_labels import ORACLE_COLUMNS, read_bounded_parquet
 
-ROOT = REPOSITORY_ROOT
 MANIFEST = "manifest.json"
 # Settings that change what preparation produces. Training compares exactly these;
 # model, optimisation and transport settings may change between runs.
@@ -52,7 +51,7 @@ def manifest_digest(dataset: Path) -> str:
 
 
 def query_hashes() -> dict[str, str]:
-    return {name: file_digest(ROOT / name) for name in QUERY_FILES}
+    return {name: file_digest(REPOSITORY_ROOT / name) for name in QUERY_FILES}
 
 
 def changed_query_files(manifest: dict[str, Any]) -> list[str]:
