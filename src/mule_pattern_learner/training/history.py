@@ -1,9 +1,11 @@
 """The run's history: its events, log intervals and epochs, as they happen.
 
-Progress appends every record to the run's events.jsonl and echoes selected records
-to stdout. It also sums the batch statistics and counts the REST calls, rejections and
-contexts of every segment of a resumed run. LogInterval keeps one log interval's losses on the
-device, so the host reads them once per interval.
+Progress adds the run's totals to every record, appends it to the run's events.jsonl
+and echoes selected records to stdout. It sums the batch statistics and counts the
+database calls, rejections and contexts of every segment of a resumed run. LogInterval
+keeps one log interval's losses on the device, so the host reads them once per
+interval. The trainer writes each interval's record as a row of history.csv and each
+epoch's as a row of epochs.csv (artifacts.HISTORY_COLUMNS and EPOCH_COLUMNS).
 """
 
 from __future__ import annotations
@@ -61,11 +63,12 @@ class Progress:
             "cache_hits": self.base_contexts["cache_hits"] + counts.cache_hits,
         }
 
-    def emit(self, record: dict[str, Any], *, echo: bool = True) -> dict[str, Any]:
+    def record(self, record: dict[str, Any]) -> dict[str, Any]:
+        """record with the run's totals so far."""
         contexts = self.contexts()
-        record = {
+        return {
             **record,
-            "query_calls": self.calls(),
+            "database_calls": self.calls(),
             "contexts_requested": contexts["requested"],
             "contexts_distinct": contexts["distinct"],
             "cache_hits": contexts["cache_hits"],
@@ -75,6 +78,10 @@ class Progress:
             "sampler_backend": self.backend,
             "elapsed_seconds": round(time.perf_counter() - self.started, 3),
         }
+
+    def emit(self, record: dict[str, Any], *, echo: bool = True) -> dict[str, Any]:
+        """Append record, with the run's totals, to events.jsonl and print it; return it."""
+        record = self.record(record)
         line = json.dumps(record, allow_nan=False)
         if self.path is not None:
             with self.path.open("a") as stream:
@@ -131,13 +138,25 @@ class LogInterval:
 
 
 def epoch_record(
-    epoch: int, loss_sum: torch.Tensor, steps: int, validation: dict[str, Any]
+    epoch: int,
+    loss_sum: torch.Tensor,
+    steps: int,
+    validation: dict[str, Any],
+    *,
+    averaged: bool,
+    stopped: bool,
 ) -> dict[str, Any]:
-    """The history entry of a finished epoch (``epoch`` counts from 1)."""
+    """The epochs.csv row of a finished epoch (``epoch`` counts from 1), without selected.
+
+    ``averaged`` says whether validation scored the weight average, and ``stopped``
+    whether early stopping ends the run after this epoch.
+    """
     return {
         "epoch": epoch,
         "loss": float(loss_sum.item() / steps),
         "steps": steps,
-        "validation_proxy_ap": validation["average_precision"],
-        "validation_proxy_roc_auc": validation["roc_auc"],
+        "validation_ap": validation["average_precision"],
+        "validation_roc_auc": validation["roc_auc"],
+        "weights": "averaged" if averaged else "raw",
+        "stopped": stopped,
     }

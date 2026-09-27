@@ -1,8 +1,10 @@
-"""What a finished run records: the model.pt payload, the split predictions and metrics.json."""
+"""What a run records: its provenance, the model.pt payload, the predictions and metrics."""
 
 from __future__ import annotations
 
-from pathlib import Path
+from datetime import datetime, timezone
+from importlib.metadata import PackageNotFoundError, version
+import subprocess
 from typing import Any
 
 import numpy as np
@@ -15,12 +17,54 @@ from ..contract.graph_schema import EVALUATION_PROTOCOL
 from ..contract.sampler_plan import SamplerPlan
 from ..contract.time_basis import BASIS_ID
 from ..data.manifest import manifest_digest
-from ..paths import DatasetPaths
+from ..paths import REPOSITORY_ROOT, DatasetPaths
 from .history import Progress
 from .objective import objective_name
 from .schedule import EvaluationSample
 
 TRAINING_PROTOCOL = "scoped_observed_label_nnpu_v5"
+# The distributions whose versions config.json records.
+PACKAGES = ("mule-pattern-learner", "torch", "numpy", "scikit-learn", "pyTigerGraph")
+
+
+def _git(*args: str) -> str | None:
+    """The output of a git command in the repository, or None without git or a repository."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(REPOSITORY_ROOT), *args],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return result.stdout.strip()
+
+
+def _version(package: str) -> str | None:
+    try:
+        return version(package)
+    except PackageNotFoundError:
+        return None
+
+
+def provenance(device: torch.device, backend: str, dataset_id: str) -> dict[str, Any]:
+    """Where and how a run ran, for config.json: the code, the versions, the host and data.
+
+    The commit is the repository's HEAD and dirty says whether its working tree had
+    changes (both None without git); started is when the run started, in UTC.
+    """
+    status = _git("status", "--porcelain")
+    return {
+        "git_commit": _git("rev-parse", "HEAD"),
+        "git_dirty": None if status is None else bool(status),
+        "versions": {package: _version(package) for package in PACKAGES},
+        "device": str(device),
+        "sampler_backend": backend,
+        "dataset_id": dataset_id,
+        "started": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
 
 
 def model_payload(
@@ -80,7 +124,7 @@ def prediction_frame(
 def run_summary(
     *,
     config: RunConfig,
-    manifest: dict[str, Any],
+    dataset_id: str,
     seed: int,
     known_mules: dict[str, int],
     device: torch.device,
@@ -89,19 +133,17 @@ def run_summary(
     plan: FeaturePlan,
     parameter_count: int,
     best_epoch: int,
-    history: list[dict[str, Any]],
     results: dict[str, Any],
     selection: dict[str, Any],
-    checkpoint: Path,
     progress: Progress,
     rejected_rows: dict[str, int],
     rejected_roots: dict[str, dict[str, int]],
     limit: float,
 ) -> dict[str, Any]:
-    """The metrics.json record of a complete run."""
+    """The metrics.json record of a complete run (its epochs are in epochs.csv)."""
     return {
         "status": "complete",
-        "cohort": manifest["cohort"],
+        "dataset_id": dataset_id,
         "label_policy": "graph_observed",
         "seed": seed,
         "known_mules": known_mules,
@@ -114,11 +156,9 @@ def run_summary(
         "parameter_count": parameter_count,
         "revealed_training_accounts": known_mules["train"],
         "best_epoch": best_epoch,
-        "history": history,
         "observed_label_proxy": results,
         "evaluation_protocol": EVALUATION_PROTOCOL,
         "validation_proxy": selection,
-        "checkpoint": str(checkpoint),
         "database_calls_during_training": progress.calls(),
         "contexts": progress.contexts(),
         "rejections": progress.rejections(),
@@ -128,6 +168,6 @@ def run_summary(
         "rejected_roots": rejected_roots,
         "max_rejected_root_fraction": limit,
         "performance_claim": EVALUATION_PROTOCOL + "_observed_label_proxy_only",
-        "evaluation_unlabeled_limit": config.training.proxy_unlabeled_limit,
+        "proxy_unlabeled_limit": config.training.proxy_unlabeled_limit,
         "training_protocol": TRAINING_PROTOCOL,
     }

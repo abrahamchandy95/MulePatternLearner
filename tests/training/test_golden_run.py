@@ -45,6 +45,7 @@ from unittest.mock import patch
 import pandas as pd
 import pytest
 
+from mule_pattern_learner.artifacts import read_epochs, read_history
 from mule_pattern_learner.batching.assemble import RootBatch, tensor_digests
 from mule_pattern_learner.config import DEFAULT_CONFIG, RunConfig
 from mule_pattern_learner.contract.feature_groups import extraction_plan
@@ -159,16 +160,13 @@ def golden_run(directory: Path) -> Observed:
         result = trainer.train(config, dataset, run, contexts=golden_source(executor, config))
     (first,) = found
     assert first.batch is not None
-    events = [json.loads(line) for line in run.events.read_text().splitlines()]
+    history = read_history(run.history)
+    columns = ["epoch", "step", "loss", "objective", "corrected_steps"]
     return Observed(
         batch=tensor_digests(first.batch),
         batch_stats={k: v for k, v in first.stats.items() if k != "sampler_backend"},
-        steps=[
-            (e["epoch"], e["step"], e["loss"], e["objective"], e["corrected_steps"])
-            for e in events
-            if e["event"] == "train"
-        ],
-        epoch_ap=[epoch["validation_proxy_ap"] for epoch in result["history"]],
+        steps=[tuple(row) for row in history[columns].to_numpy(object).tolist()],
+        epoch_ap=read_epochs(run.epochs).validation_ap.tolist(),
         selected_epoch=result["best_epoch"],
         validation_ap=result["validation_proxy"]["average_precision"],
         threshold=result["validation_proxy"]["threshold"],

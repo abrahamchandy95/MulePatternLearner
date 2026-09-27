@@ -9,11 +9,11 @@ run that stopped on rejected roots).
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 import torch
 
+from ..artifacts import read_run_config
 from ..config import RunConfig, differing_settings
 from ..paths import RunPaths
 
@@ -47,8 +47,8 @@ def load_resume_state(config: RunConfig, run: RunPaths) -> dict[str, Any] | None
         raise FileExistsError(f"Run is already complete: {run.root}")
     if run.config.exists():
         try:
-            previous = RunConfig.from_dict(json.loads(run.config.read_text()))
-        except ValueError as error:
+            previous = read_run_config(run.config)
+        except (KeyError, ValueError) as error:
             raise ValueError(
                 f"Cannot read the configuration of the run in {run.root}: {error}"
             ) from None
