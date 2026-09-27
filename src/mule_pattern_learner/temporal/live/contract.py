@@ -47,7 +47,9 @@ ROLLING_FIELDS = (
     "out_unique",
     "in_unique",
 )
-FEATURE_NAMES = (
+# The node features the contract fingerprint lists, in its order. Saved models record the
+# fingerprint, so the list stays as it is until the server step changes the contract.
+CONTRACT_FEATURES = (
     tuple("type_" + t for t in NODE_TYPES)
     + ("is_external", "is_deposit", "age_days")
     + tuple(f"{window}_{field}" for window in WINDOWS for field in ROLLING_FIELDS)
@@ -105,7 +107,7 @@ def contract_fingerprint() -> str:
         {
             "version": CONTRACT_VERSION,
             "basis": BASIS_ID,
-            "features": FEATURE_NAMES,
+            "features": CONTRACT_FEATURES,
             "relations": RELATIONS,
             "rails": RAILS,
             "groups": {k: vars(v) for k, v in FEATURE_GROUPS.items() if k not in POOL_GROUPS},
@@ -267,17 +269,6 @@ FEATURE_GROUPS = {
     "event_channel": FeatureGroup("categorical", ("channel",)),
     "sampler_meta": FeatureGroup("categorical", ("stratum",)),
 }
-LEGACY_GROUPS = (
-    "entity_meta",
-    "entity_age",
-    "rolling_windows",
-    "recency",
-    "association_counts",
-    "amount_ratios",
-    "message_core",
-    "time_encoding",
-    "pair_window_counts",
-)
 CLIENT_GROUPS = frozenset({"hub_indicator", *POOL_GROUPS})
 DEFAULT_GROUPS = (
     "entity_meta",
@@ -287,18 +278,34 @@ DEFAULT_GROUPS = (
     "pair_history",
     "flow_timing",
 )
+# The groups of the built-in run (config_schema.DEFAULT_RUN): the defaults plus the pool
+# groups.
+BUILT_IN_GROUPS = (*DEFAULT_GROUPS, *POOL_GROUPS)
+# Columns follow registry order. Before the layered restructure a fixed list placed the
+# columns of these groups elsewhere, so a plan with one of them fingerprints differently
+# now, and a model saved with such a plan is refused instead of misread.
+REORDERED_GROUPS = frozenset(
+    {"rolling_windows", "amount_ratios", "recency", "association_counts", "pair_window_counts"}
+)
 
 
 @dataclass(frozen=True)
 class FeaturePlan:
-    groups: tuple[str, ...] = LEGACY_GROUPS
-    architecture: str = "single"
+    """The feature groups a model reads and its architecture.
+
+    "split" is the graph model: attention over sampled neighbours, with a summary
+    branch for the root's summary columns. "summary" reads only the root's node and
+    summary columns (the controls without attention).
+    """
+
+    groups: tuple[str, ...] = BUILT_IN_GROUPS
+    architecture: str = "split"
 
     def __post_init__(self) -> None:
         if len(set(self.groups)) != len(self.groups) or set(self.groups) - FEATURE_GROUPS.keys():
             raise ValueError("Duplicate or unknown feature groups")
-        if self.architecture not in ("single", "split", "summary"):
-            raise ValueError("Architecture must be single, split or summary")
+        if self.architecture not in ("split", "summary"):
+            raise ValueError("Architecture must be split or summary")
         for name in self.groups:
             if set(FEATURE_GROUPS[name].requires) - set(self.groups):
                 raise ValueError(f"Missing dependencies for {name}")
@@ -306,21 +313,14 @@ class FeaturePlan:
             raise ValueError("Graph models require message_core")
         if self.architecture == "summary" and not self.names("node", "summary"):
             raise ValueError("Summary model needs node or summary inputs")
-        # A single model reads every context's summary columns, and children's pool counts
-        # come from their smaller pool: the same column would mean two things.
-        if self.architecture == "single" and set(POOL_GROUPS) & set(self.groups):
-            raise ValueError("Pool groups need the split or summary architecture")
 
     def names(self, *paths: str) -> tuple[str, ...]:
         # Registry order is canonical, independent of configuration list order.
-        names = tuple(
+        return tuple(
             n
             for g, spec in FEATURE_GROUPS.items()
             if g in self.groups and spec.path in paths
             for n in spec.names
-        )
-        return tuple(n for n in FEATURE_NAMES if n in names) + tuple(
-            n for n in names if n not in FEATURE_NAMES
         )
 
     @property
@@ -329,24 +329,7 @@ class FeaturePlan:
 
     @property
     def edge_names(self) -> tuple[str, ...]:
-        # Preserve the shipped baseline ordering, including its Fourier offsets.
-        core = FEATURE_GROUPS["message_core"].names if "message_core" in self.groups else ()
-        time = ("gap_present",) if "time_encoding" in self.groups else ()
-        windows = (
-            FEATURE_GROUPS["pair_window_counts"].names
-            if "pair_window_counts" in self.groups
-            else ()
-        )
-        fourier = (
-            FEATURE_GROUPS["time_encoding"].names[1:] if "time_encoding" in self.groups else ()
-        )
-        extra = tuple(
-            n
-            for g in ("pair_history", "flow_timing", "device_ip_context")
-            if g in self.groups
-            for n in FEATURE_GROUPS[g].names
-        )
-        return core + time + windows + fourier + extra
+        return self.names("message")
 
     def fingerprint(self) -> str:
         """The model inputs: contract, groups, architecture and any pool definitions."""
@@ -358,6 +341,8 @@ class FeaturePlan:
         # The contract leaves the pool groups out, so a plan with one covers them here.
         if set(POOL_GROUPS) & set(self.groups):
             value["pool"] = pool_definition(self.groups)
+        if REORDERED_GROUPS & set(self.groups):
+            value["columns"] = "registry"
         return fingerprint(value)
 
     def query_flags(self, hop: int = 1) -> dict[str, bool]:
@@ -365,7 +350,8 @@ class FeaturePlan:
 
         Channel/stratum are wire metadata even when their embeddings are off, and
         client groups are never requested. Split models read only node and message
-        inputs of children, so their second hop skips every summary group.
+        inputs of children, so their second hop skips every summary group. Summary
+        models fetch no children.
         """
         if hop not in (1, 2):
             raise ValueError("Hop must be 1 or 2")
@@ -378,12 +364,9 @@ class FeaturePlan:
 
     @classmethod
     def from_config(cls, config: dict[str, Any]) -> FeaturePlan:
-        groups = tuple(config.get("feature_groups", LEGACY_GROUPS))
-        variant = config.get("variant", "temporal")
-        if variant == "no_fourier":
-            groups = tuple(g for g in groups if g != "time_encoding")
-        architecture = "summary" if variant == "tabular" else config.get("architecture", "single")
-        return cls(groups, architecture)
+        """feature_groups and architecture, each the built-in run's when absent."""
+        groups = tuple(config.get("feature_groups", BUILT_IN_GROUPS))
+        return cls(groups, config.get("architecture", "split"))
 
 
 POOL_KEYS = ("recent", "older", "distinct", "associations", "max_history")
@@ -594,10 +577,9 @@ def sampler_pools(sampler: SamplerPlan) -> dict[str, dict[str, Any]]:
 def extraction_groups(config: dict[str, Any]) -> tuple[str, ...]:
     """The configured extraction superset without client groups.
 
-    `extraction_groups`, else `feature_groups`, else the legacy groups. Model
-    variants (no_fourier, tabular) do not change it, so they share a preparation.
+    `extraction_groups`, else `feature_groups`, else the built-in groups.
     """
-    groups = config.get("extraction_groups") or config.get("feature_groups") or LEGACY_GROUPS
+    groups = config.get("extraction_groups") or config.get("feature_groups") or BUILT_IN_GROUPS
     return tuple(g for g in groups if g not in CLIENT_GROUPS)
 
 
@@ -605,8 +587,7 @@ def extraction_plan(config: dict[str, Any]) -> FeaturePlan:
     """What the context source asks TigerGraph for.
 
     Groups are `extraction_groups(config)`; client groups are computed locally.
-    The architecture is the model's, so a split model skips summary groups at
-    hop 2 while a single model keeps them.
+    The architecture is the model's, so a split model skips summary groups at hop 2.
     """
     model = FeaturePlan.from_config(config)
     groups = extraction_groups(config)

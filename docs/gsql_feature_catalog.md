@@ -1,6 +1,6 @@
 # GSQL feature and query catalog
 
-The [feature-group redesign](feature_redesign.md) documents the window-free feature groups, optional summaries, sampler, and migration. Fixed 83/135 dimensions below describe the legacy control profile. The built-in v5 run (`DEFAULT_RUN`) and its candidate pools are described in [training from the live temporal graph](live_temporal_training.md#candidate-pools-and-resampling).
+The [feature-group redesign](feature_redesign.md) documents the window-free feature groups, optional summaries, sampler, and migration. Fixed 83/135 dimensions below describe the window groups as the query returns them (the `include_*` defaults). The built-in v5 run (`DEFAULT_RUN`) and its candidate pools are described in [training from the live temporal graph](live_temporal_training.md#candidate-pools-and-resampling).
 
 This describes `temporal/live`, the live TGAT-style path. The live strict path
 applies server-side ownership-group partitions before sampling and feature
@@ -92,9 +92,7 @@ as they are, so a prepared cohort stays valid.
   run): counts over the payment messages of the root's own candidate pool, computed by
   `batching.pool_activity`. The split model reads them for the roots only, in its
   summary branch, so batches compute them for the roots only (children and stubs keep
-  zeros there); a single model, which reads every context's summary columns, refuses
-  them, since children's counts would come from the smaller children pool. Every count
-  gets `log1p`.
+  zeros there). Every count gets `log1p`.
 
 | Group | Name | Meaning |
 |---|---|---|
@@ -170,8 +168,8 @@ transform as before. A missing ratio field is a query-contract error.
 
 Python applies fixed `log1p` transforms where appropriate. No learned account-ID
 embedding, label, synthetic mask, ring ID, whole-history PageRank or stored
-FastRP vector enters these features. The canonical ordered names are in
-`src/mule_pattern_learner/temporal/live/contract.py`.
+FastRP vector enters these features. Columns follow the registry order of
+`FEATURE_GROUPS` in `src/mule_pattern_learner/temporal/live/contract.py`.
 
 ## The 135 numerical message features
 

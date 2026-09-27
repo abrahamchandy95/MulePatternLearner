@@ -721,8 +721,8 @@ cohort; `--dataset <run>_run/prepared` reuses another run's.
 - Requests are processed one after another inside each REST call. Processing all
   requests of a call together, and materialising the event-intrinsic pair features (they
   do not depend on scope or cutoff), would reduce TigerGraph time per step.
-- The legacy profile's pair-window counts scan each sender's full outgoing history; keep
-  it as a control, not for large runs.
+- The optional pair-window counts scan each sender's full outgoing history; keep them as a
+  control, not for large runs.
 - `evaluate-final` needs complete 0/1 truth for the test population. The graph's label
   contract provides it by default; a `--truth` file must list negatives as well as
   positives. Its report estimates population metrics from a weighted sample: AP, ROC

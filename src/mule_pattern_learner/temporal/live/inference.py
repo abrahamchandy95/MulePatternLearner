@@ -45,7 +45,9 @@ def score(
         raise ValueError("No eligible accounts at this cutoff")
     registry = hubs if hubs is not None else load_hub_registry(dataset, manifest)
     store = (
-        contexts if contexts is not None else open_context_source(dataset, manifest, saved.config)
+        contexts
+        if contexts is not None
+        else open_context_source(dataset, manifest, saved.validated_config())
     )
     failed = True
     try:

@@ -3,10 +3,7 @@
 from copy import deepcopy
 from typing import Any
 
-from .config_schema import DEFAULT_RUN
-from .contract import DEFAULT_GROUPS, LEGACY_GROUPS, POOL_GROUPS, FeaturePlan, extraction_plan
-
-BUILT_IN_GROUPS = tuple(DEFAULT_RUN["feature_groups"])
+from .contract import BUILT_IN_GROUPS, DEFAULT_GROUPS, POOL_GROUPS, FeaturePlan, extraction_plan
 
 
 def feature_experiments(base: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -24,8 +21,6 @@ def feature_experiments(base: dict[str, Any]) -> dict[str, dict[str, Any]]:
     model on the same root inputs (the tabular control, no attention or slots).
     """
     cases = {
-        "legacy_single": (LEGACY_GROUPS, "single", False),
-        "legacy_split": (LEGACY_GROUPS, "split", False),
         "windows_only": (
             ("entity_meta", "rolling_windows", "amount_ratios", "recency", "association_counts"),
             "summary",
@@ -74,12 +69,7 @@ def feature_experiments(base: dict[str, Any]) -> dict[str, dict[str, Any]]:
     result = {}
     for name, (groups, architecture, slot_sum) in cases.items():
         config = deepcopy(base)
-        config.update(
-            feature_groups=list(groups),
-            architecture=architecture,
-            variant="temporal",
-            slot_sum=slot_sum,
-        )
+        config.update(feature_groups=list(groups), architecture=architecture, slot_sum=slot_sum)
         FeaturePlan.from_config(config)
         try:
             extraction_plan(config)

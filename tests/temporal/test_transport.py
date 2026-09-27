@@ -39,7 +39,7 @@ from mule_pattern_learner.temporal.live.context_query import (
 )
 from mule_pattern_learner.temporal.live.contract import (
     CONTRACT_VERSION,
-    LEGACY_GROUPS,
+    DEFAULT_GROUPS,
     ContextKey,
     FeaturePlan,
     PoolPlan,
@@ -63,6 +63,7 @@ from mule_pattern_learner.temporal.live.hubs import (
     load_hub_registry,
     query_hub_registry,
 )
+from mule_pattern_learner.temporal.live.queries import DEFAULT_FLAG_GROUPS
 from mule_pattern_learner.temporal.live.source import StreamingContextSource
 from mule_pattern_learner.temporal.live.supervision import GraphObservedLabels
 from mule_pattern_learner.tigergraph.client import Client, _status_error, _TimeoutConnection
@@ -1078,7 +1079,7 @@ def test_preparation_keys_fingerprint_only_preparation_settings(tmp_path: Path) 
         {"scope_unowned": "independent"},
         {"scope_unowned": "shared"},
         {"sampler": {**base["sampler"], "children": {"recent": 2, "associations": 0}}},
-        {"extraction_groups": [*LEGACY_GROUPS, "pair_history"]},
+        {"extraction_groups": [*DEFAULT_GROUPS, "rolling_windows"]},
     ]
     for change in different:
         assert dataset.preparation_fingerprint(
@@ -1385,6 +1386,19 @@ def test_configurations_saved_before_the_restructure_still_validate() -> None:
         validate_config({**saved, "label_policy": "observed"})
     with pytest.raises(ValueError, match="observed_labels = 'x.parquet' is no longer supported$"):
         validate_config({**saved, "observed_labels": "x.parquet"})
+    # The model variants became settings.
+    built_in = run_config()
+    assert validate_config({**saved, "variant": "temporal"}) == built_in
+    assert validate_config({**saved, "variant": "tabular"}) == {
+        **built_in,
+        "architecture": "summary",
+    }
+    no_fourier = validate_config({**saved, "variant": "no_fourier"})
+    groups = built_in["feature_groups"]
+    assert no_fourier["feature_groups"] == [g for g in groups if g != "time_encoding"]
+    assert no_fourier["extraction_groups"] == groups
+    with pytest.raises(ValueError, match="variant = 'wide' is no longer supported"):
+        validate_config({**saved, "variant": "wide"})
 
 
 def test_built_in_run_validates_and_only_run_config_applies_the_schema(tmp_path: Path) -> None:
@@ -1666,14 +1680,14 @@ def test_install_follows_an_asynchronous_request(monkeypatch: pytest.MonkeyPatch
         installation.install(executor(server))
 
 
-@pytest.mark.legacy
 def test_sent_parameters_match_the_repository_query_signatures() -> None:
     def signature(path: str, name: str) -> set[str]:
         text = installation.definitions((REPOSITORY_ROOT / path).read_text())[name]
         return installation.parameter_names(text)
 
     context = signature("gsql/temporal/training_context.gsql", "temporal_training_context")
-    for plan in (PLAN, FeaturePlan(), FeaturePlan(LEGACY_GROUPS, "split")):
+    windows = (FeaturePlan(DEFAULT_FLAG_GROUPS, a) for a in ("split", "summary"))
+    for plan in (PLAN, *windows):
         server = ContextServer()
         store = StreamingContextSource(server, plan=plan, sampler=SAMPLER)
         store.fetch([root(0)], hop=1)

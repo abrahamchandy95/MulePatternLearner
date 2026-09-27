@@ -1,6 +1,6 @@
 # Training from the live temporal graph
 
-The [feature-group redesign](feature_redesign.md) documents the window-free feature groups, optional summaries and migration. Fixed 83/135 dimensions below describe the legacy control profile (legacy feature groups and the single architecture). The built-in v5 run (`DEFAULT_RUN` in `config_schema.py`) adds per-hop candidate pools, per-step resampling and a hub registry; see [candidate pools and resampling](#candidate-pools-and-resampling).
+The [feature-group redesign](feature_redesign.md) documents the window-free feature groups, optional summaries and migration. Fixed 83/135 dimensions below describe the window groups (the query's `include_*` defaults). The built-in v5 run (`DEFAULT_RUN` in `config_schema.py`) adds per-hop candidate pools, per-step resampling and a hub registry; see [candidate pools and resampling](#candidate-pools-and-resampling).
 
 The live path is `mule_pattern_learner.temporal.live`: cutoff-aware GSQL features,
 two layers of temporal attention and nnPU learning. Source belongs in Git, and the
@@ -263,10 +263,10 @@ processes or a bound on TigerGraph's server memory. MPS shares system memory.
 `choose_device()` selects CUDA, then available Apple MPS, then CPU. No full graph
 is copied to the accelerator.
 
-With the legacy profile, inputs include `x[N,83]`, `first_edge[B,8,135]`,
-`second_edge[N,4,135]` and `second_x[N,4,9]`, plus relation/rail indices and masks,
-where `N <= 9*B`. The v5 profile gives `x[N,9]`, `first_edge[B,16,142]`,
-`second_edge[N,4,142]` and `second_x[N,4,9]`, with `N <= 17*B`. The outermost peers
+With the window groups and fanouts (8, 4), inputs include `x[N,83]`,
+`first_edge[B,8,135]`, `second_edge[N,4,135]` and `second_x[N,4,9]`, plus relation/rail
+indices and masks, where `N <= 9*B`. The v5 profile gives `x[N,9]`,
+`first_edge[B,16,142]`, `second_edge[N,4,142]` and `second_x[N,4,9]`, with `N <= 17*B`. The outermost peers
 carry base metadata; the intermediate contexts carry the requested node features.
 Learned account embeddings are outputs of these layers, not persisted time
 encodings from GSQL.

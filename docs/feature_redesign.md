@@ -3,10 +3,9 @@
 This implements the first feature experiment stage of the feature plan v4 draft
 (retired; the draft is in git history). The built-in run (`DEFAULT_RUN` in
 `config_schema.py`) keeps memoryless TGAT and removes every hard-window input.
-Features are hypotheses; no mule-detection lift has been established. The legacy
-feature profile is what the components choose when a raw configuration has no
-`feature_groups`; `mule-temporal train` always starts from the built-in groups, so
-select legacy groups explicitly in an overrides file to compare against them.
+Features are hypotheses; no mule-detection lift has been established. Every group
+stays in the registry and the query, so an overrides file can select any of them to
+compare against the built-in groups.
 
 ## Implemented inputs
 
@@ -32,11 +31,9 @@ The registry in `temporal/live/contract.py` defines groups, dimensions,
 transforms, dependencies and query flags. Input dimensions are derived, including
 memory admission estimates. Disabled groups have no model columns or projection
 weights. The `split` architecture sends entity metadata through attention and
-optional **root-only** summaries through a separate MLP. The `single` architecture
-retains the old all-node-features-through-attention control. `summary` skips child
+optional **root-only** summaries through a separate MLP. `summary` skips child
 fetches and creates no attention parameters. A zero-node arm has no node/base
-projection parameters. The old `no_fourier` variant remains compatibility-only;
-it is not a no-window comparison.
+projection parameters. Model columns follow the registry order.
 
 ## History and GSQL
 

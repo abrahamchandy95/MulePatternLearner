@@ -11,7 +11,6 @@ from mule_pattern_learner.temporal.live.contract import (
     PoolPlan,
     FEATURE_GROUPS,
     DEFAULT_GROUPS,
-    LEGACY_GROUPS,
 )
 from mule_pattern_learner.temporal.live.batching import (
     make_live_batch,
@@ -161,7 +160,6 @@ def test_zero_node_features_and_summary_only_have_no_unused_projection_or_fetche
     source.close()
 
 
-@pytest.mark.legacy
 def test_registry_dependencies_fingerprints_and_unknown_fields():
     with pytest.raises(ValueError, match="dependencies"):
         FeaturePlan(("message_core", "amount_ratios"))
@@ -169,7 +167,9 @@ def test_registry_dependencies_fingerprints_and_unknown_fields():
         FeaturePlan(("message_core", "made_up"))
     a = FeaturePlan(DEFAULT_GROUPS, "split")
     assert a.fingerprint() == FeaturePlan(tuple(reversed(DEFAULT_GROUPS)), "split").fingerprint()
-    assert a.fingerprint() != FeaturePlan(LEGACY_GROUPS).fingerprint()
+    assert a.fingerprint() != FeaturePlan(DEFAULT_GROUPS, "summary").fingerprint()
+    with pytest.raises(ValueError, match="split or summary"):
+        FeaturePlan(DEFAULT_GROUPS, "single")
     assert not a.query_flags()["include_rolling_windows"]
     row = context(ContextKey("Account", "root", 100, 1000))
     row["features"]["fraud_label"] = 1
