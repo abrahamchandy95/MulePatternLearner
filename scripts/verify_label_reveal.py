@@ -7,7 +7,7 @@ discovery channel, availability clock and revealed set mule by mule. The dry run
 passes force = TRUE only to skip the job's already-revealed check, so the check also
 works on a graph whose labels were revealed; with apply = FALSE nothing is written.
 
-  python scripts/temporal/verify_label_reveal.py [--salt 42] [--budget 20]
+  python scripts/verify_label_reveal.py [--salt 42] [--budget 20]
 
 Exit code 0 means the two implementations agree.
 """

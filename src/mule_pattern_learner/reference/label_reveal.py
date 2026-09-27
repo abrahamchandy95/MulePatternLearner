@@ -4,8 +4,8 @@
 revealed set for every internal mule from the rows INPUTS_QUERY prints, with the
 job's own hash (tigergraph.reveal.reveal_uniforms) and parameter defaults
 (tigergraph.reveal.REVEAL_DEFAULTS). It reads nothing itself:
-scripts/temporal/verify_label_reveal.py compares it with the installed job, and
-scripts/temporal/simulate_label_reveal.py runs it over many salts.
+scripts/verify_label_reveal.py compares it with the installed job, and
+scripts/simulate_label_reveal.py runs it over many salts.
 """
 
 from __future__ import annotations

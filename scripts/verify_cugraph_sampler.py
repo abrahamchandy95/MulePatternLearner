@@ -17,8 +17,8 @@ means cuGraph could not run here (no CUDA, or cupy or a supported pylibcugraph i
 missing; install the cuda12 or cuda13 extra, pylibcugraph 26.8).
 
 Usage:
-  python scripts/temporal/verify_cugraph_sampler.py [--seeds 600] [--rmm-pool 2GiB]
-  python scripts/temporal/verify_cugraph_sampler.py --live [--config overrides.toml]
+  python scripts/verify_cugraph_sampler.py [--seeds 600] [--rmm-pool 2GiB]
+  python scripts/verify_cugraph_sampler.py --live [--config overrides.toml]
 
 --live builds one batch from the live graph with the built-in run settings (a --config
 file only overrides keys). It prepares the default run's cache first if needed, which

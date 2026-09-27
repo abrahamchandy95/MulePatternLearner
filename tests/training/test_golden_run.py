@@ -22,7 +22,7 @@ The literals hold on macOS arm64 and on Linux x86_64:
   from the next one, far above that rounding, so the APs and the selected epoch do not
   flip between hosts.
 
-`benchmark_live_batch.py` prints the same digests and first loss for the live parity
+`benchmark_batch.py` prints the same digests and first loss for the live parity
 check; the second test pins it to these literals.
 """
 
@@ -264,8 +264,8 @@ def test_built_in_run_reproduces_the_golden_numbers(tmp_path: Path) -> None:
 
 
 def load_benchmark() -> Any:
-    path = REPOSITORY_ROOT / "scripts/temporal/benchmark_live_batch.py"
-    spec = importlib.util.spec_from_file_location("script_benchmark_live_batch", path)
+    path = REPOSITORY_ROOT / "scripts/benchmark_batch.py"
+    spec = importlib.util.spec_from_file_location("script_benchmark_batch", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -286,7 +286,7 @@ def test_benchmark_reports_the_golden_first_batch_and_loss(
 
     monkeypatch.setattr(module, "open_context_source", open_source)
     report_path = tmp_path / "report.json"
-    argv = ["benchmark_live_batch", "--config", str(overrides), "--dataset", str(dataset)]
+    argv = ["benchmark_batch", "--config", str(overrides), "--dataset", str(dataset)]
     monkeypatch.setattr(sys, "argv", [*argv, "--output", str(report_path), "--train-step"])
     module.main()
     report = json.loads(report_path.read_text())
