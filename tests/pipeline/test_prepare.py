@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -21,7 +21,6 @@ from mule_pattern_learner.testing.builders import (
     example_config,
     unit_config,
 )
-from mule_pattern_learner.testing.fake_graph import ScopeServer
 
 
 @pytest.fixture
@@ -79,21 +78,6 @@ def test_prepare_dataset_checks_query_hashes_before_reusing_a_ready_dataset(
         pipeline_prepare.prepare_dataset(config, data)
     with pytest.raises(ValueError, match="different GSQL sources"):
         data_manifest.load_prepared(dataset)
-
-
-def test_the_source_id_comes_from_the_scope_or_the_graph() -> None:
-    counts = {"Account": 10, "Party": 4}
-    header = {"ready": True, "source_id": SNAPSHOT_SOURCE, "split_seed": 42}
-    scope_id = unit_config().scope.id
-    server = ScopeServer(header, "linked")
-    server.client.graphname = "G"
-    resolved = pipeline_prepare.resolve_source_id(cast(Any, server), scope_id, counts)
-    assert resolved == SNAPSHOT_SOURCE
-    fresh = ScopeServer(None, "linked")
-    fresh.client.graphname = "G"
-    derived = pipeline_prepare.resolve_source_id(cast(Any, fresh), scope_id, counts)
-    assert derived == pipeline_prepare.derived_source_id("G", counts) and derived.startswith("G_")
-    assert derived != pipeline_prepare.derived_source_id("G", {**counts, "Account": 11})
 
 
 def record_graph_steps(monkeypatch: pytest.MonkeyPatch, steps: list[str]) -> None:

@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from mule_pattern_learner.config import DEFAULT_CONFIG
+from mule_pattern_learner.contract.server import GRAPH_NAME
 from mule_pattern_learner.data.manifest import dataset_settings
+from mule_pattern_learner.testing.builders import SNAPSHOT_SOURCE, unit_config
 from mule_pattern_learner.testing.fake_connection import executor
-from mule_pattern_learner.testing.fake_graph import policy_counts
+from mule_pattern_learner.testing.fake_graph import ScopeServer, policy_counts
 from mule_pattern_learner.tigergraph import provenance
 
 
@@ -50,3 +52,18 @@ def test_source_counts_ignore_experiment_scopes(monkeypatch: pytest.MonkeyPatch)
     counts["Account"] = 11
     with pytest.raises(ValueError, match="counts changed"):
         provenance.verify_frozen_source(tg, manifest)
+
+
+def test_the_source_id_comes_from_the_scope_or_the_graph() -> None:
+    counts = {"Account": 10, "Party": 4}
+    header = {"ready": True, "source_id": SNAPSHOT_SOURCE, "split_seed": 42}
+    scope_id = unit_config().scope.id
+    resolved = provenance.resolve_source_id(
+        cast(Any, ScopeServer(header, "linked")), scope_id, counts
+    )
+    assert resolved == SNAPSHOT_SOURCE
+    fresh = cast(Any, ScopeServer(None, "linked"))
+    derived = provenance.resolve_source_id(fresh, scope_id, counts)
+    assert derived == provenance.derived_source_id(counts)
+    assert derived.startswith(GRAPH_NAME + "_")
+    assert derived != provenance.derived_source_id({**counts, "Account": 11})

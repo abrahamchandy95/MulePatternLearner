@@ -15,18 +15,16 @@ from pathlib import Path
 from typing import Any
 
 from ..config import DEFAULT_CONFIG, RunConfig
-from ..contract.fingerprints import fingerprint
 from ..data.manifest import check_query_hashes, dataset_id, read_manifest, write_manifest
 from ..data.preparation import prepare
 from ..paths import DATA_DIR, DatasetPaths, datasets
 from ..tigergraph.cutoffs import TigerGraphCutoffs
-from ..tigergraph.executor import TigerGraphExecutor
 from ..tigergraph.hubs import TigerGraphHubs
 from ..tigergraph.installer import install, undefined_queries
 from ..tigergraph.labels import TigerGraphObservedLabels
-from ..tigergraph.provenance import source_counts
+from ..tigergraph.provenance import resolve_source_id, source_counts
 from ..tigergraph.reveal import ensure_revealed_labels
-from ..tigergraph.scope import TigerGraphScope, ensure_scope, scope_header
+from ..tigergraph.scope import TigerGraphScope, ensure_scope
 from .connect import connect
 
 
@@ -41,19 +39,6 @@ def install_queries(config: RunConfig = DEFAULT_CONFIG) -> dict[str, Any]:
     result = install(executor)
     result["not_defined"] = undefined_queries(executor)
     return result
-
-
-def derived_source_id(graph: str, counts: dict[str, int]) -> str:
-    """A stable name for the loaded snapshot: graph name plus a hash of its vertex counts."""
-    return f"{graph}_{fingerprint(counts)[:12]}"
-
-
-def resolve_source_id(executor: TigerGraphExecutor, scope_id: str, counts: dict[str, int]) -> str:
-    """The source id: an existing scope's source, else a name derived from the graph."""
-    attrs = scope_header(executor, scope_id)
-    if attrs is not None:
-        return str(attrs["source_id"])
-    return derived_source_id(str(executor.client.graphname), counts)
 
 
 def find_datasets(config: RunConfig, data: Path = DATA_DIR) -> list[DatasetPaths]:
