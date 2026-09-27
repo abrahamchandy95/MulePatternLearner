@@ -6,6 +6,7 @@ import inspect
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pytest
 import torch
 
@@ -40,26 +41,58 @@ def test_cuda_rng_restore_sets_the_training_device_only(
     assert "get_rng_state_all" not in inspect.getsource(trainer)
 
 
+def resume_state() -> ResumeState:
+    """A resume state after one epoch of a run without a weight average."""
+    weights = {"weight": torch.ones(2)}
+    return ResumeState(
+        model=weights,
+        optimizer={"state": {}, "param_groups": []},
+        weight_average=None,
+        numpy_rng=dict(np.random.default_rng(0).bit_generator.state),
+        torch_rng=torch.get_rng_state(),
+        cuda_rng=None,
+        epoch=1,
+        step=0,
+        stopped=False,
+        loss_sum=torch.tensor(0.5),
+        loss_steps=3,
+        best_state=weights,
+        best_ap=0.25,
+        best_epoch=1,
+        best_scores=torch.tensor([0.1, 0.9], dtype=torch.float64),
+        best_accepted=torch.tensor([True, True]),
+        epoch_rows=[{"epoch": 1, "loss": 0.5}],
+        sampler_backend="torch",
+        progress={"elapsed_seconds": 1.0, "totals": {"roots": 8}},
+        rejections={"run": {"requested": 8}, "epoch": {}},
+    )
+
+
 def test_a_resume_state_loads_only_in_its_format_and_configuration(tmp_path: Path) -> None:
     run = RunPaths(tmp_path / "run")
     assert not run_started(run) and load_resume_state(DEFAULT_CONFIG, run) is None
     run.root.mkdir()
-    ResumeState({"epoch": 1, "step": 0}).save(run.resume, DEFAULT_CONFIG)
+    resume_state().save(run.resume, DEFAULT_CONFIG)
     assert run_started(run)
     payload = torch.load(run.resume, weights_only=True)
     assert payload["format"] == ResumeState.FORMAT == 1
     assert payload["config_fingerprint"] == DEFAULT_CONFIG.fingerprint()
     state = load_resume_state(DEFAULT_CONFIG, run)
-    assert state is not None and state.values == {"epoch": 1, "step": 0}
+    assert state is not None and (state.epoch, state.step, state.best_ap) == (1, 0, 0.25)
+    saved, expected = state.best_scores, resume_state().best_scores
+    assert saved is not None and expected is not None and torch.equal(saved, expected)
     # Runtime settings may change between segments; results settings may not.
     faster = DEFAULT_CONFIG.with_changes({"runtime": {"threads": 8}})
-    assert load_resume_state(faster, run) == state
+    assert load_resume_state(faster, run) is not None
     slower = DEFAULT_CONFIG.with_changes({"training": {"learning_rate": 0.5}})
     with pytest.raises(ValueError, match="different configuration"):
         load_resume_state(slower, run)
     # A state of another layout, such as the checkpoint_last.pt of older runs, is refused.
     torch.save({**payload, "format": 0}, run.resume)
     with pytest.raises(ValueError, match="format 1"):
+        load_resume_state(DEFAULT_CONFIG, run)
+    torch.save({k: v for k, v in payload.items() if k != "rejections"}, run.resume)
+    with pytest.raises(ValueError, match="other fields than a resume state"):
         load_resume_state(DEFAULT_CONFIG, run)
     run.metrics.write_text("{}")
     with pytest.raises(FileExistsError, match="already complete"):

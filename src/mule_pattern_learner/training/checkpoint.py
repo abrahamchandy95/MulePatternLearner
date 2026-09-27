@@ -10,7 +10,8 @@ from its metrics.json under the same check (completed_run).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -23,21 +24,49 @@ from ..paths import RunPaths
 
 @dataclass(frozen=True)
 class ResumeState:
-    """What an interrupted run continues from.
+    """What an interrupted run continues from, as resume.pt stores it.
 
-    ``values`` holds the model, optimizer, weight average, RNG states, schedule
-    position and selection state, and the run's totals; `_TrainingRun.save_last` names
-    them. resume.pt stores them with FORMAT and the fingerprint of the configuration.
+    `_TrainingRun.save_last` writes it and `_TrainingRun.restore` continues from it.
+    resume.pt stores its fields with FORMAT and the fingerprint of the configuration.
     """
 
     # The payload layout this code writes and reads.
     FORMAT: ClassVar[int] = 1
 
-    values: dict[str, Any]
+    model: dict[str, torch.Tensor]
+    optimizer: dict[str, Any]
+    # WeightAverage.saved(), or None without a weight average.
+    weight_average: dict[str, Any] | None
+    # The numpy generator at the start of the current epoch, whose schedule it draws.
+    numpy_rng: Mapping[str, Any]
+    torch_rng: torch.Tensor
+    # The training device's CUDA generator, or None off CUDA.
+    cuda_rng: torch.Tensor | None
+    # The schedule position: epochs finished, steps of the current epoch done.
+    epoch: int
+    step: int
+    stopped: bool
+    loss_sum: torch.Tensor
+    loss_steps: int
+    # The selection so far: the best epoch's weights, validation AP, scores and mask.
+    best_state: dict[str, torch.Tensor]
+    best_ap: float
+    best_epoch: int
+    best_scores: torch.Tensor | None
+    best_accepted: torch.Tensor | None
+    # The epochs.csv rows of the finished epochs, without their selected flag.
+    epoch_rows: list[dict[str, Any]]
+    # The sampler backend the run resolved.
+    sampler_backend: str
+    # history.Progress.saved(): the totals of every segment so far.
+    progress: dict[str, Any]
+    # inference.rejections.TrainingRejections.saved().
+    rejections: dict[str, dict[str, int]]
 
     def save(self, path: Path, config: RunConfig) -> None:
         """Replace path atomically, so a crash never leaves a truncated state."""
-        payload = {**self.values, "format": self.FORMAT, "config_fingerprint": config.fingerprint()}
+        payload = {field.name: getattr(self, field.name) for field in fields(self)}
+        payload |= {"format": self.FORMAT, "config_fingerprint": config.fingerprint()}
         with atomic_write(path) as pending:
             torch.save(payload, pending)
 
@@ -45,12 +74,13 @@ class ResumeState:
     def load(cls, path: Path, config: RunConfig) -> ResumeState:
         """The state saved at path, refused unless config is the configuration it was saved by."""
         payload = torch.load(path, map_location="cpu", weights_only=True)
-        if payload.get("format") != cls.FORMAT:
+        if payload.pop("format", None) != cls.FORMAT:
             raise ValueError(f"{path} is not a resume state of format {cls.FORMAT}")
-        if payload.pop("config_fingerprint") != config.fingerprint():
+        if payload.pop("config_fingerprint", None) != config.fingerprint():
             raise ValueError("The resume state belongs to a different configuration")
-        del payload["format"]
-        return cls(payload)
+        if set(payload) != {field.name for field in fields(cls)}:
+            raise ValueError(f"{path} holds other fields than a resume state of this code")
+        return cls(**payload)
 
 
 def run_started(run: RunPaths) -> bool:

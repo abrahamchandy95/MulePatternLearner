@@ -60,6 +60,31 @@ class Progress:
             "cache_hits": self.base_contexts["cache_hits"] + counts.cache_hits,
         }
 
+    def saved(self) -> dict[str, Any]:
+        """The totals of every segment so far and the time they took, for resume.pt.
+
+        Plain dicts and ints: torch.load(weights_only=True) refuses a Counter.
+        """
+        counts = self.context_counts()
+        return {
+            "elapsed_seconds": time.perf_counter() - self.started,
+            "totals": dict(self.totals),
+            "database_calls": self.calls(),
+            "rejections": self.rejections(),
+            "contexts": {"requested": counts["requested"], "cache_hits": counts["cache_hits"]},
+            # The distinct contexts asked for, as their context_hash values.
+            "context_keys": torch.tensor(sorted(self.contexts.counts.seen), dtype=torch.int64),
+        }
+
+    def restore(self, saved: dict[str, Any]) -> None:
+        """Continue from the totals of the earlier segments (saved), counting this one on."""
+        self.started -= float(saved["elapsed_seconds"])
+        self.totals = Counter(saved["totals"])
+        self.base_calls = int(saved["database_calls"])
+        self.base_rejections = Counter(saved["rejections"])
+        self.base_contexts = Counter(saved["contexts"])
+        self.contexts.counts.seen.update(saved["context_keys"].tolist())
+
     def record(self, record: dict[str, Any]) -> dict[str, Any]:
         """record with the run's totals so far."""
         contexts = self.context_counts()
