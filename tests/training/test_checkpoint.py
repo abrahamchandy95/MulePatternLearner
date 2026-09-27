@@ -63,6 +63,8 @@ def resume_state() -> ResumeState:
         best_accepted=torch.tensor([True, True]),
         epoch_rows=[{"epoch": 1, "loss": 0.5}],
         sampler_backend="torch",
+        dataset_id="d1",
+        dataset_manifest_sha256="0" * 64,
         progress={"elapsed_seconds": 1.0, "totals": {"roots": 8}},
         rejections={"run": {"requested": 8}, "epoch": {}},
     )

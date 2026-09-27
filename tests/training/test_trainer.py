@@ -254,6 +254,42 @@ def test_resume_refuses_a_changed_result_setting(
         fit(tmp_path, "run", changed, resume=True)
 
 
+def test_resume_refuses_a_dataset_other_than_the_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = base_config()
+    prepared_dataset(tmp_path / "dataset", config, monkeypatch)
+
+    def first_fetch(keys: list[ContextKey], hop: int, calls: Counter[str]) -> bool:
+        return True
+
+    for name, fail in (("checkpointed", after_validation(1)), ("early", first_fetch)):
+        with pytest.raises(RuntimeError):
+            fit(tmp_path, name, config, contexts=FakeSource(config, fail=fail))
+    assert RunPaths(tmp_path / "checkpointed").resume.exists()
+    # Stopped before its first checkpoint: config.json names the dataset.
+    assert not RunPaths(tmp_path / "early").resume.exists()
+    ours = dataset_id(RUNTIME_SOURCE, config)
+    # The graph was reloaded and a new dataset prepared for the same settings.
+    other, _, _ = prepared_dataset(tmp_path / "other", config, monkeypatch, "another_source")
+    theirs = dataset_id("another_source", config)
+    for name in ("checkpointed", "early"):
+        with pytest.raises(ValueError, match=f"another dataset: dataset id {ours} .given {theirs}"):
+            trainer.train(
+                config,
+                other,
+                RunPaths(tmp_path / name),
+                contexts=FakeSource(config),
+                hubs=hub_registry(),
+                resume=True,
+            )
+    # The same dataset prepared again is another dataset too: its manifest changed.
+    prepared_dataset(tmp_path / "dataset", config, monkeypatch)
+    (tmp_path / "dataset" / "manifest.json").write_text("{}")
+    with pytest.raises(ValueError, match="another dataset: dataset manifest sha256"):
+        fit(tmp_path, "checkpointed", config, resume=True)
+
+
 def test_batches_use_train_mode_step_seeds_and_the_hub_registry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

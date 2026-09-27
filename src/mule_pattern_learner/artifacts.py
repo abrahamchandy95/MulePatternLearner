@@ -112,6 +112,11 @@ def read_run_config(path: Path) -> RunConfig:
     return RunConfig.from_dict(read_json(path)["config"])
 
 
+def read_run_provenance(path: Path) -> dict[str, Any]:
+    """Where and how the run a config.json records ran (write_run_config)."""
+    return dict(read_json(path)["provenance"])
+
+
 def event_line(record: Mapping[str, Any]) -> str:
     """One events.jsonl line: a JSON object; NaN and infinity are refused."""
     return json.dumps(record, allow_nan=False)
