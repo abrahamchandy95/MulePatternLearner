@@ -27,7 +27,7 @@ of them to compare against the built-in groups.
 | `rolling_windows`, `amount_ratios`, `recency`, `association_counts`, `pair_window_counts` | Existing summary and pair inputs | Reproducible controls. `amount_ratios` requires `rolling_windows`. Out/in ratio is not pass-through speed. |
 | `sampler_meta` | Sampling-stratum embedding | Optional. Describes selection, not behavior. |
 
-The registry in `temporal/live/contract.py` defines groups, dimensions,
+The registry in `contract/feature_groups.py` defines groups, dimensions,
 transforms, dependencies and query flags. Input dimensions are derived, including
 memory admission estimates. Disabled groups have no model columns or projection
 weights. The `tgat` architecture (`TGAT`) sends entity metadata through attention and
@@ -119,7 +119,7 @@ source identity, scope and revealed labels; do not reveal labels again between
 feature variants. The settings are the built-in run; a variant is a `RunConfig` that
 changes only its own settings (`dataclasses.replace` or `RunConfig.with_changes`).
 After scoped isolation and batch-cost qualification, train one from Python with
-`pipeline.train.run(RunPaths.of(name, seed), config=variant)`, which writes
+`pipeline.train.train_run(RunPaths.of(name, seed), config=variant)`, which writes
 `results/<name>/seed-<seed>/`; one dataset in `data/<dataset id>/` serves every variant
 of the same dataset settings.
 
@@ -136,13 +136,11 @@ of the same dataset settings.
 
 Run parity and cost qualification first, then nnPU/noise-floor comparisons, then
 summary-only, event-core/zero-node, individual groups and
-combined winners. `feature_experiments()` builds these configurations while holding
-source/labels/clocks fixed. Its feature-group arms run without `slot_sum`, the model
-they were designed on; the `built_in` arms measure the built-in run against itself
-without `slot_sum`, without the pool groups, without `pool_internal_inflows`, and as a
-summary-only model on the same root inputs (`built_in_tabular`). The utility does not
-launch expensive runs automatically. No synthetic results are promoted as mule
-results.
+combined winners, holding source, labels and clocks fixed. The old matrix of these
+configurations is deleted; the experiments step declares the variants in
+`experiments/variants.py` (the controls measure the built-in run without the slot sum,
+without the pool groups, without `pool_internal_inflows` and as a summary-only model on
+the same root inputs). No synthetic results are promoted as mule results.
 
 Deferred until the first wave is measured: full counterparty concentration and
 reciprocity summaries, thresholded forwarding summaries, root-only causal walks,

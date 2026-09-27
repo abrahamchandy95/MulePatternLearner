@@ -1,3 +1,5 @@
+"""The pyTigerGraph connection: finite timeouts on every request and HTTP errors raised."""
+
 from collections.abc import Generator
 from contextlib import contextmanager
 import threading

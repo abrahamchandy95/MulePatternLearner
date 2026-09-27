@@ -129,7 +129,8 @@ FEATURE_GROUPS = {
     "recency": FeatureGroup(
         "summary",
         ("out_recency_days", "in_recency_days", "out_recency_present", "in_recency_present"),
-        # Keep the legacy log1p transform for these two baseline flags.
+        # No identity columns: the two present flags get log1p like the day counts, as
+        # in the model this group was designed with.
     ),
     "association_counts": FeatureGroup(
         "summary",

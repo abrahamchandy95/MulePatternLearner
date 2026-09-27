@@ -123,6 +123,7 @@ The end-to-end guide describes
 .venv/bin/ruff check src tests scripts
 .venv/bin/ruff format --check src tests scripts
 .venv/bin/basedpyright src
+.venv/bin/lint-imports
 .venv/bin/python scripts/render_queries.py --check
 ```
 
