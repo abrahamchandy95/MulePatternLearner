@@ -448,7 +448,7 @@ DEFAULT_CONFIG = RunConfig()
 ```
 
 - **The dataset id** is the fingerprint of the source id, `scope`, `dataset` and the sampler's pool parameters. It is exactly today's `PREPARATION_KEYS` minus the deleted ones.
-  - Of `scope`, that means `scope.id` and `scope.unowned`, as in `PREPARATION_KEYS` (`scope_id`, `scope_unowned`). `scope.create`, `scope.reveal_per_split` and `scope.reveal_salt` act once on the graph (whether a missing scope is created, and the one-time reveal), so changing them later names no other dataset.
+  - Awaiting the owner's confirmation (the implementation's reading, not an approved decision): of `scope`, that means `scope.id` and `scope.unowned`, as in `PREPARATION_KEYS` (`scope_id`, `scope_unowned`). `scope.create`, `scope.reveal_per_split` and `scope.reveal_salt` act once on the graph (whether a missing scope is created, and the one-time reveal), so changing them later names no other dataset.
 - **Audit constants are not run configuration.** `AUDIT_NEGATIVES = 2000` (`evaluation/sample.py`), `REVIEW_BUDGETS = (0.01, 0.05, 0.10)`, `BOOTSTRAP_REPLICATES = 1000` and `INTERVAL = 0.90` (`metrics.py`) are recorded in each audit JSON.
 - **Component selection.** One `match` per real choice: `model.build.build_model` (tgat or summary), `sampling.backend.choose_sampler` (auto, torch or cugraph) and `training.objective` (positive weight).
   - The only registries are two plain tables: feature groups and variants.
@@ -713,7 +713,7 @@ No experiment writes to `/tmp`.
 | `temporal/encoding.py` | `contract/time_basis.py` (numpy, `BASIS_ID`), `batching/time_encoding.py` (torch) |
 | `temporal/loss.py` | `model/loss.py` |
 | `temporal/metrics.py` | `metrics.py`, merged with the weighted metrics of `L/evaluation.py`; `grouped_ap_interval` becomes the clustered bootstrap |
-| `L/contract.py` | `contract/server.py`, `graph_schema.py`, `feature_groups.py` (all groups; pool constants), `sampler_plan.py`, `bounds.py`, `fingerprints.py`; `from_config`/`extraction_plan` deleted; `LEGACY_GROUPS`, `FEATURE_NAMES` ordering, `HopBound`, positional pool arguments and `per_relation` deleted |
+| `L/contract.py` | `contract/server.py`, `graph_schema.py`, `feature_groups.py` (all groups; pool constants), `sampler_plan.py`, `bounds.py`, `fingerprints.py`; `from_config` deleted; `extraction_plan` kept in `feature_groups.py` (the groups the context source requests: the model's without the client-computed ones); `LEGACY_GROUPS`, `FEATURE_NAMES` ordering, `HopBound`, positional pool arguments and `per_relation` deleted |
 | `L/config_schema.py` | `config.py`; `FALLBACKS` and `OPERATIONAL_DEFAULTS` deleted |
 | `L/executor.py` | `tigergraph/executor.py`; `transport_settings`/`live_executor` to `pipeline/connect.py` |
 | `L/installation.py` | `tigergraph/gsql_text.py`, `installer.py`, `provenance.py`; installs through the executor, not `executor.client.conn` |
@@ -890,12 +890,14 @@ The steps, in order:
    - Update the README's commands in the same commit.
    - Gate: an offline end-to-end test asserts the run directory's file set; golden identical.
    - Names kept on purpose: `data.preparation.prepare` stays `prepare`, because `pipeline.prepare.prepare_dataset` is the use case callers run and two functions of one name would blur the layers. `_TrainingRun.score` keeps its name: it already runs the one scoring loop (`inference.predictor.score_batches`), which is what the renames table asks of it.
-   - Left for a later code step: `build_batch` and `build_root_batch` still take `fanouts` beside the `sampler` section that holds them. Drop the parameter and read `sampler.fanouts` before the experiments step; about 50 test calls pass it.
+   - Left for a later code step: `build_batch` and `build_root_batch` still take `fanouts` beside the `sampler` section that holds them (both are required now, with the feature plan). Drop the parameter and read `sampler.fanouts` before the experiments step; about 50 test calls pass it.
    - Left for the server step: the stale-query guards the removed `legacy` marker tracked, `_check_label_fields` in `data/accounts.py` (its masked-label check) and `check_graph_label_rows` in `tigergraph/labels.py`. Delete them once that step has installed every query under its new name and re-prepared the dataset: from then on no installed query and no prepared dataset can predate the masked-label predicate.
    - Kept until the owner decides, in the server step: the scope-rule inference the marker also tracked (`inferred_scope_policy` in `tigergraph/scope.py`, from the `strict_mule_v1` era). The scope vertex stores no `scope.unowned` rule, so inferring it from the membership is the only check that an existing scope was created with the configured rule. Deleting it means storing the rule on the vertex (a schema change) or giving up that check.
    - Left for the audit step, whose gate runs audits on `FakeTigerGraph`: the fake has not absorbed the inline executors. `tests/data/test_scope_isolation.py` defines four (two subclasses of the fake that check parameters, and standalone pagers of the scope population and of the ground truth), `tests/training/test_trainer.py` defines `PreparedExecutor`, and `testing/fake_graph.py` still holds `ContextServer`, `Runner`, `ScopeServer` and `ScoringExecutor` beside `FakeTigerGraph`. The stub in `tests/pipeline/test_connect.py` stays: it replaces the `TigerGraphExecutor` class to record its constructor arguments and runs no query. The audit step also rewords "final audit" in the docstrings and messages of `evaluation/audit.py`, `contract/bounds.py`, `data/accounts.py` and `data/ports.py` as the ground-truth audit, since it makes the audit cover any split.
    - Left for the docs step: "arm" in `docs/feature_redesign.md` and `docs/temporal_training_end_to_end.md` (the owner's word is "variant"), and `<output>.rejected.txt` in `docs/live_temporal_training.md` (now `scores/<stem>_<date>_rejected.txt`). That guide also says to resume a run that stopped on rejected roots with a higher limit. The commands take no options, so only a Python caller can, and the guide must say how: `train_run(config=DEFAULT_CONFIG.with_changes({"runtime": {"max_rejected_root_fraction": 0.01}}), resume=True)` from `pipeline.train`.
-   - Commits that fail the per-commit gate (the history is not rewritten, so bisect should skip them): `55bb769` and `90c0ed4` fail `ruff check --select I`, which `6ad436f` fixes; `519d897` and `455654e` fail `tests/test_naming.py`, which `17cbaf3` fixes.
+   - Commits that fail the per-commit gate (the history is not rewritten, so bisect should skip them): `b0bbbaf`, `eeaf5d5` and `30d1461` of the deduplication step fail `ruff check --select I`, which `68e8297` fixes; `55bb769` and `90c0ed4` fail it too, which `6ad436f` fixes; `519d897` and `455654e` fail `tests/test_naming.py`, which `17cbaf3` fixes. Ruff's configuration now selects the import rules, so the plain `ruff check` catches this.
+   - No experiment runner exists on `restructure` until the experiments step writes `experiments/variants.py`, `runner.py` and `scripts/run_experiments.py` (the old matrix `feature_experiments` is deleted, not ported). Until then control experiments run from `temporal`.
+   - The mid-migration review (of the move, deduplication, typed-configuration and run-layout steps) settled, before later steps build on them: resume refuses a dataset other than the run's (`resume.pt` records its id and manifest sha256); config.json and the start and resume events record each segment's device, threads and determinism, and a changed one is a `host_settings` event; old saved configurations without fan-outs or sampler are refused; the graph and query names live in `contract/server.py`; every context source is built by `pipeline.connect.context_source`; every output line is an `emit` record with an `event` name (warnings and retries included) and the CLI prints its result on one line; audits and scoring run inside the saved runtime settings; `history.csv` counts `memory_hits`; `metrics.json` records `elapsed_seconds`.
 9. **Live parity with unchanged queries (owner-run, read-only).**
    - (a) `mule check` reports every query up to date. The text did not change, so nothing is installed.
    - Then prepare the new dataset, which (b) compares and (c) needs: `mule check` refuses the batch without it, and `mule train` would go on to the hour-long baseline run, which waits for the server step. With the queries, the scope and the reveal already in place, preparing only reads the graph (about 6 minutes):
@@ -910,6 +912,8 @@ The steps, in order:
     - Run `mule install` (about 50 minutes; rerun if the 45-minute wait expires). The new dataset is re-prepared (about 6 minutes).
     - Repeat check (c): the digests must be unchanged.
     - Then drop the confirmed retired names, callers first, with a one-off call in this step (not a command flag).
+    - The renames are the constants of `contract/server.py` (and the allow-list of `tests/test_naming.py`, which a test keeps equal to them); some test texts of GSQL still spell the old names and fail until updated.
+    - From the mid-migration review: the installer still writes (the scope schema change, CREATE, `installQueries`) through `executor.client.conn` rather than the executor, because the executor's retry errors would hide the install timeout the installer polls on. Route the writes through the executor with one attempt when this step runs `mule install` live. After the dataset is re-prepared, consider comparing the manifest's query hashes by file again (`data.manifest.changed_query_files` matches on content alone so that files moved in the layered restructure stay valid).
     - Gate offline: render check; golden identical except the query hash literal; the allow-list shrinks to the vertex, scope id and salts.
     - If declined, skip this step.
 
@@ -918,15 +922,25 @@ The steps, in order:
     - Audits of any split; `revealed`, `ring_id` and `label_source` columns.
     - Ring-clustered intervals, curve arrays, tie-aware budgets everywhere, `diagnostics/proxy_validity.py`.
     - Gate: hand-computed small cases; audits on `FakeTigerGraph`.
+    - From the mid-migration review:
+      - `audit()` still audits the test split only and does seven jobs: give it the signature `audit(run, split, *, truth, scope, contexts)`, split it into `audit_population`, `score_sample` and `write_audit`, pass the loaded inputs in instead of loading them again (`pipeline.evaluate` and `audit` both call `audit_inputs`), define `AUDIT_NEGATIVES` once in `evaluation/sample.py`, reuse `data.splits.eligible_mask` and import at module level.
+      - The proxy metrics' top 1 and 5% counts (`metrics.proxy_metrics`) still ignore ties; make them tie-aware with the audit's budgets.
+      - `evaluate_predictions` is deleted; write `diagnostics/proxy_validity.py` anew.
+      - `FakeTigerGraph` answers only five read queries and has no `call` or `gsql`: make it a `ConnectionExecutor` (SHOW QUERY, the endpoint listing, vertex counts, the scope header), and give the executor protocol a `graph_name` so `pipeline/check.py` stops reading `executor.client.graphname`.
+      - Move the `capture_at_budgets` tests out of `tests/evaluation/test_audit.py` when the audit tests are rewritten, and merge the test builders (`testing/builders.py` has three configuration builders with three source ids, about a dozen message and context builders and several `SamplerPlan`s; `testing/sampler_checks.py` defines `message` again).
 12. **Plots and reports.** `reporting/`, `mule report`, automatic plots. Gate: every figure smoke-renders from synthetic files to a non-empty PNG under its fixed name; the matplotlib and torch contracts pass.
 13. **Context cache**, before any suite.
     - A disk tier inside `ContextSource` under `data/<dataset id>/contexts/`, with a size cap.
     - Keyed by hop, `ContextKey`, requested group flags, pool fingerprint, `CONTEXT_CONTRACT` and dataset id. It stores raw TigerGraph rows compressed, and the frozen-source check invalidates it.
     - The baseline run's `contexts_distinct` sets the cap.
     - Gate: golden identical with the cache on and off; hit rate in `metrics.json`.
+    - From the mid-migration review: `ContextSource.fetch` writes its LRU inline and `_canonical` drops the encodings before caching, while this step stores raw rows; extract a cache-tier interface first. Add the disk tier's hits to `history.csv` beside `memory_hits`.
 14. **Experiments.** `variants.py`, `runner.py`, `comparison.py`, `scripts/run_experiments.py` and the tests described under Experiments.
+    - From the mid-migration review: the pipeline functions connect on every call (`connect()` in each use case, and `evaluate_run` reads the whole truth each time); give them an optional connection or session so a suite connects once, prepares once and reads truth once. The executor raises `TransientQueryError` both when the outage budget runs out and when a suspected-deterministic failure repeats; add a subclass for the outage alone (for example `TigerGraphUnavailableError`) so the suite stops on an outage but carries on past one variant's own error. Add `OPTIONAL_GROUPS` (the groups outside `BUILT_IN_GROUPS`) to `contract/feature_groups.py` for the feature additions.
 15. **Diagnostics.** The modules, `mule diagnose`, and the research notes (with figures) filled from `archive/diagnostic-study`, after which `main` holds everything worth keeping from that branch. Gate: each analysis runs on a synthetic features table, and `feature_table` on `FakeTigerGraph` matches the batching features of the same keys.
+    - From the mid-migration review: `scripts/simulate_label_reveal.py` runs its interpreted query through `client.conn`; `diagnostics/reveal_spread.py` replaces it and reads through the executor. The import contracts already name `diagnostics` (the ports, fakes and matplotlib contracts), so its modules are checked from their first commit.
 16. **Docs.** The Diataxis tree and `architecture.md`. Gate: `test_doc_links.py` and the naming test.
+    - From the mid-migration review: tell users that a dataset prepared before the restructure records no dataset settings, so training refuses it and it is prepared again; and choose one adapter naming rule in `architecture.md` (the naming table asks for `<Technology><Port>`, for example `TigerGraphScopeReader`, while the tree and the code use `TigerGraphScope` and `ParquetTruth`).
 17. **Replace main.** Gate: the full offline gate, `pytest -m cuda` on the CUDA host, and read-only `pytest -m graph`. No push until the owner confirms.
 
 ```
@@ -957,3 +971,9 @@ All five were decided on 2026-09-27; see Owner decisions.
 3. **Validation audits for decisions**, with the test audit for reporting only.
 4. **Commit the `/tmp` scripts and notes to `archive/diagnostic-study` now.**
 5. **Push the fast-forwarded `main`** to `origin` and `learner`.
+
+Raised by the mid-migration review, not decided yet:
+
+6. **The table label reader.** `data.ports.ObservedLabelReader` keeps a `from_graph` flag and `positive_ids()`, and `data.accounts.select_accounts` branches on them, only for `testing.builders.FrameObservedLabels`: every run reads the graph's labels. Keep it as the tree lists it, or always read the graph's labels and turn `FrameObservedLabels` into a fake scope reader that returns the observed positives (and drop `metrics.json`'s constant `label_policy` and the external label providers in `gsql/README.md`).
+7. **The old saved-settings conversion** in `inference/saved_model.py` (`SAVED_SETTINGS`, the `variant`, `tabular` and `cohort_seed` values): keep it after live parity, so models trained on `temporal` keep loading, or delete it then. If it stays, a module of its own would keep `SavedModel` small.
+8. **The dataset id's scope settings** (under Configuration): only `scope.id` and `scope.unowned`, as implemented.
