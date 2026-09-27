@@ -15,6 +15,7 @@ from mule_pattern_learner.data.manifest import query_hashes
 from mule_pattern_learner.data.splits import resolve_cutoff
 from mule_pattern_learner.pipeline.connect import connect
 from mule_pattern_learner.tigergraph.context_query import validate_context
+from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffs
 from mule_pattern_learner.tigergraph.executor import checked_rows
 from mule_pattern_learner.tigergraph.installer import verify_sources
 from mule_pattern_learner.tigergraph.render import DEFAULT_FLAG_GROUPS
@@ -40,7 +41,7 @@ def main() -> None:
     assert attrs["Account"]["is_mule"] == "INT"
     matched = verify_sources(executor)
     account = args.account
-    cutoff_seq, cutoff_ms = resolve_cutoff(executor, args.date)
+    cutoff_seq, cutoff_ms = resolve_cutoff(TigerGraphCutoffs(executor), args.date)
     key = ContextKey("Account", account, cutoff_seq, cutoff_ms)
     row = checked_rows(
         executor.run(

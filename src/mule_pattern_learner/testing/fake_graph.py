@@ -25,7 +25,6 @@ from mule_pattern_learner.contract.bounds import REQUEST_KEYS
 from mule_pattern_learner.contract.feature_groups import FeaturePlan, extraction_plan
 from mule_pattern_learner.contract.graph_schema import RELATIONS, ContextKey
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
-from mule_pattern_learner.data.accounts import POPULATION_QUERY
 from mule_pattern_learner.paths import REPOSITORY_ROOT
 from mule_pattern_learner.testing.builders import (
     HUB,
@@ -37,9 +36,10 @@ from mule_pattern_learner.testing.builders import (
     synthetic_row,
 )
 from mule_pattern_learner.tigergraph.context_query import CONTEXT_QUERY
+from mule_pattern_learner.tigergraph.cutoffs import CUTOFF_QUERY
 from mule_pattern_learner.tigergraph.gsql_text import definitions, parameter_names
 from mule_pattern_learner.tigergraph.hubs import HUB_QUERY
-from mule_pattern_learner.tigergraph.scope import SCOPE_POLICY_QUERY
+from mule_pattern_learner.tigergraph.scope import POPULATION_QUERY, SCOPE_POLICY_QUERY
 
 PAYMENT_RELATIONS = frozenset(RELATIONS[:4])
 
@@ -132,7 +132,7 @@ class FakeExecutor:
             return self.scope_policy_rows(params)
         if name == POPULATION_QUERY:
             return self.population_rows(params)
-        if name == "temporal_training_cutoffs":
+        if name == CUTOFF_QUERY:
             return [
                 {
                     "status": "ok",
@@ -340,7 +340,13 @@ class ScopeServer:
     def __init__(self, header: dict[str, Any] | None, policy: str) -> None:
         self.header, self.policy = header, policy
         self.calls: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
-        self.client = SimpleNamespace(conn=SimpleNamespace(getVerticesById=self.vertices))
+        self.client = SimpleNamespace(
+            conn=SimpleNamespace(getVerticesById=self.vertices), graphname="Mule_Pattern_Learner"
+        )
+
+    def call(self, operation: Callable[[Any], Any], *, what: str) -> Any:
+        """A connection operation, run once (the executor would retry it)."""
+        return operation(self.client.conn)
 
     def vertices(self, *args: Any) -> list[dict[str, Any]]:
         if self.header is None:
@@ -366,6 +372,7 @@ class FakeStore:
     sampler: SamplerPlan
     query_calls: int
     rejections: Counter[str]
+    rejections_by_hop: dict[int, Counter[str]]
 
     def __init__(
         self,
@@ -380,6 +387,7 @@ class FakeStore:
         self.rows: dict[tuple[int, ContextKey], dict[str, Any]] = {}
         self.calls: list[tuple[int, list[ContextKey]]] = []
         self.rejections = Counter()
+        self.rejections_by_hop = {}
         self.query_calls = 0
 
     def row(self, key: ContextKey, hop: int = 1) -> dict[str, Any]:
@@ -395,12 +403,13 @@ class FakeStore:
         for key in keys:
             if key in self.reject:
                 self.rejections["history_capacity_exceeded"] += 1
+                self.rejections_by_hop.setdefault(hop, Counter())["history_capacity_exceeded"] += 1
                 out.append(None)
             else:
                 out.append(self.row(key, hop))
         return out
 
-    def close(self) -> None: ...
+    def close(self, *, wait: bool = True) -> None: ...
 
 
 class FakeSource:
@@ -441,7 +450,7 @@ class FakeSource:
                     rows.append(fake_context(key))
             return rows
 
-    def close(self) -> None:
+    def close(self, *, wait: bool = True) -> None:
         self.closed = True
 
 
@@ -452,9 +461,9 @@ class ScoringExecutor:
 
     def run(self, name: str, params: dict[str, Any], **_: Any) -> list[dict[str, Any]]:
         self.calls.append((name, params))
-        if name == "temporal_training_cutoffs":
+        if name == CUTOFF_QUERY:
             return [{"status": "ok", "last_visible_seqs": {str(params["cutoff_times"][0]): 29_999}}]
-        if name == "temporal_hub_registry":
+        if name == HUB_QUERY:
             (cutoff,) = params["cutoff_seqs"]
             # Score-new is unscoped: phase-3 rows over all visible history.
             assert not params.get("scope_id")

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .executor import connection_call
+from .executor import ConnectionExecutor
 from .installer import verify_sources
 from .scope import verify_scope
 
@@ -16,11 +16,9 @@ from .scope import verify_scope
 EXPERIMENT_METADATA_TYPES = frozenset({"Temporal_Training_Scope"})
 
 
-def source_counts(executor: Any) -> dict[str, int]:
+def source_counts(executor: ConnectionExecutor) -> dict[str, int]:
     """Live vertex counts by type, excluding experiment metadata vertex types."""
-    raw = connection_call(
-        executor, "getVertexCount", lambda conn: conn.getVertexCount("*", realtime=True)
-    )
+    raw = executor.call(lambda conn: conn.getVertexCount("*", realtime=True), what="getVertexCount")
     if not isinstance(raw, dict):
         raise ValueError("TigerGraph did not return counts by vertex type")
     return {
@@ -30,7 +28,7 @@ def source_counts(executor: Any) -> dict[str, int]:
     }
 
 
-def verify_frozen_source(executor: Any, manifest: dict[str, Any]) -> None:
+def verify_frozen_source(executor: ConnectionExecutor, manifest: dict[str, Any]) -> None:
     """Recheck live provenance on every streamed run, including prepared-data reuse.
 
     Counts and headers catch drift, but cannot prove absence of same-count edits.

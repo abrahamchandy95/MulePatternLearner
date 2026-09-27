@@ -12,10 +12,9 @@ import torch
 
 from mule_pattern_learner.batching.assemble import build_root_batch, child_key, make_live_batch
 from mule_pattern_learner.contract.feature_groups import DEFAULT_GROUPS, FeaturePlan
-from mule_pattern_learner.contract.graph_schema import RELATIONS, ContextKey
+from mule_pattern_learner.contract.graph_schema import HUB_COLUMNS, RELATIONS, ContextKey
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
 from mule_pattern_learner.data.contexts import StreamingContextSource
-from mule_pattern_learner.contract.graph_schema import HUB_COLUMNS
 from mule_pattern_learner.data.hub_registry import HubRegistry
 from mule_pattern_learner.model.tgat import LiveTGAT
 from mule_pattern_learner.testing.builders import (
@@ -30,6 +29,7 @@ from mule_pattern_learner.testing.builders import (
     slots,
 )
 from mule_pattern_learner.testing.fake_graph import FakeExecutor, FakeStore
+from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
 
 MPS = torch.backends.mps.is_available()
 
@@ -244,7 +244,7 @@ def test_recursive_context_keeps_same_neighbor_at_two_different_event_times() ->
     root = ContextKey("Account", "root", 100, 1000)
     messages = [message(90, 900, root), message(80, 800, root)]
     source = FakeExecutor({root: context(root, messages)})
-    store = StreamingContextSource(source)
+    store = StreamingContextSource(TigerGraphContextFetcher(source))
     batch = make_live_batch(store, [root], fanouts=(2, 2))
     assert child_key(messages[0]) in source.requested
     assert child_key(messages[1]) in source.requested
@@ -284,7 +284,9 @@ def test_one_hub_or_rejected_child_no_longer_aborts_the_batch() -> None:
         {root: context(root, messages)}, statuses={"busy": "history_capacity_exceeded"}
     )
     stats: dict[str, Any] = {}
-    with StreamingContextSource(executor, plan=DEFAULT_SPLIT_PLAN, sampler=SMALL_SAMPLER) as source:
+    with StreamingContextSource(
+        TigerGraphContextFetcher(executor), plan=DEFAULT_SPLIT_PLAN, sampler=SMALL_SAMPLER
+    ) as source:
         batch = make_live_batch(
             source,
             [root],
@@ -314,7 +316,10 @@ def test_rejected_roots_raise_in_batches_and_are_dropped_by_root_batches() -> No
     roots = [ContextKey("Account", f"R{i:02}", 100, 1000) for i in range(64)]
     executor = FakeExecutor(statuses={"R07": "missing_entity"})
     with StreamingContextSource(
-        executor, plan=DEFAULT_SPLIT_PLAN, sampler=SMALL_SAMPLER, request_batch_size=64
+        TigerGraphContextFetcher(executor),
+        plan=DEFAULT_SPLIT_PLAN,
+        sampler=SMALL_SAMPLER,
+        request_batch_size=64,
     ) as source:
         with pytest.raises(ValueError, match="rejected 1 of 64 root contexts"):
             make_live_batch(source, roots, plan=DEFAULT_SPLIT_PLAN, sampler=SMALL_SAMPLER)

@@ -127,7 +127,7 @@ experiment.
 
 ## Observed labels and masking
 
-The trainer depends on `ObservedLabelSource`, not on a masking implementation.
+The trainer depends on `ObservedLabelReader`, not on a masking implementation.
 Its table contains `account_id`, `known_positive`, `known_from_ms`. Unlisted
 accounts are unlabeled; usable positives must be known before the scoring cutoff.
 Oracle `is_mule`, mask and ring columns are rejected from this interface. Every

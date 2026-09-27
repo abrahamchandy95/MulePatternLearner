@@ -40,4 +40,10 @@ def test_score_new_checks_outputs_then_verifies_the_installed_queries(
     assert steps == []
     pending_path(output).unlink()
     result = pipeline_score.score_new(model, iter(["A1"]), "2025-01-01", output)
-    assert steps == ["connect", "verify", "score"] and result == {"executor": executor}
+    assert steps == ["connect", "verify", "score"]
+    # The cutoff clock, the hub registry and the contexts are read on that connection.
+    assert {name: port.executor for name, port in result.items()} == {
+        "cutoffs": executor,
+        "hub_reader": executor,
+        "fetcher": executor,
+    }

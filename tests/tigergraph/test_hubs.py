@@ -17,7 +17,7 @@ from mule_pattern_learner.data.hub_registry import (
 )
 from mule_pattern_learner.testing.builders import SAMPLER, hub_rows
 from mule_pattern_learner.testing.fake_graph import Runner
-from mule_pattern_learner.tigergraph.hubs import query_hub_registry
+from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
 
 
 def test_hub_registry_parse_save_load_and_stub_semantics(tmp_path: Path) -> None:
@@ -29,7 +29,7 @@ def test_hub_registry_parse_save_load_and_stub_semantics(tmp_path: Path) -> None
         return hub_rows(cutoffs, params["scope_id"])
 
     fake = Runner(run)
-    registry = query_hub_registry(fake, [2000, 1000], threshold=1024)
+    registry = TigerGraphHubs(fake).hub_registry([2000, 1000], threshold=1024)
     assert calls == [
         ("temporal_hub_registry", {"cutoff_seqs": cutoffs, "threshold": 1024, "scope_id": ""})
     ]
@@ -42,7 +42,7 @@ def test_hub_registry_parse_save_load_and_stub_semantics(tmp_path: Path) -> None
         registry.is_stub("Account", "H1", 1000, 1)  # a scoped batch needs a scoped registry
     assert registry.counts() == {"1000": {"3": 1}, "2000": {"3": 1}}
     # A scoped registry is keyed by phase: held-out events can only add later-phase rows.
-    scoped = query_hub_registry(fake, cutoffs, threshold=1024, scope_id="scope")
+    scoped = TigerGraphHubs(fake).hub_registry(cutoffs, threshold=1024, scope_id="scope")
     assert calls[-1][1]["scope_id"] == "scope"
     assert [scoped.is_stub("Account", "H1", 1000, phase) for phase in (1, 2, 3)] == [
         False,
@@ -96,16 +96,16 @@ def test_hub_registry_rejects_contract_violations(scope_id: str, change: dict[st
     rows = hub_rows([1000, 2000], scope_id)
     rows[0]["hubs"][0].update(change)
     with pytest.raises(ValueError, match="contract"):
-        query_hub_registry(
-            Runner(lambda n, p: rows), [1000, 2000], threshold=1024, scope_id=scope_id
+        TigerGraphHubs(Runner(lambda n, p: rows)).hub_registry(
+            [1000, 2000], threshold=1024, scope_id=scope_id
         )
 
 
 def test_hub_registry_rejects_stale_or_mismatched_responses() -> None:
     def check(rows: list[dict[str, Any]], message: str, scope_id: str = "") -> None:
         with pytest.raises(ValueError, match=message):
-            query_hub_registry(
-                Runner(lambda n, p: rows), [1000, 2000], threshold=1024, scope_id=scope_id
+            TigerGraphHubs(Runner(lambda n, p: rows)).hub_registry(
+                [1000, 2000], threshold=1024, scope_id=scope_id
             )
 
     rows = hub_rows([1000, 2000])

@@ -6,6 +6,7 @@ from pathlib import Path
 
 from mule_pattern_learner.config import validate_config
 from mule_pattern_learner.contract.feature_groups import DEFAULT_GROUPS
+from mule_pattern_learner.contract.server import QUERY_FILES
 from mule_pattern_learner.data import manifest as data_manifest
 from mule_pattern_learner.data.preparation import prepare
 from mule_pattern_learner.testing.builders import (
@@ -15,8 +16,10 @@ from mule_pattern_learner.testing.builders import (
     supplied_labels,
     unit_config,
 )
-from mule_pattern_learner.contract.server import QUERY_FILES
 from mule_pattern_learner.testing.fake_graph import FakeExecutor
+from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffs
+from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
+from mule_pattern_learner.tigergraph.scope import TigerGraphScope
 
 
 def test_preparation_keys_fingerprint_only_preparation_settings(tmp_path: Path) -> None:
@@ -66,9 +69,11 @@ def test_a_dataset_records_its_query_files_by_path_and_passes_its_own_check(
     manifest = prepare(
         config,
         dataset,
-        executor,
         {"Account": len(population)},
         FrameObservedLabels(supplied_labels()),
+        scope=TigerGraphScope(executor),
+        cutoffs=TigerGraphCutoffs(executor),
+        hubs=TigerGraphHubs(executor),
     )
     recorded = manifest["source"]["query_hashes"]
     assert set(recorded) == set(QUERY_FILES) == set(data_manifest.query_hashes())

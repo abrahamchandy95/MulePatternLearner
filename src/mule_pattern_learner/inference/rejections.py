@@ -21,15 +21,15 @@ def rejection_summary(
     ``rejected`` counts the roots that were not scored. ``rejected_children`` counts
     the child contexts masked out of scored batches. ``rejection_events_by_status``
     is the source's raw counter: every rejected row served by a fetch at either hop,
-    cache replays included, so it is not a count of accounts. Sources that count per
-    hop (``rejections_by_hop``) also give the root and child statuses.
+    cache replays included, so it is not a count of accounts. The source's per-hop
+    counts (``rejections_by_hop``) give the root and child statuses.
     """
-    by_hop = getattr(source, "rejections_by_hop", None)
+    by_hop = source.rejections_by_hop
     return {
         "rejected": rejected_roots,
-        "rejected_roots_by_status": None if by_hop is None else dict(by_hop.get(1, {})),
+        "rejected_roots_by_status": dict(by_hop.get(1, {})),
         "rejected_children": int(totals["rejected_children"]),
-        "rejected_children_by_status": None if by_hop is None else dict(by_hop.get(2, {})),
+        "rejected_children_by_status": dict(by_hop.get(2, {})),
         "stub_children": int(totals["stub_children"]),
-        "rejection_events_by_status": dict(getattr(source, "rejections", {}) or {}),
+        "rejection_events_by_status": dict(source.rejections),
     }

@@ -1,7 +1,7 @@
 """Context sources: the model-facing port, its streaming adapter, and its opener.
 
-StreamingContextSource requests each batch's contexts from TigerGraph through
-context_query and keeps a bounded LRU. It returns rows in key order, with None where
+StreamingContextSource requests each batch's contexts through a ContextFetcher
+(ports.py) and keeps a bounded LRU. It returns rows in key order, with None where
 TigerGraph rejected a request. check_coverage and close_source work with any
 ContextSource. A ContextOpener opens the source of a prepared dataset; the pipeline
 passes pipeline.connect.open_context_source to the use cases that need one.
@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from collections import Counter, OrderedDict, deque
 from concurrent.futures import FIRST_COMPLETED, Future, wait
-import inspect
 from pathlib import Path
 import threading
 from typing import Any, Protocol
@@ -28,8 +27,7 @@ from ..contract.feature_groups import FeaturePlan
 from ..contract.graph_schema import ContextKey
 from ..contract.sampler_plan import SamplerPlan
 from ..runtime.workers import DaemonPool
-from ..tigergraph.context_query import query_context_split
-from ..tigergraph.executor import QueryExecutor
+from .ports import ContextFetcher
 
 
 def _canonical(row: dict[str, Any]) -> dict[str, Any]:
@@ -89,19 +87,24 @@ class ContextSource(Protocol):
     """Model-facing port independent of the transport (HTTP today, a disk cache later).
 
     fetch returns rows in key order, None where TigerGraph rejected a request
-    (counted by status in rejections, once per rejected key and fetch).
-    Implementations are thread-safe. Optional extras that callers look up with
-    getattr: `rejections_by_hop` (the same counts per hop, 1 roots and 2 children)
-    and a `wait` keyword on close (False: do not wait for in-flight requests).
+    (counted by status in rejections, once per rejected key and fetch, and in
+    rejections_by_hop per hop, 1 roots and 2 children). close with wait=False does not
+    wait for requests in flight. Implementations are thread-safe.
     """
 
-    plan: FeaturePlan
-    sampler: SamplerPlan
-    query_calls: int
-    rejections: Counter[str]
+    @property
+    def plan(self) -> FeaturePlan: ...
+    @property
+    def sampler(self) -> SamplerPlan: ...
+    @property
+    def query_calls(self) -> int: ...
+    @property
+    def rejections(self) -> Counter[str]: ...
+    @property
+    def rejections_by_hop(self) -> dict[int, Counter[str]]: ...
 
     def fetch(self, keys: list[ContextKey], *, hop: int = 1) -> list[dict[str, Any] | None]: ...
-    def close(self) -> None: ...
+    def close(self, *, wait: bool = True) -> None: ...
 
 
 class StreamingContextSource:
@@ -120,7 +123,7 @@ class StreamingContextSource:
 
     def __init__(
         self,
-        executor: QueryExecutor,
+        fetcher: ContextFetcher,
         *,
         plan: FeaturePlan = FeaturePlan(),
         sampler: SamplerPlan = SamplerPlan(),
@@ -137,7 +140,7 @@ class StreamingContextSource:
             raise ValueError("Invalid context source capacity or query size")
         self.plan = plan
         self.sampler = sampler
-        self.executor = executor
+        self.fetcher = fetcher
         self.capacity, self.request_batch_size = capacity, request_batch_size
         self.concurrency = concurrency
         self._cadence = _EncodingCadence(encoding_check_every)
@@ -250,8 +253,7 @@ class StreamingContextSource:
             raise RuntimeError("Context source is closed")
         diagnostics: Counter[str] = Counter()
         try:
-            result, calls = query_context_split(
-                self.executor,
+            result, calls = self.fetcher.request(
                 block,
                 plan=self.plan,
                 sampler=self.sampler,
@@ -281,12 +283,12 @@ class StreamingContextSource:
 
 
 def streaming_source(
-    executor: QueryExecutor, plan: FeaturePlan, sampler: SamplerPlan, config: dict[str, Any]
+    fetcher: ContextFetcher, plan: FeaturePlan, sampler: SamplerPlan, config: dict[str, Any]
 ) -> StreamingContextSource:
     """Live source with the transport settings of a training configuration."""
     transport = transport_settings(config)
     return StreamingContextSource(
-        executor,
+        fetcher,
         plan=plan,
         sampler=sampler,
         capacity=transport["context_lru_capacity"],
@@ -309,10 +311,7 @@ class ContextOpener(Protocol):
 
 def check_coverage(store: ContextSource, plan: FeaturePlan, sampler: SamplerPlan) -> None:
     """The source must request every input the model reads, with the model's pools."""
-    source_plan = getattr(store, "plan", None)
-    source_sampler = getattr(store, "sampler", None)
-    if not isinstance(source_plan, FeaturePlan) or not isinstance(source_sampler, SamplerPlan):
-        raise ValueError("Context source must expose its FeaturePlan and SamplerPlan")
+    source_plan, source_sampler = store.plan, store.sampler
     # A summary model never fetches children, so only its first hop matters.
     for hop in (1,) if plan.architecture == "summary" else (1, 2):
         have = source_plan.query_flags(hop)
@@ -326,11 +325,7 @@ def check_coverage(store: ContextSource, plan: FeaturePlan, sampler: SamplerPlan
 def close_source(store: ContextSource, *, failed: bool) -> None:
     """Close a context source; after a failure, do not wait for its in-flight requests.
 
-    Sources whose ``close`` accepts ``wait`` are closed with ``wait=False`` after an
-    error or KeyboardInterrupt, so the error surfaces without waiting for REST retries.
+    After an error or KeyboardInterrupt the source is closed with ``wait=False``, so the
+    error surfaces without waiting for REST retries.
     """
-    close = store.close
-    if failed and "wait" in inspect.signature(close).parameters:
-        close(wait=False)  # pyright: ignore[reportCallIssue]
-    else:
-        close()
+    store.close(wait=not failed)

@@ -44,12 +44,11 @@ class Progress:
 
     def calls(self) -> int:
         """REST calls of every segment of the run."""
-        return self.base_calls + int(getattr(self.store, "query_calls", 0))
+        return self.base_calls + self.store.query_calls
 
     def rejections(self) -> dict[str, int]:
         """Rejected rows served by the source (both hops) in every segment, by status."""
-        current: Counter[str] = Counter(getattr(self.store, "rejections", {}) or {})
-        return dict(self.base_rejections + current)
+        return dict(self.base_rejections + Counter(self.store.rejections))
 
     def emit(self, record: dict[str, Any], *, echo: bool = True) -> dict[str, Any]:
         record = {

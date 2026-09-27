@@ -42,10 +42,10 @@ def test_final_audit_connects_after_its_checks_and_reads_truth_on_that_connectio
     result = pipeline_evaluate.final_audit(model, None, tmp_path / "audit.json")
     # The checkpoint's retry budgets, the frozen source checked, the graph's truth on it.
     assert [settings["scope_id"] for settings in connected] == [config["scope_id"]]
-    assert verified == [executor] and result["executor"] is executor
-    assert (
-        isinstance(result["truth"], GraphEvaluationTruth) and result["truth"].executor is executor
-    )
+    assert verified == [executor]
+    assert result["scope"].executor is executor and result["fetcher"].executor is executor
+    truth = result["truth"]
+    assert isinstance(truth, GraphEvaluationTruth) and truth.executor is executor
     assert result["dataset"] == dataset
     supplied = pipeline_evaluate.final_audit(model, tmp_path / "t.parquet", tmp_path / "b.json")
     assert isinstance(supplied["truth"], ParquetEvaluationTruth)

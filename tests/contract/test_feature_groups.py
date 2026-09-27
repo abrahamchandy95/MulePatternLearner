@@ -21,6 +21,7 @@ from mule_pattern_learner.model.tgat import LiveTGAT
 from mule_pattern_learner.reference.batch_features import node_features
 from mule_pattern_learner.testing.builders import context, message
 from mule_pattern_learner.testing.fake_graph import FakeExecutor
+from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
 
 WINDOW_GROUPS = (
     "entity_meta",
@@ -103,7 +104,7 @@ def test_each_group_has_consistent_transport_batch_and_model_width(group: str) -
         stratum="recent",
     )
     executor = FakeExecutor({root: context(root, [msg])})
-    source = StreamingContextSource(executor, plan=plan)
+    source = StreamingContextSource(TigerGraphContextFetcher(executor), plan=plan)
     try:
         batch = make_live_batch(source, [root], fanouts=(2, 2), plan=plan)
         assert batch["x"].shape[1] == len(plan.node_names)

@@ -22,12 +22,14 @@ from ..data.manifest import (
     write_manifest,
 )
 from ..data.preparation import prepare
+from ..tigergraph.cutoffs import TigerGraphCutoffs
 from ..tigergraph.executor import TigerGraphExecutor
+from ..tigergraph.hubs import TigerGraphHubs
 from ..tigergraph.installer import install
 from ..tigergraph.labels import GraphObservedLabels
 from ..tigergraph.provenance import source_counts
 from ..tigergraph.reveal import ensure_revealed_labels
-from ..tigergraph.scope import ensure_scope, scope_header
+from ..tigergraph.scope import TigerGraphScope, ensure_scope, scope_header
 from .connect import connect
 
 
@@ -45,7 +47,7 @@ def resolve_identity(
     attrs = scope_header(executor, config["scope_id"])
     if attrs is not None:
         return {**config, "dataset_id": str(attrs["source_id"])}
-    graph = str(getattr(executor.client.conn, "graphname", "graph"))
+    graph = str(executor.client.graphname)
     return {**config, "dataset_id": derived_dataset_id(graph, counts)}
 
 
@@ -81,7 +83,15 @@ def prepare_live(config: dict[str, Any], output: Path) -> dict[str, Any]:
     # The reveal draws its splits from the scope partitions.
     ensure_revealed_labels(executor, config)
     counts = source_counts(executor)
-    result = prepare(config, output, executor, counts, GraphObservedLabels())
+    result = prepare(
+        config,
+        output,
+        counts,
+        GraphObservedLabels(),
+        scope=TigerGraphScope(executor),
+        cutoffs=TigerGraphCutoffs(executor),
+        hubs=TigerGraphHubs(executor),
+    )
     if source_counts(executor) != counts:
         result["status"] = "source_changed"
         write_manifest(output, result)

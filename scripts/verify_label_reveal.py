@@ -19,13 +19,13 @@ import json
 import sys
 
 from mule_pattern_learner.config import run_config
+from mule_pattern_learner.pipeline.connect import connect
 from mule_pattern_learner.reference.label_reveal import (
     INPUTS_QUERY,
     available_ms,
     counts_by_split,
     plan,
 )
-from mule_pattern_learner.pipeline.connect import connect
 from mule_pattern_learner.tigergraph.executor import merged_rows
 from mule_pattern_learner.tigergraph.reveal import REVEAL_QUERY, reveal_parameters
 

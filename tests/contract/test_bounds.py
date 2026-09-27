@@ -21,6 +21,7 @@ from mule_pattern_learner.contract.bounds import (
 from mule_pattern_learner.contract.sampler_plan import PoolPlan, SamplerPlan
 from mule_pattern_learner.data.contexts import StreamingContextSource
 from mule_pattern_learner.testing.fake_graph import FakeExecutor
+from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
 
 
 def edges(bound: Bound) -> tuple[list[int], list[int]]:
@@ -73,7 +74,9 @@ def test_sampler_batches_and_context_source_read_the_same_bounds() -> None:
     assert BatchLimits().max_roots == BATCH_ROOTS.high
     for size in edges(REQUEST_KEYS)[1]:
         with pytest.raises(ValueError, match="query size"):
-            StreamingContextSource(FakeExecutor(), request_batch_size=size)
+            StreamingContextSource(
+                TigerGraphContextFetcher(FakeExecutor()), request_batch_size=size
+            )
     for workers in edges(QUERY_CONCURRENCY)[1]:
         with pytest.raises(ValueError, match="concurrency"):
-            StreamingContextSource(FakeExecutor(), concurrency=workers)
+            StreamingContextSource(TigerGraphContextFetcher(FakeExecutor()), concurrency=workers)

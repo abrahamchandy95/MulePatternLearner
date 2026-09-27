@@ -31,8 +31,11 @@ from mule_pattern_learner.testing.builders import (
     supplied_labels,
 )
 from mule_pattern_learner.testing.fake_graph import FakeExecutor
-from mule_pattern_learner.tigergraph.context_query import validate_context
+from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher, validate_context
+from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffs
+from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
 from mule_pattern_learner.tigergraph.oracle import GraphEvaluationTruth
+from mule_pattern_learner.tigergraph.scope import TigerGraphScope
 from mule_pattern_learner.training.schedule import pu_batches
 
 
@@ -50,7 +53,7 @@ def test_batch_ids_are_dense_scoped_and_temporal_and_never_global() -> None:
 
 def test_budget_rejects_before_database_calls_and_tensor_allocation() -> None:
     executor = FakeExecutor({})
-    source = StreamingContextSource(executor)
+    source = StreamingContextSource(TigerGraphContextFetcher(executor))
     roots = [ContextKey("Account", str(i), 100, 1000) for i in range(129)]
     with pytest.raises(BatchCapacityError):
         make_live_batch(source, roots)
@@ -63,7 +66,7 @@ def test_scope_follows_recursive_events_and_cache_never_crosses_scope() -> None:
     a = ContextKey("Account", "a", 100, 1000, "strict", 1)
     msg = message(90, 900, a)
     source = FakeExecutor({a: context(a, [msg])})
-    backend = StreamingContextSource(source)
+    backend = StreamingContextSource(TigerGraphContextFetcher(source))
     make_live_batch(backend, [a], fanouts=(2, 2))
     assert child_key(msg, a) in source.requested
     assert all(key.scope_id == "strict" and key.visibility_phase == 1 for key in source.requested)
@@ -75,7 +78,9 @@ def test_scope_follows_recursive_events_and_cache_never_crosses_scope() -> None:
 
 
 def test_stream_retention_is_bounded_across_many_disjoint_batches() -> None:
-    backend = StreamingContextSource(FakeExecutor({}), capacity=8, request_batch_size=16)
+    backend = StreamingContextSource(
+        TigerGraphContextFetcher(FakeExecutor({})), capacity=8, request_batch_size=16
+    )
     for start in range(0, 512, 16):
         backend.fetch([ContextKey("Account", str(i), 100, 1000) for i in range(start, start + 16)])
         assert len(backend.memory) <= 8
@@ -117,7 +122,9 @@ def test_new_account_scoring_needs_neither_training_dataset_nor_labels(tmp_path:
         (f"never_trained_{i}" for i in range(13)),
         "2025-01-01",
         output,
-        executor=executor,
+        cutoffs=TigerGraphCutoffs(executor),
+        hub_reader=TigerGraphHubs(executor),
+        fetcher=TigerGraphContextFetcher(executor),
     )
     frame = pd.read_parquet(output)
     assert result["accounts"] == len(frame) == 13
@@ -164,7 +171,7 @@ def test_bounded_seed_reservoir_does_not_enrich_the_nnpu_marginal() -> None:
     known = pd.DataFrame(
         {"account_id": ["A00000", "A00001", "A00002"], "known_positive": True, "known_from_ms": 1}
     )
-    selected, counts = scoped_cohort(Executor(), cfg, FrameObservedLabels(known))
+    selected, counts = scoped_cohort(TigerGraphScope(Executor()), cfg, FrameObservedLabels(known))
     assert len(calls) == 2 and sum(counts.values()) == len(rows)
     assert len(selected) <= 33 and selected.in_marginal.sum() == 30
     assert set(known.account_id) <= set(selected.account_id)
@@ -244,11 +251,19 @@ def test_strict_preparation_and_nnpu_use_the_correct_phase_end_to_end(tmp_path: 
     executor = Executor({}, last_visible=lambda index, ms: 100)
     dataset = tmp_path / "dataset"
     manifest = prepare(
-        cfg, dataset, executor, {"Account": len(rows)}, FrameObservedLabels(supplied_labels())
+        cfg,
+        dataset,
+        {"Account": len(rows)},
+        FrameObservedLabels(supplied_labels()),
+        scope=TigerGraphScope(executor),
+        cutoffs=TigerGraphCutoffs(executor),
+        hubs=TigerGraphHubs(executor),
     )
     assert manifest["status"] == "ready" and not executor.requested
     source = StreamingContextSource(
-        executor, plan=extraction_plan(cfg), sampler=SamplerPlan.from_config(cfg)
+        TigerGraphContextFetcher(executor),
+        plan=extraction_plan(cfg),
+        sampler=SamplerPlan.from_config(cfg),
     )
     result = train(cfg, dataset, checkpoint, contexts=source)
     assert set(phases) == {1, 2, 3}

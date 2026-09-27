@@ -160,6 +160,19 @@ class QueryExecutor(Protocol):
     ) -> list[dict[str, Any]]: ...
 
 
+class ConnectionExecutor(QueryExecutor, Protocol):
+    """A QueryExecutor that also runs operations on its connection and read-only GSQL.
+
+    The scope, provenance and installer functions use these; TigerGraphExecutor
+    retries both under its budgets.
+    """
+
+    client: Any
+
+    def call(self, operation: Callable[[Any], T], *, what: str) -> T: ...
+    def gsql(self, text: str, *, what: str = "gsql") -> str: ...
+
+
 class TigerGraphExecutor:
     """Installed-query access with per-class retry budgets (see failure_class).
 
@@ -382,14 +395,6 @@ class TigerGraphExecutor:
             return output
 
         return self.call(operation, what=what)
-
-
-def connection_call(executor: Any, what: str, operation: Callable[[Any], T]) -> T:
-    """Run a connection operation, retried when the executor supports it (test doubles may not)."""
-    call = getattr(executor, "call", None)
-    if call is not None:
-        return call(operation, what=what)
-    return operation(executor.client.conn)
 
 
 # A named tuple of exception types: formatters targeting Python 3.14 rewrite

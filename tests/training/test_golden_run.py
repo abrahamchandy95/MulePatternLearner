@@ -52,8 +52,12 @@ from mule_pattern_learner.data.preparation import prepare
 from mule_pattern_learner.paths import REPOSITORY_ROOT
 from mule_pattern_learner.testing.builders import neighbourhood, scope_population
 from mule_pattern_learner.testing.fake_graph import FakeExecutor
-from mule_pattern_learner.tigergraph.render import render_context_query
+from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
+from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffs
+from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
 from mule_pattern_learner.tigergraph.labels import GraphObservedLabels
+from mule_pattern_learner.tigergraph.render import render_context_query
+from mule_pattern_learner.tigergraph.scope import TigerGraphScope
 from mule_pattern_learner.training import trainer
 from mule_pattern_learner.training.schedule import step_seed
 
@@ -93,7 +97,10 @@ def golden_executor() -> FakeExecutor:
 def golden_source(executor: FakeExecutor, config: dict[str, Any]) -> StreamingContextSource:
     """The source open_context_source builds for a streamed preparation."""
     return streaming_source(
-        executor, extraction_plan(config), SamplerPlan.from_config(config), config
+        TigerGraphContextFetcher(executor),
+        extraction_plan(config),
+        SamplerPlan.from_config(config),
+        config,
     )
 
 
@@ -102,7 +109,15 @@ def prepare_golden(directory: Path) -> tuple[dict[str, Any], Path, FakeExecutor]
     config = golden_config()
     executor = golden_executor()
     dataset = directory / "dataset"
-    prepare(config, dataset, executor, {"Account": POPULATION}, GraphObservedLabels())
+    prepare(
+        config,
+        dataset,
+        {"Account": POPULATION},
+        GraphObservedLabels(),
+        scope=TigerGraphScope(executor),
+        cutoffs=TigerGraphCutoffs(executor),
+        hubs=TigerGraphHubs(executor),
+    )
     return config, dataset, executor
 
 

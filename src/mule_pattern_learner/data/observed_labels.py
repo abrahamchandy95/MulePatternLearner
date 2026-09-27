@@ -1,13 +1,12 @@
 """Observed labels: the revealed positives and their discovery times, never truth.
 
-prepare() accepts any ObservedLabelSource, so tests can supply a table of labels
+prepare() accepts any ports.ObservedLabelReader, so tests can supply a table of labels
 instead of the graph's (tigergraph.labels.GraphObservedLabels).
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Protocol
 
 import numpy as np
 import pandas as pd
@@ -19,13 +18,6 @@ from ..contract.graph_schema import SPLITS
 LABEL_COLUMNS = ("account_id", "known_positive", "known_from_ms")
 # Ground-truth fields that must never reach training metadata or observed labels.
 ORACLE_COLUMNS = frozenset({"is_mule", "true_label", "is_mule_masked", "ring_id"})
-
-
-class ObservedLabelSource(Protocol):
-    """Provide known positives and discovery times; zero means unlabeled."""
-
-    def read(self, metadata: pd.DataFrame) -> pd.DataFrame: ...
-    def positive_ids(self) -> set[str]: ...
 
 
 def read_bounded_parquet(path: Path, message: str, limit: int = DATASET_ROWS) -> pd.DataFrame:

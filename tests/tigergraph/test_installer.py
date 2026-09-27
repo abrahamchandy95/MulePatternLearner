@@ -176,6 +176,8 @@ def test_install_polls_endpoints_when_the_install_request_times_out(
     logs = installer.install(tg, sleep=tg.clock.sleep, clock=tg.clock.time, poll_s=30)
     assert logs["installed"] == ["temporal_training_cutoffs"] and logs["install"] is None
     assert tg.sleeps == [30, 30] and all(server.enabled.values())
+    # The install request waited up to the deadline for its answer.
+    assert tg.client.timeouts == [installer.INSTALL_DEADLINE_S]
     # Still compiling at the deadline: an actionable timeout, and a later run installs
     # only what is still stale.
     server = InstallServer(stale=("temporal_training_cutoffs",), mode="timeout", ready_after=99)

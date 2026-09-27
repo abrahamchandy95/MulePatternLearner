@@ -6,10 +6,12 @@ from pathlib import Path
 from typing import Any
 
 from ..evaluation.audit import audit_inputs, evaluate_final_population, evaluate_predictions
-from ..evaluation.truth import EvaluationTruthSource, ParquetEvaluationTruth
+from ..evaluation.truth import ParquetEvaluationTruth, TruthReader
 from ..inference.saved_model import ModelCheckpoint
+from ..tigergraph.context_query import TigerGraphContextFetcher
 from ..tigergraph.oracle import GraphEvaluationTruth
 from ..tigergraph.provenance import verify_frozen_source
+from ..tigergraph.scope import TigerGraphScope
 from .connect import connect
 
 
@@ -19,7 +21,7 @@ def evaluate(predictions: Path, checkpoint: Path, truth: Path | None) -> dict[st
     The graph is read on a connection with the checkpoint's retry budgets.
     """
     saved = ModelCheckpoint.of(checkpoint)
-    reader: EvaluationTruthSource
+    reader: TruthReader
     if truth is not None:
         reader = ParquetEvaluationTruth(truth)
     else:
@@ -39,9 +41,16 @@ def final_audit(
     saved, dataset, manifest = audit_inputs(checkpoint, output, dataset)
     executor = connect(saved.validated_config())
     verify_frozen_source(executor, manifest)
-    reader: EvaluationTruthSource
+    reader: TruthReader
     if truth is not None:
         reader = ParquetEvaluationTruth(truth)
     else:
         reader = GraphEvaluationTruth(executor)
-    return evaluate_final_population(saved, reader, output, executor=executor, dataset=dataset)
+    return evaluate_final_population(
+        saved,
+        reader,
+        output,
+        scope=TigerGraphScope(executor),
+        fetcher=TigerGraphContextFetcher(executor),
+        dataset=dataset,
+    )

@@ -6,7 +6,8 @@ clock, so retries, backoff and budgets are tested without a network.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
+from collections.abc import Generator
+from contextlib import contextmanager
 from typing import Any
 
 from mule_pattern_learner.tigergraph.executor import TigerGraphExecutor
@@ -54,13 +55,31 @@ class FakeConn:
         return self._next(text)
 
 
+class FakeClient:
+    """A connected client of the training graph over a scripted connection.
+
+    ``timeouts`` records the read timeouts set with ``request_timeout``.
+    """
+
+    graphname = "Mule_Pattern_Learner"
+
+    def __init__(self, conn: Any) -> None:
+        self.conn = conn
+        self.timeouts: list[float] = []
+
+    @contextmanager
+    def request_timeout(self, read_s: float, connect_s: float = 30.0) -> Generator[None]:
+        self.timeouts.append(read_s)
+        yield
+
+
 class RecordingExecutor(TigerGraphExecutor):
     """The real retry policy over a fake connection and a fake clock; sleeps are recorded."""
 
     def __init__(self, conn: Any, **kwargs: Any) -> None:
         self.clock = FakeClock()
         self.sleeps = self.clock.sleeps
-        client = SimpleNamespace(conn=conn, graphname="Mule_Pattern_Learner")
+        client = FakeClient(conn)
         super().__init__(client=client, sleep=self.clock.sleep, clock=self.clock.time, **kwargs)
 
 

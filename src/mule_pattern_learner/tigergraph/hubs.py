@@ -1,4 +1,4 @@
-"""The read-only hub query and the parsing of its rows into a HubRegistry."""
+"""The read-only hub query and the parsing of its rows into a HubRegistry (data.ports.HubReader)."""
 
 from __future__ import annotations
 
@@ -57,34 +57,36 @@ def _parse_hubs(
     return pd.DataFrame(records, columns=list(HUB_COLUMNS))
 
 
-def query_hub_registry(
-    executor: QueryExecutor,
-    cutoff_seqs: Iterable[int],
-    *,
-    threshold: int,
-    scope_id: str = "",
-    timeout_s: float = 1800.0,
-) -> HubRegistry:
-    """Run the read-only temporal_hub_registry query for 1..24 root cutoffs.
+class TigerGraphHubs:
+    """The HubReader of data.ports: the read-only temporal_hub_registry query."""
 
-    With a scope_id the scope must be ready, and rows cover phases 1, 2 and 3;
-    without one the counts are unscoped and rows have phase 3.
-    """
-    cutoffs = sorted({int(value) for value in cutoff_seqs})
-    if not HUB_CUTOFFS.holds(len(cutoffs)) or cutoffs[0] <= 0:
-        raise ValueError(
-            f"Hub registry needs {HUB_CUTOFFS.low}..{HUB_CUTOFFS.high} positive cutoff sequences"
+    def __init__(self, executor: QueryExecutor, *, timeout_s: float = 1800.0) -> None:
+        self.executor, self.timeout_s = executor, timeout_s
+
+    def hub_registry(
+        self, cutoff_seqs: Iterable[int], *, threshold: int, scope_id: str = ""
+    ) -> HubRegistry:
+        """The hub registry of 1..24 root cutoffs.
+
+        With a scope_id the scope must be ready, and rows cover phases 1, 2 and 3;
+        without one the counts are unscoped and rows have phase 3.
+        """
+        cutoffs = sorted({int(value) for value in cutoff_seqs})
+        if not HUB_CUTOFFS.holds(len(cutoffs)) or cutoffs[0] <= 0:
+            raise ValueError(
+                f"Hub registry needs {HUB_CUTOFFS.low}..{HUB_CUTOFFS.high} positive cutoff "
+                "sequences"
+            )
+        if threshold < 1:
+            raise ValueError("Hub threshold must be positive")
+        rows = self.executor.run(
+            HUB_QUERY,
+            {"cutoff_seqs": cutoffs, "threshold": threshold, "scope_id": scope_id},
+            timeout_s=self.timeout_s,
         )
-    if threshold < 1:
-        raise ValueError("Hub threshold must be positive")
-    rows = executor.run(
-        HUB_QUERY,
-        {"cutoff_seqs": cutoffs, "threshold": threshold, "scope_id": scope_id},
-        timeout_s=timeout_s,
-    )
-    return HubRegistry(
-        _parse_hubs(rows, cutoffs, threshold, scope_id),
-        cutoff_seqs=cutoffs,
-        threshold=threshold,
-        scope_id=scope_id,
-    )
+        return HubRegistry(
+            _parse_hubs(rows, cutoffs, threshold, scope_id),
+            cutoff_seqs=cutoffs,
+            threshold=threshold,
+            scope_id=scope_id,
+        )

@@ -13,23 +13,19 @@ from ..contract.bounds import ID_BYTES, POSITIVE_POOL, SEED_LIMIT
 from ..contract.clock import timestamp
 from ..contract.fingerprints import stable_score
 from ..contract.graph_schema import PHASE_SPLIT, SPLITS
-from ..tigergraph.executor import QueryExecutor, account_pages
-from ..tigergraph.labels import reads_graph_labels
-from .observed_labels import ORACLE_COLUMNS, ObservedLabelSource
-
-POPULATION_QUERY = "temporal_scope_population"
+from .observed_labels import ORACLE_COLUMNS
+from .ports import ObservedLabelReader, ScopeReader
 
 
 def scope_accounts(
-    executor: QueryExecutor, scope_id: str, *, include_observed: bool
+    scope: ScopeReader, scope_id: str, *, include_observed: bool
 ) -> Iterator[dict[str, Any]]:
-    """The scope's accounts in account order, as temporal_scope_population prints them.
+    """The scope's accounts in account order, page by page from the scope reader.
 
     The one pager of the scope population: the seed reservoirs and the final audit both
     read it here. Rows carry observed labels only with include_observed.
     """
-    params = {"scope_id": scope_id, "include_observed": include_observed}
-    for page in account_pages(executor, POPULATION_QUERY, params):
+    for page in scope.population_pages(scope_id, include_observed=include_observed):
         yield from page
 
 
@@ -65,19 +61,19 @@ def _check_label_fields(row: dict[str, Any], graph_labels: bool) -> None:
 
 
 def scoped_cohort(
-    executor: QueryExecutor, config: dict[str, Any], labels: ObservedLabelSource | None
+    scope: ScopeReader, config: dict[str, Any], labels: ObservedLabelReader | None
 ) -> tuple[pd.DataFrame, dict[str, int]]:
     """Keep uniform hash reservoirs plus observed positives, never all account IDs.
 
     in_marginal records membership in the label-blind reservoir. Positives retained
     outside it belong only to the separately sampled positive pool, not the nnPU
     marginal. Full graph neighborhoods are filtered server-side by scope, not by
-    this statistical seed sample. Graph labels are read only for an explicit
-    GraphObservedLabels source.
+    this statistical seed sample. Graph labels are read only for a label source whose
+    labels are the graph's (``from_graph``).
     """
     if labels is None:
         raise ValueError("An explicit observed-label source is required")
-    graph_labels = reads_graph_labels(labels)
+    graph_labels = labels.from_graph
     limits = config["seed_limits"]
     if set(limits) != set(SPLITS) or any(
         type(n) is not int or not SEED_LIMIT.holds(n) for n in limits.values()
@@ -90,7 +86,7 @@ def scoped_cohort(
     heaps: dict[str, list[tuple[float, str, dict[str, Any]]]] = {s: [] for s in limits}
     positives: dict[str, dict[str, Any]] = {}
     counts: Counter[str] = Counter()
-    for row in scope_accounts(executor, config["scope_id"], include_observed=graph_labels):
+    for row in scope_accounts(scope, config["scope_id"], include_observed=graph_labels):
         if ORACLE_COLUMNS & set(row):
             raise ValueError("Oracle fields cannot enter population metadata")
         _check_label_fields(row, graph_labels)

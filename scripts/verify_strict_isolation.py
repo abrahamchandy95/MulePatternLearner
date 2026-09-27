@@ -32,6 +32,7 @@ from mule_pattern_learner.inference.predictor import TemporalPredictor
 from mule_pattern_learner.model.build import build_model
 from mule_pattern_learner.pipeline.connect import connect
 from mule_pattern_learner.runtime.device import choose_device
+from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
 
 # The fixture's own checks read the window counts and amounts, their ratios and the pair
 # window counts, and its invariance checks also cover the age, recency and association
@@ -145,7 +146,9 @@ def main() -> None:
     config = model_config()
     plan, sampler = FeaturePlan.from_config(config), SamplerPlan.from_config(config)
     # The predictor below reads from this source, so it requests the model's inputs too.
-    source = StreamingContextSource(executor, plan=source_plan(plan), sampler=sampler, capacity=0)
+    source = StreamingContextSource(
+        TigerGraphContextFetcher(executor), plan=source_plan(plan), sampler=sampler, capacity=0
+    )
 
     def fetch_all(keys: list[ContextKey]) -> list[dict[str, Any]]:
         rows = source.fetch(keys)

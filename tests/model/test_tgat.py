@@ -27,6 +27,7 @@ from mule_pattern_learner.model.build import build_model
 from mule_pattern_learner.model.tgat import LiveTGAT
 from mule_pattern_learner.testing.builders import context, message
 from mule_pattern_learner.testing.fake_graph import FakeExecutor
+from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
 
 CONFIG = run_config()
 PLAN = FeaturePlan.from_config(CONFIG)
@@ -43,7 +44,7 @@ PAYMENTS = [
 
 def test_isolated_entities_and_model_ablations() -> None:
     key = ContextKey("Token", "alone", 100, 1000)
-    store = StreamingContextSource(FakeExecutor({}))
+    store = StreamingContextSource(TigerGraphContextFetcher(FakeExecutor({})))
     batch = make_live_batch(store, [key])
     assert not batch["first_mask"].any()
     for plan in (FeaturePlan(), FeaturePlan(architecture="summary")):
@@ -126,7 +127,9 @@ def test_output_shapes(groups: list[str]) -> None:
 
 def test_built_in_batches_fit_the_slot_sum_and_train_it() -> None:
     executor = FakeExecutor({ROOT: context(ROOT, PAYMENTS)})
-    with StreamingContextSource(executor, plan=extraction_plan(CONFIG), sampler=SAMPLER) as source:
+    with StreamingContextSource(
+        TigerGraphContextFetcher(executor), plan=extraction_plan(CONFIG), sampler=SAMPLER
+    ) as source:
         batch = make_live_batch(
             source, [ROOT], fanouts=(FANOUT, 4), plan=PLAN, sampler=SAMPLER, mode="train"
         )
@@ -216,7 +219,9 @@ def test_saved_models_with_the_slot_sum_score_like_the_trained_model(tmp_path: P
         payload(CONFIG, new, contract_fingerprint(), PLAN.fingerprint()), tmp_path / "new.pt"
     )
     executor = FakeExecutor({ROOT: context(ROOT, PAYMENTS)})
-    with StreamingContextSource(executor, plan=extraction_plan(CONFIG), sampler=SAMPLER) as source:
+    with StreamingContextSource(
+        TigerGraphContextFetcher(executor), plan=extraction_plan(CONFIG), sampler=SAMPLER
+    ) as source:
         predictor = TemporalPredictor(ModelCheckpoint.load(tmp_path / "new.pt"), source, "cpu")
         assert predictor.model.slot_sum is not None
         prepared = predictor.prepare([ROOT])
@@ -254,7 +259,7 @@ def test_nonsense_options_are_rejected() -> None:
 def test_zero_node_features_and_summary_only_have_no_unused_projection_or_fetches():
     root = ContextKey("Account", "root", 100, 1000)
     zero = FeaturePlan(("message_core", "time_encoding"), "split")
-    source = StreamingContextSource(FakeExecutor({}), plan=zero)
+    source = StreamingContextSource(TigerGraphContextFetcher(FakeExecutor({})), plan=zero)
     batch = make_live_batch(source, [root], plan=zero)
     assert batch["x"].shape[-1] == batch["second_x"].shape[-1] == 0
     model = LiveTGAT(16, 4, 0, plan=zero)
@@ -263,7 +268,7 @@ def test_zero_node_features_and_summary_only_have_no_unused_projection_or_fetche
     source.close()
     summary = FeaturePlan(("decayed_activity",), "summary")
     executor = FakeExecutor({root: context(root, [message(80, 800, root)])})
-    source = StreamingContextSource(executor, plan=summary)
+    source = StreamingContextSource(TigerGraphContextFetcher(executor), plan=summary)
     batch = make_live_batch(source, [root], plan=summary)
     assert executor.requested == [root]
     assert set(batch) == {"x", "root_positions"}

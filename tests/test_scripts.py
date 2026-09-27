@@ -30,6 +30,10 @@ from mule_pattern_learner.testing.builders import (
 )
 from mule_pattern_learner.testing.fake_graph import FakeExecutor
 from mule_pattern_learner.tigergraph import reveal
+from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
+from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffs
+from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
+from mule_pattern_learner.tigergraph.scope import TigerGraphScope
 
 SCRIPTS = REPOSITORY_ROOT / "scripts"
 # Every script that talks to the live path; each must parse --help before connecting.
@@ -122,7 +126,7 @@ def test_strict_isolation_source_requests_what_the_fixture_checks_and_the_model_
         assert flags["include_" + group], group
     # The model it trains and the predictor that scores it read nothing the source skips.
     config = module.model_config()
-    with StreamingContextSource(FakeExecutor(), **options) as source:
+    with StreamingContextSource(TigerGraphContextFetcher(FakeExecutor()), **options) as source:
         check_coverage(source, FeaturePlan.from_config(config), SamplerPlan.from_config(config))
 
 
@@ -136,14 +140,22 @@ def test_benchmark_builds_one_training_batch_and_step(
     dataset = tmp_path / "dataset"
     executor = FakeExecutor(factory=neighbourhood, hubs=[("N3", 101)], population=scoped_accounts())
     prepare(
-        config, dataset, executor, {"Account": 1000}, labels=FrameObservedLabels(supplied_labels())
+        config,
+        dataset,
+        {"Account": 1000},
+        FrameObservedLabels(supplied_labels()),
+        scope=TigerGraphScope(executor),
+        cutoffs=TigerGraphCutoffs(executor),
+        hubs=TigerGraphHubs(executor),
     )
     module = load("benchmark_batch")
 
     def open_source(path: Path, manifest: dict[str, Any], training: dict[str, Any]) -> Any:
         assert path == dataset
         return StreamingContextSource(
-            executor, plan=extraction_plan(training), sampler=SamplerPlan.from_config(training)
+            TigerGraphContextFetcher(executor),
+            plan=extraction_plan(training),
+            sampler=SamplerPlan.from_config(training),
         )
 
     monkeypatch.setattr(module, "open_context_source", open_source)

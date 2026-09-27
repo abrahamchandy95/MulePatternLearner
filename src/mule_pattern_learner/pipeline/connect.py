@@ -16,6 +16,7 @@ from ..contract.feature_groups import extraction_plan
 from ..contract.sampler_plan import SamplerPlan, sampler_pools
 from ..data.contexts import StreamingContextSource, streaming_source
 from ..tigergraph.connection import Settings
+from ..tigergraph.context_query import TigerGraphContextFetcher
 from ..tigergraph.executor import TigerGraphExecutor
 from ..tigergraph.provenance import verify_frozen_source
 
@@ -51,4 +52,4 @@ def open_context_source(
         )
     executor = connect(training)
     verify_frozen_source(executor, manifest)
-    return streaming_source(executor, plan, sampler, training)
+    return streaming_source(TigerGraphContextFetcher(executor), plan, sampler, training)

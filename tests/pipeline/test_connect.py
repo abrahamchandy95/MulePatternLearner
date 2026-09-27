@@ -68,7 +68,9 @@ def test_resumed_stream_checks_live_source_before_fetching(monkeypatch: pytest.M
         policy_calls.append(params)
         return [{"status": "ok", **scope_counts(policy["scope_unowned"])}]
 
-    executor = SimpleNamespace(client=SimpleNamespace(conn=conn), run=run)
+    executor = SimpleNamespace(
+        client=SimpleNamespace(conn=conn), run=run, call=lambda operation, what: operation(conn)
+    )
     checked = []
     monkeypatch.setattr(provenance, "verify_sources", lambda client: checked.append(client))
     budgets: list[tuple[int, int]] = []

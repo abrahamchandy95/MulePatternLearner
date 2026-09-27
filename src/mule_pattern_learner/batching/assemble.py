@@ -172,7 +172,7 @@ def make_live_batch(
     if missing:
         raise ValueError(
             f"TigerGraph rejected {len(missing)} of {len(roots)} root contexts "
-            f"(status counts {dict(getattr(store, 'rejections', {}))}); first {missing[0]}"
+            f"(status counts {dict(store.rejections)}); first {missing[0]}"
         )
     accepted = [row for row in root_rows if row is not None]
     if plan.architecture == "summary":
@@ -308,7 +308,8 @@ class PinnedRoots:
     """Serve already fetched root rows to make_live_batch without a second request.
 
     Anything else (children, other keys) goes to the wrapped source, so concurrent
-    batch builders cannot evict a batch's roots between filtering and assembly.
+    batch builders cannot evict a batch's roots between filtering and assembly. The
+    plan, pools and rejection counters are the wrapped source's own objects.
     """
 
     def __init__(
@@ -316,9 +317,15 @@ class PinnedRoots:
     ) -> None:
         self.store = store
         self.rows = dict(zip(keys, rows, strict=True))
+        self.plan, self.sampler = store.plan, store.sampler
+        self.rejections, self.rejections_by_hop = store.rejections, store.rejections_by_hop
 
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self.store, name)
+    @property
+    def query_calls(self) -> int:
+        return self.store.query_calls
+
+    def close(self, *, wait: bool = True) -> None:
+        """Nothing to close: the wrapped source's owner closes it."""
 
     def fetch(self, keys: list[ContextKey], *, hop: int = 1) -> list[dict[str, Any] | None]:
         if hop == 1 and all(key in self.rows for key in keys):
@@ -372,7 +379,7 @@ def build_root_batch(
         return RootBatch(keys, accepted, None, stats)
     pinned = PinnedRoots(store, kept, [row for row in rows if row is not None])
     batch = make_live_batch(
-        pinned,  # type: ignore[arg-type]
+        pinned,
         kept,
         fanouts=fanouts,
         device=device,
