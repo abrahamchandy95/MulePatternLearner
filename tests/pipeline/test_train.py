@@ -19,7 +19,7 @@ from mule_pattern_learner.pipeline import connect as pipeline_connect
 from mule_pattern_learner.pipeline import evaluate as pipeline_evaluate
 from mule_pattern_learner.pipeline import prepare as pipeline_prepare
 from mule_pattern_learner.pipeline.connect import open_context_source
-from mule_pattern_learner.pipeline.evaluate import final_audit
+from mule_pattern_learner.pipeline.evaluate import evaluate_run
 from mule_pattern_learner.pipeline.train import BASELINE_RUN, train_run
 from mule_pattern_learner.testing.builders import neighbourhood, scope_population
 from mule_pattern_learner.testing.fake_graph import FakeExecutor
@@ -155,7 +155,7 @@ def test_train_then_audit_write_exactly_the_files_of_the_run_and_dataset_tables(
     truth["is_mule"] = (truth.index % 3 == 0).astype(int)
     truth_path = tmp_path / "truth.parquet"
     truth.to_parquet(truth_path, index=False)
-    audit = final_audit(output, truth_path, data=data)
+    audit = evaluate_run(output, truth_path, data=data)
     assert audit["rejected_accounts"] == 0
     assert files(output.root) == trained | {"audit/test.json", "audit/test.parquet"}
     assert files(data) == prepared

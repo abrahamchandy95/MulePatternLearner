@@ -18,7 +18,7 @@ from .inference.saved_model import SavedModel
 from .inference.score_accounts import read_account_ids, score
 from .paths import DatasetPaths, RunPaths
 from .pipeline.connect import connect, open_context_source
-from .pipeline.evaluate import evaluate, final_audit
+from .pipeline.evaluate import evaluate, evaluate_run
 from .pipeline.prepare import prepare_dataset
 from .pipeline.score import score_new
 from .pipeline.train import BASELINE_RUN, train_run
@@ -121,7 +121,7 @@ def main() -> None:
         )
     elif args.command == "evaluate-final":
         dataset = None if args.dataset is None else DatasetPaths(args.dataset)
-        result = final_audit(RunPaths(args.run), args.truth, dataset=dataset)
+        result = evaluate_run(RunPaths(args.run), args.truth, dataset=dataset)
     elif args.command == "evaluate":
         if args.output.exists():
             raise FileExistsError(args.output)

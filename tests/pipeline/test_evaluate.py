@@ -9,14 +9,14 @@ from typing import Any
 import pytest
 
 from mule_pattern_learner.config import TransportConfig
-from mule_pattern_learner.evaluation.truth import ParquetEvaluationTruth
+from mule_pattern_learner.evaluation.truth import ParquetTruth
 from mule_pattern_learner.paths import RunPaths
 from mule_pattern_learner.pipeline import evaluate as pipeline_evaluate
 from mule_pattern_learner.testing.builders import base_config, checkpoint, prepared_dataset
-from mule_pattern_learner.tigergraph.oracle import GraphEvaluationTruth
+from mule_pattern_learner.tigergraph.oracle import TigerGraphTruth
 
 
-def test_final_audit_connects_after_its_checks_and_reads_truth_on_that_connection(
+def test_evaluate_run_connects_after_its_checks_and_reads_truth_on_that_connection(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config = base_config()
@@ -36,22 +36,22 @@ def test_final_audit_connects_after_its_checks_and_reads_truth_on_that_connectio
 
     monkeypatch.setattr(pipeline_evaluate, "connect", connect)
     monkeypatch.setattr(pipeline_evaluate, "verify_frozen_source", lambda e, m: verified.append(e))
-    monkeypatch.setattr(pipeline_evaluate, "evaluate_final_population", audit)
+    monkeypatch.setattr(pipeline_evaluate, "audit", audit)
     existing = run.audit_metrics("test")
     existing.parent.mkdir()
     existing.write_text("{}")
     with pytest.raises(FileExistsError):
-        pipeline_evaluate.final_audit(run, None, data=tmp_path)
+        pipeline_evaluate.evaluate_run(run, None, data=tmp_path)
     assert connected == [] and verified == []
     existing.unlink()
     # The dataset is the model's own: its dataset id's directory in data.
-    result = pipeline_evaluate.final_audit(run, None, data=tmp_path)
+    result = pipeline_evaluate.evaluate_run(run, None, data=tmp_path)
     # The checkpoint's retry budgets, the frozen source checked, the graph's truth on it.
     assert connected == [config.transport]
     assert verified == [executor]
     assert result["scope"].executor is executor and result["fetcher"].executor is executor
     truth = result["truth"]
-    assert isinstance(truth, GraphEvaluationTruth) and truth.executor is executor
+    assert isinstance(truth, TigerGraphTruth) and truth.executor is executor
     assert result["dataset"] == dataset and result["run"] == run
-    supplied = pipeline_evaluate.final_audit(run, tmp_path / "t.parquet", dataset=dataset)
-    assert isinstance(supplied["truth"], ParquetEvaluationTruth)
+    supplied = pipeline_evaluate.evaluate_run(run, tmp_path / "t.parquet", dataset=dataset)
+    assert isinstance(supplied["truth"], ParquetTruth)

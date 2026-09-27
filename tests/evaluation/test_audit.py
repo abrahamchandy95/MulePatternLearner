@@ -13,7 +13,7 @@ import torch
 from mule_pattern_learner.artifacts import read_audit_scores, read_json
 from mule_pattern_learner.batching import assemble
 from mule_pattern_learner.contract.graph_schema import ContextKey
-from mule_pattern_learner.evaluation.audit import evaluate_final_population, evaluate_weighted
+from mule_pattern_learner.evaluation.audit import audit, audit_metrics
 from mule_pattern_learner.paths import RunPaths
 from mule_pattern_learner.testing.builders import (
     CUTOFFS,
@@ -38,7 +38,7 @@ EXPECTED = {
 }
 
 
-def test_final_population_audit_scores_through_the_dataset_clock_and_hubs(
+def test_the_audit_scores_through_the_dataset_clock_and_hubs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config = base_config(runtime={"max_rejected_root_fraction": 0.1})
@@ -62,7 +62,7 @@ def test_final_population_audit_scores_through_the_dataset_clock_and_hubs(
         def read(self) -> pd.DataFrame:
             return truth
 
-    result = evaluate_final_population(
+    result = audit(
         run,
         Truth(),
         dataset=dataset,
@@ -84,7 +84,7 @@ def test_final_population_audit_scores_through_the_dataset_clock_and_hubs(
     assert run.audit_rejected("test").read_text().split() == [test_accounts.account_id.iloc[1]]
     # An audit the run already has is never overwritten.
     with pytest.raises(FileExistsError, match="test.json"):
-        evaluate_final_population(
+        audit(
             run,
             Truth(),
             dataset=dataset,
@@ -95,7 +95,7 @@ def test_final_population_audit_scores_through_the_dataset_clock_and_hubs(
 
 
 @pytest.mark.parametrize(("limit", "rejected_index"), [(1.0, 0), (0.0, 1)])
-def test_final_population_audit_fails_on_censored_rejections(
+def test_the_audit_fails_on_censored_rejections(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, limit: float, rejected_index: int
 ) -> None:
     config = base_config(runtime={"max_rejected_root_fraction": limit})
@@ -115,7 +115,7 @@ def test_final_population_audit_fails_on_censored_rejections(
     source = FakeSource(config, reject=frozenset({test_accounts.account_id.iloc[rejected_index]}))
     match = "1 test positives" if rejected_index == 0 else "0 test positives"
     with pytest.raises(ValueError, match=match):
-        evaluate_final_population(
+        audit(
             run,
             Truth(),
             dataset=dataset,
@@ -147,9 +147,9 @@ def audit_frame() -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["account_id", "is_mule", "inclusion_probability", "score"])
 
 
-def test_weighted_top_fractions_count_population_accounts() -> None:
+def test_capture_at_budgets_count_population_accounts() -> None:
     frame = audit_frame()
-    metrics = evaluate_weighted(frame, 0.5)
+    metrics = audit_metrics(frame, 0.5)
     assert metrics["estimated_population"] == 50 and metrics["weighted_prevalence"] == 0.08
     assert {k: metrics[k] for k in TOP_KEYS} == pytest.approx(EXPECTED)
     # Neither row order nor account IDs break the tie: either order of 03 and 02 would
@@ -157,21 +157,21 @@ def test_weighted_top_fractions_count_population_accounts() -> None:
     shuffled = frame.sample(frac=1, random_state=1).reset_index(drop=True)
     renamed = frame.assign(account_id=frame.account_id.replace({"02": "03", "03": "02"}))
     for variant in (shuffled, renamed, frame.drop(columns="account_id")):
-        assert {k: evaluate_weighted(variant, 0.5)[k] for k in TOP_KEYS} == pytest.approx(EXPECTED)
+        assert {k: audit_metrics(variant, 0.5)[k] for k in TOP_KEYS} == pytest.approx(EXPECTED)
     # Untied, the order decides: 03 first holds its mule inside the top 5%.
     untied = frame.assign(score=frame.score.where(frame.account_id != "03", 0.98))
-    assert evaluate_weighted(untied, 0.5)["recall_at_5pct"] == pytest.approx(2 / 4)
+    assert audit_metrics(untied, 0.5)["recall_at_5pct"] == pytest.approx(2 / 4)
 
 
-def test_weighted_top_fractions_rank_scores_beyond_float32_precision() -> None:
+def test_capture_at_budgets_rank_scores_beyond_float32_precision() -> None:
     frame = audit_frame()
     # The same ranking squeezed within 1e-9 of 1, where float32 rounds every score to 1.
     near_one = frame.assign(score=1 - 1e-9 * (1 - frame.score))
     assert (near_one.score.astype(np.float32) == 1).all()
-    assert {k: evaluate_weighted(near_one, 0.5)[k] for k in TOP_KEYS} == pytest.approx(EXPECTED)
+    assert {k: audit_metrics(near_one, 0.5)[k] for k in TOP_KEYS} == pytest.approx(EXPECTED)
 
 
-def test_weighted_top_fractions_without_positives_are_zero() -> None:
+def test_capture_at_budgets_without_positives_are_zero() -> None:
     frame = audit_frame().assign(is_mule=0)
-    metrics = evaluate_weighted(frame, 0.5)
+    metrics = audit_metrics(frame, 0.5)
     assert all(metrics[k] == 0 for k in TOP_KEYS) and metrics["average_precision"] is None

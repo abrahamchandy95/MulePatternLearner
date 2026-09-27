@@ -24,7 +24,7 @@ from ..contract.feature_groups import (
 )
 from ..contract.graph_schema import CHANNELS, NODE_TYPES, RAILS, RELATIONS, STRATA, ContextKey
 from ..contract.sampler_plan import SamplerPlan
-from ..contract.server import CONTRACT_VERSION
+from ..contract.server import CONTEXT_CONTRACT
 from ..contract.time_basis import BASIS_ID, fourier64
 from .executor import CONVERSION_ERRORS, QueryExecutor, ServerTimeoutError, error_summary
 
@@ -93,7 +93,7 @@ def validate_context(
     """
     if any(row.get(name) != value for name, value in asdict(key).items()):
         raise ValueError("Returned context differs from requested entity/cutoff")
-    if row.get("contract_version") != CONTRACT_VERSION:
+    if row.get("contract_version") != CONTEXT_CONTRACT:
         raise ValueError("Missing current feature contract; install the current context query")
     if row.get("basis_id") != BASIS_ID:
         raise ValueError("Fourier basis mismatch")

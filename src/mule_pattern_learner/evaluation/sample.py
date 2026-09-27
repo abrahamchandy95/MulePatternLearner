@@ -5,7 +5,7 @@ from __future__ import annotations
 import pandas as pd
 
 
-def final_evaluation_sample(
+def audit_sample(
     universe: pd.DataFrame, truth: pd.DataFrame, *, negative_limit: int = 2000, seed: int = 42
 ) -> pd.DataFrame:
     """Final-only case/control sample with known inclusion probabilities.

@@ -25,7 +25,7 @@ from ..contract.feature_groups import (
     FeaturePlan,
 )
 from ..contract.graph_schema import ASSOCIATION_TARGETS, ASSOCIATIONS, NODE_TYPES
-from ..contract.server import CONTRACT_VERSION
+from ..contract.server import CONTEXT_CONTRACT
 
 # The groups whose include_* parameter defaults to TRUE in the rendered query. Callers
 # pass every flag, so the defaults only keep the installed text as it is until the
@@ -906,7 +906,7 @@ def render_context_query() -> str:
     return (
         "\n".join(
             line.rstrip()
-            for line in "".join(parts).replace("__CONTRACT__", CONTRACT_VERSION).splitlines()
+            for line in "".join(parts).replace("__CONTRACT__", CONTEXT_CONTRACT).splitlines()
         )
         + "\n"
     )

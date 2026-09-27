@@ -39,7 +39,7 @@ from mule_pattern_learner.testing.fake_graph import FakeExecutor
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher, validate_context
 from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffs
 from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
-from mule_pattern_learner.tigergraph.oracle import GraphEvaluationTruth
+from mule_pattern_learner.tigergraph.oracle import TigerGraphTruth
 from mule_pattern_learner.tigergraph.scope import TigerGraphScope
 from mule_pattern_learner.training.schedule import pu_batches
 
@@ -200,7 +200,7 @@ def test_bounded_seed_reservoir_does_not_enrich_the_nnpu_marginal() -> None:
     assert all(observed[p].all() for p, _ in draws)
 
 
-def test_graph_evaluation_truth_pages_the_label_contract() -> None:
+def test_the_graph_truth_pages_the_label_contract() -> None:
     rows = [
         {"account_id": f"A{i:05}", "is_mule": i % 2, "mule_label_known": i % 3 != 0}
         for i in range(10050)
@@ -214,7 +214,7 @@ def test_graph_evaluation_truth_pages_the_label_contract() -> None:
             page = [{"attributes": r} for r in rows if r["account_id"] > params["after_id"]]
             return [{"status": "ok"}, {"accounts": page[: params["batch_size"]]}]
 
-    truth = GraphEvaluationTruth(Executor()).read()
+    truth = TigerGraphTruth(Executor()).read()
     assert [(c["after_id"], c["batch_size"]) for c in calls] == [("", 10000), ("A09999", 10000)]
     assert truth.account_id.tolist() == [r["account_id"] for r in rows]
     # An account whose label is not known is -1, never a negative.
@@ -226,14 +226,14 @@ def test_graph_evaluation_truth_pages_the_label_contract() -> None:
             return [{"status": "ok", "accounts": page}]
 
     with pytest.raises(ValueError, match="not strictly increasing"):
-        GraphEvaluationTruth(Unordered()).read()
+        TigerGraphTruth(Unordered()).read()
 
     class Silent:
         def run(self, name: str, params: dict[str, Any], **_: Any) -> list[dict[str, Any]]:
             return [{"status": "ok"}]
 
     with pytest.raises(ValueError, match="accounts missing from response"):
-        GraphEvaluationTruth(Silent()).read()
+        TigerGraphTruth(Silent()).read()
 
 
 def test_strict_preparation_and_nnpu_use_the_correct_phase_end_to_end(tmp_path: Path) -> None:

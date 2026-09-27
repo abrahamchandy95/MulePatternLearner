@@ -3,7 +3,7 @@
 This guide explains how the live temporal training pipeline works from the data in
 TigerGraph to a trained checkpoint, what every query reads and returns, how batches are
 sampled (with cuGraph on CUDA), and how to run training on a CUDA machine. It describes
-the v5 contract (`CONTRACT_VERSION = "temporal_live_v5_candidate_pools"`).
+the v5 contract (`CONTEXT_CONTRACT = "temporal_live_v5_candidate_pools"`).
 
 Deeper references: [live temporal training](live_temporal_training.md) (behaviour details
 and configuration semantics), [GSQL feature catalog](gsql_feature_catalog.md) (every
