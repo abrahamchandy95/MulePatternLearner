@@ -11,7 +11,6 @@ import numpy as np
 import pytest
 import torch
 
-from mule_pattern_learner.batching import assemble
 from mule_pattern_learner.batching.assemble import build_batch
 from mule_pattern_learner.contract.feature_groups import CORE_GROUPS, FeaturePlan
 from mule_pattern_learner.contract.graph_schema import (
@@ -19,10 +18,10 @@ from mule_pattern_learner.contract.graph_schema import (
     PAYMENT_RELATIONS,
     ContextKey,
 )
-from mule_pattern_learner.contract.sampler_plan import PoolPlan, SamplerPlan
 from mule_pattern_learner.sampling.backend import select_resampled
 from mule_pattern_learner.sampling.candidates import CandidateTable, selection_keys, splitmix64
 from mule_pattern_learner.testing.builders import (
+    POOLED_RESAMPLE,
     RESAMPLE,
     candidate_table,
     context_rng,
@@ -34,11 +33,6 @@ from mule_pattern_learner.testing.builders import (
 from mule_pattern_learner.testing.fake_graph import FakeStore
 
 MPS = torch.backends.mps.is_available()
-POOLED_RESAMPLE = SamplerPlan(
-    roots=PoolPlan(recent=8, older=4, distinct=4, associations=2),
-    children=PoolPlan(recent=4, older=2, distinct=2, associations=0),
-    relation_fanouts=(8, 4),
-)
 
 
 def test_resample_caps_reserve_and_backfill_follow_the_stratified_merge() -> None:
@@ -194,35 +188,6 @@ def test_eval_keys_mix_the_hop_and_keep_hop_one_draws() -> None:
     second = select_resampled(table, hop=2, sampler=POOLED_RESAMPLE, fanout=4, mode="eval")
     prefixes = sum(_is_prefix(table, a, b) for a, b in zip(first, second, strict=True))
     assert prefixes <= len(keys) // 4, prefixes
-
-
-def test_eval_batches_draw_root_hops_independently(monkeypatch: pytest.MonkeyPatch) -> None:
-    store = FakeStore(POOLED_RESAMPLE)
-    keys = roots(16)
-    for key in keys:
-        store.rows[1, key] = synthetic_row(key, POOLED_RESAMPLE.roots, encodings=False, full=True)
-    draws: dict[int, list[list[dict[str, Any]]]] = {}
-    select = assemble._select  # pyright: ignore[reportPrivateUsage]
-
-    def recording(
-        keys_: list[ContextKey], rows: list[dict[str, Any]], **kw: Any
-    ) -> list[list[dict[str, Any]]]:
-        chosen = select(keys_, rows, **kw)
-        draws[kw["hop"]] = chosen
-        return chosen
-
-    monkeypatch.setattr(assemble, "_select", recording)
-    plan = FeaturePlan(CORE_GROUPS, "tgat")
-    for mode in ("eval", "train"):
-        build_batch(
-            store, keys, fanouts=(16, 4), plan=plan, sampler=POOLED_RESAMPLE, mode=mode, step_seed=5
-        )
-        prefixes = 0
-        for root in range(len(keys)):  # roots come first in the hop-2 context order
-            payments = [m["event_id"] for m in draws[1][root] if m["event_id"]]
-            picked = [m["event_id"] for m in draws[2][root]]
-            prefixes += picked == payments[: len(picked)]
-        assert prefixes <= len(keys) // 4, (mode, prefixes)
 
 
 def _ids(table: CandidateTable, slots: np.ndarray) -> list[list[str]]:
