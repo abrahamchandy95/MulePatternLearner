@@ -318,16 +318,15 @@ def reference_batch(
     Neighbours are drawn by the batches' own resampling; the loop checks how the
     vectorised assembly turns them into tensors.
     """
-    draw = {"sampler": sampler, "mode": mode, "step_seed": step_seed}
     root_rows = [store.row(k) for k in keys]
-    first = slots(keys, root_rows, fanout=fanouts[0], **draw)
+    first = slots(keys, root_rows, sampler, fanouts[0], mode=mode, step_seed=step_seed)
     lookup = BatchIndex(
         keys + [child_key(m, k) for k, msgs in zip(keys, first) for m in msgs], capacity=4096
     )
     unique = lookup.keys
     root_set = set(keys)
     contexts = [store.row(k) if k in root_set else store.row(k, 2) for k in unique]
-    second = slots(unique, contexts, fanout=fanouts[1], hop=2, **draw)
+    second = slots(unique, contexts, sampler, fanouts[1], 2, mode=mode, step_seed=step_seed)
     arrays = {
         "root_positions": np.asarray([lookup[k] for k in keys], dtype=np.int64),
         "x": np.stack([node_features(row, plan) for row in contexts]),

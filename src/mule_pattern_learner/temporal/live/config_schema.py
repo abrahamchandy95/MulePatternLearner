@@ -205,7 +205,7 @@ class LiveConfig(_Strict):
         "scope_unowned"
     ]
     create_scope: bool = OPERATIONAL_DEFAULTS["create_scope"]
-    # First-run label reveal (graph_observed): at most this many known mules per split.
+    # First-run label reveal: at most this many known mules per split.
     reveal_per_split: Annotated[int, Field(ge=0, le=1000)] | None = None
     # Seed of the reveal's deterministic draws; defaults to `seed`.
     reveal_salt: int | None = None

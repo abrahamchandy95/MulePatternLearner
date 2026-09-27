@@ -121,7 +121,7 @@ def assigned_accounts() -> pd.DataFrame:
     """
     accounts = fixture_accounts()
     accounts["group_id"] = "Account:" + accounts.account_id
-    scores = accounts.group_id.map(lambda group: stable_score(group, 42, "split"))
+    scores = accounts.group_id.map(lambda group: stable_score(str(group), 42, "split"))
     accounts["split"] = np.where(
         scores < 0.7, "train", np.where(scores < 0.85, "validation", "test")
     )
