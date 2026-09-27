@@ -16,10 +16,10 @@ import numpy as np
 import pytest
 from pyTigerGraph.common.exception import TigerGraphException
 
-from mule_pattern_learner.batching.assemble import build_root_batch, make_live_batch
+from mule_pattern_learner.batching.assemble import build_root_batch, build_batch
 from mule_pattern_learner.contract.feature_groups import FeaturePlan
 from mule_pattern_learner.contract.graph_schema import ContextKey
-from mule_pattern_learner.data.contexts import StreamingContextSource, context_hash
+from mule_pattern_learner.data.contexts import ContextSource, context_hash
 from mule_pattern_learner.data.hub_registry import HubRegistry
 from mule_pattern_learner.reference.batch_features import node_features
 from mule_pattern_learner.testing.builders import (
@@ -49,7 +49,7 @@ from mule_pattern_learner.tigergraph.executor import ServerTimeoutError
 def test_per_request_failures_become_none_and_are_counted() -> None:
     keys = [root(i) for i in range(5)]
     server = ContextServer({keys[1]: "history_capacity_exceeded", keys[3]: "missing_entity"})
-    store = StreamingContextSource(
+    store = ContextSource(
         TigerGraphContextFetcher(server), plan=PLAN, sampler=SAMPLER, request_batch_size=16
     )
     rows = store.fetch(keys + [keys[1]])
@@ -73,9 +73,7 @@ def test_per_request_failures_become_none_and_are_counted() -> None:
 def test_hop_pools_and_flags_are_sent_and_lru_is_keyed_by_hop() -> None:
     plan = FeaturePlan(("entity_meta", "message_core", "time_encoding", "rolling_windows"), "tgat")
     server = ContextServer()
-    store = StreamingContextSource(
-        TigerGraphContextFetcher(server), plan=plan, sampler=SAMPLER, capacity=8
-    )
+    store = ContextSource(TigerGraphContextFetcher(server), plan=plan, sampler=SAMPLER, capacity=8)
     key = root(0)
     store.fetch([key], hop=1)
     store.fetch([key], hop=2)
@@ -93,7 +91,7 @@ def test_hop_pools_and_flags_are_sent_and_lru_is_keyed_by_hop() -> None:
 
 
 def test_sources_count_requested_distinct_and_cached_contexts() -> None:
-    store = StreamingContextSource(
+    store = ContextSource(
         TigerGraphContextFetcher(ContextServer()), plan=PLAN, sampler=SAMPLER, capacity=8
     )
     keys = [root(i) for i in range(4)]
@@ -111,7 +109,7 @@ def test_sources_count_requested_distinct_and_cached_contexts() -> None:
     assert 0 <= context_hash(key, 2) < 2**63 and context_hash(key, 2) != context_hash(key, 1)
     # Each context of a batch is asked for once: the roots it pins are not counted again.
     roots = [ContextKey("Account", f"R{i:02}", 100, 1000) for i in range(8)]
-    with StreamingContextSource(
+    with ContextSource(
         TigerGraphContextFetcher(FakeExecutor(factory=neighbourhood)),
         plan=DEFAULT_TGAT_PLAN,
         sampler=SMALL_SAMPLER,
@@ -131,7 +129,7 @@ def test_sources_count_requested_distinct_and_cached_contexts() -> None:
 
 
 def test_lru_is_bounded_and_close_releases_it() -> None:
-    store = StreamingContextSource(
+    store = ContextSource(
         TigerGraphContextFetcher(ContextServer()), plan=PLAN, sampler=SAMPLER, capacity=8
     )
     for start in range(0, 64, 16):
@@ -153,7 +151,7 @@ def test_lru_is_bounded_and_close_releases_it() -> None:
 
 def test_concurrent_fetches_share_requests_and_respect_concurrency() -> None:
     server = ContextServer(delay=0.01)
-    store = StreamingContextSource(
+    store = ContextSource(
         TigerGraphContextFetcher(server),
         plan=PLAN,
         sampler=SAMPLER,
@@ -192,7 +190,7 @@ def test_failed_request_propagates_to_every_waiting_fetch() -> None:
             time.sleep(0.05)
             raise ValueError("contract violation")
 
-    store = StreamingContextSource(
+    store = ContextSource(
         TigerGraphContextFetcher(Failing()), plan=PLAN, sampler=SAMPLER, concurrency=2
     )
     errors: list[BaseException] = []
@@ -224,7 +222,7 @@ def test_close_without_wait_cancels_queued_requests_and_leaves_daemon_workers() 
             return super().run(name, params)
 
     server = Blocking()
-    store = StreamingContextSource(
+    store = ContextSource(
         TigerGraphContextFetcher(server),
         plan=PLAN,
         sampler=SAMPLER,
@@ -248,7 +246,7 @@ def test_close_without_wait_cancels_queued_requests_and_leaves_daemon_workers() 
     while not entered and time.monotonic() < deadline:
         time.sleep(0.01)
     assert entered == [1]  # one request in flight, the others wait in the window
-    workers = [t for t in threading.enumerate() if t.name.startswith("temporal-context")]
+    workers = [t for t in threading.enumerate() if t.name.startswith("context-requests")]
     assert workers and all(t.daemon for t in workers)
     began = time.monotonic()
     store.close(wait=False)
@@ -280,7 +278,7 @@ def test_timed_out_blocks_are_bisected_and_a_single_slow_key_is_fatal() -> None:
 
     keys = [root(i) for i in range(8)]
     server = Slow(limit=2, slow_ids=set())
-    store = StreamingContextSource(
+    store = ContextSource(
         TigerGraphContextFetcher(server), plan=PLAN, sampler=SAMPLER, request_batch_size=8
     )
     rows = store.fetch(keys)
@@ -289,7 +287,7 @@ def test_timed_out_blocks_are_bisected_and_a_single_slow_key_is_fatal() -> None:
     assert store.query_calls == 4 and store.diagnostics["timeout_splits"] == 3
     store.close()
     server = Slow(limit=8, slow_ids={keys[5].node_id})
-    store = StreamingContextSource(
+    store = ContextSource(
         TigerGraphContextFetcher(server), plan=PLAN, sampler=SAMPLER, request_batch_size=8
     )
     with pytest.raises(ContextTimeoutError, match="A0005") as caught:
@@ -316,7 +314,7 @@ def test_timed_out_blocks_are_bisected_and_a_single_slow_key_is_fatal() -> None:
 
 def test_encoding_spot_checks_follow_the_cadence_and_are_stripped() -> None:
     server = ContextServer()
-    store = StreamingContextSource(
+    store = ContextSource(
         TigerGraphContextFetcher(server), plan=PLAN, sampler=SAMPLER, request_batch_size=1, concurrency=1,
         encoding_check_every=3,
     )  # fmt: skip
@@ -334,7 +332,7 @@ def test_corrupted_or_missing_spot_check_vectors_fail() -> None:
         (ContextServer(corrupt=True), "shared basis"),
         (ContextServer(omit_encodings=True), "do not cover"),
     ):
-        store = StreamingContextSource(TigerGraphContextFetcher(server), plan=PLAN, sampler=SAMPLER)
+        store = ContextSource(TigerGraphContextFetcher(server), plan=PLAN, sampler=SAMPLER)
         with pytest.raises(ValueError, match=expected):
             store.fetch([root(0)])
         store.close()
@@ -346,9 +344,9 @@ def test_corrupted_or_missing_spot_check_vectors_fail() -> None:
         validate_context(key, row, PLAN, SAMPLER)
 
 
-def test_streaming_source_serves_repeats_from_its_bounded_lru() -> None:
+def test_the_context_source_serves_repeats_from_its_bounded_lru() -> None:
     keys = [ContextKey("Account", str(i), 100, 1000) for i in range(80)]
-    memory = StreamingContextSource(TigerGraphContextFetcher(FakeExecutor({})), capacity=3)
+    memory = ContextSource(TigerGraphContextFetcher(FakeExecutor({})), capacity=3)
     rows = memory.fetch(keys)
     assert len(memory.memory) == 3
     calls = memory.query_calls
@@ -360,13 +358,13 @@ def test_hops_use_their_own_pools_and_only_spot_checks_carry_encodings() -> None
     root = ContextKey("Account", "root", 100, 1000)
     many = [message(99 - i, 990 - 10 * i, root, node_id=f"p{i}") for i in range(12)]
     executor = FakeExecutor({root: context(root, many)})
-    with StreamingContextSource(
+    with ContextSource(
         TigerGraphContextFetcher(executor),
         plan=DEFAULT_TGAT_PLAN,
         sampler=SMALL_SAMPLER,
         encoding_check_every=1000,
     ) as source:
-        batch = make_live_batch(
+        batch = build_batch(
             source,
             [root],
             fanouts=(8, 2),
@@ -390,7 +388,7 @@ def test_hops_use_their_own_pools_and_only_spot_checks_carry_encodings() -> None
 def test_same_context_in_two_scopes_or_hops_is_never_shared() -> None:
     key = ContextKey("Account", "a", 100, 1000, "strict", 1)
     executor = FakeExecutor()
-    store = StreamingContextSource(
+    store = ContextSource(
         TigerGraphContextFetcher(executor), plan=DEFAULT_TGAT_PLAN, sampler=SMALL_SAMPLER
     )
     store.fetch([key], hop=1)

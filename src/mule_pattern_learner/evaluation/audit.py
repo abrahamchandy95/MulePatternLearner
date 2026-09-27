@@ -21,7 +21,7 @@ from .sample import final_evaluation_sample
 from .truth import TruthReader
 
 if TYPE_CHECKING:
-    from ..data.contexts import ContextSource
+    from ..data.contexts import ContextReader
     from ..data.hub_registry import HubRegistry
     from ..data.ports import ContextFetcher, ScopeReader
 
@@ -123,7 +123,7 @@ def evaluate_final_population(
     fetcher: ContextFetcher | None = None,
     negative_limit: int = 2000,
     dataset: DatasetPaths | None = None,
-    contexts: ContextSource | None = None,
+    contexts: ContextReader | None = None,
     hubs: HubRegistry | None = None,
 ) -> dict[str, Any]:
     """Score a fresh final-only sample from the entire frozen test partition.
@@ -149,7 +149,7 @@ def evaluate_final_population(
     from ..data.contexts import close_source
     from ..data.hub_registry import load_hub_registry
     from ..data.splits import sample_keys
-    from ..inference.predictor import TemporalPredictor
+    from ..inference.predictor import Predictor
     from ..inference.rejections import exceeds_rejection_limit, rejection_summary
 
     saved, dataset, manifest = audit_inputs(run, dataset)
@@ -179,7 +179,7 @@ def evaluate_final_population(
     if len(selected) > AUDIT_SAMPLE:
         raise ValueError("Final scoring sample exceeds audit budget")
     registry = hubs if hubs is not None else load_hub_registry(dataset, manifest)
-    predictor = TemporalPredictor(saved, contexts, fetcher=fetcher, hubs=registry)
+    predictor = Predictor(saved, contexts, fetcher=fetcher, hubs=registry)
     failed = True
     try:
         size = predictor.batch_size

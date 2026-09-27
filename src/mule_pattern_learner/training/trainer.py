@@ -1,4 +1,4 @@
-"""nnPU with observed-label selection over an injected temporal context source.
+"""nnPU with observed-label selection over an injected context source.
 
 A run writes its files into its own directory (paths.RunPaths). It is resumable:
 resume.pt holds the model, optimizer, weight average, RNG and schedule position plus the
@@ -50,7 +50,7 @@ from ..config import RunConfig, SplitDates, TrainingConfig
 from ..contract.feature_groups import FeaturePlan, extraction_plan
 from ..contract.graph_schema import ContextKey
 from ..contract.sampler_plan import SamplerPlan
-from ..data.contexts import ContextOpener, ContextSource, check_coverage, close_source
+from ..data.contexts import ContextOpener, ContextReader, check_coverage, close_source
 from ..data.hub_registry import HubRegistry, load_hub_registry, warn_hub_stubs
 from ..data.manifest import dataset_id, dataset_mismatches, load_prepared
 from ..data.observed_labels import label_summary, load_observed_labels, visible_labels
@@ -108,14 +108,14 @@ def rejection_counts(labels: np.ndarray, accepted: np.ndarray) -> dict[str, int]
 
 
 def check_source(
-    store: ContextSource, prepared: FeaturePlan, model: FeaturePlan, sampler: SamplerPlan
+    contexts: ContextReader, prepared: FeaturePlan, model: FeaturePlan, sampler: SamplerPlan
 ) -> None:
     """The source extracts the prepared plan, covers the model inputs and uses its sampler."""
-    if store.plan.fingerprint() != prepared.fingerprint():
+    if contexts.plan.fingerprint() != prepared.fingerprint():
         raise ValueError("Context source extraction plan differs from the prepared extraction plan")
-    if store.sampler != sampler:
+    if contexts.sampler != sampler:
         raise ValueError("Context source sampler differs from the training sampler")
-    check_coverage(store, model, sampler)
+    check_coverage(contexts, model, sampler)
 
 
 def build_optimizer(model: nn.Module, training: TrainingConfig) -> torch.optim.AdamW:
@@ -129,7 +129,7 @@ def train(
     dataset: DatasetPaths,
     run: RunPaths,
     *,
-    contexts: ContextSource | None = None,
+    contexts: ContextReader | None = None,
     open_contexts: ContextOpener | None = None,
     hubs: HubRegistry | None = None,
     resume: bool = False,
@@ -163,15 +163,15 @@ def train(
     device = choose_device(runtime.device)
     registry = hubs if hubs is not None else load_hub_registry(dataset, manifest)
     warn_hub_stubs(registry, plan)
-    if contexts is not None:
-        store = contexts
-    elif open_contexts is not None:
-        store = open_contexts(dataset, manifest, config)
-    else:
-        raise ValueError("Training needs contexts, or open_contexts to open the dataset's source")
+    if contexts is None:
+        if open_contexts is None:
+            raise ValueError(
+                "Training needs contexts, or open_contexts to open the dataset's source"
+            )
+        contexts = open_contexts(dataset, manifest, config)
     failed = True
     try:
-        check_source(store, source_plan, plan, config.sampler)
+        check_source(contexts, source_plan, plan, config.sampler)
         with torch_runtime(device, deterministic=runtime.deterministic, threads=runtime.threads):
             training_run = _TrainingRun(
                 config=config,
@@ -180,7 +180,7 @@ def train(
                 accounts=accounts,
                 mask=mask,
                 plan=plan,
-                store=store,
+                contexts=contexts,
                 hubs=registry,
                 device=device,
                 prior=prior,
@@ -194,7 +194,7 @@ def train(
         return result
     finally:
         # After an error or Ctrl-C, do not wait for in-flight REST calls.
-        close_source(store, failed=failed)
+        close_source(contexts, failed=failed)
 
 
 def training_samples(
@@ -250,7 +250,7 @@ class _TrainingRun:
         accounts: pd.DataFrame,
         mask: pd.DataFrame,
         plan: FeaturePlan,
-        store: ContextSource,
+        contexts: ContextReader,
         hubs: HubRegistry,
         device: torch.device,
         prior: float,
@@ -263,7 +263,7 @@ class _TrainingRun:
         self.dataset_id = dataset_id(manifest["source"]["source_id"], config)
         self.training_config, self.runtime = config.training, config.runtime
         self.manifest, self.accounts, self.mask = manifest, accounts, mask
-        self.plan, self.sampler, self.store, self.hubs = plan, config.sampler, store, hubs
+        self.plan, self.sampler, self.contexts, self.hubs = plan, config.sampler, contexts, hubs
         self.device, self.prior, self.positive_weight = device, prior, positive_weight
         self.loss = NonNegativePULoss(prior=prior, positive_weight=positive_weight)
         self.training, self.evaluation = training, evaluation
@@ -275,7 +275,7 @@ class _TrainingRun:
         self.backend = resolve_backend(self.sampler, self.batch_device)
         self.limit = config.runtime.max_rejected_root_fraction
         self.observed = {sample.date: sample.observed for sample in training}
-        self.progress = Progress(time.perf_counter(), store, self.backend)
+        self.progress = Progress(time.perf_counter(), contexts, self.backend)
         # Seeded right before the model is built: initial weights depend only on the seed.
         torch.manual_seed(config.training.seed)
         self.model = build_model(config.model, plan, self.sampler.fanouts[0]).to(device)
@@ -309,7 +309,7 @@ class _TrainingRun:
     def build(self, request: BatchRequest) -> RootBatch:
         keys, mode, seed = request
         return build_root_batch(
-            self.store,
+            self.contexts,
             keys,
             fanouts=self.sampler.fanouts,
             device=self.batch_device,
@@ -358,10 +358,10 @@ class _TrainingRun:
             "database_calls": self.progress.calls(),
             "rejections": self.progress.rejections(),
             "context_counts": {
-                k: v for k, v in self.progress.contexts().items() if k != "distinct"
+                k: v for k, v in self.progress.context_counts().items() if k != "distinct"
             },
             # The distinct contexts asked for, as their context_hash values.
-            "context_keys": torch.tensor(sorted(self.store.counts.seen), dtype=torch.int64),
+            "context_keys": torch.tensor(sorted(self.contexts.counts.seen), dtype=torch.int64),
             "train_rejections": dict(self.train_rejections),
             "epoch_rejections": dict(self.epoch_rejections),
         }
@@ -409,7 +409,7 @@ class _TrainingRun:
         self.progress.base_calls = int(state["database_calls"])
         self.progress.base_rejections = Counter(state["rejections"])
         self.progress.base_contexts = Counter(state["context_counts"])
-        self.store.counts.seen.update(state["context_keys"].tolist())
+        self.contexts.counts.seen.update(state["context_keys"].tolist())
         self.train_rejections = Counter(state["train_rejections"])
         self.epoch_rejections = Counter(state["epoch_rejections"])
 

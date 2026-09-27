@@ -35,7 +35,7 @@ from mule_pattern_learner.batching.assemble import (
 )
 from mule_pattern_learner.config import DEFAULT_CONFIG, RunConfig
 from mule_pattern_learner.contract.feature_groups import FeaturePlan
-from mule_pattern_learner.data.contexts import StreamingContextSource
+from mule_pattern_learner.data.contexts import ContextSource
 from mule_pattern_learner.data.hub_registry import load_hub_registry
 from mule_pattern_learner.data.manifest import dataset_mismatches, load_prepared
 from mule_pattern_learner.data.observed_labels import load_observed_labels
@@ -59,7 +59,7 @@ from mule_pattern_learner.training.trainer import build_optimizer, check_limits,
 
 def rest_calls(source: Any) -> tuple[int, dict[str, int]]:
     """Successful REST calls and retries of the live executor (0 without one, e.g. a fake)."""
-    fetcher = source.fetcher if isinstance(source, StreamingContextSource) else None
+    fetcher = source.fetcher if isinstance(source, ContextSource) else None
     executor = fetcher.executor if isinstance(fetcher, TigerGraphContextFetcher) else None
     if not isinstance(executor, TigerGraphExecutor):
         return 0, {}

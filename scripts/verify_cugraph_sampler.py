@@ -290,10 +290,10 @@ def live(roots: int) -> None:
     from mule_pattern_learner.data.splits import sample_keys
     from mule_pattern_learner.model.build import build_model
     from mule_pattern_learner.pipeline.connect import open_context_source
-    from mule_pattern_learner.pipeline.prepare import prepare_live
+    from mule_pattern_learner.pipeline.prepare import prepare_dataset
     from mule_pattern_learner.runtime.device import torch_runtime
 
-    def make_live_batch(store: Any, keys: Any, **options: Any) -> dict[str, torch.Tensor]:
+    def build_batch(store: Any, keys: Any, **options: Any) -> dict[str, torch.Tensor]:
         stats = options.pop("stats", None)
         prepared = build_root_batch(store, keys, **options)
         if prepared.batch is None:
@@ -305,7 +305,7 @@ def live(roots: int) -> None:
     config = DEFAULT_CONFIG
     plan, sampler = config.feature_plan(), config.sampler
     # The default run's dataset in data/; preparing it here is what `train` would do first.
-    dataset = prepare_live(config)
+    dataset = prepare_dataset(config)
     manifest, accounts = load_prepared(dataset)
     hubs = load_hub_registry(dataset, manifest)
     date = config.dataset.dates.train[0]
@@ -318,7 +318,7 @@ def live(roots: int) -> None:
         for backend in ("torch", "cugraph"):
             stats: dict[str, Any] = {}
             start = time.perf_counter()
-            batches[backend] = make_live_batch(
+            batches[backend] = build_batch(
                 store,
                 keys,
                 fanouts=fanouts,
@@ -339,7 +339,7 @@ def live(roots: int) -> None:
             second = batch["second_relation"][batch["second_mask"]]
             check(bool((second < PAYMENT_RELATIONS).all()), f"live {backend} hop 2 payments-only")
         evaluation = [
-            make_live_batch(
+            build_batch(
                 store,
                 keys,
                 fanouts=fanouts,

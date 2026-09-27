@@ -20,7 +20,7 @@ from mule_pattern_learner.pipeline import evaluate as pipeline_evaluate
 from mule_pattern_learner.pipeline import prepare as pipeline_prepare
 from mule_pattern_learner.pipeline.connect import open_context_source
 from mule_pattern_learner.pipeline.evaluate import final_audit
-from mule_pattern_learner.pipeline.train import BASELINE_RUN, run
+from mule_pattern_learner.pipeline.train import BASELINE_RUN, train_run
 from mule_pattern_learner.testing.builders import neighbourhood, scope_population
 from mule_pattern_learner.testing.fake_graph import FakeExecutor
 
@@ -34,12 +34,12 @@ def test_minimal_command_and_run_defaults(tmp_path: Path) -> None:
     dataset = DatasetPaths.of("id", tmp_path / "data")
     output = RunPaths(tmp_path / "run")
     with (
-        patch("mule_pattern_learner.pipeline.train.prepare_live", return_value=dataset) as prep,
+        patch("mule_pattern_learner.pipeline.train.prepare_dataset", return_value=dataset) as prep,
         patch(
             "mule_pattern_learner.pipeline.train.train", return_value={"status": "complete"}
         ) as fit,
     ):
-        assert run(output, data=tmp_path / "data")["status"] == "complete"
+        assert train_run(output, data=tmp_path / "data")["status"] == "complete"
         prep.assert_called_once()
         # The built-in run's dataset, in the data directory.
         assert prep.call_args.args == (DEFAULT_CONFIG, tmp_path / "data")
@@ -52,9 +52,9 @@ def test_minimal_command_and_run_defaults(tmp_path: Path) -> None:
         output.root.mkdir()
         output.config.write_text("{}")
         with pytest.raises(FileExistsError, match="Run already exists"):
-            run(output, data=tmp_path / "data")
+            train_run(output, data=tmp_path / "data")
         assert prep.call_count == 1
-        run(output, data=tmp_path / "data", resume=True)
+        train_run(output, data=tmp_path / "data", resume=True)
         assert fit.call_args.kwargs["resume"] is True
 
 
@@ -115,7 +115,7 @@ def test_train_then_audit_write_exactly_the_files_of_the_run_and_dataset_tables(
     )
     data, results = tmp_path / "data", tmp_path / "results"
     output = RunPaths.of(BASELINE_VARIANT, config.training.seed, results)
-    result = run(output, config=config, data=data)
+    result = train_run(output, config=config, data=data)
     assert result["status"] == "complete"
     # The dataset is data/<dataset id>/, and nothing else is written there.
     identity = dataset_id(FAKE_SOURCE, config)
@@ -148,7 +148,7 @@ def test_train_then_audit_write_exactly_the_files_of_the_run_and_dataset_tables(
     # A complete run is reported, and left as it was.
     written = {name: (output.root / name).stat().st_mtime_ns for name in trained}
     with pytest.raises(FileExistsError, match="already complete"):
-        run(output, config=config, data=data, resume=True)
+        train_run(output, config=config, data=data, resume=True)
     assert {name: (output.root / name).stat().st_mtime_ns for name in trained} == written
     # The audit adds its files to the run's audit/ and reads the model's own dataset.
     truth = pd.DataFrame(scope_population(POPULATION))[["account_id"]]

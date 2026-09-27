@@ -5,7 +5,7 @@ code the saved models on the CUDA host come from. They are the built-in run, the
 variant and the no_fourier variant, each trained for two steps with 8 hidden units on the
 fake graph. Their configurations hold keys that the restructure retires, such as
 context_storage, evaluation_protocol, label_policy and variant. The literals are the
-scores that commit's TemporalPredictor gave eight test accounts; this code must give the
+scores that commit's Predictor gave eight test accounts; this code must give the
 same scores. Floating point rounding differs between machines, hence the tolerance.
 
 `dataset/` is the dataset that commit prepared for the built-in model: its manifest
@@ -37,10 +37,10 @@ from mule_pattern_learner.contract.feature_groups import (
 from mule_pattern_learner.contract.fingerprints import fingerprint
 from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.contract.sampler_plan import PoolPlan
-from mule_pattern_learner.data.contexts import StreamingContextSource, streaming_source
+from mule_pattern_learner.data.contexts import ContextSource, build_context_source
 from mule_pattern_learner.data.manifest import dataset_id, read_manifest
 from mule_pattern_learner.data.preparation import prepare
-from mule_pattern_learner.inference.predictor import TemporalPredictor
+from mule_pattern_learner.inference.predictor import Predictor
 from mule_pattern_learner.inference.saved_model import SavedModel, saved_run_config
 from mule_pattern_learner.inference.score_accounts import score
 from mule_pattern_learner.paths import DATA_DIR, DatasetPaths, RunPaths
@@ -131,7 +131,7 @@ def test_models_saved_before_the_restructure_score_as_they_did(name: str) -> Non
         for account in ACCOUNTS
     ]
     fetcher = TigerGraphContextFetcher(FakeExecutor(factory=neighbourhood))
-    predictor = TemporalPredictor(saved, fetcher=fetcher)
+    predictor = Predictor(saved, fetcher=fetcher)
     try:
         frame = predictor.predict(keys)
     finally:
@@ -164,9 +164,9 @@ def test_models_whose_columns_moved_are_refused(tmp_path: Path) -> None:
         saved.check_inputs(plan)
 
 
-def fixture_source(config: RunConfig) -> StreamingContextSource:
+def fixture_source(config: RunConfig) -> ContextSource:
     executor = FakeExecutor(factory=neighbourhood)
-    return streaming_source(
+    return build_context_source(
         TigerGraphContextFetcher(executor),
         extraction_plan(config.feature_plan()),
         config.sampler,

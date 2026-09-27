@@ -17,14 +17,14 @@ import pytest
 
 from mule_pattern_learner.config import RunConfig
 from mule_pattern_learner.contract.feature_groups import FeaturePlan, extraction_plan
-from mule_pattern_learner.data.contexts import StreamingContextSource, check_coverage
+from mule_pattern_learner.data.contexts import ContextSource, check_coverage
 from mule_pattern_learner.data.preparation import prepare
 from mule_pattern_learner.paths import REPOSITORY_ROOT, DatasetPaths
 from mule_pattern_learner.reference import label_reveal
 from mule_pattern_learner.testing.builders import (
     UNIT_SOURCE,
     FrameObservedLabels,
-    live_config,
+    example_config,
     neighbourhood,
     reveal_inputs,
     scoped_accounts,
@@ -161,7 +161,7 @@ def test_strict_isolation_source_requests_what_the_fixture_checks_and_the_model_
 
     graph = SimpleNamespace(client=SimpleNamespace(conn=None))
     monkeypatch.setattr(module, "connect", lambda config: graph)
-    monkeypatch.setattr(module, "StreamingContextSource", record)
+    monkeypatch.setattr(module, "ContextSource", record)
     monkeypatch.setattr(sys, "argv", ["verify_strict_isolation", "--write-fixture"])
     with pytest.raises(Built):
         module.main()
@@ -184,14 +184,14 @@ def test_strict_isolation_source_requests_what_the_fixture_checks_and_the_model_
         assert flags["include_" + group], group
     # The model it trains and the predictor that scores it read nothing the source skips.
     config = module.model_config()
-    with StreamingContextSource(TigerGraphContextFetcher(FakeExecutor()), **options) as source:
+    with ContextSource(TigerGraphContextFetcher(FakeExecutor()), **options) as source:
         check_coverage(source, config.feature_plan(), config.sampler)
 
 
 def test_benchmark_builds_one_training_batch_and_step(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    config = live_config(training={"batch_size": 32}, sampler={"fanouts": [8, 2]})
+    config = example_config(training={"batch_size": 32}, sampler={"fanouts": [8, 2]})
     dataset = DatasetPaths(tmp_path / "dataset")
     executor = FakeExecutor(factory=neighbourhood, hubs=[("N3", 101)], population=scoped_accounts())
     prepare(
@@ -208,7 +208,7 @@ def test_benchmark_builds_one_training_batch_and_step(
 
     def open_source(path: DatasetPaths, manifest: dict[str, Any], training: RunConfig) -> Any:
         assert path == dataset and training == config
-        return StreamingContextSource(
+        return ContextSource(
             TigerGraphContextFetcher(executor),
             plan=extraction_plan(training.feature_plan()),
             sampler=training.sampler,

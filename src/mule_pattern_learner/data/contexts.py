@@ -1,11 +1,13 @@
-"""Context sources: the model-facing port, its streaming adapter, and its opener.
+"""Context sources: the model-facing port, the source that streams contexts, its opener.
 
-StreamingContextSource requests each batch's contexts through a ContextFetcher
-(ports.py) and keeps a bounded LRU. It returns rows in key order, with None where
-TigerGraph rejected a request. Every source counts what it was asked for in a
-ContextCounts. check_coverage and close_source work with any ContextSource. A
-ContextOpener opens the source of a prepared dataset; the pipeline passes
-pipeline.connect.open_context_source to the use cases that need one.
+Batching, training and scoring read contexts through a ContextReader. ContextSource
+is the one that reads them from the graph: it requests each batch's contexts through
+a ContextFetcher (ports.py) and keeps a bounded LRU. It returns rows in key order,
+with None where TigerGraph rejected a request. Every reader counts what it was asked
+for in a ContextCounts. check_coverage and close_source work with any ContextReader,
+and a parameter that takes one is named ``contexts``. A ContextOpener opens the
+source of a prepared dataset; the pipeline passes pipeline.connect.open_context_source
+to the use cases that need one.
 """
 
 from __future__ import annotations
@@ -118,7 +120,7 @@ class ContextCounts:
         return len(self.seen)
 
 
-class ContextSource(Protocol):
+class ContextReader(Protocol):
     """Model-facing port independent of the transport (HTTP today, a disk cache later).
 
     fetch returns rows in key order, None where TigerGraph rejected a request
@@ -145,7 +147,7 @@ class ContextSource(Protocol):
     def close(self, *, wait: bool = True) -> None: ...
 
 
-class StreamingContextSource:
+class ContextSource:
     """Fetch only requested batch contexts with a bounded in-memory LRU; no disk.
 
     The LRU is keyed by (hop, ContextKey) because roots and children use
@@ -182,7 +184,7 @@ class StreamingContextSource:
         self.capacity, self.request_batch_size = capacity, request_batch_size
         self.concurrency = concurrency
         self._cadence = _EncodingCadence(encoding_check_every)
-        self.pool = DaemonPool(concurrency, "temporal-context")
+        self.pool = DaemonPool(concurrency, "context-requests")
         self.memory: OrderedDict[tuple[int, ContextKey], dict[str, Any]] = OrderedDict()
         self.query_calls = 0
         self.rejections: Counter[str] = Counter()
@@ -193,7 +195,7 @@ class StreamingContextSource:
         self._inflight: dict[tuple[int, ContextKey], Future[dict[ContextKey, dict[str, Any]]]] = {}
         self._closed = False
 
-    def __enter__(self) -> StreamingContextSource:
+    def __enter__(self) -> ContextSource:
         return self
 
     def __exit__(self, *_: object) -> None:
@@ -322,11 +324,11 @@ class StreamingContextSource:
             self.memory.clear()
 
 
-def streaming_source(
+def build_context_source(
     fetcher: ContextFetcher, plan: FeaturePlan, sampler: SamplerPlan, transport: TransportConfig
-) -> StreamingContextSource:
+) -> ContextSource:
     """Live source with the LRU, request size and concurrency of a transport section."""
-    return StreamingContextSource(
+    return ContextSource(
         fetcher,
         plan=plan,
         sampler=sampler,
@@ -345,12 +347,12 @@ class ContextOpener(Protocol):
 
     def __call__(
         self, dataset: DatasetPaths, manifest: dict[str, Any], config: RunConfig
-    ) -> ContextSource: ...
+    ) -> ContextReader: ...
 
 
-def check_coverage(store: ContextSource, plan: FeaturePlan, sampler: SamplerPlan) -> None:
+def check_coverage(contexts: ContextReader, plan: FeaturePlan, sampler: SamplerPlan) -> None:
     """The source must request every input the model reads, with the model's pools."""
-    source_plan, source_sampler = store.plan, store.sampler
+    source_plan, source_sampler = contexts.plan, contexts.sampler
     # A summary model never fetches children, so only its first hop matters.
     for hop in (1,) if plan.architecture == "summary" else (1, 2):
         have = source_plan.query_flags(hop)
@@ -361,10 +363,10 @@ def check_coverage(store: ContextSource, plan: FeaturePlan, sampler: SamplerPlan
         raise ValueError("Context source candidate pools differ from the model sampler")
 
 
-def close_source(store: ContextSource, *, failed: bool) -> None:
+def close_source(contexts: ContextReader, *, failed: bool) -> None:
     """Close a context source; after a failure, do not wait for its in-flight requests.
 
     After an error or KeyboardInterrupt the source is closed with ``wait=False``, so the
     error surfaces without waiting for REST retries.
     """
-    store.close(wait=not failed)
+    contexts.close(wait=not failed)

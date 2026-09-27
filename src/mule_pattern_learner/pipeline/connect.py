@@ -13,7 +13,7 @@ from typing import Any
 from ..config import RunConfig, TransportConfig
 from ..contract.feature_groups import extraction_plan
 from ..contract.sampler_plan import sampler_pools
-from ..data.contexts import StreamingContextSource, streaming_source
+from ..data.contexts import ContextSource, build_context_source
 from ..data.manifest import recorded_settings
 from ..paths import DatasetPaths
 from ..tigergraph.connection import Settings
@@ -33,7 +33,7 @@ def connect(transport: TransportConfig) -> TigerGraphExecutor:
 
 def open_context_source(
     dataset: DatasetPaths, manifest: dict[str, Any], config: RunConfig
-) -> StreamingContextSource:
+) -> ContextSource:
     """Open the live source of a prepared dataset for a training or scoring configuration.
 
     It requests the model's groups and hop-2 flags (extraction_plan) with the prepared
@@ -47,7 +47,7 @@ def open_context_source(
         )
     executor = connect(config.transport)
     verify_frozen_source(executor, manifest)
-    return streaming_source(
+    return build_context_source(
         TigerGraphContextFetcher(executor),
         extraction_plan(config.feature_plan()),
         config.sampler,

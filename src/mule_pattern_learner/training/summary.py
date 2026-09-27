@@ -161,7 +161,7 @@ def run_summary(
         "evaluation_protocol": EVALUATION_PROTOCOL,
         "validation_proxy": selection,
         "database_calls_during_training": progress.calls(),
-        "contexts": progress.contexts(),
+        "contexts": progress.context_counts(),
         "rejections": progress.rejections(),
         "sampler_backend": progress.backend,
         "sampler_totals": dict(progress.totals),

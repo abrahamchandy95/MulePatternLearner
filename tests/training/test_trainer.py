@@ -25,12 +25,12 @@ from mule_pattern_learner.artifacts import (
     read_run_config,
 )
 from mule_pattern_learner.batching import assemble
-from mule_pattern_learner.batching.assemble import make_live_batch
+from mule_pattern_learner.batching.assemble import build_batch
 from mule_pattern_learner.config import RunConfig
 from mule_pattern_learner.contract.feature_groups import DEFAULT_GROUPS, extraction_plan
 from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
-from mule_pattern_learner.data.contexts import StreamingContextSource
+from mule_pattern_learner.data.contexts import ContextSource
 from mule_pattern_learner.data.hub_registry import HubRegistry, load_hub_registry, warn_hub_stubs
 from mule_pattern_learner.data.manifest import dataset_id, load_prepared
 from mule_pattern_learner.data.observed_labels import label_summary
@@ -48,7 +48,7 @@ from mule_pattern_learner.testing.builders import (
     assigned_accounts,
     base_config,
     hub_registry,
-    live_config,
+    example_config,
     neighbourhood,
     prepared_dataset,
     scoped_accounts,
@@ -70,14 +70,14 @@ def fit(
     name: str,
     config: RunConfig,
     *,
-    source: FakeSource | None = None,
+    contexts: FakeSource | None = None,
     resume: bool = False,
 ) -> dict[str, Any]:
     return trainer.train(
         config,
         DatasetPaths(tmp_path / "dataset"),
         RunPaths(tmp_path / name),
-        contexts=source or FakeSource(config),
+        contexts=contexts or FakeSource(config),
         hubs=hub_registry(),
         resume=resume,
     )
@@ -122,7 +122,7 @@ def test_two_epochs_equal_one_epoch_plus_resume(
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     fit(tmp_path, "straight", config)
     with pytest.raises(RuntimeError, match="injected"):
-        fit(tmp_path, "resumed", config, source=FakeSource(config, fail=after_validation(1)))
+        fit(tmp_path, "resumed", config, contexts=FakeSource(config, fail=after_validation(1)))
     state = torch.load(RunPaths(tmp_path / "resumed").resume, weights_only=True)
     assert (state["epoch"], state["step"]) == (1, 0)
     assert not RunPaths(tmp_path / "resumed").model.exists()
@@ -155,7 +155,7 @@ def test_mid_epoch_step_checkpoint_resumes_exactly(
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     fit(tmp_path, "straight", config)
     with pytest.raises(RuntimeError, match="injected"):
-        fit(tmp_path, "resumed", config, source=FakeSource(config, fail=after_validation(3)))
+        fit(tmp_path, "resumed", config, contexts=FakeSource(config, fail=after_validation(3)))
     state = torch.load(RunPaths(tmp_path / "resumed").resume, weights_only=True)
     assert state["epoch"] == 1 and 1 <= state["step"] < 4
     # Runtime-only settings may change on resume; results must not.
@@ -181,7 +181,7 @@ def test_a_resumed_run_logs_each_interval_once(
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     fit(tmp_path, "straight", config)
     with pytest.raises(RuntimeError, match="injected"):
-        fit(tmp_path, "resumed", config, source=FakeSource(config, fail=after_validation(3)))
+        fit(tmp_path, "resumed", config, contexts=FakeSource(config, fail=after_validation(3)))
     resumed = RunPaths(tmp_path / "resumed")
     assert read_history(resumed.history)[["epoch", "step"]].to_numpy().tolist()[-2:] == [
         [2, 1],
@@ -248,7 +248,7 @@ def test_resume_refuses_a_changed_result_setting(
     config = base_config()
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     with pytest.raises(RuntimeError):
-        fit(tmp_path, "run", config, source=FakeSource(config, fail=after_validation(1)))
+        fit(tmp_path, "run", config, contexts=FakeSource(config, fail=after_validation(1)))
     changed = config.with_changes({"training": {"learning_rate": 0.02}})
     with pytest.raises(ValueError, match="training.learning_rate"):
         fit(tmp_path, "run", changed, resume=True)
@@ -263,7 +263,7 @@ def test_batches_use_train_mode_step_seeds_and_the_hub_registry(
     backends: set[str | None] = set()
     resolved: list[threading.Thread] = []
     lock = threading.Lock()
-    real = assemble.make_live_batch
+    real = assemble.build_batch
     real_resolve = trainer.resolve_backend
 
     def resolve(sampler: SamplerPlan, device: torch.device) -> str:
@@ -286,7 +286,7 @@ def test_batches_use_train_mode_step_seeds_and_the_hub_registry(
             )
         return batch
 
-    monkeypatch.setattr(assemble, "make_live_batch", record)
+    monkeypatch.setattr(assemble, "build_batch", record)
     monkeypatch.setattr(trainer, "resolve_backend", resolve)
     result = fit(tmp_path, "run", config)
     # One resolution per run, on the main thread; every batch gets its result.
@@ -328,7 +328,7 @@ def test_rejected_roots_are_dropped_and_reported(
     # Unlabeled validation, test and train accounts (4 of the 21 marginal train rows,
     # so every epoch's 18-row marginal draw meets at least one).
     rejected = frozenset({"A001", "A002", "A003", "A006", "A009", "A012"})
-    result = fit(tmp_path, "run", config, source=FakeSource(config, reject=rejected))
+    result = fit(tmp_path, "run", config, contexts=FakeSource(config, reject=rejected))
     assert result["rejections"]["missing_entity"] > 0
     assert result["rejected_evaluation_rows"] == {"validation": 1, "test": 1}
     roots = result["rejected_roots"]
@@ -352,22 +352,22 @@ def test_rejected_roots_fail_closed_by_default(
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     # Default limit 0: one rejected unlabeled validation root fails epoch 1.
     with pytest.raises(ValueError, match=r"validation: TigerGraph rejected 1 of 23 roots"):
-        fit(tmp_path, "one", config, source=FakeSource(config, reject=frozenset({"A001"})))
+        fit(tmp_path, "one", config, contexts=FakeSource(config, reject=frozenset({"A001"})))
     assert not RunPaths(tmp_path / "one").model.exists()
     # A rejected observed positive always fails, whatever the limit.
     loose = base_config(
         training={"proxy_unlabeled_limit": 100}, runtime={"max_rejected_root_fraction": 1.0}
     )
     with pytest.raises(ValueError, match="1 observed positives"):
-        fit(tmp_path, "pos", loose, source=FakeSource(loose, reject=frozenset({"A010"})))
+        fit(tmp_path, "pos", loose, contexts=FakeSource(loose, reject=frozenset({"A010"})))
     # A training positive (A015) fails the training epoch before validation.
     with pytest.raises(ValueError, match=r"Epoch 1: .*training roots .*observed positives"):
-        fit(tmp_path, "train", loose, source=FakeSource(loose, reject=frozenset({"A015"})))
+        fit(tmp_path, "train", loose, contexts=FakeSource(loose, reject=frozenset({"A015"})))
     # Validation must keep both observed classes after its rejections.
     validation_positives = frozenset({"A010", "A025", "A040", "A055", "A070"})
     unlabeled = frozenset(f"A{i:03}" for i in range(1, 72, 3)) - validation_positives
     with pytest.raises(ValueError, match="both observed classes"):
-        fit(tmp_path, "classes", loose, source=FakeSource(loose, reject=unlabeled))
+        fit(tmp_path, "classes", loose, contexts=FakeSource(loose, reject=unlabeled))
 
 
 def test_test_split_rejections_fail_after_the_model_is_saved(
@@ -376,7 +376,7 @@ def test_test_split_rejections_fail_after_the_model_is_saved(
     config = base_config(training={"proxy_unlabeled_limit": 100})
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     with pytest.raises(ValueError, match=r"test: TigerGraph rejected 1 of 22 roots"):
-        fit(tmp_path, "run", config, source=FakeSource(config, reject=frozenset({"A002"})))
+        fit(tmp_path, "run", config, contexts=FakeSource(config, reject=frozenset({"A002"})))
     run = RunPaths(tmp_path / "run")
     assert run.model.exists() and not run.metrics.exists()
     # The limit is a runtime key: raising it lets the run finish from its checkpoint.
@@ -384,7 +384,7 @@ def test_test_split_rejections_fail_after_the_model_is_saved(
         tmp_path,
         "run",
         config.with_changes({"runtime": {"max_rejected_root_fraction": 0.1}}),
-        source=FakeSource(config, reject=frozenset({"A002"})),
+        contexts=FakeSource(config, reject=frozenset({"A002"})),
         resume=True,
     )
     assert result["status"] == "complete" and result["max_rejected_root_fraction"] == 0.1
@@ -476,7 +476,7 @@ def test_resume_refuses_a_different_sampler_backend_unless_configured(
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     fit(tmp_path, "straight", config)
     with pytest.raises(RuntimeError, match="injected"):
-        fit(tmp_path, "run", config, source=FakeSource(config, fail=after_validation(1)))
+        fit(tmp_path, "run", config, contexts=FakeSource(config, fail=after_validation(1)))
     path = RunPaths(tmp_path / "run").resume
     state = torch.load(path, weights_only=True)
     # As if the first segment ran on a cuGraph host.
@@ -531,7 +531,7 @@ def test_run_directory_is_created_only_after_the_source_opens(
     # A source built with another sampler is rejected before anything is written.
     other = base_config(sampler={"relation_fanouts": [3, 2]})
     with pytest.raises(ValueError, match="sampler"):
-        fit(tmp_path, "m", config, source=FakeSource(other))
+        fit(tmp_path, "m", config, contexts=FakeSource(other))
     assert not RunPaths(tmp_path / "m").root.exists()
 
 
@@ -562,7 +562,7 @@ def test_train_restores_global_torch_state(tmp_path: Path, monkeypatch: pytest.M
         assert not torch.are_deterministic_algorithms_enabled()
         assert torch.get_num_threads() == threads
         with pytest.raises(RuntimeError):
-            fit(tmp_path, "bad", config, source=FakeSource(config, fail=lambda *_: True))
+            fit(tmp_path, "bad", config, contexts=FakeSource(config, fail=lambda *_: True))
         assert not torch.are_deterministic_algorithms_enabled()
         assert torch.get_num_threads() == threads
     finally:
@@ -607,9 +607,9 @@ def test_averaged_run_validates_and_saves_the_average(
     assert any(not torch.equal(averaged[k], raw[k]) for k in raw)
 
 
-def streaming_source(executor: FakeExecutor, config: RunConfig, **kwargs: Any):
+def build_context_source(executor: FakeExecutor, config: RunConfig, **kwargs: Any):
     """The source a prepared run opens: prepared extraction plan and training sampler."""
-    return StreamingContextSource(
+    return ContextSource(
         TigerGraphContextFetcher(executor),
         plan=extraction_plan(config.feature_plan()),
         sampler=config.sampler,
@@ -652,10 +652,12 @@ def prepared(tmp_path: Path, config: RunConfig, **kwargs: Any) -> tuple[DatasetP
 
 
 def test_hidden_truth_cannot_change_updates_or_checkpoint_selection(tmp_path: Path) -> None:
-    c = live_config()
+    c = example_config()
     dataset, executor = prepared(tmp_path, c)
     assert executor.names().count("temporal_hub_registry") == 1
-    first = train(c, dataset, RunPaths(tmp_path / "first"), contexts=streaming_source(executor, c))
+    first = train(
+        c, dataset, RunPaths(tmp_path / "first"), contexts=build_context_source(executor, c)
+    )
     saved_first = torch.load(RunPaths(tmp_path / "first").model, weights_only=True)
     # The oracle is a separate file that is never opened by training.
     a = pd.read_parquet(dataset.accounts)
@@ -677,7 +679,7 @@ def test_hidden_truth_cannot_change_updates_or_checkpoint_selection(tmp_path: Pa
     )
     assert before != after
     second = train(
-        c, dataset, RunPaths(tmp_path / "second"), contexts=streaming_source(executor, c)
+        c, dataset, RunPaths(tmp_path / "second"), contexts=build_context_source(executor, c)
     )
     saved_second = torch.load(RunPaths(tmp_path / "second").model, weights_only=True)
     pd.testing.assert_frame_equal(
@@ -695,18 +697,18 @@ def test_hidden_truth_cannot_change_updates_or_checkpoint_selection(tmp_path: Pa
 
 
 def test_preparation_requests_no_context_and_training_keeps_a_bounded_lru(tmp_path: Path) -> None:
-    c = live_config()
+    c = example_config()
     dataset, executor = prepared(tmp_path, c)
     load_prepared(dataset)
     assert not executor.requested
-    source = streaming_source(executor, c, capacity=4)
+    source = build_context_source(executor, c, capacity=4)
     result = train(c, dataset, RunPaths(tmp_path / "model"), contexts=source)
     assert result["database_calls_during_training"] > 0
     assert len(source.memory) <= 4
 
 
 def test_training_end_to_end_with_v5_neighbour_messages(tmp_path: Path) -> None:
-    c = live_config()
+    c = example_config()
     # N3 is a hub at every root cutoff; N5 always exceeds its history capacity.
     dataset, executor = prepared(
         tmp_path,
@@ -722,8 +724,8 @@ def test_training_end_to_end_with_v5_neighbour_messages(tmp_path: Path) -> None:
     train_rows = accounts[accounts.split == "train"].iloc[:16]
     keys = sample_keys(train_rows, c.dataset.dates.train[0], manifest)
     stats: dict[str, Any] = {}
-    with streaming_source(executor, c) as source:
-        batch = make_live_batch(
+    with build_context_source(executor, c) as source:
+        batch = build_batch(
             source,
             keys,
             fanouts=sampler.fanouts,
@@ -749,7 +751,7 @@ def test_training_end_to_end_with_v5_neighbour_messages(tmp_path: Path) -> None:
     for module in (model.edge, model.relation, model.rail):
         assert module.weight.grad is not None and torch.count_nonzero(module.weight.grad) > 0
 
-    source = streaming_source(executor, c, capacity=64)
+    source = build_context_source(executor, c, capacity=64)
     result = train(c, dataset, RunPaths(tmp_path / "model"), contexts=source)
     assert result["status"] == "complete"
     assert np.isfinite(read_epochs(RunPaths(tmp_path / "model").epochs).loss).all()
@@ -767,7 +769,7 @@ def test_training_end_to_end_with_v5_neighbour_messages(tmp_path: Path) -> None:
 
 def test_rejected_roots_within_the_limit_are_dropped_and_counted(tmp_path: Path) -> None:
     # Rejected roots fail closed by default; this run tolerates up to 5% per split.
-    c = live_config(runtime={"max_rejected_root_fraction": 0.05})
+    c = example_config(runtime={"max_rejected_root_fraction": 0.05})
     # An unlabeled validation account, scored (and rejected) in every epoch. A rejected
     # observed positive would fail the run at any limit.
     validation = assigned_accounts().query("split == 'validation'").account_id
@@ -779,7 +781,9 @@ def test_rejected_roots_within_the_limit_are_dropped_and_counted(tmp_path: Path)
         factory=neighbourhood,
         statuses={"N5": "history_capacity_exceeded", rejected_root: "invisible_entity"},
     )
-    result = train(c, dataset, RunPaths(tmp_path / "model"), contexts=streaming_source(executor, c))
+    result = train(
+        c, dataset, RunPaths(tmp_path / "model"), contexts=build_context_source(executor, c)
+    )
     assert result["sampler_totals"]["rejected_children"] > 0
     assert result["rejections"]["invisible_entity"] >= 1
     assert result["rejected_roots"]["validation"]["rejected"] == 1
@@ -788,11 +792,11 @@ def test_rejected_roots_within_the_limit_are_dropped_and_counted(tmp_path: Path)
 
 
 def test_rejected_roots_fail_the_run_under_the_default_limit(tmp_path: Path) -> None:
-    c = live_config()
+    c = example_config()
     validation = assigned_accounts().query("split == 'validation'").account_id
     dataset, executor = prepared(
         tmp_path, c, factory=neighbourhood, statuses={str(validation.iloc[20]): "invisible_entity"}
     )
     with pytest.raises(ValueError, match="validation: TigerGraph rejected 1 of"):
-        train(c, dataset, RunPaths(tmp_path / "model"), contexts=streaming_source(executor, c))
+        train(c, dataset, RunPaths(tmp_path / "model"), contexts=build_context_source(executor, c))
     assert not RunPaths(tmp_path / "model").model.exists()

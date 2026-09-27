@@ -296,7 +296,7 @@ measured: 3.7e-7).
 
 ## Building one training batch
 
-`make_live_batch` in [assemble.py](../src/mule_pattern_learner/batching/assemble.py)
+`build_batch` in [assemble.py](../src/mule_pattern_learner/batching/assemble.py)
 builds a two-hop computation tree for the batch's roots (64 in the v5 configuration, at most
 128; internal deposit accounts at the
 split's cutoff, all in one scope phase).

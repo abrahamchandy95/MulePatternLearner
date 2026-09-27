@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 import torch
 
-from mule_pattern_learner.batching.assemble import child_key, make_live_batch
+from mule_pattern_learner.batching.assemble import child_key, build_batch
 from mule_pattern_learner.batching.limits import BatchCapacityError, BatchIndex
 from mule_pattern_learner.config import (
     DEFAULT_CONFIG,
@@ -22,7 +22,7 @@ from mule_pattern_learner.contract.feature_groups import (
 from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.contract.time_basis import BASIS_ID
 from mule_pattern_learner.data.accounts import select_accounts
-from mule_pattern_learner.data.contexts import StreamingContextSource
+from mule_pattern_learner.data.contexts import ContextSource
 from mule_pattern_learner.inference.score_accounts import score_new_accounts
 from mule_pattern_learner.model.build import build_model
 from mule_pattern_learner.paths import DatasetPaths, RunPaths
@@ -31,7 +31,7 @@ from mule_pattern_learner.testing.builders import (
     FrameObservedLabels,
     assigned_accounts,
     context,
-    live_config,
+    example_config,
     message,
     supplied_labels,
 )
@@ -58,12 +58,12 @@ def test_batch_ids_are_dense_scoped_and_temporal_and_never_global() -> None:
 
 def test_budget_rejects_before_database_calls_and_tensor_allocation() -> None:
     executor = FakeExecutor({})
-    source = StreamingContextSource(TigerGraphContextFetcher(executor))
+    source = ContextSource(TigerGraphContextFetcher(executor))
     roots = [ContextKey("Account", str(i), 100, 1000) for i in range(129)]
     with pytest.raises(BatchCapacityError):
-        make_live_batch(source, roots)
+        build_batch(source, roots)
     with pytest.raises(BatchCapacityError):
-        make_live_batch(source, roots[:64], fanouts=(64, 64))
+        build_batch(source, roots[:64], fanouts=(64, 64))
     assert executor.requested == []
 
 
@@ -71,8 +71,8 @@ def test_scope_follows_recursive_events_and_cache_never_crosses_scope() -> None:
     a = ContextKey("Account", "a", 100, 1000, "strict", 1)
     msg = message(90, 900, a)
     source = FakeExecutor({a: context(a, [msg])})
-    backend = StreamingContextSource(TigerGraphContextFetcher(source))
-    make_live_batch(backend, [a], fanouts=(2, 2))
+    backend = ContextSource(TigerGraphContextFetcher(source))
+    build_batch(backend, [a], fanouts=(2, 2))
     assert child_key(msg, a) in source.requested
     assert all(key.scope_id == "strict" and key.visibility_phase == 1 for key in source.requested)
     previous = backend.query_calls
@@ -83,7 +83,7 @@ def test_scope_follows_recursive_events_and_cache_never_crosses_scope() -> None:
 
 
 def test_stream_retention_is_bounded_across_many_disjoint_batches() -> None:
-    backend = StreamingContextSource(
+    backend = ContextSource(
         TigerGraphContextFetcher(FakeExecutor({})), capacity=8, request_batch_size=16
     )
     for start in range(0, 512, 16):
@@ -240,7 +240,7 @@ def test_strict_preparation_and_nnpu_use_the_correct_phase_end_to_end(tmp_path: 
     from mule_pattern_learner.data.preparation import prepare
     from mule_pattern_learner.training.trainer import train
 
-    cfg = live_config(
+    cfg = example_config(
         scope={"id": "unit_strict"},
         dataset={"seed_limits": {"train": 10, "validation": 10, "test": 10}},
     )
@@ -275,7 +275,7 @@ def test_strict_preparation_and_nnpu_use_the_correct_phase_end_to_end(tmp_path: 
         hubs=TigerGraphHubs(executor),
     )
     assert manifest["status"] == "ready" and not executor.requested
-    source = StreamingContextSource(
+    source = ContextSource(
         TigerGraphContextFetcher(executor),
         plan=extraction_plan(cfg.feature_plan()),
         sampler=cfg.sampler,

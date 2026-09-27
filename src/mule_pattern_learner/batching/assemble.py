@@ -31,7 +31,7 @@ from .limits import BatchIndex, BatchLimits
 from .time_encoding import fourier64_torch
 
 if TYPE_CHECKING:
-    from ..data.contexts import ContextSource
+    from ..data.contexts import ContextReader
 
 
 _CLIENT_NAMES = frozenset(n for group in CLIENT_GROUPS for n in FEATURE_GROUPS[group].names)
@@ -125,8 +125,8 @@ def _tensor(value: np.ndarray, device: torch.device) -> torch.Tensor:
     return tensor.to(device)
 
 
-def make_live_batch(
-    store: ContextSource,
+def build_batch(
+    contexts: ContextReader,
     roots: list[ContextKey],
     *,
     fanouts: tuple[int, int] = (8, 4),
@@ -164,7 +164,7 @@ def make_live_batch(
     device = torch.device(device)
     backend = batch_backend(sampler, device, mode, sampler_backend)
     counts: dict[str, Any] = {"roots": len(roots), "sampler_backend": backend}
-    root_rows = store.fetch(list(roots), hop=1)
+    root_rows = contexts.fetch(list(roots), hop=1)
     if len(root_rows) != len(roots):
         raise ValueError("Context source returned a different number of rows")
     _fetched(root_rows)
@@ -172,7 +172,7 @@ def make_live_batch(
     if missing:
         raise ValueError(
             f"TigerGraph rejected {len(missing)} of {len(roots)} root contexts "
-            f"(status counts {dict(store.rejections)}); first {missing[0]}"
+            f"(status counts {dict(contexts.rejections)}); first {missing[0]}"
         )
     accepted = [row for row in root_rows if row is not None]
     if plan.architecture == "summary":
@@ -221,7 +221,7 @@ def make_live_batch(
         rows[key] = _stub_row(key, reached[key])
     fetch = [key for key in children if key not in rows]
     rejected: set[ContextKey] = set()
-    child_rows = store.fetch(fetch, hop=2) if fetch else []
+    child_rows = contexts.fetch(fetch, hop=2) if fetch else []
     _fetched(child_rows)
     for key, row in zip(fetch, child_rows, strict=True):
         if row is None:
@@ -230,14 +230,14 @@ def make_live_batch(
             rows[key] = row
     lookup = BatchIndex([*roots, *(k for k in children if k not in rejected)], limits.max_contexts)
     unique = lookup.keys
-    contexts = [rows[key] for key in unique]
-    second = select(unique, contexts, 2)
+    context_rows = [rows[key] for key in unique]
+    second = select(unique, context_rows, 2)
 
     arrays: dict[str, np.ndarray] = {
         "root_positions": np.asarray([lookup[key] for key in roots], dtype=np.int64),
         # The distinct roots lead the contexts; only they get pool counts, and the model
         # reads the summary columns of roots only.
-        "x": node_matrix(contexts, plan, pooled=len(set(roots))),
+        "x": node_matrix(context_rows, plan, pooled=len(set(roots))),
         "neighbor_positions": np.zeros((len(roots), fanouts[0]), dtype=np.int64),
     }
     encodings: dict[str, dict[str, np.ndarray]] = {}
@@ -305,7 +305,7 @@ def make_live_batch(
 
 
 class PinnedRoots:
-    """Serve already fetched root rows to make_live_batch without a second request.
+    """Serve already fetched root rows to build_batch without a second request.
 
     Anything else (children, other keys) goes to the wrapped source, so concurrent
     batch builders cannot evict a batch's roots between filtering and assembly. The
@@ -314,17 +314,17 @@ class PinnedRoots:
     """
 
     def __init__(
-        self, store: ContextSource, keys: list[ContextKey], rows: list[dict[str, Any]]
+        self, contexts: ContextReader, keys: list[ContextKey], rows: list[dict[str, Any]]
     ) -> None:
-        self.store = store
+        self.contexts = contexts
         self.rows = dict(zip(keys, rows, strict=True))
-        self.plan, self.sampler = store.plan, store.sampler
-        self.rejections, self.rejections_by_hop = store.rejections, store.rejections_by_hop
-        self.counts = store.counts
+        self.plan, self.sampler = contexts.plan, contexts.sampler
+        self.rejections, self.rejections_by_hop = contexts.rejections, contexts.rejections_by_hop
+        self.counts = contexts.counts
 
     @property
     def query_calls(self) -> int:
-        return self.store.query_calls
+        return self.contexts.query_calls
 
     def close(self, *, wait: bool = True) -> None:
         """Nothing to close: the wrapped source's owner closes it."""
@@ -332,7 +332,7 @@ class PinnedRoots:
     def fetch(self, keys: list[ContextKey], *, hop: int = 1) -> list[dict[str, Any] | None]:
         if hop == 1 and all(key in self.rows for key in keys):
             return [self.rows[key] for key in keys]
-        return self.store.fetch(keys, hop=hop)
+        return self.contexts.fetch(keys, hop=hop)
 
 
 @dataclass
@@ -354,7 +354,7 @@ class RootBatch:
 
 
 def build_root_batch(
-    store: ContextSource,
+    contexts: ContextReader,
     keys: list[ContextKey],
     *,
     fanouts: tuple[int, int],
@@ -368,19 +368,19 @@ def build_root_batch(
 ) -> RootBatch:
     """Drop roots TigerGraph rejected (per-request status), then assemble the rest.
 
-    Rejections are counted by status on ``store.rejections``; the batch statistics
+    Rejections are counted by status on ``contexts.rejections``; the batch statistics
     carry ``rejected_roots``. A batch with no accepted root has ``batch=None``.
     ``sampler_backend`` is the backend resolved once per run (``resolve_backend``);
-    None lets make_live_batch resolve it.
+    None lets build_batch resolve it.
     """
-    rows = store.fetch(keys, hop=1)
+    rows = contexts.fetch(keys, hop=1)
     accepted = np.fromiter((row is not None for row in rows), dtype=bool, count=len(keys))
     stats: dict[str, Any] = {"rejected_roots": int(len(keys) - accepted.sum())}
     kept = [k for k, ok in zip(keys, accepted, strict=True) if ok]
     if not kept:
         return RootBatch(keys, accepted, None, stats)
-    pinned = PinnedRoots(store, kept, [row for row in rows if row is not None])
-    batch = make_live_batch(
+    pinned = PinnedRoots(contexts, kept, [row for row in rows if row is not None])
+    batch = build_batch(
         pinned,
         kept,
         fanouts=fanouts,

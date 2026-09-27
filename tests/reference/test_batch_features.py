@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 import torch
 
-from mule_pattern_learner.batching.assemble import child_key, make_live_batch
+from mule_pattern_learner.batching.assemble import child_key, build_batch
 from mule_pattern_learner.batching.limits import BatchIndex
 from mule_pattern_learner.contract.feature_groups import (
     DEFAULT_GROUPS,
@@ -103,7 +103,7 @@ def test_vectorised_assembly_matches_the_scalar_features_bit_for_bit(
     sampler = POOLED
     store = FakeStore(sampler)
     keys = roots(12) + roots(2)  # duplicate roots, as PU batches draw with replacement
-    batch = make_live_batch(
+    batch = build_batch(
         store, keys, fanouts=(8, 4), plan=plan, sampler=sampler, mode=mode, step_seed=5
     )
     expected = reference_batch(store, keys, (8, 4), plan, sampler, mode=mode, step_seed=5)

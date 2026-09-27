@@ -14,13 +14,13 @@ import pyarrow.parquet as pq
 from ..artifacts import atomic_write, pending_path, write_rejected
 from ..contract.graph_schema import SPLITS, ContextKey
 from ..contract.sampler_plan import SamplerPlan
-from ..data.contexts import ContextOpener, ContextSource, close_source
+from ..data.contexts import ContextOpener, ContextReader, close_source
 from ..data.hub_registry import HubRegistry, hub_threshold, load_hub_registry, warn_hub_stubs
 from ..data.manifest import load_prepared
 from ..data.ports import ContextFetcher, CutoffReader, HubReader
 from ..data.splits import eligible_mask, resolve_cutoff, sample_keys
 from ..paths import DatasetPaths
-from .predictor import TemporalPredictor
+from .predictor import Predictor
 from .rejections import rejection_summary
 from .saved_model import SavedModel
 
@@ -32,7 +32,7 @@ def score(
     split: str,
     output: Path,
     *,
-    contexts: ContextSource | None = None,
+    contexts: ContextReader | None = None,
     open_contexts: ContextOpener | None = None,
     hubs: HubRegistry | None = None,
 ) -> dict[str, Any]:
@@ -59,15 +59,15 @@ def score(
     if accounts.empty:
         raise ValueError("No eligible accounts at this cutoff")
     registry = hubs if hubs is not None else load_hub_registry(dataset, manifest)
-    if contexts is not None:
-        store = contexts
-    elif open_contexts is not None:
-        store = open_contexts(dataset, manifest, config)
-    else:
-        raise ValueError("Scoring needs contexts, or open_contexts to open the dataset's source")
+    if contexts is None:
+        if open_contexts is None:
+            raise ValueError(
+                "Scoring needs contexts, or open_contexts to open the dataset's source"
+            )
+        contexts = open_contexts(dataset, manifest, config)
     failed = True
     try:
-        predictor = TemporalPredictor(saved, store, hubs=registry)
+        predictor = Predictor(saved, contexts, hubs=registry)
         size = predictor.batch_size
         frames, rejected = predictor.score_keys(
             sample_keys(accounts.iloc[start : start + size], date, manifest)
@@ -75,7 +75,7 @@ def score(
         )
         failed = False
     finally:
-        close_source(store, failed=failed)
+        close_source(contexts, failed=failed)
     result = pd.concat(frames, ignore_index=True)
     result["date"] = date
     result["cutoff_utc"] = date
@@ -85,7 +85,7 @@ def score(
         write_rejected(rejected_output, rejected)
     return {
         "accounts": len(result),
-        **rejection_summary(store, len(rejected), predictor.totals),
+        **rejection_summary(contexts, len(rejected), predictor.totals),
         "rejected_output": str(rejected_output) if rejected else None,
         "device": str(predictor.device),
         "embedding_dimensions": predictor.model.head[0].in_features,
@@ -151,13 +151,13 @@ def score_new_accounts(
     cutoffs: CutoffReader,
     hub_reader: HubReader,
     fetcher: ContextFetcher | None = None,
-    contexts: ContextSource | None = None,
+    contexts: ContextReader | None = None,
     hubs: HubRegistry | None = None,
 ) -> dict[str, Any]:
     """Score arbitrary existing-in-TigerGraph account IDs without a training manifest.
 
     Inference can use all history available at its cutoff. Strict experiment
-    scoring uses scoped ContextKeys through TemporalPredictor instead. IDs that
+    scoring uses scoped ContextKeys through Predictor instead. IDs that
     TigerGraph rejects (missing, not yet visible, over capacity) are not scored:
     they are listed in ``<output>.rejected.txt``. The result reports rejected roots and
     masked child contexts separately (see ``rejection_summary``). A date before the
@@ -171,8 +171,8 @@ def score_new_accounts(
     rejected_output = rejected_path(output)
     saved = SavedModel.of(checkpoint)
     seq, ms = resolve_cutoff(cutoffs, date)
-    predictor = TemporalPredictor(saved, contexts, fetcher=fetcher, hubs=hubs)
-    source = predictor.contexts
+    predictor = Predictor(saved, contexts, fetcher=fetcher, hubs=hubs)
+    contexts = predictor.contexts
     output.parent.mkdir(parents=True, exist_ok=True)
     count = rejected = supplied = 0
     examples: list[str] = []
@@ -212,14 +212,14 @@ def score_new_accounts(
                 rejected_pending.unlink()
         failed = False
     finally:
-        close_source(source, failed=failed)
+        close_source(contexts, failed=failed)
     return {
         "accounts": count,
-        **rejection_summary(source, rejected, predictor.totals),
+        **rejection_summary(contexts, rejected, predictor.totals),
         "rejected_examples": examples,
         "rejected_output": str(rejected_output) if rejected else None,
         "output": str(output),
         "device": str(predictor.device),
-        "database_calls": source.query_calls,
+        "database_calls": contexts.query_calls,
         "scope": "available_history_at_prediction",
     }

@@ -5,11 +5,11 @@ from __future__ import annotations
 import pytest
 import torch
 
-from mule_pattern_learner.batching.assemble import make_live_batch
+from mule_pattern_learner.batching.assemble import build_batch
 from mule_pattern_learner.config import DEFAULT_CONFIG
 from mule_pattern_learner.contract.feature_groups import FeaturePlan
 from mule_pattern_learner.contract.graph_schema import ContextKey
-from mule_pattern_learner.data.contexts import StreamingContextSource
+from mule_pattern_learner.data.contexts import ContextSource
 from mule_pattern_learner.model.build import build_model
 from mule_pattern_learner.model.summary import SummaryMLP
 from mule_pattern_learner.model.tgat import TGAT
@@ -46,8 +46,8 @@ def test_summary_models_fetch_only_the_roots_and_have_no_graph_parameters() -> N
     root = ContextKey("Account", "root", 100, 1000)
     summary = FeaturePlan(("decayed_activity",), "summary")
     executor = FakeExecutor({root: context(root, [message(80, 800, root)])})
-    source = StreamingContextSource(TigerGraphContextFetcher(executor), plan=summary)
-    batch = make_live_batch(source, [root], plan=summary)
+    source = ContextSource(TigerGraphContextFetcher(executor), plan=summary)
+    batch = build_batch(source, [root], plan=summary)
     assert executor.requested == [root]
     assert set(batch) == {"x", "root_positions"}
     model = SummaryMLP(16, 0, plan=summary)

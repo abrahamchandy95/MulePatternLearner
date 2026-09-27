@@ -57,7 +57,7 @@ def find_datasets(config: RunConfig, data: Path = DATA_DIR) -> list[DatasetPaths
     return found
 
 
-def prepare_live(config: RunConfig, data: Path = DATA_DIR) -> DatasetPaths:
+def prepare_dataset(config: RunConfig, data: Path = DATA_DIR) -> DatasetPaths:
     """The ready dataset of config under data, prepared (or resumed) as needed.
 
     A ready dataset of config is reused without connecting, but only after its GSQL

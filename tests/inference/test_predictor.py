@@ -12,11 +12,11 @@ import torch
 from mule_pattern_learner.contract.clock import cutoff_ms
 from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.inference.predictor import (
-    TemporalPredictor,
+    Predictor,
     accepted_scores,
     score_batch,
 )
-from mule_pattern_learner.testing.builders import checkpoint, live_config, neighbourhood
+from mule_pattern_learner.testing.builders import checkpoint, example_config, neighbourhood
 from mule_pattern_learner.testing.fake_graph import FakeExecutor
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
 
@@ -24,10 +24,10 @@ from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetch
 def test_embeddings_leave_the_logits_unchanged_and_rejected_roots_are_listed(
     tmp_path: Path,
 ) -> None:
-    config = live_config()
+    config = example_config()
     path = checkpoint(tmp_path / "model.pt", config)
     executor = FakeExecutor(factory=neighbourhood, statuses={"A0002": "missing_entity"})
-    predictor = TemporalPredictor(path, fetcher=TigerGraphContextFetcher(executor), device="cpu")
+    predictor = Predictor(path, fetcher=TigerGraphContextFetcher(executor), device="cpu")
     ms = cutoff_ms("2024-07-01")
     keys = [ContextKey("Account", f"A{i:04}", 103, ms, config.scope.id, 3) for i in range(5)]
     try:

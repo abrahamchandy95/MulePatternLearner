@@ -18,7 +18,7 @@ import numpy as np
 import torch
 
 from ..batching.assemble import batch_counts
-from ..data.contexts import ContextSource
+from ..data.contexts import ContextReader
 
 
 def plain(stats: dict[str, Any]) -> dict[str, Any]:
@@ -29,8 +29,8 @@ def plain(stats: dict[str, Any]) -> dict[str, Any]:
 class Progress:
     """The run's totals: batch statistics, database calls, rejections and contexts."""
 
-    def __init__(self, started: float, store: ContextSource, backend: str) -> None:
-        self.started, self.store = started, store
+    def __init__(self, started: float, contexts: ContextReader, backend: str) -> None:
+        self.started, self.contexts = started, contexts
         self.totals: Counter[str] = Counter()
         # The backend resolved once for the run (batch statistics name the same one).
         self.backend = backend
@@ -45,15 +45,15 @@ class Progress:
 
     def calls(self) -> int:
         """REST calls of every segment of the run."""
-        return self.base_calls + self.store.query_calls
+        return self.base_calls + self.contexts.query_calls
 
     def rejections(self) -> dict[str, int]:
         """Rejected rows served by the source (both hops) in every segment, by status."""
-        return dict(self.base_rejections + Counter(self.store.rejections))
+        return dict(self.base_rejections + Counter(self.contexts.rejections))
 
-    def contexts(self) -> dict[str, int]:
+    def context_counts(self) -> dict[str, int]:
         """Contexts requested, distinct and served from memory in every segment."""
-        counts = self.store.counts
+        counts = self.contexts.counts
         return {
             "requested": self.base_contexts["requested"] + counts.requested,
             "distinct": counts.distinct,
@@ -62,7 +62,7 @@ class Progress:
 
     def record(self, record: dict[str, Any]) -> dict[str, Any]:
         """record with the run's totals so far."""
-        contexts = self.contexts()
+        contexts = self.context_counts()
         return {
             **record,
             "database_calls": self.calls(),

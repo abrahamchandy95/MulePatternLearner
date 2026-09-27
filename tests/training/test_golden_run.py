@@ -49,7 +49,7 @@ from mule_pattern_learner.artifacts import read_epochs, read_history
 from mule_pattern_learner.batching.assemble import RootBatch, tensor_digests
 from mule_pattern_learner.config import DEFAULT_CONFIG, RunConfig
 from mule_pattern_learner.contract.feature_groups import extraction_plan
-from mule_pattern_learner.data.contexts import StreamingContextSource, streaming_source
+from mule_pattern_learner.data.contexts import ContextSource, build_context_source
 from mule_pattern_learner.data.preparation import prepare
 from mule_pattern_learner.paths import REPOSITORY_ROOT, DatasetPaths, RunPaths
 from mule_pattern_learner.testing.builders import neighbourhood, scope_population
@@ -93,9 +93,9 @@ def golden_executor() -> FakeExecutor:
     )
 
 
-def golden_source(executor: FakeExecutor, config: RunConfig) -> StreamingContextSource:
+def golden_source(executor: FakeExecutor, config: RunConfig) -> ContextSource:
     """The source open_context_source builds for a streamed preparation."""
-    return streaming_source(
+    return build_context_source(
         TigerGraphContextFetcher(executor),
         extraction_plan(config.feature_plan()),
         config.sampler,
