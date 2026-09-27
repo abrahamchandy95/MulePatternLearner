@@ -10,9 +10,15 @@ import pandas as pd
 import pytest
 import torch
 
+from mule_pattern_learner.config import RuntimeConfig
 from mule_pattern_learner.training import summary
 from mule_pattern_learner.training.schedule import EvaluationSample
-from mule_pattern_learner.training.summary import PACKAGES, prediction_frame, provenance
+from mule_pattern_learner.training.summary import (
+    PACKAGES,
+    host_settings,
+    prediction_frame,
+    provenance,
+)
 
 
 def test_prediction_frames_keep_the_accepted_rows_in_sample_order() -> None:
@@ -32,11 +38,14 @@ def test_prediction_frames_keep_the_accepted_rows_in_sample_order() -> None:
 def test_provenance_names_the_code_versions_host_and_dataset(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    recorded = provenance(torch.device("cpu"), "torch", "abc")
+    host = host_settings(torch.device("cpu"), RuntimeConfig(threads=2, deterministic="strict"))
+    assert host == {"device": "cpu", "threads": 2, "deterministic": "strict"}
+    recorded = provenance(host, "torch", "abc")
     assert (recorded["device"], recorded["sampler_backend"]) == ("cpu", "torch")
+    assert (recorded["threads"], recorded["deterministic"]) == (2, "strict")
     assert recorded["dataset_id"] == "abc" and set(recorded["versions"]) == set(PACKAGES)
     assert datetime.fromisoformat(recorded["started"]).tzinfo is not None
     # Outside a git repository the commit and dirty flag are unknown, not an error.
     monkeypatch.setattr(summary, "REPOSITORY_ROOT", tmp_path)
-    outside = provenance(torch.device("cpu"), "torch", "abc")
+    outside = provenance(host, "torch", "abc")
     assert outside["git_commit"] is None and outside["git_dirty"] is None

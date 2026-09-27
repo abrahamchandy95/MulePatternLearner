@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from ..config import RunConfig
+from ..config import RunConfig, RuntimeConfig
 from ..contract.feature_groups import FeaturePlan, contract_fingerprint
 from ..contract.graph_schema import EVALUATION_PROTOCOL
 from ..contract.sampler_plan import SamplerPlan
@@ -49,18 +49,32 @@ def _version(package: str) -> str | None:
         return None
 
 
-def provenance(device: torch.device, backend: str, dataset_id: str) -> dict[str, Any]:
+def host_settings(device: torch.device, runtime: RuntimeConfig) -> dict[str, Any]:
+    """The device, CPU threads and determinism a segment of a run trains with.
+
+    The configuration's fingerprint leaves them out, so a resumed run may change them,
+    but each can change floating-point results.
+    """
+    return {
+        "device": str(device),
+        "threads": runtime.threads,
+        "deterministic": runtime.deterministic,
+    }
+
+
+def provenance(host: dict[str, Any], backend: str, dataset_id: str) -> dict[str, Any]:
     """Where and how a run ran, for config.json: the code, the versions, the host and data.
 
     The commit is the repository's HEAD and dirty says whether its working tree had
-    changes (both None without git); started is when the run started, in UTC.
+    changes (both None without git); host is the run's host_settings and started is
+    when the run started, in UTC.
     """
     status = _git("status", "--porcelain")
     return {
         "git_commit": _git("rev-parse", "HEAD"),
         "git_dirty": None if status is None else bool(status),
         "versions": {package: _version(package) for package in PACKAGES},
-        "device": str(device),
+        **host,
         "sampler_backend": backend,
         "dataset_id": dataset_id,
         "started": datetime.now(timezone.utc).isoformat(timespec="seconds"),
