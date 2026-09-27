@@ -18,10 +18,10 @@ missing; install the cuda12 or cuda13 extra, pylibcugraph 26.8).
 
 Usage:
   python scripts/verify_cugraph_sampler.py [--seeds 600] [--rmm-pool 2GiB]
-  python scripts/verify_cugraph_sampler.py --live [--config overrides.toml]
+  python scripts/verify_cugraph_sampler.py --live [--roots 32]
 
---live builds one batch from the live graph with the built-in run settings (a --config
-file only overrides keys). It prepares the default run's cache first if needed, which
+--live builds one batch from the live graph with the built-in run's settings
+(config.DEFAULT_CONFIG). It prepares the default run's dataset first if needed, which
 `mule-temporal train` then reuses. Roots that TigerGraph rejects are dropped and
 reported, like training does.
 """
@@ -31,7 +31,6 @@ from __future__ import annotations
 import argparse
 from collections.abc import Callable
 from dataclasses import replace
-from pathlib import Path
 import platform
 import sys
 import time
@@ -283,11 +282,9 @@ def merged_slots(engine: CuGraphSampler, sampler: SamplerPlan, device: str = "cu
     )
 
 
-def live(config_path: Path | None, roots: int) -> None:
+def live(roots: int) -> None:
     from mule_pattern_learner.batching.assemble import build_root_batch
-    from mule_pattern_learner.config import fanouts as configured_fanouts
-    from mule_pattern_learner.config import run_config
-    from mule_pattern_learner.contract.feature_groups import FeaturePlan
+    from mule_pattern_learner.config import DEFAULT_CONFIG
     from mule_pattern_learner.data.hub_registry import load_hub_registry
     from mule_pattern_learner.data.manifest import load_prepared
     from mule_pattern_learner.data.splits import sample_keys
@@ -295,7 +292,6 @@ def live(config_path: Path | None, roots: int) -> None:
     from mule_pattern_learner.paths import dataset_path
     from mule_pattern_learner.pipeline.connect import open_context_source
     from mule_pattern_learner.pipeline.prepare import prepare_live
-    from mule_pattern_learner.pipeline.train import prepared_config
     from mule_pattern_learner.runtime.device import torch_runtime
 
     def make_live_batch(store: Any, keys: Any, **options: Any) -> dict[str, torch.Tensor]:
@@ -307,19 +303,17 @@ def live(config_path: Path | None, roots: int) -> None:
             stats.update(prepared.stats)
         return prepared.batch
 
-    config = run_config(config_path)
-    plan = FeaturePlan.from_config(config)
-    sampler = SamplerPlan.from_config(config)
+    config = DEFAULT_CONFIG
+    plan, sampler = config.feature_plan(), config.sampler
     # The default run's prepared cache; preparing it here is what `train` would do first.
-    dataset = dataset_path(config)
+    dataset = dataset_path()
     prepare_live(config, dataset)
     manifest, accounts = load_prepared(dataset)
-    config = prepared_config(config, manifest)
     hubs = load_hub_registry(dataset, manifest)
-    date = config["dates"]["train"][0]
+    date = config.dataset.dates.train[0]
     train = accounts[accounts["split"] == "train"].head(roots)
     keys = sample_keys(train, date, manifest)
-    fanouts = configured_fanouts(config)
+    fanouts = sampler.fanouts
     store = open_context_source(dataset, manifest, config)
     try:
         batches = {}
@@ -365,10 +359,10 @@ def live(config_path: Path | None, roots: int) -> None:
         )
         # One deterministic CUDA training step, twice from the same state.
         losses, grads = [], []
-        with torch_runtime(torch.device("cuda"), deterministic=config["deterministic"]):
+        with torch_runtime(torch.device("cuda"), deterministic=config.runtime.deterministic):
             for _ in range(2):
                 torch.manual_seed(0)
-                model = build_model(config, plan, dropout=0.0).cuda()
+                model = build_model(config.model, plan, fanouts[0], dropout=0.0).cuda()
                 logits = model(batches["cugraph"])
                 target = torch.arange(len(logits), device="cuda") % 2
                 loss = torch.nn.functional.binary_cross_entropy_with_logits(logits, target.float())
@@ -392,7 +386,6 @@ def main() -> int:
     parser.add_argument("--seeds", type=int, default=600, help="seeds for the uniformity test")
     parser.add_argument("--rmm-pool", default=None, help="optional RMM pool size, e.g. 2GiB")
     parser.add_argument("--live", action="store_true", help="also run one real batch and step")
-    parser.add_argument("--config", type=Path, help="optional overrides of the built-in run")
     parser.add_argument("--roots", type=int, default=32)
     args = parser.parse_args()
     if not versions():
@@ -426,7 +419,7 @@ def main() -> int:
     latency(engine, sampler)
     if args.live:
         print("live batch:")
-        live(args.config, args.roots)
+        live(args.roots)
     print(f"{len(FAILURES)} failed checks" if FAILURES else "all checks passed")
     return 1 if FAILURES else 0
 

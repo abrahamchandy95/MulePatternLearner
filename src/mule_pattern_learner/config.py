@@ -1,98 +1,391 @@
-"""Schema for training configuration files.
+"""The settings of a run as frozen dataclasses; DEFAULT_CONFIG is the built-in run.
 
-`validate_config` rejects unknown or mistyped keys before any database work. A key
-the configuration leaves absent takes its DEFAULT_RUN value (the built-in run) or its
-operational default, so a validated configuration holds every key the code reads,
-and components index it directly. A table the configuration writes is kept as
-written. The optional keys stay absent: dataset_id, prepared_id, cohort_seed and
-reveal_salt (both default to seed). `run_config` merges an optional overrides file into
-DEFAULT_RUN.
+RunConfig has one section per concern: the frozen TigerGraph scope (scope), the
+prepared dataset (dataset), neighbour sampling (sampler, which is
+contract.sampler_plan.SamplerPlan itself), the model's feature groups (features), the
+model (model), the nnPU loss (loss), optimisation (training), the connection to
+TigerGraph (transport) and the host (runtime). Every default is the run `mule-temporal
+train` performs, and each component receives only its own section. A section checks
+its values when it is built, with the ranges of contract.bounds, so a bad setting
+fails before any database work. `dataclasses.replace` changes a setting.
+
+fingerprint() names the settings that can change a run's results. to_dict and
+from_dict map a configuration to JSON values and back, for the files a run writes, and
+with_changes changes the settings a table of the same shape names.
 """
 
 from __future__ import annotations
 
-import copy
+from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import asdict, dataclass, fields, is_dataclass, replace
 from datetime import datetime
-import json
-from pathlib import Path
-import re
-import tomllib
-from typing import Annotated, Any, Literal, cast
-
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+import math
+from typing import Any
 
 from .contract.bounds import (
-    ASSOCIATION_FANOUT,
-    ASSOCIATION_SLOTS,
     BATCH_ROOTS,
     CONTEXT_LRU_CAPACITY,
     ENCODING_CHECK_EVERY,
-    FANOUT,
+    HEADS,
+    HIDDEN,
     OUTAGE_SECONDS,
-    POOL,
     PREFETCH_BATCHES,
     QUERY_ATTEMPTS,
     QUERY_CONCURRENCY,
     REQUEST_KEYS,
     REVEAL_PER_SPLIT,
+    SCOPE_ID_BYTES,
     SEED_LIMIT,
-    Bound,
 )
-from .contract.feature_groups import BUILT_IN_GROUPS, FEATURE_GROUPS
+from .contract.clock import timestamp
+from .contract.feature_groups import BUILT_IN_GROUPS, FEATURE_GROUPS, FeaturePlan
+from .contract.fingerprints import fingerprint
+from .contract.graph_schema import SPLITS
+from .contract.sampler_plan import PoolPlan, SamplerPlan
 
-TRANSPORT_DEFAULTS: dict[str, int] = {
-    # Measured on the live graph: 8 contexts per request, 16 in parallel built a 64-root
-    # batch in about 11 s, against about 20 s for 16 x 8 and 22 s for 4 x 16.
-    "request_batch_size": 8,
-    "query_concurrency": 16,
-    "context_lru_capacity": 256,
-    "encoding_check_every": 64,
-    "max_query_attempts": 6,
-    # Wall-clock seconds one operation keeps retrying while TigerGraph is unavailable.
-    "max_outage_s": 900,
-}
-OPERATIONAL_DEFAULTS: dict[str, Any] = {
-    **TRANSPORT_DEFAULTS,
-    "prepare_batch_size": 16,
+
+def _integer(name: str, value: object, low: int = 0) -> int:
+    """value when it is an integer of at least low (a boolean is not one)."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < low:
+        raise ValueError(f"{name} must be an integer >= {low}, got {value!r}")
+    return value
+
+
+def _number(
+    name: str,
+    value: object,
+    low: float,
+    high: float = math.inf,
+    *,
+    open_low: bool = False,
+    open_high: bool = False,
+) -> float:
+    """value as a float when it is a number from low to high; open ends exclude the bound."""
+    number = math.nan
+    if isinstance(value, int | float) and not isinstance(value, bool):
+        number = float(value)
+    above = number > low if open_low else number >= low
+    below = number < high if open_high else number <= high
+    if not (math.isfinite(number) and above and below):
+        closing = ")" if open_high or math.isinf(high) else "]"
+        interval = f"{'(' if open_low else '['}{low}, {high}{closing}"
+        raise ValueError(f"{name} must be a number in {interval}, got {value!r}")
+    return number
+
+
+def _choice(name: str, value: object, choices: Sequence[object]) -> None:
+    """value must be one of choices, of the same type (True is not 1)."""
+    if not any(type(value) is type(choice) and value == choice for choice in choices):
+        raise ValueError(f"{name} must be one of {list(choices)}, got {value!r}")
+
+
+def _flag(name: str, value: object) -> None:
+    if not isinstance(value, bool):
+        raise ValueError(f"{name} must be true or false, got {value!r}")
+
+
+def _text(name: str, value: object, max_bytes: int | None = None) -> None:
+    """value must be a nonempty string, of at most max_bytes bytes when that is given."""
+    if (
+        not isinstance(value, str)
+        or not value
+        or (max_bytes is not None and len(value.encode()) > max_bytes)
+    ):
+        longest = "" if max_bytes is None else f" of at most {max_bytes} bytes"
+        raise ValueError(f"{name} must be a nonempty string{longest}, got {value!r}")
+
+
+def _instance(name: str, value: object, kind: type) -> None:
+    if not isinstance(value, kind):
+        raise ValueError(f"{name} must be a {kind.__name__}, got {value!r}")
+
+
+def _names(name: str, value: object) -> tuple[str, ...]:
+    """value as a tuple of strings, from any sequence of them but a string."""
+    if isinstance(value, str) or not isinstance(value, Sequence):
+        raise ValueError(f"{name} must be a list of names, got {value!r}")
+    names = tuple(value)
+    if not all(isinstance(item, str) for item in names):
+        raise ValueError(f"{name} must be a list of names, got {value!r}")
+    return names
+
+
+def _set(section: object, name: str, value: object) -> None:
+    """Normalise a field of a frozen section while it is checked."""
+    object.__setattr__(section, name, value)
+
+
+@dataclass(frozen=True)
+class ScopeConfig:
+    """The frozen scope the splits come from, and the first run's label reveal."""
+
+    id: str = "strict_mule_v2"
     # The first run creates a missing scope; false forbids that write.
-    "create_scope": True,
-    "scope_unowned": "linked",
-    "deterministic": True,
-    "prefetch_batches": 2,
-    "checkpoint_every_steps": 0,
-    "log_every_steps": 10,
-}
-# The run `mule-temporal train` performs with no configuration file: strict inductive
-# splits over the frozen scope, labels revealed in the graph (label contract), the v5
-# candidate-pool sampler and the model and optimisation settings of the reference run.
-# A configuration file only overrides keys (see run_config for how tables merge).
-# Identity (dataset_id) is read from the scope or derived from the graph, and the
-# prepared cache lives inside the run directory, so none of it is configured.
-DEFAULT_RUN: dict[str, Any] = {
-    "scope_id": "strict_mule_v2",
+    create: bool = True
+    # The accounts no party owns: "independent", "shared" or "linked" (tigergraph.scope).
+    unowned: str = "linked"
     # Known mules the first run reveals per split, among those a bank would have
     # discovered before the split's cutoff (gsql/queries/label_reveal.gsql).
-    "reveal_per_split": 20,
-    "evaluation_unlabeled_limit": 2000,
-    "fanouts": [16, 4],
-    "batch_size": 64,
-    "epochs": 30,
-    "steps_per_epoch": 100,
-    # 0 disables early stopping.
-    "patience": 6,
-    # Largest fraction of an epoch's or evaluation split's roots TigerGraph may reject.
-    "max_rejected_root_fraction": 0.0,
-    "hidden": 64,
-    "heads": 4,
-    "dropout": 0.15,
-    "architecture": "split",
+    reveal_per_split: int = 20
+    # Seed of the reveal's deterministic draws.
+    reveal_salt: int = 42
+
+    def __post_init__(self) -> None:
+        _text("scope.id", self.id, SCOPE_ID_BYTES)
+        _flag("scope.create", self.create)
+        _choice("scope.unowned", self.unowned, ("independent", "shared", "linked"))
+        REVEAL_PER_SPLIT.check("scope.reveal_per_split", self.reveal_per_split)
+        _integer("scope.reveal_salt", self.reveal_salt)
+
+
+@dataclass(frozen=True)
+class SplitDates:
+    """The cutoff dates of each split, as ISO dates; the splits follow one another."""
+
+    train: tuple[str, ...] = ("2024-07-01",)
+    validation: tuple[str, ...] = ("2024-10-01",)
+    test: tuple[str, ...] = ("2025-01-01",)
+
+    def __post_init__(self) -> None:
+        for split in SPLITS:
+            dates = _names(f"dataset.dates.{split}", getattr(self, split))
+            if not dates:
+                raise ValueError(f"dataset.dates.{split} must name at least one date")
+            for date in dates:
+                try:
+                    datetime.fromisoformat(date)
+                except ValueError:
+                    raise ValueError(f"dataset.dates.{split}: not an ISO date: {date!r}") from None
+            _set(self, split, dates)
+        if not (
+            max(map(timestamp, self.train))
+            < min(map(timestamp, self.validation))
+            <= max(map(timestamp, self.validation))
+            < min(map(timestamp, self.test))
+        ):
+            raise ValueError("Train, validation and test cutoffs overlap or are out of order")
+
+    def __getitem__(self, split: str) -> tuple[str, ...]:
+        if split not in SPLITS:
+            raise KeyError(split)
+        return getattr(self, split)
+
+    def all(self) -> list[str]:
+        """Every date of every split, sorted."""
+        return sorted({date for split in SPLITS for date in self[split]})
+
+
+@dataclass(frozen=True)
+class SeedLimits:
+    """The size of each split's label-blind seed reservoir."""
+
+    train: int = 20_000
+    validation: int = 2_000
+    test: int = 2_000
+
+    def __post_init__(self) -> None:
+        for split in SPLITS:
+            SEED_LIMIT.check(f"dataset.seed_limits.{split}", getattr(self, split))
+
+    def __getitem__(self, split: str) -> int:
+        if split not in SPLITS:
+            raise KeyError(split)
+        return getattr(self, split)
+
+
+@dataclass(frozen=True)
+class DatasetConfig:
+    """What preparation stages inside the scope: the split cutoffs and seed reservoirs."""
+
+    dates: SplitDates = SplitDates()
+    seed_limits: SeedLimits = SeedLimits()
+    # Seed of the label-blind seed reservoirs (data.accounts).
+    seed: int = 42
+    # Seed of the scope's partition into splits and of the evaluation samples.
+    split_seed: int = 42
+
+    def __post_init__(self) -> None:
+        _instance("dataset.dates", self.dates, SplitDates)
+        _instance("dataset.seed_limits", self.seed_limits, SeedLimits)
+        _integer("dataset.seed", self.seed)
+        _integer("dataset.split_seed", self.split_seed)
+
+
+# The sampler of the built-in run: the candidate pools TigerGraph returns per hop and
+# the client's resampling into the fan-out slots.
+BUILT_IN_SAMPLER = SamplerPlan(
+    fanouts=(16, 4),
+    roots=PoolPlan(recent=8, older=4, distinct=4, associations=2, max_history=2048),
+    children=PoolPlan(recent=4, older=2, distinct=2, associations=0, max_history=2048),
+    relation_fanouts=(8, 4),
+    association_fanout=1,
+    association_slots=2,
+    # cuGraph on CUDA when its functional probe passes, otherwise the torch sampler.
+    backend="auto",
+    evaluation_seed=0,
+)
+ARCHITECTURES = ("split", "summary")
+
+
+@dataclass(frozen=True)
+class ModelConfig:
+    """The model: its architecture, width, attention heads, dropout and slot sum."""
+
+    # "split" attends over sampled neighbours; "summary" reads only the root's inputs.
+    architecture: str = "split"
+    hidden: int = 64
+    heads: int = 4
+    dropout: float = 0.15
     # Beside attention, feed the head a small MLP of each of the root's hop-1 slots, summed
     # and divided by the hop-1 fan-out. Attention averages linear projections of the
     # slots; the MLP can test a combined condition on each slot before pooling, so the sum
     # counts the slots that meet it (Xu, Hu, Leskovec and Jegelka, "How Powerful are Graph
     # Neural Networks?", ICLR 2019). Most roots fill all 16 slots, so this is mostly the
-    # share of such slots. Provisional: not yet measured in a run on the live graph.
-    "slot_sum": True,
+    # share of such slots. Provisional: not yet measured in a run on the live graph. The
+    # summary architecture has no slots and ignores it.
+    slot_sum: bool = True
+
+    def __post_init__(self) -> None:
+        _choice("model.architecture", self.architecture, ARCHITECTURES)
+        HIDDEN.check("model.hidden", self.hidden)
+        HEADS.check("model.heads", self.heads)
+        if self.hidden % self.heads:
+            raise ValueError(
+                f"model.hidden ({self.hidden}) must be divisible by model.heads ({self.heads})"
+            )
+        _set(self, "dropout", _number("model.dropout", self.dropout, 0, 1, open_high=True))
+        _flag("model.slot_sum", self.slot_sum)
+
+
+@dataclass(frozen=True)
+class LossConfig:
+    """The nnPU loss: the class prior and the weight of the revealed positives."""
+
+    class_prior: float = 0.001
+    # Imbalanced nnPU (Su, Chen and Xu, IJCAI 2021): weigh the revealed positives as a
+    # balanced problem would. With "prior" (textbook nnPU) the positives carry 0.001 of
+    # the loss, and the reference run collapsed to scoring every account near zero. A
+    # number in (0, 1) is the weight itself. Provisional: not yet compared with other
+    # weights over several seeds.
+    positive_weight: str | float = "balanced"
+
+    def __post_init__(self) -> None:
+        prior = _number("loss.class_prior", self.class_prior, 0, 1, open_low=True, open_high=True)
+        _set(self, "class_prior", prior)
+        if isinstance(self.positive_weight, str):
+            _choice("loss.positive_weight", self.positive_weight, ("prior", "balanced"))
+        else:
+            weight = _number(
+                "loss.positive_weight", self.positive_weight, 0, 1, open_low=True, open_high=True
+            )
+            _set(self, "positive_weight", weight)
+
+
+@dataclass(frozen=True)
+class TrainingConfig:
+    """Optimisation, early stopping and the proxy evaluation on observed labels."""
+
+    seed: int = 42
+    epochs: int = 30
+    # None trains on every marginal account of an epoch.
+    steps_per_epoch: int | None = 100
+    batch_size: int = 64
+    # Epochs without a better validation AP before training stops; 0 never stops early.
+    patience: int = 6
+    learning_rate: float = 0.001
+    weight_decay: float = 0.0001
+    # Validate, select and save an exponential moving average of the weights (decay per
+    # step, warmed up); training itself is unchanged. With 11 validation positives the
+    # raw weights' AP swung 0.011 to 0.096 between epochs of the reference run. 0
+    # validates the raw weights.
+    weight_average_decay: float = 0.99
+    # Unlabeled accounts of each validation and test cutoff that the proxy evaluation
+    # scores beside every observed positive; None scores them all.
+    proxy_unlabeled_limit: int | None = 2000
+
+    def __post_init__(self) -> None:
+        _integer("training.seed", self.seed)
+        _integer("training.epochs", self.epochs, 1)
+        if self.steps_per_epoch is not None:
+            _integer("training.steps_per_epoch", self.steps_per_epoch, 1)
+        BATCH_ROOTS.check("training.batch_size", self.batch_size)
+        _integer("training.patience", self.patience)
+        rate = _number("training.learning_rate", self.learning_rate, 0, open_low=True)
+        _set(self, "learning_rate", rate)
+        _set(self, "weight_decay", _number("training.weight_decay", self.weight_decay, 0))
+        decay = _number(
+            "training.weight_average_decay", self.weight_average_decay, 0, 1, open_high=True
+        )
+        _set(self, "weight_average_decay", decay)
+        if self.proxy_unlabeled_limit is not None:
+            _integer("training.proxy_unlabeled_limit", self.proxy_unlabeled_limit, 1)
+
+
+@dataclass(frozen=True)
+class TransportConfig:
+    """Context requests and their retry budgets. Changing them never changes results."""
+
+    # Measured on the live graph: 8 contexts per request, 16 in parallel built a 64-root
+    # batch in about 11 s, against about 20 s for 16 x 8 and 22 s for 4 x 16.
+    request_batch_size: int = 8
+    query_concurrency: int = 16
+    context_lru_capacity: int = 256
+    encoding_check_every: int = 64
+    max_query_attempts: int = 6
+    # Wall-clock seconds one operation keeps retrying while TigerGraph is unavailable.
+    max_outage_s: int = 900
+
+    def __post_init__(self) -> None:
+        REQUEST_KEYS.check("transport.request_batch_size", self.request_batch_size)
+        QUERY_CONCURRENCY.check("transport.query_concurrency", self.query_concurrency)
+        CONTEXT_LRU_CAPACITY.check("transport.context_lru_capacity", self.context_lru_capacity)
+        ENCODING_CHECK_EVERY.check("transport.encoding_check_every", self.encoding_check_every)
+        QUERY_ATTEMPTS.check("transport.max_query_attempts", self.max_query_attempts)
+        OUTAGE_SECONDS.check("transport.max_outage_s", self.max_outage_s)
+
+
+@dataclass(frozen=True)
+class RuntimeConfig:
+    """The host: device, threads, determinism, prefetch, checkpoints, logs and rejections."""
+
+    # CUDA when available, then Apple MPS, then CPU; or "cpu", "mps", "cuda".
+    device: str = "auto"
+    threads: int = 4
+    # True: deterministic algorithms, warning on CUDA-only gaps; "strict" fails on them.
+    deterministic: bool | str = True
+    prefetch_batches: int = 2
+    # Also save the resume state every n training steps; 0 saves it once per epoch.
+    checkpoint_every_steps: int = 0
+    log_every_steps: int = 10
+    # Largest fraction of an epoch's or evaluation split's roots TigerGraph may reject.
+    # It only decides whether a run may go on, never its numbers.
+    max_rejected_root_fraction: float = 0.0
+
+    def __post_init__(self) -> None:
+        _text("runtime.device", self.device)
+        _integer("runtime.threads", self.threads, 1)
+        _choice("runtime.deterministic", self.deterministic, (True, False, "strict"))
+        PREFETCH_BATCHES.check("runtime.prefetch_batches", self.prefetch_batches)
+        _integer("runtime.checkpoint_every_steps", self.checkpoint_every_steps)
+        _integer("runtime.log_every_steps", self.log_every_steps, 1)
+        fraction = _number(
+            "runtime.max_rejected_root_fraction", self.max_rejected_root_fraction, 0, 1
+        )
+        _set(self, "max_rejected_root_fraction", fraction)
+
+
+# The sections fingerprint() leaves out: they never change a run's numbers. Provenance
+# records the device, threads and determinism a run used.
+RUNTIME_SECTIONS = ("transport", "runtime")
+
+
+@dataclass(frozen=True)
+class RunConfig:
+    """Every setting of one run; the defaults are the built-in run."""
+
+    scope: ScopeConfig = ScopeConfig()
+    dataset: DatasetConfig = DatasetConfig()
+    sampler: SamplerPlan = BUILT_IN_SAMPLER
     # The pool groups feed counts over the root's candidate pool (not all-time totals) to
     # the split model's summary branch. Without them a root's node vector held only its
     # entity type, is_external, is_deposit and history_withheld. In the diagnostic study
@@ -101,347 +394,119 @@ DEFAULT_RUN: dict[str, Any] = {
     # chosen after reading the generator's mule typology, and the internal ones
     # (pool_internal_inflows) suit the generator more than a real bank. Computed on the
     # client, so the query is unchanged.
-    "feature_groups": list(BUILT_IN_GROUPS),
-    "learning_rate": 0.001,
-    "weight_decay": 0.0001,
-    # Validate, select and save an exponential moving average of the weights (decay per
-    # step, warmed up); training itself is unchanged. With 11 validation positives the
-    # raw weights' AP swung 0.011 to 0.096 between epochs of the reference run.
-    "weight_average_decay": 0.99,
-    "class_prior": 0.001,
-    # Imbalanced nnPU (Su, Chen and Xu, IJCAI 2021): weigh the revealed positives as a
-    # balanced problem would. With "prior" (textbook nnPU) the positives carry 0.001 of
-    # the loss, and the reference run collapsed to scoring every account near zero.
-    # Provisional: not yet compared with other weights over several seeds.
-    "positive_weight": "balanced",
-    "seed": 42,
-    "split_seed": 42,
-    # CUDA when available, then Apple MPS, then CPU.
-    "device": "auto",
-    "threads": 4,
-    "dates": {"train": ["2024-07-01"], "validation": ["2024-10-01"], "test": ["2025-01-01"]},
-    "seed_limits": {"train": 20000, "validation": 2000, "test": 2000},
-    "sampler": {
-        "recent": 8,
-        "older": 4,
-        "distinct": 4,
-        "associations": 2,
-        "max_history": 2048,
-        "relation_fanouts": [8, 4],
-        "association_fanout": 1,
-        "association_slots": 2,
-        # cuGraph on CUDA when its functional probe passes, otherwise the torch sampler.
-        "backend": "auto",
-        "evaluation_seed": 0,
-        "children": {
-            "recent": 4,
-            "older": 2,
-            "distinct": 2,
-            "associations": 0,
-            "max_history": 2048,
-        },
-    },
-}
-# Keys that configurations written before the layered restructure hold (saved models,
-# prepared cohorts and run directories), each with the one value this code still
-# implements; a dot names a key of a table. validate_config drops them, so those files
-# keep loading; any other value names a removed path and is refused.
-RETIRED_KEYS: dict[str, Any] = {
-    "context_storage": "stream",
-    "evaluation_protocol": "strict_inductive",
-    "label_policy": "graph_observed",
-    "observed_labels": None,
-    "sampler.policy": "resample",
-}
-# Identifiers that become directory names or server-side scope metadata.
-IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+    features: tuple[str, ...] = BUILT_IN_GROUPS
+    model: ModelConfig = ModelConfig()
+    loss: LossConfig = LossConfig()
+    training: TrainingConfig = TrainingConfig()
+    transport: TransportConfig = TransportConfig()
+    runtime: RuntimeConfig = RuntimeConfig()
 
-Positive = Annotated[int, Field(ge=1)]
-NonNegative = Annotated[int, Field(ge=0)]
-
-
-def _within(bound: Bound) -> Any:
-    """The constraint of an integer in a bound of contract.bounds."""
-    return Field(ge=bound.low, le=bound.high)
-
-
-Fanouts = Annotated[list[Annotated[int, _within(FANOUT)]], Field(min_length=2, max_length=2)]
-
-
-class _Strict(BaseModel):
-    model_config = ConfigDict(strict=True, extra="forbid")
-
-
-class PoolConfig(_Strict):
-    """One candidate pool; its ranges are those of `PoolPlan` (contract.bounds.POOL)."""
-
-    recent: Annotated[int, _within(POOL["recent"])] | None = None
-    older: Annotated[int, _within(POOL["older"])] | None = None
-    distinct: Annotated[int, _within(POOL["distinct"])] | None = None
-    associations: Annotated[int, _within(POOL["associations"])] | None = None
-    max_history: Annotated[int, _within(POOL["max_history"])] | None = None
-
-
-class SamplerConfig(PoolConfig):
-    """`[sampler]`: flat keys are the roots pool, `[sampler.children]` the second hop."""
-
-    children: PoolConfig | None = None
-    relation_fanouts: Fanouts | None = None
-    association_fanout: Annotated[int, _within(ASSOCIATION_FANOUT)] | None = None
-    association_slots: Annotated[int, _within(ASSOCIATION_SLOTS)] | None = None
-    backend: Literal["auto", "cugraph", "torch"] | None = None
-    evaluation_seed: NonNegative | None = None
-
-
-class DatesConfig(_Strict):
-    train: Annotated[list[str], Field(min_length=1)]
-    validation: Annotated[list[str], Field(min_length=1)]
-    test: Annotated[list[str], Field(min_length=1)]
-
-    @field_validator("train", "validation", "test")
-    @classmethod
-    def _iso_dates(cls, values: list[str]) -> list[str]:
-        for value in values:
-            try:
-                datetime.fromisoformat(value)
-            except ValueError as error:
-                raise ValueError(f"not an ISO date: {value!r}") from error
-        return values
-
-
-class SeedLimitsConfig(_Strict):
-    train: Annotated[int, _within(SEED_LIMIT)]
-    validation: Annotated[int, _within(SEED_LIMIT)]
-    test: Annotated[int, _within(SEED_LIMIT)]
-
-
-class LiveConfig(_Strict):
-    """Every key is optional here; preparation and training require what they use.
-
-    Operational keys default to OPERATIONAL_DEFAULTS, which validate_config also fills.
-    """
-
-    # Identity and preparation.
-    dataset_id: str | None = None
-    prepared_id: str | None = None
-    scope_id: str | None = None
-    scope_unowned: Literal["independent", "shared", "linked"] = OPERATIONAL_DEFAULTS[
-        "scope_unowned"
-    ]
-    create_scope: bool = OPERATIONAL_DEFAULTS["create_scope"]
-    # First-run label reveal: at most this many known mules per split.
-    reveal_per_split: Annotated[int, _within(REVEAL_PER_SPLIT)] | None = None
-    # Seed of the reveal's deterministic draws; defaults to `seed`.
-    reveal_salt: int | None = None
-    prepare_batch_size: Annotated[int, _within(BATCH_ROOTS)] = OPERATIONAL_DEFAULTS[
-        "prepare_batch_size"
-    ]
-    dates: DatesConfig | None = None
-    seed_limits: SeedLimitsConfig | None = None
-    seed: int | None = None
-    # Reservoir seed of the prepared cohort; defaults to `seed`.
-    cohort_seed: int | None = None
-    split_seed: int | None = None
-    evaluation_unlabeled_limit: NonNegative | None = None
-    # Features, sampling and model.
-    feature_groups: list[str] | None = None
-    architecture: Literal["split", "summary"] | None = None
-    # Sum over the root's hop-1 slots beside attention; the summary architecture ignores it.
-    slot_sum: bool | None = None
-    fanouts: Fanouts | None = None
-    sampler: SamplerConfig | None = None
-    hidden: Positive | None = None
-    heads: Positive | None = None
-    dropout: Annotated[float, Field(ge=0, lt=1)] | None = None
-    # Optimisation.
-    epochs: Positive | None = None
-    steps_per_epoch: Positive | None = None
-    patience: NonNegative | None = None
-    # Largest fraction of an epoch's or evaluation split's roots TigerGraph may reject.
-    max_rejected_root_fraction: Annotated[float, Field(ge=0, le=1)] | None = None
-    batch_size: Annotated[int, _within(BATCH_ROOTS)] | None = None
-    learning_rate: Annotated[float, Field(gt=0)] | None = None
-    weight_decay: Annotated[float, Field(ge=0)] | None = None
-    weight_average_decay: Annotated[float, Field(ge=0, lt=1)] | None = None
-    class_prior: Annotated[float, Field(gt=0, lt=1)] | None = None
-    positive_weight: Literal["prior", "balanced"] | Annotated[float, Field(gt=0, lt=1)] | None = (
-        None
-    )
-    device: str | None = None
-    threads: Positive | None = None
-    deterministic: bool | Literal["strict"] = OPERATIONAL_DEFAULTS["deterministic"]
-    # Transport and runtime.
-    request_batch_size: Annotated[int, _within(REQUEST_KEYS)] = OPERATIONAL_DEFAULTS[
-        "request_batch_size"
-    ]
-    query_concurrency: Annotated[int, _within(QUERY_CONCURRENCY)] = OPERATIONAL_DEFAULTS[
-        "query_concurrency"
-    ]
-    context_lru_capacity: Annotated[int, _within(CONTEXT_LRU_CAPACITY)] = OPERATIONAL_DEFAULTS[
-        "context_lru_capacity"
-    ]
-    encoding_check_every: Annotated[int, _within(ENCODING_CHECK_EVERY)] = OPERATIONAL_DEFAULTS[
-        "encoding_check_every"
-    ]
-    max_query_attempts: Annotated[int, _within(QUERY_ATTEMPTS)] = OPERATIONAL_DEFAULTS[
-        "max_query_attempts"
-    ]
-    max_outage_s: Annotated[int, _within(OUTAGE_SECONDS)] = OPERATIONAL_DEFAULTS["max_outage_s"]
-    prefetch_batches: Annotated[int, _within(PREFETCH_BATCHES)] = OPERATIONAL_DEFAULTS[
-        "prefetch_batches"
-    ]
-    checkpoint_every_steps: NonNegative = OPERATIONAL_DEFAULTS["checkpoint_every_steps"]
-    log_every_steps: Positive = OPERATIONAL_DEFAULTS["log_every_steps"]
-
-    @field_validator("dataset_id", "prepared_id")
-    @classmethod
-    def _identifier(cls, value: str | None) -> str | None:
-        if value is not None and not IDENTIFIER.match(value):
-            raise ValueError(
-                "must be 1-128 characters of letters, digits, '.', '_' or '-' "
-                "and start with a letter or digit"
-            )
-        return value
-
-    @field_validator("feature_groups")
-    @classmethod
-    def _known_groups(cls, groups: list[str] | None) -> list[str] | None:
-        unknown = sorted(set(groups or ()) - set(FEATURE_GROUPS))
+    def __post_init__(self) -> None:
+        sections: dict[str, tuple[object, type]] = {
+            "scope": (self.scope, ScopeConfig),
+            "dataset": (self.dataset, DatasetConfig),
+            "sampler": (self.sampler, SamplerPlan),
+            "model": (self.model, ModelConfig),
+            "loss": (self.loss, LossConfig),
+            "training": (self.training, TrainingConfig),
+            "transport": (self.transport, TransportConfig),
+            "runtime": (self.runtime, RuntimeConfig),
+        }
+        for name, (section, kind) in sections.items():
+            _instance(name, section, kind)
+        groups = _names("features", self.features)
+        unknown = sorted(set(groups) - FEATURE_GROUPS.keys())
         if unknown:
             raise ValueError(f"unknown feature groups {unknown}; known: {sorted(FEATURE_GROUPS)}")
-        return groups
+        if len(set(groups)) != len(groups):
+            raise ValueError(f"features names a group twice: {list(groups)}")
+        _set(self, "features", groups)
+
+    def feature_plan(self) -> FeaturePlan:
+        """The model's inputs: the feature groups, read by the model's architecture."""
+        return FeaturePlan(self.features, self.model.architecture)
+
+    def results_view(self) -> dict[str, Any]:
+        """The settings that can change a run's results, as JSON values.
+
+        Every section but transport and runtime, and the sampler without its backend:
+        a run checks the backend it samples with on its own, so a resumed run may name
+        another one explicitly.
+        """
+        value = self.to_dict()
+        for name in RUNTIME_SECTIONS:
+            del value[name]
+        del value["sampler"]["backend"]
+        return value
+
+    def fingerprint(self) -> str:
+        return fingerprint(self.results_view())
+
+    def to_dict(self) -> dict[str, Any]:
+        """Every setting as JSON values: sections are tables and tuples are lists."""
+        return as_json(self)
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> RunConfig:
+        """The configuration a to_dict table describes; absent keys keep their defaults."""
+        return DEFAULT_CONFIG.with_changes(value)
+
+    def with_changes(self, changes: Mapping[str, Any]) -> RunConfig:
+        """This configuration with the settings a table of to_dict's shape names changed.
+
+        A nested table changes only the fields it names, so {"training": {"epochs": 3}}
+        keeps every other setting. Unknown keys are refused with their dotted names.
+        """
+        return _replaced(self, changes, "")
 
 
-KNOWN_KEYS = frozenset(LiveConfig.model_fields)
+def as_json(value: Any) -> Any:
+    """A section or setting as JSON values (dataclasses as tables, tuples as lists)."""
+    if is_dataclass(value) and not isinstance(value, type):
+        return as_json(asdict(value))
+    if isinstance(value, Mapping):
+        return {str(k): as_json(v) for k, v in value.items()}
+    if isinstance(value, list | tuple):
+        return [as_json(v) for v in value]
+    return value
 
 
-def without_retired_keys(config: dict[str, Any]) -> dict[str, Any]:
-    """config without RETIRED_KEYS; a retired key with another value is refused."""
-    result = dict(config)
-    # extraction_groups only widened what TigerGraph returned beyond the model's groups;
-    # the source now requests exactly the model's groups, so a saved value is dropped.
-    result.pop("extraction_groups", None)
-    for name, value in RETIRED_KEYS.items():
-        *parents, key = name.split(".")
-        table: Any = result
-        for parent in parents:
-            if not isinstance(table.get(parent), dict):
-                break
-            table[parent] = table = dict(table[parent])
-        else:
-            if key not in table:
-                continue
-            if table[key] != value:
-                remains = "" if value is None else f": only {value!r} remains"
-                raise ValueError(f"{name} = {table[key]!r} is no longer supported{remains}")
-            del table[key]
-    return result
-
-
-def without_variant(config: dict[str, Any]) -> dict[str, Any]:
-    """config without `variant`, which configurations saved before the restructure hold.
-
-    The model variants became settings: "temporal" is the plain model, "tabular" the
-    summary architecture and "no_fourier" the feature groups without time_encoding.
-    """
-    if "variant" not in config:
-        return config
-    result = dict(config)
-    variant = result.pop("variant")
-    groups = list(result.get("feature_groups") or BUILT_IN_GROUPS)
-    if variant == "tabular":
-        result["architecture"] = "summary"
-    elif variant == "no_fourier":
-        result["feature_groups"] = [group for group in groups if group != "time_encoding"]
-    elif variant != "temporal":
-        raise ValueError(f"variant = {variant!r} is no longer supported")
-    return result
-
-
-def validate_config(config: dict[str, Any]) -> dict[str, Any]:
-    """Return a validated, complete copy; raise ValueError on bad input.
-
-    Absent keys take their DEFAULT_RUN or operational default (see the module docstring).
-    """
-    if not isinstance(config, dict):  # pyright: ignore[reportUnnecessaryIsInstance]
-        raise ValueError("Configuration must be a table")
-    config = without_variant(without_retired_keys(config))
-    unknown = sorted(set(config) - KNOWN_KEYS)
+def _replaced(default: Any, value: object, path: str) -> Any:
+    """default with the fields a table sets, recursively through nested sections."""
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{path.rstrip('.') or 'The configuration'} must be a table")
+    names = {field.name for field in fields(default)}
+    unknown = sorted(f"{path}{key}" for key in value if key not in names)
     if unknown:
-        raise ValueError(
-            f"Unknown configuration key(s): {', '.join(unknown)}. "
-            f"Known keys: {', '.join(sorted(KNOWN_KEYS))}"
-        )
-    try:
-        model = LiveConfig.model_validate(config)
-    except ValidationError as error:
-        problems = "; ".join(
-            f"{'.'.join(str(part) for part in item['loc']) or 'config'}: {item['msg']}"
-            for item in error.errors()
-        )
-        raise ValueError(f"Invalid configuration: {problems}") from None
-    # A written table keeps only its written keys; an absent one takes the default.
-    result = model.model_dump(exclude_unset=True)
-    for key, value in {**DEFAULT_RUN, **OPERATIONAL_DEFAULTS}.items():
-        result.setdefault(key, copy.deepcopy(value))
-    return result
-
-
-def fanouts(config: dict[str, Any]) -> tuple[int, int]:
-    """Children sampled per context at hop 1 and hop 2 (validated configs hold exactly two)."""
-    return tuple(int(v) for v in config["fanouts"])  # type: ignore[return-value]
-
-
-def transport_settings(config: dict[str, Any]) -> dict[str, int]:
-    """Transport knobs from a training config, with documented defaults."""
-    result = {}
-    for name, default in TRANSPORT_DEFAULTS.items():
-        value = config.get(name, default)
-        if type(value) is not int:
-            raise ValueError(f"{name} must be an integer")
-        result[name] = value
-    return result
-
-
-def merged(base: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
-    """base with overrides applied: tables merge key by key, lists and scalars replace."""
-    result = dict(base)
-    for key, value in overrides.items():
-        current = result.get(key)
-        if isinstance(value, dict) and isinstance(current, dict):
-            result[key] = merged(cast(dict[str, Any], current), cast(dict[str, Any], value))
+        raise ValueError(f"Unknown configuration key(s): {', '.join(unknown)}")
+    changes: dict[str, Any] = {}
+    for name, item in value.items():
+        current = getattr(default, name)
+        if is_dataclass(current):
+            changes[name] = _replaced(current, item, f"{path}{name}.")
+        elif isinstance(current, tuple) and isinstance(item, list):
+            changes[name] = tuple(item)
         else:
-            result[key] = value
-    return result
+            changes[name] = item
+    return replace(default, **changes)
 
 
-def load_config(path: Path) -> dict[str, Any]:
-    """Read a TOML or JSON table as written, without any schema.
-
-    Training reads override files through run_config, which merges them into the
-    built-in settings and validates the result.
-    """
-    if path.suffix.lower() == ".toml":
-        with path.open("rb") as stream:
-            value: object = tomllib.load(stream)
-    elif path.suffix.lower() == ".json":
-        value = json.loads(path.read_text())
+def _leaves(value: object, path: str = "") -> Iterator[tuple[str, object]]:
+    if isinstance(value, Mapping) and value:
+        for key, item in value.items():
+            yield from _leaves(item, f"{path}.{key}" if path else str(key))
     else:
-        value = None
-    if not isinstance(value, dict):
-        raise ValueError("Configuration must be a TOML table or a local JSON object")
-    config: dict[str, Any] = value
-    return config
+        yield path, value
 
 
-def run_config(path: Path | None = None) -> dict[str, Any]:
-    """DEFAULT_RUN with the keys of an optional TOML/JSON overrides file, validated.
+def differing_settings(current: Mapping[str, Any], recorded: Mapping[str, Any]) -> list[str]:
+    """The dotted names of the settings whose JSON values differ between two tables."""
+    have, want = dict(_leaves(current)), dict(_leaves(recorded))
+    return sorted(
+        name
+        for name in have.keys() | want.keys()
+        if fingerprint(have.get(name)) != fingerprint(want.get(name))
+    )
 
-    Tables merge recursively, so `[sampler] backend = "torch"` changes only the
-    backend and `[dates] train = [...]` keeps the default validation and test dates.
-    Lists and scalars replace the default.
-    """
-    config = copy.deepcopy(DEFAULT_RUN)
-    if path is not None:
-        config = merged(config, load_config(path))
-    return validate_config(config)
+
+DEFAULT_CONFIG = RunConfig()

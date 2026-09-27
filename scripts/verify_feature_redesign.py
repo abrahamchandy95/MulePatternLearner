@@ -14,7 +14,7 @@ from typing import Any
 
 import numpy as np
 
-from mule_pattern_learner.config import run_config
+from mule_pattern_learner.config import DEFAULT_CONFIG
 from mule_pattern_learner.contract.feature_groups import FEATURE_GROUPS, FeaturePlan
 from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.contract.sampler_plan import PoolPlan, SamplerPlan
@@ -93,7 +93,7 @@ def main() -> None:
         "--output", type=Path, default=Path("artifacts/temporal/feature_parity.json")
     )
     args = parser.parse_args()
-    executor = connect(run_config())
+    executor = connect(DEFAULT_CONFIG.transport)
     seq, ms = resolve_cutoff(TigerGraphCutoffs(executor), args.date)
     groups = tuple(
         g

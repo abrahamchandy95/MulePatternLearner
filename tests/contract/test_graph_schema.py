@@ -12,9 +12,10 @@ from mule_pattern_learner.paths import REPOSITORY_ROOT
 
 
 def test_strict_claim_fails_before_preparation_or_training() -> None:
-    with pytest.raises(ValueError, match="frozen TigerGraph scope_id"):
-        context_scope({})
-    assert context_scope({"scope_id": "scope"}) == "scope"
+    for missing in (None, ""):
+        with pytest.raises(ValueError, match="frozen TigerGraph scope id"):
+            context_scope(missing)
+    assert context_scope("scope") == "scope"
 
 
 def test_account_schema_contract_matches_canonical_ddl() -> None:

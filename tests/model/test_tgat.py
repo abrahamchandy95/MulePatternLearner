@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -10,7 +11,7 @@ import torch
 from torch import nn
 
 from mule_pattern_learner.batching.assemble import make_live_batch
-from mule_pattern_learner.config import DEFAULT_RUN, run_config, validate_config
+from mule_pattern_learner.config import DEFAULT_CONFIG, ModelConfig, RunConfig
 from mule_pattern_learner.contract.feature_groups import (
     DEFAULT_GROUPS,
     FeaturePlan,
@@ -18,7 +19,6 @@ from mule_pattern_learner.contract.feature_groups import (
     extraction_plan,
 )
 from mule_pattern_learner.contract.graph_schema import RAILS, RELATIONS, ContextKey
-from mule_pattern_learner.contract.sampler_plan import SamplerPlan
 from mule_pattern_learner.contract.time_basis import BASIS_ID
 from mule_pattern_learner.data.contexts import StreamingContextSource
 from mule_pattern_learner.inference.predictor import TemporalPredictor
@@ -29,11 +29,11 @@ from mule_pattern_learner.testing.builders import context, message
 from mule_pattern_learner.testing.fake_graph import FakeExecutor
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
 
-CONFIG = run_config()
-PLAN = FeaturePlan.from_config(CONFIG)
-SAMPLER = SamplerPlan.from_config(CONFIG)
-HIDDEN = CONFIG["hidden"]
-FANOUT = CONFIG["fanouts"][0]
+CONFIG = DEFAULT_CONFIG
+PLAN = CONFIG.feature_plan()
+SAMPLER = CONFIG.sampler
+HIDDEN = CONFIG.model.hidden
+FANOUT = SAMPLER.fanouts[0]
 SLOT_KEYS = {"slot_sum.0.weight", "slot_sum.0.bias", "slot_sum.2.weight", "slot_sum.2.bias"}
 ROOT = ContextKey("Account", "root", 1000, 100_000_000)
 PAYMENTS = [
@@ -89,9 +89,14 @@ def slot_batch(
     return batch
 
 
-def seeded(config: dict[str, Any], plan: FeaturePlan = PLAN) -> LiveTGAT:
+def built(config: RunConfig, plan: FeaturePlan | None = None) -> LiveTGAT:
+    """The model of a configuration, over its own feature plan unless one is given."""
+    return build_model(config.model, plan or config.feature_plan(), config.sampler.fanouts[0])
+
+
+def seeded(config: RunConfig, plan: FeaturePlan = PLAN) -> LiveTGAT:
     torch.manual_seed(0)
-    return build_model(config, plan, dropout=0.0).eval()
+    return build_model(config.model, plan, config.sampler.fanouts[0], dropout=0.0).eval()
 
 
 def slot_mlp(model: LiveTGAT) -> nn.Module:
@@ -99,11 +104,11 @@ def slot_mlp(model: LiveTGAT) -> nn.Module:
     return model.slot_sum
 
 
-def payload(config: dict[str, Any], model: LiveTGAT, contract: str, inputs: str) -> dict[str, Any]:
+def payload(config: RunConfig, model: LiveTGAT, contract: str, inputs: str) -> dict[str, Any]:
     """A model.pt payload as training saves it, with the fields scoring checks."""
     return {
         "state_dict": model.state_dict(),
-        "config": config,
+        "config": config.to_dict(),
         "contract": contract,
         "basis_id": BASIS_ID,
         "threshold": 0.5,
@@ -111,10 +116,10 @@ def payload(config: dict[str, Any], model: LiveTGAT, contract: str, inputs: str)
     }
 
 
-@pytest.mark.parametrize("groups", [DEFAULT_RUN["feature_groups"], list(DEFAULT_GROUPS)])
-def test_output_shapes(groups: list[str]) -> None:
-    config = {**CONFIG, "feature_groups": groups}
-    plan = FeaturePlan.from_config(config)
+@pytest.mark.parametrize("groups", [DEFAULT_CONFIG.features, DEFAULT_GROUPS])
+def test_output_shapes(groups: tuple[str, ...]) -> None:
+    config = replace(CONFIG, features=groups)
+    plan = config.feature_plan()
     model = seeded(config, plan)
     assert model.first_fanout == FANOUT == 16
     # Attention, slot sum and, with pool_activity, the summary branch.
@@ -128,12 +133,12 @@ def test_output_shapes(groups: list[str]) -> None:
 def test_built_in_batches_fit_the_slot_sum_and_train_it() -> None:
     executor = FakeExecutor({ROOT: context(ROOT, PAYMENTS)})
     with StreamingContextSource(
-        TigerGraphContextFetcher(executor), plan=extraction_plan(CONFIG), sampler=SAMPLER
+        TigerGraphContextFetcher(executor), plan=extraction_plan(PLAN), sampler=SAMPLER
     ) as source:
         batch = make_live_batch(
             source, [ROOT], fanouts=(FANOUT, 4), plan=PLAN, sampler=SAMPLER, mode="train"
         )
-    model = build_model(CONFIG, PLAN)
+    model = built(CONFIG)
     assert batch["first_mask"].shape == (1, model.first_fanout)
     assert 0 < int(batch["first_mask"].sum()) < FANOUT
     output = model(batch)
@@ -190,24 +195,24 @@ def test_padding_changes_nothing() -> None:
 
 
 def test_the_slot_sum_is_on_by_default_and_off_builds_the_model_without_it() -> None:
-    absent = {k: v for k, v in CONFIG.items() if k != "slot_sum"}
-    assert validate_config(absent)["slot_sum"] is True
-    no_pools = {**CONFIG, "slot_sum": False, "feature_groups": list(DEFAULT_GROUPS)}
-    for config, parameters in ((no_pools, 83_457), ({**CONFIG, "slot_sum": False}, 88_705)):
-        plan = FeaturePlan.from_config(config)
+    assert ModelConfig().slot_sum is True
+    without = CONFIG.with_changes({"model": {"slot_sum": False}})
+    no_pools = replace(without, features=DEFAULT_GROUPS)
+    for config, parameters in ((no_pools, 83_457), (without, 88_705)):
+        plan = config.feature_plan()
         # The constructor call without the option.
         torch.manual_seed(0)
-        old = LiveTGAT(HIDDEN, CONFIG["heads"], CONFIG["dropout"], plan=plan).state_dict()
+        old = LiveTGAT(HIDDEN, CONFIG.model.heads, CONFIG.model.dropout, plan=plan).state_dict()
         torch.manual_seed(0)
-        model = build_model(config, plan)
+        model = built(config)
         assert model.slot_sum is None
         state = model.state_dict()
         # Same keys, shapes and initial weights.
         assert list(state) == list(old)
         assert all(torch.equal(state[k], old[k]) for k in old)
         assert sum(p.numel() for p in model.parameters()) == parameters
-    old = LiveTGAT(HIDDEN, CONFIG["heads"], CONFIG["dropout"], plan=PLAN).state_dict()
-    model = build_model(CONFIG, PLAN)
+    old = LiveTGAT(HIDDEN, CONFIG.model.heads, CONFIG.model.dropout, plan=PLAN).state_dict()
+    model = built(CONFIG)
     assert model.state_dict().keys() - old.keys() == SLOT_KEYS
     assert model.state_dict()["head.0.weight"].shape == (HIDDEN, 3 * HIDDEN)
     assert sum(p.numel() for p in model.parameters()) == 101_121
@@ -220,7 +225,7 @@ def test_saved_models_with_the_slot_sum_score_like_the_trained_model(tmp_path: P
     )
     executor = FakeExecutor({ROOT: context(ROOT, PAYMENTS)})
     with StreamingContextSource(
-        TigerGraphContextFetcher(executor), plan=extraction_plan(CONFIG), sampler=SAMPLER
+        TigerGraphContextFetcher(executor), plan=extraction_plan(PLAN), sampler=SAMPLER
     ) as source:
         predictor = TemporalPredictor(ModelCheckpoint.load(tmp_path / "new.pt"), source, "cpu")
         assert predictor.model.slot_sum is not None
@@ -244,13 +249,13 @@ def test_nonsense_options_are_rejected() -> None:
             LiveTGAT(16, 4, 0, plan=PLAN, slot_sum=True, first_fanout=fanout)  # type: ignore[arg-type]
     for flag in ("yes", 1, 0.5):
         with pytest.raises(ValueError, match="slot_sum"):
-            validate_config({"slot_sum": flag})
+            ModelConfig(slot_sum=flag)  # type: ignore[arg-type]
     # The tabular variant of the built-in run has no slots: the switch adds nothing.
-    tabular = {**CONFIG, "architecture": "summary"}
-    model = build_model(tabular, FeaturePlan.from_config(tabular))
+    tabular = CONFIG.with_changes({"model": {"architecture": "summary"}})
+    model = built(tabular)
     assert model.slot_sum is None and model.head[0].in_features == HIDDEN
     # A batch wider than the configured fan-out would change the divisor's meaning.
-    narrow = build_model({**CONFIG, "fanouts": [8, 4]}, PLAN)
+    narrow = built(CONFIG.with_changes({"sampler": {"fanouts": [8, 4]}}), PLAN)
     assert narrow.first_fanout == 8
     with pytest.raises(ValueError, match="16 hop-1 slots, more than the model's fan-out 8"):
         narrow.encode(slot_batch(PLAN, [[0]], width=16))

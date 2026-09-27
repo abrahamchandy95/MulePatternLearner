@@ -20,7 +20,7 @@ import torch
 
 from mule_pattern_learner.artifacts import file_digest
 from mule_pattern_learner.batching import assemble
-from mule_pattern_learner.config import run_config, validate_config
+from mule_pattern_learner.config import DEFAULT_CONFIG, RunConfig
 from mule_pattern_learner.contract.clock import timestamp
 from mule_pattern_learner.contract.feature_groups import (
     DEFAULT_GROUPS,
@@ -43,7 +43,7 @@ from mule_pattern_learner.contract.server import CONTRACT_VERSION
 from mule_pattern_learner.contract.time_basis import BASIS_ID, fourier64
 from mule_pattern_learner.data import manifest as data_manifest
 from mule_pattern_learner.data.hub_registry import HubRegistry
-from mule_pattern_learner.data.manifest import preparation_view
+from mule_pattern_learner.data.manifest import dataset_settings
 from mule_pattern_learner.data.observed_labels import align_observed_labels, validate_label_table
 from mule_pattern_learner.inference import score_accounts
 from mule_pattern_learner.model.build import build_model
@@ -52,25 +52,26 @@ from mule_pattern_learner.tigergraph.context_query import query_context_rows
 from mule_pattern_learner.tigergraph.executor import QueryExecutor
 from mule_pattern_learner.training import trainer
 
+# The source ids the test datasets are prepared from.
+UNIT_SOURCE = "unit_fixture"
+SNAPSHOT_SOURCE = "unit_snapshot"
+RUNTIME_SOURCE = "unit_runtime"
 
-def live_config(**changes: Any) -> dict[str, Any]:
+
+def live_config(**sections: Any) -> RunConfig:
     """A small, explicit unit run of the built-in settings in an example scope.
 
-    Tests hand prepare() their labels (FrameObservedLabels).
+    Each keyword names a section and a table of the fields it changes, as in
+    RunConfig.with_changes. Tests hand prepare() their labels (FrameObservedLabels) and
+    the source id UNIT_SOURCE.
     """
-    value = {**run_config(), "scope_id": "example_strict_scope", "create_scope": False}
-    value.update(
-        dataset_id="unit_fixture",
-        epochs=2,
-        hidden=16,
-        dropout=0,
-        batch_size=16,
-        steps_per_epoch=2,
-        device="cpu",
-        threads=1,
-    )
-    value.update(changes)
-    return value
+    small = {
+        "scope": {"id": "example_strict_scope", "create": False},
+        "model": {"hidden": 16, "dropout": 0.0},
+        "training": {"epochs": 2, "batch_size": 16, "steps_per_epoch": 2},
+        "runtime": {"device": "cpu", "threads": 1},
+    }
+    return DEFAULT_CONFIG.with_changes(small).with_changes(sections)
 
 
 def fixture_accounts(count: int = 1000, date: str = "2024-07-01") -> pd.DataFrame:
@@ -453,10 +454,9 @@ def hub_rows(cutoffs: list[int], scope_id: str = "") -> list[dict[str, Any]]:
     ]
 
 
-def unit_config(tmp_path: Path, **changes: Any) -> dict[str, Any]:
-    """Validated settings of the built-in run in a unit scope and snapshot."""
-    config = {"dataset_id": "unit_snapshot", "scope_id": "unit_scope"}
-    return validate_config({**config, **changes})
+def unit_config(**sections: Any) -> RunConfig:
+    """The built-in run in a unit scope; its datasets come from SNAPSHOT_SOURCE."""
+    return DEFAULT_CONFIG.with_changes({"scope": {"id": "unit_scope"}}).with_changes(sections)
 
 
 # The plan and pools of the batch and context source tests.
@@ -755,44 +755,46 @@ def fake_context(key: ContextKey) -> dict[str, Any]:
     }
 
 
-def base_config(**overrides: Any) -> dict[str, Any]:
-    value = {
-        "dataset_id": "unit_runtime",
-        "scope_id": "unit_scope",
-        "dates": deepcopy(DATES),
-        "feature_groups": list(DEFAULT_GROUPS),
-        "architecture": "split",
+# A small model without the slot sum, validated on its raw weights, over small pools.
+RUNTIME_CHANGES: dict[str, Any] = {
+    "scope": {"id": "unit_scope"},
+    "dataset": {"dates": deepcopy(DATES), "seed": 7, "split_seed": 7},
+    "sampler": {
         "fanouts": [4, 2],
-        "hidden": 16,
-        "heads": 2,
-        "dropout": 0.2,
-        "epochs": 2,
-        "steps_per_epoch": 3,
-        "patience": 5,
-        "batch_size": 8,
-        "learning_rate": 0.01,
-        "class_prior": 0.05,
-        "positive_weight": 0.5,
-        # A small model without the slot sum, validated on its raw weights.
-        "slot_sum": False,
-        "weight_average_decay": 0.0,
-        "seed": 7,
-        "split_seed": 7,
-        "device": "cpu",
-        "threads": 1,
-        "evaluation_unlabeled_limit": 12,
-        "log_every_steps": 2,
-        "prefetch_batches": 2,
-        "sampler": {
+        "roots": {"recent": 3, "older": 1, "distinct": 1, "associations": 1, "max_history": 2048},
+        "children": {
             "recent": 3,
             "older": 1,
             "distinct": 1,
-            "associations": 1,
-            "relation_fanouts": [2, 2],
+            "associations": 0,
+            "max_history": 2048,
         },
-    }
-    value.update(overrides)
-    return validate_config(value)
+        "relation_fanouts": [2, 2],
+    },
+    "features": list(DEFAULT_GROUPS),
+    "model": {"architecture": "split", "hidden": 16, "heads": 2, "dropout": 0.2, "slot_sum": False},
+    "loss": {"class_prior": 0.05, "positive_weight": 0.5},
+    "training": {
+        "seed": 7,
+        "epochs": 2,
+        "steps_per_epoch": 3,
+        "batch_size": 8,
+        "patience": 5,
+        "learning_rate": 0.01,
+        "weight_average_decay": 0.0,
+        "proxy_unlabeled_limit": 12,
+    },
+    "runtime": {"device": "cpu", "threads": 1, "log_every_steps": 2, "prefetch_batches": 2},
+}
+
+
+def base_config(**sections: Any) -> RunConfig:
+    """The runtime tests' run; its datasets come from RUNTIME_SOURCE.
+
+    Each keyword names a section and a table of the fields it changes, as in
+    RunConfig.with_changes.
+    """
+    return DEFAULT_CONFIG.with_changes(RUNTIME_CHANGES).with_changes(sections)
 
 
 def accounts_frame() -> pd.DataFrame:
@@ -841,9 +843,12 @@ def hub_registry() -> HubRegistry:
 
 
 def prepared_dataset(
-    path: Path, config: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    path: Path, config: RunConfig, monkeypatch: pytest.MonkeyPatch
 ) -> tuple[Path, dict[str, Any], pd.DataFrame]:
-    """A prepared-dataset directory; load_prepared is replaced by its in-memory copy."""
+    """A prepared-dataset directory; load_prepared is replaced by its in-memory copy.
+
+    Its manifest records config's dataset settings for the source RUNTIME_SOURCE.
+    """
     path.mkdir(parents=True, exist_ok=True)
     accounts = accounts_frame()
     align_observed_labels(accounts, labels_frame(accounts)).to_parquet(
@@ -851,11 +856,14 @@ def prepared_dataset(
     )
     manifest = {
         "status": "ready",
-        "config": config,
         "cutoff_seqs": dict(CUTOFFS),
         "cohort": "bounded_internal_deposit_seeds",
         "observed_labels_sha256": file_digest(path / "observed_labels.parquet"),
-        "source": {"preparation": preparation_view(config)},
+        "source": {
+            "source_id": RUNTIME_SOURCE,
+            "settings": dataset_settings(RUNTIME_SOURCE, config),
+            "scope_id": config.scope.id,
+        },
     }
     (path / "manifest.json").write_text(json.dumps(manifest))
 
@@ -870,21 +878,21 @@ def prepared_dataset(
 
 def checkpoint(
     path: Path,
-    config: dict[str, Any],
+    config: RunConfig,
     manifest_path: Path | None = None,
     *,
     logit_shift: float = 0.0,
 ) -> Path:
-    plan = FeaturePlan.from_config(config)
+    plan = config.feature_plan()
     torch.manual_seed(0)
-    model = build_model(config, plan, dropout=0.0)
+    model = build_model(config.model, plan, config.sampler.fanouts[0], dropout=0.0)
     with torch.no_grad():
         bias = model.head[-1].bias
         assert isinstance(bias, torch.Tensor)
         bias += logit_shift
     payload = {
         "state_dict": model.state_dict(),
-        "config": config,
+        "config": config.to_dict(),
         "contract": contract_fingerprint(),
         "basis_id": BASIS_ID,
         "threshold": 0.5,

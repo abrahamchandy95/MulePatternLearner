@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import torch
 
+from ..config import RunConfig
 from ..contract.feature_groups import FeaturePlan, contract_fingerprint
 from ..contract.graph_schema import EVALUATION_PROTOCOL
 from ..contract.sampler_plan import SamplerPlan
@@ -24,7 +25,7 @@ TRAINING_PROTOCOL = "scoped_observed_label_nnpu_v5"
 def model_payload(
     *,
     state: dict[str, torch.Tensor],
-    config: dict[str, Any],
+    config: RunConfig,
     dataset: Path,
     threshold: float,
     plan: FeaturePlan,
@@ -36,7 +37,7 @@ def model_payload(
     """The model.pt payload of the selected state (read by saved_model.ModelCheckpoint)."""
     return {
         "state_dict": state,
-        "config": config,
+        "config": config.to_dict(),
         "basis_id": BASIS_ID,
         "contract": contract_fingerprint(),
         "dataset": str(dataset.resolve()),
@@ -77,7 +78,7 @@ def prediction_frame(
 
 def run_summary(
     *,
-    config: dict[str, Any],
+    config: RunConfig,
     manifest: dict[str, Any],
     seed: int,
     known_mules: dict[str, int],
@@ -125,6 +126,6 @@ def run_summary(
         "rejected_roots": rejected_roots,
         "max_rejected_root_fraction": limit,
         "performance_claim": EVALUATION_PROTOCOL + "_observed_label_proxy_only",
-        "evaluation_unlabeled_limit": config.get("evaluation_unlabeled_limit"),
+        "evaluation_unlabeled_limit": config.training.proxy_unlabeled_limit,
         "training_protocol": TRAINING_PROTOCOL,
     }

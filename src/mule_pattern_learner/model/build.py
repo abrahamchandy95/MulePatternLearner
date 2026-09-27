@@ -1,13 +1,11 @@
-"""The model a configuration describes, and float64 probabilities from its logits."""
+"""The model a model section describes, and float64 probabilities from its logits."""
 
 from __future__ import annotations
-
-from typing import Any
 
 import numpy as np
 import torch
 
-from ..config import fanouts
+from ..config import ModelConfig
 from ..contract.feature_groups import FeaturePlan
 from .tgat import LiveTGAT
 
@@ -25,19 +23,20 @@ def probabilities_from_logits(logits: torch.Tensor) -> np.ndarray:
 
 
 def build_model(
-    config: dict[str, Any], plan: FeaturePlan, *, dropout: float | None = None
+    model: ModelConfig, plan: FeaturePlan, first_fanout: int, *, dropout: float | None = None
 ) -> LiveTGAT:
-    """The model a validated configuration describes (hidden, heads, dropout, slot_sum).
+    """The model of a model section (hidden, heads, dropout, slot_sum) over plan's inputs.
 
-    ``dropout`` replaces the configured rate, for dropout-free determinism checks.
-    The summary architecture has no hop-1 slots, so it ignores ``slot_sum`` as it
-    ignores the fanouts.
+    ``first_fanout`` is the sampler's hop-1 fan-out, the divisor of the slot sum.
+    ``dropout`` replaces the configured rate, for dropout-free determinism checks. The
+    summary architecture has no hop-1 slots, so it ignores ``slot_sum`` as it ignores
+    the fanouts.
     """
     return LiveTGAT(
-        int(config["hidden"]),
-        int(config["heads"]),
-        float(config["dropout"] if dropout is None else dropout),
+        model.hidden,
+        model.heads,
+        model.dropout if dropout is None else dropout,
         plan=plan,
-        slot_sum=config["slot_sum"] if plan.architecture != "summary" else False,
-        first_fanout=fanouts(config)[0],
+        slot_sum=model.slot_sum if plan.architecture != "summary" else False,
+        first_fanout=first_fanout,
     )

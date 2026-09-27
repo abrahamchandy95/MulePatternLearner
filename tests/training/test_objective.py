@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from mule_pattern_learner.config import LossConfig
 from mule_pattern_learner.training import objective as training_objective
 
 
@@ -14,7 +15,7 @@ def test_nnpu_objective_resolves_the_named_positive_weights() -> None:
         (0.5, 0.5, "positive_reweighted_nnPU"),
     ):
         prior, value = training_objective.nnpu_objective(
-            {"class_prior": 0.001, "positive_weight": weight}
+            LossConfig(class_prior=0.001, positive_weight=weight)
         )
         assert (prior, value) == (0.001, pytest.approx(resolved))
         assert training_objective.objective_name(prior, value) == name

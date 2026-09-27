@@ -15,13 +15,14 @@ from typing import Any
 
 import pytest
 
+from mule_pattern_learner.config import RunConfig
 from mule_pattern_learner.contract.feature_groups import FeaturePlan, extraction_plan
-from mule_pattern_learner.contract.sampler_plan import SamplerPlan
 from mule_pattern_learner.data.contexts import StreamingContextSource, check_coverage
 from mule_pattern_learner.data.preparation import prepare
 from mule_pattern_learner.paths import REPOSITORY_ROOT
 from mule_pattern_learner.reference import label_reveal
 from mule_pattern_learner.testing.builders import (
+    UNIT_SOURCE,
     FrameObservedLabels,
     live_config,
     neighbourhood,
@@ -184,20 +185,18 @@ def test_strict_isolation_source_requests_what_the_fixture_checks_and_the_model_
     # The model it trains and the predictor that scores it read nothing the source skips.
     config = module.model_config()
     with StreamingContextSource(TigerGraphContextFetcher(FakeExecutor()), **options) as source:
-        check_coverage(source, FeaturePlan.from_config(config), SamplerPlan.from_config(config))
+        check_coverage(source, config.feature_plan(), config.sampler)
 
 
 def test_benchmark_builds_one_training_batch_and_step(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    config = live_config(batch_size=32, fanouts=[8, 2])
-    config_path = tmp_path / "config.json"
-    # The identity comes from the prepared dataset, as it does for `mule-temporal train`.
-    config_path.write_text(json.dumps({k: v for k, v in config.items() if k != "dataset_id"}))
+    config = live_config(training={"batch_size": 32}, sampler={"fanouts": [8, 2]})
     dataset = tmp_path / "dataset"
     executor = FakeExecutor(factory=neighbourhood, hubs=[("N3", 101)], population=scoped_accounts())
     prepare(
         config,
+        UNIT_SOURCE,
         dataset,
         {"Account": 1000},
         FrameObservedLabels(supplied_labels()),
@@ -207,19 +206,19 @@ def test_benchmark_builds_one_training_batch_and_step(
     )
     module = load("benchmark_batch")
 
-    def open_source(path: Path, manifest: dict[str, Any], training: dict[str, Any]) -> Any:
-        assert path == dataset
+    def open_source(path: Path, manifest: dict[str, Any], training: RunConfig) -> Any:
+        assert path == dataset and training == config
         return StreamingContextSource(
             TigerGraphContextFetcher(executor),
-            plan=extraction_plan(training),
-            sampler=SamplerPlan.from_config(training),
+            plan=extraction_plan(training.feature_plan()),
+            sampler=training.sampler,
         )
 
     monkeypatch.setattr(module, "open_context_source", open_source)
     output = tmp_path / "report.json"
-    argv = ["benchmark_batch", "--config", str(config_path), "--dataset", str(dataset)]
-    monkeypatch.setattr(sys, "argv", [*argv, "--output", str(output), "--train-step"])
-    module.main()
+    argv = ["benchmark_batch", "--dataset", str(dataset), "--output", str(output)]
+    monkeypatch.setattr(sys, "argv", [*argv, "--train-step"])
+    module.main(config)
     report = json.loads(output.read_text())
     assert report["status"] == "passed" and report["mode"] == "train"
     assert report["roots"] == report["accepted_roots"] == 32

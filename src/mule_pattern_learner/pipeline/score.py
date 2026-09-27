@@ -25,7 +25,7 @@ def score_new(
     """
     check_new_outputs(output)
     saved = ModelCheckpoint.of(checkpoint)
-    executor = connect(saved.validated_config())
+    executor = connect(saved.config.transport)
     verify_sources(executor)
     return score_new_accounts(
         saved,

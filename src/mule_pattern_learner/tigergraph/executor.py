@@ -12,7 +12,7 @@ import threading
 import time
 from typing import TYPE_CHECKING, Any, Protocol, TypeVar
 
-from ..config import TRANSPORT_DEFAULTS
+from ..config import DEFAULT_CONFIG
 from ..contract.bounds import OUTAGE_SECONDS, QUERY_ATTEMPTS
 
 if TYPE_CHECKING:
@@ -185,7 +185,7 @@ class TigerGraphExecutor:
     - Server timeouts are retried `timeout_retries` times (default once) and then
       raise ServerTimeoutError; other suspected-deterministic failures are
       retried once.
-    - `max_attempts` (config max_query_attempts) caps the attempts that count:
+    - `max_attempts` (transport.max_query_attempts) caps the attempts that count:
       every attempt except an availability failure that failed within
       `slow_attempt_s`, so a fast-failing outage is bounded by the wall clock
       and a request that hangs on every attempt by the attempt cap. An explicit
@@ -198,8 +198,8 @@ class TigerGraphExecutor:
     def __init__(
         self,
         *,
-        max_attempts: int = TRANSPORT_DEFAULTS["max_query_attempts"],
-        max_outage_s: float = TRANSPORT_DEFAULTS["max_outage_s"],
+        max_attempts: int = DEFAULT_CONFIG.transport.max_query_attempts,
+        max_outage_s: float = DEFAULT_CONFIG.transport.max_outage_s,
         timeout_s: float = 300.0,
         base_delay_s: float = 4.0,
         max_delay_s: float = 60.0,

@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from mule_pattern_learner.batching.limits import BatchLimits
-from mule_pattern_learner.config import validate_config
+from mule_pattern_learner.config import DEFAULT_CONFIG
 from mule_pattern_learner.contract.bounds import (
     BATCH_ROOTS,
     FANOUT,
@@ -34,23 +34,31 @@ def test_pool_settings_accept_exactly_their_bound(name: str) -> None:
     inside, outside = edges(POOL[name])
     for value in inside:
         assert getattr(PoolPlan(**{name: value}), name) == value
-        validate_config({"sampler": {name: value, "children": {name: value}}})
+        DEFAULT_CONFIG.with_changes(
+            {"sampler": {"roots": {name: value}, "children": {name: value}}}
+        )
     for value in outside:
         with pytest.raises(ValueError, match=name):
             PoolPlan(**{name: value})
         with pytest.raises(ValueError, match=name):
-            validate_config({"sampler": {name: value}})
+            DEFAULT_CONFIG.with_changes({"sampler": {"roots": {name: value}}})
 
 
-# A configuration that sets one bounded setting to a value, and the setting's bound.
+# The changes that set one bounded setting to a value, and the setting's bound.
 SETTINGS: dict[str, tuple[Callable[[int], dict[str, Any]], Bound]] = {
-    "fanouts": (lambda v: {"fanouts": [v, v]}, FANOUT),
-    "relation_fanouts": (lambda v: {"sampler": {"relation_fanouts": [v, v]}}, FANOUT),
-    "batch_size": (lambda v: {"batch_size": v}, BATCH_ROOTS),
-    "request_batch_size": (lambda v: {"request_batch_size": v}, REQUEST_KEYS),
-    "query_concurrency": (lambda v: {"query_concurrency": v}, QUERY_CONCURRENCY),
-    "seed_limits": (
-        lambda v: {"seed_limits": {"train": v, "validation": 1, "test": 1}},
+    "sampler.fanouts": (lambda v: {"sampler": {"fanouts": [v, v]}}, FANOUT),
+    "sampler.relation_fanouts": (lambda v: {"sampler": {"relation_fanouts": [v, v]}}, FANOUT),
+    "training.batch_size": (lambda v: {"training": {"batch_size": v}}, BATCH_ROOTS),
+    "transport.request_batch_size": (
+        lambda v: {"transport": {"request_batch_size": v}},
+        REQUEST_KEYS,
+    ),
+    "transport.query_concurrency": (
+        lambda v: {"transport": {"query_concurrency": v}},
+        QUERY_CONCURRENCY,
+    ),
+    "dataset.seed_limits.train": (
+        lambda v: {"dataset": {"seed_limits": {"train": v, "validation": 1, "test": 1}}},
         SEED_LIMIT,
     ),
 }
@@ -58,13 +66,15 @@ SETTINGS: dict[str, tuple[Callable[[int], dict[str, Any]], Bound]] = {
 
 @pytest.mark.parametrize("name", SETTINGS)
 def test_configuration_accepts_exactly_the_bounds(name: str) -> None:
-    config, bound = SETTINGS[name]
+    changes, bound = SETTINGS[name]
     inside, outside = edges(bound)
     for value in inside:
-        validate_config(config(value))
+        DEFAULT_CONFIG.with_changes(changes(value))
     for value in outside:
-        with pytest.raises(ValueError, match="Invalid configuration"):
-            validate_config(config(value))
+        with pytest.raises(
+            ValueError, match=f"must be an integer in \\[{bound.low},{bound.high}\\]"
+        ):
+            DEFAULT_CONFIG.with_changes(changes(value))
 
 
 def test_sampler_batches_and_context_source_read_the_same_bounds() -> None:

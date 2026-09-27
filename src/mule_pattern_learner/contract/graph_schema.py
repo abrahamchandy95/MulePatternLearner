@@ -8,7 +8,6 @@ scope, the columns of a hub row and the Account columns of the loading contract.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
 from .bounds import ID_BYTES, SCOPE_ID_BYTES
 
@@ -96,12 +95,11 @@ STRATA = ("recent", "older", "distinct", "association")
 EVALUATION_PROTOCOL = "strict_inductive"
 
 
-def context_scope(config: dict[str, Any]) -> str:
-    """The scope_id of every context of a run; strict inductive splits need one."""
-    scope = config.get("scope_id")
-    if not scope:
-        raise ValueError("Strict inductive sampling requires a frozen TigerGraph scope_id")
-    return str(scope)
+def context_scope(scope_id: object) -> str:
+    """The scope id of every context of a dataset; strict inductive splits need one."""
+    if not isinstance(scope_id, str) or not scope_id:
+        raise ValueError("Strict inductive sampling requires a frozen TigerGraph scope id")
+    return scope_id
 
 
 # The columns of a hub row, in order, as the hub query prints them and the prepared hub

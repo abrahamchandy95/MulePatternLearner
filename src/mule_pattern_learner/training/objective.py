@@ -1,31 +1,35 @@
-"""The nnPU objective a configuration names, and one optimizer step on it."""
+"""The nnPU objective a loss section names, and one optimizer step on it."""
 
 from __future__ import annotations
 
 import math
-from typing import Any, NamedTuple
+from typing import NamedTuple
 
 import torch
 from torch import nn
 
+from ..config import LossConfig
 from ..model.loss import NonNegativePULoss
 
 
-def nnpu_objective(config: dict[str, Any]) -> tuple[float, float]:
-    """The class prior and the positive-risk weight.
+def nnpu_objective(loss: LossConfig) -> tuple[float, float]:
+    """The class prior and the positive-risk weight of a loss section.
 
     "prior" is textbook nnPU (the weight is the prior). "balanced" is imbalanced nnPU
     (Su, Chen and Xu, IJCAI 2021) with a balanced target prior of 0.5: its risk
     0.5 * R_p^+ + 0.5 / (1 - prior) * (R_u^- - prior * R_p^-) is this loss with weight
     1 - prior, scaled by a constant (exactly so for the loss's beta = 0, gamma = 1).
     """
-    prior = float(config["class_prior"])
-    weight = config["positive_weight"]
-    if weight == "prior":
-        return prior, prior
-    if weight == "balanced":
-        return prior, 1.0 - prior
-    return prior, float(weight)
+    prior, weight = loss.class_prior, loss.positive_weight
+    match weight:
+        case "prior":
+            return prior, prior
+        case "balanced":
+            return prior, 1.0 - prior
+        case float():
+            return prior, weight
+        case _:
+            raise ValueError(f"Unknown positive weight {weight!r}")
 
 
 def objective_name(prior: float, positive_weight: float) -> str:

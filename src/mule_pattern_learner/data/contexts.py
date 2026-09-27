@@ -15,7 +15,7 @@ from pathlib import Path
 import threading
 from typing import Any, Protocol
 
-from ..config import TRANSPORT_DEFAULTS, transport_settings
+from ..config import DEFAULT_CONFIG, RunConfig, TransportConfig
 from ..contract.bounds import (
     BATCH_CONTEXTS,
     CONTEXT_LRU_CAPACITY,
@@ -127,10 +127,10 @@ class StreamingContextSource:
         *,
         plan: FeaturePlan = FeaturePlan(),
         sampler: SamplerPlan = SamplerPlan(),
-        capacity: int = TRANSPORT_DEFAULTS["context_lru_capacity"],
-        request_batch_size: int = TRANSPORT_DEFAULTS["request_batch_size"],
-        concurrency: int = TRANSPORT_DEFAULTS["query_concurrency"],
-        encoding_check_every: int = TRANSPORT_DEFAULTS["encoding_check_every"],
+        capacity: int = DEFAULT_CONFIG.transport.context_lru_capacity,
+        request_batch_size: int = DEFAULT_CONFIG.transport.request_batch_size,
+        concurrency: int = DEFAULT_CONFIG.transport.query_concurrency,
+        encoding_check_every: int = DEFAULT_CONFIG.transport.encoding_check_every,
     ) -> None:
         if not QUERY_CONCURRENCY.holds(concurrency):
             raise ValueError(
@@ -283,18 +283,17 @@ class StreamingContextSource:
 
 
 def streaming_source(
-    fetcher: ContextFetcher, plan: FeaturePlan, sampler: SamplerPlan, config: dict[str, Any]
+    fetcher: ContextFetcher, plan: FeaturePlan, sampler: SamplerPlan, transport: TransportConfig
 ) -> StreamingContextSource:
-    """Live source with the transport settings of a training configuration."""
-    transport = transport_settings(config)
+    """Live source with the LRU, request size and concurrency of a transport section."""
     return StreamingContextSource(
         fetcher,
         plan=plan,
         sampler=sampler,
-        capacity=transport["context_lru_capacity"],
-        request_batch_size=transport["request_batch_size"],
-        concurrency=transport["query_concurrency"],
-        encoding_check_every=transport["encoding_check_every"],
+        capacity=transport.context_lru_capacity,
+        request_batch_size=transport.request_batch_size,
+        concurrency=transport.query_concurrency,
+        encoding_check_every=transport.encoding_check_every,
     )
 
 
@@ -305,7 +304,7 @@ class ContextOpener(Protocol):
     """
 
     def __call__(
-        self, dataset: Path, manifest: dict[str, Any], config: dict[str, Any] | None = None
+        self, dataset: Path, manifest: dict[str, Any], config: RunConfig
     ) -> ContextSource: ...
 
 

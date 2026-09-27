@@ -92,8 +92,7 @@ def audit_inputs(
     if output.exists() or output.with_suffix(".parquet").exists() or rejected_output.exists():
         raise FileExistsError(output)
     saved = ModelCheckpoint.of(checkpoint)
-    config = saved.validated_config()
-    if len(config["dates"]["test"]) != 1:
+    if len(saved.config.dataset.dates.test) != 1:
         raise ValueError("Final population audit requires one test cutoff")
     if dataset is None:
         dataset = saved.dataset
@@ -131,7 +130,7 @@ def evaluate_final_population(
 
     Accounts TigerGraph rejects are not scored. A rejected test positive, or a
     rejected fraction of the sample above the checkpoint's
-    ``max_rejected_root_fraction`` (default 0), fails the audit before anything is
+    ``runtime.max_rejected_root_fraction`` (default 0), fails the audit before anything is
     written: the weighted metrics would silently describe a censored population.
     Rejected negatives within the limit are listed in ``<output>.rejected.txt`` and
     the metrics' ``evaluation_cohort`` says that they were dropped.
@@ -149,11 +148,11 @@ def evaluate_final_population(
 
     saved, dataset, manifest = audit_inputs(checkpoint, output, dataset)
     rejected_output = output.with_suffix(".rejected.txt")
-    config = saved.validated_config()
-    date = config["dates"]["test"][0]
+    config = saved.config
+    (date,) = config.dataset.dates.test
     last_ms = cutoff_ms(date)
     population: list[dict[str, Any]] = []
-    for row in scope_accounts(scope, config["scope_id"], include_observed=False):
+    for row in scope_accounts(scope, config.scope.id, include_observed=False):
         if row["partition"] == SPLIT_PHASE["test"] and row["first_seen_ts_ms"] <= last_ms:
             population.append({"account_id": row["account_id"], "split": "test"})
             if len(population) > AUDIT_POPULATION:
@@ -169,7 +168,7 @@ def evaluate_final_population(
         pd.DataFrame(population),
         answer,
         negative_limit=negative_limit,
-        seed=int(config["split_seed"]),
+        seed=config.dataset.split_seed,
     )
     if len(selected) > AUDIT_SAMPLE:
         raise ValueError("Final scoring sample exceeds audit budget")
@@ -193,7 +192,7 @@ def evaluate_final_population(
     unscored = selected[selected.score.isna()]
     scored = selected[selected.score.notna()].reset_index(drop=True)
     rejected_positives = int(unscored.is_mule.sum())
-    limit = float(config["max_rejected_root_fraction"])
+    limit = config.runtime.max_rejected_root_fraction
     if exceeds_rejection_limit(len(unscored), rejected_positives, len(selected), limit):
         examples = unscored.account_id.astype(str).head(20).tolist()
         raise ValueError(
@@ -215,7 +214,7 @@ def evaluate_final_population(
         "rejected_positives": rejected_positives,
         "rejected_negatives": len(unscored) - rejected_positives,
         **rejection_summary(predictor.contexts, len(rejected), predictor.totals),
-        "scope": config["scope_id"],
+        "scope": config.scope.id,
         "model_changed": False,
     }
     output.parent.mkdir(parents=True, exist_ok=True)

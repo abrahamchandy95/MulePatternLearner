@@ -61,7 +61,7 @@ def evaluation_indices(
     them as "unlabeled" would enrich the sample with hidden positives.
     """
     if limit is not None and limit < 1:
-        raise ValueError("evaluation_unlabeled_limit must be positive")
+        raise ValueError("training.proxy_unlabeled_limit must be positive")
     visible = observed[indices]
     known = indices[visible]
     unlabeled = indices[~visible]

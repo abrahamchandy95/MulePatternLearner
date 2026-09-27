@@ -39,7 +39,7 @@ EXPECTED = {
 def test_final_population_audit_scores_through_the_dataset_clock_and_hubs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    config = base_config(max_rejected_root_fraction=0.1)
+    config = base_config(runtime={"max_rejected_root_fraction": 0.1})
     dataset, _, accounts = prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     model = checkpoint(tmp_path / "model.pt", config, dataset / "manifest.json")
     test_accounts = accounts[accounts.split == "test"]
@@ -85,7 +85,7 @@ def test_final_population_audit_scores_through_the_dataset_clock_and_hubs(
 def test_final_population_audit_fails_on_censored_rejections(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, limit: float, rejected_index: int
 ) -> None:
-    config = base_config(max_rejected_root_fraction=limit)
+    config = base_config(runtime={"max_rejected_root_fraction": limit})
     dataset, _, accounts = prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     model = checkpoint(tmp_path / "model.pt", config, dataset / "manifest.json")
     test_accounts = accounts[accounts.split == "test"]

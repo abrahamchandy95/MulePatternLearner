@@ -66,10 +66,9 @@ It uses CUDA when available (then Apple MPS, then CPU) and writes `models/tempor
 On a fresh graph the first run installs the training queries, creates the frozen
 scope and reveals the known mules in the graph ([label reveal](docs/label_reveal.md));
 every run then prepares its cohort inside `models/temporal/model_run/`. Run the same
-command again to resume an interrupted run. The settings are built in
-(`DEFAULT_RUN` in `src/mule_pattern_learner/config.py`); an
-optional `--config overrides.toml` changes only the keys it sets (tables such as
-`[sampler]` merge key by key).
+command again to resume an interrupted run. The settings are built in:
+`DEFAULT_CONFIG` in `src/mule_pattern_learner/config.py`, frozen dataclasses with one
+section per concern. No command reads a configuration file.
 
 The other commands (`install`, `prepare`, `score`, `score-new`, `evaluate` and
 `evaluate-final`) are described in the end-to-end guide under
