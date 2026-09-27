@@ -29,8 +29,7 @@ from ..contract.graph_schema import ContextKey
 from ..data.contexts import ContextSource, check_coverage, streaming_source
 from ..data.hub_registry import HubRegistry, warn_hub_stubs
 from ..data.ports import ContextFetcher
-from ..model.build import build_model, probabilities_from_logits
-from ..model.tgat import LiveTGAT
+from ..model.build import Model, build_model, probabilities_from_logits
 from ..runtime.device import choose_device
 from ..runtime.workers import BatchPrefetcher
 from .saved_model import SavedModel
@@ -49,7 +48,7 @@ class ScoredBatch(NamedTuple):
 
 
 def score_batch(
-    model: LiveTGAT, prepared: RootBatch, device: torch.device, *, embeddings: bool = False
+    model: Model, prepared: RootBatch, device: torch.device, *, embeddings: bool = False
 ) -> ScoredBatch:
     """The logits of one assembled batch, on ``device``; the model must be in eval mode.
 
@@ -66,7 +65,7 @@ def score_batch(
 
 
 def score_batches(
-    model: LiveTGAT,
+    model: Model,
     build: Callable[[list[ContextKey]], RootBatch],
     batches: Iterable[list[ContextKey]],
     *,

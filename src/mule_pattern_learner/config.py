@@ -38,7 +38,7 @@ from .contract.bounds import (
     SEED_LIMIT,
 )
 from .contract.clock import timestamp
-from .contract.feature_groups import BUILT_IN_GROUPS, FEATURE_GROUPS, FeaturePlan
+from .contract.feature_groups import ARCHITECTURES, BUILT_IN_GROUPS, FEATURE_GROUPS, FeaturePlan
 from .contract.fingerprints import fingerprint
 from .contract.graph_schema import SPLITS
 from .contract.sampler_plan import PoolPlan, SamplerPlan
@@ -224,15 +224,14 @@ BUILT_IN_SAMPLER = SamplerPlan(
     backend="auto",
     evaluation_seed=0,
 )
-ARCHITECTURES = ("split", "summary")
 
 
 @dataclass(frozen=True)
 class ModelConfig:
     """The model: its architecture, width, attention heads, dropout and slot sum."""
 
-    # "split" attends over sampled neighbours; "summary" reads only the root's inputs.
-    architecture: str = "split"
+    # "tgat" attends over sampled neighbours; "summary" reads only the root's inputs.
+    architecture: str = "tgat"
     hidden: int = 64
     heads: int = 4
     dropout: float = 0.15
@@ -387,7 +386,7 @@ class RunConfig:
     dataset: DatasetConfig = DatasetConfig()
     sampler: SamplerPlan = BUILT_IN_SAMPLER
     # The pool groups feed counts over the root's candidate pool (not all-time totals) to
-    # the split model's summary branch. Without them a root's node vector held only its
+    # the TGAT model's summary branch. Without them a root's node vector held only its
     # entity type, is_external, is_deposit and history_withheld. In the diagnostic study
     # distinct payers and internal first-time inflows alone ranked test mules at a
     # weighted ROC AUC of 0.88 and 0.92, against the model's 0.78; those counts were

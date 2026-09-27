@@ -31,7 +31,7 @@ from mule_pattern_learner.data.contexts import ContextCounts, StreamingContextSo
 from mule_pattern_learner.data.manifest import dataset_mismatches, dataset_settings
 from mule_pattern_learner.inference.saved_model import SavedModel
 from mule_pattern_learner.model.build import build_model
-from mule_pattern_learner.model.tgat import LiveTGAT
+from mule_pattern_learner.model.tgat import TGAT
 from mule_pattern_learner.reference import batch_features
 from mule_pattern_learner.reference.batch_features import node_features
 from mule_pattern_learner.testing.builders import association, context, message
@@ -147,7 +147,7 @@ def test_pool_activity_counts_the_candidate_pool_exactly() -> None:
     assert not set(row["features"]) & set(POOL_NAMES)
     # Each group feeds only its own columns.
     for group, names in zip(POOL_GROUPS, (POOL_ACTIVITY_FEATURES, POOL_INTERNAL_FEATURES)):
-        plan = FeaturePlan((*WITHOUT_POOLS.features, group), "split")
+        plan = FeaturePlan((*WITHOUT_POOLS.features, group), "tgat")
         assert plan.names("summary") == names
         vector = node_matrix([row], plan)[0]
         expected = [np.log1p(EXPECTED[name]) for name in names]
@@ -199,7 +199,7 @@ def test_built_in_batches_feed_root_pool_counts_to_the_summary_branch() -> None:
         expected = node_matrix([rows[key]], PLAN)[0, columns]
         assert expected.any()
         np.testing.assert_allclose(x[position, columns].numpy(), expected)
-    # The split model reads pool columns for roots only, so children (the payer and the
+    # The TGAT model reads pool columns for roots only, so children (the payer and the
     # hub stub among them) keep zeros there, whatever their own pool holds.
     withheld = x[:, PLAN.node_names.index("history_withheld")] == 1
     assert int(withheld.sum()) == 1 and len(x) > 3
@@ -207,7 +207,7 @@ def test_built_in_batches_feed_root_pool_counts_to_the_summary_branch() -> None:
     assert node_matrix([rows[payer]], PLAN)[0, columns].any()
     # The summary branch reads the root's pool columns and receives gradient.
     model = build_model(CONFIG.model, PLAN, SAMPLER.fanouts[0], dropout=0.0)
-    assert model.summary is not None
+    assert isinstance(model, TGAT) and model.summary is not None
     assert list(model.summary_indices) == columns
     assert [PLAN.node_names[i] for i in model.node_indices] == list(PLAN.names("node"))
     output = model(batch)
@@ -258,7 +258,7 @@ def test_tigergraph_cannot_supply_pool_counts() -> None:
 
 def test_client_groups_leave_the_wire_and_the_preparation_unchanged() -> None:
     assert set(POOL_GROUPS) <= set(DEFAULT_CONFIG.features)
-    assert PLAN.architecture == "split" and PLAN.names("summary") == POOL_NAMES
+    assert PLAN.architecture == "tgat" and PLAN.names("summary") == POOL_NAMES
     assert extraction_plan(PLAN) == extraction_plan(WITHOUT_POOLS.feature_plan())
     for hop in (1, 2):
         flags = PLAN.query_flags(hop)
@@ -271,9 +271,9 @@ def test_client_groups_leave_the_wire_and_the_preparation_unchanged() -> None:
     assert dataset_mismatches(CONFIG, manifest) == []
     # The counts read pair (and flow) fields, so the model must extract those groups.
     with pytest.raises(ValueError, match="dependencies for pool_activity"):
-        FeaturePlan(("entity_meta", "message_core", "pair_history", "pool_activity"), "split")
+        FeaturePlan(("entity_meta", "message_core", "pair_history", "pool_activity"), "tgat")
     with pytest.raises(ValueError, match="dependencies for pool_internal_inflows"):
-        FeaturePlan(("entity_meta", "message_core", "pool_internal_inflows"), "split")
+        FeaturePlan(("entity_meta", "message_core", "pool_internal_inflows"), "tgat")
 
 
 def test_pool_definitions_are_part_of_the_input_fingerprint_only(
@@ -284,7 +284,7 @@ def test_pool_definitions_are_part_of_the_input_fingerprint_only(
         PLAN.fingerprint(),
         WITHOUT_POOLS.feature_plan().fingerprint(),
     )
-    internal = FeaturePlan((*WITHOUT_POOLS.features, "pool_internal_inflows"), "split")
+    internal = FeaturePlan((*WITHOUT_POOLS.features, "pool_internal_inflows"), "tgat")
     first = internal.fingerprint()
     changes: list[tuple[str, Any]] = [
         ("PASS_THROUGH_RATIO", (0.8, 1.0)),
@@ -311,7 +311,7 @@ def test_pool_definitions_are_part_of_the_input_fingerprint_only(
 
 @pytest.mark.parametrize(
     ("groups", "architecture"),
-    [(DEFAULT_GROUPS, "split"), (DEFAULT_GROUPS, "summary")],
+    [(DEFAULT_GROUPS, "tgat"), (DEFAULT_GROUPS, "summary")],
 )
 def test_plans_without_pool_groups_are_unaffected(
     groups: tuple[str, ...], architecture: str, monkeypatch: pytest.MonkeyPatch
@@ -326,8 +326,8 @@ def test_plans_without_pool_groups_are_unaffected(
     monkeypatch.setattr(batch_features, "pool_activity", refuse)
     row = context(ROOT, POOL)
     np.testing.assert_allclose(node_features(row, plan), node_matrix([row], plan)[0])
-    if architecture == "split":
+    if architecture == "tgat":
         # The previous built-in profile keeps its width and has no summary branch.
-        model = LiveTGAT(64, 4, 0.15, plan=plan)
+        model = TGAT(64, 4, 0.15, plan=plan, slot_sum=False, first_fanout=16)
         assert model.summary is None and len(plan.node_names) == 9
         assert sum(p.numel() for p in model.parameters()) == 83_457

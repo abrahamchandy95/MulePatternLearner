@@ -22,7 +22,7 @@ of them to compare against the built-in groups.
 | `history_support` | Visible payment participations, fewer-than-five flag | Optional; self-transfers participate in both directions. Counts only visible USD history. |
 | `decayed_activity` | Incoming/outgoing counts and amounts at half-lives 1, 7, 30, 90 days | Optional smooth summaries: contribution is `value * 2**(-age/half_life)`. These half-lives still need sensitivity tests. |
 | `identity_order` | Starts/ends of owner, token and device tenures since the tenth most recent payment | Ordinal, not hours or days. With fewer than ten payments, starts at the earliest available payment; with none, absent/zero. Never converts sequence differences to time. |
-| `pool_activity` | Counts over the root's own candidate pool, through the split model's summary branch | In the built-in run. Computed on the client from the payment messages, never requested from TigerGraph: candidate payments and distinct counterparties per relation, distinct payers and payees, first-time inflows, and inflows forwarded within 24 hours at 50 to 100 percent. Counts over the pool (at most `recent + older + distinct` per relation), not all-time totals. Requires `pair_history` and `flow_timing`; split or summary architecture only; see the [catalog](gsql_feature_catalog.md#client-computed-groups). |
+| `pool_activity` | Counts over the root's own candidate pool, through the TGAT model's summary branch | In the built-in run. Computed on the client from the payment messages, never requested from TigerGraph: candidate payments and distinct counterparties per relation, distinct payers and payees, first-time inflows, and inflows forwarded within 24 hours at 50 to 100 percent. Counts over the pool (at most `recent + older + distinct` per relation), not all-time totals. Requires `pair_history` and `flow_timing`; tgat or summary architecture only; see the [catalog](gsql_feature_catalog.md#client-computed-groups). |
 | `pool_internal_inflows` | First-time inflows from internal payers over the root's candidate pool: all, at least 100, at least 1,000 | In the built-in run, computed like `pool_activity`. A group of its own because it suits the data generator, which places scam victims inside the bank, more than a real bank; the `built_in_no_internal` arm measures it. Requires `pair_history`. |
 | `rolling_windows`, `amount_ratios`, `recency`, `association_counts`, `pair_window_counts` | Existing summary and pair inputs | Reproducible controls. `amount_ratios` requires `rolling_windows`. Out/in ratio is not pass-through speed. |
 | `sampler_meta` | Sampling-stratum embedding | Optional. Describes selection, not behavior. |
@@ -30,9 +30,9 @@ of them to compare against the built-in groups.
 The registry in `temporal/live/contract.py` defines groups, dimensions,
 transforms, dependencies and query flags. Input dimensions are derived, including
 memory admission estimates. Disabled groups have no model columns or projection
-weights. The `split` architecture sends entity metadata through attention and
-optional **root-only** summaries through a separate MLP. `summary` skips child
-fetches and creates no attention parameters. A zero-node arm has no node/base
+weights. The `tgat` architecture (`TGAT`) sends entity metadata through attention and
+optional **root-only** summaries through a separate MLP. `summary` (`SummaryMLP`)
+skips child fetches and creates no attention parameters. A model without node features has no node/base
 projection parameters. Model columns follow the registry order.
 
 ## History and GSQL

@@ -94,7 +94,7 @@ def reference_batch(
 @pytest.mark.parametrize("mode", ["eval", "train"])
 @pytest.mark.parametrize(
     "plan",
-    [FeaturePlan(DEFAULT_GROUPS, "split"), FeaturePlan(V4_GROUPS, "split")],
+    [FeaturePlan(DEFAULT_GROUPS, "tgat"), FeaturePlan(V4_GROUPS, "tgat")],
     ids=["default", "all-but-pools"],
 )
 def test_vectorised_assembly_matches_the_scalar_features_bit_for_bit(

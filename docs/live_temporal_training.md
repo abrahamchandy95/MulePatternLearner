@@ -330,7 +330,7 @@ contract are incompatible (the contract fingerprint refuses them).
 The built-in run adds two groups that `DEFAULT_GROUPS` lacks, `pool_activity` and
 `pool_internal_inflows`: counts over the root's candidate pool (distinct counterparties,
 first-time inflows, rapid pass-throughs and more; see the
-[catalog](gsql_feature_catalog.md#client-computed-groups)), fed to the split model's
+[catalog](gsql_feature_catalog.md#client-computed-groups)), fed to the TGAT model's
 summary branch. Like `hub_indicator` they are computed on the client and never
 requested, so the query and a prepared dataset are unchanged. Their definitions are part of the model's input fingerprint, not the
 contract fingerprint.

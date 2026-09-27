@@ -6,7 +6,7 @@ import re
 
 import pytest
 
-from mule_pattern_learner.contract.feature_groups import FeaturePlan
+from mule_pattern_learner.contract.feature_groups import ARCHITECTURES, FeaturePlan
 from mule_pattern_learner.data.contexts import StreamingContextSource
 from mule_pattern_learner.paths import GSQL_DIR
 from mule_pattern_learner.testing.builders import PLAN, SAMPLER, hub_rows, root
@@ -67,7 +67,7 @@ def test_sent_parameters_match_the_repository_query_signatures() -> None:
         return gsql_text.parameter_names(text)
 
     context = signature("queries/training_context.gsql", "temporal_training_context")
-    windows = (FeaturePlan(DEFAULT_FLAG_GROUPS, a) for a in ("split", "summary"))
+    windows = (FeaturePlan(DEFAULT_FLAG_GROUPS, a) for a in ARCHITECTURES)
     for plan in (PLAN, *windows):
         server = ContextServer()
         store = StreamingContextSource(TigerGraphContextFetcher(server), plan=plan, sampler=SAMPLER)

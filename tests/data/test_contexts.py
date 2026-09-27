@@ -23,7 +23,7 @@ from mule_pattern_learner.data.contexts import StreamingContextSource, context_h
 from mule_pattern_learner.data.hub_registry import HubRegistry
 from mule_pattern_learner.reference.batch_features import node_features
 from mule_pattern_learner.testing.builders import (
-    DEFAULT_SPLIT_PLAN,
+    DEFAULT_TGAT_PLAN,
     PLAN,
     SAMPLER,
     SMALL_SAMPLER,
@@ -71,7 +71,7 @@ def test_per_request_failures_become_none_and_are_counted() -> None:
 
 
 def test_hop_pools_and_flags_are_sent_and_lru_is_keyed_by_hop() -> None:
-    plan = FeaturePlan(("entity_meta", "message_core", "time_encoding", "rolling_windows"), "split")
+    plan = FeaturePlan(("entity_meta", "message_core", "time_encoding", "rolling_windows"), "tgat")
     server = ContextServer()
     store = StreamingContextSource(
         TigerGraphContextFetcher(server), plan=plan, sampler=SAMPLER, capacity=8
@@ -113,7 +113,7 @@ def test_sources_count_requested_distinct_and_cached_contexts() -> None:
     roots = [ContextKey("Account", f"R{i:02}", 100, 1000) for i in range(8)]
     with StreamingContextSource(
         TigerGraphContextFetcher(FakeExecutor(factory=neighbourhood)),
-        plan=DEFAULT_SPLIT_PLAN,
+        plan=DEFAULT_TGAT_PLAN,
         sampler=SMALL_SAMPLER,
     ) as source:
         prepared = build_root_batch(
@@ -121,7 +121,7 @@ def test_sources_count_requested_distinct_and_cached_contexts() -> None:
             roots,
             fanouts=(8, 4),
             device="cpu",
-            plan=DEFAULT_SPLIT_PLAN,
+            plan=DEFAULT_TGAT_PLAN,
             sampler=SMALL_SAMPLER,
             hubs=HubRegistry.empty(),
             mode="eval",
@@ -362,7 +362,7 @@ def test_hops_use_their_own_pools_and_only_spot_checks_carry_encodings() -> None
     executor = FakeExecutor({root: context(root, many)})
     with StreamingContextSource(
         TigerGraphContextFetcher(executor),
-        plan=DEFAULT_SPLIT_PLAN,
+        plan=DEFAULT_TGAT_PLAN,
         sampler=SMALL_SAMPLER,
         encoding_check_every=1000,
     ) as source:
@@ -370,7 +370,7 @@ def test_hops_use_their_own_pools_and_only_spot_checks_carry_encodings() -> None
             source,
             [root],
             fanouts=(8, 2),
-            plan=DEFAULT_SPLIT_PLAN,
+            plan=DEFAULT_TGAT_PLAN,
             sampler=SMALL_SAMPLER,
             mode="train",
         )
@@ -391,7 +391,7 @@ def test_same_context_in_two_scopes_or_hops_is_never_shared() -> None:
     key = ContextKey("Account", "a", 100, 1000, "strict", 1)
     executor = FakeExecutor()
     store = StreamingContextSource(
-        TigerGraphContextFetcher(executor), plan=DEFAULT_SPLIT_PLAN, sampler=SMALL_SAMPLER
+        TigerGraphContextFetcher(executor), plan=DEFAULT_TGAT_PLAN, sampler=SMALL_SAMPLER
     )
     store.fetch([key], hop=1)
     store.fetch([key], hop=2)
@@ -402,5 +402,5 @@ def test_same_context_in_two_scopes_or_hops_is_never_shared() -> None:
     bad = deepcopy(context(key))
     bad["features"]["history_withheld"] = 1
     with pytest.raises(ValueError, match="Unknown node feature"):
-        validate_context(key, bad, DEFAULT_SPLIT_PLAN, SMALL_SAMPLER)
-    assert np.isfinite(node_features(context(key), DEFAULT_SPLIT_PLAN)).all()
+        validate_context(key, bad, DEFAULT_TGAT_PLAN, SMALL_SAMPLER)
+    assert np.isfinite(node_features(context(key), DEFAULT_TGAT_PLAN)).all()

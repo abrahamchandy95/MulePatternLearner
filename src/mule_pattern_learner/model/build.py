@@ -7,7 +7,11 @@ import torch
 
 from ..config import ModelConfig
 from ..contract.feature_groups import FeaturePlan
-from .tgat import LiveTGAT
+from .summary import SummaryMLP
+from .tgat import TGAT
+
+# The model of either architecture: the graph model, or the controls without attention.
+type Model = TGAT | SummaryMLP
 
 
 def probabilities_from_logits(logits: torch.Tensor) -> np.ndarray:
@@ -24,19 +28,27 @@ def probabilities_from_logits(logits: torch.Tensor) -> np.ndarray:
 
 def build_model(
     model: ModelConfig, plan: FeaturePlan, first_fanout: int, *, dropout: float | None = None
-) -> LiveTGAT:
+) -> Model:
     """The model of a model section (hidden, heads, dropout, slot_sum) over plan's inputs.
 
+    plan's architecture chooses the class: "tgat" builds TGAT, "summary" SummaryMLP.
     ``first_fanout`` is the sampler's hop-1 fan-out, the divisor of the slot sum.
     ``dropout`` replaces the configured rate, for dropout-free determinism checks. The
-    summary architecture has no hop-1 slots, so it ignores ``slot_sum`` as it ignores
+    summary architecture has no hop-1 slots, so it ignores ``heads``, ``slot_sum`` and
     the fanouts.
     """
-    return LiveTGAT(
-        model.hidden,
-        model.heads,
-        model.dropout if dropout is None else dropout,
-        plan=plan,
-        slot_sum=model.slot_sum if plan.architecture != "summary" else False,
-        first_fanout=first_fanout,
-    )
+    rate = model.dropout if dropout is None else dropout
+    match plan.architecture:
+        case "tgat":
+            return TGAT(
+                model.hidden,
+                model.heads,
+                rate,
+                plan=plan,
+                slot_sum=model.slot_sum,
+                first_fanout=first_fanout,
+            )
+        case "summary":
+            return SummaryMLP(model.hidden, rate, plan=plan)
+        case other:
+            raise ValueError(f"Unknown architecture {other!r}")

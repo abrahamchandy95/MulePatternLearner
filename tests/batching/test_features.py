@@ -13,7 +13,7 @@ from mule_pattern_learner.testing.fake_graph import FakeStore
 
 def test_missing_required_message_fields_raise_instead_of_defaulting() -> None:
     sampler = SamplerPlan(roots=PoolPlan(recent=3))
-    plan = FeaturePlan(DEFAULT_GROUPS, "split")
+    plan = FeaturePlan(DEFAULT_GROUPS, "tgat")
     key = roots(1)[0]
     rng = context_rng(key)
     for field in ("flow_present", "pair_prior_count", "age_ms", "amount"):

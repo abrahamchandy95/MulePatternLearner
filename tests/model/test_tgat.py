@@ -1,4 +1,4 @@
-"""The TGAT model: shapes, ablations, the slot sum and saved models that use it."""
+"""The TGAT model: shapes, the slot sum and saved models that use it."""
 
 from __future__ import annotations
 
@@ -24,7 +24,8 @@ from mule_pattern_learner.data.contexts import StreamingContextSource
 from mule_pattern_learner.inference.predictor import TemporalPredictor
 from mule_pattern_learner.inference.saved_model import SavedModel
 from mule_pattern_learner.model.build import build_model
-from mule_pattern_learner.model.tgat import LiveTGAT
+from mule_pattern_learner.model.summary import SummaryMLP
+from mule_pattern_learner.model.tgat import TGAT
 from mule_pattern_learner.testing.builders import context, message
 from mule_pattern_learner.testing.fake_graph import FakeExecutor
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
@@ -42,13 +43,15 @@ PAYMENTS = [
 ]
 
 
-def test_isolated_entities_and_model_ablations() -> None:
+def test_isolated_entities_score_under_both_architectures() -> None:
     key = ContextKey("Token", "alone", 100, 1000)
     store = StreamingContextSource(TigerGraphContextFetcher(FakeExecutor({})))
     batch = make_live_batch(store, [key])
     assert not batch["first_mask"].any()
-    for plan in (FeaturePlan(), FeaturePlan(architecture="summary")):
-        assert torch.isfinite(LiveTGAT(16, 4, 0, plan=plan)(batch)).all()
+    tgat = TGAT(16, 4, 0, plan=FeaturePlan(), slot_sum=False, first_fanout=8)
+    summary = SummaryMLP(16, 0, plan=FeaturePlan(architecture="summary"))
+    for model in (tgat, summary):
+        assert torch.isfinite(model(batch)).all()
     store.close()
 
 
@@ -89,22 +92,26 @@ def slot_batch(
     return batch
 
 
-def built(config: RunConfig, plan: FeaturePlan | None = None) -> LiveTGAT:
-    """The model of a configuration, over its own feature plan unless one is given."""
-    return build_model(config.model, plan or config.feature_plan(), config.sampler.fanouts[0])
+def built(config: RunConfig, plan: FeaturePlan | None = None) -> TGAT:
+    """The TGAT model of a configuration, over its own feature plan unless one is given."""
+    model = build_model(config.model, plan or config.feature_plan(), config.sampler.fanouts[0])
+    assert isinstance(model, TGAT)
+    return model
 
 
-def seeded(config: RunConfig, plan: FeaturePlan = PLAN) -> LiveTGAT:
+def seeded(config: RunConfig, plan: FeaturePlan = PLAN) -> TGAT:
     torch.manual_seed(0)
-    return build_model(config.model, plan, config.sampler.fanouts[0], dropout=0.0).eval()
+    model = build_model(config.model, plan, config.sampler.fanouts[0], dropout=0.0).eval()
+    assert isinstance(model, TGAT)
+    return model
 
 
-def slot_mlp(model: LiveTGAT) -> nn.Module:
+def slot_mlp(model: TGAT) -> nn.Module:
     assert model.slot_sum is not None
     return model.slot_sum
 
 
-def payload(config: RunConfig, model: LiveTGAT, contract: str, inputs: str) -> dict[str, Any]:
+def payload(config: RunConfig, model: TGAT, contract: str, inputs: str) -> dict[str, Any]:
     """A model.pt payload as training saves it, with the fields scoring checks."""
     return {
         "state_dict": model.state_dict(),
@@ -200,9 +207,16 @@ def test_the_slot_sum_is_on_by_default_and_off_builds_the_model_without_it() -> 
     no_pools = replace(without, features=DEFAULT_GROUPS)
     for config, parameters in ((no_pools, 83_457), (without, 88_705)):
         plan = config.feature_plan()
-        # The constructor call without the option.
+        # The model as it was before the option existed.
         torch.manual_seed(0)
-        old = LiveTGAT(HIDDEN, CONFIG.model.heads, CONFIG.model.dropout, plan=plan).state_dict()
+        old = TGAT(
+            HIDDEN,
+            CONFIG.model.heads,
+            CONFIG.model.dropout,
+            plan=plan,
+            slot_sum=False,
+            first_fanout=16,
+        ).state_dict()
         torch.manual_seed(0)
         model = built(config)
         assert model.slot_sum is None
@@ -211,7 +225,9 @@ def test_the_slot_sum_is_on_by_default_and_off_builds_the_model_without_it() -> 
         assert list(state) == list(old)
         assert all(torch.equal(state[k], old[k]) for k in old)
         assert sum(p.numel() for p in model.parameters()) == parameters
-    old = LiveTGAT(HIDDEN, CONFIG.model.heads, CONFIG.model.dropout, plan=PLAN).state_dict()
+    old = TGAT(
+        HIDDEN, CONFIG.model.heads, CONFIG.model.dropout, plan=PLAN, slot_sum=False, first_fanout=16
+    ).state_dict()
     model = built(CONFIG)
     assert model.state_dict().keys() - old.keys() == SLOT_KEYS
     assert model.state_dict()["head.0.weight"].shape == (HIDDEN, 3 * HIDDEN)
@@ -239,21 +255,24 @@ def test_saved_models_with_the_slot_sum_score_like_the_trained_model(tmp_path: P
 
 def test_nonsense_options_are_rejected() -> None:
     summary = FeaturePlan(("entity_meta", "decayed_activity", "history_support"), "summary")
-    with pytest.raises(ValueError, match="no hop-1 slots"):
-        LiveTGAT(16, 4, 0, plan=summary, slot_sum=True)
+    with pytest.raises(ValueError, match="TGAT needs a tgat feature plan, not 'summary'"):
+        TGAT(16, 4, 0, plan=summary, slot_sum=True, first_fanout=16)
     for flag in (1, "yes", None):
         with pytest.raises(ValueError, match="slot_sum must be true or false"):
-            LiveTGAT(16, 4, 0, plan=PLAN, slot_sum=flag)  # type: ignore[arg-type]
+            TGAT(16, 4, 0, plan=PLAN, slot_sum=flag, first_fanout=16)  # type: ignore[arg-type]
     for fanout in (0, 65, 8.0, True):
         with pytest.raises(ValueError, match="fan-out must be an integer"):
-            LiveTGAT(16, 4, 0, plan=PLAN, slot_sum=True, first_fanout=fanout)  # type: ignore[arg-type]
+            TGAT(16, 4, 0, plan=PLAN, slot_sum=True, first_fanout=fanout)  # type: ignore[arg-type]
+    for hidden, heads in ((16, 3), (2, 2), (16, 32)):
+        with pytest.raises(ValueError, match="Hidden size"):
+            TGAT(hidden, heads, 0, plan=PLAN, slot_sum=True, first_fanout=16)
     for flag in ("yes", 1, 0.5):
         with pytest.raises(ValueError, match="slot_sum"):
             ModelConfig(slot_sum=flag)  # type: ignore[arg-type]
     # The tabular variant of the built-in run has no slots: the switch adds nothing.
     tabular = CONFIG.with_changes({"model": {"architecture": "summary"}})
-    model = built(tabular)
-    assert model.slot_sum is None and model.head[0].in_features == HIDDEN
+    model = build_model(tabular.model, tabular.feature_plan(), FANOUT)
+    assert isinstance(model, SummaryMLP) and model.head[0].in_features == HIDDEN
     # A batch wider than the configured fan-out would change the divisor's meaning.
     narrow = built(CONFIG.with_changes({"sampler": {"fanouts": [8, 4]}}), PLAN)
     assert narrow.first_fanout == 8
@@ -261,22 +280,13 @@ def test_nonsense_options_are_rejected() -> None:
         narrow.encode(slot_batch(PLAN, [[0]], width=16))
 
 
-def test_zero_node_features_and_summary_only_have_no_unused_projection_or_fetches():
+def test_zero_node_features_have_no_unused_projection() -> None:
     root = ContextKey("Account", "root", 100, 1000)
-    zero = FeaturePlan(("message_core", "time_encoding"), "split")
+    zero = FeaturePlan(("message_core", "time_encoding"), "tgat")
     source = StreamingContextSource(TigerGraphContextFetcher(FakeExecutor({})), plan=zero)
     batch = make_live_batch(source, [root], plan=zero)
     assert batch["x"].shape[-1] == batch["second_x"].shape[-1] == 0
-    model = LiveTGAT(16, 4, 0, plan=zero)
+    model = TGAT(16, 4, 0, plan=zero, slot_sum=False, first_fanout=8)
     assert model.node is None and model.base is None
     assert torch.isfinite(model(batch)).all()
-    source.close()
-    summary = FeaturePlan(("decayed_activity",), "summary")
-    executor = FakeExecutor({root: context(root, [message(80, 800, root)])})
-    source = StreamingContextSource(TigerGraphContextFetcher(executor), plan=summary)
-    batch = make_live_batch(source, [root], plan=summary)
-    assert executor.requested == [root]
-    assert set(batch) == {"x", "root_positions"}
-    assert not hasattr(LiveTGAT(16, 4, 0, plan=summary), "edge")
-    assert torch.isfinite(LiveTGAT(16, 4, 0, plan=summary)(batch)).all()
     source.close()
