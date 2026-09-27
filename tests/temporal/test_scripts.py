@@ -14,10 +14,10 @@ import pytest
 
 from mule_pattern_learner.temporal.live import labels, reveal_model
 from mule_pattern_learner.temporal.live.config_schema import run_config
-from mule_pattern_learner.temporal.live.contract import SamplerPlan, extraction_plan
+from mule_pattern_learner.temporal.live.contract import FeaturePlan, SamplerPlan, extraction_plan
 from mule_pattern_learner.temporal.live.dataset import prepare
 from mule_pattern_learner.temporal.live.experiments import feature_experiments
-from mule_pattern_learner.temporal.live.source import StreamingContextSource
+from mule_pattern_learner.temporal.live.source import StreamingContextSource, check_coverage
 from temporal_fakes import (
     REPOSITORY,
     FakeExecutor,
@@ -80,6 +80,48 @@ def test_strict_isolation_fixture_needs_explicit_write_consent(
     with pytest.raises(SystemExit) as stopped:
         module.main()
     assert stopped.value.code == 2
+
+
+def test_strict_isolation_source_requests_what_the_fixture_checks_and_the_model_reads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = load("verify_strict_isolation")
+    built: list[dict[str, Any]] = []
+
+    class Built(Exception):
+        pass
+
+    def record(executor: object, **options: Any) -> None:
+        built.append(options)
+        raise Built  # before the fixture writes anything
+
+    graph = SimpleNamespace(client=SimpleNamespace(conn=None))
+    monkeypatch.setattr(module, "TigerGraphExecutor", lambda: graph)
+    monkeypatch.setattr(module, "StreamingContextSource", record)
+    monkeypatch.setattr(sys, "argv", ["verify_strict_isolation", "--write-fixture"])
+    with pytest.raises(Built):
+        module.main()
+    (options,) = built
+    # Without a plan the source requests its default groups.
+    plan: FeaturePlan = options.get("plan", FeaturePlan())
+    # The values the fixture asserts on: first-hop root features and message fields.
+    checked = {
+        "1h_out_count",
+        "1h_out_amount",
+        "1d_out_in_amount_ratio",
+        "7d_out_in_amount_ratio",
+        "pair_count_1h",
+        "pair_count_1d",
+        "pair_count_7d",
+    }
+    assert checked <= set(plan.node_names + plan.edge_names)
+    flags = plan.query_flags(1)
+    for group in ("rolling_windows", "amount_ratios", "pair_window_counts"):
+        assert flags["include_" + group], group
+    # The model it trains and the predictor that scores it read nothing the source skips.
+    config = module.model_config()
+    with StreamingContextSource(FakeExecutor(), **options) as source:
+        check_coverage(source, FeaturePlan.from_config(config), SamplerPlan.from_config(config))
 
 
 def test_benchmark_builds_one_training_batch_and_step(
