@@ -121,7 +121,6 @@ def run_summary(
     return {
         "status": "complete",
         "dataset_id": dataset_id,
-        "label_policy": "graph_observed",
         "seed": seed,
         "known_mules": known_mules,
         "device": str(device),
