@@ -1,18 +1,16 @@
 """The run's history: its events, log intervals and epochs, as they happen.
 
-Progress adds the run's totals to every record, appends it to the run's events.jsonl
-and echoes selected records to stdout. It sums the batch statistics and counts the
-database calls, rejections and contexts of every segment of a resumed run. LogInterval
-keeps one log interval's losses on the device, so the host reads them once per
-interval. The trainer writes each interval's record as a row of history.csv and each
-epoch's as a row of epochs.csv (artifacts.HISTORY_COLUMNS and EPOCH_COLUMNS).
+Progress adds the run's totals to every record the trainer emits
+(runtime.progress.emit). It sums the batch statistics and counts the database calls,
+rejections and contexts of every segment of a resumed run. LogInterval keeps one log
+interval's losses on the device, so the host reads them once per interval. The trainer
+writes each interval's record as a row of history.csv and each epoch's as a row of
+epochs.csv (artifacts.HISTORY_COLUMNS and EPOCH_COLUMNS).
 """
 
 from __future__ import annotations
 
 from collections import Counter
-import json
-from pathlib import Path
 import time
 from typing import Any
 
@@ -29,11 +27,10 @@ def plain(stats: dict[str, Any]) -> dict[str, Any]:
 
 
 class Progress:
-    """Append JSON lines to the run's events.jsonl; echo selected records to stdout."""
+    """The run's totals: batch statistics, database calls, rejections and contexts."""
 
     def __init__(self, started: float, store: ContextSource, backend: str) -> None:
         self.started, self.store = started, store
-        self.path: Path | None = None
         self.totals: Counter[str] = Counter()
         # The backend resolved once for the run (batch statistics name the same one).
         self.backend = backend
@@ -78,17 +75,6 @@ class Progress:
             "sampler_backend": self.backend,
             "elapsed_seconds": round(time.perf_counter() - self.started, 3),
         }
-
-    def emit(self, record: dict[str, Any], *, echo: bool = True) -> dict[str, Any]:
-        """Append record, with the run's totals, to events.jsonl and print it; return it."""
-        record = self.record(record)
-        line = json.dumps(record, allow_nan=False)
-        if self.path is not None:
-            with self.path.open("a") as stream:
-                stream.write(line + "\n")
-        if echo:
-            print(line, flush=True)
-        return record
 
 
 class LogInterval:

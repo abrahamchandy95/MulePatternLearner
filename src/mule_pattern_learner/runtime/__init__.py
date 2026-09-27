@@ -1,1 +1,1 @@
-"""Devices, determinism and worker threads."""
+"""Devices, determinism, worker threads and the structured output of every command."""

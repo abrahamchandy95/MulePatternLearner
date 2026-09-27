@@ -109,6 +109,21 @@ def read_run_config(path: Path) -> RunConfig:
     return RunConfig.from_dict(read_json(path)["config"])
 
 
+def event_line(record: Mapping[str, Any]) -> str:
+    """One events.jsonl line: a JSON object; NaN and infinity are refused."""
+    return json.dumps(record, allow_nan=False)
+
+
+def append_event(path: Path, line: str) -> None:
+    """Append an event_line to events.jsonl."""
+    with path.open("a") as stream:
+        stream.write(line + "\n")
+
+
+def read_events(path: Path) -> list[dict[str, Any]]:
+    return [json.loads(line) for line in path.read_text().splitlines()]
+
+
 def _checked(row: Mapping[str, Any], columns: tuple[str, ...], name: str) -> None:
     if set(row) != set(columns):
         raise ValueError(f"A {name} row has the columns {sorted(row)}, not {list(columns)}")

@@ -11,12 +11,12 @@ graph for the oracle audit.
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from ..config import ScopeConfig, SplitDates
 from ..contract.clock import timestamp
 from ..contract.graph_schema import SPLIT_PHASE
+from ..runtime.progress import emit
 from .executor import QueryExecutor, merged_rows
 from .labels import validate_supervision
 
@@ -115,5 +115,5 @@ def ensure_revealed_labels(
     summary["contract"] = {
         key: audit.get(key) for key in ("known_labels", "true_mules", "revealed_positives")
     }
-    print(json.dumps(summary, sort_keys=True), flush=True)
+    emit(summary)
     return summary
