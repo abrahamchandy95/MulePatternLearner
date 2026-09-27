@@ -3,17 +3,16 @@
 from copy import deepcopy
 from typing import Any
 
-from .contract import BUILT_IN_GROUPS, DEFAULT_GROUPS, POOL_GROUPS, FeaturePlan, extraction_plan
+from .contract import BUILT_IN_GROUPS, DEFAULT_GROUPS, POOL_GROUPS, FeaturePlan
 
 
 def feature_experiments(base: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    """Keep dates, scope, revealed labels, prior and extraction fixed across feature arms.
+    """Keep dates, scope, revealed labels and prior fixed across feature arms.
 
-    Every arm keeps the base ``extraction_groups`` (training compares it with the
-    preparation), so all arms can train on one dataset prepared with that superset,
-    whatever their architecture: the hop-2 flags follow each arm's model. An arm
-    needing a group outside the superset raises here. train() additionally checks that the source covers each arm's
-    inputs at both hops.
+    Feature groups are not a preparation setting, so all arms train on one prepared
+    cohort whatever their groups and architecture: the source requests each arm's
+    groups and hop-2 flags. train() checks that the source covers each arm's inputs at
+    both hops.
 
     Every arm sets ``slot_sum``. The feature-group arms keep it off, the model they
     were designed on. The ``built_in`` arms measure the built-in run's own additions:
@@ -71,9 +70,5 @@ def feature_experiments(base: dict[str, Any]) -> dict[str, dict[str, Any]]:
         config = deepcopy(base)
         config.update(feature_groups=list(groups), architecture=architecture, slot_sum=slot_sum)
         FeaturePlan.from_config(config)
-        try:
-            extraction_plan(config)
-        except ValueError as error:
-            raise ValueError(f"Arm {name} does not fit extraction_groups: {error}") from None
         result[name] = config
     return result

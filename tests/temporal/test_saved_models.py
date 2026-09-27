@@ -7,25 +7,38 @@ fake graph. Their configurations hold keys that the restructure retires, such as
 context_storage, evaluation_protocol, label_policy and variant. The literals are the
 scores that commit's TemporalPredictor gave eight test accounts; this code must give the
 same scores. Floating point rounding differs between machines, hence the tolerance.
+
+`cohort/` is the cohort that commit prepared for the built-in model: its manifest
+records preparation keys and a query file the restructure retires.
 """
 
 from __future__ import annotations
 
 import math
 from pathlib import Path
+import shutil
+from typing import Any
 
+import pandas as pd
 import pytest
 
 from mule_pattern_learner.temporal.common import cutoff_ms
+from mule_pattern_learner.temporal.live import pipeline
 from mule_pattern_learner.temporal.live.checkpoint import ModelCheckpoint
+from mule_pattern_learner.temporal.live.config_schema import run_config, validate_config
 from mule_pattern_learner.temporal.live.contract import (
     DEFAULT_GROUPS,
     ContextKey,
     FeaturePlan,
+    SamplerPlan,
     contract_fingerprint,
+    extraction_plan,
     fingerprint,
 )
+from mule_pattern_learner.temporal.live.inference import score
 from mule_pattern_learner.temporal.live.predictor import TemporalPredictor
+from mule_pattern_learner.temporal.live.source import streaming_source
+from mule_pattern_learner.temporal.live.training import train
 from temporal_fakes import FakeExecutor, neighbourhood
 
 FIXTURES = Path(__file__).parent / "fixtures" / "saved_models"
@@ -63,6 +76,42 @@ SCORES = {
         0.5634052456284869,
         0.5619818620262174,
     ],
+}
+
+# The settings the fixtures were trained and prepared with, over the built-in run.
+CHANGES = {
+    "dataset_id": "load_fixture",
+    "seed_limits": {"train": 40, "validation": 16, "test": 16},
+    "epochs": 1,
+    "steps_per_epoch": 2,
+    "batch_size": 8,
+    "hidden": 8,
+    "heads": 2,
+    "dropout": 0.0,
+    "device": "cpu",
+    "threads": 1,
+}
+# What that commit's inference.score gave the cohort's test accounts with built_in.pt.
+COHORT_SCORES = {
+    "S0009": 0.5007370076392473,
+    "S0014": 0.5002217446308491,
+    "S0019": 0.4998289155840587,
+    "S0029": 0.5003809564941073,
+    "S0034": 0.4991540060069826,
+    "S0044": 0.500269264422404,
+    "S0049": 0.501590554359506,
+    "S0059": 0.4995948039882288,
+    "S0079": 0.5013632801106169,
+    "S0084": 0.5003109690332304,
+    "S0109": 0.5015115724461501,
+    "S0119": 0.4992631679146766,
+    "S0129": 0.49867206472206704,
+    "S0154": 0.5018713894459883,
+    "S0159": 0.5004211802902023,
+    "S0174": 0.4990827842659545,
+    "S0179": 0.5004852529022983,
+    "S0189": 0.5004320097012165,
+    "S0194": 0.4994300410757545,
 }
 
 
@@ -104,3 +153,35 @@ def test_models_whose_columns_moved_are_refused(tmp_path: Path) -> None:
     saved = ModelCheckpoint(tmp_path / "model.pt", {"input_fingerprint": recorded})
     with pytest.raises(ValueError, match="input groups"):
         saved.check_inputs(plan)
+
+
+def test_a_cohort_prepared_before_the_restructure_is_reused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dataset = tmp_path / "prepared"
+    shutil.copytree(FIXTURES / "cohort", dataset)
+    config = validate_config({**run_config(), **CHANGES})
+
+    def refuse(config: dict[str, Any]) -> None:
+        raise AssertionError("a ready cohort is reused without connecting")
+
+    monkeypatch.setattr(pipeline, "live_executor", refuse)
+    assert pipeline.prepare_live(config, dataset)["status"] == "ready"
+
+    def source() -> Any:
+        executor = FakeExecutor(factory=neighbourhood)
+        return streaming_source(
+            executor, extraction_plan(config), SamplerPlan.from_config(config), config
+        )
+
+    # The model trained on it scores its test accounts as it did.
+    saved = ModelCheckpoint.load(FIXTURES / "built_in.pt")
+    output = tmp_path / "scores.parquet"
+    assert score(saved, dataset, "2025-01-01", "test", output, contexts=source())["accounts"] == 19
+    frame = pd.read_parquet(output)
+    assert frame.account_id.tolist() == list(COHORT_SCORES)
+    for account, have in zip(frame.account_id, frame.score, strict=True):
+        assert math.isclose(have, COHORT_SCORES[account], rel_tol=RELATIVE), account
+    # And a new model trains on it.
+    result = train(config, dataset, tmp_path / "model.pt", contexts=source())
+    assert result["status"] == "complete"

@@ -279,53 +279,31 @@ WINDOW_GROUPS = (
 )
 
 
-@pytest.mark.legacy
-def test_extraction_plan_ignores_client_groups_and_keeps_the_model_architecture() -> None:
+def test_extraction_plan_is_the_model_groups_without_the_client_groups() -> None:
     from mule_pattern_learner.temporal.live.contract import extraction_plan
 
-    superset = sorted({*WINDOW_GROUPS, *DEFAULT_GROUPS} - {"hub_indicator"})
-    split = extraction_plan(
-        {
-            "feature_groups": list(DEFAULT_GROUPS),
-            "architecture": "split",
-            "extraction_groups": superset,
-        }
-    )
-    assert "hub_indicator" not in split.groups and split.architecture == "split"
-    assert not split.query_flags(2)["include_rolling_windows"]
-    summary = extraction_plan(
-        {
-            "feature_groups": list(WINDOW_GROUPS),
-            "architecture": "summary",
-            "extraction_groups": superset,
-        }
-    )
+    split = extraction_plan({"feature_groups": [*DEFAULT_GROUPS, "rolling_windows"]})
+    assert set(split.groups) == set(DEFAULT_GROUPS) - {"hub_indicator"} | {"rolling_windows"}
+    assert split.architecture == "split" and not split.query_flags(2)["include_rolling_windows"]
+    summary = extraction_plan({"feature_groups": list(WINDOW_GROUPS), "architecture": "summary"})
     assert summary.architecture == "summary" and summary.query_flags(1)["include_rolling_windows"]
-    assert "hub_indicator" not in extraction_plan({"feature_groups": list(DEFAULT_GROUPS)}).groups
-    with pytest.raises(ValueError, match="pair_history"):
-        extraction_plan(
-            {"feature_groups": list(DEFAULT_GROUPS), "extraction_groups": list(WINDOW_GROUPS)}
-        )
+    built_in = extraction_plan({})
+    assert set(built_in.groups) == set(DEFAULT_GROUPS) - {"hub_indicator"}
 
 
-@pytest.mark.legacy
-def test_feature_arms_and_model_seeds_share_one_streamed_preparation() -> None:
-    from mule_pattern_learner.temporal.live.dataset import preparation_view
+def test_feature_arms_and_model_seeds_share_one_preparation() -> None:
     from mule_pattern_learner.temporal.live.config_schema import validate_config
+    from mule_pattern_learner.temporal.live.dataset import preparation_view
     from mule_pattern_learner.temporal.live.experiments import feature_experiments
     from temporal_fakes import live_config
 
-    groups = sorted({*WINDOW_GROUPS, *DEFAULT_GROUPS, "event_channel", "decayed_activity"})
-    groups += ["history_support", "identity_order", "device_ip_context"]
-    base = live_config(extraction_groups=groups)
+    base = live_config()
     views = {json_key(preparation_view(arm)) for arm in feature_experiments(base).values()}
-    assert len(views) == 1  # split and summary arms all fit the same preparation
-    # Models saved with a variant read fewer inputs but keep the configured extraction.
-    variants = {
-        json_key(preparation_view(validate_config({**base, "variant": v})))
-        for v in ("no_fourier", "tabular")
-    }
-    assert variants == views
+    assert len(views) == 1  # arms of any groups and architecture fit the same preparation
+    # So do models saved with a variant, and ones that named extraction groups.
+    saved = [{**base, "variant": v} for v in ("no_fourier", "tabular")]
+    saved.append({**base, "extraction_groups": [*base["feature_groups"], "rolling_windows"]})
+    assert {json_key(preparation_view(validate_config(c))) for c in saved} == views
     reseeded = {**base, "seed": 7, "cohort_seed": base["seed"]}
     assert preparation_view(reseeded) == preparation_view(base)
     assert preparation_view({**base, "seed": 7})["cohort_seed"] == 7

@@ -1043,7 +1043,6 @@ def test_first_preparation_creates_the_scope_and_reveals_labels(
     assert steps == ["install", "scope", "reveal", "prepare"]
 
 
-@pytest.mark.legacy
 def test_preparation_keys_fingerprint_only_preparation_settings(tmp_path: Path) -> None:
     base = live_config(tmp_path)
     view = dataset.preparation_view(base)
@@ -1052,6 +1051,8 @@ def test_preparation_keys_fingerprint_only_preparation_settings(tmp_path: Path) 
         {"learning_rate": 0.5, "epochs": 3, "hidden": 8, "request_batch_size": 4},
         {"scope_unowned": "linked", "max_outage_s": 60},
         {"sampler": {**base["sampler"], "association_slots": 1}},  # selection, not pools
+        # A preparation stores no contexts, so feature groups and architecture do not count.
+        {"feature_groups": list(DEFAULT_GROUPS), "architecture": "summary"},
     ]
     for change in same:
         assert dataset.preparation_fingerprint(
@@ -1068,7 +1069,6 @@ def test_preparation_keys_fingerprint_only_preparation_settings(tmp_path: Path) 
         {"scope_unowned": "independent"},
         {"scope_unowned": "shared"},
         {"sampler": {**base["sampler"], "children": {"recent": 2, "associations": 0}}},
-        {"extraction_groups": [*DEFAULT_GROUPS, "rolling_windows"]},
     ]
     for change in different:
         assert dataset.preparation_fingerprint(
@@ -1313,7 +1313,7 @@ def test_config_schema_rejects_unknown_keys_and_applies_defaults(
     # Absent keys take their built-in or operational value; the optional ones stay absent.
     for key, value in {**DEFAULT_RUN, **OPERATIONAL_DEFAULTS}.items():
         assert result[key] == base.get(key, value), key
-    for key in ("extraction_groups", "prepared_id", "cohort_seed", "reveal_salt"):
+    for key in ("prepared_id", "cohort_seed", "reveal_salt"):
         assert key not in result
     assert result["sampler"] == base["sampler"] and base == live_config(tmp_path)
     with pytest.raises(ValueError, match="Unknown configuration key.*learnig_rate"):
@@ -1382,7 +1382,10 @@ def test_configurations_saved_before_the_restructure_still_validate() -> None:
     no_fourier = validate_config({**saved, "variant": "no_fourier"})
     groups = built_in["feature_groups"]
     assert no_fourier["feature_groups"] == [g for g in groups if g != "time_encoding"]
-    assert no_fourier["extraction_groups"] == groups
+    assert "extraction_groups" not in no_fourier
+    # Extraction groups only widened the request; the source asks for the model's groups.
+    wider = {**saved, "extraction_groups": [*groups, "rolling_windows"]}
+    assert validate_config(wider) == built_in
     with pytest.raises(ValueError, match="variant = 'wide' is no longer supported"):
         validate_config({**saved, "variant": "wide"})
 

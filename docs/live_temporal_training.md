@@ -332,8 +332,7 @@ The built-in run adds two groups that `DEFAULT_GROUPS` lacks, `pool_activity` an
 first-time inflows, rapid pass-throughs and more; see the
 [catalog](gsql_feature_catalog.md#client-computed-groups)), fed to the split model's
 summary branch. Like `hub_indicator` they are computed on the client and never
-requested, so the query, the extraction groups and a prepared cohort are
-unchanged. Their definitions are part of the model's input fingerprint, not the
+requested, so the query and a prepared cohort are unchanged. Their definitions are part of the model's input fingerprint, not the
 contract fingerprint.
 
 ### Hub accounts and rejected contexts
@@ -440,9 +439,9 @@ hash of its vertex counts; a `dataset_id` pinned in an overrides file must match
 prepared dataset. A ready directory is reused without connecting, but only
 when its GSQL hashes and its preparation settings still match; otherwise train into
 a new output. Preparation
-settings are the dates, seed limits, scope, split and cohort seeds, label
-source (content hash), sampler pools, extraction groups and `scope_unowned`. Model,
-optimisation and transport settings may change freely.
+settings are the dates, seed limits, scope, split and cohort seeds, sampler pools and
+`scope_unowned`. Feature groups, model, optimisation and transport settings may change
+freely.
 Set `cohort_seed` to train several model `seed` values on one prepared cohort
 (it defaults to `seed`). A missing scope is created by the first run (set
 `create_scope = false` to forbid that write), and a run on a graph without known

@@ -17,7 +17,6 @@ from typing import Any
 from mule_pattern_learner.temporal.live.checkpoint import ModelCheckpoint
 from mule_pattern_learner.temporal.live.cohort import cohort_seed
 from mule_pattern_learner.temporal.live.config_schema import run_config, validate_config
-from mule_pattern_learner.temporal.live.contract import extraction_groups
 from mule_pattern_learner.temporal.live.dataset import read_manifest
 from mule_pattern_learner.temporal.live.pipeline import prepared_config
 from mule_pattern_learner.temporal.live.training import TRAINING_PROTOCOL, train
@@ -26,15 +25,9 @@ VARIANTS = ("temporal", "no_fourier", "tabular")
 
 
 def variant_changes(base: dict[str, Any], variant: str) -> dict[str, Any]:
-    """The settings of one comparison: the base model, no time encoding, or no graph.
-
-    no_fourier keeps the base extraction groups, so it trains on the base preparation.
-    """
+    """The settings of one comparison: the base model, no time encoding, or no graph."""
     if variant == "no_fourier":
-        return {
-            "feature_groups": [g for g in base["feature_groups"] if g != "time_encoding"],
-            "extraction_groups": list(extraction_groups(base)),
-        }
+        return {"feature_groups": [g for g in base["feature_groups"] if g != "time_encoding"]}
     if variant == "tabular":
         return {"architecture": "summary", "slot_sum": False}
     return {}

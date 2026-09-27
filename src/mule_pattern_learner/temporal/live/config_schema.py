@@ -5,8 +5,8 @@ the configuration leaves absent takes its DEFAULT_RUN value (the built-in run) o
 operational default, so a validated configuration holds every key the code reads,
 and components index it directly. A table the configuration writes is kept as
 written. The optional keys stay absent: dataset_id, prepared_id, cohort_seed and
-reveal_salt (both default to seed) and extraction_groups (defaults to
-feature_groups). `run_config` merges an optional overrides file into DEFAULT_RUN.
+reveal_salt (both default to seed). `run_config` merges an optional overrides file into
+DEFAULT_RUN.
 """
 
 from __future__ import annotations
@@ -81,7 +81,7 @@ DEFAULT_RUN: dict[str, Any] = {
     # weighted ROC AUC of 0.88 and 0.92, against the model's 0.78; those counts were
     # chosen after reading the generator's mule typology, and the internal ones
     # (pool_internal_inflows) suit the generator more than a real bank. Computed on the
-    # client, so the query and the extraction groups are unchanged.
+    # client, so the query is unchanged.
     "feature_groups": list(BUILT_IN_GROUPS),
     "learning_rate": 0.001,
     "weight_decay": 0.0001,
@@ -221,7 +221,6 @@ class LiveConfig(_Strict):
     evaluation_unlabeled_limit: NonNegative | None = None
     # Features, sampling and model.
     feature_groups: list[str] | None = None
-    extraction_groups: list[str] | None = None
     architecture: Literal["split", "summary"] | None = None
     # Sum over the root's hop-1 slots beside attention; the summary architecture ignores it.
     slot_sum: bool | None = None
@@ -281,7 +280,7 @@ class LiveConfig(_Strict):
             )
         return value
 
-    @field_validator("feature_groups", "extraction_groups")
+    @field_validator("feature_groups")
     @classmethod
     def _known_groups(cls, groups: list[str] | None) -> list[str] | None:
         unknown = sorted(set(groups or ()) - set(FEATURE_GROUPS))
@@ -296,6 +295,9 @@ KNOWN_KEYS = frozenset(LiveConfig.model_fields)
 def without_retired_keys(config: dict[str, Any]) -> dict[str, Any]:
     """config without RETIRED_KEYS; a retired key with another value is refused."""
     result = dict(config)
+    # extraction_groups only widened what TigerGraph returned beyond the model's groups;
+    # the source now requests exactly the model's groups, so a saved value is dropped.
+    result.pop("extraction_groups", None)
     for name, value in RETIRED_KEYS.items():
         *parents, key = name.split(".")
         table: Any = result
@@ -318,7 +320,6 @@ def without_variant(config: dict[str, Any]) -> dict[str, Any]:
 
     The model variants became settings: "temporal" is the plain model, "tabular" the
     summary architecture and "no_fourier" the feature groups without time_encoding.
-    Extraction keeps the configured feature groups, as it did for a variant.
     """
     if "variant" not in config:
         return config
@@ -329,7 +330,6 @@ def without_variant(config: dict[str, Any]) -> dict[str, Any]:
         result["architecture"] = "summary"
     elif variant == "no_fourier":
         result["feature_groups"] = [group for group in groups if group != "time_encoding"]
-        result.setdefault("extraction_groups", groups)
     elif variant != "temporal":
         raise ValueError(f"variant = {variant!r} is no longer supported")
     return result
