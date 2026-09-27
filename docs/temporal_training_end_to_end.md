@@ -646,10 +646,10 @@ instance, shrink the child pool, or move to the future work listed below.
    python scripts/verify_cugraph_sampler.py --live
    ```
 
-5. **Qualify one real batch** with the configured transport:
+5. **Qualify the graph and one real batch** with the configured transport (read-only):
 
    ```bash
-   python scripts/benchmark_batch.py --train-step --device cuda
+   mule check
    ```
 
 6. **Train** (run it in `tmux` or with `nohup`; `events.jsonl` in the run directory and

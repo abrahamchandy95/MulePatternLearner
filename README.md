@@ -72,8 +72,10 @@ settings are built in:
 `DEFAULT_CONFIG` in `src/mule_pattern_learner/config.py`, frozen dataclasses with one
 section per concern. No command reads a configuration file.
 
-The other commands (`install`, `prepare`, `score`, `score-new`, `evaluate` and
-`evaluate-final`) are described in the end-to-end guide under
+Before a long run, `mule check` reports without writing anything whether the graph,
+its installed queries and the cuGraph sampler are ready, then builds one training batch
+and runs one step. The other commands (`install`, `prepare`, `score`, `score-new`,
+`evaluate` and `evaluate-final`) are described in the end-to-end guide under
 [what runs where](docs/temporal_training_end_to_end.md#what-runs-where);
 `mule-temporal --help` lists their options.
 

@@ -17,6 +17,7 @@ from .data.manifest import read_manifest
 from .inference.saved_model import SavedModel
 from .inference.score_accounts import read_account_ids, score
 from .paths import DatasetPaths, RunPaths
+from .pipeline.check import check
 from .pipeline.connect import connect, open_context_source
 from .pipeline.evaluate import evaluate, evaluate_run
 from .pipeline.prepare import prepare_dataset
@@ -45,6 +46,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     commands.add_parser(
         "prepare", help="Optionally stage the built-in run's dataset in data/ ahead of training"
+    )
+    commands.add_parser(
+        "check",
+        help="Read-only readiness: the graph, its queries, the cuGraph probe, then one "
+        "batch's tensor digests and the first training loss",
     )
     commands.add_parser(
         "train",
@@ -143,9 +149,13 @@ def main() -> None:
         )
     elif args.command == "prepare":
         result = read_manifest(prepare_dataset(DEFAULT_CONFIG))
+    elif args.command == "check":
+        result = check()
     else:
         result = train_command()
     print(json.dumps(result, indent=2, allow_nan=False))
+    if result.get("status") == "not_ready":
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

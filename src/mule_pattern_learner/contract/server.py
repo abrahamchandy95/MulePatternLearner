@@ -9,6 +9,9 @@ the repository's gsql folder (paths.GSQL_DIR).
 from __future__ import annotations
 
 CONTEXT_CONTRACT = "temporal_live_v5_candidate_pools"
+# The vertex type of the experiment scopes (gsql/schema/scope_vertex.gsql). It is part of
+# the graph's schema, so it keeps the name it was created with.
+SCOPE_VERTEX = "Temporal_Training_Scope"
 # The generated context query (tigergraph.render, scripts/render_queries.py).
 CONTEXT_QUERY_FILE = "queries/training_context.gsql"
 # The queries preparation runs; a prepared dataset records their source hashes.

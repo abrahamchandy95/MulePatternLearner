@@ -8,13 +8,14 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..contract.server import SCOPE_VERTEX
 from ..data.manifest import recorded_settings
 from .executor import ConnectionExecutor
 from .installer import verify_sources
 from .scope import verify_scope
 
 # Experiment metadata written by preparation itself; never part of source identity.
-EXPERIMENT_METADATA_TYPES = frozenset({"Temporal_Training_Scope"})
+EXPERIMENT_METADATA_TYPES = frozenset({SCOPE_VERTEX})
 
 
 def source_counts(executor: ConnectionExecutor) -> dict[str, int]:

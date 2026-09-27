@@ -7,7 +7,7 @@ import re
 import time
 from typing import Any
 
-from ..contract.server import QUERY_FILES
+from ..contract.server import QUERY_FILES, SCOPE_VERTEX
 from ..paths import GSQL_DIR
 from ..runtime.progress import emit
 from .executor import AVAILABILITY, GRAPH, SERVER_TIMEOUT, ConnectionExecutor, failure_class
@@ -92,6 +92,12 @@ def verify_sources(
     return list(repository_queries(files))
 
 
+def has_scope_vertex(executor: ConnectionExecutor) -> bool:
+    """Whether the graph schema has the scope vertex type (read-only)."""
+    schema = executor.call(lambda conn: conn.getSchema(force=True), what="getSchema")
+    return SCOPE_VERTEX in {v["Name"] for v in schema["VertexTypes"]}
+
+
 def _installation_state(status: Any) -> str:
     if not isinstance(status, dict):
         return "running"
@@ -157,8 +163,7 @@ def install(
     """
     conn = executor.client.conn
     logs: dict[str, Any] = {}
-    schema = conn.getSchema(force=True)
-    if "Temporal_Training_Scope" not in {v["Name"] for v in schema["VertexTypes"]}:
+    if not has_scope_vertex(executor):
         migration = GSQL_DIR / "schema/scope_vertex.gsql"
         result = str(conn.gsql(migration.read_text()))
         if "Local schema change succeeded" not in result:
