@@ -2,10 +2,10 @@
 
 Historical payment neighbors are represented at their own event cutoffs.
 Valid-time associations retain the current cutoff and consume another layer.
-Optional root summaries are independently switchable, and so is a sum of a per-slot
-MLP over the root's hop-1 slots (attention averages linear projections of the slots).
-The event path can run with zero node features; no recurrent memory or account
-embedding table is used.
+The root's summary columns feed their own branch, and a sum of a per-slot MLP over
+the root's hop-1 slots is switchable (attention averages linear projections of the
+slots). The event path can run with zero node features; no recurrent memory or
+account embedding table is used.
 """
 
 from __future__ import annotations
@@ -46,28 +46,47 @@ class AttentionBlock(nn.Module):
         return self.output_norm(hidden + self.feedforward(hidden))
 
 
-class LiveTGAT(nn.Module):
+def projection(width: int, hidden: int) -> nn.Module | None:
+    """A linear projection of width input columns, or None when there are none."""
+    return (
+        nn.Sequential(nn.Linear(width, hidden), nn.GELU(), nn.LayerNorm(hidden)) if width else None
+    )
+
+
+def check_width(hidden: int, dropout: float) -> None:
+    """The hidden size and dropout rate every model of the package accepts."""
+    if not HIDDEN.holds(hidden):
+        raise ValueError(f"Hidden size must be {HIDDEN.low}..{HIDDEN.high}")
+    if not 0 <= dropout < 1:
+        raise ValueError("Dropout must be in [0,1)")
+
+
+class TGAT(nn.Module):
+    """The graph model: attention over the root's sampled hop-1 and hop-2 slots.
+
+    Beside attention, a summary branch reads the root's summary columns, and the slot
+    sum (when on) adds a per-slot MLP summed over the hop-1 slots. Its submodules are
+    created in a fixed order, so a seed gives the same initial weights as the model of
+    the same settings saved before the layered restructure.
+    """
+
     def __init__(
         self,
         hidden: int,
         heads: int,
         dropout: float,
         *,
-        plan: FeaturePlan | None = None,
-        slot_sum: bool = False,
-        first_fanout: int = 8,
+        plan: FeaturePlan,
+        slot_sum: bool,
+        first_fanout: int,
     ) -> None:
         super().__init__()
-        if not HIDDEN.holds(hidden) or not HEADS.holds(heads) or hidden % heads:
-            raise ValueError(
-                f"Hidden size must be {HIDDEN.low}..{HIDDEN.high} and divisible by "
-                f"{HEADS.low}..{HEADS.high} heads"
-            )
-        if not 0 <= dropout < 1:
-            raise ValueError("Dropout must be in [0,1)")
+        check_width(hidden, dropout)
+        if not HEADS.holds(heads) or hidden % heads:
+            raise ValueError(f"Hidden size must be divisible by {HEADS.low}..{HEADS.high} heads")
         if not isinstance(slot_sum, bool):  # pyright: ignore[reportUnnecessaryIsInstance]
             raise ValueError(f"slot_sum must be true or false, got {slot_sum!r}")
-        # Batches hold one column per hop-1 slot, at most FANOUT.high (make_live_batch).
+        # Batches hold one column per hop-1 slot, at most FANOUT.high (build_batch).
         if (
             isinstance(first_fanout, bool)
             or not isinstance(first_fanout, int)  # pyright: ignore[reportUnnecessaryIsInstance]
@@ -77,33 +96,27 @@ class LiveTGAT(nn.Module):
                 f"Hop-1 fan-out must be an integer in [{FANOUT.low},{FANOUT.high}], "
                 f"got {first_fanout!r}"
             )
-        self.plan = plan = plan or FeaturePlan()
-        if slot_sum and plan.architecture == "summary":
-            raise ValueError("The summary architecture has no hop-1 slots to sum")
+        if plan.architecture != "tgat":
+            raise ValueError(f"TGAT needs a tgat feature plan, not {plan.architecture!r}")
+        self.plan = plan
         self.hidden = hidden
-        # A summary model reads every root column; the split model's summary columns go
-        # to their own branch.
-        node_names = plan.node_names if plan.architecture == "summary" else plan.names("node")
+        # The root's node columns go to attention, its summary columns to their own branch.
+        node_names = plan.names("node")
         self.node_indices = tuple(plan.node_names.index(n) for n in node_names)
         self.summary_indices = tuple(plan.node_names.index(n) for n in plan.names("summary"))
-        self.node = self.projection(len(node_names), hidden)
+        self.node = projection(len(node_names), hidden)
         self.summary = (
-            self.projection(len(self.summary_indices), hidden)
-            if plan.architecture == "split" and self.summary_indices
-            else None
+            projection(len(self.summary_indices), hidden) if self.summary_indices else None
         )
-        if plan.architecture != "summary":
-            self.base = self.projection(len(plan.names("node")), hidden)
-            self.relation = nn.Embedding(len(RELATIONS), hidden)
-            self.rail = nn.Embedding(len(RAILS), hidden)
-            self.edge = nn.Linear(len(plan.edge_names), hidden)
-            self.channel = (
-                nn.Embedding(len(CHANNELS), hidden) if "event_channel" in plan.groups else None
-            )
-            self.stratum = (
-                nn.Embedding(len(STRATA), hidden) if "sampler_meta" in plan.groups else None
-            )
-            self.layers = nn.ModuleList([AttentionBlock(hidden, heads, dropout) for _ in range(2)])
+        self.base = projection(len(plan.names("node")), hidden)
+        self.relation = nn.Embedding(len(RELATIONS), hidden)
+        self.rail = nn.Embedding(len(RAILS), hidden)
+        self.edge = nn.Linear(len(plan.edge_names), hidden)
+        self.channel = (
+            nn.Embedding(len(CHANNELS), hidden) if "event_channel" in plan.groups else None
+        )
+        self.stratum = nn.Embedding(len(STRATA), hidden) if "sampler_meta" in plan.groups else None
+        self.layers = nn.ModuleList([AttentionBlock(hidden, heads, dropout) for _ in range(2)])
         # Built only when on, so a model without it keeps its parameters and initial weights.
         self.first_fanout = first_fanout
         self.slot_sum = (
@@ -116,16 +129,8 @@ class LiveTGAT(nn.Module):
             nn.Linear(width, hidden), nn.GELU(), nn.Dropout(dropout), nn.Linear(hidden, 1)
         )
 
-    @staticmethod
-    def projection(width: int, hidden: int) -> nn.Module | None:
-        return (
-            nn.Sequential(nn.Linear(width, hidden), nn.GELU(), nn.LayerNorm(hidden))
-            if width
-            else None
-        )
-
     def project(self, module: nn.Module | None, x: torch.Tensor) -> torch.Tensor:
-        # A true zero-feature arm has no input projection parameters.
+        # A model without node features has no input projection parameters.
         return module(x) if module is not None else x.new_zeros((*x.shape[:-1], self.hidden))
 
     def edge_embedding(self, batch: dict[str, torch.Tensor], prefix: str) -> torch.Tensor:
@@ -143,8 +148,6 @@ class LiveTGAT(nn.Module):
     def encode(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
         x = self.project(self.node, batch["x"][..., list(self.node_indices)])
         positions = batch["root_positions"]
-        if self.plan.architecture == "summary":
-            return x[positions]
         first = self.layers[0](
             x,
             self.project(self.base, batch["second_x"]),

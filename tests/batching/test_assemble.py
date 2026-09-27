@@ -16,9 +16,9 @@ from mule_pattern_learner.contract.graph_schema import HUB_COLUMNS, RELATIONS, C
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
 from mule_pattern_learner.data.contexts import StreamingContextSource
 from mule_pattern_learner.data.hub_registry import HubRegistry
-from mule_pattern_learner.model.tgat import LiveTGAT
+from mule_pattern_learner.model.tgat import TGAT
 from mule_pattern_learner.testing.builders import (
-    DEFAULT_SPLIT_PLAN,
+    DEFAULT_TGAT_PLAN,
     POOLED,
     RESAMPLE,
     SMALL_SAMPLER,
@@ -49,7 +49,7 @@ class Hubs:
 
 def test_fourier_columns_come_from_scalar_deltas_on_every_device() -> None:
     sampler = POOLED
-    plan = FeaturePlan(DEFAULT_GROUPS, "split")
+    plan = FeaturePlan(DEFAULT_GROUPS, "tgat")
     store = FakeStore(sampler, encodings=True)
     cpu = make_live_batch(store, roots(4), fanouts=(8, 4), plan=plan, sampler=sampler)
     start = plan.edge_names.index("age_fourier_0")
@@ -68,7 +68,7 @@ def test_fourier_columns_come_from_scalar_deltas_on_every_device() -> None:
 
 def test_resampled_batches_respect_caps_hops_and_time_in_both_modes() -> None:
     store = FakeStore(RESAMPLE)
-    plan = FeaturePlan(DEFAULT_GROUPS, "split")
+    plan = FeaturePlan(DEFAULT_GROUPS, "tgat")
     keys = roots(16)
     for mode in ("train", "eval"):
         stats: dict[str, Any] = {}
@@ -97,7 +97,7 @@ def test_resampled_batches_respect_caps_hops_and_time_in_both_modes() -> None:
         # Hop-2 fetches use the children pool and never re-request roots.
         assert [hop for hop, _ in store.calls[-2:]] == [1, 2]
         assert not set(store.calls[-1][1]) & set(keys)
-        model = LiveTGAT(16, 4, 0, plan=plan)
+        model = TGAT(16, 4, 0, plan=plan, slot_sum=False, first_fanout=8)
         assert torch.isfinite(model(batch)).all()
 
 
@@ -114,7 +114,7 @@ def _first_children(
 
 def test_hub_children_become_local_stubs_and_mark_outer_peers() -> None:
     sampler = POOLED
-    plan = FeaturePlan((*DEFAULT_GROUPS, "entity_age"), "split")
+    plan = FeaturePlan((*DEFAULT_GROUPS, "entity_age"), "tgat")
     store = FakeStore(sampler)
     keys = roots(6)
     children = _first_children(store, keys, sampler)
@@ -178,7 +178,7 @@ def test_hub_children_become_local_stubs_and_mark_outer_peers() -> None:
 )
 def test_hub_lookups_use_the_batch_visibility_phase(scope: str, phase: int, expected: int) -> None:
     sampler = POOLED
-    plan = FeaturePlan(DEFAULT_GROUPS, "split")
+    plan = FeaturePlan(DEFAULT_GROUPS, "tgat")
     store = FakeStore(sampler)
     keys = roots(4, scope=scope, phase=phase)
     hubs = Hubs()
@@ -190,7 +190,7 @@ def test_hub_lookups_use_the_batch_visibility_phase(scope: str, phase: int, expe
 
 def test_rejected_children_are_masked_and_rejected_roots_raise() -> None:
     sampler = POOLED
-    plan = FeaturePlan(DEFAULT_GROUPS, "split")
+    plan = FeaturePlan(DEFAULT_GROUPS, "tgat")
     keys = roots(6)
     clean = FakeStore(sampler)
     children = sorted(_first_children(clean, keys, sampler))
@@ -218,7 +218,7 @@ def test_rejected_children_are_masked_and_rejected_roots_raise() -> None:
 
 def test_tigergraph_cannot_supply_client_features() -> None:
     sampler = POOLED
-    plan = FeaturePlan(DEFAULT_GROUPS, "split")
+    plan = FeaturePlan(DEFAULT_GROUPS, "tgat")
     keys = roots(3)
     store = FakeStore(sampler)
     store.row(keys[1])["features"]["history_withheld"] = 1.0
@@ -249,7 +249,7 @@ def test_recursive_context_keeps_same_neighbor_at_two_different_event_times() ->
     assert child_key(messages[0]) in source.requested
     assert child_key(messages[1]) in source.requested
     assert len(set(batch["neighbor_positions"][0].tolist())) == 2
-    model = LiveTGAT(hidden=16, heads=4, dropout=0)
+    model = TGAT(16, 4, 0, plan=FeaturePlan(), slot_sum=False, first_fanout=8)
     logits = model(batch)
     logits.sum().backward()
     assert torch.isfinite(logits).all()
@@ -285,13 +285,13 @@ def test_one_hub_or_rejected_child_no_longer_aborts_the_batch() -> None:
     )
     stats: dict[str, Any] = {}
     with StreamingContextSource(
-        TigerGraphContextFetcher(executor), plan=DEFAULT_SPLIT_PLAN, sampler=SMALL_SAMPLER
+        TigerGraphContextFetcher(executor), plan=DEFAULT_TGAT_PLAN, sampler=SMALL_SAMPLER
     ) as source:
         batch = make_live_batch(
             source,
             [root],
             fanouts=(8, 2),
-            plan=DEFAULT_SPLIT_PLAN,
+            plan=DEFAULT_TGAT_PLAN,
             sampler=SMALL_SAMPLER,
             hubs=hub_registry("hub", scope_id="strict", phase=1),
             stats=stats,
@@ -304,11 +304,11 @@ def test_one_hub_or_rejected_child_no_longer_aborts_the_batch() -> None:
     assert batch["first_mask"][0].sum() == 3
     kept = batch["first_relation"][0][batch["first_mask"][0]].tolist()
     assert sorted(kept) == [RELATIONS.index(r) for r in ("zelle_out", "zelle_in", ASSOCIATED)]
-    withheld = DEFAULT_SPLIT_PLAN.node_names.index("history_withheld")
+    withheld = DEFAULT_TGAT_PLAN.node_names.index("history_withheld")
     stub = batch["neighbor_positions"][0][batch["first_relation"][0] == 0][0]
     assert batch["x"][stub, withheld] == 1
     assert batch["x"][batch["root_positions"][0], withheld] == 0
-    model = LiveTGAT(16, 4, 0, plan=DEFAULT_SPLIT_PLAN)
+    model = TGAT(16, 4, 0, plan=DEFAULT_TGAT_PLAN, slot_sum=False, first_fanout=8)
     assert torch.isfinite(model(batch)).all()
 
 
@@ -317,19 +317,19 @@ def test_rejected_roots_raise_in_batches_and_are_dropped_by_root_batches() -> No
     executor = FakeExecutor(statuses={"R07": "missing_entity"})
     with StreamingContextSource(
         TigerGraphContextFetcher(executor),
-        plan=DEFAULT_SPLIT_PLAN,
+        plan=DEFAULT_TGAT_PLAN,
         sampler=SMALL_SAMPLER,
         request_batch_size=64,
     ) as source:
         with pytest.raises(ValueError, match="rejected 1 of 64 root contexts"):
-            make_live_batch(source, roots, plan=DEFAULT_SPLIT_PLAN, sampler=SMALL_SAMPLER)
+            make_live_batch(source, roots, plan=DEFAULT_TGAT_PLAN, sampler=SMALL_SAMPLER)
         assert executor.names().count("temporal_training_context") == 1  # one 64-key request
         prepared = build_root_batch(
             source,
             roots,
             fanouts=(8, 4),
             device="cpu",
-            plan=DEFAULT_SPLIT_PLAN,
+            plan=DEFAULT_TGAT_PLAN,
             sampler=SMALL_SAMPLER,
             hubs=HubRegistry.empty(),
             mode="eval",

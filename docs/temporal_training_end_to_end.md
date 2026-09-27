@@ -383,7 +383,7 @@ rejected observed positive always fails).
 
 The built-in run (`feature_groups = entity_meta, hub_indicator, message_core,
 time_encoding, pair_history, flow_timing, pool_activity, pool_internal_inflows`,
-`architecture = "split"`) produces, for B roots and N unique contexts:
+`architecture = "tgat"`) produces, for B roots and N unique contexts:
 
 | Tensor | Shape | Content |
 |---|---|---|
@@ -409,7 +409,7 @@ relation), not over its whole history, computed on the client from its payment m
 `pool_activity` holds candidate payments and distinct counterparties per payment
 relation, distinct payers and payees, inflows from first-time payers and rapid
 pass-throughs; `pool_internal_inflows` holds first-time inflows from internal payers, all
-and of at least 100 and 1,000. Only the roots get them, since the split model reads them
+and of at least 100 and 1,000. Only the roots get them, since the TGAT model reads them
 for the roots only, in its summary branch. They are in the built-in run because a
 diagnostic study found that without them a root's node vector held only its entity type,
 `is_external`, `is_deposit` and `history_withheld`, so the model reached an account's
@@ -423,7 +423,7 @@ still serves the built-in run.
 
 ## The model and the loss
 
-`LiveTGAT` ([tgat.py](../src/mule_pattern_learner/model/tgat.py), 101,121
+`TGAT` ([tgat.py](../src/mule_pattern_learner/model/tgat.py), 101,121
 parameters in the built-in run, hidden 64, 4 heads, dropout 0.15; 88,705 with
 `slot_sum = false`, and 83,457 without the pool groups as well, the v5 profile):
 
@@ -686,7 +686,7 @@ changes only the settings it names; unknown keys are rejected.
 | `dataset` | `dates` train 2024-07-01, validation 2024-10-01, test 2025-01-01; `seed_limits` 20000 / 2000 / 2000; `seed` (42, the seed reservoirs); `split_seed` (42) |
 | `sampler` | `fanouts` [16, 4]; `roots` recent 8, older 4, distinct 4, associations 2, max_history 2048; `children` 4 / 2 / 2 / 0 / 2048; `relation_fanouts` [8, 4], `association_fanout` 1, `association_slots` 2, `backend` auto, `evaluation_seed` 0 |
 | `features` | the built-in feature groups |
-| `model` | `architecture` split, `hidden` 64, `heads` 4, `dropout` 0.15, `slot_sum` true |
+| `model` | `architecture` tgat, `hidden` 64, `heads` 4, `dropout` 0.15, `slot_sum` true |
 | `loss` | `class_prior` 0.001, `positive_weight` balanced |
 | `training` | `seed` 42, `epochs` 30, `steps_per_epoch` 100, `batch_size` 64, `patience` 6, `learning_rate` 0.001, `weight_decay` 0.0001, `weight_average_decay` 0.99, `proxy_unlabeled_limit` 2000 |
 | `transport` | `request_batch_size` 8, `query_concurrency` 16, `context_lru_capacity` 256, `encoding_check_every` 64, `max_query_attempts` 6, `max_outage_s` 900 |

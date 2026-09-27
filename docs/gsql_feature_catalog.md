@@ -90,7 +90,7 @@ dataset stays valid.
   [hub accounts](live_temporal_training.md#hub-accounts-and-rejected-contexts)).
 - The pool groups `pool_activity` and `pool_internal_inflows` (both in the built-in
   run): counts over the payment messages of the root's own candidate pool, computed by
-  `batching.pool_activity`. The split model reads them for the roots only, in its
+  `batching.pool_activity`. The TGAT model reads them for the roots only, in its
   summary branch, so batches compute them for the roots only (children and stubs keep
   zeros there). Every count gets `log1p`.
 

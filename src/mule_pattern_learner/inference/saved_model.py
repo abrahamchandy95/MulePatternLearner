@@ -8,8 +8,8 @@ load it once and pass the SavedModel on; each checks only what it relies on.
 A model saved before FORMAT 1 records no format, and names its dataset by directory
 instead of by dataset id. One saved before the typed configuration also holds a flat
 table of the old setting names: SavedModel.config converts it through SAVED_SETTINGS,
-the one table from old names to RunConfig fields, so such models load and score as
-they did.
+the one table from old names to RunConfig fields (and SAVED_VALUES, the values that
+name something else now), so such models load and score as they did.
 """
 
 from __future__ import annotations
@@ -105,6 +105,9 @@ SAVED_SETTINGS: dict[str, str | None] = {
     # The model variants, which became settings (saved_run_config).
     "variant": None,
 }
+# Saved values that name something else now, by the old setting name: the graph model's
+# architecture was "split" before it became TGAT.
+SAVED_VALUES: dict[str, dict[object, object]] = {"architecture": {"split": "tgat"}}
 # Saved settings whose null value took a default: the reveal's built-in budget, and the
 # training seed for the reservoir seed and the reveal salt.
 SEEDED_DEFAULTS = frozenset({"reveal_per_split", "reveal_salt", "cohort_seed"})
@@ -132,8 +135,8 @@ def _flat(table: dict[str, Any], prefix: str = "") -> dict[str, Any]:
 def saved_run_config(saved: dict[str, Any]) -> RunConfig:
     """The RunConfig of a saved configuration: RunConfig.to_dict(), or the old flat table.
 
-    An old table goes through SAVED_SETTINGS, and what it leaves out takes the value
-    the old code gave it: a setting it leaves absent is the built-in run's; a
+    An old table goes through SAVED_SETTINGS, with the values SAVED_VALUES renames,
+    and what it leaves out takes the value the old code gave it: a setting it leaves absent is the built-in run's; a
     [sampler] table's absent pool keys are those of PoolPlan() and its children pool
     is the roots pool without associations, changed by [sampler.children]; an absent
     or null reservoir seed and reveal salt are the training seed, and a null reveal
@@ -155,6 +158,8 @@ def saved_run_config(saved: dict[str, Any]) -> RunConfig:
         target = SAVED_SETTINGS[name]
         if target is None or (value is None and name in SEEDED_DEFAULTS):
             continue
+        if name in SAVED_VALUES:
+            value = SAVED_VALUES[name].get(value, value)
         *sections, key = target.split(".")
         node = table
         for section in sections:

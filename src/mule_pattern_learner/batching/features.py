@@ -60,7 +60,7 @@ def node_matrix(
 
     Only the first ``pooled`` rows (all when None) get the client-computed pool counts;
     the rest keep zeros there. Split batches pass their roots, which lead the rows,
-    since the split model reads the pool columns of roots only.
+    since the TGAT model reads the pool columns of roots only.
     """
     names = plan.node_names
     for row in rows:

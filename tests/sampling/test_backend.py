@@ -67,7 +67,7 @@ def test_make_live_batch_uses_the_run_backend_without_resolving(
         raise AssertionError("make_live_batch resolved the backend again")
 
     monkeypatch.setattr(backend, "resolve_backend", unexpected)
-    plan = FeaturePlan(DEFAULT_GROUPS, "split")
+    plan = FeaturePlan(DEFAULT_GROUPS, "tgat")
     store = FakeStore(RESAMPLE)
     keys = roots(4)
     options: dict[str, Any] = {"plan": plan, "sampler": RESAMPLE, "step_seed": 3}

@@ -39,7 +39,7 @@ from mule_pattern_learner.data.splits import sample_keys
 from mule_pattern_learner.evaluation.audit import evaluate_predictions
 from mule_pattern_learner.evaluation.truth import ParquetEvaluationTruth
 from mule_pattern_learner.model.loss import NonNegativePULoss
-from mule_pattern_learner.model.tgat import LiveTGAT
+from mule_pattern_learner.model.tgat import TGAT
 from mule_pattern_learner.paths import DatasetPaths, RunPaths
 from mule_pattern_learner.testing.builders import (
     RUNTIME_SOURCE,
@@ -412,15 +412,15 @@ def test_non_finite_evaluation_scores_raise_instead_of_counting_as_rejections(
 ) -> None:
     config = base_config()
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
-    original = LiveTGAT.forward
+    original = TGAT.forward
 
-    def poisoned(self: LiveTGAT, batch: dict[str, torch.Tensor]) -> torch.Tensor:
+    def poisoned(self: TGAT, batch: dict[str, torch.Tensor]) -> torch.Tensor:
         logits = original(self, batch)
         if self.training:
             return logits
         return torch.cat((torch.full_like(logits[:1], float("nan")), logits[1:]))
 
-    monkeypatch.setattr(LiveTGAT, "forward", poisoned)
+    monkeypatch.setattr(TGAT, "forward", poisoned)
     with pytest.raises(ValueError, match="Non-finite model probability .* accepted validation"):
         fit(tmp_path, "run", config)
 
@@ -430,14 +430,14 @@ def test_evaluation_scores_keep_float64_resolution_near_one(
 ) -> None:
     config = base_config()
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
-    original = LiveTGAT.forward
+    original = TGAT.forward
 
-    def confident(self: LiveTGAT, batch: dict[str, torch.Tensor]) -> torch.Tensor:
+    def confident(self: TGAT, batch: dict[str, torch.Tensor]) -> torch.Tensor:
         logits = original(self, batch)
         # Evaluation logits near 20, where a float32 probability is exactly 1.
         return logits if self.training else logits + 20
 
-    monkeypatch.setattr(LiveTGAT, "forward", confident)
+    monkeypatch.setattr(TGAT, "forward", confident)
     # The validation F1 threshold falls between scores that float32 would tie at 1.
     assert 0.99 < fit(tmp_path, "run", config)["validation_proxy"]["threshold"] < 1
     for split in ("validation", "test"):
@@ -717,7 +717,7 @@ def test_training_end_to_end_with_v5_neighbour_messages(tmp_path: Path) -> None:
     )
     manifest, accounts = load_prepared(dataset)
     plan, sampler = c.feature_plan(), c.sampler
-    assert plan.architecture == "split"
+    assert plan.architecture == "tgat"
     hubs = load_hub_registry(dataset, manifest)
     train_rows = accounts[accounts.split == "train"].iloc[:16]
     keys = sample_keys(train_rows, c.dataset.dates.train[0], manifest)
@@ -738,7 +738,7 @@ def test_training_end_to_end_with_v5_neighbour_messages(tmp_path: Path) -> None:
     assert stats["stub_children"] > 0 and stats["rejected_children"] > 0
     assert stats["sampler_backend"] == "torch"
     torch.manual_seed(0)
-    model = LiveTGAT(16, 4, 0, plan=plan)
+    model = TGAT(16, 4, 0, plan=plan, slot_sum=False, first_fanout=8)
     logits = model(batch)
     targets = torch.zeros_like(logits)
     targets[:4] = 1

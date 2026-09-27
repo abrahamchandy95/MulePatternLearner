@@ -369,7 +369,7 @@ def query_context_batch(
 
 
 # Contexts and messages of the transport tests.
-PLAN = FeaturePlan(("entity_meta", "message_core", "time_encoding"), "split")
+PLAN = FeaturePlan(("entity_meta", "message_core", "time_encoding"), "tgat")
 SAMPLER = SamplerPlan(
     roots=PoolPlan(recent=4, older=2, distinct=1, associations=2, max_history=2048),
     children=PoolPlan(recent=2, associations=0, max_history=1024),
@@ -462,7 +462,7 @@ def unit_config(**sections: Any) -> RunConfig:
 
 
 # The plan and pools of the batch and context source tests.
-DEFAULT_SPLIT_PLAN = FeaturePlan(DEFAULT_GROUPS, "split")
+DEFAULT_TGAT_PLAN = FeaturePlan(DEFAULT_GROUPS, "tgat")
 SMALL_SAMPLER = SamplerPlan(
     roots=PoolPlan(recent=4, older=1, distinct=1, associations=1),
     children=PoolPlan(recent=2, associations=0),
@@ -774,7 +774,7 @@ RUNTIME_CHANGES: dict[str, Any] = {
         "relation_fanouts": [2, 2],
     },
     "features": list(DEFAULT_GROUPS),
-    "model": {"architecture": "split", "hidden": 16, "heads": 2, "dropout": 0.2, "slot_sum": False},
+    "model": {"architecture": "tgat", "hidden": 16, "heads": 2, "dropout": 0.2, "slot_sum": False},
     "loss": {"class_prior": 0.05, "positive_weight": 0.5},
     "training": {
         "seed": 7,

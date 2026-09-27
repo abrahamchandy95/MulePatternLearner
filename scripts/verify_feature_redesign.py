@@ -102,7 +102,7 @@ def main() -> None:
         for g in FEATURE_GROUPS
         if g not in ("rolling_windows", "amount_ratios", "pair_window_counts", "device_ip_context")
     )
-    plan = FeaturePlan(groups, "split")
+    plan = FeaturePlan(groups, "tgat")
     sampler = SamplerPlan(roots=PoolPlan(recent=4, older=3, distinct=2))
     reports = []
     for account in args.account:

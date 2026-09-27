@@ -58,7 +58,7 @@ def main() -> None:
         )
     )[0]
     # The request passes no flags or pools beyond per_relation, so it gets the defaults.
-    defaults = FeaturePlan(DEFAULT_FLAG_GROUPS, "split")
+    defaults = FeaturePlan(DEFAULT_FLAG_GROUPS, "tgat")
     validate_context(key, row, defaults, SamplerPlan(), require_encodings=True)
     pairs = []
     for relation in ("zelle_out", "payment_out", "payment_in"):

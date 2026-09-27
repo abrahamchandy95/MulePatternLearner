@@ -221,23 +221,31 @@ REORDERED_GROUPS = frozenset(
 )
 
 
+# The model architectures: "tgat" is the graph model (model.tgat.TGAT), "summary" the
+# controls without attention (model.summary.SummaryMLP).
+ARCHITECTURES = ("tgat", "summary")
+# Each architecture as the input fingerprint records it. Saved models hold the
+# fingerprint, so the graph model keeps the name it had before the layered restructure.
+RECORDED_ARCHITECTURES = {"tgat": "split", "summary": "summary"}
+
+
 @dataclass(frozen=True)
 class FeaturePlan:
     """The feature groups a model reads and its architecture.
 
-    "split" is the graph model: attention over sampled neighbours, with a summary
+    "tgat" is the graph model: attention over sampled neighbours, with a summary
     branch for the root's summary columns. "summary" reads only the root's node and
     summary columns (the controls without attention).
     """
 
     groups: tuple[str, ...] = BUILT_IN_GROUPS
-    architecture: str = "split"
+    architecture: str = "tgat"
 
     def __post_init__(self) -> None:
         if len(set(self.groups)) != len(self.groups) or set(self.groups) - FEATURE_GROUPS.keys():
             raise ValueError("Duplicate or unknown feature groups")
-        if self.architecture not in ("split", "summary"):
-            raise ValueError("Architecture must be split or summary")
+        if self.architecture not in ARCHITECTURES:
+            raise ValueError(f"Architecture must be one of {list(ARCHITECTURES)}")
         for name in self.groups:
             if set(FEATURE_GROUPS[name].requires) - set(self.groups):
                 raise ValueError(f"Missing dependencies for {name}")
@@ -268,7 +276,7 @@ class FeaturePlan:
         value: dict[str, Any] = {
             "contract": contract_fingerprint(),
             "groups": sorted(self.groups),
-            "architecture": self.architecture,
+            "architecture": RECORDED_ARCHITECTURES[self.architecture],
         }
         # The contract leaves the pool groups out, so a plan with one covers them here.
         if set(POOL_GROUPS) & set(self.groups):
@@ -281,13 +289,13 @@ class FeaturePlan:
         """GSQL `include_*` parameters for one hop.
 
         Channel/stratum are wire metadata even when their embeddings are off, and
-        client groups are never requested. Split models read only node and message
+        client groups are never requested. TGAT models read only node and message
         inputs of children, so their second hop skips every summary group. Summary
         models fetch no children.
         """
         if hop not in (1, 2):
             raise ValueError("Hop must be 1 or 2")
-        skip_summary = hop == 2 and self.architecture == "split"
+        skip_summary = hop == 2 and self.architecture == "tgat"
         return {
             "include_" + name: name in self.groups and not (skip_summary and spec.path == "summary")
             for name, spec in FEATURE_GROUPS.items()
@@ -298,7 +306,7 @@ class FeaturePlan:
 def extraction_plan(model: FeaturePlan) -> FeaturePlan:
     """What the context source asks TigerGraph for: the model's groups but the client ones.
 
-    Client groups are computed locally. The architecture is the model's, so a split
+    Client groups are computed locally. The architecture is the model's, so a TGAT
     model skips summary groups at hop 2.
     """
     groups = tuple(g for g in model.groups if g not in CLIENT_GROUPS)

@@ -36,7 +36,7 @@ def test_renderer_guards_currency_and_does_not_use_a_global_reference_date():
     assert 't.currency != "USD"),\n' not in query
     assert "now()" not in query.lower()
     assert "IF include_pair_window_counts OR" in query
-    for flag in FeaturePlan(DEFAULT_GROUPS, "split").query_flags():
+    for flag in FeaturePlan(DEFAULT_GROUPS, "tgat").query_flags():
         assert f"BOOL {flag}" in query
 
 
@@ -58,7 +58,7 @@ def test_flags_are_exactly_the_non_client_groups(text: str) -> None:
     assert flags == expected == list(FeaturePlan().query_flags())
     assert "include_hub_indicator" not in text
     for hop in (1, 2):
-        assert set(FeaturePlan(DEFAULT_GROUPS, "split").query_flags(hop)) == set(flags)
+        assert set(FeaturePlan(DEFAULT_GROUPS, "tgat").query_flags(hop)) == set(flags)
 
 
 def test_signature_order_and_bounds(text: str) -> None:

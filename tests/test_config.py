@@ -22,7 +22,11 @@ from mule_pattern_learner.config import (
     differing_settings,
 )
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
-from mule_pattern_learner.inference.saved_model import SAVED_SETTINGS, saved_run_config
+from mule_pattern_learner.inference.saved_model import (
+    SAVED_SETTINGS,
+    SAVED_VALUES,
+    saved_run_config,
+)
 
 # The built-in run as the code before the typed configuration validated it
 # (config.run_config()), key for key.
@@ -125,7 +129,9 @@ def test_the_default_config_is_the_old_built_in_run_field_by_field() -> None:
         field: Any = new
         for part in target.split("."):
             field = field[part]
-        assert field == value, (name, target)
+        # The graph model's architecture "split" is "tgat" now.
+        renamed = SAVED_VALUES[name].get(value, value) if name in SAVED_VALUES else value
+        assert field == renamed, (name, target)
         targets.add(target)
     # The reservoir seed and the reveal salt were the training seed.
     assert DEFAULT_CONFIG.dataset.seed == DEFAULT_CONFIG.scope.reveal_salt == OLD_BUILT_IN["seed"]

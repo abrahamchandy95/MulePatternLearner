@@ -886,7 +886,7 @@ MESSAGES = """    FOREACH item IN @@events DO
 
 def render_context_query() -> str:
     """The exact text of gsql/queries/training_context.gsql."""
-    defaults = FeaturePlan(DEFAULT_FLAG_GROUPS, "split").query_flags()
+    defaults = FeaturePlan(DEFAULT_FLAG_GROUPS, "tgat").query_flags()
     flags = ",\n  ".join(f"BOOL {name} = {str(value).upper()}" for name, value in defaults.items())
     parts = [_header(flags), _root_catalog(), _request_setup()]
     parts.append('    IF root_type == "Account" OR root_type == "Token" THEN\n')
