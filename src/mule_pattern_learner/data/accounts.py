@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Iterator
 import heapq
 from typing import Any
 
@@ -14,6 +15,21 @@ from ..contract.graph_schema import PHASE_SPLIT, SPLITS
 from ..tigergraph.executor import QueryExecutor, account_pages
 from ..tigergraph.labels import reads_graph_labels
 from .observed_labels import ORACLE_COLUMNS, ObservedLabelSource
+
+POPULATION_QUERY = "temporal_scope_population"
+
+
+def scope_accounts(
+    executor: QueryExecutor, scope_id: str, *, include_observed: bool
+) -> Iterator[dict[str, Any]]:
+    """The scope's accounts in account order, as temporal_scope_population prints them.
+
+    The one pager of the scope population: the seed reservoirs and the final audit both
+    read it here. Rows carry observed labels only with include_observed.
+    """
+    params = {"scope_id": scope_id, "include_observed": include_observed}
+    for page in account_pages(executor, POPULATION_QUERY, params):
+        yield from page
 
 
 def cohort_seed(config: dict[str, Any]) -> int:
@@ -71,39 +87,33 @@ def scoped_cohort(
     heaps: dict[str, list[tuple[float, str, dict[str, Any]]]] = {s: [] for s in limits}
     positives: dict[str, dict[str, Any]] = {}
     counts: Counter[str] = Counter()
-    pages = account_pages(
-        executor,
-        "temporal_scope_population",
-        {"scope_id": config["scope_id"], "include_observed": graph_labels},
-    )
-    for page in pages:
-        for row in page:
-            if ORACLE_COLUMNS & set(row):
-                raise ValueError("Oracle fields cannot enter population metadata")
-            _check_label_fields(row, graph_labels)
-            account = row["account_id"]
-            if not isinstance(account, str) or len(account.encode()) > 1024:
-                raise ValueError("Account pagination/ID violates the transport contract")
-            # Server-assigned scope partitions are the visibility phases of the splits.
-            if row["partition"] not in PHASE_SPLIT:
-                raise ValueError("Unassigned account in frozen scope")
-            split = PHASE_SPLIT[row.pop("partition")]
-            row["split"] = split
-            counts[split] += 1
-            if row["first_seen_ts_ms"] >= min(timestamp(d) for d in config["dates"][split]):
-                continue
-            row["in_marginal"] = True
-            rank = stable_score(account, seed, "marginal_cohort")
-            entry = (-rank, account, row)
-            heap = heaps[split]
-            if len(heap) < limits[split]:
-                heapq.heappush(heap, entry)
-            elif rank < -heap[0][0]:
-                heapq.heapreplace(heap, entry)
-            if account in known_ids or (graph_labels and row["observed_positive"]):
-                if len(positives) >= 40000:
-                    raise ValueError("Observed-positive pool exceeds bounded cohort capacity")
-                positives[account] = {**row, "in_marginal": False}
+    for row in scope_accounts(executor, config["scope_id"], include_observed=graph_labels):
+        if ORACLE_COLUMNS & set(row):
+            raise ValueError("Oracle fields cannot enter population metadata")
+        _check_label_fields(row, graph_labels)
+        account = row["account_id"]
+        if not isinstance(account, str) or len(account.encode()) > 1024:
+            raise ValueError("Account pagination/ID violates the transport contract")
+        # Server-assigned scope partitions are the visibility phases of the splits.
+        if row["partition"] not in PHASE_SPLIT:
+            raise ValueError("Unassigned account in frozen scope")
+        split = PHASE_SPLIT[row.pop("partition")]
+        row["split"] = split
+        counts[split] += 1
+        if row["first_seen_ts_ms"] >= min(timestamp(d) for d in config["dates"][split]):
+            continue
+        row["in_marginal"] = True
+        rank = stable_score(account, seed, "marginal_cohort")
+        entry = (-rank, account, row)
+        heap = heaps[split]
+        if len(heap) < limits[split]:
+            heapq.heappush(heap, entry)
+        elif rank < -heap[0][0]:
+            heapq.heapreplace(heap, entry)
+        if account in known_ids or (graph_labels and row["observed_positive"]):
+            if len(positives) >= 40000:
+                raise ValueError("Observed-positive pool exceeds bounded cohort capacity")
+            positives[account] = {**row, "in_marginal": False}
     selected = dict(positives)
     selected.update({row["account_id"]: row for heap in heaps.values() for _, _, row in heap})
     if not selected:

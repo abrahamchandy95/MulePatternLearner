@@ -97,6 +97,7 @@ def evaluate_final_population(
     import json
 
     from ..contract.graph_schema import SPLIT_PHASE
+    from ..data.accounts import scope_accounts
     from ..data.contexts import close_source
     from ..data.hub_registry import load_hub_registry
     from ..data.manifest import MANIFEST, load_prepared
@@ -104,7 +105,7 @@ def evaluate_final_population(
     from ..inference.predictor import TemporalPredictor
     from ..inference.rejections import exceeds_rejection_limit, rejection_summary
     from ..inference.score_accounts import write_rejected
-    from ..tigergraph.executor import account_pages, live_executor
+    from ..tigergraph.executor import live_executor
 
     if output.suffix != ".json":
         raise ValueError("Final audit output must be a .json report path")
@@ -133,18 +134,13 @@ def evaluate_final_population(
         executor = live_executor(config)
         verify_frozen_source(executor, manifest)
     population: list[dict[str, Any]] = []
-    for page in account_pages(
-        executor,
-        "temporal_scope_population",
-        {"scope_id": config["scope_id"], "include_observed": False},
-    ):
-        for row in page:
-            if row["partition"] == SPLIT_PHASE["test"] and row["first_seen_ts_ms"] <= last_ms:
-                population.append({"account_id": row["account_id"], "split": "test"})
-                if len(population) > 1_000_000:
-                    raise ValueError(
-                        "Final audit metadata budget exceeded; use a streamed truth provider"
-                    )
+    for row in scope_accounts(executor, config["scope_id"], include_observed=False):
+        if row["partition"] == SPLIT_PHASE["test"] and row["first_seen_ts_ms"] <= last_ms:
+            population.append({"account_id": row["account_id"], "split": "test"})
+            if len(population) > 1_000_000:
+                raise ValueError(
+                    "Final audit metadata budget exceeded; use a streamed truth provider"
+                )
     if not population:
         raise ValueError("No eligible accounts in final test population")
     answer = truth.read()

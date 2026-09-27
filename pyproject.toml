@@ -123,8 +123,8 @@ ignore_imports = [
     # run_config reads an overrides file with paths.load_config; removed with run_config and the
     # loaders in the typed configuration step
     "mule_pattern_learner.config -> mule_pattern_learner.paths",
-    # scoped_cohort pages the scope population with account_pages; removed by one population
-    # pager and consumer-owned ports
+    # scope_accounts pages the scope population with account_pages; removed by consumer-owned
+    # ports
     "mule_pattern_learner.data.accounts -> mule_pattern_learner.tigergraph.executor",
     # scoped_cohort asks whether its label source is the graph's; removed by consumer-owned
     # ports
@@ -146,8 +146,7 @@ ignore_imports = [
     "mule_pattern_learner.data.preparation -> mule_pattern_learner.tigergraph.labels",
     # resolve_cutoffs runs the cutoff query; removed by consumer-owned ports
     "mule_pattern_learner.data.splits -> mule_pattern_learner.tigergraph.executor",
-    # the audit builds an executor and pages the scope population; removed by one population
-    # pager and adapters built only in pipeline
+    # the audit builds an executor; removed by adapters built only in pipeline
     "mule_pattern_learner.evaluation.audit -> mule_pattern_learner.tigergraph.executor",
     # the audit rechecks the frozen source; removed by adapters built only in pipeline
     "mule_pattern_learner.evaluation.audit -> mule_pattern_learner.tigergraph.provenance",
@@ -178,8 +177,8 @@ source_modules = [
 ]
 forbidden_modules = ["mule_pattern_learner.tigergraph", "pyTigerGraph"]
 ignore_imports = [
-    # scoped_cohort pages the scope population with account_pages; removed by one population
-    # pager and consumer-owned ports
+    # scope_accounts pages the scope population with account_pages; removed by consumer-owned
+    # ports
     "mule_pattern_learner.data.accounts -> mule_pattern_learner.tigergraph.executor",
     # scoped_cohort asks whether its label source is the graph's; removed by consumer-owned
     # ports
@@ -201,8 +200,7 @@ ignore_imports = [
     "mule_pattern_learner.data.preparation -> mule_pattern_learner.tigergraph.labels",
     # resolve_cutoffs runs the cutoff query; removed by consumer-owned ports
     "mule_pattern_learner.data.splits -> mule_pattern_learner.tigergraph.executor",
-    # the audit builds an executor and pages the scope population; removed by one population
-    # pager and adapters built only in pipeline
+    # the audit builds an executor; removed by adapters built only in pipeline
     "mule_pattern_learner.evaluation.audit -> mule_pattern_learner.tigergraph.executor",
     # the audit rechecks the frozen source; removed by adapters built only in pipeline
     "mule_pattern_learner.evaluation.audit -> mule_pattern_learner.tigergraph.provenance",
