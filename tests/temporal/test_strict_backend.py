@@ -222,7 +222,6 @@ def test_strict_preparation_and_nnpu_use_the_correct_phase_end_to_end(
         profile,
         evaluation_protocol="strict_inductive",
         scope_id="unit_strict",
-        context_storage="stream",
         seed_limits={"train": 10, "validation": 10, "test": 10},
     )
     rows = assigned_accounts().drop(columns="owner_ids").copy()
@@ -248,7 +247,7 @@ def test_strict_preparation_and_nnpu_use_the_correct_phase_end_to_end(
     manifest = prepare(
         cfg, dataset, executor, {"Account": len(rows)}, FrameObservedLabels(supplied_labels())
     )
-    assert manifest["cached_contexts"] == 0
+    assert manifest["status"] == "ready" and not executor.requested
     source = StreamingContextSource(
         executor, plan=extraction_plan(cfg), sampler=SamplerPlan.from_config(cfg)
     )
@@ -294,7 +293,7 @@ def test_resumed_stream_checks_live_source_before_fetching(monkeypatch: pytest.M
             "scope_id": "scope",
             "evaluation_protocol": "strict_inductive",
         },
-        "source": {"context_storage": "stream", "source_counts": dict(counts)},
+        "source": {"source_counts": dict(counts)},
     }
     backend = source.open_context_source(
         Path("unused"), manifest, {"max_query_attempts": 3, "max_outage_s": 60}

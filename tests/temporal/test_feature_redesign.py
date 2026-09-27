@@ -1,4 +1,3 @@
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -22,7 +21,7 @@ from mule_pattern_learner.temporal.live.batching import (
 from mule_pattern_learner.temporal.live.history_reference import payment_features, stratify
 from mule_pattern_learner.temporal.live.evaluation import final_evaluation_sample, evaluate_weighted
 from mule_pattern_learner.temporal.live.model import LiveTGAT
-from mule_pattern_learner.temporal.live.source import StreamingContextSource, ContextStore
+from mule_pattern_learner.temporal.live.source import StreamingContextSource
 from mule_pattern_learner.temporal.live.queries import render_context_query
 from temporal_fakes import FakeExecutor, context, message
 
@@ -181,20 +180,6 @@ def test_registry_dependencies_fingerprints_and_unknown_fields():
     row["features"]["fraud_label"] = 1
     with pytest.raises(ValueError, match="Unrecognized"):
         node_features(row, a)
-
-
-@pytest.mark.legacy
-def test_extraction_cache_can_be_shared_across_model_seeds_but_not_sampling_or_scope(
-    tmp_path: Path,
-) -> None:
-    path = tmp_path / "contexts.sqlite"
-    base = {"dataset_id": "frozen", "scope_id": "one", "config_sha256": "seed1"}
-    ContextStore(path, base).close()
-    ContextStore(path, {**base, "config_sha256": "seed2"}).close()
-    with pytest.raises(ValueError, match="provenance"):
-        ContextStore(path, {**base, "scope_id": "two"})
-    with pytest.raises(ValueError, match="provenance"):
-        ContextStore(path, base, sampler=SamplerPlan("stratified", 4, 3, 2))
 
 
 def test_final_evaluation_covers_rare_positives_and_recovers_population_prevalence():

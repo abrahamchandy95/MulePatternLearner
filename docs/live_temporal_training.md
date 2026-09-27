@@ -197,8 +197,8 @@ population claims, including when using complete synthetic truth.
 
 ## Memory, IDs and transport
 
-The default `context_storage="stream"` makes bounded installed-query HTTPS/REST
-requests. It never writes a full feature cache. `ContextSource` separates transport
+Contexts are streamed: bounded installed-query HTTPS/REST requests, and no feature
+cache on disk. `ContextSource` separates transport
 from batching/model/loss: `fetch(keys, hop=1|2)` returns rows in key order, `None`
 where TigerGraph rejected a request, and counts rejections by status
 (`rejections`, once per rejected key and fetch) and per hop (`rejections_by_hop`,
@@ -209,10 +209,6 @@ After an error or Ctrl-C, training and scoring close the source without waiting:
 queued requests are cancelled, and requests already in flight finish on their own
 or are dropped when the process exits, so neither the error nor the exit waits for
 a REST retry chain.
-
-Optional SQLite staging remains available for small, repeated experiments; it is
-not required by training or new-account prediction. For the `resample` policy it
-caches every candidate child, because training draws different children each step.
 
 Every failure is classified before it is retried, and each class has its own
 budget:
@@ -319,9 +315,8 @@ and associations up to `K`. The second hop is payments only: `chosen = P[:K]`.
   scores do not depend on the machine, the torch version or the backend. A root's
   hop-2 draw is independent of its hop-1 draw. Hop-1 keys are unchanged from
   earlier versions; hop-2 draws changed, and the resample fingerprint records the
-  key scheme (`selection_keys = 2`). A resample preparation with SQLite storage made
-  before this change reports a changed `sqlite_selection` and must be prepared
-  again. `model.pt` records the fingerprint as `sampler_fingerprint`.
+  key scheme (`selection_keys = 2`). `model.pt` records the fingerprint as
+  `sampler_fingerprint`.
 - `backend = "auto"` uses cuGraph only on a CUDA device whose functional probe
   passed. The probe runs once per process and device: it subsets a tiny candidate
   table with both hops' default quotas, twice with one random state, and requires
@@ -347,10 +342,9 @@ The built-in run adds two groups that `DEFAULT_GROUPS` lacks, `pool_activity` an
 first-time inflows, rapid pass-throughs and more; see the
 [catalog](gsql_feature_catalog.md#client-computed-groups)), fed to the split model's
 summary branch. Like `hub_indicator` they are computed on the client and never
-requested, so the query, the extraction groups and a streamed preparation are
+requested, so the query, the extraction groups and a prepared cohort are
 unchanged. Their definitions are part of the model's input fingerprint, not the
-contract fingerprint, so checkpoints saved before the groups existed still score and a
-SQLite cache prepared before them stays valid.
+contract fingerprint, so checkpoints saved before the groups existed still score.
 
 ### Hub accounts and rejected contexts
 
@@ -459,9 +453,8 @@ prepared dataset. A ready directory is reused without connecting, but only
 when its GSQL hashes and its preparation settings still match; otherwise train into
 a new output. Preparation
 settings are the dates, seed limits, protocol, scope, split and cohort seeds, label
-source (content hash), storage, sampler pools, extraction groups, `scope_unowned`
-and, for SQLite storage, the fanouts, sampler and architecture that decide what the
-cache holds. Model, optimisation and transport settings may change freely.
+source (content hash), sampler pools, extraction groups and `scope_unowned`. Model,
+optimisation and transport settings may change freely.
 Set `cohort_seed` to train several model `seed` values on one prepared cohort
 (it defaults to `seed`). A missing strict scope is created by the first run (set
 `create_scope = false` to forbid that write), and a strict run on a graph without

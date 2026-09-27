@@ -700,7 +700,7 @@ policy do not apply to another. Unknown keys are rejected.
 
 Preparation keys (the derived dataset_id, an optional shared `prepared_id`,
 evaluation_protocol, scope_id, scope_unowned, dates, seed_limits, split_seed, cohort_seed,
-label_policy and any observed-label file hash, context_storage, the candidate pools, and
+label_policy and any observed-label file hash, the candidate pools, and
 the extraction groups derived from feature_groups) must match between preparation and
 training; other settings may change between runs. A new `--output` prepares its own
 cohort; `--dataset <run>_run/prepared` reuses another run's.

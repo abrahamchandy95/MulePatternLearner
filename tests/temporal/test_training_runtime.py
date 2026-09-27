@@ -554,7 +554,6 @@ def base_config(**overrides: Any) -> dict[str, Any]:
         "evaluation_protocol": "strict_inductive",
         "scope_id": "unit_scope",
         "label_policy": "observed",
-        "context_storage": "stream",
         "dates": deepcopy(DATES),
         "feature_groups": list(DEFAULT_GROUPS),
         "architecture": "split",
@@ -649,7 +648,7 @@ def prepared_dataset(
         "cutoff_seqs": dict(CUTOFFS),
         "cohort": "bounded_internal_deposit_seeds",
         "observed_labels_sha256": digest(path / "observed_labels.parquet"),
-        "source": {"context_storage": "stream", "preparation": preparation_view(config)},
+        "source": {"preparation": preparation_view(config)},
     }
     (path / "manifest.json").write_text(json.dumps(manifest))
 

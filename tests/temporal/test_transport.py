@@ -63,7 +63,7 @@ from mule_pattern_learner.temporal.live.hubs import (
     load_hub_registry,
     query_hub_registry,
 )
-from mule_pattern_learner.temporal.live.source import ContextStore, StreamingContextSource
+from mule_pattern_learner.temporal.live.source import StreamingContextSource
 from mule_pattern_learner.temporal.live.supervision import (
     GraphObservedLabels,
     ParquetObservedLabels,
@@ -806,40 +806,6 @@ def test_corrupted_or_missing_spot_check_vectors_fail() -> None:
         validate_context(key, row, PLAN, SAMPLER)
 
 
-# --- SQLite store --------------------------------------------------------------------------
-
-
-@pytest.mark.legacy
-def test_context_store_keys_by_hop_caches_rejections_and_reads_once(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    keys = [root(i) for i in range(3)]
-    server = ContextServer({keys[2]: "invisible_entity"})
-    store = ContextStore(
-        tmp_path / "c.sqlite", {"dataset": "x"}, server, plan=PLAN, sampler=SAMPLER
-    )
-    reads = Counter()
-    original = ContextStore._read
-
-    def counting(self: ContextStore, hop: int, key: ContextKey) -> dict[str, Any] | None:
-        reads[(hop, key)] += 1
-        return original(self, hop, key)
-
-    monkeypatch.setattr(ContextStore, "_read", counting)
-    first = store.fetch(keys, hop=1)
-    store.fetch(keys[:1], hop=2)
-    assert store.query_calls == 2 and first[2] is None
-    assert max(reads.values()) == 1
-    store.close()
-    offline = ContextStore(tmp_path / "c.sqlite", {"dataset": "x"}, plan=PLAN, sampler=SAMPLER)
-    again = offline.fetch(keys, hop=1)
-    assert again[2] is None and again[0] == first[0] and offline.rejections["invisible_entity"] == 1
-    assert offline.fetch(keys[:1], hop=2)[0] is not None
-    with pytest.raises(ValueError, match="Offline"):
-        offline.fetch(keys[1:2], hop=2)
-    offline.close()
-
-
 # --- hub registry ---------------------------------------------------------------------------
 
 
@@ -1105,7 +1071,7 @@ def test_preparation_keys_fingerprint_only_preparation_settings(tmp_path: Path) 
     assert tuple(view) == dataset.PREPARATION_KEYS and "hub_scan_cap" not in view
     same = [
         {"learning_rate": 0.5, "epochs": 3, "hidden": 8, "request_batch_size": 4},
-        {"scope_unowned": "linked", "context_storage": "stream", "max_outage_s": 60},
+        {"scope_unowned": "linked", "max_outage_s": 60},
         {"sampler": {**base["sampler"], "association_slots": 1}},  # selection, not pools
     ]
     for change in same:
@@ -1124,7 +1090,6 @@ def test_preparation_keys_fingerprint_only_preparation_settings(tmp_path: Path) 
         {"scope_unowned": "shared"},
         {"sampler": {**base["sampler"], "children": {"recent": 2, "associations": 0}}},
         {"extraction_groups": [*LEGACY_GROUPS, "pair_history"]},
-        {"context_storage": "sqlite"},
     ]
     for change in different:
         assert dataset.preparation_fingerprint(
@@ -1418,7 +1383,6 @@ def test_config_schema_rejects_unknown_keys_and_applies_operational_defaults(
         ({"query_concurrency": 17}, "query_concurrency"),
         ({"request_batch_size": 65}, "request_batch_size"),
         ({"deterministic": "yes"}, "deterministic"),
-        ({"context_storage": "disk"}, "context_storage"),
         ({"label_policy": "oracle"}, "label_policy"),
         ({"prepared_id": "../escape"}, "prepared_id"),
         ({"sampler": {"recnt": 2}}, "sampler.recnt"),
@@ -1449,6 +1413,15 @@ def test_config_schema_rejects_unknown_keys_and_applies_operational_defaults(
     for weight in ("equal", 1.0, 0.0):
         with pytest.raises(ValueError, match="positive_weight"):
             validate_config({**base, "positive_weight": weight})
+
+
+def test_configurations_saved_before_the_restructure_still_validate() -> None:
+    # Saved models and prepared cohorts hold keys of removed paths, with the one value
+    # that remains; validation drops them. Another value names a removed path.
+    saved = {**run_config(), "context_storage": "stream"}
+    assert validate_config(saved) == run_config()
+    with pytest.raises(ValueError, match="context_storage = 'sqlite' is no longer supported"):
+        validate_config({**saved, "context_storage": "sqlite"})
 
 
 def test_built_in_run_validates_and_only_run_config_applies_the_schema(tmp_path: Path) -> None:
@@ -1504,7 +1477,7 @@ def test_transport_settings_come_from_the_training_config(monkeypatch: pytest.Mo
 
     monkeypatch.setattr("mule_pattern_learner.temporal.live.executor.TigerGraphExecutor", Executor)
     prepared = {"dataset_id": "d", "evaluation_protocol": "shared_history"}
-    manifest = {"config": prepared, "source": {"context_storage": "stream"}}
+    manifest = {"config": prepared, "source": {}}
     training = {
         **prepared,
         "request_batch_size": 32,

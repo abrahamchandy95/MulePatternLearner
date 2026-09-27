@@ -39,7 +39,7 @@ from mule_pattern_learner.temporal.live.config_schema import DEFAULT_RUN
 from mule_pattern_learner.temporal.live.pipeline import DEFAULT_MODEL, run
 from mule_pattern_learner.temporal.live.policy import validate_protocol
 from mule_pattern_learner.temporal.live.sampling import pu_batches
-from mule_pattern_learner.temporal.live.source import ContextStore, StreamingContextSource
+from mule_pattern_learner.temporal.live.source import StreamingContextSource
 from mule_pattern_learner.temporal.live.supervision import (
     FrameObservedLabels,
     align_observed_labels,
@@ -156,13 +156,7 @@ def test_hidden_truth_cannot_change_updates_or_checkpoint_selection(
     c = live_config(profile)
     dataset, executor = prepared(tmp_path, c)
     assert executor.names().count("temporal_hub_registry") == 1
-    # A streamed preparation trains against the fake graph; SQLite needs no source.
-    streamed = c["context_storage"] == "stream"
-
-    def contexts() -> StreamingContextSource | None:
-        return streaming_source(executor, c) if streamed else None
-
-    first = train(c, dataset, tmp_path / "first.pt", contexts=contexts())
+    first = train(c, dataset, tmp_path / "first.pt", contexts=streaming_source(executor, c))
     saved_first = torch.load(tmp_path / "first.pt", weights_only=True)
     # The oracle is a separate file that is never opened by training.
     a = pd.read_parquet(dataset / "accounts.parquet")
@@ -183,7 +177,7 @@ def test_hidden_truth_cannot_change_updates_or_checkpoint_selection(
         ParquetEvaluationTruth(truth_path),
     )
     assert before != after
-    second = train(c, dataset, tmp_path / "second.pt", contexts=contexts())
+    second = train(c, dataset, tmp_path / "second.pt", contexts=streaming_source(executor, c))
     saved_second = torch.load(tmp_path / "second.pt", weights_only=True)
     assert first["history"] == second["history"]
     assert first["best_epoch"] == second["best_epoch"]
@@ -192,7 +186,7 @@ def test_hidden_truth_cannot_change_updates_or_checkpoint_selection(
     assert first["observed_label_proxy"] == second["observed_label_proxy"]
     for name, value in saved_first["state_dict"].items():
         torch.testing.assert_close(value, saved_second["state_dict"][name], rtol=0, atol=0)
-    assert (first["database_calls_during_training"] > 0) == streamed
+    assert first["database_calls_during_training"] > 0
     assert first["known_mules"] == {"train": 20, "validation": 20, "test": 20}
 
 
@@ -239,38 +233,30 @@ def test_ready_pipeline_reuses_cache_without_connecting(tmp_path: Path) -> None:
         client.assert_not_called()
 
 
-def test_streaming_preparation_and_training_never_create_disk_context_cache(tmp_path: Path) -> None:
-    c = live_config(context_storage="stream")
+def test_preparation_requests_no_context_and_training_keeps_a_bounded_lru(tmp_path: Path) -> None:
+    c = live_config()
     dataset, executor = prepared(tmp_path, c)
-    manifest, _ = load_prepared(dataset)
-    assert manifest["cached_contexts"] == 0
+    load_prepared(dataset)
     assert not executor.requested
-    assert not (dataset / "contexts.sqlite").exists()
     source = streaming_source(executor, c, capacity=4)
     result = train(c, dataset, tmp_path / "model.pt", contexts=source)
     assert result["database_calls_during_training"] > 0
-    assert not (dataset / "contexts.sqlite").exists()
     assert len(source.memory) <= 4
 
 
 @pytest.mark.legacy
-def test_streaming_and_sqlite_return_identical_features_with_bounded_retention(
-    tmp_path: Path,
-) -> None:
+def test_streaming_source_serves_repeats_from_its_bounded_lru() -> None:
     keys = [ContextKey("Account", str(i), 100, 1000) for i in range(80)]
-    source = FakeExecutor({})
-    memory = StreamingContextSource(source, capacity=3)
-    disk = ContextStore(tmp_path / "contexts.sqlite", {}, FakeExecutor({}))
-    assert memory.fetch(keys) == disk.fetch(keys)
+    memory = StreamingContextSource(FakeExecutor({}), capacity=3)
+    rows = memory.fetch(keys)
     assert len(memory.memory) == 3
     calls = memory.query_calls
-    assert memory.fetch(keys[-3:]) == disk.fetch(keys[-3:])
+    assert memory.fetch(keys[-3:]) == rows[-3:]
     assert memory.query_calls == calls
-    disk.close()
 
 
 def test_training_end_to_end_with_v5_neighbour_messages(tmp_path: Path) -> None:
-    c = live_config(context_storage="stream")
+    c = live_config()
     # N3 is a hub at every root cutoff; N5 always exceeds its history capacity.
     dataset, executor = prepared(
         tmp_path,
@@ -330,26 +316,21 @@ def test_training_end_to_end_with_v5_neighbour_messages(tmp_path: Path) -> None:
     assert json.loads(progress[-1])["event"] == "complete"
 
 
-@pytest.mark.legacy
-def test_sqlite_preparation_caches_every_resampling_candidate(tmp_path: Path) -> None:
+def test_rejected_roots_within_the_limit_are_dropped_and_counted(tmp_path: Path) -> None:
     # Rejected roots fail closed by default; this run tolerates up to 5% per split.
-    c = live_config(context_storage="sqlite", max_rejected_root_fraction=0.05)
+    c = live_config(max_rejected_root_fraction=0.05)
     # An unlabeled validation account, scored (and rejected) in every epoch. A rejected
     # observed positive would fail the run at any limit.
     validation = assigned_accounts().query("split == 'validation'").account_id
     rejected_root = str(validation.iloc[20])
     assert rejected_root not in set(supplied_labels().account_id)
-    dataset, _ = prepared(
+    dataset, executor = prepared(
         tmp_path,
         c,
         factory=neighbourhood,
         statuses={"N5": "history_capacity_exceeded", rejected_root: "invisible_entity"},
     )
-    manifest, _ = load_prepared(dataset)
-    assert manifest["cached_contexts"] > 1000  # roots plus every candidate child
-    # Training resamples children per step and still never misses the offline cache.
-    result = train(c, dataset, tmp_path / "model.pt")
-    assert result["database_calls_during_training"] == 0
+    result = train(c, dataset, tmp_path / "model.pt", contexts=streaming_source(executor, c))
     assert result["sampler_totals"]["rejected_children"] > 0
     assert result["rejections"]["invisible_entity"] >= 1
     assert result["rejected_roots"]["validation"]["rejected"] == 1
