@@ -17,12 +17,12 @@ from ..contract.graph_schema import EVALUATION_PROTOCOL
 from ..contract.sampler_plan import SamplerPlan
 from ..contract.time_basis import BASIS_ID
 from ..data.manifest import manifest_digest
+from ..inference.saved_model import SavedModel
 from ..paths import REPOSITORY_ROOT, DatasetPaths
 from .history import Progress
 from .objective import objective_name
 from .schedule import EvaluationSample
 
-TRAINING_PROTOCOL = "scoped_observed_label_nnpu_v5"
 # The distributions whose versions config.json records.
 PACKAGES = ("mule-pattern-learner", "torch", "numpy", "scikit-learn", "pyTigerGraph")
 
@@ -72,6 +72,7 @@ def model_payload(
     state: dict[str, torch.Tensor],
     config: RunConfig,
     dataset: DatasetPaths,
+    dataset_id: str,
     threshold: float,
     plan: FeaturePlan,
     sampler: SamplerPlan,
@@ -79,13 +80,14 @@ def model_payload(
     device: torch.device,
     backend: str,
 ) -> dict[str, Any]:
-    """The model.pt payload of the selected state (read by saved_model.ModelCheckpoint)."""
+    """The model.pt payload of the selected state (read by inference.saved_model.SavedModel)."""
     return {
+        "format": SavedModel.FORMAT,
         "state_dict": state,
         "config": config.to_dict(),
         "basis_id": BASIS_ID,
         "contract": contract_fingerprint(),
-        "dataset": str(dataset.root.resolve()),
+        "dataset_id": dataset_id,
         "dataset_manifest_sha256": manifest_digest(dataset),
         "threshold": threshold,
         "feature_dim": len(plan.node_names),
@@ -93,7 +95,6 @@ def model_payload(
         "sampler": sampler.query_params(),
         "sampler_fingerprint": sampler.fingerprint(),
         "selected_on": "validation_observed_label_proxy_ap",
-        "training_protocol": TRAINING_PROTOCOL,
         "evaluation_protocol": EVALUATION_PROTOCOL,
         "known_mules": known_mules,
         "training_device": str(device),
@@ -169,5 +170,4 @@ def run_summary(
         "max_rejected_root_fraction": limit,
         "performance_claim": EVALUATION_PROTOCOL + "_observed_label_proxy_only",
         "proxy_unlabeled_limit": config.training.proxy_unlabeled_limit,
-        "training_protocol": TRAINING_PROTOCOL,
     }

@@ -6,7 +6,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-from ..inference.saved_model import ModelCheckpoint
+from ..inference.saved_model import SavedModel
 from ..inference.score_accounts import check_new_outputs, score_new_accounts
 from ..tigergraph.context_query import TigerGraphContextFetcher
 from ..tigergraph.cutoffs import TigerGraphCutoffs
@@ -24,7 +24,7 @@ def score_new(
     the repository's before any account is scored.
     """
     check_new_outputs(output)
-    saved = ModelCheckpoint.of(checkpoint)
+    saved = SavedModel.of(checkpoint)
     executor = connect(saved.config.transport)
     verify_sources(executor)
     return score_new_accounts(

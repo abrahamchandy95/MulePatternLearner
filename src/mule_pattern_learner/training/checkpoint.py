@@ -1,23 +1,55 @@
 """resume.pt: the resume state of an interrupted run.
 
-`_TrainingRun.save_last` writes it. A run resumes from it only when every setting
-that can change results matches (config.RunConfig.fingerprint); the transport and
-runtime sections, and the sampler backend, may change between segments (for example a
-lower query concurrency after server trouble, or a higher rejection limit to resume a
-run that stopped on rejected roots).
+`_TrainingRun.save_last` writes it as a ResumeState. A run resumes from it only when
+every setting that can change results matches (config.RunConfig.fingerprint); the
+transport and runtime sections, and the sampler backend, may change between segments
+(for example a lower query concurrency after server trouble, or a higher rejection
+limit to resume a run that stopped on rejected roots).
 """
 
 from __future__ import annotations
 
-from typing import Any
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, ClassVar
 
 import torch
 
-from ..artifacts import read_run_config
+from ..artifacts import atomic_write, read_run_config
 from ..config import RunConfig, differing_settings
 from ..paths import RunPaths
 
-CHECKPOINT_FORMAT = "temporal_live_checkpoint_v1"
+
+@dataclass(frozen=True)
+class ResumeState:
+    """What an interrupted run continues from.
+
+    ``values`` holds the model, optimizer, weight average, RNG states, schedule
+    position and selection state, and the run's totals; `_TrainingRun.save_last` names
+    them. resume.pt stores them with FORMAT and the fingerprint of the configuration.
+    """
+
+    # The payload layout this code writes and reads.
+    FORMAT: ClassVar[int] = 1
+
+    values: dict[str, Any]
+
+    def save(self, path: Path, config: RunConfig) -> None:
+        """Replace path atomically, so a crash never leaves a truncated state."""
+        payload = {**self.values, "format": self.FORMAT, "config_fingerprint": config.fingerprint()}
+        with atomic_write(path) as pending:
+            torch.save(payload, pending)
+
+    @classmethod
+    def load(cls, path: Path, config: RunConfig) -> ResumeState:
+        """The state saved at path, refused unless config is the configuration it was saved by."""
+        payload = torch.load(path, map_location="cpu", weights_only=True)
+        if payload.get("format") != cls.FORMAT:
+            raise ValueError(f"{path} is not a resume state of format {cls.FORMAT}")
+        if payload.pop("config_fingerprint") != config.fingerprint():
+            raise ValueError("The resume state belongs to a different configuration")
+        del payload["format"]
+        return cls(payload)
 
 
 def run_started(run: RunPaths) -> bool:
@@ -37,7 +69,7 @@ def restore_cuda_rng(saved: torch.Tensor | None, device: torch.device) -> None:
     torch.cuda.set_rng_state(saved, device)
 
 
-def load_resume_state(config: RunConfig, run: RunPaths) -> dict[str, Any] | None:
+def load_resume_state(config: RunConfig, run: RunPaths) -> ResumeState | None:
     """The saved state of an interrupted run, or None before its first checkpoint.
 
     A finished run and a configuration whose results-relevant settings changed
@@ -57,9 +89,4 @@ def load_resume_state(config: RunConfig, run: RunPaths) -> dict[str, Any] | None
             raise ValueError(f"Resumed configuration differs from the run: {changed}")
     if not run.resume.exists():
         return None
-    state = torch.load(run.resume, map_location="cpu", weights_only=True)
-    if state.get("format") != CHECKPOINT_FORMAT:
-        raise ValueError(f"Unsupported checkpoint format in {run.resume}")
-    if state["config_fingerprint"] != config.fingerprint():
-        raise ValueError("Checkpoint belongs to a different configuration")
-    return state
+    return ResumeState.load(run.resume, config)

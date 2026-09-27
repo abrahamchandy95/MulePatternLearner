@@ -14,7 +14,7 @@ from typing import Any
 
 from .config import DEFAULT_CONFIG
 from .data.manifest import read_manifest
-from .inference.saved_model import ModelCheckpoint
+from .inference.saved_model import SavedModel
 from .inference.score_accounts import read_account_ids, score
 from .paths import DatasetPaths, RunPaths
 from .pipeline.connect import connect, open_context_source
@@ -94,11 +94,12 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def checkpoint_dataset(checkpoint: ModelCheckpoint) -> DatasetPaths:
-    """The prepared dataset a checkpoint was trained on."""
-    if checkpoint.dataset is None:
-        raise ValueError(f"{checkpoint.path} records no prepared dataset; pass --dataset")
-    return checkpoint.dataset
+def model_dataset(model: SavedModel) -> DatasetPaths:
+    """The prepared dataset a model was trained on."""
+    dataset = model.dataset()
+    if dataset is None:
+        raise ValueError(f"{model.path} records no prepared dataset; pass --dataset")
+    return dataset
 
 
 def train_command() -> dict[str, Any]:
@@ -130,12 +131,10 @@ def main() -> None:
     elif args.command == "score-new":
         result = score_new(args.checkpoint, read_account_ids(args.accounts), args.date, args.output)
     elif args.command == "score":
-        checkpoint = ModelCheckpoint.load(args.checkpoint)
-        dataset = (
-            checkpoint_dataset(checkpoint) if args.dataset is None else DatasetPaths(args.dataset)
-        )
+        model = SavedModel.load(args.checkpoint)
+        dataset = model_dataset(model) if args.dataset is None else DatasetPaths(args.dataset)
         result = score(
-            checkpoint,
+            model,
             dataset,
             args.date,
             args.split,

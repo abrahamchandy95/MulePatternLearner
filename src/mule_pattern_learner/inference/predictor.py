@@ -33,7 +33,7 @@ from ..model.build import build_model, probabilities_from_logits
 from ..model.tgat import LiveTGAT
 from ..runtime.device import choose_device
 from ..runtime.workers import BatchPrefetcher
-from .saved_model import ModelCheckpoint
+from .saved_model import SavedModel
 
 
 class ScoredBatch(NamedTuple):
@@ -121,14 +121,14 @@ class TemporalPredictor:
 
     def __init__(
         self,
-        checkpoint: Path | ModelCheckpoint,
+        checkpoint: Path | SavedModel,
         contexts: ContextSource | None = None,
         device: str = "auto",
         *,
         fetcher: ContextFetcher | None = None,
         hubs: HubRegistry | None = None,
     ) -> None:
-        saved = ModelCheckpoint.of(checkpoint)
+        saved = SavedModel.of(checkpoint)
         saved.check_contract()
         self.config = config = saved.config
         self.plan = config.feature_plan()

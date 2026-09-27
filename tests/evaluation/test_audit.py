@@ -65,6 +65,7 @@ def test_final_population_audit_scores_through_the_dataset_clock_and_hubs(
     result = evaluate_final_population(
         run,
         Truth(),
+        dataset=dataset,
         scope=TigerGraphScope(ScoringExecutor(test_accounts)),
         contexts=source,
         hubs=hub_registry(),
@@ -86,6 +87,7 @@ def test_final_population_audit_scores_through_the_dataset_clock_and_hubs(
         evaluate_final_population(
             run,
             Truth(),
+            dataset=dataset,
             scope=TigerGraphScope(ScoringExecutor(test_accounts)),
             contexts=source,
             hubs=hub_registry(),
@@ -116,6 +118,7 @@ def test_final_population_audit_fails_on_censored_rejections(
         evaluate_final_population(
             run,
             Truth(),
+            dataset=dataset,
             scope=TigerGraphScope(ScoringExecutor(test_accounts)),
             contexts=source,
             hubs=hub_registry(),

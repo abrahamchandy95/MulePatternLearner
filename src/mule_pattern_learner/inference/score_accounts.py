@@ -22,11 +22,11 @@ from ..data.splits import eligible_mask, resolve_cutoff, sample_keys
 from ..paths import DatasetPaths
 from .predictor import TemporalPredictor
 from .rejections import rejection_summary
-from .saved_model import ModelCheckpoint
+from .saved_model import SavedModel
 
 
 def score(
-    checkpoint: Path | ModelCheckpoint,
+    checkpoint: Path | SavedModel,
     dataset: DatasetPaths,
     date: str,
     split: str,
@@ -49,7 +49,7 @@ def score(
     for path in (output, rejected_output):
         if path.exists():
             raise FileExistsError(path)
-    saved = ModelCheckpoint.of(checkpoint)
+    saved = SavedModel.of(checkpoint)
     config = saved.config
     manifest, accounts = load_prepared(dataset)
     saved.check_dataset(dataset)
@@ -144,7 +144,7 @@ def check_new_outputs(output: Path) -> None:
 
 
 def score_new_accounts(
-    checkpoint: Path | ModelCheckpoint,
+    checkpoint: Path | SavedModel,
     account_ids: Iterable[str],
     date: str,
     output: Path,
@@ -170,7 +170,7 @@ def score_new_accounts(
     """
     check_new_outputs(output)
     rejected_output = rejected_path(output)
-    saved = ModelCheckpoint.of(checkpoint)
+    saved = SavedModel.of(checkpoint)
     seq, ms = resolve_cutoff(cutoffs, date)
     predictor = TemporalPredictor(saved, contexts, fetcher=fetcher, hubs=hubs)
     source = predictor.contexts

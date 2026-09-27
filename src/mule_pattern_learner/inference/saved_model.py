@@ -1,28 +1,32 @@
 """model.pt: the selected model, as scoring and audits read it.
 
-`training.summary.model_payload` builds its payload, whose configuration is
-RunConfig.to_dict(). Readers load it once and pass the ModelCheckpoint on; each checks
-only what it relies on.
+`training.summary.model_payload` builds its payload: the selected weights, the
+configuration (RunConfig.to_dict()), the fingerprint of the feature plan, the
+threshold, the id and manifest digest of the dataset and SavedModel.FORMAT. Readers
+load it once and pass the SavedModel on; each checks only what it relies on.
 
-A model saved before the typed configuration holds a flat table of the old setting
-names. ModelCheckpoint.config converts it through SAVED_SETTINGS, the one table from
-old names to RunConfig fields, so such models load and score as they did.
+A model saved before FORMAT 1 records no format, and names its dataset by directory
+instead of by dataset id. One saved before the typed configuration also holds a flat
+table of the old setting names: SavedModel.config converts it through SAVED_SETTINGS,
+the one table from old names to RunConfig fields, so such models load and score as
+they did.
 """
 
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import torch
 
+from ..artifacts import atomic_write
 from ..config import DEFAULT_CONFIG, RunConfig
 from ..contract.feature_groups import BUILT_IN_GROUPS, FeaturePlan, contract_fingerprint
 from ..contract.sampler_plan import PoolPlan
 from ..contract.time_basis import BASIS_ID
 from ..data.manifest import manifest_digest
-from ..paths import DatasetPaths
+from ..paths import DATA_DIR, DatasetPaths
 
 # Where each setting of a configuration saved before the typed configuration lives in
 # RunConfig: the dotted name of its field, or None for a setting that names nothing
@@ -175,18 +179,35 @@ def saved_run_config(saved: dict[str, Any]) -> RunConfig:
 
 
 @dataclass(frozen=True)
-class ModelCheckpoint:
+class SavedModel:
+    """A model.pt payload and where it was read from."""
+
+    # The payload layout this code writes. A payload without a format is older, and
+    # loads through the conversions above.
+    FORMAT: ClassVar[int] = 1
+
     path: Path
     payload: dict[str, Any]
 
     @classmethod
-    def load(cls, path: Path) -> ModelCheckpoint:
-        return cls(path, torch.load(path, map_location="cpu", weights_only=True))
+    def load(cls, path: Path) -> SavedModel:
+        payload = torch.load(path, map_location="cpu", weights_only=True)
+        recorded = payload.get("format")
+        if recorded is not None and recorded != cls.FORMAT:
+            raise ValueError(
+                f"{path} is a model of format {recorded}; this code reads {cls.FORMAT}"
+            )
+        return cls(path, payload)
 
     @classmethod
-    def of(cls, checkpoint: Path | ModelCheckpoint) -> ModelCheckpoint:
-        """An already loaded checkpoint, or the one at a path."""
-        return checkpoint if isinstance(checkpoint, ModelCheckpoint) else cls.load(checkpoint)
+    def of(cls, model: Path | SavedModel) -> SavedModel:
+        """An already loaded model, or the one at a path."""
+        return model if isinstance(model, SavedModel) else cls.load(model)
+
+    def save(self) -> None:
+        """Write the payload to path atomically, so a crash never leaves a truncated model."""
+        with atomic_write(self.path) as pending:
+            torch.save(self.payload, pending)
 
     @property
     def config(self) -> RunConfig:
@@ -206,12 +227,17 @@ class ModelCheckpoint:
         return self.payload.get("selected_on")
 
     @property
-    def training_protocol(self) -> str | None:
-        return self.payload.get("training_protocol")
+    def dataset_id(self) -> str | None:
+        """The id of the dataset the model was trained on; None before FORMAT 1."""
+        return self.payload.get("dataset_id")
 
-    @property
-    def dataset(self) -> DatasetPaths | None:
-        """The prepared dataset recorded at training time, if any."""
+    def dataset(self, data: Path = DATA_DIR) -> DatasetPaths | None:
+        """The prepared dataset the model was trained on: its dataset id's directory in data.
+
+        A model saved before FORMAT 1 recorded the directory itself, if anything.
+        """
+        if self.dataset_id is not None:
+            return DatasetPaths.of(self.dataset_id, data)
         value = self.payload.get("dataset")
         return DatasetPaths(Path(value)) if value else None
 
@@ -221,7 +247,7 @@ class ModelCheckpoint:
             self.payload["contract"] != contract_fingerprint()
             or self.payload["basis_id"] != BASIS_ID
         ):
-            raise ValueError("Checkpoint feature/time contract differs from this sampler")
+            raise ValueError("The model's feature/time contract differs from this sampler")
 
     def check_inputs(self, plan: FeaturePlan) -> None:
         """Refuse a model whose inputs differ from those of its configuration.
@@ -231,13 +257,13 @@ class ModelCheckpoint:
         """
         if self.payload.get("input_fingerprint") != plan.fingerprint():
             raise ValueError(
-                "Checkpoint input groups or pool definitions differ from its configuration"
+                "The model's input groups or pool definitions differ from its configuration"
             )
 
     def check_dataset(
         self,
         dataset: DatasetPaths,
-        message: str = "Checkpoint belongs to a different prepared dataset",
+        message: str = "The model belongs to a different prepared dataset",
     ) -> None:
         """Refuse a prepared dataset other than the one this model was trained on."""
         if self.payload.get("dataset_manifest_sha256") != manifest_digest(dataset):

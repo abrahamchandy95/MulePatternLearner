@@ -22,7 +22,7 @@ from mule_pattern_learner.contract.graph_schema import RAILS, RELATIONS, Context
 from mule_pattern_learner.contract.time_basis import BASIS_ID
 from mule_pattern_learner.data.contexts import StreamingContextSource
 from mule_pattern_learner.inference.predictor import TemporalPredictor
-from mule_pattern_learner.inference.saved_model import ModelCheckpoint
+from mule_pattern_learner.inference.saved_model import SavedModel
 from mule_pattern_learner.model.build import build_model
 from mule_pattern_learner.model.tgat import LiveTGAT
 from mule_pattern_learner.testing.builders import context, message
@@ -227,7 +227,7 @@ def test_saved_models_with_the_slot_sum_score_like_the_trained_model(tmp_path: P
     with StreamingContextSource(
         TigerGraphContextFetcher(executor), plan=extraction_plan(PLAN), sampler=SAMPLER
     ) as source:
-        predictor = TemporalPredictor(ModelCheckpoint.load(tmp_path / "new.pt"), source, "cpu")
+        predictor = TemporalPredictor(SavedModel.load(tmp_path / "new.pt"), source, "cpu")
         assert predictor.model.slot_sum is not None
         prepared = predictor.prepare([ROOT])
         frame = predictor.infer(prepared)
