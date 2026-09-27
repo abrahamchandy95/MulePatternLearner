@@ -384,6 +384,20 @@ def build_root_batch(
     return RootBatch(keys, accepted, batch, stats)
 
 
+def batch_device(device: torch.device) -> torch.device:
+    """Where the batches of a model on ``device`` are assembled.
+
+    CUDA batches are built (and resampled) on the device by the prefetch workers.
+    Other devices build on the CPU and copy on the consuming thread (``to_device``).
+    """
+    return device if device.type == "cuda" else torch.device("cpu")
+
+
+def to_device(batch: dict[str, torch.Tensor], device: torch.device) -> dict[str, torch.Tensor]:
+    """The batch on the model's device; tensors already there are not copied."""
+    return {k: v.to(device) for k, v in batch.items()}
+
+
 def tensor_digests(batch: Mapping[str, torch.Tensor]) -> dict[str, dict[str, Any]]:
     """Fingerprints of a batch's tensors by name, to compare batches across code versions.
 

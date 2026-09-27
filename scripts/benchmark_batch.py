@@ -46,12 +46,11 @@ from mule_pattern_learner.paths import dataset_path  # noqa: E402
 from mule_pattern_learner.pipeline.train import prepared_config  # noqa: E402
 from mule_pattern_learner.runtime.device import choose_device, torch_runtime  # noqa: E402
 from mule_pattern_learner.tigergraph.executor import TigerGraphExecutor  # noqa: E402
-from mule_pattern_learner.training.objective import nnpu_objective  # noqa: E402
+from mule_pattern_learner.training.objective import nnpu_objective, nnpu_step  # noqa: E402
 from mule_pattern_learner.training.schedule import epoch_schedule  # noqa: E402
 from mule_pattern_learner.training.trainer import (  # noqa: E402
     RunSettings,
     build_optimizer,
-    nnpu_step,
     training_samples,
 )
 

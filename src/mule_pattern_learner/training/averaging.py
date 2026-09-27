@@ -1,4 +1,4 @@
-"""An exponential moving average of the model's weights."""
+"""An exponential moving average of the model's weights, and the weights validation scores."""
 
 from __future__ import annotations
 
@@ -58,3 +58,12 @@ class WeightAverage:
         for key, value in saved["state"].items():
             self.state[key].copy_(value)
         self.updates = int(saved["updates"])
+
+
+def evaluated_weights(
+    model: nn.Module, average: WeightAverage | None
+) -> contextlib.AbstractContextManager[None]:
+    """The weights validation scores and selection keeps: the average, if any."""
+    if average is None:
+        return contextlib.nullcontext()
+    return average.applied(model)
