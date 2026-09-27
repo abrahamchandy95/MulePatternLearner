@@ -6,7 +6,7 @@ job's own hash and defaults, once per salt. Prints, per split, the mules and the
 median and 5th to 95th percentile of the mules discovered before the split's cutoff
 (eligible) and of those revealed. It never calls the reveal job and writes nothing.
 
-  python scripts/temporal/simulate_label_reveal.py [--runs 1000] [--first-salt 0]
+  python scripts/simulate_label_reveal.py [--runs 1000] [--first-salt 0]
 """
 
 from __future__ import annotations

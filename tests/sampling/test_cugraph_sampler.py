@@ -397,7 +397,7 @@ def test_gpu_self_test_script_runs_its_synthetic_checks_on_the_mock(
     import importlib.util
     from pathlib import Path
 
-    path = Path(__file__).resolve().parents[2] / "scripts/temporal/verify_cugraph_sampler.py"
+    path = Path(__file__).resolve().parents[2] / "scripts/verify_cugraph_sampler.py"
     spec = importlib.util.spec_from_file_location("verify_cugraph_sampler", path)
     assert spec is not None and spec.loader is not None
     script = importlib.util.module_from_spec(spec)

@@ -4,7 +4,7 @@ The batch is the first scheduled training step of the prepared dataset, built th
 way train() builds it: the configured sampler (training-mode resampling with the
 step seed), hub stubs from the dataset registry, and rejected roots dropped. The
 report has REST calls and retries, seconds, stub and rejected counts, the sampler
-backend and the digest of every batch tensor (batching.tensor_digests, the
+backend and the digest of every batch tensor (batching.assemble.tensor_digests, the
 definition the golden-run test pins). With --train-step it also runs one optimizer
 step on the chosen device under the configured determinism and reports its loss
 and objective, the first values train() logs. Two code versions built the same

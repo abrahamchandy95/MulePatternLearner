@@ -15,7 +15,7 @@ def main() -> int:
         help="Only compare the rendered text with the file; exit 1 when it differs",
     )
     args = parser.parse_args()
-    path = Path(__file__).resolve().parents[2] / "gsql/temporal/training_context.gsql"
+    path = Path(__file__).resolve().parents[1] / "gsql/temporal/training_context.gsql"
     text = render_context_query()
     if args.check:
         same = path.read_text() == text

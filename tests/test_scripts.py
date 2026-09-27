@@ -31,19 +31,19 @@ from mule_pattern_learner.testing.builders import (
 from mule_pattern_learner.testing.fake_graph import FakeExecutor
 from mule_pattern_learner.tigergraph import reveal
 
-SCRIPTS = REPOSITORY_ROOT / "scripts/temporal"
+SCRIPTS = REPOSITORY_ROOT / "scripts"
 # Every script that talks to the live path; each must parse --help before connecting.
 LIVE_SCRIPTS = (
-    "benchmark_live_batch",
+    "benchmark_batch",
     "feature_experiments",
-    "render_training_queries",
-    "run_live_experiments",
+    "render_queries",
+    "run_experiments",
     "simulate_label_reveal",
     "verify_cugraph_sampler",
     "verify_feature_redesign",
     "verify_label_reveal",
-    "verify_live_training",
     "verify_strict_isolation",
+    "verify_training",
 )
 
 
@@ -138,7 +138,7 @@ def test_benchmark_builds_one_training_batch_and_step(
     prepare(
         config, dataset, executor, {"Account": 1000}, labels=FrameObservedLabels(supplied_labels())
     )
-    module = load("benchmark_live_batch")
+    module = load("benchmark_batch")
 
     def open_source(path: Path, manifest: dict[str, Any], training: dict[str, Any]) -> Any:
         assert path == dataset
@@ -148,7 +148,7 @@ def test_benchmark_builds_one_training_batch_and_step(
 
     monkeypatch.setattr(module, "open_context_source", open_source)
     output = tmp_path / "report.json"
-    argv = ["benchmark_live_batch", "--config", str(config_path), "--dataset", str(dataset)]
+    argv = ["benchmark_batch", "--config", str(config_path), "--dataset", str(dataset)]
     monkeypatch.setattr(sys, "argv", [*argv, "--output", str(output), "--train-step"])
     module.main()
     report = json.loads(output.read_text())

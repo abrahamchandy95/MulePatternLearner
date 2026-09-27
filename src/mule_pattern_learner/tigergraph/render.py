@@ -1,7 +1,7 @@
 """Render the temporal context query from the shared relation/window contract.
 
 The generated text is the single source of `gsql/temporal/training_context.gsql`
-(re-render with `scripts/temporal/render_training_queries.py`). It runs unchanged
+(re-render with `scripts/render_queries.py`). It runs unchanged
 through INTERPRET (see `as_interpreted`), so parity checks never need an install.
 
 Processing is per request, but set-based inside a request: role, peer, device/IP

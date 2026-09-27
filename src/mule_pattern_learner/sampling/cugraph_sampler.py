@@ -407,7 +407,7 @@ class CuGraphSampler:
         if not np.array_equal(counts, expected_counts(table, quotas)):
             raise RuntimeError(
                 "cuGraph under-sampled a (context, relation): got fewer than "
-                "min(visible candidates, fan-out); run scripts/temporal/verify_cugraph_sampler.py"
+                "min(visible candidates, fan-out); run scripts/verify_cugraph_sampler.py"
             )
         return keep
 
