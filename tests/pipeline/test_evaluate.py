@@ -10,6 +10,7 @@ import pytest
 
 from mule_pattern_learner.artifacts import read_events
 from mule_pattern_learner.config import TransportConfig
+from mule_pattern_learner.contract.feature_groups import extraction_plan
 from mule_pattern_learner.evaluation.truth import ParquetTruth
 from mule_pattern_learner.paths import RunPaths
 from mule_pattern_learner.pipeline import evaluate as pipeline_evaluate
@@ -52,7 +53,14 @@ def test_evaluate_run_connects_after_its_checks_and_reads_truth_on_that_connecti
     # The model's retry budgets, the frozen source checked, the graph's truth on it.
     assert connected == [config.transport]
     assert verified == [executor]
-    assert result["scope"].executor is executor and result["fetcher"].executor is executor
+    contexts = result["contexts"]
+    contexts.close()
+    assert result["scope"].executor is executor and contexts.fetcher.executor is executor
+    # The source requests the model's inputs with its pools.
+    assert (contexts.plan, contexts.sampler) == (
+        extraction_plan(config.feature_plan()),
+        config.sampler,
+    )
     truth = result["truth"]
     assert isinstance(truth, TigerGraphTruth) and truth.executor is executor
     assert result["dataset"] == dataset and result["run"] == run

@@ -26,9 +26,8 @@ from ..batching.assemble import (
 from ..batching.limits import BatchLimits
 from ..contract.bounds import BATCH_ROOTS
 from ..contract.graph_schema import ContextKey
-from ..data.contexts import ContextReader, build_context_source, check_coverage
+from ..data.contexts import ContextReader, check_coverage
 from ..data.hub_registry import HubRegistry, warn_hub_stubs
-from ..data.ports import ContextFetcher
 from ..model.build import Model, build_model, probabilities_from_logits
 from ..runtime.device import choose_device
 from ..runtime.workers import BatchPrefetcher
@@ -111,20 +110,19 @@ def accepted_scores(
 class Predictor:
     """The same feature/weight contract for old and newly arriving accounts.
 
-    Scoring uses the deterministic evaluation sampler. ``hubs`` must be the registry
-    for the scored cutoff (training's dataset registry or ``query_hubs``); without
-    it no child is stubbed and hub children are masked out when TigerGraph rejects them.
-    Without ``contexts`` the predictor streams them through ``fetcher`` with the
-    saved model's plan, pools and transport section.
+    Scoring uses the deterministic evaluation sampler. ``contexts`` must request the
+    saved model's inputs with its candidate pools (the pipeline opens it for the model's
+    configuration). ``hubs`` must be the registry for the scored cutoff (training's
+    dataset registry or ``query_hubs``); without it no child is stubbed and hub children
+    are masked out when TigerGraph rejects them. The caller closes ``contexts``.
     """
 
     def __init__(
         self,
         model: Path | SavedModel,
-        contexts: ContextReader | None = None,
+        contexts: ContextReader,
         device: str = "auto",
         *,
-        fetcher: ContextFetcher | None = None,
         hubs: HubRegistry | None = None,
     ) -> None:
         saved = SavedModel.of(model)
@@ -134,36 +132,26 @@ class Predictor:
         self.sampler = config.sampler
         saved.check_inputs(self.plan)
         self.threshold = saved.threshold
-        created = contexts is None
-        if contexts is None:
-            if fetcher is None:
-                raise ValueError("Provide a context source or a context fetcher")
-            contexts = build_context_source(fetcher, self.plan, self.sampler, config.transport)
-        try:
-            check_coverage(contexts, self.plan, self.sampler)
-            self.contexts = contexts
-            self.hubs = hubs if hubs is not None else HubRegistry.empty()
-            warn_hub_stubs(self.hubs, self.plan)
-            # Batch statistics of everything streamed (stub and rejected children).
-            self.totals: Counter[str] = Counter()
-            self.device = choose_device(device)
-            self.batch_device = batch_device(self.device)
-            # The fan-outs training sampled, so scoring samples training's neighbourhoods.
-            self.fanouts = self.sampler.fanouts
-            self.hidden = config.model.hidden
-            self.batch_size = min(config.training.batch_size, BATCH_ROOTS.high)
-            BatchLimits().validate_model(
-                self.batch_size, self.fanouts, self.hidden, self.plan, self.sampler
-            )
-            self.prefetch = config.runtime.prefetch_batches
-            self.model = build_model(config.model, self.plan, self.fanouts[0]).to(self.device)
-            self.model.load_state_dict(saved.state_dict)
-            self.model.eval()
-            torch.set_num_threads(config.runtime.threads)
-        except BaseException:
-            if created:
-                contexts.close()
-            raise
+        check_coverage(contexts, self.plan, self.sampler)
+        self.contexts = contexts
+        self.hubs = hubs if hubs is not None else HubRegistry.empty()
+        warn_hub_stubs(self.hubs, self.plan)
+        # Batch statistics of everything streamed (stub and rejected children).
+        self.totals: Counter[str] = Counter()
+        self.device = choose_device(device)
+        self.batch_device = batch_device(self.device)
+        # The fan-outs training sampled, so scoring samples training's neighbourhoods.
+        self.fanouts = self.sampler.fanouts
+        self.hidden = config.model.hidden
+        self.batch_size = min(config.training.batch_size, BATCH_ROOTS.high)
+        BatchLimits().validate_model(
+            self.batch_size, self.fanouts, self.hidden, self.plan, self.sampler
+        )
+        self.prefetch = config.runtime.prefetch_batches
+        self.model = build_model(config.model, self.plan, self.fanouts[0]).to(self.device)
+        self.model.load_state_dict(saved.state_dict)
+        self.model.eval()
+        torch.set_num_threads(config.runtime.threads)
 
     def prepare(self, keys: list[ContextKey]) -> RootBatch:
         """Fetch and assemble one batch; safe to call from prefetch worker threads."""

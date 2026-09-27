@@ -32,6 +32,7 @@ from mule_pattern_learner.data.contexts import ContextSource
 from mule_pattern_learner.inference.score_accounts import score_new_accounts
 from mule_pattern_learner.model.build import build_model
 from mule_pattern_learner.paths import DatasetPaths, RunPaths
+from mule_pattern_learner.pipeline.connect import context_source
 from mule_pattern_learner.testing.builders import (
     UNIT_SOURCE,
     FrameObservedLabels,
@@ -142,9 +143,9 @@ def test_new_account_scoring_needs_neither_training_dataset_nor_labels(tmp_path:
         "2025-01-01",
         output,
         rejected_output=tmp_path / "new_rejected.txt",
+        contexts=context_source(executor, config),
         cutoffs=TigerGraphCutoffs(executor),
         hub_reader=TigerGraphHubs(executor),
-        fetcher=TigerGraphContextFetcher(executor),
     )
     frame = pd.read_parquet(output)
     assert result["accounts"] == len(frame) == 13

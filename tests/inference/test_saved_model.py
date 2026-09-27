@@ -134,8 +134,7 @@ def test_models_saved_before_the_restructure_score_as_they_did(name: str) -> Non
         ContextKey("Account", account, 103, cutoff_ms("2025-01-01"), saved.config.scope.id, 3)
         for account in ACCOUNTS
     ]
-    fetcher = TigerGraphContextFetcher(FakeTigerGraph(factory=neighbourhood))
-    predictor = Predictor(saved, fetcher=fetcher)
+    predictor = Predictor(saved, fixture_source(saved.config))
     try:
         frame = predictor.predict(keys)
     finally:

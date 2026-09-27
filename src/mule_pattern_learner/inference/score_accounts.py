@@ -17,7 +17,7 @@ from ..contract.sampler_plan import SamplerPlan
 from ..data.contexts import ContextOpener, ContextReader, close_source
 from ..data.hub_registry import HubRegistry, hub_threshold, load_hub_registry, warn_hub_stubs
 from ..data.manifest import load_prepared
-from ..data.ports import ContextFetcher, CutoffReader, HubReader
+from ..data.ports import CutoffReader, HubReader
 from ..data.splits import eligible_mask, resolve_cutoff, sample_keys
 from ..paths import DatasetPaths
 from ..runtime.progress import emit
@@ -144,10 +144,9 @@ def score_new_accounts(
     output: Path,
     *,
     rejected_output: Path,
+    contexts: ContextReader,
     cutoffs: CutoffReader,
     hub_reader: HubReader,
-    fetcher: ContextFetcher | None = None,
-    contexts: ContextReader | None = None,
     hubs: HubRegistry | None = None,
 ) -> dict[str, Any]:
     """Score arbitrary existing-in-TigerGraph account IDs without a training manifest.
@@ -159,20 +158,19 @@ def score_new_accounts(
     masked child contexts separately (see ``rejection_summary``). A date before the
     first visible event is refused, since no account could be scored at it.
     The date's cutoff comes from ``cutoffs``, the unscoped hub registry from
-    ``hub_reader`` (``hubs`` replaces it) and the contexts from ``fetcher`` (``contexts``
-    replaces them); the pipeline builds them on a connection whose installed queries
-    it has verified.
+    ``hub_reader`` (``hubs`` replaces it) and the contexts from ``contexts``, which
+    scoring closes; the pipeline opens them on a connection whose installed queries it
+    has verified.
     """
-    check_new_outputs(output, rejected_output)
-    saved = SavedModel.of(model)
-    seq, ms = resolve_cutoff(cutoffs, date)
-    predictor = Predictor(saved, contexts, fetcher=fetcher, hubs=hubs)
-    contexts = predictor.contexts
-    output.parent.mkdir(parents=True, exist_ok=True)
     count = rejected = supplied = 0
     examples: list[str] = []
     failed = True
     try:
+        check_new_outputs(output, rejected_output)
+        saved = SavedModel.of(model)
+        seq, ms = resolve_cutoff(cutoffs, date)
+        predictor = Predictor(saved, contexts, hubs=hubs)
+        output.parent.mkdir(parents=True, exist_ok=True)
         if hubs is None:
             predictor.hubs = query_hubs(hub_reader, [seq], predictor.sampler)
             warn_hub_stubs(predictor.hubs, predictor.plan)

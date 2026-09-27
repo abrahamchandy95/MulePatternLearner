@@ -9,11 +9,10 @@ from ..evaluation.audit import audit, audit_inputs
 from ..evaluation.truth import TruthReader
 from ..paths import DATA_DIR, RunPaths
 from ..runtime.progress import recording
-from ..tigergraph.context_query import TigerGraphContextFetcher
 from ..tigergraph.oracle import TigerGraphTruth
 from ..tigergraph.provenance import verify_frozen_source
 from ..tigergraph.scope import TigerGraphScope
-from .connect import connect
+from .connect import connect, context_source
 
 
 def evaluate_run(
@@ -35,6 +34,6 @@ def evaluate_run(
             run,
             truth if truth is not None else TigerGraphTruth(executor),
             scope=TigerGraphScope(executor),
-            fetcher=TigerGraphContextFetcher(executor),
+            contexts=context_source(executor, saved.config),
             dataset=dataset,
         )
