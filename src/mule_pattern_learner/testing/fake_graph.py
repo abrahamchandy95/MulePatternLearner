@@ -344,6 +344,8 @@ def policy_counts(policy: str) -> dict[str, int]:
 class ScopeServer:
     """A TigerGraph fake for scope headers, scope creation and the scope policy query."""
 
+    graph_name = GRAPH_NAME
+
     def __init__(self, header: dict[str, Any] | None, policy: str) -> None:
         self.header, self.policy = header, policy
         self.calls: list[tuple[str, dict[str, Any], dict[str, Any]]] = []

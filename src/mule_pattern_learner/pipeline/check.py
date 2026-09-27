@@ -38,7 +38,7 @@ from ..paths import DATA_DIR, DatasetPaths
 from ..runtime.device import choose_device, torch_runtime
 from ..sampling.cugraph_sampler import cugraph_usable
 from ..tigergraph.context_query import TigerGraphContextFetcher
-from ..tigergraph.executor import TigerGraphExecutor
+from ..tigergraph.executor import ConnectionExecutor, TigerGraphExecutor
 from ..tigergraph.gsql_text import repository_queries
 from ..tigergraph.installer import has_scope_vertex, query_problems
 from ..training.objective import nnpu_objective, nnpu_step
@@ -57,12 +57,12 @@ def rest_calls(contexts: ContextReader) -> tuple[int, dict[str, int]]:
     return executor.calls, dict(executor.retries)
 
 
-def graph_readiness(executor: TigerGraphExecutor) -> dict[str, Any]:
+def graph_readiness(executor: ConnectionExecutor) -> dict[str, Any]:
     """The graph name, the scope vertex type and the installed training queries."""
     problems = query_problems(executor)
     names = repository_queries(TRAINING_QUERY_FILES)
     return {
-        "graph": str(executor.client.graphname),
+        "graph": executor.graph_name,
         "scope_schema": "present" if has_scope_vertex(executor) else "missing",
         "queries": {
             "up_to_date": [name for name in names if name not in problems],

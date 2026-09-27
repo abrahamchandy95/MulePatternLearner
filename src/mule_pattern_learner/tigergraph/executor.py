@@ -156,10 +156,11 @@ class ConnectionExecutor(QueryExecutor, Protocol):
     """A QueryExecutor that also runs operations on its connection and read-only GSQL.
 
     The scope, provenance and installer functions use these; TigerGraphExecutor
-    retries both under its budgets.
+    retries both under its budgets. ``graph_name`` is the graph the connection uses.
     """
 
     client: Any
+    graph_name: str
 
     def call(self, operation: Callable[[Any], T], *, what: str) -> T: ...
     def gsql(self, text: str, *, what: str = "gsql") -> str: ...
@@ -230,6 +231,7 @@ class TigerGraphExecutor:
         self.client = client
         if self.client.graphname != GRAPH_NAME:
             raise ValueError(f"Training queries require {GRAPH_NAME}")
+        self.graph_name: str = GRAPH_NAME
 
     def delay(self, attempt: int) -> float:
         """Exponential backoff with equal jitter, capped at max_delay_s."""
