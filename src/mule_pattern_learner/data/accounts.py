@@ -14,6 +14,7 @@ from ..contract.bounds import ID_BYTES, POSITIVE_POOL
 from ..contract.clock import timestamp
 from ..contract.fingerprints import stable_score
 from ..contract.graph_schema import PHASE_SPLIT, SPLITS
+from ..contract.salts import RESERVOIR_SALT
 from .observed_labels import ORACLE_COLUMNS
 from .ports import ObservedLabelReader, ScopeReader
 
@@ -91,9 +92,7 @@ def select_accounts(
         if row["first_seen_ts_ms"] >= min(timestamp(d) for d in dataset.dates[split]):
             continue
         row["in_marginal"] = True
-        # The salt of the reservoir ranks. It feeds the seeded draw, so it keeps the name
-        # it had before the layered restructure, and a dataset selects the same accounts.
-        rank = stable_score(account, seed, "marginal_cohort")
+        rank = stable_score(account, seed, RESERVOIR_SALT)
         entry = (-rank, account, row)
         heap = heaps[split]
         if len(heap) < limits[split]:

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from ..contract.fingerprints import hash64
+from ..contract.salts import STEP_SALT
 
 
 def pu_batches(
@@ -74,7 +75,7 @@ def evaluation_indices(
 
 def step_seed(seed: int, epoch: int, step: int) -> int:
     """Stable nonnegative 63-bit seed for one training step, identical on every machine."""
-    return hash64("temporal_live_step", seed, epoch, step) >> 1
+    return hash64(STEP_SALT, seed, epoch, step) >> 1
 
 
 @dataclass(frozen=True)
