@@ -17,8 +17,8 @@ from mule_pattern_learner.contract.server import (
 )
 from mule_pattern_learner.data.contexts import ContextSource
 from mule_pattern_learner.paths import GSQL_DIR
-from mule_pattern_learner.testing.builders import PLAN, SAMPLER, hub_rows, root
-from mule_pattern_learner.testing.fake_graph import ContextServer, FakeTigerGraph
+from mule_pattern_learner.testing.builders import PLAN, SAMPLER, hub_rows, payments_context, root
+from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
 from mule_pattern_learner.tigergraph import gsql_text
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
 from mule_pattern_learner.tigergraph.gsql_text import definitions, parameter_names
@@ -77,12 +77,12 @@ def test_sent_parameters_match_the_repository_query_signatures() -> None:
     context = signature("queries/training_context.gsql", CONTEXT_QUERY)
     windows = (FeaturePlan(DEFAULT_FLAG_GROUPS, a) for a in ARCHITECTURES)
     for plan in (PLAN, *windows):
-        server = ContextServer()
+        server = FakeTigerGraph(factory=payments_context)
         store = ContextSource(TigerGraphContextFetcher(server), plan=plan, sampler=SAMPLER)
         store.fetch([root(0)], hop=1)
         store.fetch([root(0)], hop=2)
         store.close()
-        assert all(set(call) == context for call in server.calls)
+        assert len(server.calls) == 2 and all(set(call) == context for _, call in server.calls)
     hubs = FakeTigerGraph(answers={HUB_QUERY: lambda params: hub_rows([1000, 2000])})
     TigerGraphHubs(hubs).hub_registry([1000, 2000], threshold=1024)
     assert set(hubs.calls[0][1]) == signature("queries/hub_accounts.gsql", HUB_QUERY)

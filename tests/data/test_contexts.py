@@ -34,11 +34,16 @@ from mule_pattern_learner.testing.builders import (
     event,
     message,
     neighbourhood,
+    payments_context,
     query_context_batch,
     root,
 )
 from mule_pattern_learner.testing.fake_connection import FakeConn, executor
-from mule_pattern_learner.testing.fake_graph import ContextServer, FakeTigerGraph
+from mule_pattern_learner.testing.fake_graph import (
+    FakeTigerGraph,
+    pool_of,
+    request_keys,
+)
 from mule_pattern_learner.tigergraph.context_query import (
     ContextTimeoutError,
     TigerGraphContextFetcher,
@@ -48,9 +53,21 @@ from mule_pattern_learner.tigergraph.context_query import (
 from mule_pattern_learner.tigergraph.executor import ServerTimeoutError
 
 
+def payments_graph(**options: Any) -> FakeTigerGraph:
+    """A fake graph whose every context holds two payments (payments_context)."""
+    return FakeTigerGraph(factory=payments_context, **options)
+
+
+def context_calls(graph: FakeTigerGraph) -> list[dict[str, Any]]:
+    """The parameters of the graph's context requests, in order."""
+    return [params for name, params in graph.calls if name == CONTEXT_QUERY]
+
+
 def test_per_request_failures_become_none_and_are_counted() -> None:
     keys = [root(i) for i in range(5)]
-    server = ContextServer({keys[1]: "history_capacity_exceeded", keys[3]: "missing_entity"})
+    server = payments_graph(
+        statuses={keys[1]: "history_capacity_exceeded", keys[3]: "missing_entity"}
+    )
     store = ContextSource(
         TigerGraphContextFetcher(server), plan=PLAN, sampler=SAMPLER, request_batch_size=16
     )
@@ -74,14 +91,14 @@ def test_per_request_failures_become_none_and_are_counted() -> None:
 
 def test_hop_pools_and_flags_are_sent_and_lru_is_keyed_by_hop() -> None:
     plan = FeaturePlan(("entity_meta", "message_core", "time_encoding", "rolling_windows"), "tgat")
-    server = ContextServer()
+    server = payments_graph()
     store = ContextSource(TigerGraphContextFetcher(server), plan=plan, sampler=SAMPLER, capacity=8)
     key = root(0)
     store.fetch([key], hop=1)
     store.fetch([key], hop=2)
     store.fetch([key], hop=1)
     assert store.database_calls == 2 and len(server.calls) == 2
-    first, second = server.calls
+    first, second = context_calls(server)
     assert {k: first[k] for k in SAMPLER.query_params(1)} == SAMPLER.query_params(1)
     assert {k: second[k] for k in SAMPLER.query_params(2)} == SAMPLER.query_params(2)
     assert first["include_rolling_windows"] and not second["include_rolling_windows"]
@@ -94,7 +111,7 @@ def test_hop_pools_and_flags_are_sent_and_lru_is_keyed_by_hop() -> None:
 
 def test_sources_count_requested_distinct_and_cached_contexts() -> None:
     store = ContextSource(
-        TigerGraphContextFetcher(ContextServer()), plan=PLAN, sampler=SAMPLER, capacity=8
+        TigerGraphContextFetcher(payments_graph()), plan=PLAN, sampler=SAMPLER, capacity=8
     )
     keys = [root(i) for i in range(4)]
     # A key repeated within one fetch is asked for once.
@@ -132,7 +149,7 @@ def test_sources_count_requested_distinct_and_cached_contexts() -> None:
 
 def test_lru_is_bounded_and_close_releases_it() -> None:
     store = ContextSource(
-        TigerGraphContextFetcher(ContextServer()), plan=PLAN, sampler=SAMPLER, capacity=8
+        TigerGraphContextFetcher(payments_graph()), plan=PLAN, sampler=SAMPLER, capacity=8
     )
     for start in range(0, 64, 16):
         store.fetch([root(i) for i in range(start, start + 16)])
@@ -152,7 +169,7 @@ def test_lru_is_bounded_and_close_releases_it() -> None:
 
 
 def test_concurrent_fetches_share_requests_and_respect_concurrency() -> None:
-    server = ContextServer(delay=0.01)
+    server = payments_graph(delay=0.01)
     store = ContextSource(
         TigerGraphContextFetcher(server),
         plan=PLAN,
@@ -181,19 +198,25 @@ def test_concurrent_fetches_share_requests_and_respect_concurrency() -> None:
         thread.join()
     assert not errors and len(results) == 12
     assert server.peak <= 3
-    assert max(server.requested.values()) == 1  # each (hop, key) requested once
+    # Each (hop, key) is requested once; the hops ask for different pools.
+    requested = Counter(
+        (pool_of(params), key) for params in context_calls(server) for key in request_keys(params)
+    )
+    assert max(requested.values()) == 1
     assert store.database_calls == len(server.calls)
     store.close()
 
 
 def test_failed_request_propagates_to_every_waiting_fetch() -> None:
-    class Failing(ContextServer):
-        def run(self, name: str, params: dict[str, Any], **_: Any) -> list[dict[str, Any]]:
-            time.sleep(0.05)
-            raise ValueError("contract violation")
+    def failing(name: str, params: dict[str, Any]) -> None:
+        time.sleep(0.05)
+        raise ValueError("contract violation")
 
     store = ContextSource(
-        TigerGraphContextFetcher(Failing()), plan=PLAN, sampler=SAMPLER, concurrency=2
+        TigerGraphContextFetcher(payments_graph(before=failing)),
+        plan=PLAN,
+        sampler=SAMPLER,
+        concurrency=2,
     )
     errors: list[BaseException] = []
 
@@ -217,13 +240,11 @@ def test_close_without_wait_cancels_queued_requests_and_leaves_daemon_workers() 
 
     entered: list[int] = []
 
-    class Blocking(ContextServer):
-        def run(self, name: str, params: dict[str, Any], **_: Any) -> list[dict[str, Any]]:
-            entered.append(len(params["node_ids"]))
-            release.wait(10)
-            return super().run(name, params)
+    def blocking(name: str, params: dict[str, Any]) -> None:
+        entered.append(len(params["node_ids"]))
+        release.wait(10)
 
-    server = Blocking()
+    server = payments_graph(before=blocking)
     store = ContextSource(
         TigerGraphContextFetcher(server),
         plan=PLAN,
@@ -263,32 +284,26 @@ def test_close_without_wait_cancels_queued_requests_and_leaves_daemon_workers() 
 
 
 def test_timed_out_blocks_are_bisected_and_a_single_slow_key_is_fatal() -> None:
-    class Slow(ContextServer):
+    def slow(limit: int, slow_ids: set[str]) -> FakeTigerGraph:
         """Times out on any request with more than `limit` keys or with a slow key."""
 
-        def __init__(self, limit: int, slow_ids: set[str]) -> None:
-            super().__init__()
-            self.limit, self.slow_ids = limit, slow_ids
-            self.sizes: list[int] = []
-
-        def run(self, name: str, params: dict[str, Any], **_: Any) -> list[dict[str, Any]]:
-            with self.lock:
-                self.sizes.append(len(params["node_ids"]))
-            if len(params["node_ids"]) > self.limit or self.slow_ids & set(params["node_ids"]):
+        def timeout(name: str, params: dict[str, Any]) -> None:
+            if len(params["node_ids"]) > limit or slow_ids & set(params["node_ids"]):
                 raise ServerTimeoutError(f"{CONTEXT_QUERY} timed out")
-            return super().run(name, params)
+
+        return payments_graph(before=timeout)
 
     keys = [root(i) for i in range(8)]
-    server = Slow(limit=2, slow_ids=set())
+    server = slow(limit=2, slow_ids=set())
     store = ContextSource(
         TigerGraphContextFetcher(server), plan=PLAN, sampler=SAMPLER, request_batch_size=8
     )
     rows = store.fetch(keys)
     assert [row and row["node_id"] for row in rows] == [key.node_id for key in keys]
-    assert server.sizes == [8, 4, 2, 2, 4, 2, 2]
+    assert [len(params["node_ids"]) for params in context_calls(server)] == [8, 4, 2, 2, 4, 2, 2]
     assert store.database_calls == 4 and store.diagnostics["timeout_splits"] == 3
     store.close()
-    server = Slow(limit=8, slow_ids={keys[5].node_id})
+    server = slow(limit=8, slow_ids={keys[5].node_id})
     store = ContextSource(
         TigerGraphContextFetcher(server), plan=PLAN, sampler=SAMPLER, request_batch_size=8
     )
@@ -299,7 +314,7 @@ def test_timed_out_blocks_are_bisected_and_a_single_slow_key_is_fatal() -> None:
     store.close()
     # Through the real executor a multi-key block is split at once (no repeat of the
     # timed-out request) and a single key gets one retry before the fatal error.
-    responder = ContextServer()
+    responder = payments_graph()
     timeout = TigerGraphException("Query timeout exceeded", "REST-3002")
 
     def answer(name: str, params: dict[str, Any], kwargs: dict[str, Any]) -> Any:
@@ -315,13 +330,13 @@ def test_timed_out_blocks_are_bisected_and_a_single_slow_key_is_fatal() -> None:
 
 
 def test_encoding_spot_checks_follow_the_cadence_and_are_stripped() -> None:
-    server = ContextServer()
+    server = payments_graph()
     store = ContextSource(
         TigerGraphContextFetcher(server), plan=PLAN, sampler=SAMPLER, request_batch_size=1, concurrency=1,
         encoding_check_every=3,
     )  # fmt: skip
     rows = store.fetch([root(i) for i in range(7)])
-    assert [call["emit_encodings"] for call in server.calls] == [
+    assert [call["emit_encodings"] for call in context_calls(server)] == [
         True, False, False, True, False, False, True,
     ]  # fmt: skip
     assert store.diagnostics["encoding_checks"] == 3
@@ -331,8 +346,8 @@ def test_encoding_spot_checks_follow_the_cadence_and_are_stripped() -> None:
 
 def test_corrupted_or_missing_spot_check_vectors_fail() -> None:
     for server, expected in (
-        (ContextServer(corrupt=True), "shared basis"),
-        (ContextServer(omit_encodings=True), "do not cover"),
+        (payments_graph(encodings="perturbed"), "shared basis"),
+        (payments_graph(encodings="omitted"), "do not cover"),
     ):
         store = ContextSource(TigerGraphContextFetcher(server), plan=PLAN, sampler=SAMPLER)
         with pytest.raises(ValueError, match=expected):

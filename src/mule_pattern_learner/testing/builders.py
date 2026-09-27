@@ -413,6 +413,12 @@ def context_row(
     return encode(row) if encodings else row
 
 
+def payments_context(key: ContextKey) -> dict[str, Any]:
+    """An ok context of two payments before the cutoff, the second without a gap."""
+    messages = [event(key.cutoff_seq - 1, key), event(key.cutoff_seq - 3, key, gap=0)]
+    return context_row(key, messages, encodings=False)
+
+
 def root(i: int, **changes: Any) -> ContextKey:
     return replace(ContextKey("Account", f"A{i:04}", 1000, 100_000, "scope", 1), **changes)
 
