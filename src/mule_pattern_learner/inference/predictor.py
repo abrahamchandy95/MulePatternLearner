@@ -1,18 +1,22 @@
-"""Inductive prediction from bounded contexts, independent of training account IDs."""
+"""Inductive prediction from bounded contexts, independent of training account IDs.
+
+score_batches is the one scoring loop: training scores validation and test with it,
+and TemporalPredictor scores prepared splits, audit samples and arbitrary accounts.
+"""
 
 from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Callable, Generator, Iterable, Iterator
+import contextlib
 from pathlib import Path
 from typing import Any, NamedTuple
 
 import numpy as np
 import pandas as pd
 import torch
-from torch import nn
 
-from ..batching.assemble import RootBatch, build_root_batch, to_device
+from ..batching.assemble import RootBatch, batch_device, build_root_batch, to_device
 from ..batching.limits import BatchLimits
 from ..config import fanouts
 from ..contract.feature_groups import FeaturePlan
@@ -21,6 +25,7 @@ from ..contract.sampler_plan import SamplerPlan
 from ..data.contexts import ContextSource, check_coverage, streaming_source
 from ..data.hub_registry import HubRegistry, warn_hub_stubs
 from ..model.build import build_model, probabilities_from_logits
+from ..model.tgat import LiveTGAT
 from ..runtime.device import choose_device
 from ..runtime.workers import BatchPrefetcher
 from ..tigergraph.executor import QueryExecutor
@@ -28,27 +33,42 @@ from .saved_model import ModelCheckpoint
 
 
 class ScoredBatch(NamedTuple):
-    """One assembled batch and the logits of its accepted roots (None when none was)."""
+    """One assembled batch and the logits (and embeddings) of its accepted roots.
+
+    Both are None when TigerGraph rejected every root; embeddings are also None unless
+    they were asked for.
+    """
 
     prepared: RootBatch
     logits: torch.Tensor | None
+    embeddings: torch.Tensor | None = None
 
 
-def score_batch(model: nn.Module, prepared: RootBatch, device: torch.device) -> ScoredBatch:
-    """The logits of one assembled batch, on ``device``; the model must be in eval mode."""
+def score_batch(
+    model: LiveTGAT, prepared: RootBatch, device: torch.device, *, embeddings: bool = False
+) -> ScoredBatch:
+    """The logits of one assembled batch, on ``device``; the model must be in eval mode.
+
+    With ``embeddings`` the head scores the encoder's output, which is kept too.
+    """
     if prepared.batch is None:
         return ScoredBatch(prepared, None)
     with torch.inference_mode():
-        return ScoredBatch(prepared, model(to_device(prepared.batch, device)))
+        batch = to_device(prepared.batch, device)
+        if not embeddings:
+            return ScoredBatch(prepared, model(batch))
+        hidden = model.encode(batch)
+        return ScoredBatch(prepared, model.head(hidden).squeeze(-1), hidden)
 
 
 def score_batches(
-    model: nn.Module,
+    model: LiveTGAT,
     build: Callable[[list[ContextKey]], RootBatch],
     batches: Iterable[list[ContextKey]],
     *,
     device: torch.device,
     prefetch: int,
+    embeddings: bool = False,
 ) -> Generator[ScoredBatch]:
     """Score key batches in order, building the next ``prefetch`` ones on worker threads.
 
@@ -58,7 +78,7 @@ def score_batches(
     """
     with BatchPrefetcher(build, batches, depth=prefetch) as prepared:
         for item in prepared:
-            yield score_batch(model, item, device)
+            yield score_batch(model, item, device, embeddings=embeddings)
 
 
 def accepted_scores(
@@ -122,8 +142,7 @@ class TemporalPredictor:
             # Batch statistics of everything streamed (stub and rejected children).
             self.totals: Counter[str] = Counter()
             self.device = choose_device(device)
-            # CUDA batches are assembled on the device by the prefetch workers.
-            self.batch_device = self.device if self.device.type == "cuda" else torch.device("cpu")
+            self.batch_device = batch_device(self.device)
             # Read like RunSettings reads them, so scoring samples training's neighbourhoods.
             self.fanouts = fanouts(self.config)
             self.hidden = int(self.config["hidden"])
@@ -157,8 +176,11 @@ class TemporalPredictor:
 
     def infer(self, prepared: RootBatch) -> pd.DataFrame:
         """Scores and embeddings for the accepted roots only; CPU outputs."""
-        keys = prepared.keys
-        if prepared.batch is None:
+        return self.frame(score_batch(self.model, prepared, self.device, embeddings=True))
+
+    def frame(self, scored: ScoredBatch) -> pd.DataFrame:
+        """The rows of a scored batch's accepted roots."""
+        if scored.logits is None or scored.embeddings is None:
             return pd.DataFrame(
                 {
                     "account_id": pd.Series([], dtype=object),
@@ -167,16 +189,12 @@ class TemporalPredictor:
                     "predicted_mule": np.zeros(0, dtype=bool),
                 }
             )
-        with torch.inference_mode():
-            batch = {k: v.to(self.device) for k, v in prepared.batch.items()}
-            hidden = self.model.encode(batch)
-            probabilities = probabilities_from_logits(self.model.head(hidden).squeeze(-1))
-            vectors = hidden.cpu().tolist()
+        probabilities = probabilities_from_logits(scored.logits)
         return pd.DataFrame(
             {
-                "account_id": [key.node_id for key in keys],
+                "account_id": [key.node_id for key in scored.prepared.keys],
                 "score": probabilities,
-                "embedding": vectors,
+                "embedding": scored.embeddings.cpu().tolist(),
                 "predicted_mule": probabilities >= self.threshold,
             }
         )
@@ -192,16 +210,24 @@ class TemporalPredictor:
 
         Integer batch statistics are summed into ``self.totals``.
         """
-        with BatchPrefetcher(self.prepare, batches, depth=self.prefetch) as prepared:
-            for item in prepared:
+        scored = score_batches(
+            self.model,
+            self.prepare,
+            batches,
+            device=self.device,
+            prefetch=self.prefetch,
+            embeddings=True,
+        )
+        with contextlib.closing(scored):
+            for item in scored:
                 self.totals.update(
                     {
                         k: int(v)
-                        for k, v in item.stats.items()
+                        for k, v in item.prepared.stats.items()
                         if isinstance(v, (int, np.integer)) and not isinstance(v, bool)
                     }
                 )
-                yield self.infer(item), item.rejected
+                yield self.frame(item), item.prepared.rejected
 
     def score_keys(
         self, batches: Iterable[list[ContextKey]]
