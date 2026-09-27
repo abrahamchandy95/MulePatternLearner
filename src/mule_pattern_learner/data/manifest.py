@@ -113,7 +113,9 @@ def load_prepared(dataset: DatasetPaths) -> tuple[dict[str, Any], pd.DataFrame]:
     """Shared training/inference integrity gate for all prepared artifacts."""
     manifest = read_manifest(dataset)
     if manifest["status"] != "ready":
-        raise ValueError(f"Dataset is incomplete ({manifest['status']}); run prepare again")
+        raise ValueError(
+            f"Dataset is incomplete ({manifest['status']}); run `mule train` to finish preparing it"
+        )
     check_query_hashes(manifest, dataset)
     required = [
         (dataset.accounts, "accounts_sha256"),
