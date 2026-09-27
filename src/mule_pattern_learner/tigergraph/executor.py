@@ -364,7 +364,7 @@ class TigerGraphExecutor:
                 raise ValueError(f"{name} returned {type(result).__name__}, not a result list")
             return result
 
-        # Parameter sizes name the request in retry logs (context requests: key count).
+        # Parameter sizes name the request in retry events (context requests: key count).
         sizes = {key: len(value) for key, value in params.items() if isinstance(value, list)}
         detail = (
             f"{sizes['node_ids']} keys"
