@@ -80,10 +80,9 @@ not model inputs. There is no FX conversion or multi-currency modeling yet.
 
 Contexts are streamed: bounded request size, concurrency and LRU, with batch-local
 typed/time-qualified tensor IDs. No full-graph export or ID table was added. The
-preparation records the extraction groups and sampler pools, independent of the model
-seed. `extraction_groups` can request a superset for feature-only ablations; the model
-groups must be a subset.
-A different sampler or missing child context requires fresh preparation. This
+preparation records the sampler pools, independent of the model seed and the feature
+groups: it stores no contexts, and each model requests its own groups, so feature-only
+ablations share one preparation. Different candidate pools require fresh preparation. This
 change does **not** silently build the union of both samplers' neighborhoods or
 stage the entire population. Prepared labels/manifests remain immutable.
 

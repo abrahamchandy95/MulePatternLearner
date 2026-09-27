@@ -381,18 +381,12 @@ def open_context_source(
 ) -> ContextSource:
     """Open the live source of a prepared dataset; `config` is the training config.
 
-    It requests the extraction plan of the training model: the prepared extraction
-    groups (training compares them with PREPARATION_KEYS) and the hop-2 flags of the
-    model's architecture. `config` defaults to the prepared configuration.
+    It requests the training model's groups and hop-2 flags (extraction_plan) with the
+    prepared candidate pools. `config` defaults to the prepared configuration.
     """
     prepared: dict[str, Any] = manifest["config"]
     training = prepared if config is None else config
     plan = extraction_plan(training)
-    if sorted(plan.groups) != sorted(extraction_plan(prepared).groups):
-        raise ValueError(
-            f"Extraction groups differ from the preparation in {dataset}; prepare a new "
-            "dataset (set prepared_id) or restore the prepared extraction_groups"
-        )
     sampler = SamplerPlan.from_config(training)
     if sampler_pools(sampler) != sampler_pools(SamplerPlan.from_config(prepared)):
         raise ValueError(

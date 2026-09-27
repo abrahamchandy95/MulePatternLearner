@@ -51,7 +51,6 @@ from .checkpoint import (
 )
 from .config_schema import fanouts, validate_config
 from .contract import (
-    CLIENT_GROUPS,
     ContextKey,
     FeaturePlan,
     SamplerPlan,
@@ -344,10 +343,8 @@ def train(
     differences = preparation_mismatches(config, manifest)
     if differences:
         raise ValueError(f"Training settings differ from preparation: {differences}")
-    # Same extraction groups as preparation (checked above); hop-2 flags follow this model.
+    # The source requests this model's groups; its hop-2 flags follow the architecture.
     source_plan = extraction_plan(config)
-    if set(plan.groups) - set(source_plan.groups) - CLIENT_GROUPS:
-        raise ValueError("Prepared extraction does not contain requested feature groups")
     mask = load_observed_labels(accounts, dataset)
     training, evaluation = _samples(config, settings, accounts, mask)
     prior, positive_weight = nnpu_objective(config)

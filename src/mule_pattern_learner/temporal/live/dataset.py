@@ -19,7 +19,6 @@ from .contract import (
     SPLIT_PHASE,
     ContextKey,
     SamplerPlan,
-    extraction_plan,
     fingerprint,
     sampler_pools,
 )
@@ -48,7 +47,6 @@ PREPARATION_KEYS = (
     "split_seed",
     "cohort_seed",
     "sampler_pools",
-    "extraction_groups",
     "scope_unowned",
 )
 
@@ -96,13 +94,13 @@ def check_query_hashes(manifest: dict[str, Any], dataset: Path) -> None:
 def preparation_view(config: dict[str, Any]) -> dict[str, Any]:
     """Normalized values of PREPARATION_KEYS of the validated configuration.
 
-    sampler_pools is what TigerGraph returns per hop. extraction_groups are the groups
-    TigerGraph is asked for; the source derives the hop-2 flags from each training
-    model, so arms of any architecture can share one preparation.
+    sampler_pools is what TigerGraph returns per hop. Feature groups are not a
+    preparation setting: a preparation stores no contexts, and the source requests each
+    training model's groups, so arms of any groups and architecture share one
+    preparation.
     """
     config = validate_config(config)
     sampler = SamplerPlan.from_config(config)
-    plan = extraction_plan(config)
     view = {
         "dataset_id": config.get("dataset_id"),
         "prepared_id": config.get("prepared_id"),
@@ -112,7 +110,6 @@ def preparation_view(config: dict[str, Any]) -> dict[str, Any]:
         "split_seed": config["split_seed"],
         "cohort_seed": cohort_seed(config),
         "sampler_pools": sampler_pools(sampler),
-        "extraction_groups": sorted(plan.groups),
         "scope_unowned": config["scope_unowned"],
     }
     assert tuple(view) == PREPARATION_KEYS

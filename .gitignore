@@ -85,8 +85,6 @@ nosetests.xml
 
 # ── ML / experiment artifacts ───────────────────────────────────────────────
 *.pt
-# Small saved models the tests load (tests/temporal/test_saved_models.py).
-!tests/temporal/fixtures/saved_models/*.pt
 *.pth
 *.ckpt
 *.onnx
@@ -170,3 +168,8 @@ desktop.ini
 
 # Local research attachments.
 /docs/*.pdf
+
+# Fixtures the tests load: models and a prepared cohort written before the restructure
+# (tests/temporal/test_saved_models.py).
+!tests/temporal/fixtures/saved_models/*.pt
+!tests/temporal/fixtures/saved_models/cohort/*

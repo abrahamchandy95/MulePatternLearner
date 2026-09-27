@@ -51,7 +51,6 @@ from mule_pattern_learner.temporal.live.contract import (
 )
 from mule_pattern_learner.temporal.live.dataset import preparation_view
 from mule_pattern_learner.temporal.live.evaluation import evaluate_final_population
-from mule_pattern_learner.temporal.live.experiments import feature_experiments
 from mule_pattern_learner.temporal.live.hubs import HUB_COLUMNS, HubRegistry, warn_hub_stubs
 from mule_pattern_learner.temporal.live.model import LiveTGAT, build_model
 from mule_pattern_learner.temporal.live.sampling import (
@@ -1423,33 +1422,6 @@ def test_train_command_prepares_then_trains_or_resumes(
     assert prepared[-1][1] == tmp_path / "model_run" / "prepared"
     c, d, o, resume = trained[-1]
     assert c["dataset_id"] == "derived" and d == prepared[-1][1] and o == output and resume
-
-
-@pytest.mark.legacy
-def test_feature_arms_keep_the_base_extraction() -> None:
-    groups = sorted(
-        {
-            *DEFAULT_GROUPS,
-            "event_channel",
-            "decayed_activity",
-            "history_support",
-            "identity_order",
-            "device_ip_context",
-            "rolling_windows",
-            "amount_ratios",
-            "recency",
-            "association_counts",
-            "entity_age",
-            "pair_window_counts",
-        }
-    )
-    base = base_config(extraction_groups=groups)
-    arms = feature_experiments(base)
-    assert all(arm["extraction_groups"] == groups for arm in arms.values())
-    with pytest.raises(ValueError, match="window_free_device_ip"):
-        feature_experiments(
-            base_config(extraction_groups=[g for g in groups if g != "device_ip_context"])
-        )
 
 
 def test_nnpu_objective_resolves_the_named_positive_weights() -> None:

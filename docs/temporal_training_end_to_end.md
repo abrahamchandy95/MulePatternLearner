@@ -418,8 +418,8 @@ and internal first-time inflows alone ranked test mules at a weighted ROC AUC of
 0.92, against the model's 0.78. Those counts were chosen after reading the data
 generator's mule typology, and the internal ones suit it more than a real bank, which is
 why `pool_internal_inflows` is a group of its own that an ablation arm drops. TigerGraph
-never sends them, so the query and the extraction groups are unchanged and a streamed
-preparation made without the groups still serves the built-in run.
+never sends them, so the query is unchanged and a preparation made without the groups
+still serves the built-in run.
 
 ## The model and the loss
 
@@ -688,9 +688,9 @@ changes only that key; lists and scalars replace the default. Unknown keys are r
 | Transport | `request_batch_size` 8, `query_concurrency` 16, `context_lru_capacity` 256, `encoding_check_every` 64, `max_query_attempts` 6, `max_outage_s` 900 |
 
 Preparation keys (the derived dataset_id, an optional shared `prepared_id`, scope_id,
-scope_unowned, dates, seed_limits, split_seed, cohort_seed, the candidate pools, and the
-extraction groups derived from feature_groups) must match between preparation and
-training; other settings may change between runs. A new `--output` prepares its own
+scope_unowned, dates, seed_limits, split_seed, cohort_seed and the candidate pools) must
+match between preparation and training; other settings, feature groups included, may
+change between runs. A new `--output` prepares its own
 cohort; `--dataset <run>_run/prepared` reuses another run's.
 
 ## Troubleshooting

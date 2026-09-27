@@ -573,26 +573,12 @@ def sampler_pools(sampler: SamplerPlan) -> dict[str, dict[str, Any]]:
     return {"roots": sampler.query_params(1), "children": sampler.query_params(2)}
 
 
-def extraction_groups(config: dict[str, Any]) -> tuple[str, ...]:
-    """The configured extraction superset without client groups.
-
-    `extraction_groups`, else `feature_groups`, else the built-in groups.
-    """
-    groups = config.get("extraction_groups") or config.get("feature_groups") or BUILT_IN_GROUPS
-    return tuple(g for g in groups if g not in CLIENT_GROUPS)
-
-
 def extraction_plan(config: dict[str, Any]) -> FeaturePlan:
-    """What the context source asks TigerGraph for.
+    """What the context source asks TigerGraph for: the model's groups but the client ones.
 
-    Groups are `extraction_groups(config)`; client groups are computed locally.
-    The architecture is the model's, so a split model skips summary groups at hop 2.
+    Client groups are computed locally. The architecture is the model's, so a split
+    model skips summary groups at hop 2.
     """
     model = FeaturePlan.from_config(config)
-    groups = extraction_groups(config)
-    missing = set(model.groups) - set(groups) - CLIENT_GROUPS
-    if missing:
-        raise ValueError(
-            f"Extraction groups must cover all model inputs; missing {sorted(missing)}"
-        )
+    groups = tuple(g for g in model.groups if g not in CLIENT_GROUPS)
     return FeaturePlan(groups, model.architecture)
