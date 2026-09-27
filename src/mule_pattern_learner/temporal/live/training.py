@@ -34,15 +34,24 @@ import pandas as pd
 import torch
 from torch import nn
 
+from ...batching.assemble import RootBatch, build_root_batch
+from ...batching.limits import BatchLimits
 from ...config import fanouts, validate_config
 from ...contract.feature_groups import FeaturePlan, contract_fingerprint, extraction_plan
-from ...contract.graph_schema import ContextKey
+from ...contract.graph_schema import EVALUATION_PROTOCOL, ContextKey, context_scope
 from ...contract.sampler_plan import SamplerPlan
 from ...contract.time_basis import BASIS_ID
+from ...data.contexts import ContextSource, check_coverage, close_source, open_context_source
+from ...data.hub_registry import HubRegistry, load_hub_registry, warn_hub_stubs
+from ...data.manifest import load_prepared, manifest_digest, preparation_mismatches
+from ...data.observed_labels import label_summary, load_observed_labels, visible_labels
+from ...data.splits import eligible_mask, marginal_mask, sample_keys
+from ...inference.rejections import exceeds_rejection_limit
 from ...metrics import evaluate, select_threshold
+from ...model.build import build_model, probabilities_from_logits
+from ...model.loss import NonNegativePULoss
 from ...runtime.device import choose_device, torch_runtime
-from ..loss import NonNegativePULoss
-from .batching import RootBatch, build_root_batch
+from ...sampling.backend import resolve_backend
 from .checkpoint import (
     CHECKPOINT_FORMAT,
     RUN_STATE_FILES,
@@ -52,19 +61,6 @@ from .checkpoint import (
     restore_cuda_rng,
     resume_fingerprint,
 )
-from .dataset import (
-    eligible_mask,
-    load_prepared,
-    manifest_digest,
-    marginal_mask,
-    preparation_mismatches,
-    sample_keys,
-)
-from .hubs import HubRegistry, load_hub_registry, warn_hub_stubs
-from .memory import BatchLimits
-from .model import build_model, probabilities_from_logits
-from .policy import EVALUATION_PROTOCOL, context_scope, exceeds_rejection_limit
-from .sampler import resolve_backend
 from .sampling import (
     MAX_PREFETCH,
     BatchPrefetcher,
@@ -73,8 +69,6 @@ from .sampling import (
     epoch_schedule,
     evaluation_indices,
 )
-from .source import ContextSource, check_coverage, close_source, open_context_source
-from .supervision import label_summary, load_observed_labels, visible_labels
 
 TRAINING_PROTOCOL = "scoped_observed_label_nnpu_v5"
 Batch = dict[str, torch.Tensor]

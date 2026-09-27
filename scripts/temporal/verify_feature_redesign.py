@@ -17,15 +17,15 @@ import numpy as np
 from mule_pattern_learner.contract.feature_groups import FEATURE_GROUPS, FeaturePlan
 from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.contract.sampler_plan import PoolPlan, SamplerPlan
-from mule_pattern_learner.temporal.live.context_query import validate_context
-from mule_pattern_learner.temporal.live.dataset import resolve_cutoff
-from mule_pattern_learner.temporal.live.executor import TigerGraphExecutor, checked_rows
+from mule_pattern_learner.data.splits import resolve_cutoff
 from mule_pattern_learner.temporal.live.history_reference import (
     payment_features,
     stratify,
     visible_history,
 )
-from mule_pattern_learner.temporal.live.queries import as_interpreted
+from mule_pattern_learner.tigergraph.context_query import validate_context
+from mule_pattern_learner.tigergraph.executor import TigerGraphExecutor, checked_rows
+from mule_pattern_learner.tigergraph.render import as_interpreted
 
 
 def audit_history(executor: TigerGraphExecutor, key: ContextKey) -> list[dict[str, Any]]:

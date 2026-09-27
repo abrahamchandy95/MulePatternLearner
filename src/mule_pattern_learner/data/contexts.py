@@ -2,8 +2,8 @@
 
 StreamingContextSource requests each batch's contexts from TigerGraph through
 context_query and keeps a bounded LRU. It returns rows in key order, with None where
-TigerGraph rejected a request. check_coverage, close_source and rejection_summary
-work with any ContextSource.
+TigerGraph rejected a request. check_coverage and close_source work with any
+ContextSource.
 """
 
 from __future__ import annotations
@@ -18,13 +18,13 @@ import threading
 from typing import Any, Protocol, TypeVar
 import weakref
 
-from ...config import TRANSPORT_DEFAULTS
-from ...contract.feature_groups import FeaturePlan, extraction_plan
-from ...contract.graph_schema import ContextKey
-from ...contract.sampler_plan import SamplerPlan, sampler_pools
-from .context_query import query_context_split
-from .executor import QueryExecutor, live_executor, transport_settings
-from .installation import verify_frozen_source
+from ..config import TRANSPORT_DEFAULTS
+from ..contract.feature_groups import FeaturePlan, extraction_plan
+from ..contract.graph_schema import ContextKey
+from ..contract.sampler_plan import SamplerPlan, sampler_pools
+from ..tigergraph.context_query import query_context_split
+from ..tigergraph.executor import QueryExecutor, live_executor, transport_settings
+from ..tigergraph.provenance import verify_frozen_source
 
 T = TypeVar("T")
 
@@ -421,25 +421,3 @@ def close_source(store: ContextSource, *, failed: bool) -> None:
         close(wait=False)  # pyright: ignore[reportCallIssue]
     else:
         close()
-
-
-def rejection_summary(
-    source: ContextSource, rejected_roots: int, totals: Counter[str]
-) -> dict[str, Any]:
-    """Root and child rejections reported separately.
-
-    ``rejected`` counts the roots that were not scored. ``rejected_children`` counts
-    the child contexts masked out of scored batches. ``rejection_events_by_status``
-    is the source's raw counter: every rejected row served by a fetch at either hop,
-    cache replays included, so it is not a count of accounts. Sources that count per
-    hop (``rejections_by_hop``) also give the root and child statuses.
-    """
-    by_hop = getattr(source, "rejections_by_hop", None)
-    return {
-        "rejected": rejected_roots,
-        "rejected_roots_by_status": None if by_hop is None else dict(by_hop.get(1, {})),
-        "rejected_children": int(totals["rejected_children"]),
-        "rejected_children_by_status": None if by_hop is None else dict(by_hop.get(2, {})),
-        "stub_children": int(totals["stub_children"]),
-        "rejection_events_by_status": dict(getattr(source, "rejections", {}) or {}),
-    }

@@ -1,6 +1,6 @@
 """The temporal_training_context request protocol: requests, bisection and validation.
 
-queries.py renders the query; this module is its client side. It validates every
+render.py renders the query; this module is its client side. It validates every
 returned context against its key, clocks and the feature contract, and splits a
 multi-key request that TigerGraph times out on.
 """
@@ -14,17 +14,17 @@ from typing import Any
 
 import numpy as np
 
-from ...contract.feature_groups import (
+from ..contract.feature_groups import (
     AMOUNT_RATIO_CAP,
     AMOUNT_RATIO_FEATURES,
     CLIENT_GROUPS,
     FEATURE_GROUPS,
     FeaturePlan,
 )
-from ...contract.graph_schema import CHANNELS, NODE_TYPES, RAILS, RELATIONS, STRATA, ContextKey
-from ...contract.sampler_plan import SamplerPlan
-from ...contract.server import CONTRACT_VERSION
-from ...contract.time_basis import BASIS_ID, fourier64
+from ..contract.graph_schema import CHANNELS, NODE_TYPES, RAILS, RELATIONS, STRATA, ContextKey
+from ..contract.sampler_plan import SamplerPlan
+from ..contract.server import CONTRACT_VERSION
+from ..contract.time_basis import BASIS_ID, fourier64
 from .executor import CONVERSION_ERRORS, QueryExecutor, ServerTimeoutError, error_summary
 
 LOGGER = logging.getLogger(__name__)

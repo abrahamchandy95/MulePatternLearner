@@ -44,15 +44,15 @@ from unittest.mock import patch
 import pytest
 from temporal_fakes import REPOSITORY, FakeExecutor, neighbourhood, scope_population
 
+from mule_pattern_learner.batching.assemble import RootBatch, tensor_digests
 from mule_pattern_learner.config import run_config, validate_config
 from mule_pattern_learner.contract.feature_groups import extraction_plan
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
+from mule_pattern_learner.data.contexts import StreamingContextSource, streaming_source
+from mule_pattern_learner.data.preparation import prepare
 from mule_pattern_learner.temporal.live import training
-from mule_pattern_learner.temporal.live.batching import RootBatch, tensor_digests
-from mule_pattern_learner.temporal.live.dataset import prepare
-from mule_pattern_learner.temporal.live.queries import render_context_query
 from mule_pattern_learner.temporal.live.sampling import step_seed
-from mule_pattern_learner.temporal.live.source import StreamingContextSource, streaming_source
+from mule_pattern_learner.tigergraph.render import render_context_query
 
 RELATIVE = 1e-5
 # The built-in run (run_config) with a smaller cohort, batch and run. Dropout is the one

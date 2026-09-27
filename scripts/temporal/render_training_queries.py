@@ -4,7 +4,7 @@ import argparse
 from pathlib import Path
 import sys
 
-from mule_pattern_learner.temporal.live.queries import render_context_query
+from mule_pattern_learner.tigergraph.render import render_context_query
 
 
 def main() -> int:

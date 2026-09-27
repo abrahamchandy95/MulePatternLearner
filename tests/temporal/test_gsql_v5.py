@@ -13,8 +13,8 @@ from mule_pattern_learner.contract.feature_groups import (
     FEATURE_GROUPS,
     FeaturePlan,
 )
-from mule_pattern_learner.temporal.live.installation import definitions, parameter_names
-from mule_pattern_learner.temporal.live.queries import as_interpreted, render_context_query
+from mule_pattern_learner.tigergraph.gsql_text import definitions, parameter_names
+from mule_pattern_learner.tigergraph.render import as_interpreted, render_context_query
 
 ROOT = Path(__file__).resolve().parents[2]
 GSQL = ROOT / "gsql/temporal"

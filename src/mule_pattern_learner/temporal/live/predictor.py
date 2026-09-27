@@ -14,26 +14,22 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import torch
 
+from ...batching.assemble import RootBatch, build_root_batch
+from ...batching.limits import BatchLimits
 from ...config import fanouts
 from ...contract.feature_groups import FeaturePlan
 from ...contract.graph_schema import ContextKey
 from ...contract.sampler_plan import SamplerPlan
+from ...data.contexts import ContextSource, check_coverage, close_source, streaming_source
+from ...data.hub_registry import HubRegistry, hub_threshold, warn_hub_stubs
+from ...data.splits import resolve_cutoff
+from ...inference.rejections import rejection_summary
+from ...model.build import build_model, probabilities_from_logits
 from ...runtime.device import choose_device
-from .batching import RootBatch, build_root_batch
+from ...tigergraph.executor import QueryExecutor, live_executor
+from ...tigergraph.hubs import query_hub_registry
 from .checkpoint import ModelCheckpoint
-from .dataset import resolve_cutoff
-from .executor import QueryExecutor, live_executor
-from .hubs import HubRegistry, hub_threshold, query_hub_registry, warn_hub_stubs
-from .memory import BatchLimits
-from .model import build_model, probabilities_from_logits
 from .sampling import BatchPrefetcher
-from .source import (
-    ContextSource,
-    check_coverage,
-    close_source,
-    rejection_summary,
-    streaming_source,
-)
 
 SCORE_SCHEMA = pa.schema(
     [
@@ -239,7 +235,7 @@ def score_new_accounts(
             raise FileExistsError(path)
     saved = ModelCheckpoint.of(checkpoint)
     if executor is None:
-        from .installation import verify_sources
+        from ...tigergraph.installer import verify_sources
 
         # The checkpoint's retry budgets (max_query_attempts, max_outage_s).
         live = live_executor(saved.validated_config())

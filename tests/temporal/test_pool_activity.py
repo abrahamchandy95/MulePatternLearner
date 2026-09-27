@@ -10,6 +10,10 @@ import pytest
 from temporal_fakes import FakeExecutor, association, context, message
 import torch
 
+from mule_pattern_learner.batching import assemble, features
+from mule_pattern_learner.batching.assemble import child_key, make_live_batch
+from mule_pattern_learner.batching.features import node_matrix
+from mule_pattern_learner.batching.pool_counts import pool_activity
 from mule_pattern_learner.config import DEFAULT_RUN, run_config
 from mule_pattern_learner.contract import feature_groups
 from mule_pattern_learner.contract.feature_groups import (
@@ -23,19 +27,14 @@ from mule_pattern_learner.contract.feature_groups import (
 )
 from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
-from mule_pattern_learner.temporal.live import batch_reference, batching
+from mule_pattern_learner.data.contexts import StreamingContextSource
+from mule_pattern_learner.data.manifest import preparation_mismatches, preparation_view
+from mule_pattern_learner.model.build import build_model
+from mule_pattern_learner.model.tgat import LiveTGAT
+from mule_pattern_learner.temporal.live import batch_reference
 from mule_pattern_learner.temporal.live.batch_reference import node_features
-from mule_pattern_learner.temporal.live.batching import (
-    child_key,
-    make_live_batch,
-    node_matrix,
-    pool_activity,
-)
 from mule_pattern_learner.temporal.live.checkpoint import ModelCheckpoint
-from mule_pattern_learner.temporal.live.context_query import validate_context
-from mule_pattern_learner.temporal.live.dataset import preparation_mismatches, preparation_view
-from mule_pattern_learner.temporal.live.model import LiveTGAT, build_model
-from mule_pattern_learner.temporal.live.source import StreamingContextSource
+from mule_pattern_learner.tigergraph.context_query import validate_context
 
 ROOT = ContextKey("Account", "root", 1000, 100_000_000)
 CONFIG = run_config()
@@ -152,7 +151,7 @@ def test_pool_activity_counts_the_candidate_pool_exactly() -> None:
 
 def test_stubs_and_contexts_without_payments_get_zeros() -> None:
     link = POOL[0]
-    stub = batching._stub_row(child_key(link, ROOT), link)  # pyright: ignore[reportPrivateUsage]
+    stub = assemble._stub_row(child_key(link, ROOT), link)  # pyright: ignore[reportPrivateUsage]
     rows = [stub, context(ROOT), context(ROOT, [association(ROOT)])]
     for row in rows:
         assert pool_activity(row) == dict.fromkeys(POOL_NAMES, 0)
@@ -313,7 +312,7 @@ def test_plans_without_pool_groups_are_unaffected(
     def refuse(row: dict[str, Any]) -> dict[str, float]:
         raise AssertionError("pool counts computed for a plan without a pool group")
 
-    monkeypatch.setattr(batching, "pool_activity", refuse)
+    monkeypatch.setattr(features, "pool_activity", refuse)
     monkeypatch.setattr(batch_reference, "pool_activity", refuse)
     row = context(ROOT, POOL)
     np.testing.assert_allclose(node_features(row, plan), node_matrix([row], plan)[0])

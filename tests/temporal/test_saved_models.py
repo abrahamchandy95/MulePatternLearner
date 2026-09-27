@@ -34,11 +34,11 @@ from mule_pattern_learner.contract.feature_groups import (
 from mule_pattern_learner.contract.fingerprints import fingerprint
 from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
+from mule_pattern_learner.data.contexts import streaming_source
 from mule_pattern_learner.temporal.live import pipeline
 from mule_pattern_learner.temporal.live.checkpoint import ModelCheckpoint
 from mule_pattern_learner.temporal.live.inference import score
 from mule_pattern_learner.temporal.live.predictor import TemporalPredictor
-from mule_pattern_learner.temporal.live.source import streaming_source
 from mule_pattern_learner.temporal.live.training import train
 
 FIXTURES = Path(__file__).parent / "fixtures" / "saved_models"

@@ -25,10 +25,11 @@ from temporal_fakes import (
 from mule_pattern_learner.config import run_config
 from mule_pattern_learner.contract.feature_groups import FeaturePlan, extraction_plan
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
-from mule_pattern_learner.temporal.live import labels, reveal_model
-from mule_pattern_learner.temporal.live.dataset import prepare
+from mule_pattern_learner.data.contexts import StreamingContextSource, check_coverage
+from mule_pattern_learner.data.preparation import prepare
+from mule_pattern_learner.temporal.live import reveal_model
 from mule_pattern_learner.temporal.live.experiments import feature_experiments
-from mule_pattern_learner.temporal.live.source import StreamingContextSource, check_coverage
+from mule_pattern_learner.tigergraph import reveal
 
 SCRIPTS = REPOSITORY / "scripts/temporal"
 # Every script that talks to the live path; each must parse --help before connecting.
@@ -58,7 +59,7 @@ def load(name: str) -> ModuleType:
 def test_live_scripts_import_and_print_help_without_connecting(
     name: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    from mule_pattern_learner.temporal.live.executor import TigerGraphExecutor
+    from mule_pattern_learner.tigergraph.executor import TigerGraphExecutor
 
     def refuse(*args: Any, **kwargs: Any) -> None:
         raise AssertionError("--help must not connect to TigerGraph")
@@ -216,7 +217,7 @@ def test_label_reveal_scripts_run_offline(
     assert verify.main() == 0
     ((name, params),) = graph.calls
     # force only skips the already-revealed check; apply = FALSE writes nothing.
-    assert name == labels.REVEAL_QUERY and params["apply"] is False and params["force"] is True
+    assert name == reveal.REVEAL_QUERY and params["apply"] is False and params["force"] is True
     capsys.readouterr()
     simulate = load("simulate_label_reveal")
     monkeypatch.setattr(simulate, "TigerGraphExecutor", lambda: graph)

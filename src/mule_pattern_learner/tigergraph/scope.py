@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ...config import OPERATIONAL_DEFAULTS
+from ..config import OPERATIONAL_DEFAULTS
 from .executor import QueryExecutor, checked_rows, connection_call, merged_rows, printed
 
 

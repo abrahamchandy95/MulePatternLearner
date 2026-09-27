@@ -31,26 +31,20 @@ from typing import Any  # noqa: E402
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
 
+from mule_pattern_learner.batching.assemble import build_root_batch, tensor_digests  # noqa: E402
 from mule_pattern_learner.config import run_config  # noqa: E402
 from mule_pattern_learner.contract.feature_groups import FeaturePlan  # noqa: E402
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan  # noqa: E402
+from mule_pattern_learner.data.contexts import open_context_source  # noqa: E402
+from mule_pattern_learner.data.hub_registry import load_hub_registry  # noqa: E402
+from mule_pattern_learner.data.manifest import load_prepared, preparation_mismatches  # noqa: E402
+from mule_pattern_learner.data.observed_labels import load_observed_labels  # noqa: E402
+from mule_pattern_learner.data.splits import sample_keys  # noqa: E402
+from mule_pattern_learner.model.build import build_model  # noqa: E402
+from mule_pattern_learner.model.loss import NonNegativePULoss  # noqa: E402
 from mule_pattern_learner.runtime.device import choose_device, torch_runtime  # noqa: E402
-from mule_pattern_learner.temporal.live.batching import (  # noqa: E402
-    build_root_batch,
-    tensor_digests,
-)
-from mule_pattern_learner.temporal.live.dataset import (  # noqa: E402
-    load_prepared,
-    preparation_mismatches,
-    sample_keys,
-)
-from mule_pattern_learner.temporal.live.executor import TigerGraphExecutor  # noqa: E402
-from mule_pattern_learner.temporal.live.hubs import load_hub_registry  # noqa: E402
-from mule_pattern_learner.temporal.live.model import build_model  # noqa: E402
 from mule_pattern_learner.temporal.live.pipeline import dataset_path, prepared_config  # noqa: E402
 from mule_pattern_learner.temporal.live.sampling import epoch_schedule  # noqa: E402
-from mule_pattern_learner.temporal.live.source import open_context_source  # noqa: E402
-from mule_pattern_learner.temporal.live.supervision import load_observed_labels  # noqa: E402
 from mule_pattern_learner.temporal.live.training import (  # noqa: E402
     RunSettings,
     build_optimizer,
@@ -58,7 +52,7 @@ from mule_pattern_learner.temporal.live.training import (  # noqa: E402
     nnpu_step,
     training_samples,
 )
-from mule_pattern_learner.temporal.loss import NonNegativePULoss  # noqa: E402
+from mule_pattern_learner.tigergraph.executor import TigerGraphExecutor  # noqa: E402
 
 
 def rest_calls(source: Any) -> tuple[int, dict[str, int]]:

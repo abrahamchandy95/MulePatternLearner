@@ -8,6 +8,7 @@ scope, and the Account columns of the loading contract.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 NODE_TYPES = ("Account", "Token", "Party", "Device", "IP", "Address")
 ASSOCIATIONS = (
@@ -76,3 +77,38 @@ CHANNELS = (
     "other",
 )
 STRATA = ("recent", "older", "distinct", "association")
+# Every run keeps its splits in disjoint scope partitions (strict inductive); outputs
+# record it so their performance claims say what they cover.
+EVALUATION_PROTOCOL = "strict_inductive"
+
+
+def context_scope(config: dict[str, Any]) -> str:
+    """The scope_id of every context of a run; strict inductive splits need one."""
+    scope = config.get("scope_id")
+    if not scope:
+        raise ValueError("Strict inductive sampling requires a frozen TigerGraph scope_id")
+    return str(scope)
+
+
+# Account CSV/PSV input columns (gsql/schema/temporal_account_loading.gsql): five
+# account facts, then the ten supervision fields of the label contract.
+ACCOUNT_LOAD_COLUMNS = [
+    "id",
+    "account_type",
+    "is_external",
+    "first_seen_seq",
+    "first_seen_ts_ms",
+    "is_mule",
+    "mule_label_known",
+    "is_mule_masked",
+    "pu_label",
+    "mule_label_effective_seq",
+    "mule_label_effective_ts_ms",
+    "mule_label_available_seq",
+    "mule_label_available_ts_ms",
+    "mule_ring_id",
+    "mule_label_source",
+]
+# The integer migration appends is_mule in graph storage. CSV/PSV input order
+# stays unchanged; the loading job maps named columns to storage positions.
+ACCOUNT_STORAGE_COLUMNS = [name for name in ACCOUNT_LOAD_COLUMNS if name != "is_mule"] + ["is_mule"]

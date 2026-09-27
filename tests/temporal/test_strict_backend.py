@@ -17,6 +17,8 @@ from temporal_fakes import (
 )
 import torch
 
+from mule_pattern_learner.batching.assemble import child_key, make_live_batch
+from mule_pattern_learner.batching.limits import BatchCapacityError, BatchIndex
 from mule_pattern_learner.config import validate_config
 from mule_pattern_learner.contract.feature_groups import (
     FeaturePlan,
@@ -26,15 +28,15 @@ from mule_pattern_learner.contract.feature_groups import (
 from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
 from mule_pattern_learner.contract.time_basis import BASIS_ID
-from mule_pattern_learner.temporal.live.batching import child_key, make_live_batch
-from mule_pattern_learner.temporal.live.cohort import scoped_cohort
-from mule_pattern_learner.temporal.live.context_query import validate_context
+from mule_pattern_learner.data import contexts
+from mule_pattern_learner.data.accounts import scoped_cohort
+from mule_pattern_learner.data.contexts import StreamingContextSource
+from mule_pattern_learner.model.build import build_model
 from mule_pattern_learner.temporal.live.evaluation import GraphEvaluationTruth
-from mule_pattern_learner.temporal.live.memory import BatchCapacityError, BatchIndex
-from mule_pattern_learner.temporal.live.model import build_model
 from mule_pattern_learner.temporal.live.predictor import score_new_accounts
 from mule_pattern_learner.temporal.live.sampling import pu_batches
-from mule_pattern_learner.temporal.live.source import StreamingContextSource
+from mule_pattern_learner.tigergraph import provenance
+from mule_pattern_learner.tigergraph.context_query import validate_context
 
 
 def test_batch_ids_are_dense_scoped_and_temporal_and_never_global() -> None:
@@ -217,7 +219,7 @@ def test_graph_evaluation_truth_pages_the_label_contract() -> None:
 
 
 def test_strict_preparation_and_nnpu_use_the_correct_phase_end_to_end(tmp_path: Path) -> None:
-    from mule_pattern_learner.temporal.live.dataset import prepare
+    from mule_pattern_learner.data.preparation import prepare
     from mule_pattern_learner.temporal.live.training import train
 
     cfg = live_config(
@@ -260,8 +262,8 @@ def test_strict_preparation_and_nnpu_use_the_correct_phase_end_to_end(tmp_path: 
 def test_resumed_stream_checks_live_source_before_fetching(monkeypatch: pytest.MonkeyPatch) -> None:
     from types import SimpleNamespace
 
-    from mule_pattern_learner.temporal.live import installation, source
-    from mule_pattern_learner.temporal.live.executor import transport_settings
+    pass
+    from mule_pattern_learner.tigergraph.executor import transport_settings
 
     counts = {"Account": 10}
     header = {"ready": True, "source_id": "snapshot", "split_seed": 42}
@@ -279,7 +281,7 @@ def test_resumed_stream_checks_live_source_before_fetching(monkeypatch: pytest.M
 
     executor = SimpleNamespace(client=SimpleNamespace(conn=conn), run=run)
     checked = []
-    monkeypatch.setattr(installation, "verify_sources", lambda client: checked.append(client))
+    monkeypatch.setattr(provenance, "verify_sources", lambda client: checked.append(client))
     budgets: list[tuple[int, int]] = []
 
     def live_executor(config: dict[str, Any]) -> Any:
@@ -287,12 +289,12 @@ def test_resumed_stream_checks_live_source_before_fetching(monkeypatch: pytest.M
         budgets.append((transport["max_query_attempts"], transport["max_outage_s"]))
         return executor
 
-    monkeypatch.setattr(source, "live_executor", live_executor)
+    monkeypatch.setattr(contexts, "live_executor", live_executor)
     manifest = {
         "config": {"dataset_id": "snapshot", "scope_id": "scope", "split_seed": 42},
         "source": {"source_counts": dict(counts)},
     }
-    backend = source.open_context_source(
+    backend = contexts.open_context_source(
         Path("unused"), manifest, {"max_query_attempts": 3, "max_outage_s": 60}
     )
     backend.close()
@@ -301,12 +303,12 @@ def test_resumed_stream_checks_live_source_before_fetching(monkeypatch: pytest.M
     # A scope created with another scope_unowned rule than the configured one is refused.
     policy["scope_unowned"] = "independent"
     with pytest.raises(ValueError, match="no longer valid.*scope_unowned = 'independent'"):
-        source.open_context_source(Path("unused"), manifest)
+        contexts.open_context_source(Path("unused"), manifest)
     policy["scope_unowned"] = "linked"
     counts["Account"] += 1
     with pytest.raises(ValueError, match="counts changed"):
-        source.open_context_source(Path("unused"), manifest)
+        contexts.open_context_source(Path("unused"), manifest)
     counts["Account"] -= 1
     header["ready"] = False
     with pytest.raises(ValueError, match="no longer valid"):
-        source.open_context_source(Path("unused"), manifest)
+        contexts.open_context_source(Path("unused"), manifest)

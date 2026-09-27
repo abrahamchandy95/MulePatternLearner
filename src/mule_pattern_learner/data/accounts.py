@@ -8,11 +8,12 @@ from typing import Any
 
 import pandas as pd
 
-from ...contract.clock import timestamp
-from ...contract.fingerprints import stable_score
-from ...contract.graph_schema import PHASE_SPLIT, SPLITS
-from .executor import QueryExecutor, account_pages
-from .supervision import ORACLE_COLUMNS, ObservedLabelSource, reads_graph_labels
+from ..contract.clock import timestamp
+from ..contract.fingerprints import stable_score
+from ..contract.graph_schema import PHASE_SPLIT, SPLITS
+from ..tigergraph.executor import QueryExecutor, account_pages
+from ..tigergraph.labels import reads_graph_labels
+from .observed_labels import ORACLE_COLUMNS, ObservedLabelSource
 
 
 def cohort_seed(config: dict[str, Any]) -> int:
@@ -29,7 +30,7 @@ def _check_label_fields(row: dict[str, Any], graph_labels: bool) -> None:
 
     Without include_observed the query must emit no label information at all.
     With it, only revealed positives carry a discovery time (see
-    supervision.check_graph_label_rows, which checks the finished table too).
+    tigergraph.labels.check_graph_label_rows, which checks the finished table too).
     """
     positive = bool(row.get("observed_positive") or False)
     known = int(row.get("known_from_ms") or 0)

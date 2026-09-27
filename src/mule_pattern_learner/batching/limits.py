@@ -9,9 +9,9 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from ...contract.feature_groups import FeaturePlan
-from ...contract.graph_schema import ContextKey
-from ...contract.sampler_plan import SamplerPlan
+from ..contract.feature_groups import FeaturePlan
+from ..contract.graph_schema import ContextKey
+from ..contract.sampler_plan import SamplerPlan
 
 
 class BatchCapacityError(ValueError):

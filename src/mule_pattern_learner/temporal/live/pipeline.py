@@ -14,20 +14,21 @@ from typing import Any
 
 from ...config import run_config
 from ...contract.fingerprints import fingerprint
-from .dataset import (
+from ...contract.graph_schema import context_scope
+from ...data.manifest import (
     MANIFEST,
     ROOT,
     check_query_hashes,
     preparation_mismatches,
-    prepare,
     read_manifest,
     write_manifest,
 )
-from .executor import TigerGraphExecutor, live_executor
-from .installation import install, source_counts
-from .labels import ensure_revealed_labels
-from .policy import context_scope
-from .scope import ensure_scope, scope_header
+from ...data.preparation import prepare
+from ...tigergraph.executor import TigerGraphExecutor, live_executor
+from ...tigergraph.installer import install
+from ...tigergraph.provenance import source_counts
+from ...tigergraph.reveal import ensure_revealed_labels
+from ...tigergraph.scope import ensure_scope, scope_header
 from .training import output_paths, train
 
 DEFAULT_MODEL = ROOT / "models/temporal/model.pt"

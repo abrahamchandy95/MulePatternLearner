@@ -14,12 +14,12 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ...contract.clock import timestamp
-from ...contract.graph_schema import SPLIT_PHASE
+from ..contract.clock import timestamp
+from ..contract.graph_schema import SPLIT_PHASE
 from .executor import QueryExecutor, merged_rows
+from .labels import validate_supervision
 
 REVEAL_QUERY = "temporal_reveal_mule_labels"
-VALIDATE_QUERY = "temporal_validate_account_supervision"
 # The defaults temporal_reveal_mule_labels declares (tests compare them with the GSQL).
 # reveal_parameters sends the budget and salt; the model parameters stay the query's own.
 REVEAL_DEFAULTS: dict[str, float] = {
@@ -33,30 +33,6 @@ REVEAL_DEFAULTS: dict[str, float] = {
     "propensity_slope": 1.0,
     "propensity_floor": 0.05,
 }
-# Contract violations temporal_validate_account_supervision counts; all must be zero.
-VIOLATIONS = ("invalid_mule", "invalid_pu", "invalid_unknown", "invalid_clocks", "invalid_ring")
-# Account CSV/PSV input columns (gsql/schema/temporal_account_loading.gsql): five
-# account facts, then the ten supervision fields of the label contract.
-ACCOUNT_LOAD_COLUMNS = [
-    "id",
-    "account_type",
-    "is_external",
-    "first_seen_seq",
-    "first_seen_ts_ms",
-    "is_mule",
-    "mule_label_known",
-    "is_mule_masked",
-    "pu_label",
-    "mule_label_effective_seq",
-    "mule_label_effective_ts_ms",
-    "mule_label_available_seq",
-    "mule_label_available_ts_ms",
-    "mule_ring_id",
-    "mule_label_source",
-]
-# The integer migration appends is_mule in graph storage. CSV/PSV input order
-# stays unchanged; the loading job maps named columns to storage positions.
-ACCOUNT_STORAGE_COLUMNS = [name for name in ACCOUNT_LOAD_COLUMNS if name != "is_mule"] + ["is_mule"]
 _PRIME = 2147483647
 
 
@@ -92,15 +68,6 @@ def reveal_parameters(config: dict[str, Any], *, apply: bool) -> dict[str, Any]:
         "salt": int(config["seed"] if salt is None else salt),
         "apply": apply,
     }
-
-
-def validate_supervision(executor: QueryExecutor) -> dict[str, Any]:
-    """Label-contract audit counts; raises if any violation counter is nonzero."""
-    counts = merged_rows(executor.run(VALIDATE_QUERY, {}, timeout_s=900.0))
-    bad = {name: int(counts.get(name, 0)) for name in VIOLATIONS if int(counts.get(name, 0))}
-    if bad:
-        raise ValueError(f"Account label contract violated after the reveal: {bad}")
-    return counts
 
 
 def ensure_revealed_labels(executor: QueryExecutor, config: dict[str, Any]) -> dict[str, Any]:

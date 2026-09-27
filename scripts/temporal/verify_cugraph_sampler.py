@@ -47,20 +47,22 @@ import torch
 
 from mule_pattern_learner.contract.graph_schema import RELATIONS, ContextKey
 from mule_pattern_learner.contract.sampler_plan import PoolPlan, SamplerPlan
-from mule_pattern_learner.temporal.live.sampler import (
+from mule_pattern_learner.sampling.backend import select_resampled
+from mule_pattern_learner.sampling.candidates import (
     NUM_RELATIONS,
     PAYMENT_RELATIONS,
     CandidateTable,
-    CuGraphSampler,
-    TorchGroupedSampler,
-    cugraph_import_error,
     group_counts,
-    import_pylibcugraph,
-    probe_cugraph,
     relation_quotas,
-    select_resampled,
     selection_keys,
 )
+from mule_pattern_learner.sampling.cugraph_sampler import (
+    CuGraphSampler,
+    cugraph_import_error,
+    import_pylibcugraph,
+    probe_cugraph,
+)
+from mule_pattern_learner.sampling.torch_sampler import TorchGroupedSampler
 
 CHI2_999 = {11: 31.26}  # 0.999 quantile of chi-square with 11 degrees of freedom
 FAILURES: list[str] = []
@@ -286,20 +288,21 @@ def merged_slots(engine: CuGraphSampler, sampler: SamplerPlan, device: str = "cu
 
 
 def live(config_path: Path | None, roots: int) -> None:
+    from mule_pattern_learner.batching.assemble import build_root_batch
     from mule_pattern_learner.config import fanouts as configured_fanouts
     from mule_pattern_learner.config import run_config
     from mule_pattern_learner.contract.feature_groups import FeaturePlan
+    from mule_pattern_learner.data.contexts import open_context_source
+    from mule_pattern_learner.data.hub_registry import load_hub_registry
+    from mule_pattern_learner.data.manifest import load_prepared
+    from mule_pattern_learner.data.splits import sample_keys
+    from mule_pattern_learner.model.build import build_model
     from mule_pattern_learner.runtime.device import torch_runtime
-    from mule_pattern_learner.temporal.live.batching import build_root_batch
-    from mule_pattern_learner.temporal.live.dataset import load_prepared, sample_keys
-    from mule_pattern_learner.temporal.live.hubs import load_hub_registry
-    from mule_pattern_learner.temporal.live.model import build_model
     from mule_pattern_learner.temporal.live.pipeline import (
         dataset_path,
         prepare_live,
         prepared_config,
     )
-    from mule_pattern_learner.temporal.live.source import open_context_source
 
     def make_live_batch(store: Any, keys: Any, **options: Any) -> dict[str, torch.Tensor]:
         stats = options.pop("stats", None)

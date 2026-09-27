@@ -6,16 +6,16 @@ import pytest
 from temporal_fakes import FakeExecutor, context, message
 import torch
 
+from mule_pattern_learner.batching.assemble import make_live_batch
 from mule_pattern_learner.contract.feature_groups import DEFAULT_GROUPS, FEATURE_GROUPS, FeaturePlan
 from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.contract.sampler_plan import PoolPlan
+from mule_pattern_learner.data.contexts import StreamingContextSource
+from mule_pattern_learner.model.tgat import LiveTGAT
 from mule_pattern_learner.temporal.live.batch_reference import node_features
-from mule_pattern_learner.temporal.live.batching import make_live_batch
 from mule_pattern_learner.temporal.live.evaluation import evaluate_weighted, final_evaluation_sample
 from mule_pattern_learner.temporal.live.history_reference import payment_features, stratify
-from mule_pattern_learner.temporal.live.model import LiveTGAT
-from mule_pattern_learner.temporal.live.queries import render_context_query
-from mule_pattern_learner.temporal.live.source import StreamingContextSource
+from mule_pattern_learner.tigergraph.render import render_context_query
 
 
 def event(

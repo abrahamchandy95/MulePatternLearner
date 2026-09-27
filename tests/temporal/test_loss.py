@@ -5,7 +5,7 @@ import pytest
 import torch
 from torch import Tensor
 
-from mule_pattern_learner.temporal.loss import NonNegativePULoss
+from mule_pattern_learner.model.loss import NonNegativePULoss
 
 
 def _sigmoid(x: float) -> float:

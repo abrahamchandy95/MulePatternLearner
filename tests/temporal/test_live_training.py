@@ -22,33 +22,28 @@ from temporal_fakes import (
 )
 import torch
 
+from mule_pattern_learner.batching.assemble import make_live_batch
 from mule_pattern_learner.config import DEFAULT_RUN
 from mule_pattern_learner.contract.feature_groups import FeaturePlan, extraction_plan
-from mule_pattern_learner.contract.graph_schema import ContextKey
+from mule_pattern_learner.contract.graph_schema import ContextKey, context_scope
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
+from mule_pattern_learner.data.contexts import StreamingContextSource
+from mule_pattern_learner.data.hub_registry import load_hub_registry
+from mule_pattern_learner.data.manifest import load_prepared, preparation_view, query_hashes
+from mule_pattern_learner.data.observed_labels import align_observed_labels, label_summary
+from mule_pattern_learner.data.preparation import prepare
+from mule_pattern_learner.data.splits import sample_keys
+from mule_pattern_learner.model.loss import NonNegativePULoss
+from mule_pattern_learner.model.tgat import LiveTGAT
 from mule_pattern_learner.runtime.device import choose_device
-from mule_pattern_learner.temporal.live.batching import make_live_batch
 from mule_pattern_learner.temporal.live.cli import build_parser
-from mule_pattern_learner.temporal.live.dataset import (
-    load_prepared,
-    preparation_view,
-    prepare,
-    query_hashes,
-    sample_keys,
-)
 from mule_pattern_learner.temporal.live.evaluation import (
     ParquetEvaluationTruth,
     evaluate_predictions,
 )
-from mule_pattern_learner.temporal.live.hubs import load_hub_registry
-from mule_pattern_learner.temporal.live.model import LiveTGAT
 from mule_pattern_learner.temporal.live.pipeline import DEFAULT_MODEL, run
-from mule_pattern_learner.temporal.live.policy import context_scope
 from mule_pattern_learner.temporal.live.sampling import pu_batches
-from mule_pattern_learner.temporal.live.source import StreamingContextSource
-from mule_pattern_learner.temporal.live.supervision import align_observed_labels, label_summary
 from mule_pattern_learner.temporal.live.training import train
-from mule_pattern_learner.temporal.loss import NonNegativePULoss
 
 
 def streaming_source(executor: FakeExecutor, config: dict[str, Any], **kwargs: Any):

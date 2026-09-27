@@ -19,14 +19,14 @@ import json
 import sys
 
 from mule_pattern_learner.config import run_config
-from mule_pattern_learner.temporal.live.executor import TigerGraphExecutor, merged_rows
-from mule_pattern_learner.temporal.live.labels import REVEAL_QUERY, reveal_parameters
 from mule_pattern_learner.temporal.live.reveal_model import (
     INPUTS_QUERY,
     available_ms,
     counts_by_split,
     plan,
 )
+from mule_pattern_learner.tigergraph.executor import TigerGraphExecutor, merged_rows
+from mule_pattern_learner.tigergraph.reveal import REVEAL_QUERY, reveal_parameters
 
 
 def main() -> int:

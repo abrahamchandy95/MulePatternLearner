@@ -19,7 +19,8 @@ SAMPLER_KEYS = (
     "backend",
     "evaluation_seed",
 )
-# Version of the resample key scheme (sampler.selection_keys), part of the fingerprint.
+# Version of the resample key scheme (sampling.candidates.selection_keys), part of the
+# fingerprint.
 # 2: evaluation keys mix the hop in (hop 1 unchanged, hop 2 an independent stream).
 SELECTION_KEYS_VERSION = 2
 
