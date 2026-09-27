@@ -23,7 +23,7 @@ from mule_pattern_learner.batching import assemble
 from mule_pattern_learner.config import DEFAULT_CONFIG, RunConfig
 from mule_pattern_learner.contract.clock import timestamp
 from mule_pattern_learner.contract.feature_groups import (
-    DEFAULT_GROUPS,
+    CORE_GROUPS,
     FEATURE_GROUPS,
     FeaturePlan,
     contract_fingerprint,
@@ -461,7 +461,7 @@ def unit_config(**sections: Any) -> RunConfig:
 
 
 # The plan and pools of the batch and context source tests.
-DEFAULT_TGAT_PLAN = FeaturePlan(DEFAULT_GROUPS, "tgat")
+CORE_PLAN = FeaturePlan(CORE_GROUPS, "tgat")
 SMALL_SAMPLER = SamplerPlan(
     roots=PoolPlan(recent=4, older=1, distinct=1, associations=1),
     children=PoolPlan(recent=2, associations=0),
@@ -772,7 +772,7 @@ RUNTIME_CHANGES: dict[str, Any] = {
         },
         "relation_fanouts": [2, 2],
     },
-    "features": list(DEFAULT_GROUPS),
+    "features": list(CORE_GROUPS),
     "model": {"architecture": "tgat", "hidden": 16, "heads": 2, "dropout": 0.2, "slot_sum": False},
     "loss": {"class_prior": 0.05, "positive_weight": 0.5},
     "training": {

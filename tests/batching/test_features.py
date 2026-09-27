@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from mule_pattern_learner.batching.assemble import build_batch
-from mule_pattern_learner.contract.feature_groups import DEFAULT_GROUPS, FeaturePlan
+from mule_pattern_learner.contract.feature_groups import CORE_GROUPS, FeaturePlan
 from mule_pattern_learner.contract.sampler_plan import PoolPlan, SamplerPlan
 from mule_pattern_learner.testing.builders import context_rng, payment, roots
 from mule_pattern_learner.testing.fake_graph import FakeStore
@@ -13,7 +13,7 @@ from mule_pattern_learner.testing.fake_graph import FakeStore
 
 def test_missing_required_message_fields_raise_instead_of_defaulting() -> None:
     sampler = SamplerPlan(roots=PoolPlan(recent=3))
-    plan = FeaturePlan(DEFAULT_GROUPS, "tgat")
+    plan = FeaturePlan(CORE_GROUPS, "tgat")
     key = roots(1)[0]
     rng = context_rng(key)
     for field in ("flow_present", "pair_prior_count", "age_ms", "amount"):

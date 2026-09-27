@@ -379,7 +379,7 @@ class FakeStore:
 
     plan: FeaturePlan
     sampler: SamplerPlan
-    query_calls: int
+    database_calls: int
     rejections: Counter[str]
     rejections_by_hop: dict[int, Counter[str]]
     counts: ContextCounts
@@ -399,7 +399,7 @@ class FakeStore:
         self.rejections = Counter()
         self.rejections_by_hop = {}
         self.counts = ContextCounts()
-        self.query_calls = 0
+        self.database_calls = 0
 
     def row(self, key: ContextKey, hop: int = 1) -> dict[str, Any]:
         if (hop, key) not in self.rows:
@@ -410,7 +410,7 @@ class FakeStore:
     def fetch(self, keys: list[ContextKey], *, hop: int = 1) -> list[dict[str, Any] | None]:
         self.calls.append((hop, list(keys)))
         self.counts.ask(dict.fromkeys(keys), hop)
-        self.query_calls += 1
+        self.database_calls += 1
         out: list[dict[str, Any] | None] = []
         for key in keys:
             if key in self.reject:
@@ -437,7 +437,7 @@ class FakeSource:
         self.plan = extraction_plan(config.feature_plan())
         self.sampler = config.sampler
         self.reject, self.fail = reject, fail
-        self.query_calls = 0
+        self.database_calls = 0
         self.rejections: Counter[str] = Counter()
         self.rejections_by_hop: dict[int, Counter[str]] = {}
         self.counts = ContextCounts()
@@ -452,7 +452,7 @@ class FakeSource:
                 self.calls[f"hop{hop}_phase{phase}"] += 1
             if self.fail is not None and self.fail(keys, hop, self.calls):
                 raise RuntimeError("injected source failure")
-            self.query_calls += 1
+            self.database_calls += 1
             self.counts.ask(dict.fromkeys(keys), hop)
             rows: list[dict[str, Any] | None] = []
             for key in keys:

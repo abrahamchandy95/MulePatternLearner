@@ -13,7 +13,7 @@ import torch
 
 from mule_pattern_learner.batching import assemble
 from mule_pattern_learner.batching.assemble import build_batch
-from mule_pattern_learner.contract.feature_groups import DEFAULT_GROUPS, FeaturePlan
+from mule_pattern_learner.contract.feature_groups import CORE_GROUPS, FeaturePlan
 from mule_pattern_learner.contract.graph_schema import RELATIONS, ContextKey
 from mule_pattern_learner.contract.sampler_plan import PoolPlan, SamplerPlan
 from mule_pattern_learner.sampling.backend import select_resampled
@@ -141,7 +141,7 @@ def test_eval_is_deterministic_and_device_independent() -> None:
     assert not np.array_equal(
         select_resampled(table, hop=1, sampler=other, fanout=8, mode="eval"), expected
     )
-    plan = FeaturePlan(DEFAULT_GROUPS, "tgat")
+    plan = FeaturePlan(CORE_GROUPS, "tgat")
     one = build_batch(store, keys, plan=plan, sampler=RESAMPLE, mode="eval", step_seed=1)
     two = build_batch(store, keys, plan=plan, sampler=RESAMPLE, mode="eval", step_seed=2)
     for name in one:
@@ -201,7 +201,7 @@ def test_eval_batches_draw_root_hops_independently(monkeypatch: pytest.MonkeyPat
         return chosen
 
     monkeypatch.setattr(assemble, "_select", recording)
-    plan = FeaturePlan(DEFAULT_GROUPS, "tgat")
+    plan = FeaturePlan(CORE_GROUPS, "tgat")
     for mode in ("eval", "train"):
         build_batch(
             store, keys, fanouts=(16, 4), plan=plan, sampler=POOLED_RESAMPLE, mode=mode, step_seed=5
@@ -248,7 +248,7 @@ def test_train_mode_varies_with_step_seed_and_ignores_wire_order() -> None:
             table, hop=1, sampler=RESAMPLE, fanout=8, mode="train", step_seed=3, device="mps"
         )
         assert np.array_equal(mps, draws[3])
-    plan = FeaturePlan(DEFAULT_GROUPS, "tgat")
+    plan = FeaturePlan(CORE_GROUPS, "tgat")
     a = build_batch(store, keys, plan=plan, sampler=RESAMPLE, mode="train", step_seed=10)
     b = build_batch(store, keys, plan=plan, sampler=RESAMPLE, mode="train", step_seed=10)
     c = build_batch(store, keys, plan=plan, sampler=RESAMPLE, mode="train", step_seed=11)

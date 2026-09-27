@@ -19,7 +19,7 @@ from ..contract.time_basis import BASIS_ID
 from ..data.manifest import manifest_digest
 from ..inference.saved_model import SavedModel
 from ..paths import REPOSITORY_ROOT, DatasetPaths
-from .history import Progress
+from .history import RunTotals
 from .objective import objective_name
 from .schedule import EvaluationSample
 
@@ -150,7 +150,7 @@ def run_summary(
     best_epoch: int,
     results: dict[str, Any],
     selection: dict[str, Any],
-    progress: Progress,
+    progress: RunTotals,
     rejected_rows: dict[str, int],
     rejected_roots: dict[str, dict[str, int]],
     limit: float,

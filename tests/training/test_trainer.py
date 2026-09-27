@@ -26,7 +26,7 @@ from mule_pattern_learner.artifacts import (
 from mule_pattern_learner.batching import assemble
 from mule_pattern_learner.batching.assemble import build_batch
 from mule_pattern_learner.config import RunConfig
-from mule_pattern_learner.contract.feature_groups import DEFAULT_GROUPS, extraction_plan
+from mule_pattern_learner.contract.feature_groups import CORE_GROUPS, extraction_plan
 from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
 from mule_pattern_learner.contract.server import CONTEXT_QUERY, HUB_QUERY
@@ -557,7 +557,7 @@ def test_resume_refuses_a_different_sampler_backend_unless_configured(
 def test_missing_hub_indicator_warns_once_at_start(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    groups = [g for g in DEFAULT_GROUPS if g != "hub_indicator"]
+    groups = [g for g in CORE_GROUPS if g != "hub_indicator"]
     config = base_config(features=groups, training={"epochs": 1})
     plan = config.feature_plan()
     warn_hub_stubs(HubRegistry.empty(), plan)
@@ -708,7 +708,7 @@ def prepared(
         FrameObservedLabels(supplied_labels()),
         scope=TigerGraphScope(executor),
         cutoffs=TigerGraphCutoffs(executor),
-        hubs=TigerGraphHubs(executor),
+        hub_reader=TigerGraphHubs(executor),
     )
     return dataset, executor
 

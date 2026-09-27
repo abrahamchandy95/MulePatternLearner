@@ -11,7 +11,7 @@ import pytest
 import torch
 
 from mule_pattern_learner.batching.assemble import build_batch
-from mule_pattern_learner.contract.feature_groups import DEFAULT_GROUPS, FeaturePlan
+from mule_pattern_learner.contract.feature_groups import CORE_GROUPS, FeaturePlan
 from mule_pattern_learner.sampling import backend, cugraph_sampler
 from mule_pattern_learner.sampling.backend import resolve_backend
 from mule_pattern_learner.sampling.cugraph_sampler import CuGraphProbe
@@ -75,7 +75,7 @@ def test_build_batch_uses_the_run_backend_without_resolving(
         raise AssertionError("build_batch resolved the backend again")
 
     monkeypatch.setattr(backend, "resolve_backend", unexpected)
-    plan = FeaturePlan(DEFAULT_GROUPS, "tgat")
+    plan = FeaturePlan(CORE_GROUPS, "tgat")
     store = FakeStore(RESAMPLE)
     keys = roots(4)
     options: dict[str, Any] = {"plan": plan, "sampler": RESAMPLE, "step_seed": 3}

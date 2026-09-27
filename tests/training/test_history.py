@@ -10,7 +10,7 @@ import numpy as np
 import torch
 
 from mule_pattern_learner.data.contexts import ContextCounts
-from mule_pattern_learner.training.history import LogInterval, Progress
+from mule_pattern_learner.training.history import LogInterval, RunTotals
 
 
 def test_log_interval_counts_corrections_and_non_finite_losses() -> None:
@@ -31,8 +31,8 @@ def test_log_interval_counts_corrections_and_non_finite_losses() -> None:
 def test_progress_sums_integer_statistics_across_segments() -> None:
     counts = ContextCounts(requested=7, cache_hits=2, seen={1, 2, 3})
     rejections = Counter({"missing_entity": 1})
-    source = SimpleNamespace(query_calls=3, rejections=rejections, counts=counts)
-    progress = Progress(0.0, cast(Any, source), "torch")
+    source = SimpleNamespace(database_calls=3, rejections=rejections, counts=counts)
+    progress = RunTotals(0.0, cast(Any, source), "torch")
     # The totals of an earlier segment, as resume.pt saved them.
     earlier = {
         "elapsed_seconds": 5.0,

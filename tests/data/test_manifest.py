@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from mule_pattern_learner.contract.feature_groups import DEFAULT_GROUPS
+from mule_pattern_learner.contract.feature_groups import CORE_GROUPS
 from mule_pattern_learner.contract.server import QUERY_FILES
 from mule_pattern_learner.data import manifest as data_manifest
 from mule_pattern_learner.data.preparation import prepare
@@ -35,7 +35,7 @@ def test_the_dataset_id_covers_only_the_dataset_settings() -> None:
         {"scope": {"unowned": "linked", "create": False, "reveal_salt": 7}},
         {"sampler": {"association_slots": 1, "fanouts": [8, 2]}},  # selection, not pools
         # A dataset stores no contexts, so feature groups and architecture do not count.
-        {"features": list(DEFAULT_GROUPS), "model": {"architecture": "summary"}},
+        {"features": list(CORE_GROUPS), "model": {"architecture": "summary"}},
     ]
     for change in same:
         assert data_manifest.dataset_id("source", base.with_changes(change)) == identity, change
@@ -76,7 +76,7 @@ def test_a_dataset_records_its_query_files_by_path_and_passes_its_own_check(
         FrameObservedLabels(supplied_labels()),
         scope=TigerGraphScope(executor),
         cutoffs=TigerGraphCutoffs(executor),
-        hubs=TigerGraphHubs(executor),
+        hub_reader=TigerGraphHubs(executor),
     )
     recorded = manifest["source"]["query_hashes"]
     assert set(recorded) == set(QUERY_FILES) == set(data_manifest.query_hashes())

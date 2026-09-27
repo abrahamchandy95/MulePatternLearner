@@ -110,7 +110,7 @@ def prepare_dataset(config: RunConfig, data: Path = DATA_DIR) -> DatasetPaths:
         TigerGraphObservedLabels(),
         scope=TigerGraphScope(executor),
         cutoffs=TigerGraphCutoffs(executor),
-        hubs=TigerGraphHubs(executor),
+        hub_reader=TigerGraphHubs(executor),
     )
     if source_counts(executor) != counts:
         result["status"] = "source_changed"

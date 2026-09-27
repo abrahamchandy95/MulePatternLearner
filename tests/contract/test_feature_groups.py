@@ -9,7 +9,7 @@ from mule_pattern_learner.batching.assemble import build_batch
 from mule_pattern_learner.contract.feature_groups import (
     BUILT_IN_GROUPS,
     CLIENT_GROUPS,
-    DEFAULT_GROUPS,
+    CORE_GROUPS,
     FEATURE_GROUPS,
     POOL_GROUPS,
     FeaturePlan,
@@ -40,11 +40,11 @@ def test_contract_constants_and_client_groups() -> None:
     assert CONTEXT_CONTRACT == "temporal_live_v5_candidate_pools"
     assert CHANNELS[:4] == ("unknown", "digital", "branch_or_atm", "bank")
     assert CHANNELS[-1] == "other" and len(set(CHANNELS)) == len(CHANNELS)
-    assert "event_channel" not in DEFAULT_GROUPS and "event_channel" in FEATURE_GROUPS
-    assert DEFAULT_GROUPS[:2] == ("entity_meta", "hub_indicator")
+    assert "event_channel" not in CORE_GROUPS and "event_channel" in FEATURE_GROUPS
+    assert CORE_GROUPS[:2] == ("entity_meta", "hub_indicator")
     assert CLIENT_GROUPS == {"hub_indicator", *POOL_GROUPS}
     assert FEATURE_GROUPS["hub_indicator"].identity == ("history_withheld",)
-    plan = FeaturePlan(DEFAULT_GROUPS, "tgat")
+    plan = FeaturePlan(CORE_GROUPS, "tgat")
     assert plan.names("node")[-1] == "history_withheld"
     for hop in (1, 2):
         assert not any("hub" in flag for flag in plan.query_flags(hop))
@@ -69,18 +69,18 @@ def test_query_flags_skip_child_summaries_only_for_tgat_models() -> None:
 def test_extraction_plan_is_the_model_groups_without_the_client_groups() -> None:
     from mule_pattern_learner.contract.feature_groups import extraction_plan
 
-    tgat = extraction_plan(FeaturePlan((*DEFAULT_GROUPS, "rolling_windows")))
-    assert set(tgat.groups) == set(DEFAULT_GROUPS) - {"hub_indicator"} | {"rolling_windows"}
+    tgat = extraction_plan(FeaturePlan((*CORE_GROUPS, "rolling_windows")))
+    assert set(tgat.groups) == set(CORE_GROUPS) - {"hub_indicator"} | {"rolling_windows"}
     assert tgat.architecture == "tgat" and not tgat.query_flags(2)["include_rolling_windows"]
     summary = extraction_plan(FeaturePlan(WINDOW_GROUPS, "summary"))
     assert summary.architecture == "summary" and summary.query_flags(1)["include_rolling_windows"]
     built_in = extraction_plan(FeaturePlan())
-    assert set(built_in.groups) == set(DEFAULT_GROUPS) - {"hub_indicator"}
+    assert set(built_in.groups) == set(CORE_GROUPS) - {"hub_indicator"}
 
 
 @pytest.mark.parametrize("group", list(FEATURE_GROUPS))
 def test_each_group_has_consistent_transport_batch_and_model_width(group: str) -> None:
-    groups = set(DEFAULT_GROUPS) | {group} | set(FEATURE_GROUPS[group].requires)
+    groups = set(CORE_GROUPS) | {group} | set(FEATURE_GROUPS[group].requires)
     plan = FeaturePlan(tuple(g for g in FEATURE_GROUPS if g in groups), "tgat")
     root = ContextKey("Account", "root", 100, 1000)
     msg = message(80, 800, root)
@@ -122,11 +122,11 @@ def test_registry_dependencies_fingerprints_and_unknown_fields():
         FeaturePlan(("message_core", "amount_ratios"))
     with pytest.raises(ValueError, match="unknown"):
         FeaturePlan(("message_core", "made_up"))
-    a = FeaturePlan(DEFAULT_GROUPS, "tgat")
-    assert a.fingerprint() == FeaturePlan(tuple(reversed(DEFAULT_GROUPS)), "tgat").fingerprint()
-    assert a.fingerprint() != FeaturePlan(DEFAULT_GROUPS, "summary").fingerprint()
+    a = FeaturePlan(CORE_GROUPS, "tgat")
+    assert a.fingerprint() == FeaturePlan(tuple(reversed(CORE_GROUPS)), "tgat").fingerprint()
+    assert a.fingerprint() != FeaturePlan(CORE_GROUPS, "summary").fingerprint()
     with pytest.raises(ValueError, match="Architecture must be one of"):
-        FeaturePlan(DEFAULT_GROUPS, "single")
+        FeaturePlan(CORE_GROUPS, "single")
     assert not a.query_flags()["include_rolling_windows"]
     row = context(ContextKey("Account", "root", 100, 1000))
     row["features"]["fraud_label"] = 1

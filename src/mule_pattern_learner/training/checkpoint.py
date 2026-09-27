@@ -62,7 +62,7 @@ class ResumeState:
     # The dataset the run trains on: its id and its manifest's sha256.
     dataset_id: str
     dataset_manifest_sha256: str
-    # history.Progress.saved(): the totals of every segment so far.
+    # history.RunTotals.saved(): the totals of every segment so far.
     progress: dict[str, Any]
     # inference.rejections.TrainingRejections.saved().
     rejections: dict[str, dict[str, int]]

@@ -9,7 +9,7 @@ import torch
 from mule_pattern_learner.batching.assemble import build_batch, child_key
 from mule_pattern_learner.batching.limits import BatchIndex
 from mule_pattern_learner.contract.feature_groups import (
-    DEFAULT_GROUPS,
+    CORE_GROUPS,
     FEATURE_GROUPS,
     POOL_GROUPS,
     FeaturePlan,
@@ -94,7 +94,7 @@ def reference_batch(
 @pytest.mark.parametrize("mode", ["eval", "train"])
 @pytest.mark.parametrize(
     "plan",
-    [FeaturePlan(DEFAULT_GROUPS, "tgat"), FeaturePlan(V4_GROUPS, "tgat")],
+    [FeaturePlan(CORE_GROUPS, "tgat"), FeaturePlan(V4_GROUPS, "tgat")],
     ids=["default", "all-but-pools"],
 )
 def test_vectorised_assembly_matches_the_scalar_features_bit_for_bit(

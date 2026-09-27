@@ -94,7 +94,7 @@ def prepared(data: Path, config: RunConfig) -> tuple[DatasetPaths, FakeTigerGrap
         FrameObservedLabels(supplied_labels()),
         scope=TigerGraphScope(fake),
         cutoffs=TigerGraphCutoffs(fake),
-        hubs=TigerGraphHubs(fake),
+        hub_reader=TigerGraphHubs(fake),
     )
     return dataset, fake
 

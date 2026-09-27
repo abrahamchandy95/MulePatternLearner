@@ -323,8 +323,8 @@ class PinnedRoots:
         self.counts = contexts.counts
 
     @property
-    def query_calls(self) -> int:
-        return self.contexts.query_calls
+    def database_calls(self) -> int:
+        return self.contexts.database_calls
 
     def close(self, *, wait: bool = True) -> None:
         """Nothing to close: the wrapped source's owner closes it."""

@@ -135,7 +135,7 @@ class ContextReader(Protocol):
     @property
     def sampler(self) -> SamplerPlan: ...
     @property
-    def query_calls(self) -> int: ...
+    def database_calls(self) -> int: ...
     @property
     def rejections(self) -> Counter[str]: ...
     @property
@@ -186,7 +186,7 @@ class ContextSource:
         self._cadence = _EncodingCadence(encoding_check_every)
         self.pool = DaemonPool(concurrency, "context-requests")
         self.memory: OrderedDict[tuple[int, ContextKey], dict[str, Any]] = OrderedDict()
-        self.query_calls = 0
+        self.database_calls = 0
         self.rejections: Counter[str] = Counter()
         self.rejections_by_hop: dict[int, Counter[str]] = {}
         self.counts = ContextCounts()
@@ -307,7 +307,7 @@ class ContextSource:
             with self._lock:
                 self.diagnostics.update(diagnostics)
         with self._lock:
-            self.query_calls += calls
+            self.database_calls += calls
         return [_canonical(row) for row in result]
 
     def close(self, *, wait: bool = True) -> None:

@@ -9,7 +9,7 @@ from ..paths import REPOSITORY_ROOT
 ENV_FILE = REPOSITORY_ROOT / ".env"
 
 
-class Settings(BaseSettings):
+class ConnectionSettings(BaseSettings):
     """Connection settings from the repository `.env`; environment variables override it."""
 
     model_config: ClassVar[SettingsConfigDict] = SettingsConfigDict(

@@ -1,6 +1,6 @@
 """The run's history: its events, log intervals and epochs, as they happen.
 
-Progress adds the run's totals to every record the trainer emits
+RunTotals adds the run's totals to every record the trainer emits
 (runtime.progress.emit). It sums the batch statistics and counts the database calls,
 rejections and contexts of every segment of a resumed run. LogInterval keeps one log
 interval's losses on the device, so the host reads them once per interval. The trainer
@@ -26,7 +26,7 @@ def plain(stats: dict[str, Any]) -> dict[str, Any]:
     return {k: v.item() if isinstance(v, np.generic) else v for k, v in stats.items()}
 
 
-class Progress:
+class RunTotals:
     """The run's totals: batch statistics, database calls, rejections and contexts."""
 
     def __init__(self, started: float, contexts: ContextReader, backend: str) -> None:
@@ -45,7 +45,7 @@ class Progress:
 
     def calls(self) -> int:
         """REST calls of every segment of the run."""
-        return self.base_calls + self.contexts.query_calls
+        return self.base_calls + self.contexts.database_calls
 
     def rejections(self) -> dict[str, int]:
         """Rejected rows served by the source (both hops) in every segment, by status."""

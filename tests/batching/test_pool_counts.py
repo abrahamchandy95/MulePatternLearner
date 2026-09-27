@@ -18,7 +18,7 @@ from mule_pattern_learner.batching.pool_counts import pool_activity
 from mule_pattern_learner.config import DEFAULT_CONFIG
 from mule_pattern_learner.contract import feature_groups
 from mule_pattern_learner.contract.feature_groups import (
-    DEFAULT_GROUPS,
+    CORE_GROUPS,
     POOL_ACTIVITY_FEATURES,
     POOL_GROUPS,
     POOL_INTERNAL_FEATURES,
@@ -120,7 +120,7 @@ class RawRows:
 
     def __init__(self, rows: dict[tuple[int, ContextKey], dict[str, Any]]) -> None:
         self.rows = rows
-        self.plan, self.sampler, self.query_calls = PLAN, SAMPLER, 0
+        self.plan, self.sampler, self.database_calls = PLAN, SAMPLER, 0
         self.rejections: Counter[str] = Counter()
         self.rejections_by_hop: dict[int, Counter[str]] = {}
         self.counts = ContextCounts()
@@ -315,7 +315,7 @@ def test_pool_definitions_are_part_of_the_input_fingerprint_only(
 
 @pytest.mark.parametrize(
     ("groups", "architecture"),
-    [(DEFAULT_GROUPS, "tgat"), (DEFAULT_GROUPS, "summary")],
+    [(CORE_GROUPS, "tgat"), (CORE_GROUPS, "summary")],
 )
 def test_plans_without_pool_groups_are_unaffected(
     groups: tuple[str, ...], architecture: str, monkeypatch: pytest.MonkeyPatch
