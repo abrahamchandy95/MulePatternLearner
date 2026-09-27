@@ -98,16 +98,25 @@ def completed_run(config: RunConfig, run: RunPaths) -> dict[str, Any] | None:
     return read_json(run.metrics)
 
 
-def load_resume_state(config: RunConfig, run: RunPaths) -> ResumeState | None:
-    """The saved state of an interrupted run, or None before its first checkpoint.
+def check_resumable(config: RunConfig, run: RunPaths) -> None:
+    """Refuse to resume the run with config if a results-relevant setting changed.
 
-    A configuration whose results-relevant settings changed is refused, and the error
-    names the settings that changed; a finished run is refused after that check.
+    The error names the settings that changed. A run that has not written its
+    config.json yet has nothing to compare.
     """
     if run.config.exists():
         changed = changed_settings(config, run)
         if changed:
             raise ValueError(f"Resumed configuration differs from the run: {changed}")
+
+
+def load_resume_state(config: RunConfig, run: RunPaths) -> ResumeState | None:
+    """The saved state of an interrupted run, or None before its first checkpoint.
+
+    A configuration whose results-relevant settings changed is refused (check_resumable);
+    a finished run is refused after that check.
+    """
+    check_resumable(config, run)
     if run.metrics.exists():
         raise FileExistsError(f"Run is already complete: {run.root}")
     if not run.resume.exists():
