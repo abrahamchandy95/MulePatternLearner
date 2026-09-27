@@ -17,7 +17,7 @@ The project contains:
 1. **A GSQL layer** (`gsql/`): the temporal payment schema and Account label contract,
    the cutoff-aware training queries, the experiment scope, the hub registry, the Fourier
    time encoding and the one-time label reveal.
-2. **A Python layer** (`src/mule_pattern_learner/`, command `mule-temporal`)
+2. **A Python layer** (`src/mule_pattern_learner/`, command `mule`)
    that installs those queries, prepares a bounded dataset, streams batches from
    TigerGraph, trains, scores and evaluates.
 
@@ -52,14 +52,14 @@ payment events, associations, tokens and other entities are loaded by the extern
 data producer (for the reference snapshot, an export of the PhantomLedger
 simulator).
 
-## Train
+## Commands
 
-With the data loaded in TigerGraph, one command trains the live temporal model. It
-needs nothing but `.env`: no configuration file, no dataset identifier, no label file
-and no prepared artifacts to copy.
+With the data loaded in TigerGraph, one command trains the model. It needs nothing but
+`.env`: no configuration file, no dataset identifier, no label file and no prepared
+artifacts to copy.
 
 ```bash
-mule-temporal train
+mule train
 ```
 
 It uses CUDA when available (then Apple MPS, then CPU) and writes the run to
@@ -70,14 +70,20 @@ the graph ([label reveal](docs/label_reveal.md)); every run then prepares its da
 `data/<dataset id>/`. Run the same command again to resume an interrupted run. The
 settings are built in:
 `DEFAULT_CONFIG` in `src/mule_pattern_learner/config.py`, frozen dataclasses with one
-section per concern. No command reads a configuration file.
+section per concern. No command reads a configuration file, and no command takes an
+option besides `--help`.
 
-Before a long run, `mule check` reports without writing anything whether the graph,
-its installed queries and the cuGraph sampler are ready, then builds one training batch
-and runs one step. The other commands (`install`, `prepare`, `score`, `score-new`,
-`evaluate` and `evaluate-final`) are described in the end-to-end guide under
-[what runs where](docs/temporal_training_end_to_end.md#what-runs-where);
-`mule-temporal --help` lists their options.
+| Command | What it does |
+|---|---|
+| `mule train` | Prepares as needed (install, scope, reveal, dataset), then trains the built-in run into `results/baseline/seed-42/`, or resumes it |
+| `mule evaluate [RUN]` | Ground-truth audit of the run's model on the frozen test partition, written to the run's `audit/`; `RUN` defaults to `results/baseline/seed-42` |
+| `mule score ACCOUNTS [DATE]` | Scores the accounts listed in a file (one id per line) with the built-in run's model; `DATE` defaults to the test cutoff. Writes `scores/<file stem>_<date>.parquet` in the run |
+| `mule check` | Read-only readiness: the graph, its installed queries and the cuGraph probe, then one training batch with its tensor digests and the first loss |
+| `mule install` | Adds the scope vertex type if it is missing, installs the queries whose text differs and lists installed queries that no file defines (`train` does this too) |
+
+`python -m mule_pattern_learner` runs the same commands. Each prints one JSON result.
+The end-to-end guide describes
+[what runs where](docs/temporal_training_end_to_end.md#what-runs-where).
 
 ## Documentation
 

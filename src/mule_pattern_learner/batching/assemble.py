@@ -41,7 +41,7 @@ class HubLookup(Protocol):
     """Hub status from history visible before the root cutoff (see data/hub_registry.py).
 
     `phase` is the batch's visibility phase (1 train, 2 validation, 3 test); unscoped
-    batches (score-new) use 3. Positional-only, so implementations may name them freely.
+    batches (`mule score`) use 3. Positional-only, so implementations may name them freely.
     """
 
     def is_stub(

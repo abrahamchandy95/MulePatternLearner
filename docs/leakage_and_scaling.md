@@ -17,7 +17,7 @@ UUID-prefixed and removed afterwards. Unit/integration tests check scope propaga
 label separation, bounded seed selection and batch-local IDs. These checks do not
 establish production-scale performance or rule out missing source availability data.
 
-The model has no per-account learned parameters. `score-new` can score new IDs
+The model has no per-account learned parameters. `mule score` can score new IDs
 without a prepared training dataset, using history before the requested cutoff.
 Successful inference demonstrates architectural induction; measured quality on
 newly arriving accounts requires its own chronological evaluation sample.

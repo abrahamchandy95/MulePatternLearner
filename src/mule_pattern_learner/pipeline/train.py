@@ -25,7 +25,7 @@ def train_run(
 ) -> dict[str, Any]:
     """Prepare if needed, train with nnPU, and write the run into output.
 
-    `mule-temporal train` runs DEFAULT_CONFIG into BASELINE_RUN. The dataset is
+    `mule train` runs DEFAULT_CONFIG into BASELINE_RUN. The dataset is
     config's in data (pipeline.prepare.prepare_dataset). With ``resume`` (what the command
     passes) an interrupted run continues from its resume.pt; a finished one is an error.
     """

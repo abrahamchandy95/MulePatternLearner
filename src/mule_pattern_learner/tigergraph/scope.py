@@ -92,7 +92,7 @@ def scope_policy_counts(executor: QueryExecutor, scope_id: str) -> dict[str, int
     if missing:
         raise ValueError(
             f"{SCOPE_POLICY_QUERY} response lacks {missing}; install the current queries "
-            "(mule-temporal install)"
+            "(mule install)"
         )
     return {name: int(merged[name]) for name in names}
 
@@ -135,14 +135,13 @@ def check_scope_policy(counts: dict[str, int], scope_id: str, configured: str) -
         raise ValueError(
             f"Scope {scope_id!r} matches no scope.unowned rule (unowned member classes "
             f"{json.dumps(counts, sort_keys=True)}). Create a new scope: set a new scope.id "
-            "in config.ScopeConfig; the next `mule-temporal train` (or `prepare`) creates it."
+            "in config.ScopeConfig; the next `mule train` creates it."
         )
     raise ValueError(
         f"Scope {scope_id!r} was created with scope.unowned = {stored!r}, but the "
         f"configuration says {configured!r} (unowned member classes "
         f"{json.dumps(counts, sort_keys=True)}). Set scope.unowned = {stored!r} to use this "
-        "scope, or set a new scope.id; the next `mule-temporal train` (or `prepare`) "
-        "creates it."
+        "scope, or set a new scope.id; the next `mule train` creates it."
     )
 
 

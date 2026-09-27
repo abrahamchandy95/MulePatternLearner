@@ -58,7 +58,7 @@ def check_query_hashes(manifest: dict[str, Any], dataset: DatasetPaths) -> None:
     if changed:
         raise ValueError(
             f"Prepared dataset {dataset.root} was built from different GSQL sources "
-            f"({', '.join(changed)}). Install the current queries (mule-temporal install), "
+            f"({', '.join(changed)}). Install the current queries (mule install), "
             f"then move {dataset.root} aside to prepare it again."
         )
 

@@ -76,7 +76,7 @@ def test_stale_population_queries_fail_fast() -> None:
             "known_from_ms": [5, 0, 7],
         }
     )
-    with pytest.raises(ValueError, match="1 account.*'A3'.*mule-temporal install"):
+    with pytest.raises(ValueError, match="1 account.*'A3'.*mule install"):
         GraphObservedLabels().read(metadata)
     metadata.loc[2, "known_from_ms"] = 0
     labels = GraphObservedLabels().read(metadata)

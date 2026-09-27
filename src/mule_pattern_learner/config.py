@@ -4,7 +4,7 @@ RunConfig has one section per concern: the frozen TigerGraph scope (scope), the
 prepared dataset (dataset), neighbour sampling (sampler, which is
 contract.sampler_plan.SamplerPlan itself), the model's feature groups (features), the
 model (model), the nnPU loss (loss), optimisation (training), the connection to
-TigerGraph (transport) and the host (runtime). Every default is the run `mule-temporal
+TigerGraph (transport) and the host (runtime). Every default is the run `mule
 train` performs, and each component receives only its own section. A section checks
 its values when it is built, with the ranges of contract.bounds, so a bad setting
 fails before any database work. `dataclasses.replace` changes a setting.

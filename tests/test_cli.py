@@ -1,8 +1,10 @@
-"""The command line: entry points, the cuBLAS workspace, subcommands and defaults."""
+"""The command line: one entry point, the cuBLAS workspace, five commands without options."""
 
 from __future__ import annotations
 
+import argparse
 from importlib.metadata import distribution
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -17,6 +19,8 @@ from mule_pattern_learner.paths import DATA_DIR, REPOSITORY_ROOT, DatasetPaths, 
 from mule_pattern_learner.pipeline import train as pipeline_train
 from mule_pattern_learner.pipeline.connect import open_context_source
 
+COMMANDS = ("install", "train", "evaluate", "score", "check")
+
 
 def test_python_m_runs_the_command_line() -> None:
     result = subprocess.run(
@@ -25,17 +29,17 @@ def test_python_m_runs_the_command_line() -> None:
         text=True,
         check=True,
     )
-    assert "train" in result.stdout
+    assert all(command in result.stdout for command in COMMANDS)
 
 
-def test_mule_and_mule_temporal_run_the_same_main() -> None:
+def test_mule_is_the_one_console_script() -> None:
     scripts = {
         e.name: e.value
         for e in distribution("mule-pattern-learner").entry_points
         if e.group == "console_scripts"
     }
-    # A missing name means the installed metadata is stale: rerun pip install -e '.[dev]'.
-    assert scripts["mule"] == scripts["mule-temporal"] == "mule_pattern_learner.cli:main"
+    # Another name means the installed metadata is stale: rerun pip install -e '.[dev]'.
+    assert scripts == {"mule": "mule_pattern_learner.cli:main"}
 
 
 def test_cli_reserves_the_cublas_workspace_first_and_keeps_user_values(
@@ -63,52 +67,69 @@ def test_cli_reserves_the_cublas_workspace_first_and_keeps_user_values(
         assert os.environ["CUBLAS_WORKSPACE_CONFIG"] == expected
 
 
-def test_cli_needs_no_config_truth_or_dataset() -> None:
+def subcommands(parser: argparse.ArgumentParser) -> dict[str, argparse.ArgumentParser]:
+    (action,) = (a for a in parser._actions if isinstance(a, argparse._SubParsersAction))  # pyright: ignore[reportPrivateUsage]
+    return dict(action.choices)  # pyright: ignore[reportUnknownArgumentType]
+
+
+def test_the_commands_take_no_options_and_default_to_the_baseline_run() -> None:
     parser = cli.build_parser()
-    args = parser.parse_args(["train"])
-    # The dataset is the built-in run's own, in data/.
-    assert not hasattr(args, "dataset")
-    # The settings are built in: no command reads a configuration file.
-    for command in (["train"], ["prepare"]):
+    commands = subcommands(parser)
+    assert tuple(commands) == COMMANDS
+    for name, command in commands.items():
+        # Only --help: every input is a built-in setting or a positional argument.
+        options = [o for a in command._actions for o in a.option_strings]  # pyright: ignore[reportPrivateUsage]
+        assert options == ["-h", "--help"], name
+    assert vars(parser.parse_args(["train"])) == {"command": "train"}
+    for retired in (["train", "--config", "x.toml"], ["prepare"], ["evaluate-final"]):
         with pytest.raises(SystemExit):
-            parser.parse_args([*command, "--config", "overrides.toml"])
-    final = parser.parse_args(["evaluate-final"])
-    assert final.dataset is None and final.truth is None
-    # The audit goes into the baseline run, or the run directory named.
-    assert final.run == pipeline_train.BASELINE_RUN.root
-    assert parser.parse_args(["evaluate-final", "results/x/seed-1"]).run == Path("results/x/seed-1")
-    scoring = parser.parse_args(
-        ["score", "--checkpoint", "m.pt", "--date", "2025-01-01", "--output", "s.parquet"]
-    )
-    assert scoring.dataset is None
+            parser.parse_args(retired)
+    # RUN is the baseline run unless a run directory is named.
+    assert parser.parse_args(["evaluate"]).run == pipeline_train.BASELINE_RUN
+    named = parser.parse_args(["evaluate", "results/x/seed-1"])
+    assert named.run == RunPaths(Path("results/x/seed-1"))
+    scoring = parser.parse_args(["score", "new.txt"])
+    assert (scoring.accounts, scoring.date) == (Path("new.txt"), None)
+    assert parser.parse_args(["score", "new.txt", "2025-02-01"]).date == "2025-02-01"
 
 
-def test_cli_install_passes_force_and_optional(
+def test_each_command_runs_its_use_case_and_prints_one_json_result(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    calls: list[dict[str, Any]] = []
+    calls: list[tuple[str, tuple[Any, ...]]] = []
 
-    def install(executor: object, **kwargs: Any) -> dict[str, Any]:
-        calls.append(kwargs)
-        return {"installed": []}
+    def use_case(name: str, result: dict[str, Any]) -> Any:
+        def run(*args: Any) -> dict[str, Any]:
+            calls.append((name, args))
+            return result
 
-    monkeypatch.setattr(cli, "install", install)
-    connected: list[object] = []
-    monkeypatch.setattr(cli, "connect", lambda transport: connected.append(transport))
-    for argv, expected in (
-        (["install"], {"include_optional": False, "force": False}),
-        (["install", "--force", "--include-optional"], {"include_optional": True, "force": True}),
-    ):
-        monkeypatch.setattr(sys, "argv", ["mule-temporal", *argv])
+        return run
+
+    monkeypatch.setattr(cli, "install_queries", use_case("install", {"installed": []}))
+    monkeypatch.setattr(cli, "evaluate_run", use_case("evaluate", {"metrics": {}}))
+    monkeypatch.setattr(cli, "score_accounts", use_case("score", {"accounts": 2}))
+    monkeypatch.setattr(cli, "check", use_case("check", {"status": "ready"}))
+    for argv in (["install"], ["evaluate"], ["score", "new.txt"], ["check"]):
+        monkeypatch.setattr(sys, "argv", ["mule", *argv])
         cli.main()
-        assert calls[-1] == expected
-    assert capsys.readouterr().out.count('"installed": []') == 2
-    # The built-in run's retry budgets.
-    assert connected == [DEFAULT_CONFIG.transport] * 2
+        json.loads(capsys.readouterr().out)
+    assert calls == [
+        ("install", ()),
+        ("evaluate", (pipeline_train.BASELINE_RUN,)),
+        ("score", (pipeline_train.BASELINE_RUN, Path("new.txt"), None)),
+        ("check", ()),
+    ]
+    # A graph that is not ready is a failure, after the report is printed.
+    monkeypatch.setattr(cli, "check", use_case("check", {"status": "not_ready"}))
+    monkeypatch.setattr(sys, "argv", ["mule", "check"])
+    with pytest.raises(SystemExit) as stopped:
+        cli.main()
+    assert stopped.value.code == 1
+    assert json.loads(capsys.readouterr().out) == {"status": "not_ready"}
 
 
-def test_train_command_prepares_then_trains_or_resumes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_train_prepares_then_trains_or_resumes_the_baseline_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     prepared: list[tuple[RunConfig, Path]] = []
     trained: list[tuple[RunConfig, DatasetPaths, RunPaths, dict[str, Any]]] = []
@@ -118,19 +139,21 @@ def test_train_command_prepares_then_trains_or_resumes(
         prepared.append((c, data))
         return dataset
 
-    # `mule-temporal train` is pipeline.run with resume: patch the pipeline's steps.
+    # `mule train` is pipeline.train.train_run with resume: patch the pipeline's steps.
     monkeypatch.setattr(pipeline_train, "prepare_dataset", prepare)
 
     def train(c: RunConfig, d: DatasetPaths, o: RunPaths, **kwargs: Any) -> dict[str, Any]:
         trained.append((c, d, o, kwargs))
-        return {}
+        return {"status": "complete"}
 
     monkeypatch.setattr(pipeline_train, "train", train)
-    cli.train_command()
+    monkeypatch.setattr(sys, "argv", ["mule", "train"])
+    cli.main()
+    assert json.loads(capsys.readouterr().out) == {"status": "complete"}
     # One command prepares the built-in run's dataset in data/, then trains it into
     # results/baseline/seed-42/ (resuming if interrupted).
     assert prepared[-1] == (DEFAULT_CONFIG, DATA_DIR)
     c, d, o, kwargs = trained[-1]
     assert c is DEFAULT_CONFIG and d == dataset and o == pipeline_train.BASELINE_RUN
-    # The trainer opens the live source through the pipeline once its checks passed.
+    # The trainer opens the source through the pipeline once its checks passed.
     assert kwargs == {"open_contexts": open_context_source, "resume": True}

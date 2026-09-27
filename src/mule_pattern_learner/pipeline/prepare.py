@@ -1,6 +1,6 @@
-"""Preparation against the live graph, with built-in settings.
+"""Preparation against the graph, with built-in settings, and the query installation.
 
-`mule-temporal train` needs only the TigerGraph credentials in .env. On a fresh graph
+`mule train` needs only the TigerGraph credentials in .env. On a fresh graph
 the first run installs the training queries, creates the frozen scope and reveals the
 known mules through the label contract; later runs find all three in place. Settings
 are a config.RunConfig (DEFAULT_CONFIG for the command line), and the source id is read
@@ -12,8 +12,9 @@ the source id and the dataset settings (data.manifest.dataset_id).
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
-from ..config import RunConfig
+from ..config import DEFAULT_CONFIG, RunConfig
 from ..contract.fingerprints import fingerprint
 from ..data.manifest import check_query_hashes, dataset_id, read_manifest, write_manifest
 from ..data.preparation import prepare
@@ -21,12 +22,25 @@ from ..paths import DATA_DIR, DatasetPaths, datasets
 from ..tigergraph.cutoffs import TigerGraphCutoffs
 from ..tigergraph.executor import TigerGraphExecutor
 from ..tigergraph.hubs import TigerGraphHubs
-from ..tigergraph.installer import install
+from ..tigergraph.installer import install, undefined_queries
 from ..tigergraph.labels import GraphObservedLabels
 from ..tigergraph.provenance import source_counts
 from ..tigergraph.reveal import ensure_revealed_labels
 from ..tigergraph.scope import TigerGraphScope, ensure_scope, scope_header
 from .connect import connect
+
+
+def install_queries(config: RunConfig = DEFAULT_CONFIG) -> dict[str, Any]:
+    """What `mule install` does, on a connection with config's retry budgets.
+
+    It adds the scope vertex type if it is missing, installs the training queries whose
+    text differs (installer.install) and lists the installed queries that no repository
+    file defines, which it leaves in place.
+    """
+    executor = connect(config.transport)
+    result = install(executor)
+    result["not_defined"] = undefined_queries(executor)
+    return result
 
 
 def derived_source_id(graph: str, counts: dict[str, int]) -> str:

@@ -1,7 +1,7 @@
 # Label reveal: which mules the model may know, and since when
 
 A fresh PhantomLedger load masks every mule, so training would have no positives.
-The first `mule-temporal train` therefore runs `temporal_reveal_mule_labels`
+The first `mule train` therefore runs `temporal_reveal_mule_labels`
 ([`gsql/queries/label_reveal.gsql`](../gsql/queries/label_reveal.gsql)) once. It
 decides which mules a bank would realistically have confirmed, and when, and writes
 that into the existing [Account label contract](account_mule_labels.md). Training
@@ -121,5 +121,5 @@ their own copy of the labels they were trained on.
   that the graph does not populate.
 - nnPU assumes positives are selected completely at random; this reveal is
   deliberately not, which is the realistic setting a production model faces.
-  Evaluate with the oracle audit (`mule-temporal evaluate-final`), which scores all
+  Evaluate with the oracle audit (`mule evaluate`), which scores all
   test mules, not just the revealed ones.

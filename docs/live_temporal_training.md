@@ -350,7 +350,7 @@ and has rows per visibility phase 1, 2 and 3. A phase counts only the events who
 Account endpoints are all allowed in that phase, the endpoint rule of the context
 query, and the hub itself must be allowed in the phase. A held-out partition
 therefore cannot change a training-phase stub decision. Without a scope
-(`score-new`) the counts are unscoped and every
+(`mule score`) the counts are unscoped and every
 row has phase 3. Counts cover all currencies, an upper bound of the context
 query's USD-only capacity check, so an account whose USD history would fit can
 still be stubbed; that costs history, never leaks it. The manifest records
@@ -420,8 +420,10 @@ parameters differ. Queries that call a stale query are installed with it (a chan
 to `temporal_fourier64_values` also reinstalls `temporal_training_context`). Only
 stale definitions are created again, because `CREATE OR REPLACE` disables an
 installed endpoint until it is installed again, and the command prints which
-queries it installs and which are up to date. `--force` treats every query as
-stale; `--include-optional` also installs the pair_time64 parity queries.
+queries it installs, which are up to date and which installed queries no repository
+file defines (listed, never dropped). The pair_time64 parity queries of
+`gsql/analytics/` are never installed by `mule install` or `mule train`;
+`tigergraph.installer.install(executor, analytics=True)` installs them.
 
 On TigerGraph 4.2.5 the install request answers only when compilation finishes,
 so it runs with a 45-minute read timeout. When the client gives up first (read
@@ -452,7 +454,7 @@ against the configuration, so a different rule needs a new `scope.id`.
 The ordinary command prepares bounded metadata if necessary, then trains:
 
 ```bash
-mule-temporal train
+mule train
 ```
 
 It writes the run directory `results/baseline/seed-42/` and prepares the dataset in
@@ -538,15 +540,14 @@ every check passed, 1 a failed check, 2 that cuGraph cannot run on the host.
 `--live` builds one real batch per backend from the prepared dataset (read-only
 queries) and runs one deterministic CUDA training step twice.
 
-Score IDs absent from training, using an ID text file with one account per line:
+Score IDs absent from training, using an ID text file with one account per line
+(the date defaults to the model's test cutoff):
 
 ```bash
-mule-temporal score-new \
-  --checkpoint results/baseline/seed-42/model.pt \
-  --accounts new_accounts.txt \
-  --date 2025-02-01 \
-  --output artifacts/new_account_scores.parquet
+mule score new_accounts.txt 2025-02-01
 ```
+
+The scores go to `results/baseline/seed-42/scores/new_accounts_2025-02-01.parquet`.
 
 This command streams ID batches and writes scores/embeddings incrementally. It
 uses history available before the requested date without the experimental scope,
@@ -554,33 +555,19 @@ as an operational scorer would, and computes the hub registry for that cutoff (a
 date before the graph's first visible event is refused). It needs neither the
 training dataset nor labels. IDs that TigerGraph rejects
 (missing, not yet visible, over capacity) are not scored; they go to
-`<output>.rejected.txt`, and the result reports root and child rejections apart
+`<scores>.parquet.rejected.txt` beside the scores, and the result reports root and child rejections apart
 (see [hub accounts and rejected contexts](#hub-accounts-and-rejected-contexts)).
-The command uses the checkpoint's `max_query_attempts` and `max_outage_s`. An
+The command uses the model's `max_query_attempts` and `max_outage_s`. An
 account with no history can be scored from available metadata, but accuracy on
 such accounts must be measured separately.
 
-Evaluate frozen predictions separately:
-
-```bash
-mule-temporal evaluate \
-  --predictions results/baseline/seed-42/predictions/test.parquet \
-  --checkpoint results/baseline/seed-42/model.pt \
-  --output artifacts/oracle_evaluation.json
-```
-
-Truth comes from the graph's label contract (`temporal_get_account_supervision`,
-the oracle endpoint training never calls); an account whose label is not known
-counts as unknown, never as a negative. `--truth <parquet>` supplies it instead,
-with `account_id`, integer `is_mule` and optionally `date`. Duplicate keys fail
-validation. The current evaluator is for bounded experiment prediction
-files; it is not a distributed full-population metrics service.
-
-`evaluate-final [RUN]` scores all test positives and weighted sampled negatives of the
+`mule evaluate [RUN]` scores all test positives and weighted sampled negatives of the
 frozen test partition with the model of a run directory (`results/baseline/seed-42/`
-by default). It takes the test cutoff and hub registry from the model's prepared
-dataset (`--dataset`, or the dataset id recorded in `model.pt`), and the retry budgets
-from the model. It writes `audit/test.json` (the report) and `audit/test.parquet` (the
+by default). Truth comes from the graph's label contract
+(`temporal_get_account_supervision`, the oracle endpoint training never calls); an
+account whose label is not known counts as unknown, never as a negative. It takes the
+test cutoff and hub registry from the model's prepared dataset (the dataset id recorded
+in `model.pt`), and the retry budgets from the model. It writes `audit/test.json` (the report) and `audit/test.parquet` (the
 scored sample) into the run directory, and refuses a run that already has them. It
 fails before writing anything when a test positive is rejected or the rejected
 fraction exceeds the model's `max_rejected_root_fraction`, because weighted metrics

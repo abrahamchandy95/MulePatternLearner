@@ -105,14 +105,15 @@ stubs](#hubs-and-stubs)).
 
 | Stage | Command | TigerGraph work | Writes to TigerGraph? |
 |---|---|---|---|
-| Install queries | first `train` (or `mule-temporal install`) | Creates and compiles the training queries that are stale, plus the queries that call them | Query catalog (and the Temporal_Training_Scope schema if it is missing) |
+| Install queries | first `mule train` (or `mule install`) | Creates and compiles the training queries that are stale, plus the queries that call them | Query catalog (and the Temporal_Training_Scope schema if it is missing) |
 | Create the experiment scope | first `train`, when the scope is missing | Partitions every Account and Party into train, validation or test | One scope vertex and one membership edge per Account and Party |
 | Reveal known mules | first strict `train`, when the graph has no known labels | Simulates each mule's discovery and reveals up to 20 per split ([label reveal](label_reveal.md)) | The label-contract attributes of every internal Account |
-| Prepare the dataset | every `train` (or `mule-temporal prepare`) | Pages the population, resolves cutoffs, builds the hub registry | No |
-| Train | `mule-temporal train` | Two rounds of context queries per step | No |
-| Score, evaluate | `score`, `score-new`, `evaluate-final` (and `evaluate`) | Context queries for the scored accounts; `evaluate-final` also pages the test population; `evaluate` reads saved predictions and the graph's label contract (or a `--truth` file) | No |
+| Prepare the dataset | every `mule train` | Pages the population, resolves cutoffs, builds the hub registry | No |
+| Train | `mule train` | Two rounds of context queries per step | No |
+| Check readiness | `mule check` | Reads the schema and the query catalog, then the contexts of one training batch | No |
+| Score, evaluate | `mule score`, `mule evaluate` | Context queries for the scored accounts; `mule evaluate` also pages the test population and reads the graph's label contract | No |
 
-`mule-temporal` is `python -m mule_pattern_learner` (the entry point exists
+`mule` is `python -m mule_pattern_learner` (the entry point exists
 after `pip install -e .`; the project needs an editable install because it reads `gsql/`
 from the repository). Every setting is built in (`DEFAULT_CONFIG` in
 [config.py](../src/mule_pattern_learner/config.py)), so no
@@ -132,7 +133,7 @@ feature contract drift apart.
 
 ### temporal_create_training_scope (once per experiment)
 
-- **When:** the first `train` or `prepare`, only if the configured `scope.id` does not
+- **When:** the first `mule train`, only if the configured `scope.id` does not
   exist (`scope.create = False` forbids the write).
 - **Reads:** every Account and Party, all `Party_Owns_Account` tenures (all time), and,
   for the `linked` rule, every Payment_Transaction and Zelle_Transfer of unowned internal
@@ -182,7 +183,7 @@ feature contract drift apart.
   2,000 test accounts opened before their split's cutoff) plus the observed positives. For
   `strict_mule_v2`: population 222,337 / 47,754 / 47,749 by split, 24,059 prepared rows.
 
-### temporal_training_cutoffs (preparation, score-new)
+### temporal_training_cutoffs (preparation, `mule score`)
 
 - **Reads:** `event_ts_ms` and `event_seq` of every event, `first_seen_*` of every entity.
 - **Returns:** for each calendar cutoff (midnight minus 1 ms) the largest sequence visible
@@ -192,7 +193,7 @@ feature contract drift apart.
   `cutoff_seq` is 61,035,552 for 2024-07-01, 89,141,831 for 2024-10-01 and 120,799,198 for
   2025-01-01 (every event, since the data ends on 2024-12-31). About 6.6 s installed.
 
-### temporal_hub_registry (preparation, score-new)
+### temporal_hub_registry (preparation, `mule score`)
 
 - **Reads:** all-time `outdegree()` of the four payment relations for every Account (an
   O(1) prefilter), then, for the candidates only, the `event_seq` of each payment edge
@@ -587,7 +588,7 @@ MacBook with an M2 Max):
 | Optimiser step on MPS | 0.5 s (first step) |
 | Two-epoch smoke run (3 steps per epoch, 60 validation and 60 test roots) | 90 s, 0 rejections |
 | Scope creation plus preparation | 6 min 19 s |
-| Installing every training query | about 50 min (the context query dominates). The command stops waiting after 45 min, so re-run `mule-temporal install` until it reports every query up to date; later installs only recompile changed queries |
+| Installing every training query | about 50 min (the context query dominates). The command stops waiting after 45 min, so re-run `mule install` until it reports every query up to date; later installs only recompile changed queries |
 
 Training is bound by TigerGraph, not the GPU. At about 11 s per step, an epoch of 100
 steps plus validation of 2,020 accounts takes roughly 25 minutes, so 30 epochs is at most
@@ -656,16 +657,18 @@ instance, shrink the child pool, or move to the future work listed below.
    stdout show progress):
 
    ```bash
-   mule-temporal train
+   mule train
    ```
 
 7. **Resume** after any interruption by running the same command again; it continues
    from `results/baseline/seed-42/resume.pt`.
 
-8. **Score new accounts** (one ID per line; rejected IDs go to `<output>.rejected.txt`):
+8. **Score new accounts** (one ID per line; the scores go to
+   `results/baseline/seed-42/scores/new_accounts_2025-01-01.parquet` and rejected IDs
+   beside them):
 
    ```bash
-   mule-temporal score-new --checkpoint results/baseline/seed-42/model.pt --accounts new_accounts.txt --date 2025-01-01 --output artifacts/new_scores.parquet
+   mule score new_accounts.txt 2025-01-01
    ```
 
 Keep the TigerGraph graph frozen during training. Every streamed run rechecks counts,
@@ -703,7 +706,7 @@ dataset; different dataset settings name another dataset, prepared beside it.
 
 | Message | Meaning and fix |
 |---|---|
-| `Installed query differs from repository source or is not installed` | Run `mule-temporal install`; it recompiles only the stale queries (the context query alone takes most of the roughly 50 minutes a full install needs) |
+| `Installed query differs from repository source or is not installed` | Run `mule install`; it recompiles only the stale queries (the context query alone takes most of the roughly 50 minutes a full install needs) |
 | `Prepared dataset ... was built from different GSQL sources` | The GSQL changed after preparation; install the current queries, then move the dataset aside so the next run prepares it again |
 | `Account label contract violated after the reveal` | The label attributes are inconsistent; see [label reveal](label_reveal.md) and run `temporal_validate_account_supervision` |
 | Scope rule mismatch | The scope was created with another `scope.unowned`; use the stored rule or a new `scope.id` |
@@ -727,9 +730,8 @@ dataset; different dataset settings name another dataset, prepared beside it.
   do not depend on scope or cutoff), would reduce TigerGraph time per step.
 - The optional pair-window counts scan each sender's full outgoing history; keep them as a
   control, not for large runs.
-- `evaluate-final` needs complete 0/1 truth for the test population. The graph's label
-  contract provides it by default; a `--truth` file must list negatives as well as
-  positives. Its report estimates population metrics from a weighted sample: AP, ROC
+- `mule evaluate` needs complete 0/1 truth for the test population, which the graph's
+  label contract provides. Its report estimates population metrics from a weighted sample: AP, ROC
   AUC, precision and recall at the frozen threshold, and precision and recall in the
   top 1, 5 and 10% of the estimated population (`precision_at_1pct`, `recall_at_1pct`
   and so on; see the [commands](live_temporal_training.md#commands) of the live

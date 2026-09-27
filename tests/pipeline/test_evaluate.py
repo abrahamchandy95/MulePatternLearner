@@ -1,4 +1,4 @@
-"""The evaluation use cases connect only once their inputs passed their checks."""
+"""The audit of a run connects only once its inputs passed their checks."""
 
 from __future__ import annotations
 
@@ -41,11 +41,11 @@ def test_evaluate_run_connects_after_its_checks_and_reads_truth_on_that_connecti
     existing.parent.mkdir()
     existing.write_text("{}")
     with pytest.raises(FileExistsError):
-        pipeline_evaluate.evaluate_run(run, None, data=tmp_path)
+        pipeline_evaluate.evaluate_run(run, data=tmp_path)
     assert connected == [] and verified == []
     existing.unlink()
     # The dataset is the model's own: its dataset id's directory in data.
-    result = pipeline_evaluate.evaluate_run(run, None, data=tmp_path)
+    result = pipeline_evaluate.evaluate_run(run, data=tmp_path)
     # The checkpoint's retry budgets, the frozen source checked, the graph's truth on it.
     assert connected == [config.transport]
     assert verified == [executor]
@@ -53,5 +53,5 @@ def test_evaluate_run_connects_after_its_checks_and_reads_truth_on_that_connecti
     truth = result["truth"]
     assert isinstance(truth, TigerGraphTruth) and truth.executor is executor
     assert result["dataset"] == dataset and result["run"] == run
-    supplied = pipeline_evaluate.evaluate_run(run, tmp_path / "t.parquet", dataset=dataset)
-    assert isinstance(supplied["truth"], ParquetTruth)
+    reader = ParquetTruth(tmp_path / "t.parquet")
+    assert pipeline_evaluate.evaluate_run(run, truth=reader, data=tmp_path)["truth"] is reader

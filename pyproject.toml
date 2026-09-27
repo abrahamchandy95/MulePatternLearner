@@ -27,7 +27,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# GPU neighbor resampling for the live temporal trainer (Linux x86_64 with CUDA). Pick the
+# GPU neighbor resampling for training (Linux x86_64 with CUDA). Pick the
 # extra that matches the CUDA major version of the installed torch wheel: cu12 wheels are on
 # pypi.nvidia.com (use with torch cu129), cu13 wheels are on pypi.org (torch>=2.13 cu130/cu132).
 cuda12 = [
@@ -48,7 +48,6 @@ dev = [
 
 [project.scripts]
 mule = "mule_pattern_learner.cli:main"
-mule-temporal = "mule_pattern_learner.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mule_pattern_learner"]
