@@ -135,8 +135,8 @@ lead to validate, not a setting.
 The pool definitions (the groups' names, the bands, the pass-through thresholds and
 `POOL_ACTIVITY_VERSION`) are part of a model's input fingerprint
 (`FeaturePlan.fingerprint`) when it uses a pool group, so a checkpoint trained with them
-is refused once they change. They are not part of the contract fingerprint, so
-checkpoints from before the pool groups existed stay valid.
+is refused once they change. They are not part of the contract fingerprint, which
+covers only what TigerGraph returns.
 
 ## The 83 entity/context features
 

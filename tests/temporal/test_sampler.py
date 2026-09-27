@@ -498,7 +498,6 @@ def test_vectorised_assembly_matches_the_scalar_features_bit_for_bit(
     assert batch["first_mask"].sum() > len(keys) and batch["second_mask"].any()
 
 
-@pytest.mark.legacy
 def test_fourier_columns_come_from_scalar_deltas_on_every_device() -> None:
     sampler = POOLED
     plan = FeaturePlan(DEFAULT_GROUPS, "split")
@@ -547,7 +546,6 @@ def test_torch_fourier_matches_numpy(device: str) -> None:
         fourier64_torch(torch.tensor([1.5], device=device))
 
 
-@pytest.mark.legacy
 def test_missing_required_message_fields_raise_instead_of_defaulting() -> None:
     sampler = SamplerPlan(roots=PoolPlan(recent=3))
     plan = FeaturePlan(DEFAULT_GROUPS, "split")
@@ -900,7 +898,6 @@ def _first_children(
     }
 
 
-@pytest.mark.legacy
 def test_hub_children_become_local_stubs_and_mark_outer_peers() -> None:
     sampler = POOLED
     plan = FeaturePlan((*DEFAULT_GROUPS, "entity_age"), "split")
@@ -960,7 +957,6 @@ def test_hub_children_become_local_stubs_and_mark_outer_peers() -> None:
     assert int(reference["x"][:, column].sum()) == 0
 
 
-@pytest.mark.legacy
 @pytest.mark.parametrize(
     ("scope", "phase", "expected"),
     [("s", 1, 1), ("s", 2, 2), ("s", 3, 3), ("", 3, 3), ("", 1, 3)],
@@ -978,7 +974,6 @@ def test_hub_lookups_use_the_batch_visibility_phase(scope: str, phase: int, expe
     assert {p for *_, p in hubs.calls} == {expected}
 
 
-@pytest.mark.legacy
 def test_rejected_children_are_masked_and_rejected_roots_raise() -> None:
     sampler = POOLED
     plan = FeaturePlan(DEFAULT_GROUPS, "split")
@@ -1007,7 +1002,6 @@ def test_rejected_children_are_masked_and_rejected_roots_raise() -> None:
         make_live_batch(FakeStore(sampler, reject={keys[2]}), keys, plan=plan, sampler=sampler)
 
 
-@pytest.mark.legacy
 def test_tigergraph_cannot_supply_client_features() -> None:
     sampler = POOLED
     plan = FeaturePlan(DEFAULT_GROUPS, "split")

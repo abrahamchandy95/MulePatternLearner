@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from .config_schema import OPERATIONAL_DEFAULTS, split_seed
+from .config_schema import OPERATIONAL_DEFAULTS
 from .executor import QueryExecutor, checked_rows, connection_call, merged_rows, printed
 
 
@@ -39,7 +39,7 @@ def check_scope(attrs: dict[str, Any] | None, config: dict[str, Any]) -> None:
     if (
         not attrs["ready"]
         or attrs["source_id"] != config["dataset_id"]
-        or attrs["split_seed"] != split_seed(config)
+        or attrs["split_seed"] != int(config["split_seed"])
     ):
         raise ValueError("Scope is incomplete or belongs to a different source/partition")
 
@@ -167,7 +167,7 @@ def ensure_scope(executor: QueryExecutor, config: dict[str, Any]) -> None:
             {
                 "scope_id": scope_id,
                 "source_id": config["dataset_id"],
-                "split_seed": split_seed(config),
+                "split_seed": int(config["split_seed"]),
                 "unowned_policy": config.get(
                     "scope_unowned", OPERATIONAL_DEFAULTS["scope_unowned"]
                 ),

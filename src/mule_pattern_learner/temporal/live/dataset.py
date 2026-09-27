@@ -14,12 +14,7 @@ from mule_pattern_learner.configuration import REPOSITORY_ROOT
 
 from ..common import cutoff_ms, digest, timestamp
 from .cohort import cohort_seed, scoped_cohort
-from .config_schema import (
-    DEFAULT_RUN,
-    OPERATIONAL_DEFAULTS,
-    split_seed,
-    without_retired_keys,
-)
+from .config_schema import validate_config, without_retired_keys
 from .contract import (
     SPLIT_PHASE,
     ContextKey,
@@ -99,25 +94,26 @@ def check_query_hashes(manifest: dict[str, Any], dataset: Path) -> None:
 
 
 def preparation_view(config: dict[str, Any]) -> dict[str, Any]:
-    """Normalized values of PREPARATION_KEYS, with defaults resolved.
+    """Normalized values of PREPARATION_KEYS of the validated configuration.
 
-    sampler_pools is what TigerGraph returns per hop. extraction_groups are the groups TigerGraph is
-    asked for; the source derives the hop-2 flags from each training model, so
-    arms of any architecture can share one preparation.
+    sampler_pools is what TigerGraph returns per hop. extraction_groups are the groups
+    TigerGraph is asked for; the source derives the hop-2 flags from each training
+    model, so arms of any architecture can share one preparation.
     """
+    config = validate_config(config)
     sampler = SamplerPlan.from_config(config)
     plan = extraction_plan(config)
     view = {
         "dataset_id": config.get("dataset_id"),
         "prepared_id": config.get("prepared_id"),
-        "dates": config.get("dates"),
-        "seed_limits": config.get("seed_limits", DEFAULT_RUN["seed_limits"]),
-        "scope_id": config.get("scope_id", ""),
-        "split_seed": split_seed(config),
+        "dates": config["dates"],
+        "seed_limits": config["seed_limits"],
+        "scope_id": config["scope_id"],
+        "split_seed": config["split_seed"],
         "cohort_seed": cohort_seed(config),
         "sampler_pools": sampler_pools(sampler),
         "extraction_groups": sorted(plan.groups),
-        "scope_unowned": config.get("scope_unowned", OPERATIONAL_DEFAULTS["scope_unowned"]),
+        "scope_unowned": config["scope_unowned"],
     }
     assert tuple(view) == PREPARATION_KEYS
     return json.loads(json.dumps(view))
@@ -148,8 +144,8 @@ def load_prepared(dataset: Path) -> tuple[dict[str, Any], pd.DataFrame]:
         (HUB_FILE, "hubs_sha256"),
     ]
     for name, field in required:
-        if field not in manifest or digest(dataset / name) != manifest[field]:
-            raise ValueError(f"Prepared artifact changed or legacy oracle cache: {name}")
+        if digest(dataset / name) != manifest[field]:
+            raise ValueError(f"Prepared artifact changed: {name}")
     accounts = read_bounded_parquet(
         dataset / "accounts.parquet",
         "Prepared seed metadata exceeds the bounded population contract",
@@ -184,10 +180,8 @@ def eligible_mask(accounts: pd.DataFrame, split: str, date: str) -> np.ndarray:
 
 
 def marginal_mask(accounts: pd.DataFrame) -> np.ndarray:
-    """Rows of the label-blind reservoir; every row when the cohort records none."""
-    if "in_marginal" in accounts:
-        return accounts["in_marginal"].to_numpy(bool)
-    return np.ones(len(accounts), dtype=bool)
+    """Rows of the label-blind reservoir (the observed positives outside it are not)."""
+    return accounts["in_marginal"].to_numpy(bool)
 
 
 def sample_keys(accounts: pd.DataFrame, date: str, manifest: dict[str, Any]) -> list[ContextKey]:
@@ -318,6 +312,7 @@ def prepare(
     defaults to the labels revealed in the graph. Each stage writes the manifest when
     it is done, and a resumed preparation skips the stages the manifest records.
     """
+    config = validate_config(config)
     sampler = SamplerPlan.from_config(config)
     context_scope(config)
     validate_dates(config)

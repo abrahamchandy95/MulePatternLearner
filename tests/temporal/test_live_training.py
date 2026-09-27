@@ -53,8 +53,6 @@ from temporal_fakes import (
     supplied_labels,
 )
 
-PROFILES = (pytest.param("legacy", marks=pytest.mark.legacy), "built_in")
-
 
 def streaming_source(executor: FakeExecutor, config: dict[str, Any], **kwargs: Any):
     """The source a prepared run opens: prepared extraction plan and training sampler."""
@@ -139,11 +137,8 @@ def prepared(tmp_path: Path, config: dict[str, Any], **kwargs: Any) -> tuple[Pat
     return dataset, executor
 
 
-@pytest.mark.parametrize("profile", PROFILES)
-def test_hidden_truth_cannot_change_updates_or_checkpoint_selection(
-    tmp_path: Path, profile: str
-) -> None:
-    c = live_config(profile)
+def test_hidden_truth_cannot_change_updates_or_checkpoint_selection(tmp_path: Path) -> None:
+    c = live_config()
     dataset, executor = prepared(tmp_path, c)
     assert executor.names().count("temporal_hub_registry") == 1
     first = train(c, dataset, tmp_path / "first.pt", contexts=streaming_source(executor, c))
@@ -234,7 +229,6 @@ def test_preparation_requests_no_context_and_training_keeps_a_bounded_lru(tmp_pa
     assert len(source.memory) <= 4
 
 
-@pytest.mark.legacy
 def test_streaming_source_serves_repeats_from_its_bounded_lru() -> None:
     keys = [ContextKey("Account", str(i), 100, 1000) for i in range(80)]
     memory = StreamingContextSource(FakeExecutor({}), capacity=3)

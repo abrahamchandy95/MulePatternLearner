@@ -54,48 +54,14 @@ SCOPE_POLICY_QUERY = "temporal_scope_policy"
 SCOPE_POLICY_PARAMETERS = signature("gsql/temporal/training_scope.gsql", SCOPE_POLICY_QUERY)
 SCOPE_POPULATION_QUERY = "temporal_scope_population"
 SCOPE_POPULATION_PARAMETERS = signature("gsql/temporal/training_scope.gsql", SCOPE_POPULATION_QUERY)
-# The legacy control profile: the model and optimisation settings components fall back
-# to when a configuration leaves them absent, and the default candidate pools. Only a
-# raw configuration can omit them; run_config fills them in. Tests of this profile are
-# marked legacy.
-LEGACY_PROFILE: dict[str, Any] = {
-    "evaluation_unlabeled_limit": 2000,
-    "fanouts": [8, 4],
-    "prepare_batch_size": 16,
-    "hidden": 64,
-    "heads": 4,
-    "dropout": 0.15,
-    "epochs": 30,
-    "steps_per_epoch": 100,
-    "patience": 6,
-    "batch_size": 64,
-    "learning_rate": 0.001,
-    "class_prior": 0.001,
-    "seed": 42,
-    "split_seed": 42,
-    "device": "auto",
-    "threads": 4,
-    "scope_id": "example_strict_scope",
-    "dates": {"train": ["2024-07-01"], "validation": ["2024-10-01"], "test": ["2025-01-01"]},
-    "seed_limits": {"train": 20000, "validation": 2000, "test": 2000},
-}
 
 
-def profile_config(profile: str) -> dict[str, Any]:
-    """The built-in run (strict inductive, graph labels), or the legacy profile.
+def live_config(**changes: Any) -> dict[str, Any]:
+    """A small, explicit unit run of the built-in settings in an example scope.
 
-    Tests of the built-in profile hand prepare() their labels (FrameObservedLabels).
+    Tests hand prepare() their labels (FrameObservedLabels).
     """
-    if profile == "legacy":
-        return deepcopy(LEGACY_PROFILE)
-    if profile != "built_in":
-        raise ValueError(f"unknown profile {profile!r}")
-    return {**run_config(), "scope_id": "example_strict_scope", "create_scope": False}
-
-
-def live_config(profile: str = "built_in", **changes: Any) -> dict[str, Any]:
-    """A small, explicit unit run on top of one example profile."""
-    value = profile_config(profile)
+    value = {**run_config(), "scope_id": "example_strict_scope", "create_scope": False}
     value.update(
         dataset_id="unit_fixture",
         epochs=2,

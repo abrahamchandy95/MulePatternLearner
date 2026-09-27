@@ -9,7 +9,6 @@ from typing import Any
 import pandas as pd
 
 from ..common import stable_score, timestamp
-from .config_schema import DEFAULT_RUN, model_seed
 from .contract import PHASE_SPLIT, SPLITS
 from .executor import QueryExecutor, account_pages
 from .supervision import ORACLE_COLUMNS, ObservedLabelSource, reads_graph_labels
@@ -21,7 +20,7 @@ def cohort_seed(config: dict[str, Any]) -> int:
     Pin `cohort_seed` to train several model seeds on one prepared cohort.
     """
     value = config.get("cohort_seed")
-    return model_seed(config) if value is None else int(value)
+    return int(config["seed"] if value is None else value)
 
 
 def _check_label_fields(row: dict[str, Any], graph_labels: bool) -> None:
@@ -60,7 +59,7 @@ def scoped_cohort(
     if labels is None:
         raise ValueError("An explicit observed-label source is required")
     graph_labels = reads_graph_labels(labels)
-    limits = config.get("seed_limits", DEFAULT_RUN["seed_limits"])
+    limits = config["seed_limits"]
     if set(limits) != set(SPLITS) or any(
         type(n) is not int or not 1 <= n <= 20000 for n in limits.values()
     ):

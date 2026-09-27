@@ -10,12 +10,10 @@ import torch
 from torch import nn
 
 from mule_pattern_learner.temporal.encoding import BASIS_ID
-from mule_pattern_learner.temporal.live import checkpoint as checkpoint_module
 from mule_pattern_learner.temporal.live.batching import make_live_batch
 from mule_pattern_learner.temporal.live.checkpoint import ModelCheckpoint
 from mule_pattern_learner.temporal.live.config_schema import (
     DEFAULT_RUN,
-    FALLBACKS,
     run_config,
     validate_config,
 )
@@ -38,15 +36,6 @@ from temporal_fakes import FakeExecutor, context, message
 CONFIG = run_config()
 PLAN = FeaturePlan.from_config(CONFIG)
 SAMPLER = SamplerPlan.from_config(CONFIG)
-# A configuration saved before the key and the pool groups existed: the six-group run.
-OLD_CONFIG = {k: v for k, v in CONFIG.items() if k != "slot_sum"} | {
-    "feature_groups": list(DEFAULT_GROUPS)
-}
-OLD_PLAN = FeaturePlan.from_config(OLD_CONFIG)
-# What such checkpoints recorded (commit 5770926): the contract fingerprint and the
-# input fingerprint of OLD_PLAN. Adding the pool groups and the slot sum changed neither.
-V5_CONTRACT = "530e46c91b07b254d38722e57117b917761d2b68176e7eb1cb5e2e9de32307da"
-V5_INPUTS = "27767beb3551eda931b8935862e075944f3c2792609e3f4fa814925aeb219a02"
 HIDDEN = CONFIG["hidden"]
 FANOUT = CONFIG["fanouts"][0]
 SLOT_KEYS = {"slot_sum.0.weight", "slot_sum.0.bias", "slot_sum.2.weight", "slot_sum.2.bias"}
@@ -192,13 +181,13 @@ def test_padding_changes_nothing() -> None:
     torch.testing.assert_close(model.encode(wide), expected)
 
 
-@pytest.mark.legacy
-def test_a_configuration_without_the_key_builds_the_old_model() -> None:
-    assert FALLBACKS["slot_sum"] is False and DEFAULT_RUN["slot_sum"] is True
-    assert "slot_sum" not in validate_config(OLD_CONFIG)
-    for config, parameters in ((OLD_CONFIG, 83_457), ({**CONFIG, "slot_sum": False}, 88_705)):
+def test_the_slot_sum_is_on_by_default_and_off_builds_the_model_without_it() -> None:
+    absent = {k: v for k, v in CONFIG.items() if k != "slot_sum"}
+    assert validate_config(absent)["slot_sum"] is True
+    no_pools = {**CONFIG, "slot_sum": False, "feature_groups": list(DEFAULT_GROUPS)}
+    for config, parameters in ((no_pools, 83_457), ({**CONFIG, "slot_sum": False}, 88_705)):
         plan = FeaturePlan.from_config(config)
-        # The constructor call from before the option.
+        # The constructor call without the option.
         torch.manual_seed(0)
         old = LiveTGAT(HIDDEN, CONFIG["heads"], CONFIG["dropout"], plan=plan).state_dict()
         torch.manual_seed(0)
@@ -216,33 +205,23 @@ def test_a_configuration_without_the_key_builds_the_old_model() -> None:
     assert sum(p.numel() for p in model.parameters()) == 101_121
 
 
-@pytest.mark.legacy
-def test_checkpoints_from_before_the_change_load_and_score(tmp_path: Path) -> None:
-    # The pool groups stay out of the contract, so older checkpoints and caches match.
-    assert contract_fingerprint() == V5_CONTRACT and OLD_PLAN.fingerprint() == V5_INPUTS
-    torch.manual_seed(0)
-    old = LiveTGAT(HIDDEN, CONFIG["heads"], 0.0, plan=OLD_PLAN).eval()
-    torch.save(payload(OLD_CONFIG, old, V5_CONTRACT, V5_INPUTS), tmp_path / "old.pt")
-    saved = ModelCheckpoint.load(tmp_path / "old.pt")
-    # Its state has no slot branch, so only the model without it accepts it.
-    with pytest.raises(RuntimeError, match="Missing key"):
-        build_model({**OLD_CONFIG, "slot_sum": True}, OLD_PLAN).load_state_dict(saved.state_dict)
+def test_saved_models_with_the_slot_sum_score_like_the_trained_model(tmp_path: Path) -> None:
     new = seeded(CONFIG)
-    torch.save(payload(CONFIG, new, V5_CONTRACT, PLAN.fingerprint()), tmp_path / "new.pt")
+    torch.save(
+        payload(CONFIG, new, contract_fingerprint(), PLAN.fingerprint()), tmp_path / "new.pt"
+    )
     executor = FakeExecutor({ROOT: context(ROOT, PAYMENTS)})
     with StreamingContextSource(executor, plan=extraction_plan(CONFIG), sampler=SAMPLER) as source:
-        for path, reference, width in (("old.pt", old, 1), ("new.pt", new, 3)):
-            predictor = TemporalPredictor(ModelCheckpoint.load(tmp_path / path), source, "cpu")
-            assert (predictor.model.slot_sum is None) == (reference is old)
-            prepared = predictor.prepare([ROOT])
-            frame = predictor.infer(prepared)
-            assert prepared.batch is not None and len(frame.embedding[0]) == width * HIDDEN
-            with torch.no_grad():
-                expected = torch.sigmoid(reference(prepared.batch))
-            assert frame.score.tolist() == pytest.approx(expected.tolist(), rel=1e-6)
+        predictor = TemporalPredictor(ModelCheckpoint.load(tmp_path / "new.pt"), source, "cpu")
+        assert predictor.model.slot_sum is not None
+        prepared = predictor.prepare([ROOT])
+        frame = predictor.infer(prepared)
+        assert prepared.batch is not None and len(frame.embedding[0]) == 3 * HIDDEN
+        with torch.no_grad():
+            expected = torch.sigmoid(new(prepared.batch))
+        assert frame.score.tolist() == pytest.approx(expected.tolist(), rel=1e-6)
 
 
-@pytest.mark.legacy
 def test_nonsense_options_are_rejected() -> None:
     summary = FeaturePlan(("entity_meta", "decayed_activity", "history_support"), "summary")
     with pytest.raises(ValueError, match="no hop-1 slots"):
@@ -267,7 +246,6 @@ def test_nonsense_options_are_rejected() -> None:
         narrow.encode(slot_batch(PLAN, [[0]], width=16))
 
 
-@pytest.mark.legacy
 def test_every_ablation_arm_states_its_slot_sum() -> None:
     arms = feature_experiments(CONFIG)
     for name, arm in arms.items():
@@ -290,11 +268,3 @@ def test_every_ablation_arm_states_its_slot_sum() -> None:
     }
     assert arms["built_in_no_pool"]["feature_groups"] == list(DEFAULT_GROUPS)
     assert "pool_internal_inflows" not in arms["built_in_no_internal"]["feature_groups"]
-
-
-@pytest.mark.legacy
-def test_runs_from_before_the_key_resume_with_it_off() -> None:
-    view = checkpoint_module._result_view  # pyright: ignore[reportPrivateUsage]
-    old = {"epochs": 2, "positive_weight": "prior"}
-    assert view({**old, "slot_sum": False}) == view(old)
-    assert view({**old, "slot_sum": True}) != view(old)

@@ -873,7 +873,7 @@ def test_hub_registry_parse_save_load_and_stub_semantics(tmp_path: Path) -> None
         "config": {"scope_id": "scope"},
         **hub_manifest(scoped, path),
     }
-    assert manifest["hub_scope_id"] == "scope" and "hub_scan_cap" not in manifest
+    assert manifest["hub_scope_id"] == "scope"
     assert manifest["hub_counts"] == {
         "1000": {"1": 0, "2": 1, "3": 1},
         "2000": {"1": 1, "2": 0, "3": 0},
@@ -882,8 +882,6 @@ def test_hub_registry_parse_save_load_and_stub_semantics(tmp_path: Path) -> None
     assert loaded.is_stub("Account", "H1", 1000, 2) and len(loaded) == 3
     with pytest.raises(ValueError, match="computed for scope 'scope'"):
         load_hub_registry(tmp_path, {**manifest, "config": {"scope_id": "other"}})
-    with pytest.raises(ValueError, match="no scoped hub registry"):
-        load_hub_registry(tmp_path, {k: v for k, v in manifest.items() if k != "hub_scope_id"})
     HubRegistry(loaded.frame.iloc[:1], cutoff_seqs=cutoffs, threshold=1, scope_id="scope").save(
         path
     )
@@ -918,7 +916,6 @@ def test_hub_registry_rejects_contract_violations(scope_id: str, change: dict[st
         )
 
 
-@pytest.mark.legacy
 def test_hub_registry_rejects_stale_or_mismatched_responses() -> None:
     def check(rows: list[dict[str, Any]], message: str, scope_id: str = "") -> None:
         with pytest.raises(ValueError, match=message):
@@ -930,9 +927,6 @@ def test_hub_registry_rejects_stale_or_mismatched_responses() -> None:
     rows[0]["threshold"] = 2048
     check(rows, "echoed threshold")
     check(hub_rows([1000, 2000], "other"), "echoed scope_id", "scope")
-    rows = hub_rows([1000, 2000])
-    rows[0]["scan_cap"] = 262144  # the old query with the all-time degree decision
-    check(rows, "mule-temporal install")
     rows = hub_rows([1000, 2000])
     del rows[0]["hubs"][0]["visibility_phase"]
     check(rows, "Malformed")
@@ -946,14 +940,9 @@ def test_hub_registry_rejects_stale_or_mismatched_responses() -> None:
 
 
 def live_config(tmp_path: Path, **changes: Any) -> dict[str, Any]:
-    """Raw preparation settings of the built-in run: graph labels, candidate-pool sampler."""
-    config = {
-        "dataset_id": "unit_snapshot",
-        "scope_id": "unit_scope",
-        "dates": {"train": ["2024-07-01"], "validation": ["2024-10-01"], "test": ["2025-01-01"]},
-        "sampler": deepcopy(DEFAULT_RUN["sampler"]),
-    }
-    return {**config, **changes}
+    """Validated settings of the built-in run in a unit scope and snapshot."""
+    config = {"dataset_id": "unit_snapshot", "scope_id": "unit_scope"}
+    return validate_config({**config, **changes})
 
 
 @pytest.fixture
@@ -1058,7 +1047,7 @@ def test_first_preparation_creates_the_scope_and_reveals_labels(
 def test_preparation_keys_fingerprint_only_preparation_settings(tmp_path: Path) -> None:
     base = live_config(tmp_path)
     view = dataset.preparation_view(base)
-    assert tuple(view) == dataset.PREPARATION_KEYS and "hub_scan_cap" not in view
+    assert tuple(view) == dataset.PREPARATION_KEYS
     same = [
         {"learning_rate": 0.5, "epochs": 3, "hidden": 8, "request_batch_size": 4},
         {"scope_unowned": "linked", "max_outage_s": 60},
@@ -1157,7 +1146,7 @@ def test_source_counts_ignore_experiment_scopes(monkeypatch: pytest.MonkeyPatch)
     assert installation.source_counts(tg) == {"Account": 10, "Party": 4}
     monkeypatch.setattr(installation, "verify_sources", lambda executor: [])
     manifest: dict[str, Any] = {
-        "config": {"dataset_id": "snap", "scope_id": "s"},
+        "config": {"dataset_id": "snap", "scope_id": "s", "split_seed": 42},
         # Older manifests recorded the scope vertex count too.
         "source": {"source_counts": {"Account": 10, "Party": 4, "Temporal_Training_Scope": 1}},
     }
@@ -1264,7 +1253,6 @@ def population_row(account: str, positive: bool, known: int) -> dict[str, Any]:
     }
 
 
-@pytest.mark.legacy
 def test_only_graph_labels_read_labels_from_the_graph(tmp_path: Path) -> None:
     from mule_pattern_learner.temporal.live.cohort import scoped_cohort
 
@@ -1317,15 +1305,15 @@ def test_stale_population_queries_fail_fast(tmp_path: Path) -> None:
 # --- configuration schema ------------------------------------------------------------------
 
 
-@pytest.mark.legacy
-def test_config_schema_rejects_unknown_keys_and_applies_operational_defaults(
+def test_config_schema_rejects_unknown_keys_and_applies_defaults(
     tmp_path: Path,
 ) -> None:
     base = live_config(tmp_path)
     result = validate_config(base)
-    for key, value in OPERATIONAL_DEFAULTS.items():
-        assert result[key] == value
-    for key in ("fanouts", "feature_groups", "extraction_groups", "prepared_id"):
+    # Absent keys take their built-in or operational value; the optional ones stay absent.
+    for key, value in {**DEFAULT_RUN, **OPERATIONAL_DEFAULTS}.items():
+        assert result[key] == base.get(key, value), key
+    for key in ("extraction_groups", "prepared_id", "cohort_seed", "reveal_salt"):
         assert key not in result
     assert result["sampler"] == base["sampler"] and base == live_config(tmp_path)
     with pytest.raises(ValueError, match="Unknown configuration key.*learnig_rate"):
@@ -1346,12 +1334,10 @@ def test_config_schema_rejects_unknown_keys_and_applies_operational_defaults(
         with pytest.raises(ValueError, match=name):
             validate_config({**base, **change})
     assert result["scope_unowned"] == "linked" and result["max_outage_s"] == 900
-    assert "hub_scan_cap" not in result
     for change, name in [
         ({"scope_unowned": "all"}, "scope_unowned"),
         ({"max_outage_s": -1}, "max_outage_s"),
         ({"max_outage_s": 1.5}, "max_outage_s"),
-        ({"hub_scan_cap": 262144}, "Unknown configuration key.*hub_scan_cap"),
     ]:
         with pytest.raises(ValueError, match=name):
             validate_config({**base, **change})
@@ -1442,7 +1428,6 @@ def test_override_tables_merge_into_the_built_in_run(tmp_path: Path) -> None:
     assert run_config() == default
 
 
-@pytest.mark.legacy
 def test_transport_settings_come_from_the_training_config(monkeypatch: pytest.MonkeyPatch) -> None:
     seen = {}
     monkeypatch.setattr(source, "verify_frozen_source", lambda executor, manifest: None)

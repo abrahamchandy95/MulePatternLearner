@@ -235,7 +235,6 @@ def evaluate_final_population(
     """
     import json
 
-    from .config_schema import setting, split_seed
     from .contract import SPLIT_PHASE
     from .dataset import MANIFEST, load_prepared, sample_keys
     from .executor import account_pages, live_executor
@@ -292,7 +291,7 @@ def evaluate_final_population(
         pd.DataFrame(population),
         answer,
         negative_limit=negative_limit,
-        seed=split_seed(config),
+        seed=int(config["split_seed"]),
     )
     if len(selected) > 100_000:
         raise ValueError("Final scoring sample exceeds audit budget")
@@ -316,7 +315,7 @@ def evaluate_final_population(
     unscored = selected[selected.score.isna()]
     scored = selected[selected.score.notna()].reset_index(drop=True)
     rejected_positives = int(unscored.is_mule.sum())
-    limit = float(setting(config, "max_rejected_root_fraction"))
+    limit = float(config["max_rejected_root_fraction"])
     if exceeds_rejection_limit(len(unscored), rejected_positives, len(selected), limit):
         examples = unscored.account_id.astype(str).head(20).tolist()
         raise ValueError(

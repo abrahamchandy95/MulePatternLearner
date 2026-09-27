@@ -120,7 +120,6 @@ def test_benchmark_builds_one_training_batch_and_step(
     assert digests["root_positions"]["shape"] == [32] and len(digests["x"]["sha256"]) == 64
 
 
-@pytest.mark.legacy
 def test_feature_experiments_run_on_the_built_in_settings(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
