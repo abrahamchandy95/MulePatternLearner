@@ -444,6 +444,7 @@ DEFAULT_CONFIG = RunConfig()
 ```
 
 - **The dataset id** is the fingerprint of the source id, `scope`, `dataset` and the sampler's pool parameters. It is exactly today's `PREPARATION_KEYS` minus the deleted ones.
+  - Of `scope`, that means `scope.id` and `scope.unowned`, as in `PREPARATION_KEYS` (`scope_id`, `scope_unowned`). `scope.create`, `scope.reveal_per_split` and `scope.reveal_salt` act once on the graph (whether a missing scope is created, and the one-time reveal), so changing them later names no other dataset.
 - **Audit constants are not run configuration.** `AUDIT_NEGATIVES = 2000` (`evaluation/sample.py`), `REVIEW_BUDGETS = (0.01, 0.05, 0.10)`, `BOOTSTRAP_REPLICATES = 1000` and `INTERVAL = 0.90` (`metrics.py`) are recorded in each audit JSON.
 - **Component selection.** One `match` per real choice: `model.build.build_model` (tgat or summary), `sampling.backend.choose_sampler` (auto, torch or cugraph) and `training.objective` (positive weight).
   - The only registries are two plain tables: feature groups and variants.
@@ -884,13 +885,18 @@ The steps, in order:
    - Remove `mule-temporal`; add `test_naming.py` with the server names allow-listed.
    - Update the README's commands in the same commit.
    - Gate: an offline end-to-end test asserts the run directory's file set; golden identical.
+   - Names kept on purpose: `data.preparation.prepare` stays `prepare`, because `pipeline.prepare.prepare_dataset` is the use case callers run and two functions of one name would blur the layers. `_TrainingRun.score` keeps its name: it already runs the one scoring loop (`inference.predictor.score_batches`), which is what the renames table asks of it.
+   - Left for a later code step: `build_batch` and `build_root_batch` still take `fanouts` beside the `sampler` section that holds them. Drop the parameter and read `sampler.fanouts` before the experiments step; about 50 test calls pass it.
+   - Commits that fail the per-commit gate (the history is not rewritten, so bisect should skip them): `55bb769` and `90c0ed4` fail `ruff check --select I`, which `6ad436f` fixes; `519d897` and `455654e` fail `tests/test_naming.py`, which `17cbaf3` fixes.
 9. **Live parity with unchanged queries (owner-run, read-only).**
    - (a) `mule check` reports every query up to date. The text did not change, so nothing is installed.
    - (b) The new dataset's accounts and observed labels have the same rows as the old preparation's.
    - (c) `mule check` prints the same digests and first loss as `benchmark_live_batch.py --train-step` at `pre-restructure`, on the same machine and device.
    - (d) Optional: the first three log intervals of `mule train` equal those of `mule-temporal train` at the tag. Stop both after 30 steps, and write the old run's output under `results/parity/`.
+   - Models trained before the restructure (such as the current best model on the CUDA host) are audited from `temporal`: their datasets record no dataset settings, so this code refuses to audit them. The saved-model test shows that such models still load and give their recorded scores offline.
 10. **Server rename** (owner decision, owner-run). Precondition: no old-code run is active anywhere.
     - Render with the new names, the derived `CONTEXT_CONTRACT`, and without the `fourier64` wrapper.
+    - In the same render, fix the generated header of `gsql/queries/training_context.gsql` (written by `tigergraph/render.py`): it still names `scripts/temporal/render_training_queries.py`, which is now `scripts/render_queries.py`. Byte identity keeps it until then.
     - Run `mule install` (about 50 minutes; rerun if the 45-minute wait expires). The new dataset is re-prepared (about 6 minutes).
     - Repeat check (c): the digests must be unchanged.
     - Then drop the confirmed retired names, callers first, with a one-off call in this step (not a command flag).
