@@ -53,7 +53,7 @@ class MockPLC:
         if unified:
             self.neighbor_sample = self._unified
         else:
-            self.heterogeneous_uniform_temporal_neighbor_sample = self._legacy
+            self.heterogeneous_uniform_temporal_neighbor_sample = self._heterogeneous
 
     @staticmethod
     def ResourceHandle(handle: Any = None) -> SimpleNamespace:
@@ -118,7 +118,7 @@ class MockPLC:
         dtypes = {"edge_type": np.int32, "edge_start_time": np.int64, "batch_id": np.int32}
         return {k: np.asarray(v, dtype=dtypes.get(k, graph.src.dtype)) for k, v in out.items()}
 
-    def _legacy(
+    def _heterogeneous(
         self,
         handle: Any,
         graph: Any,

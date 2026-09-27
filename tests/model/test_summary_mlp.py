@@ -11,7 +11,7 @@ from mule_pattern_learner.contract.feature_groups import FeaturePlan
 from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.data.contexts import ContextSource
 from mule_pattern_learner.model.build import build_model
-from mule_pattern_learner.model.summary import SummaryMLP
+from mule_pattern_learner.model.summary_mlp import SummaryMLP
 from mule_pattern_learner.model.tgat import TGAT
 from mule_pattern_learner.testing.builders import context, message
 from mule_pattern_learner.testing.fake_graph import FakeExecutor

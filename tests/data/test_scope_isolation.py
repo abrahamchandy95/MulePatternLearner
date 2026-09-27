@@ -44,7 +44,7 @@ from mule_pattern_learner.tigergraph.scope import TigerGraphScope
 from mule_pattern_learner.training.schedule import pu_batches
 
 
-def test_batch_ids_are_dense_scoped_and_temporal_and_never_global() -> None:
+def test_batch_ids_are_dense_per_type_cutoff_and_scope_and_never_global() -> None:
     a = ContextKey("Account", "999999999999999999999999", 100, 1000, "experiment", 1)
     other_type = replace(a, node_type="Token")
     other_time = replace(a, cutoff_seq=90)
