@@ -84,3 +84,7 @@ def test_a_complete_run_is_reported_only_for_its_own_settings(tmp_path: Path) ->
     with pytest.raises(ValueError, match="training.learning_rate"):
         load_resume_state(changed, run)
     assert {path: path.stat().st_mtime_ns for path in written} == written
+    # A complete run without its config.json is an error that names the run.
+    run.config.unlink()
+    with pytest.raises(ValueError, match="Cannot read the configuration of the run in"):
+        completed_run(DEFAULT_CONFIG, run)

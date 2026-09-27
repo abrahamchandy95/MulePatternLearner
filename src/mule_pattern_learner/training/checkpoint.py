@@ -74,7 +74,7 @@ def changed_settings(config: RunConfig, run: RunPaths) -> list[str]:
     """The dotted names of the results-relevant settings config changes from the run's."""
     try:
         previous = read_run_config(run.config)
-    except (KeyError, ValueError) as error:
+    except (KeyError, OSError, ValueError) as error:
         raise ValueError(
             f"Cannot read the configuration of the run in {run.root}: {error}"
         ) from None
