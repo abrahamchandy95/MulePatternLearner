@@ -312,7 +312,7 @@ and associations up to `K`. The second hop is payments only: `chosen = P[:K]`.
   table with both hops' default quotas, twice with one random state, and requires
   exactly min(candidates, fan-out) rows per (context, relation), identical draws
   and the leakage checks. Otherwise `auto` uses the torch sampler, with a
-  RuntimeWarning when cuGraph is installed but failed the probe (when cupy or
+  `cugraph_probe` warning event when cuGraph is installed but failed the probe (when cupy or
   pylibcugraph is simply not installed it falls back silently). `backend =
   "cugraph"` raises with the probe's reason instead, and `"torch"` always uses the
   torch sampler. After every cuGraph call the client checks that each (context,
