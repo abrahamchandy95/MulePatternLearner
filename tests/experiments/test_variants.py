@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from typing import Any
 
-from mule_pattern_learner.config import DEFAULT_CONFIG, RunConfig
+from mule_pattern_learner.config import BUILT_IN_SAMPLER, DEFAULT_CONFIG, RunConfig
 from mule_pattern_learner.contract.feature_groups import DEFAULT_GROUPS
 from mule_pattern_learner.data.manifest import dataset_id
 from mule_pattern_learner.experiments.variants import feature_experiments
@@ -21,8 +22,11 @@ def test_feature_variants_and_model_seeds_share_one_dataset() -> None:
     ids = {dataset_id("source", variant) for variant in feature_experiments(base).values()}
     assert ids == {dataset_id("source", base)}  # any groups and architecture fit one dataset
     # So do models saved with a variant, and ones that named extraction groups.
-    saved = [saved_run_config({"variant": v}) for v in ("no_fourier", "tabular")]
-    saved.append(saved_run_config({"extraction_groups": [*CONFIG.features, "rolling_windows"]}))
+    pools = {**asdict(BUILT_IN_SAMPLER.roots), "children": asdict(BUILT_IN_SAMPLER.children)}
+    sampling = {"fanouts": [16, 4], "sampler": pools}
+    saved = [saved_run_config({**sampling, "variant": v}) for v in ("no_fourier", "tabular")]
+    widened = [*CONFIG.features, "rolling_windows"]
+    saved.append(saved_run_config({**sampling, "extraction_groups": widened}))
     assert {dataset_id("source", config) for config in saved} == {dataset_id("source", CONFIG)}
     # And other model seeds: the reservoir seed is the dataset's own.
     reseeded = base.with_changes({"training": {"seed": 7}})

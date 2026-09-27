@@ -41,7 +41,11 @@ from mule_pattern_learner.data.contexts import ContextSource, build_context_sour
 from mule_pattern_learner.data.manifest import dataset_id, read_manifest
 from mule_pattern_learner.data.preparation import prepare
 from mule_pattern_learner.inference.predictor import Predictor
-from mule_pattern_learner.inference.saved_model import SavedModel, saved_run_config
+from mule_pattern_learner.inference.saved_model import (
+    REQUIRED_SETTINGS,
+    SavedModel,
+    saved_run_config,
+)
 from mule_pattern_learner.inference.score_accounts import score
 from mule_pattern_learner.paths import DATA_DIR, DatasetPaths, RunPaths
 from mule_pattern_learner.testing.builders import neighbourhood, scope_population
@@ -238,8 +242,21 @@ def test_a_model_of_another_format_is_refused_and_old_ones_keep_their_directory(
         SavedModel.load(newer)
 
 
+# The fan-outs and sampler table every configuration the old code saved holds, here the
+# built-in run's.
+OLD_SAMPLING: dict[str, Any] = {
+    "fanouts": [16, 4],
+    "sampler": {**asdict(BUILT_IN_SAMPLER.roots), "children": asdict(BUILT_IN_SAMPLER.children)},
+}
+
+
+def old(**settings: Any) -> dict[str, Any]:
+    """An old flat configuration: OLD_SAMPLING with settings."""
+    return {**OLD_SAMPLING, **settings}
+
+
 def test_old_configurations_convert_through_the_key_table() -> None:
-    built_in = saved_run_config({})
+    built_in = saved_run_config(old())
     assert built_in == DEFAULT_CONFIG
     # Settings of removed paths were saved with the one value that remains.
     retired = {
@@ -248,6 +265,7 @@ def test_old_configurations_convert_through_the_key_table() -> None:
         "label_policy": "graph_observed",
         "observed_labels": None,
         "extraction_groups": ["entity_meta", "rolling_windows"],
+        "fanouts": [16, 4],
         "sampler": {**asdict(BUILT_IN_SAMPLER.roots), "policy": "resample"},
         "dataset_id": "load_fixture",
         "prepared_id": None,
@@ -266,29 +284,37 @@ def test_old_configurations_convert_through_the_key_table() -> None:
         ("stage", "offline", "Unknown saved configuration key"),
     ):
         with pytest.raises(ValueError, match=message):
-            saved_run_config({key: value})
+            saved_run_config(old(**{key: value}))
     with pytest.raises(ValueError, match="sampler.policy = 'recent' is no longer supported"):
-        saved_run_config({"sampler": {"policy": "recent"}})
+        saved_run_config(old(sampler={"policy": "recent"}))
+    # The old code gave absent fan-outs and sampler pools values of its own, which
+    # nothing else would catch, so a table without them is refused.
+    for missing in REQUIRED_SETTINGS:
+        partial = {k: v for k, v in old().items() if k != missing}
+        with pytest.raises(ValueError, match=f"names no {missing}; the code that saved it"):
+            saved_run_config(partial)
+    with pytest.raises(ValueError, match="names no fanouts or sampler"):
+        saved_run_config({"fanouts": None})
     # The model variants became settings.
-    assert saved_run_config({"variant": "temporal"}) == built_in
-    tabular = saved_run_config({"variant": "tabular"})
+    assert saved_run_config(old(variant="temporal")) == built_in
+    tabular = saved_run_config(old(variant="tabular"))
     assert tabular == replace(built_in, model=replace(built_in.model, architecture="summary"))
-    no_fourier = saved_run_config({"variant": "no_fourier"}).features
+    no_fourier = saved_run_config(old(variant="no_fourier")).features
     assert no_fourier == tuple(g for g in built_in.features if g != "time_encoding")
     # A [sampler] table's absent pool keys were those of PoolPlan(), and its children
     # pool the roots pool without associations, changed by [sampler.children].
-    partial = saved_run_config({"sampler": {"recent": 4, "children": {"older": 1}}}).sampler
+    partial = saved_run_config(old(sampler={"recent": 4, "children": {"older": 1}})).sampler
     assert partial.roots == PoolPlan(recent=4)
     assert partial.children == PoolPlan(recent=4, older=1, associations=0)
     assert partial.relation_fanouts == BUILT_IN_SAMPLER.relation_fanouts
     # The reservoir seed and the reveal salt defaulted to the training seed.
-    seeded = saved_run_config({"seed": 7, "reveal_salt": None, "reveal_per_split": None})
+    seeded = saved_run_config(old(seed=7, reveal_salt=None, reveal_per_split=None))
     assert (seeded.training.seed, seeded.dataset.seed, seeded.scope.reveal_salt) == (7, 7, 7)
     assert seeded.scope.reveal_per_split == built_in.scope.reveal_per_split
-    pinned = saved_run_config({"seed": 7, "cohort_seed": 3, "reveal_salt": 5})
+    pinned = saved_run_config(old(seed=7, cohort_seed=3, reveal_salt=5))
     assert (pinned.dataset.seed, pinned.scope.reveal_salt) == (3, 5)
     # A null limit saved on purpose stays null.
-    unlimited = saved_run_config({"steps_per_epoch": None, "evaluation_unlabeled_limit": None})
+    unlimited = saved_run_config(old(steps_per_epoch=None, evaluation_unlabeled_limit=None))
     assert unlimited.training.steps_per_epoch is None
     assert unlimited.training.proxy_unlabeled_limit is None
     # A model saved since the typed configuration holds RunConfig.to_dict().
