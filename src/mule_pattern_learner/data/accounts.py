@@ -31,21 +31,6 @@ def scope_accounts(
         yield from page
 
 
-def _check_label_fields(row: dict[str, Any]) -> None:
-    """Only revealed positives carry a discovery time, checked while paging.
-
-    tigergraph.labels.check_graph_label_rows checks the finished table too.
-    """
-    positive = bool(row.get("observed_positive") or False)
-    known = int(row.get("known_from_ms") or 0)
-    if known > 0 and not positive:
-        raise ValueError(
-            f"Account {row.get('account_id')!r} has known_from_ms > 0 but observed_positive "
-            "false: the installed list_scope_accounts predates the masked-label "
-            "predicate. Run `mule install`, then `mule train` to prepare again."
-        )
-
-
 def select_accounts(
     scope: ScopeReader, scope_id: str, dataset: DatasetConfig
 ) -> tuple[pd.DataFrame, dict[str, int]]:
@@ -65,7 +50,6 @@ def select_accounts(
     for row in scope_accounts(scope, scope_id, include_observed=True):
         if ORACLE_COLUMNS & set(row):
             raise ValueError("Oracle fields cannot enter population metadata")
-        _check_label_fields(row)
         account = row["account_id"]
         if not isinstance(account, str) or len(account.encode()) > ID_BYTES:
             raise ValueError("Account pagination/ID violates the transport contract")

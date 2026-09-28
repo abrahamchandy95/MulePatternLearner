@@ -452,7 +452,7 @@ def policy_counts(policy: str) -> dict[str, int]:
         return dict(LINKED_COUNTS)
     if policy == "shared":
         return {**LINKED_COUNTS, "independent_internal": 97, "linked_internal": 0}
-    if policy == "independent":  # every scope created before the policy, strict_mule_v1
+    if policy == "independent":
         return {
             **LINKED_COUNTS,
             "shared_external": 0,
@@ -461,7 +461,8 @@ def policy_counts(policy: str) -> dict[str, int]:
             "linked_internal": 0,
             "shared_ledger": 0,
         }
-    return {**LINKED_COUNTS, "shared_internal": 97, "linked_internal": 0}  # a retired draft
+    # Any other name: internal customer accounts shared, which no rule does.
+    return {**LINKED_COUNTS, "shared_internal": 97, "linked_internal": 0}
 
 
 class FakeStore:

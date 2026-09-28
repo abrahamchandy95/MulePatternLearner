@@ -85,8 +85,8 @@ linked otherwise. The counts map to a rule as follows:
   (`account_type = "gl"`) shared, nothing linked.
 - `"linked"`: every unowned external and ledger account shared (if there are any),
   at least one internal account linked.
-- No rule: anything else, such as shared internal customer accounts (an early draft
-  rule) or ledger accounts left in hashed partitions.
+- No rule: anything else, such as shared internal customer accounts or ledger accounts
+  left in hashed partitions.
 
 Bank ledger accounts are the bank's own income books that fee and interest postings
 credit (PhantomLedger exports four: card interest, card fees, deposit fees and
@@ -98,8 +98,7 @@ to a held-out ledger account from training. The policy query reports them as
 Preparation checks the inferred rule against `scope.unowned` when it reuses a
 scope and right after it creates one. Every streamed run checks it again, and a
 mismatch names the stored rule and asks for either that `scope.unowned` value or a
-new `scope.id`. Scopes created before the rule existed, such as `strict_mule_v1`,
-read as `"independent"`. Rules that write identical membership cannot be told
+new `scope.id`. Rules that write identical membership cannot be told
 apart and read as the simplest of them: a `"linked"` scope in which no internal
 account qualified reads as `"shared"`, and a scope with neither unowned external
 accounts nor links reads as `"independent"`. Set `scope.unowned` to the inferred

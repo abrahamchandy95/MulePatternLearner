@@ -26,29 +26,10 @@ class TigerGraphObservedLabels:
     """
 
     def read(self, metadata: pd.DataFrame) -> pd.DataFrame:
-        check_graph_label_rows(metadata)
         labels = metadata[["account_id", "observed_positive", "known_from_ms"]].rename(
             columns={"observed_positive": "known_positive"}
         )
         return align_observed_labels(metadata, labels)
-
-
-def check_graph_label_rows(rows: pd.DataFrame) -> None:
-    """Fail fast when a population query emits a discovery time for a non-positive.
-
-    The current queries emit known_from_ms only for revealed positives. A
-    nonzero clock on any other account means an older query is installed, one
-    that reads hidden (masked) labels or reveals which accounts are labeled.
-    """
-    clocks = pd.to_numeric(rows["known_from_ms"], errors="coerce").fillna(0)
-    positive = rows["observed_positive"].eq(True)
-    stale = rows.loc[(clocks > 0) & ~positive, "account_id"]
-    if len(stale):
-        raise ValueError(
-            f"{len(stale)} account(s) have known_from_ms > 0 but observed_positive false "
-            f"(for example {stale.iloc[0]!r}): the installed population query predates the "
-            "masked-label predicate. Run `mule install`, then `mule train` to prepare again."
-        )
 
 
 # Contract violations the label-contract query counts; all must be zero.
