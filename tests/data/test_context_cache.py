@@ -270,6 +270,25 @@ def test_the_disk_tier_evicts_its_least_recently_used_entries_beyond_its_capacit
     assert later.evicted == 2
 
 
+def test_writers_of_one_entry_never_share_a_pending_file(tmp_path: Path) -> None:
+    tier = DiskTier(cache_in(tmp_path, capacity=4), plan=CORE_PLAN, sampler=SMALL_SAMPLER)
+    rows = {key: {"status": "missing_entity"} for key in KEYS}
+    path = entry(tier, KEYS[0])
+    path.parent.mkdir(parents=True)
+    # Another process is writing the same entry: its half-written file is left alone.
+    other = path.with_name(f"{path.name}.pending")
+    other.write_bytes(b"half an entry")
+    tier.put(1, KEYS[:1], rows)
+    assert tier.get(1, KEYS[:1]) == {KEYS[0]: rows[KEYS[0]]}
+    assert list(tmp_path.glob("??/*.pending")) == [other]
+    assert other.read_bytes() == b"half an entry"
+    # When that writer died, its file ages out with the least recently used entries.
+    os.utime(other, ns=(10**9, 10**9))
+    tier.put(1, KEYS[1:5], rows)
+    assert not other.exists() and tier.evicted == 3
+    assert len(list(tmp_path.glob("??/*.json.gz"))) == 3
+
+
 def test_an_entry_that_cannot_be_evicted_is_warned_about_once_and_left(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
