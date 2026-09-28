@@ -4,9 +4,9 @@ from typing import Any
 
 import pytest
 
+from mule_pattern_learner.contract.analytics_features import ANALYTICS_GROUPS
 from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.contract.sampler_plan import PoolPlan
-from mule_pattern_learner.contract.analytics_features import ANALYTICS_GROUPS
 from mule_pattern_learner.reference.gsql_features import (
     MIRRORED_ACCOUNT_GROUPS,
     account_features,
