@@ -26,6 +26,10 @@ The literals hold on macOS arm64 and on Linux x86_64:
 `mule check` prints the same digests and first loss for the live parity check
 (pipeline.check.first_step); a test pins it to these literals.
 
+The golden run itself has no context cache. Another test trains it twice more with the
+dataset's disk tier (data.context_cache): cold, then warm from the entries the cold run
+wrote, and both give the same literals.
+
 A last test audits the golden run's validation and test splits against the builders'
 ground truth (testing.builders.ground_truth_rows) and pins GOLDEN_AUDIT: each split's
 sample, point estimates and ring-clustered intervals. They depend only on how the scores
@@ -36,7 +40,7 @@ from __future__ import annotations
 
 from collections.abc import Generator
 import contextlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import math
 from pathlib import Path
@@ -46,11 +50,14 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from mule_pattern_learner.artifacts import read_epochs, read_history
+from mule_pattern_learner.artifacts import read_epochs, read_history, read_json
 from mule_pattern_learner.batching.assemble import RootBatch, tensor_digests
 from mule_pattern_learner.config import DEFAULT_CONFIG, RunConfig
 from mule_pattern_learner.contract.feature_groups import extraction_plan
+from mule_pattern_learner.contract.server import CONTEXT_QUERY
+from mule_pattern_learner.data.context_cache import ContextCache
 from mule_pattern_learner.data.contexts import ContextSource, build_context_source
+from mule_pattern_learner.data.manifest import read_manifest
 from mule_pattern_learner.data.preparation import prepare
 from mule_pattern_learner.evaluation.audit import audit, audit_inputs
 from mule_pattern_learner.paths import DatasetPaths, RunPaths
@@ -280,6 +287,59 @@ def test_built_in_run_reproduces_the_golden_numbers(tmp_path: Path) -> None:
     observed = golden_run(tmp_path)
     problems = run_differences(observed)
     assert not problems, "\n".join([*problems, "", "Observed:", literals(observed)])
+
+
+@contextlib.contextmanager
+def through_context_cache(directory: Path) -> Generator[list[ContextSource]]:
+    """Train the golden run with its source given the dataset's disk tier: the cache on.
+
+    The harness's source (golden_source) is closed and replaced by the same source with
+    the dataset's context cache, kept in directory so that every run shares it. The
+    sources are listed in the order the runs train.
+    """
+    real = trainer.train
+    sources: list[ContextSource] = []
+
+    def train(
+        config: RunConfig, dataset: DatasetPaths, run: RunPaths, *, contexts: ContextSource
+    ) -> dict[str, Any]:
+        contexts.close()
+        cache = replace(ContextCache.of(dataset, read_manifest(dataset)), directory=directory)
+        cached = build_context_source(
+            contexts.fetcher, contexts.plan, contexts.sampler, config.transport, cache
+        )
+        sources.append(cached)
+        return real(config, dataset, run, contexts=cached)
+
+    with patch.object(trainer, "train", train):
+        yield sources
+
+
+def test_the_golden_run_is_the_same_with_the_context_cache_cold_and_warm(
+    tmp_path: Path,
+) -> None:
+    with through_context_cache(tmp_path / "contexts") as sources:
+        runs = {name: golden_run(tmp_path / name) for name in ("cold", "warm")}
+    for name, observed in runs.items():
+        problems = run_differences(observed)
+        assert not problems, "\n".join([name, *problems, "", "Observed:", literals(observed)])
+    cold, warm = sources
+    # The cold run requested its contexts and wrote them, and read from disk only those
+    # it asked for again after the LRU had dropped them. The warm one read every context
+    # memory did not hold from disk, and requested none from the graph.
+    counts = cold.counts
+    assert cold.database_calls > 0
+    assert counts.memory_hits + counts.disk_hits <= counts.requested - counts.distinct
+    assert warm.database_calls == 0 and warm.counts.requested == cold.counts.requested
+    fetcher = warm.fetcher
+    assert isinstance(fetcher, TigerGraphContextFetcher)
+    assert isinstance(fetcher.executor, FakeTigerGraph)
+    assert CONTEXT_QUERY not in fetcher.executor.names()
+    run = RunPaths(tmp_path / "warm" / "run")
+    assert read_history(run.history).database_calls.max() == 0
+    contexts = read_json(run.metrics)["contexts"]
+    assert contexts["disk_hits"] == contexts["requested"] - contexts["memory_hits"] > 0
+    assert contexts["disk_hit_rate"] == 1.0
 
 
 def frame_digest(frame: pd.DataFrame) -> str:
