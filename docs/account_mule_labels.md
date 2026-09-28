@@ -92,8 +92,8 @@ labels.
 After loading, run:
 
 ```gsql
-RUN QUERY temporal_validate_account_supervision()
-RUN QUERY temporal_get_account_supervision("", 100)
+RUN QUERY validate_label_contract()
+RUN QUERY read_ground_truth("", 100)
 ```
 
 The validation query reports counts of known labels, true mules, masked mules,
@@ -126,7 +126,7 @@ actually populate them.
 
 The live trainer reads the revealed positives of this contract. A PhantomLedger load
 masks every mule, so the
-first run writes the contract once with `temporal_reveal_mule_labels`: every
+first run writes the contract once with `reveal_mule_labels`: every
 internal Account becomes a known label, and up to 20 mules per split that a bank
 would have discovered before the split's cutoff are revealed with their discovery
 clocks. See [label reveal](label_reveal.md) for the discovery model and its

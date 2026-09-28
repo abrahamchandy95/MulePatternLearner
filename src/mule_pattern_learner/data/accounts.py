@@ -41,7 +41,7 @@ def _check_label_fields(row: dict[str, Any]) -> None:
     if known > 0 and not positive:
         raise ValueError(
             f"Account {row.get('account_id')!r} has known_from_ms > 0 but observed_positive "
-            "false: the installed temporal_scope_population predates the masked-label "
+            "false: the installed list_scope_accounts predates the masked-label "
             "predicate. Run `mule install`, then `mule train` to prepare again."
         )
 

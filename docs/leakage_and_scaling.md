@@ -2,7 +2,7 @@
 
 ## Current status
 
-The strict sampler is implemented. `temporal_training_context` checks frozen
+The strict sampler is implemented. `fetch_training_context` checks frozen
 server-side Account/Party partitions before payment aggregation, association
 summaries, neighbor selection and pair-history calculations. The `strict_inductive`
 experiment, the only protocol, withholds existing ownership groups from training.

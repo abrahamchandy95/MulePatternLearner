@@ -73,7 +73,7 @@ once. This happens only in the one-off creation call, which has a one-hour timeo
 and a single attempt, and its server time has not been measured yet.
 
 The rule is read back from the stored membership by the read-only
-`temporal_scope_policy` query. It counts the scope's unowned member Accounts by
+`summarize_scope_policy` query. It counts the scope's unowned member Accounts by
 class and side (internal or external). An account is shared when its group ID
 starts with `shared:`, independent when its group ID is its own component, and
 linked otherwise. The counts map to a rule as follows:
@@ -150,7 +150,7 @@ graph's population the same way.
   Datasets prepared before the masked-label predicate counted masked mules as
   positives and must be prepared again.
 
-The reveal (`temporal_reveal_mule_labels`) is the only place that reads complete
+The reveal (`reveal_mule_labels`) is the only place that reads complete
 synthetic truth before training. It reveals up to 20 positives per split among
 the mules discovered before each split's cutoff (20, 11 and 20 on the 2024
 snapshot) and writes them into the graph's label contract; the trainer reads only
@@ -358,7 +358,7 @@ contract fingerprint.
 
 ### Hub accounts and rejected contexts
 
-Preparation runs `temporal_hub_registry` for the dataset cutoffs and saves
+Preparation runs `list_hub_accounts` for the dataset cutoffs and saves
 `hubs.parquet` with the columns `account_id`, `cutoff_seq`, `visibility_phase`,
 `max_visible`, `max_degree` and `reason`. An Account is a hub at a root cutoff and
 phase when its visible history in some payment relation, counting only events
@@ -438,7 +438,7 @@ changes only the settings it names and refuses unknown ones by name.
 Installation is incremental. A query is stale when its `SHOW QUERY` text differs
 from the repository, its REST endpoint is missing or disabled, or the endpoint's
 parameters differ. Queries that call a stale query are installed with it (a change
-to `temporal_fourier64_values` also reinstalls `temporal_training_context`). Only
+to `encode_fourier64` also reinstalls `fetch_training_context`). Only
 stale definitions are created again, because `CREATE OR REPLACE` disables an
 installed endpoint until it is installed again, and the command prints which
 queries it installs, which are up to date and which installed queries no repository
@@ -605,7 +605,7 @@ audit, and the test audit is for reporting. Each audit scores all positives and
 2,000 uniformly sampled negatives of its split's population at the split's cutoff. The
 sample depends only on the scope, the truth and `dataset.split_seed`, so every run of a
 dataset is audited on the same accounts. Truth comes from the graph's label contract
-(`temporal_get_account_supervision`, the oracle endpoint training never calls) and is
+(`read_ground_truth`, the oracle endpoint training never calls) and is
 read once for both splits; an account whose label is not known counts as unknown, never
 as a negative. The audits take the cutoffs and hub registry from the model's prepared
 dataset (the dataset id recorded in `model.pt`), and the retry budgets from the model.

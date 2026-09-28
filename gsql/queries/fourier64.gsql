@@ -6,7 +6,7 @@ USE GRAPH Mule_Pattern_Learner
    Output order: sin(f_0*2*pi*u), cos(f_0*2*pi*u), ..., sin_31, cos_31.
    Sequential append is intentional: concurrent ACCUM appends scramble axes.
 */
-CREATE OR REPLACE QUERY temporal_fourier64_values(UINT delta_t_ms)
+CREATE OR REPLACE QUERY encode_fourier64(UINT delta_t_ms)
 FOR GRAPH Mule_Pattern_Learner RETURNS (ListAccum<DOUBLE>) SYNTAX V2 {
   ListAccum<DOUBLE> @@encoding;
   DOUBLE elapsed_seconds = delta_t_ms / 1000.0;
@@ -20,19 +20,4 @@ FOR GRAPH Mule_Pattern_Learner RETURNS (ListAccum<DOUBLE>) SYNTAX V2 {
     @@encoding += cos(angle);
   END;
   RETURN @@encoding;
-}
-
-CREATE OR REPLACE QUERY temporal_fourier64(INT delta_t_ms = 0)
-FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
-  ListAccum<DOUBLE> @@encoding;
-  IF delta_t_ms < 0 THEN
-    PRINT "invalid_delta_t" AS status;
-    RETURN;
-  END;
-  @@encoding = temporal_fourier64_values(delta_t_ms);
-  PRINT "ok" AS status,
-        "log1p_s_400d_32x_sincos_v1" AS basis_id,
-        delta_t_ms AS delta_t_ms,
-        @@encoding.size() AS dimensions,
-        @@encoding AS time_encoding;
 }

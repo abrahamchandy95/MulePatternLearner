@@ -32,7 +32,7 @@ CLEAN = {
 
 
 def test_hash_mirror_is_pinned_uniform_and_stream_independent() -> None:
-    # Pinned: the GSQL temporal_reveal_uniforms must return exactly these values.
+    # Pinned: the GSQL draw_reveal_uniforms must return exactly these values.
     assert tigergraph_reveal.reveal_uniforms(123456789, 42, 3) == [
         0.8522561180182994,
         0.339975114371616,

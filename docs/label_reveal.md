@@ -1,7 +1,7 @@
 # Label reveal: which mules the model may know, and since when
 
 A fresh PhantomLedger load masks every mule, so training would have no positives.
-The first `mule train` therefore runs `temporal_reveal_mule_labels`
+The first `mule train` therefore runs `reveal_mule_labels`
 ([`gsql/queries/label_reveal.gsql`](../gsql/queries/label_reveal.gsql)) once. It
 decides which mules a bank would realistically have confirmed, and when, and writes
 that into the existing [Account label contract](account_mule_labels.md). Training
@@ -83,7 +83,7 @@ test) discovered before the cutoffs and revealed 20, 11 and 20.
 hash. It reads the job's inputs once (read-only, the same query as the check below),
 then runs `plan` from
 [`label_reveal.py`](../src/mule_pattern_learner/reference/label_reveal.py), the
-Python mirror of `temporal_reveal_mule_labels`, for many salts and prints the median and 5th to 95th percentile of the mules
+Python mirror of `reveal_mule_labels`, for many salts and prints the median and 5th to 95th percentile of the mules
 discovered before each cutoff and of those revealed:
 
 ```bash
@@ -106,7 +106,7 @@ discovery clocks as availability; revealed mules get `is_mule_masked = FALSE` an
 `pu_label = 1`, the others stay masked. `mule_label_source` records the version, the
 salt and, for revealed mules, the channel. External accounts stay unknown, because
 PhantomLedger does not calibrate external mule roles. The contract check
-(`temporal_validate_account_supervision`) must report zero violations afterwards.
+(`validate_label_contract`) must report zero violations afterwards.
 
 The job runs once: a graph that already has known labels is left alone. To reveal
 again with other parameters, call the query with `force = TRUE`; prepared runs keep

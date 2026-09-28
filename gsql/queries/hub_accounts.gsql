@@ -4,7 +4,7 @@ USE GRAPH Mule_Pattern_Learner
    A row (account_id, cutoff_seq, visibility_phase) means that, counting only events with
    event_seq < cutoff_seq that are visible in that phase, one of the account's four payment
    relations has more than `threshold` events. That count (all currencies) is an upper
-   bound of the per-relation history temporal_training_context can see there (its capacity
+   bound of the per-relation history fetch_training_context can see there (its capacity
    check counts USD events only). Hub status therefore depends only on history before the
    cutoff and, in a scope, only on events visible in the phase: no post-cutoff event and
    no event hidden in that phase can create a row.
@@ -12,14 +12,14 @@ USE GRAPH Mule_Pattern_Learner
      unscoped score-new case).
    - scope_id != "" (the scope must be ready): for each phase p in 1..3 an event counts
      only when every Account endpoint (From/To role) has a membership in this scope with
-     partition in [1, p], exactly the endpoint rule of temporal_training_context. The hub
+     partition in [1, p], exactly the endpoint rule of fetch_training_context. The hub
      itself must be visible in p, otherwise that phase has no row. Each member Account's
      partition is read once, then each candidate event is marked once with the first
      phase in which all of its Account endpoints are visible (4: never).
    Candidates come from an O(1) all-time outdegree prefilter, a superset of every hub.
    max_degree (the largest all-time relation outdegree) is informational only and never
    decides a row. Rows are unordered; callers sort them. No labels are read. */
-CREATE OR REPLACE QUERY temporal_hub_registry(
+CREATE OR REPLACE QUERY list_hub_accounts(
   LIST<UINT> cutoff_seqs, UINT threshold = 2048, STRING scope_id = ""
 ) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
   TYPEDEF TUPLE<STRING account_id, UINT cutoff_seq, INT visibility_phase, UINT max_visible,

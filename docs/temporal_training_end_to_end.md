@@ -131,7 +131,7 @@ generated from [render.py](../src/mule_pattern_learner/tigergraph/render.py) by
 `scripts/render_queries.py`; `--check` and the test suite fail if the file and the Python
 feature contract drift apart.
 
-### temporal_create_training_scope (once per experiment)
+### create_training_scope (once per experiment)
 
 - **When:** the first `mule train`, only if the configured `scope.id` does not
   exist (`scope.create = False` forbids the write).
@@ -160,17 +160,17 @@ feature contract drift apart.
   components (every internal deposit account) kept exactly the partitions of
   `strict_mule_v1`, so the observed-label splits are unchanged.
 
-### temporal_finalize_training_scope and temporal_scope_policy
+### finalize_training_scope and summarize_scope_policy
 
-- `temporal_finalize_training_scope(scope_id, expected_members)` reads every membership
+- `finalize_training_scope(scope_id, expected_members)` reads every membership
   edge, checks the count and that each partition is 1 to 3 with a group ID, then sets
   `ready = true`. Queries refuse unready scopes.
-- `temporal_scope_policy(scope_id)` (read-only, about 0.7 s) counts unowned member
+- `summarize_scope_policy(scope_id)` (read-only, about 0.7 s) counts unowned member
   accounts by class (shared, independent, linked) and side (internal, external). The
   client infers the stored rule from these counts and refuses to run when it differs from
   `scope.unowned`. It runs at preparation and at the start of every streamed run.
 
-### temporal_scope_population (preparation)
+### list_scope_accounts (preparation)
 
 - **Reads:** the scope's membership edges (partition, group_id) and, for each internal
   deposit Account, `id`, `first_seen_seq`, `first_seen_ts_ms`. With
@@ -183,7 +183,7 @@ feature contract drift apart.
   2,000 test accounts opened before their split's cutoff) plus the observed positives. For
   `strict_mule_v2`: population 222,337 / 47,754 / 47,749 by split, 24,059 prepared rows.
 
-### temporal_training_cutoffs (preparation, `mule score`)
+### resolve_split_cutoffs (preparation, `mule score`)
 
 - **Reads:** `event_ts_ms` and `event_seq` of every event, `first_seen_*` of every entity.
 - **Returns:** for each calendar cutoff (midnight minus 1 ms) the largest sequence visible
@@ -193,7 +193,7 @@ feature contract drift apart.
   `cutoff_seq` is 61,035,552 for 2024-07-01, 89,141,831 for 2024-10-01 and 120,799,198 for
   2025-01-01 (every event, since the data ends on 2024-12-31). About 6.6 s installed.
 
-### temporal_hub_registry (preparation, `mule score`)
+### list_hub_accounts (preparation, `mule score`)
 
 - **Reads:** all-time `outdegree()` of the four payment relations for every Account (an
   O(1) prefilter), then, for the candidates only, the `event_seq` of each payment edge
@@ -212,7 +212,7 @@ feature contract drift apart.
   | 2024-10-01 (89,141,831) | 4,055 | 4,399 | 4,765 |
   | 2025-01-01 (120,799,198) | 4,662 | 5,180 | 5,602 |
 
-### temporal_training_context (every batch)
+### fetch_training_context (every batch)
 
 This is the query that produces the model inputs. One REST call carries 1 to 64 requests,
 each an entity at its own cutoff:
@@ -284,7 +284,7 @@ Pool sizes in the v5 configuration:
 Children use the same query with `include_*` flags limited to what the model reads for a
 child (node metadata and message groups; root-only summaries are skipped).
 
-### temporal_fourier64_values and temporal_fourier64
+### encode_fourier64
 
 The fixed time basis shared by GSQL and Python: `u = ln(1 + delta_ms / 1000) /
 ln(1 + 34,560,000)` (400 days in seconds), 32 frequencies `f_i = 0.125 * 16^(i / 31)`,
@@ -706,7 +706,7 @@ dataset; different dataset settings name another dataset, prepared beside it.
 |---|---|
 | `Installed query differs from repository source or is not installed` | Run `mule install`; it recompiles only the stale queries (the context query alone takes most of the roughly 50 minutes a full install needs) |
 | `Prepared dataset ... was built from different GSQL sources` | The GSQL changed after preparation; install the current queries, then move the dataset aside so the next run prepares it again |
-| `Account label contract violated after the reveal` | The label attributes are inconsistent; see [label reveal](label_reveal.md) and run `temporal_validate_account_supervision` |
+| `Account label contract violated after the reveal` | The label attributes are inconsistent; see [label reveal](label_reveal.md) and run `validate_label_contract` |
 | Scope rule mismatch | The scope was created with another `scope.unowned`; use the stored rule or a new `scope.id` |
 | `Live graph counts changed; freeze the source and prepare a new dataset` | The graph was modified after preparation; freeze it and prepare a new dataset |
 | `TigerGraph rejected ... training roots so far` or `validation: TigerGraph rejected ... roots` | Roots failed a per-request check beyond `max_rejected_root_fraction`, or an observed positive was rejected; the statuses name why (for example `history_capacity_exceeded`) |

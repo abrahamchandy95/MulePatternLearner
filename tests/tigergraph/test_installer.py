@@ -20,13 +20,15 @@ from mule_pattern_learner.contract.server import (
     GRAPH_NAME,
     HUB_QUERY,
     QUERY_FILES,
+    REVEAL_QUERY,
+    REVEAL_UNIFORMS_QUERY,
     TRAINING_QUERY_FILES,
 )
 from mule_pattern_learner.paths import GSQL_DIR
 from mule_pattern_learner.testing.fake_connection import executor
 from mule_pattern_learner.tigergraph import gsql_text, installer
 
-INSTALL_FILES = ("queries/fourier64.gsql", "queries/split_cutoffs.gsql")
+INSTALL_FILES = ("queries/label_reveal.gsql", "queries/split_cutoffs.gsql")
 
 
 def endpoint(parameters: set[str], enabled: bool = True) -> dict[str, Any]:
@@ -59,7 +61,7 @@ def test_verify_sources_requires_matching_text_and_enabled_endpoints() -> None:
         expected
     )
     disabled = {**good, CUTOFF_QUERY: endpoint({"cutoff_times"}, False)}
-    renamed = {**good, "temporal_fourier64": endpoint({"other"})}
+    renamed = {**good, CUTOFF_QUERY: endpoint({"other"})}
     cases = [
         (conn(expected.__getitem__, disabled), "not installed"),
         (conn(lambda n: expected[n].replace("24", "25"), good), "differs"),
@@ -143,18 +145,18 @@ class InstallServer:
 def test_install_creates_and_installs_only_stale_queries(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(installer, "TRAINING_QUERY_FILES", INSTALL_FILES)
     names = list(gsql_text.repository_queries(INSTALL_FILES))
-    assert names == [FOURIER_QUERY, "temporal_fourier64", CUTOFF_QUERY]
+    assert names == [REVEAL_UNIFORMS_QUERY, REVEAL_QUERY, CUTOFF_QUERY]
     # Everything current: nothing is created or installed.
     server = InstallServer()
     logs = installer.install(executor(server))
     assert logs["installed"] == [] and logs["verified"] == names
     assert not server.created and not server.installs
     # A stale subquery is reinstalled together with its caller, nothing else.
-    server = InstallServer(stale=(FOURIER_QUERY,))
+    server = InstallServer(stale=(REVEAL_UNIFORMS_QUERY,))
     logs = installer.install(executor(server))
-    assert logs["installed"] == [FOURIER_QUERY, "temporal_fourier64"]
+    assert logs["installed"] == [REVEAL_UNIFORMS_QUERY, REVEAL_QUERY]
     assert logs["up_to_date"] == [CUTOFF_QUERY]
-    assert server.installs == [([FOURIER_QUERY, "temporal_fourier64"], False)]
+    assert server.installs == [([REVEAL_UNIFORMS_QUERY, REVEAL_QUERY], False)]
     assert len(server.created) == 1 and CUTOFF_QUERY not in server.created[0]
     assert server.created[0].startswith(f"USE GRAPH {GRAPH_NAME}\n")
     assert logs["verified"] == names

@@ -9,9 +9,10 @@ scores that commit's Predictor gave eight test accounts; this code must give the
 same scores. Floating point rounding differs between machines, hence the tolerance.
 
 `dataset/` is the dataset that commit prepared for the built-in model: its manifest
-records preparation keys and a query file the restructure retires. The model still
-scores it as it did, and today's code prepares the same accounts and labels from the
-same settings.
+records preparation keys and a query file the restructure retires. The server step
+renamed the queries it was prepared from, so the integrity gate refuses it now, but the
+model still scores its accounts as it did, and today's code prepares the same accounts
+and labels from the same settings.
 """
 
 from __future__ import annotations
@@ -179,8 +180,11 @@ def test_the_dataset_prepared_before_the_restructure_scores_as_it_did(tmp_path: 
     shutil.copytree(FIXTURES / "dataset", dataset.root)
     saved = SavedModel.load(FIXTURES / "built_in.pt")
     assert saved.config == DEFAULT_CONFIG.with_changes(CHANGES)
+    # The queries it was prepared from have other text now, so the gate refuses it.
+    with pytest.raises(ValueError, match="different GSQL sources"):
+        load_prepared(dataset)
     # Every eligible test account at the test cutoff, with the dataset's hub registry.
-    manifest, accounts = load_prepared(dataset)
+    manifest, accounts = read_manifest(dataset), pd.read_parquet(dataset.accounts)
     saved.check_dataset(dataset)
     date = "2025-01-01"
     accounts = accounts[eligible_mask(accounts, "test", date)]
