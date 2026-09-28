@@ -22,12 +22,12 @@ import numpy as np
 import pandas as pd
 
 from ..artifacts import read_json, read_predictions
+from ..contract.graph_schema import HELD_OUT_SPLITS
 from ..evaluation.truth import checked_truth
 from ..metrics import proxy_metrics
 from ..paths import RunPaths
 
-# The predicted splits, and the subsets of their accounts each is scored on.
-SPLITS = ("validation", "test")
+# The subsets of a predicted split's accounts, each scored on its own.
 SUBSETS = ("all", "hidden", "revealed")
 # The long-format columns of the result.
 COLUMNS = ("split", "subset", "metric", "value")
@@ -80,7 +80,7 @@ def proxy_validity(run: RunPaths, truth: pd.DataFrame) -> pd.DataFrame:
     answer = checked_truth(truth)
     threshold = float(read_json(run.metrics)["validation_proxy"]["threshold"])
     rows: list[tuple[str, str, str, float]] = []
-    for split in SPLITS:
+    for split in HELD_OUT_SPLITS:
         found = split_validity(read_predictions(run.predictions(split)), answer, threshold)
         for subset, metrics in found.items():
             for metric, value in metrics.items():
