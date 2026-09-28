@@ -14,12 +14,19 @@ def test_a_dataset_directory_is_named_by_its_dataset_id(tmp_path: Path) -> None:
     assert DatasetPaths.of("abc").root == paths.DATA_DIR / "abc"
     dataset = DatasetPaths.of("abc", tmp_path)
     assert dataset.root == tmp_path / "abc"
-    names = [dataset.manifest, dataset.accounts, dataset.observed_labels, dataset.hubs]
+    names = [
+        dataset.manifest,
+        dataset.accounts,
+        dataset.observed_labels,
+        dataset.hubs,
+        dataset.contexts,
+    ]
     assert [path.relative_to(dataset.root).as_posix() for path in names] == [
         "manifest.json",
         "accounts.parquet",
         "observed_labels.parquet",
         "hubs.parquet",
+        "contexts",
     ]
 
 

@@ -51,6 +51,11 @@ class DatasetPaths:
     def hubs(self) -> Path:
         return self.root / "hubs.parquet"
 
+    @property
+    def contexts(self) -> Path:
+        """The dataset's context cache on disk (data.context_cache.ContextCache)."""
+        return self.root / "contexts"
+
 
 def datasets(data: Path = DATA_DIR) -> list[DatasetPaths]:
     """Every dataset directory under data that holds a manifest, by name."""

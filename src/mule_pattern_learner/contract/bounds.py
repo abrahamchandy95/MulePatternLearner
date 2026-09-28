@@ -41,6 +41,15 @@ REQUEST_KEYS = Bound(1, 64)
 # Context requests one source keeps in flight, and the contexts it keeps in memory.
 QUERY_CONCURRENCY = Bound(1, 16)
 CONTEXT_LRU_CAPACITY = Bound(0, 4096)
+# Contexts the disk tier of one dataset keeps (data.context_cache). The baseline run's
+# contexts_distinct should set it, so that the cache holds every context a run asked for
+# and the next run of the dataset asks TigerGraph for none of them again. No run has
+# measured that yet, so this is an estimate: a training step asks for at most 64 roots
+# and 64 x 16 children, so the reference run's 11 epochs of 100 steps ask for at most
+# 1.2 million contexts, and the proxy evaluations and the audits add about 70,000 each.
+# Compressed, a full root pool takes about 14 KB and a child's about 6 KB, so the cap is
+# roughly 10 GB of disk.
+CONTEXT_CACHE_ENTRIES = 1_500_000
 # Every n-th context request asks for the Fourier vectors, which are then checked.
 ENCODING_CHECK_EVERY = Bound(1, 1_000_000)
 # Attempts one query may count, and the seconds of unavailability it waits out.
