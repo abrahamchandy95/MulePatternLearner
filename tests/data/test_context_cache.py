@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections import Counter
+from collections.abc import Iterable
 from dataclasses import replace
 import gzip
 import json
@@ -17,8 +19,9 @@ from mule_pattern_learner.contract.server import CONTEXT_QUERY
 from mule_pattern_learner.data import context_cache
 from mule_pattern_learner.data.context_cache import ContextCache, DiskTier, MemoryTier
 from mule_pattern_learner.data.contexts import ContextSource
+from mule_pattern_learner.runtime.workers import BatchPrefetcher
 from mule_pattern_learner.testing.builders import CORE_PLAN, SMALL_SAMPLER, neighbourhood, root
-from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
+from mule_pattern_learner.testing.fake_graph import FakeTigerGraph, pool_of, request_keys
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
 
 # Roots whose cutoff leaves room for the neighbourhood's hourly payments.
@@ -104,6 +107,67 @@ def test_a_second_source_reads_the_rows_of_the_first_from_disk(tmp_path: Path) -
     assert first["row"]["request_index"] == 0 and first["row"]["age_encoding"]
     served = cold_rows[0][0]
     assert served is not None and served["age_encoding"] == {} and "request_index" not in served
+
+
+def test_a_key_evicted_while_a_fetch_reads_the_disk_is_still_not_requested(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cache = cache_in(tmp_path)
+    expected = read_all(source(graph(), cache))[0]
+    executor = graph()
+    contexts = source(executor, cache, capacity=2)
+    assert contexts.disk is not None
+    contexts.fetch(KEYS[:2])  # memory holds the first two keys
+    read = contexts.disk.get
+
+    def get(hop: int, keys: Iterable[ContextKey]) -> dict[ContextKey, dict[str, Any]]:
+        # Another fetch runs while this one reads the disk, and evicts both from memory.
+        monkeypatch.setattr(contexts.disk, "get", read)
+        contexts.fetch(KEYS[4:])
+        return read(hop, keys)
+
+    monkeypatch.setattr(contexts.disk, "get", get)
+    assert contexts.fetch(KEYS[:4]) == expected[:4]
+    assert executor.calls == [] and contexts.database_calls == 0
+    assert (contexts.counts.memory_hits, contexts.counts.disk_hits) == (2, 6)
+    contexts.close()
+
+
+def test_fetches_through_a_churning_lru_request_each_context_once(tmp_path: Path) -> None:
+    # Two batch builders, as the trainer's prefetch runs them, over an LRU far smaller
+    # than one fetch, so a builder's fetches keep evicting the keys the other asks for.
+    keys = [root(i, cutoff_ms=1000 * 3_600_000) for i in range(40)]
+    batches = [keys[start : start + 24] for start in range(0, 17, 2)] * 4
+    cache = cache_in(tmp_path)
+
+    def train(executor: FakeTigerGraph) -> tuple[ContextSource, list[Any]]:
+        contexts = source(executor, cache, capacity=4, concurrency=4)
+
+        def build(batch: list[ContextKey]) -> Any:
+            return contexts.fetch(batch), contexts.fetch(batch[::-1], hop=2)
+
+        with BatchPrefetcher(build, batches, depth=2) as built:
+            rows = list(built)
+        contexts.close()
+        return contexts, rows
+
+    cold_graph, warm_graph = graph(), graph()
+    cold, cold_rows = train(cold_graph)
+    # The cold source requested each context once: a key another fetch evicted from
+    # memory is read from disk, and one another fetch is reading or requesting is awaited.
+    requested = Counter(
+        (pool_of(params), key)
+        for name, params in cold_graph.calls
+        if name == CONTEXT_QUERY
+        for key in request_keys(params)
+    )
+    assert len(requested) == cold.counts.distinct == 2 * len(keys)
+    assert set(requested.values()) == {1}
+    # The warm one requested none: the disk held every context memory did not.
+    warm, warm_rows = train(warm_graph)
+    assert warm_rows == cold_rows and warm_graph.calls == [] and warm.database_calls == 0
+    assert warm.counts.disk_hits == warm.counts.requested - warm.counts.memory_hits > 0
+    assert warm.counts.requested == cold.counts.requested
 
 
 def test_an_entry_is_named_by_everything_its_row_depends_on(

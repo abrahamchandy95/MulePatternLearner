@@ -193,8 +193,9 @@ from batching/model/loss: `fetch(keys, hop=1|2)` returns rows in key order, `Non
 where TigerGraph rejected a request, and counts rejections by status
 (`rejections`, once per rejected key and fetch) and per hop (`rejections_by_hop`,
 1 for roots and 2 for children). Several batch-builder threads share one bounded
-request pool; a key already being fetched is awaited instead of requested twice,
-and the LRU is keyed by `(hop, key)`. The pool's workers are daemon threads.
+request pool; a key another thread is already reading from the context cache or
+requesting is awaited instead of read or requested twice, and the LRU is keyed by
+`(hop, key)`. The pool's workers are daemon threads.
 After an error or Ctrl-C, training and scoring close the source without waiting:
 queued requests are cancelled, and requests already in flight finish on their own
 or are dropped when the process exits, so neither the error nor the exit waits for
