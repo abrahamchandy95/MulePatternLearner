@@ -130,7 +130,7 @@ of the same dataset settings.
 # A label-blind audit of the first scope accounts against the Python reference (read-only).
 .venv/bin/python -m pytest -m graph tests/integration/test_feature_parity.py
 
-# Final-only; do not run during feature selection. Truth comes from the graph.
+# Audits validation (for decisions) and test (for reporting only). Truth comes from the graph.
 .venv/bin/python -m mule_pattern_learner evaluate results/<name>/seed-<seed>
 ```
 

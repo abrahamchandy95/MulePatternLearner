@@ -243,7 +243,8 @@ MulePatternLearner/
 │   │   ├── label_reveal.py     mirror of the reveal job
 │   │   └── batch_features.py   scalar node, base and edge features (oracle for batching.features)
 │   └── testing/            fakes and builders (the PyG testing/ pattern)
-│       ├── fake_graph.py       FakeTigerGraph: a QueryExecutor answering every repository query, asserting GSQL signatures
+│       ├── fake_graph.py       FakeTigerGraph: a ConnectionExecutor answering the repository's queries, asserting GSQL
+│       │                       signatures, with SHOW QUERY, endpoints, counts and scope headers on its connection
 │       ├── fake_connection.py  fake pyTigerGraph connections for client and executor tests
 │       └── builders.py         accounts with their revealed labels, messages, payments, associations, contexts, test RunConfig
 ├── gsql/
@@ -517,7 +518,7 @@ DEFAULT_CONFIG = RunConfig()
 | `ModelCheckpoint`, `checkpoint_last.pt` | `SavedModel` (`model.pt`), `ResumeState` (`resume.pt`) |
 | `StreamingContextSource`; `store`, `source`, `contexts` | `ContextSource`; `contexts` |
 | `GraphEvaluationTruth`, `ParquetEvaluationTruth`, `evaluate_final_population`, `evaluate-final` | `TigerGraphTruth`, `ParquetTruth`, `audit`, `mule evaluate` |
-| `grouped_ap_interval`, `weighted_top_fractions`, `evaluate_weighted` | `bootstrap_interval` (stratified or ring-clustered), `capture_at_budgets`, `audit_metrics` |
+| `grouped_ap_interval`, `weighted_top_fractions`, `evaluate_weighted` | `bootstrap_intervals` (stratified or ring-clustered), `capture_at_budgets`, `audit_metrics` |
 | `sampler.py`/`sampling.py`, `memory.py`, `policy.py`, `contract.py`, `config_schema.py`, `common.py` | `sampling/`, `training/schedule.py`, `batching/limits.py`, split up, `contract/`, `config.py`, split up |
 | `CONTRACT_VERSION` | `CONTEXT_CONTRACT` in `contract/server.py` (value unchanged until the server step) |
 | `TRAINING_PROTOCOL`, `CHECKPOINT_FORMAT` | `SavedModel.FORMAT = 1`, `ResumeState.FORMAT = 1` |
@@ -661,7 +662,7 @@ rewritten.
 - **Per run, per split:** weighted AP, ROC AUC, and recall and precision at the budgets. Each has a 90% bootstrap interval with 1,000 replicates and seed 0.
   - Positives are resampled by ring (`ring_id`), and negatives within class. Inclusion weights are kept.
   - The level and replicate count come from `/tmp/mpl_arms/audit_summary.py`.
-- **Paired delta:** every replicate draws one resample of the shared accounts and rings and applies it to every run. The statistic is seed-mean AP of the variant minus seed-mean AP of the baseline.
+- **Paired delta:** every replicate draws one resample of the shared accounts and rings and applies it to every run (`metrics.paired_replicates`). The statistic is seed-mean AP of the variant minus seed-mean AP of the baseline.
   - The interval covers audit-sample uncertainty for these seeds, not seed-to-seed variation. The per-seed deltas are plotted beside it.
   - A variant is marked "consistent" only when every seed's delta has the same sign and the interval excludes zero.
   - With about 18 variants at 90%, about two will exclude zero by chance, so results are exploratory until repeated with more seeds.
@@ -912,7 +913,7 @@ The steps, in order:
    - Left for a later code step: `build_batch` and `build_root_batch` still take `fanouts` beside the `sampler` section that holds them (both are required now, with the feature plan). Drop the parameter and read `sampler.fanouts` before the experiments step; about 50 test calls pass it.
    - Left for the server step: the stale-query guards the removed `legacy` marker tracked, `_check_label_fields` in `data/accounts.py` (its masked-label check) and `check_graph_label_rows` in `tigergraph/labels.py`. Delete them once that step has installed every query under its new name and re-prepared the dataset: from then on no installed query and no prepared dataset can predate the masked-label predicate.
    - Kept until the owner decides, in the server step: the scope-rule inference the marker also tracked (`inferred_scope_policy` in `tigergraph/scope.py`, from the `strict_mule_v1` era). The scope vertex stores no `scope.unowned` rule, so inferring it from the membership is the only check that an existing scope was created with the configured rule. Deleting it means storing the rule on the vertex (a schema change) or giving up that check.
-   - Left for the audit step, whose gate runs audits on `FakeTigerGraph`: the fake has not absorbed the inline executors. `tests/data/test_scope_isolation.py` defines four (two subclasses of the fake that check parameters, and standalone pagers of the scope population and of the ground truth), `tests/training/test_trainer.py` defines `PreparedExecutor`, and `testing/fake_graph.py` still holds `ContextServer`, `Runner`, `ScopeServer` and `ScoringExecutor` beside `FakeTigerGraph`. The stub in `tests/pipeline/test_connect.py` stays: it replaces the `TigerGraphExecutor` class to record its constructor arguments and runs no query. The audit step also rewords "final audit" in the docstrings and messages of `evaluation/audit.py`, `contract/bounds.py`, `data/accounts.py` and `data/ports.py` as the ground-truth audit, since it makes the audit cover any split.
+   - Done in the audit step (see Audit additions): the fake graph absorbed the inline executors, and "final audit" became the ground-truth audit. The stub in `tests/pipeline/test_connect.py` stays: it replaces the `TigerGraphExecutor` class to record its constructor arguments and runs no query.
    - Left for the docs step: "arm" in `docs/feature_redesign.md` and `docs/temporal_training_end_to_end.md` (the owner's word is "variant"), and `<output>.rejected.txt` in `docs/live_temporal_training.md` (now `scores/<stem>_<date>_rejected.txt`). That guide also says to resume a run that stopped on rejected roots with a higher limit. The commands take no options, so only a Python caller can, and the guide must say how: `train_run(config=DEFAULT_CONFIG.with_changes({"runtime": {"max_rejected_root_fraction": 0.01}}), resume=True)` from `pipeline.train`.
    - Commits that fail the per-commit gate (the history is not rewritten, so bisect should skip them): `b0bbbaf`, `eeaf5d5` and `30d1461` of the deduplication step fail `ruff check --select I`, which `68e8297` fixes; `55bb769` and `90c0ed4` fail it too, which `6ad436f` fixes; `519d897` and `455654e` fail `tests/test_naming.py`, which `17cbaf3` fixes. Ruff's configuration now selects the import rules, so the plain `ruff check` catches this.
    - No experiment runner exists on `restructure` until the experiments step writes `experiments/variants.py`, `runner.py` and `scripts/run_experiments.py` (the old matrix `feature_experiments` is deleted, not ported). Until then control experiments run from `temporal`.
@@ -947,6 +948,16 @@ The steps, in order:
       - `evaluate_predictions` is deleted; write `diagnostics/proxy_validity.py` anew.
       - `FakeTigerGraph` answers only five read queries and has no `call` or `gsql`: make it a `ConnectionExecutor` (SHOW QUERY, the endpoint listing, vertex counts, the scope header), and give the executor protocol a `graph_name` so `pipeline/check.py` stops reading `executor.client.graphname`.
       - Move the `capture_at_budgets` tests out of `tests/evaluation/test_audit.py` when the audit tests are rewritten, and merge the test builders (`testing/builders.py` has three configuration builders with three source ids, about a dozen message and context builders and several `SamplerPlan`s; `testing/sampler_checks.py` defines `message` again).
+    - Settled in this step, for the steps after it:
+      - `evaluation.audit.audit_inputs(run)` loads and checks the model, its dataset, the manifest and the hub registry once into an `AuditedRun`; `audit(run, split, *, truth, scope, contexts)` takes it, the truth table and the caller's context source, which the caller closes. `pipeline.evaluate.evaluate_run` returns the reports by split, audits only the splits whose `audit/<split>.json` is missing (the report is written last) and connects only if one is.
+      - The truth table has `contract.graph_schema.TRUTH_COLUMNS` (`account_id, is_mule, ring_id, label_source`), read by `TigerGraphTruth` and checked by `evaluation.truth.checked_truth`. The report holds `split`, `purpose` (`decisions` or `reporting`), `date`, `population_accounts`, `metrics`, `intervals` (ring-clustered), `constants`, the revealed and hidden positives and the rejection counts.
+      - The proxy metrics in `metrics.json` report the audit's review budgets with unit weights: 1, 5 and 10%, where a budget that ends inside an account or a block of tied scores takes a share of it. The commit that changed them lists the golden run's old and new values.
+      - `FakeTigerGraph` is the one fake executor: `before` and `answers` hooks replace scripted executors, `delay` and `encodings` the context faults. `testing.builders.unit_config` is the one configuration builder (`unit_config(RUNTIME_CHANGES)` for the runtime tests), `UNIT_SOURCE` the one source id, and `ground_truth_rows` the truth of a scope population.
+    - Left for later steps:
+      - The plots step draws the audit figures from `metrics.precision_recall_curve`, `roc_curve` and `capture_curve`, and the report's intervals.
+      - The experiments step computes paired deltas with `metrics.paired_replicates` and still has to give `evaluate_run` a shared connection and truth for a suite.
+      - The diagnostics step adds `mule diagnose proxy-validity` over `diagnostics.proxy_validity.proxy_validity(run, truth)`, which returns the long table and writes nothing.
+      - The fake graph does not answer the reveal or the label-contract query, so the pipeline's end-to-end test still replaces the reveal; `tests/tigergraph/test_reveal.py`, `test_labels.py` and `test_installer.py` and `tests/test_scripts.py` keep their own executors or connections for the queries and writes they script.
 12. **Plots and reports.** `reporting/`, `mule report`, automatic plots. Gate: every figure smoke-renders from synthetic files to a non-empty PNG under its fixed name; the matplotlib and torch contracts pass.
 13. **Context cache**, before any suite.
     - A disk tier inside `ContextSource` under `data/<dataset id>/contexts/`, with a size cap.
