@@ -18,8 +18,10 @@ from mule_pattern_learner.contract.graph_schema import PHASE_SPLIT, ContextKey
 from mule_pattern_learner.contract.server import CONTEXT_QUERY, TRUTH_QUERY
 from mule_pattern_learner.data.manifest import dataset_id
 from mule_pattern_learner.data.preparation import prepare
+from mule_pattern_learner.evaluation.audit import AUDIT_SPLITS
 from mule_pattern_learner.evaluation.truth import ParquetTruth
 from mule_pattern_learner.paths import DatasetPaths, RunPaths
+from mule_pattern_learner.pipeline import connect as pipeline_connect
 from mule_pattern_learner.pipeline import evaluate as pipeline_evaluate
 from mule_pattern_learner.reporting.report import AUDIT_FIGURES
 from mule_pattern_learner.runtime.progress import emit
@@ -238,6 +240,37 @@ def test_evaluate_run_audits_validation_and_test_on_the_fake_graph(
         third, truth=ParquetTruth(tmp_path / "truth.parquet"), data=data
     )
     assert parquet["test"]["metrics"] == reports[0]["test"]["metrics"]
+
+
+def test_a_session_audits_several_runs_on_one_connection_and_reads_truth_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = unit_config()
+    graph, data = audited_graph(tmp_path, config)
+    connected: list[TransportConfig] = []
+
+    def connect(transport: TransportConfig) -> FakeTigerGraph:
+        connected.append(transport)
+        return graph
+
+    monkeypatch.setattr(pipeline_connect, "connect", connect)
+    monkeypatch.setattr(pipeline_evaluate, "connect", connecting(None))
+    dataset = DatasetPaths.of(dataset_id(UNIT_SOURCE, config), data)
+    runs = [RunPaths(tmp_path / name) for name in ("first", "second")]
+    for run, shift in zip(runs, (0.0, 2.0), strict=True):
+        saved_model(run.model, config, dataset, logit_shift=shift)
+    session = pipeline_connect.Session(config.transport)
+    truth = pipeline_evaluate.SharedTruth(session)
+    for run in runs:
+        pipeline_evaluate.evaluate_run(run, truth=truth, data=data, session=session)
+    assert connected == [config.transport] and graph.names().count(TRUTH_QUERY) == 1
+    assert all(run.audit_report(split).exists() for run in runs for split in AUDIT_SPLITS)
+    # Runs that are audited already need neither the connection nor the truth.
+    idle = pipeline_connect.Session(config.transport)
+    pipeline_evaluate.evaluate_run(
+        runs[0], truth=pipeline_evaluate.SharedTruth(idle), data=data, session=idle
+    )
+    assert not idle.connected and connected == [config.transport]
 
 
 def test_each_split_reports_the_rejections_of_its_own_audit(

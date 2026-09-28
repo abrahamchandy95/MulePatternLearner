@@ -14,6 +14,7 @@ from mule_pattern_learner.config import RunConfig, ScopeConfig, SplitDates, Tran
 from mule_pattern_learner.data import manifest as data_manifest
 from mule_pattern_learner.data.manifest import dataset_id, dataset_settings, query_hashes
 from mule_pattern_learner.paths import DatasetPaths
+from mule_pattern_learner.pipeline import connect as pipeline_connect
 from mule_pattern_learner.pipeline import prepare as pipeline_prepare
 from mule_pattern_learner.testing.builders import (
     UNIT_SOURCE,
@@ -138,6 +139,37 @@ def test_first_preparation_creates_the_scope_and_reveals_labels(
         "reveal",
         f"prepare {UNIT_SOURCE} {identity}",
     ]
+
+
+def test_a_session_prepares_on_its_connection_and_connects_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    steps: list[str] = []
+    record_graph_steps(monkeypatch, steps)
+    config = unit_config()
+    shared = SimpleNamespace()
+    connected: list[TransportConfig] = []
+
+    def connect(transport: TransportConfig) -> Any:
+        connected.append(transport)
+        return shared
+
+    def install(executor: Any) -> None:
+        assert executor is shared
+        steps.append("install")
+
+    def no_connection(transport: TransportConfig) -> None:
+        raise AssertionError("a use case given a session uses its connection")
+
+    monkeypatch.setattr(pipeline_connect, "connect", connect)
+    monkeypatch.setattr(pipeline_prepare, "connect", no_connection)
+    monkeypatch.setattr(pipeline_prepare, "install", install)
+    session = pipeline_connect.Session(config.transport)
+    assert not session.connected
+    first = pipeline_prepare.prepare_dataset(config, tmp_path / "a", session=session)
+    second = pipeline_prepare.prepare_dataset(config, tmp_path / "b", session=session)
+    assert first.root.name == second.root.name and steps.count("install") == 2
+    assert session.connected and connected == [config.transport]
 
 
 def test_a_dataset_being_prepared_keeps_its_source_id(

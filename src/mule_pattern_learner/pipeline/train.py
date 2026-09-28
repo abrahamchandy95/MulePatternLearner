@@ -6,11 +6,12 @@ from pathlib import Path
 from typing import Any
 
 from ..config import DEFAULT_CONFIG, RunConfig
-from ..paths import BASELINE_VARIANT, DATA_DIR, RunPaths
+from ..data.contexts import ContextOpener, ContextSource
+from ..paths import BASELINE_VARIANT, DATA_DIR, DatasetPaths, RunPaths
 from ..reporting.report import write_training_report
 from ..training.checkpoint import check_resumable, completed_run, run_started
 from ..training.trainer import train
-from .connect import open_context_source
+from .connect import Session, open_context_source
 from .prepare import prepare_dataset
 
 # The directory of the built-in run, results/baseline/seed-42/, which `mule train` writes.
@@ -23,6 +24,7 @@ def train_run(
     config: RunConfig = DEFAULT_CONFIG,
     data: Path = DATA_DIR,
     resume: bool = False,
+    session: Session | None = None,
 ) -> dict[str, Any]:
     """Prepare if needed, train with nnPU, and write the run into output.
 
@@ -36,6 +38,8 @@ def train_run(
     connects or is written: a run of other settings, complete or not, is an error that
     names them. A run trained here then gets its training figures and report.md
     (reporting.report.write_training_report); a complete run reported is left as it was.
+    With a ``session`` the dataset is prepared and the contexts are requested on its
+    connection, which a suite of runs shares.
     """
     if output is None:
         if config.fingerprint() != DEFAULT_CONFIG.fingerprint():
@@ -51,9 +55,22 @@ def train_run(
         if recorded is not None:
             return recorded
         check_resumable(config, output)
-    dataset = prepare_dataset(config, data)
-    result = train(config, dataset, output, open_contexts=open_context_source, resume=resume)
+    dataset = prepare_dataset(config, data, session=session)
+    result = train(config, dataset, output, open_contexts=opener(session), resume=resume)
     # model.pt and every other file of the run are saved by now, so a figure that fails
     # loses nothing: the error comes after the other figures and report.md are written.
     write_training_report(output)
     return result
+
+
+def opener(session: Session | None) -> ContextOpener:
+    """The pipeline's context opener: open_context_source, on the session's connection if any."""
+    if session is None:
+        return open_context_source
+
+    def open_on_session(
+        dataset: DatasetPaths, manifest: dict[str, Any], config: RunConfig
+    ) -> ContextSource:
+        return open_context_source(dataset, manifest, config, session=session)
+
+    return open_on_session

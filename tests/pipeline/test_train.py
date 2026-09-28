@@ -76,6 +76,15 @@ def test_minimal_command_and_run_defaults(tmp_path: Path) -> None:
         with pytest.raises(ValueError, match="Only the built-in run trains into"):
             train_run(config=changed, data=tmp_path / "data")
         assert prep.call_count == 2
+        # A session's run is prepared and opens its contexts on the session's connection.
+        session = pipeline_connect.Session(DEFAULT_CONFIG.transport)
+        train_run(RunPaths(tmp_path / "shared"), data=tmp_path / "data", session=session)
+        assert prep.call_args.kwargs == {"session": session}
+        opened = fit.call_args.kwargs["open_contexts"]
+        with patch("mule_pattern_learner.pipeline.train.open_context_source") as source:
+            opened(dataset, {}, DEFAULT_CONFIG)
+        source.assert_called_once_with(dataset, {}, DEFAULT_CONFIG, session=session)
+        assert not session.connected
 
 
 # The source id of the fake graph's data, and its accounts.
