@@ -44,8 +44,7 @@ positive is the revealed positive of the
 accompanied by its discovery timestamp (`mule_label_available_ts_ms`). Every other
 account, including masked mules and labeled non-mules, has `observed_positive`
 FALSE and `known_from_ms` 0, so neither field reveals a withheld label or which
-accounts are labeled. The client fails fast on a nonzero `known_from_ms` without a
-positive, the sign of an older installed query.
+accounts are labeled.
 The query never exports raw oracle truth or the synthetic mask.
 
 ## Context query contract

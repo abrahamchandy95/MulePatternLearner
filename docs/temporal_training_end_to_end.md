@@ -143,7 +143,7 @@ feature contract drift apart.
   over ownership edges). Each component gets partition 1 (train, 70%), 2 (validation,
   15%) or 3 (test, 15%) from a seeded hash of the component ID.
 - **Unowned accounts** (`unowned_policy`, config `scope.unowned`):
-  - `independent`: each unowned account is its own component (the old rule; `strict_mule_v1`).
+  - `independent`: each unowned account is its own component.
   - `shared`: unowned external accounts and unowned bank ledger accounts
     (`account_type = "gl"`, the bank's income books for fees and interest) get partition 1
     (visible in every phase), like tokens and devices.

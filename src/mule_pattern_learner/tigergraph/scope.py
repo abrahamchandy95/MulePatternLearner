@@ -103,17 +103,17 @@ def scope_policy_counts(executor: QueryExecutor, scope_id: str) -> dict[str, int
 def inferred_scope_policy(counts: dict[str, int]) -> str | None:
     """The scope.unowned rule a scope was created with, from its membership classes.
 
-    Under every rule an unowned internal customer account is never shared and an
-    unowned external account is never linked. Unowned bank ledger accounts (the
-    bank's own "gl" books) are shared exactly when external accounts are: all of them
-    under "shared" and "linked", none under "independent". "independent": nothing shared or linked
-    (every scope created before the policy existed, such as strict_mule_v1).
-    "shared": every unowned external account shared, nothing linked. "linked":
-    every unowned external account shared (possibly none exist) and at least one
-    internal account linked to its sole owned deposit counterparty. None: no rule
-    produces this membership (for example an early draft that also shared
-    internal accounts). Rules that wrote identical membership read as the
-    simplest of them: "independent" without unowned external accounts or links,
+    The scope vertex stores no rule, so this is the check that an existing scope was
+    built with the configured one (check_scope_policy). Under every rule an unowned
+    internal customer account is never shared and an unowned external account is never
+    linked. Unowned bank ledger accounts (the bank's own "gl" books) are shared exactly
+    when external accounts are: all of them under "shared" and "linked", none under
+    "independent". "independent": nothing shared or linked. "shared": every unowned
+    external account shared, nothing linked. "linked": every unowned external account
+    shared (possibly none exist) and at least one internal account linked to its sole
+    owned deposit counterparty. None: no rule produces this membership (for example
+    internal customer accounts shared). Rules that wrote identical membership read as
+    the simplest of them: "independent" without unowned external accounts or links,
     "shared" when no internal account was linked.
     """
     if counts["shared_internal"] or counts["linked_external"]:

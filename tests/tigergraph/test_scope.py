@@ -63,7 +63,7 @@ def test_existing_scope_must_have_the_configured_unowned_policy() -> None:
         server = FakeTigerGraph(scope_policy=policy, scopes={"unit_scope": header})
         ensure(server, replace(config, unowned=policy))
         assert server.names() == [SCOPE_POLICY_QUERY]
-    assert scope.inferred_scope_policy(policy_counts("retired")) is None
+    assert scope.inferred_scope_policy(policy_counts("no_rule")) is None
     # Without unowned external accounts a linked scope is still recognised by its links.
     no_external = {**policy_counts("linked"), "shared_external": 0, "independent_external": 0}
     assert scope.inferred_scope_policy(no_external) == "linked"
@@ -79,11 +79,11 @@ def test_existing_scope_must_have_the_configured_unowned_policy() -> None:
     assert scope.inferred_scope_policy(unshared) is None
     partly = {**policy_counts("shared"), "independent_external": 1}
     assert scope.inferred_scope_policy(partly) is None
-    # A pre-policy scope (strict_mule_v1) under the default "linked" configuration.
+    # A scope created with "independent", under the default "linked" configuration.
     with pytest.raises(ValueError, match=r"created with scope.unowned = 'independent'.*set a new"):
         ensure(existing(header, "independent"), config)
     with pytest.raises(ValueError, match="matches no scope.unowned rule"):
-        ensure(existing(header, "retired"), config)
+        ensure(existing(header, "no_rule"), config)
     with pytest.raises(ValueError, match="different source"):
         ensure(existing({**header, "split_seed": 7}, "linked"), config)
     with pytest.raises(ValueError, match="different source"):
