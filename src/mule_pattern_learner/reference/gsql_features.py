@@ -3,6 +3,9 @@
 Input events must already respect the experiment's endpoint visibility scope.
 Currency filtering matches the USD-only query. Sequence and milliseconds both
 constrain visibility; timestamps are never synthesized from sequence numbers.
+payment_features and stratify mirror what the training context query computes for
+sampled messages; account_features mirrors the account features the analytics context
+query computes from the root's payment history.
 """
 
 from __future__ import annotations
@@ -11,11 +14,28 @@ from collections import defaultdict
 import math
 from typing import Any
 
-from ..contract.analytics_features import HALF_LIVES
+from ..contract.analytics_features import (
+    AMOUNT_RATIO_CAP,
+    AMOUNT_RATIO_FLOOR,
+    AMOUNT_RATIO_WINDOWS,
+    HALF_LIVES,
+    WINDOWS,
+)
 from ..contract.graph_schema import ContextKey
 from ..contract.sampler_plan import PoolPlan
 
 Event = dict[str, Any]
+DAY_MS = 86_400_000
+# The analytics groups account_features mirrors. association_counts and identity_order
+# read the root's associations, which a payment history does not hold.
+MIRRORED_ACCOUNT_GROUPS = (
+    "entity_age",
+    "history_support",
+    "rolling_windows",
+    "amount_ratios",
+    "recency",
+    "decayed_activity",
+)
 
 
 def visible_history(events: list[Event], key: ContextKey) -> list[Event]:
@@ -129,3 +149,47 @@ def payment_features(
                 summary[label] = summary.get(label, 0) + value * decay
     assert all(math.isfinite(v) and v >= 0 for v in summary.values())
     return features, summary
+
+
+def account_features(events: list[Event], key: ContextKey, first_seen_ms: int) -> dict[str, float]:
+    """The features of MIRRORED_ACCOUNT_GROUPS, as the analytics context query computes them.
+
+    ``events`` is the root's payment history (each with its counterparty as node_type and
+    node_id) and ``first_seen_ms`` the root's first observation. A window counts the
+    visible events less than its length before the cutoff; its distinct peers are the
+    recipients of outgoing events and the sending Accounts of incoming ones. The query
+    prints only what it accumulated, so a feature missing here is zero there.
+    """
+    history = visible_history(events, key)
+    values: dict[str, float] = {"age_days": (key.cutoff_ms - first_seen_ms) / DAY_MS}
+    peers: defaultdict[str, set[tuple[str, str]]] = defaultdict(set)
+    last: dict[str, int] = {}
+
+    def add(name: str, value: float) -> None:
+        values[name] = values.get(name, 0.0) + value
+
+    for e in history:
+        direction = "in" if e["relation"].endswith("_in") else "out"
+        last[direction] = max(last.get(direction, 0), e["event_ts_ms"])
+        for window, length in WINDOWS.items():
+            if key.cutoff_ms - e["event_ts_ms"] < length:
+                prefix = f"{window}_{direction}"
+                add(f"{prefix}_count", 1)
+                add(f"{prefix}_amount", e["amount"])
+                add(f"{prefix}_missing", float(not e["amount_present"]))
+                add(f"{prefix}_zelle", float(e["relation"].startswith("zelle")))
+                if direction == "out" or e["node_type"] == "Account":
+                    peers[f"{prefix}_unique"].add((e["node_type"], e["node_id"]))
+    values |= {name: float(len(found)) for name, found in peers.items()}
+    for window in AMOUNT_RATIO_WINDOWS:
+        incoming = max(values.get(f"{window}_in_amount", 0.0), AMOUNT_RATIO_FLOOR)
+        outgoing = values.get(f"{window}_out_amount", 0.0)
+        values[f"{window}_out_in_amount_ratio"] = min(outgoing / incoming, AMOUNT_RATIO_CAP)
+    values["visible_event_count"] = float(len(history))
+    if len(history) < 5:
+        values["history_lt_5_events"] = 1.0
+    for direction, ts in last.items():
+        values[f"{direction}_recency_days"] = (key.cutoff_ms - ts) / DAY_MS
+        values[f"{direction}_recency_present"] = 1.0
+    values |= payment_features(events, key)[1]
+    return values

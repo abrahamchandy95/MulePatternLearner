@@ -4,10 +4,11 @@ Read-only. The accounts are the first of the built-in scope's population, chosen
 without labels. Their raw payment history is read with an interpreted audit query,
 unscoped on purpose (tests/integration/test_scope_isolation.py checks the scope), and
 reference.gsql_features recomputes the pair and flow features and the sampler strata
-the training context query returned, and the decayed sums of the analytics context
-query (the decayed activity is analytics now). Each query's text is checked installed
-and, through INTERPRET, as it is in the repository; the analytics query only when it is
-installed.
+the training context query returned, and the account features of the analytics context
+query that a payment history determines (the age, windows, ratios, recency and decayed
+sums; reference.gsql_features.MIRRORED_ACCOUNT_GROUPS). Each query's text is checked
+installed and, through INTERPRET, as it is in the repository; the analytics query only
+when it is installed.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ import numpy as np
 import pytest
 
 from mule_pattern_learner.config import DEFAULT_CONFIG
+from mule_pattern_learner.contract.analytics_features import ANALYTICS_GROUPS
 from mule_pattern_learner.contract.feature_groups import CORE_GROUPS, FeaturePlan
 from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.contract.sampler_plan import PoolPlan, SamplerPlan
@@ -31,7 +33,13 @@ from mule_pattern_learner.contract.server import (
 )
 from mule_pattern_learner.data.splits import resolve_cutoff
 from mule_pattern_learner.paths import GSQL_DIR
-from mule_pattern_learner.reference.gsql_features import payment_features, stratify, visible_history
+from mule_pattern_learner.reference.gsql_features import (
+    MIRRORED_ACCOUNT_GROUPS,
+    account_features,
+    payment_features,
+    stratify,
+    visible_history,
+)
 from mule_pattern_learner.tigergraph.context_query import validate_context
 from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffs
 from mule_pattern_learner.tigergraph.executor import TigerGraphExecutor, checked_rows
@@ -102,14 +110,18 @@ def audit_history(graph: TigerGraphExecutor, key: ContextKey) -> list[dict[str, 
 
 
 @pytest.fixture(scope="module")
-def keys(graph: TigerGraphExecutor) -> list[ContextKey]:
+def population(graph: TigerGraphExecutor) -> list[dict[str, Any]]:
+    """The first scope accounts, read without labels."""
+    pages = TigerGraphScope(graph).population_pages(DEFAULT_CONFIG.scope.id, include_observed=False)
+    return next(iter(pages))[:ACCOUNTS]
+
+
+@pytest.fixture(scope="module")
+def keys(graph: TigerGraphExecutor, population: list[dict[str, Any]]) -> list[ContextKey]:
     """The first scope accounts at the test cutoff, unscoped."""
     (date,) = DEFAULT_CONFIG.dataset.dates.test
     seq, ms = resolve_cutoff(TigerGraphCutoffs(graph), date)
-    pages = TigerGraphScope(graph).population_pages(DEFAULT_CONFIG.scope.id, include_observed=False)
-    return [
-        ContextKey("Account", row["account_id"], seq, ms) for row in next(iter(pages))[:ACCOUNTS]
-    ]
+    return [ContextKey("Account", row["account_id"], seq, ms) for row in population]
 
 
 def request(key: ContextKey) -> dict[str, Any]:
@@ -157,8 +169,11 @@ def test_context_features_match_the_reference(
 
 
 @pytest.mark.parametrize("text", ["installed", "interpreted"])
-def test_decayed_activity_matches_the_reference(
-    graph: TigerGraphExecutor, keys: list[ContextKey], text: str
+def test_account_features_match_the_reference(
+    graph: TigerGraphExecutor,
+    keys: list[ContextKey],
+    population: list[dict[str, Any]],
+    text: str,
 ) -> None:
     problems = query_problems(graph, (ANALYTICS_CONTEXT_FILE,))
     if problems:
@@ -166,12 +181,15 @@ def test_decayed_activity_matches_the_reference(
             f"the analytics context query is not installed as the repository defines it "
             f"({problems}); install(executor, analytics=True) installs it"
         )
-    for key in keys:
-        _, decay = payment_features(audit_history(graph, key), key)
+    mirrored = {name for group in MIRRORED_ACCOUNT_GROUPS for name in ANALYTICS_GROUPS[group].names}
+    for key, member in zip(keys, population, strict=True):
+        history = audit_history(graph, key)
+        expected = account_features(history, key, int(member["first_seen_ts_ms"]))
+        assert set(expected) <= mirrored
         # The request names no flags, so the analytics query computes every group.
         row = context_row(
             graph, ANALYTICS_CONTEXT_QUERY, ANALYTICS_CONTEXT_FILE, request(key), text
         )
-        for name, value in decay.items():
-            have = row["features"][name]
-            assert np.isclose(have, value, rtol=1e-5, atol=1e-6), (name, have, value)
+        for name in sorted(mirrored):
+            have, value = row["features"].get(name, 0.0), expected.get(name, 0.0)
+            assert np.isclose(have, value, rtol=1e-5, atol=1e-6), (key.node_id, name, have, value)
