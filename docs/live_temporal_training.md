@@ -187,8 +187,8 @@ population claims, including when using complete synthetic truth.
 
 ## Memory, IDs and transport
 
-Contexts are streamed: bounded installed-query HTTPS/REST requests, and no feature
-cache on disk. `ContextReader` separates transport
+Contexts are streamed: bounded installed-query HTTPS/REST requests, kept on disk in
+the dataset's context cache (below). `ContextReader` separates transport
 from batching/model/loss: `fetch(keys, hop=1|2)` returns rows in key order, `None`
 where TigerGraph rejected a request, and counts rejections by status
 (`rejections`, once per rejected key and fetch) and per hop (`rejections_by_hop`,
@@ -199,6 +199,24 @@ After an error or Ctrl-C, training and scoring close the source without waiting:
 queued requests are cancelled, and requests already in flight finish on their own
 or are dropped when the process exits, so neither the error nor the exit waits for
 a REST retry chain.
+
+Training, `mule check` and the audits read and write the prepared dataset's context
+cache, `data/<dataset id>/contexts/`, once the frozen-source check has passed on their
+connection. A context the LRU does not hold is read from the cache before it is
+requested, and every row TigerGraph returns is kept there as it came, one
+gzip-compressed JSON file per context, so the next run of the dataset (another seed or
+variant, or the audits of every run) requests none of the contexts an earlier run
+fetched. An entry is named by the hop and context key, the feature flags and candidate
+pool requested at that hop, the context contract, the dataset id and the frozen source
+the manifest records (its vertex counts and scope): a variant that requests other
+groups has entries of its own, and a graph whose counts changed fails the frozen-source
+check before any entry is read. An entry that cannot be read, or that belongs to
+another context, is refused with a `context_cache_refused` warning and requested
+again. Beyond 1.5 million entries (`contract.bounds.CONTEXT_CACHE_ENTRIES`, roughly
+10 GB, an estimate until a baseline run measures its distinct contexts) the least
+recently used entries are removed until 90% remain. A cache directory that cannot be
+written gives one `context_cache_unwritable` warning and is then only read. `mule
+score` reads the live graph without the frozen-source check, so it has no cache.
 
 Every failure is classified before it is retried, and each class has its own
 budget:
@@ -478,7 +496,8 @@ The run directory holds:
   accounts `mule score` scores;
 - `history.csv`: one row per training log interval (loss, unclamped objective,
   corrected steps, timing, and the run's totals of database calls, contexts
-  requested, distinct and cached, rejected training roots and stub children);
+  requested and distinct, contexts served from memory (`memory_hits`) and read from
+  the disk cache (`disk_hits`), rejected training roots and stub children);
 - `epochs.csv`: one row per epoch (loss, proxy validation AP and ROC AUC, which
   weights were validated, the selected epoch and early stopping);
 - `resume.pt`, written atomically every epoch and every `checkpoint_every_steps` steps;
@@ -500,8 +519,10 @@ exactly. It refuses a changed result-affecting setting but allows transport
 (including `max_outage_s`), prefetch and logging settings and
 `max_rejected_root_fraction` to change. Database calls, rejections, rejected-root
 counts and sampler totals are kept in `resume.pt`, so `history.csv` and
-`metrics.json` (`database_calls_during_training`, `rejections`, `sampler_totals`,
-`rejected_roots`) cover every segment of a resumed run, and a resumed run drops the
+`metrics.json` (`database_calls_during_training`, `contexts`, `rejections`,
+`sampler_totals`, `rejected_roots`) cover every segment of a resumed run. Its
+`contexts` also record `disk_hit_rate`, the share of the contexts memory did not serve
+that the disk cache served (null when memory served them all). A resumed run drops the
 `history.csv` rows logged after its resume position before it logs them again.
 `patience = 0` disables early stopping.
 

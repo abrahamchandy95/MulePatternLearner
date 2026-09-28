@@ -533,7 +533,8 @@ the kept checkpoint is still the best validation epoch.
   the slow key is found and named. `max_query_attempts` (6) caps the attempts that count.
 - **Outputs:** the dataset in `data/<dataset id>/` (`manifest.json`, `accounts.parquet`,
   `observed_labels.parquet` and `hubs.parquet`: the accounts, labels, cutoffs and hub
-  registry the run was trained on) and the run directory `results/baseline/seed-42/`:
+  registry the run was trained on, and `contexts/`, the cache of the contexts every run
+  of the dataset has read from the graph) and the run directory `results/baseline/seed-42/`:
   `config.json` (configuration, fingerprint and provenance), `model.pt` (selected
   weights, threshold, contracts, fingerprints and the dataset id), `resume.pt`,
   `history.csv` (one row per logging interval), `epochs.csv`, `events.jsonl` (start,
