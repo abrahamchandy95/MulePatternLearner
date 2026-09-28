@@ -25,6 +25,11 @@ The literals hold on macOS arm64 and on Linux x86_64:
 
 `mule check` prints the same digests and first loss for the live parity check
 (pipeline.check.first_step); a test pins it to these literals.
+
+A last test audits the golden run's validation and test splits against the builders'
+ground truth (testing.builders.ground_truth_rows) and pins GOLDEN_AUDIT: each split's
+sample, point estimates and ring-clustered intervals. They depend only on how the scores
+rank, so they hold on both machines as the APs do.
 """
 
 from __future__ import annotations
@@ -47,14 +52,20 @@ from mule_pattern_learner.config import DEFAULT_CONFIG, RunConfig
 from mule_pattern_learner.contract.feature_groups import extraction_plan
 from mule_pattern_learner.data.contexts import ContextSource, build_context_source
 from mule_pattern_learner.data.preparation import prepare
+from mule_pattern_learner.evaluation.audit import audit, audit_inputs
 from mule_pattern_learner.paths import DatasetPaths, RunPaths
 from mule_pattern_learner.pipeline.check import first_step
-from mule_pattern_learner.testing.builders import neighbourhood, scope_population
+from mule_pattern_learner.testing.builders import (
+    ground_truth_rows,
+    neighbourhood,
+    scope_population,
+)
 from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
 from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffs
 from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
 from mule_pattern_learner.tigergraph.labels import TigerGraphObservedLabels
+from mule_pattern_learner.tigergraph.oracle import TigerGraphTruth
 from mule_pattern_learner.tigergraph.render import render_context_query
 from mule_pattern_learner.tigergraph.scope import TigerGraphScope
 from mule_pattern_learner.training import trainer
@@ -298,6 +309,63 @@ def test_mule_check_reports_the_golden_first_batch_and_loss(tmp_path: Path) -> N
     assert close(report["loss"], loss) and close(report["objective"], objective, abs(loss))
 
 
+# The numbers of an audit that GOLDEN_AUDIT records for each split.
+AUDIT_METRICS = (
+    "sample_accounts",
+    "sample_positives",
+    "estimated_population",
+    "average_precision",
+    "roc_auc",
+    "precision",
+    "recall",
+    "f1",
+    *(f"{kind}_at_{pct}pct" for pct in (1, 5, 10) for kind in ("precision", "recall")),
+)
+
+
+def audit_numbers(report: dict[str, Any]) -> dict[str, Any]:
+    """What GOLDEN_AUDIT records of a split's audit report."""
+    return {
+        "metrics": {name: report["metrics"][name] for name in AUDIT_METRICS},
+        "intervals": report["intervals"],
+        "positives": (report["revealed_positives"], report["hidden_positives"]),
+    }
+
+
+def audit_differences(observed: dict[str, dict[str, Any]]) -> list[str]:
+    """Audit numbers that differ from GOLDEN_AUDIT: integers exactly, floats within RELATIVE."""
+    problems = []
+    for split, want in GOLDEN_AUDIT.items():
+        have = observed[split]
+        if have["positives"] != want["positives"]:
+            problems.append(f"{split}: revealed and hidden positives {have['positives']}")
+        pairs = [(name, have["metrics"][name], value) for name, value in want["metrics"].items()]
+        for name, bounds in want["intervals"].items():
+            got = have["intervals"][name]
+            pairs += [(f"{name} interval", a, b) for a, b in zip(got, bounds, strict=True)]
+        for name, got, value in pairs:
+            same = got == value if isinstance(value, int) else close(got, value, 1.0)
+            if not same:
+                problems.append(f"{split}: {name} {got}")
+    return problems
+
+
+def test_the_golden_run_audits_validation_and_test(tmp_path: Path) -> None:
+    golden_run(tmp_path)
+    config, executor = golden_config(), golden_executor()
+    oracle = FakeTigerGraph(truth=ground_truth_rows(scope_population(POPULATION)))
+    truth = TigerGraphTruth(oracle).read()
+    inputs = audit_inputs(RunPaths(tmp_path / "run"), dataset=DatasetPaths(tmp_path / "dataset"))
+    observed = {}
+    with golden_source(executor, config) as contexts:
+        for split in GOLDEN_AUDIT:
+            scope = TigerGraphScope(executor)
+            report = audit(inputs, split, truth=truth, scope=scope, contexts=contexts)
+            observed[split] = audit_numbers(report)
+    problems = audit_differences(observed)
+    assert not problems, "\n".join([*problems, "", f"GOLDEN_AUDIT = {observed!r}"])
+
+
 # Golden literals, recorded on macOS arm64 (torch 2.12, CPU). Floating tensors keep no sha256.
 GOLDEN_BATCH = {
     "first_channel": {
@@ -422,4 +490,66 @@ GOLDEN_QUERY_SHA256 = "16647ae2e7f8728cc92fbe678b8e3be78158a3f8fe17f261e4e0a8a4d
 GOLDEN_DATASET = {
     "accounts": (123, "bdfe8b31ed8e0561638d9459c87b9e4dddc2a0cf09d3aad971a25fa2a0650062"),
     "observed_labels": (123, "ceda44c0fbb4040d251dc1832061724f9b4a335006b6e94f1ec0c4ddabe0f118"),
+}
+# The audits of the golden run (test_the_golden_run_audits_validation_and_test). Each split's
+# population is 40 accounts, all sampled; its intervals are ring-clustered 90% intervals.
+GOLDEN_AUDIT: dict[str, dict[str, Any]] = {
+    "validation": {
+        "metrics": {
+            "sample_accounts": 40,
+            "sample_positives": 11,
+            "estimated_population": 40.0,
+            "average_precision": 0.35639207813120855,
+            "roc_auc": 0.6520376175548589,
+            "precision": 0.375,
+            "recall": 0.8181818181818182,
+            "f1": 0.5142857142857142,
+            "precision_at_1pct": 0.0,
+            "recall_at_1pct": 0.0,
+            "precision_at_5pct": 0.0,
+            "recall_at_5pct": 0.0,
+            "precision_at_10pct": 0.25,
+            "recall_at_10pct": 0.09090909090909091,
+        },
+        "intervals": {
+            "average_precision": [0.27460380830646947, 0.542421933214359],
+            "roc_auc": [0.49843260188087773, 0.7836990595611285],
+            "precision_at_1pct": [0.0, 0.0],
+            "recall_at_1pct": [0.0, 0.0],
+            "precision_at_5pct": [0.0, 0.5],
+            "recall_at_5pct": [0.0, 0.09090909090909091],
+            "precision_at_10pct": [0.0, 0.5121951219512195],
+            "recall_at_10pct": [0.0, 0.19000000000000003],
+        },
+        "positives": (5, 6),
+    },
+    "test": {
+        "metrics": {
+            "sample_accounts": 40,
+            "sample_positives": 12,
+            "estimated_population": 40.0,
+            "average_precision": 0.34625358588206884,
+            "roc_auc": 0.4285714285714286,
+            "precision": 0.2916666666666667,
+            "recall": 0.5833333333333334,
+            "f1": 0.38888888888888895,
+            "precision_at_1pct": 1.0,
+            "recall_at_1pct": 0.03333333333333333,
+            "precision_at_5pct": 0.5,
+            "recall_at_5pct": 0.08333333333333333,
+            "precision_at_10pct": 0.25,
+            "recall_at_10pct": 0.08333333333333333,
+        },
+        "intervals": {
+            "average_precision": [0.2492364271417604, 0.5337862670172485],
+            "roc_auc": [0.2618589743589743, 0.6321915584415584],
+            "precision_at_1pct": [0.0, 1.0],
+            "recall_at_1pct": [0.0, 0.038],
+            "precision_at_5pct": [0.0, 1.0],
+            "recall_at_5pct": [0.0, 0.17727272727272728],
+            "precision_at_10pct": [0.0, 0.75],
+            "recall_at_10pct": [0.0, 0.25],
+        },
+        "positives": (6, 6),
+    },
 }
