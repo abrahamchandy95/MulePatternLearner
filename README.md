@@ -64,7 +64,8 @@ mule train
 
 It uses CUDA when available (then Apple MPS, then CPU) and writes the run to
 `results/baseline/seed-42/`: `model.pt`, `metrics.json`, `history.csv`, `epochs.csv`,
-`events.jsonl` and the other files of the run directory. On a fresh graph the first run
+`events.jsonl` and the other files of the run directory, then the training figures in
+`plots/` and `report.md`, the run's tables with links to its figures. On a fresh graph the first run
 installs the training queries, creates the frozen scope and reveals the known mules in
 the graph ([label reveal](docs/label_reveal.md)); every run then prepares its dataset in
 `data/<dataset id>/`. Run the same command again to resume an interrupted run; on a
@@ -77,8 +78,9 @@ option besides `--help`.
 | Command | What it does |
 |---|---|
 | `mule train` | Prepares as needed (install, scope, reveal, dataset), then trains the built-in run into `results/baseline/seed-42/`, resumes it, or reports it when it is complete |
-| `mule evaluate [RUN]` | Ground-truth audits of the run's model on the frozen validation and test partitions, written to the run's `audit/`: decisions use the validation audit, and the test audit is for reporting; `RUN` defaults to `results/baseline/seed-42` |
+| `mule evaluate [RUN]` | Ground-truth audits of the run's model on the frozen validation and test partitions, written to the run's `audit/` with the audit figures in `plots/`: decisions use the validation audit, and the test audit is for reporting; `RUN` defaults to `results/baseline/seed-42` |
 | `mule score ACCOUNTS [DATE]` | Scores the accounts listed in a file (one id per line) with the built-in run's model; `DATE` defaults to the test cutoff. Writes `scores/<file stem>_<date>.parquet` in the run, and the ids TigerGraph rejects to `scores/<file stem>_<date>_rejected.txt` |
+| `mule report [RUN]` | Redraws the run's figures (`plots/<topic>_<figure>.png`) and `report.md` from the files it saved, offline: the training figures of a complete run and the audit figures of its audits |
 | `mule check` | Read-only readiness: the graph, its installed queries and the cuGraph probe, then one training batch with its tensor digests and the first loss. The batch needs the built-in run's prepared dataset in `data/` (see below) |
 | `mule install` | Adds the scope vertex type if it is missing, installs the queries whose text differs and lists installed queries that no file defines (`train` does this too) |
 

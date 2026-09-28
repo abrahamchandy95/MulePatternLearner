@@ -1,4 +1,4 @@
-"""The command line: one entry point, the cuBLAS workspace, five commands without options."""
+"""The command line: one entry point, the cuBLAS workspace, six commands without options."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from mule_pattern_learner.paths import DATA_DIR, REPOSITORY_ROOT, DatasetPaths, 
 from mule_pattern_learner.pipeline import train as pipeline_train
 from mule_pattern_learner.pipeline.connect import open_context_source
 
-COMMANDS = ("install", "train", "evaluate", "score", "check")
+COMMANDS = ("install", "train", "evaluate", "score", "report", "check")
 
 
 def test_python_m_runs_the_command_line() -> None:
@@ -91,6 +91,8 @@ def test_the_commands_take_no_options_and_default_to_the_baseline_run() -> None:
     scoring = parser.parse_args(["score", "new.txt"])
     assert (scoring.accounts, scoring.date) == (Path("new.txt"), None)
     assert parser.parse_args(["score", "new.txt", "2025-02-01"]).date == "2025-02-01"
+    assert parser.parse_args(["report"]).run == pipeline_train.BASELINE_RUN
+    assert parser.parse_args(["report", "results/x/seed-1"]).run == named.run
 
 
 def test_each_command_runs_its_use_case_and_prints_one_json_result(
@@ -108,8 +110,9 @@ def test_each_command_runs_its_use_case_and_prints_one_json_result(
     monkeypatch.setattr(cli, "install_queries", use_case("install", {"installed": []}))
     monkeypatch.setattr(cli, "evaluate_run", use_case("evaluate", {"metrics": {}}))
     monkeypatch.setattr(cli, "score_accounts", use_case("score", {"accounts": 2}))
+    monkeypatch.setattr(cli, "report_run", use_case("report", {"figures": []}))
     monkeypatch.setattr(cli, "check", use_case("check", {"status": "ready"}))
-    for argv in (["install"], ["evaluate"], ["score", "new.txt"], ["check"]):
+    for argv in (["install"], ["evaluate"], ["score", "new.txt"], ["report"], ["check"]):
         monkeypatch.setattr(sys, "argv", ["mule", *argv])
         cli.main()
         json.loads(capsys.readouterr().out)
@@ -117,6 +120,7 @@ def test_each_command_runs_its_use_case_and_prints_one_json_result(
         ("install", ()),
         ("evaluate", (pipeline_train.BASELINE_RUN,)),
         ("score", (pipeline_train.BASELINE_RUN, Path("new.txt"), None)),
+        ("report", (pipeline_train.BASELINE_RUN,)),
         ("check", ()),
     ]
     # A graph that is not ready is a failure, after the report is printed.
@@ -162,9 +166,19 @@ def test_train_prepares_then_trains_or_resumes_the_baseline_run(
         return {"status": "complete"}
 
     monkeypatch.setattr(pipeline_train, "train", train)
+    # The training figures come after every other file of the run.
+    reported: list[RunPaths] = []
+
+    def write_training_report(run: RunPaths) -> dict[str, Any]:
+        assert len(trained) == 1
+        reported.append(run)
+        return {}
+
+    monkeypatch.setattr(pipeline_train, "write_training_report", write_training_report)
     monkeypatch.setattr(sys, "argv", ["mule", "train"])
     cli.main()
     assert json.loads(capsys.readouterr().out) == {"status": "complete"}
+    assert reported == [pipeline_train.BASELINE_RUN]
     # One command checks that an interrupted run has the built-in settings, prepares the
     # built-in run's dataset in data/, then trains it into results/baseline/seed-42/
     # (resuming if interrupted).
@@ -174,8 +188,8 @@ def test_train_prepares_then_trains_or_resumes_the_baseline_run(
     assert c is DEFAULT_CONFIG and d == dataset and o == pipeline_train.BASELINE_RUN
     # The trainer opens the source through the pipeline once its checks passed.
     assert kwargs == {"open_contexts": open_context_source, "resume": True}
-    # A complete run prints its recorded result, and nothing is prepared or trained.
+    # A complete run prints its recorded result, and nothing is prepared, trained or drawn.
     recorded[0] = {"status": "complete", "best_epoch": 3}
     cli.main()
     assert json.loads(capsys.readouterr().out) == recorded[0]
-    assert len(checked) == len(prepared) == len(trained) == 1
+    assert len(checked) == len(prepared) == len(trained) == len(reported) == 1

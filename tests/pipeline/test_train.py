@@ -28,6 +28,7 @@ from mule_pattern_learner.pipeline import prepare as pipeline_prepare
 from mule_pattern_learner.pipeline.connect import open_context_source
 from mule_pattern_learner.pipeline.evaluate import evaluate_run
 from mule_pattern_learner.pipeline.train import BASELINE_RUN, train_run
+from mule_pattern_learner.reporting.report import AUDIT_FIGURES, TRAINING_FIGURES
 from mule_pattern_learner.testing.builders import neighbourhood, scope_population
 from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
 
@@ -45,6 +46,7 @@ def test_minimal_command_and_run_defaults(tmp_path: Path) -> None:
         patch(
             "mule_pattern_learner.pipeline.train.train", return_value={"status": "complete"}
         ) as fit,
+        patch("mule_pattern_learner.pipeline.train.write_training_report") as draw,
     ):
         assert train_run(output, data=tmp_path / "data")["status"] == "complete"
         prep.assert_called_once()
@@ -55,6 +57,8 @@ def test_minimal_command_and_run_defaults(tmp_path: Path) -> None:
         assert written == output and trained_on == dataset
         assert fit.call_args.kwargs["open_contexts"] is open_context_source
         assert config is DEFAULT_CONFIG
+        # The trained run's figures and report.md come last.
+        draw.assert_called_once_with(output)
         # A started run is refused before anything is prepared, unless it is resumed.
         output.root.mkdir()
         write_run_config(output.config, DEFAULT_CONFIG, {})
@@ -145,6 +149,9 @@ def test_train_then_audit_write_exactly_the_files_of_the_run_and_dataset_tables(
         "metrics.json",
         "predictions/validation.parquet",
         "predictions/test.parquet",
+        # Drawn after every other file, from those files.
+        *(f"plots/{name}.png" for name in TRAINING_FIGURES),
+        "report.md",
     }
     assert output.root == results / "baseline" / "seed-42"
     assert files(results) == {f"baseline/seed-42/{name}" for name in trained}
@@ -178,8 +185,9 @@ def test_train_then_audit_write_exactly_the_files_of_the_run_and_dataset_tables(
     assert [audits[split]["rejected_accounts"] for split in ("validation", "test")] == [0, 0]
     audited = {
         f"audit/{split}.{kind}" for split in ("validation", "test") for kind in ("json", "parquet")
-    }
+    } | {f"plots/{name}.png" for name in AUDIT_FIGURES}
     assert files(output.root) == trained | audited
+    assert "## Ground-truth audit" in output.report.read_text()
     assert files(data) == prepared
     # The audits append their lines to the run's events.jsonl, after training's.
     recorded = read_events(output.events)

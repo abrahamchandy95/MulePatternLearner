@@ -7,6 +7,7 @@ from typing import Any
 
 from ..config import DEFAULT_CONFIG, RunConfig
 from ..paths import BASELINE_VARIANT, DATA_DIR, RunPaths
+from ..reporting.report import write_training_report
 from ..training.checkpoint import check_resumable, completed_run, run_started
 from ..training.trainer import train
 from .connect import open_context_source
@@ -33,7 +34,8 @@ def train_run(
     passes) an interrupted run continues from its resume.pt, and a complete run of the
     same settings is reported from its metrics.json. Both are checked before anything
     connects or is written: a run of other settings, complete or not, is an error that
-    names them.
+    names them. A run trained here then gets its training figures and report.md
+    (reporting.report.write_training_report); a complete run reported is left as it was.
     """
     if output is None:
         if config.fingerprint() != DEFAULT_CONFIG.fingerprint():
@@ -50,4 +52,8 @@ def train_run(
             return recorded
         check_resumable(config, output)
     dataset = prepare_dataset(config, data)
-    return train(config, dataset, output, open_contexts=open_context_source, resume=resume)
+    result = train(config, dataset, output, open_contexts=open_context_source, resume=resume)
+    # model.pt and every other file of the run are saved by now, so a figure that fails
+    # loses nothing: the error comes after the other figures and report.md are written.
+    write_training_report(output)
+    return result
