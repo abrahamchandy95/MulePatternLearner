@@ -1,6 +1,6 @@
 # GSQL feature and query catalog
 
-The [feature-group redesign](feature_redesign.md) documents the window-free feature groups, optional summaries, sampler, and migration. Fixed 83/135 dimensions below describe the window groups as the query returns them (the `include_*` defaults). The built-in v5 run (`DEFAULT_CONFIG`) and its candidate pools are described in [training from the live temporal graph](live_temporal_training.md#candidate-pools-and-resampling).
+The [feature-group redesign](feature_redesign.md) documents the window-free feature groups, optional summaries, sampler, and migration. Fixed 83/135 dimensions below describe the window groups as the analytics context query returns them. The built-in v5 run (`DEFAULT_CONFIG`) and its candidate pools are described in [training from the live temporal graph](live_temporal_training.md#candidate-pools-and-resampling).
 
 Training keeps only the built-in run's groups: `fetch_training_context` computes
 `entity_meta`, `message_core`, `time_encoding`, `pair_history` and `flow_timing`, and
