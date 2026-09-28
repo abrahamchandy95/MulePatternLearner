@@ -1,4 +1,4 @@
-"""The ground-truth audit of a run's model."""
+"""The ground-truth audit of one split of a run's model."""
 
 from __future__ import annotations
 
@@ -10,13 +10,15 @@ import pandas as pd
 import pytest
 import torch
 
-from mule_pattern_learner.artifacts import read_audit_scores, read_json
+from mule_pattern_learner.artifacts import AUDIT_COLUMNS, read_audit_scores, read_json
 from mule_pattern_learner.batching import assemble
-from mule_pattern_learner.contract.graph_schema import ContextKey
-from mule_pattern_learner.evaluation.audit import audit
+from mule_pattern_learner.contract.clock import timestamp
+from mule_pattern_learner.contract.graph_schema import SPLIT_PHASE, ContextKey
+from mule_pattern_learner.evaluation.audit import audit, audit_inputs, audit_population
 from mule_pattern_learner.paths import RunPaths
 from mule_pattern_learner.testing.builders import (
     CUTOFFS,
+    DATES,
     RUNTIME_CHANGES,
     hub_registry,
     prepared_dataset,
@@ -27,66 +29,95 @@ from mule_pattern_learner.testing.fake_graph import FakeSource, FakeTigerGraph
 from mule_pattern_learner.tigergraph.scope import TigerGraphScope
 
 
-def split_graph(accounts: pd.DataFrame) -> FakeTigerGraph:
-    """A graph whose scope population is these accounts, all in the test partition."""
-    rows = [{"account_id": a, "partition": 3, "first_seen_ts_ms": 1} for a in accounts.account_id]
-    return FakeTigerGraph(population=rows)
+def split_scope(accounts: pd.DataFrame, split: str) -> TigerGraphScope:
+    """A scope whose population is these accounts, all in the split's partition."""
+    rows = [
+        {
+            "account_id": account,
+            "partition": SPLIT_PHASE[split],
+            "first_seen_ts_ms": 1,
+            "observed_positive": False,
+            "known_from_ms": 0,
+        }
+        for account in accounts.account_id
+    ]
+    return TigerGraphScope(FakeTigerGraph(population=rows))
 
 
-def test_the_audit_scores_through_the_dataset_clock_and_hubs(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def truth_of(accounts: pd.DataFrame) -> pd.DataFrame:
+    """Every fourth account is a mule, and consecutive mules pair up in rings."""
+    index = np.arange(len(accounts))
+    mule = index % 4 == 0
+    return pd.DataFrame(
+        {
+            "account_id": accounts.account_id.to_numpy(),
+            "is_mule": mule.astype(int),
+            "ring_id": np.where(mule, index // 8, -1),
+            "label_source": np.where(mule, "phantomledger_role;unit;hidden", "phantomledger_role"),
+        }
+    )
+
+
+@pytest.mark.parametrize("split", ["validation", "test"])
+def test_the_audit_scores_a_split_through_the_dataset_clock_and_hubs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, split: str
 ) -> None:
     config = unit_config(RUNTIME_CHANGES, runtime={"max_rejected_root_fraction": 0.1})
     dataset, _, accounts = prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     run = RunPaths(tmp_path / "run")
     saved_model(run.model, config, dataset)
-    test_accounts = accounts[accounts.split == "test"]
-    truth = test_accounts[["account_id"]].assign(is_mule=(np.arange(len(test_accounts)) % 4 == 0))
-    truth["is_mule"] = truth.is_mule.astype(int)
-    source = FakeSource(config, reject=frozenset({test_accounts.account_id.iloc[1]}))
-    seen: list[int] = []
+    members = accounts[accounts.split == split]
+    source = FakeSource(config, reject=frozenset({members.account_id.iloc[1]}))
+    seen: list[tuple[int, int]] = []
     real = assemble.build_batch
 
     def record(store: Any, roots: list[ContextKey], **kwargs: Any) -> dict[str, torch.Tensor]:
-        seen.extend(k.cutoff_seq for k in roots)
+        seen.extend((k.cutoff_seq, k.visibility_phase) for k in roots)
         return real(store, roots, **kwargs)
 
     monkeypatch.setattr(assemble, "build_batch", record)
-
-    class Truth:
-        def read(self) -> pd.DataFrame:
-            return truth
-
-    result = audit(
-        run,
-        Truth(),
-        dataset=dataset,
-        scope=TigerGraphScope(split_graph(test_accounts)),
-        contexts=source,
-        hubs=hub_registry(),
-    )
-    assert set(seen) == {CUTOFFS["2025-01-01"]}
+    inputs = audit_inputs(run, dataset=dataset, hubs=hub_registry())
+    truth = truth_of(members)
+    result = audit(inputs, split, truth=truth, scope=split_scope(members, split), contexts=source)
+    # The split's cutoff clock and phase.
+    (date,) = DATES[split]
+    assert set(seen) == {(CUTOFFS[date], SPLIT_PHASE[split])}
+    assert result["split"] == split and result["date"] == date
+    assert result["purpose"] == {"validation": "decisions", "test": "reporting"}[split]
     assert result["rejected_accounts"] == 1 and result["rejected_negatives"] == 1
     assert result["rejected"] == 1 and result["rejected_roots_by_status"] == {"missing_entity": 1}
-    assert result["metrics"]["sample_accounts"] == len(test_accounts) - 1
-    assert result["metrics"]["evaluation_sample"].endswith("_minus_rejected_negatives")
-    for pct in (1, 5, 10):
-        assert 0 <= result["metrics"][f"recall_at_{pct}pct"] <= 1
-        assert 0 <= result["metrics"][f"precision_at_{pct}pct"] <= 1
-    assert read_json(run.audit_report("test")) == result
-    scores = read_audit_scores(run.audit_scores("test"))
-    assert scores.score.dtype == np.float64 and len(scores) == len(test_accounts) - 1
-    assert run.audit_rejected("test").read_text().split() == [test_accounts.account_id.iloc[1]]
+    metrics = result["metrics"]
+    assert metrics["sample_accounts"] == len(members) - 1
+    assert metrics["evaluation_sample"] == (
+        f"all_{split}_positives_plus_uniform_negatives_inverse_probability_weighted"
+        "_minus_rejected_negatives"
+    )
+    for name, interval in result["intervals"].items():
+        assert interval is not None and interval[0] <= interval[1], name
+    assert result["constants"] == {
+        "audit_negatives": 2000,
+        "sample_seed": config.dataset.split_seed,
+        "review_budgets": [0.01, 0.05, 0.1],
+        "interval": 0.9,
+        "bootstrap_replicates": 1000,
+        "bootstrap_seed": 0,
+        "bootstrap": "positives_by_ring_negatives_within_class",
+    }
+    assert (result["revealed_positives"], result["hidden_positives"]) == (0, 6)
+    assert read_json(run.audit_report(split)) == result
+    scores = read_audit_scores(run.audit_scores(split))
+    assert tuple(scores.columns) == AUDIT_COLUMNS
+    assert scores.score.dtype == np.float64 and len(scores) == len(members) - 1
+    expected = truth.set_index("account_id").loc[scores.account_id]
+    assert scores.ring_id.tolist() == expected.ring_id.tolist()
+    assert scores.label_source.tolist() == expected.label_source.tolist()
+    assert not scores.revealed.any()
+    assert run.audit_rejected(split).read_text().split() == [members.account_id.iloc[1]]
     # An audit the run already has is never overwritten.
-    with pytest.raises(FileExistsError, match="test.json"):
-        audit(
-            run,
-            Truth(),
-            dataset=dataset,
-            scope=TigerGraphScope(split_graph(test_accounts)),
-            contexts=source,
-            hubs=hub_registry(),
-        )
+    with pytest.raises(FileExistsError, match=f"{split}.json"):
+        audit(inputs, split, truth=truth, scope=split_scope(members, split), contexts=source)
+    with pytest.raises(ValueError, match="Audits cover"):
+        audit(inputs, "train", truth=truth, scope=split_scope(members, split), contexts=source)
 
 
 @pytest.mark.parametrize(("limit", "rejected_index"), [(1.0, 0), (0.0, 1)])
@@ -97,25 +128,51 @@ def test_the_audit_fails_on_censored_rejections(
     dataset, _, accounts = prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     run = RunPaths(tmp_path / "run")
     saved_model(run.model, config, dataset)
-    test_accounts = accounts[accounts.split == "test"]
-    truth = test_accounts[["account_id"]].assign(
-        is_mule=(np.arange(len(test_accounts)) % 4 == 0).astype(int)
-    )
-
-    class Truth:
-        def read(self) -> pd.DataFrame:
-            return truth
-
+    members = accounts[accounts.split == "test"]
     # Index 0 is a test positive (always fatal); index 1 a negative (fatal at limit 0).
-    source = FakeSource(config, reject=frozenset({test_accounts.account_id.iloc[rejected_index]}))
+    source = FakeSource(config, reject=frozenset({members.account_id.iloc[rejected_index]}))
     match = "1 test positives" if rejected_index == 0 else "0 test positives"
+    inputs = audit_inputs(run, dataset=dataset, hubs=hub_registry())
     with pytest.raises(ValueError, match=match):
         audit(
-            run,
-            Truth(),
-            dataset=dataset,
-            scope=TigerGraphScope(split_graph(test_accounts)),
+            inputs,
+            "test",
+            truth=truth_of(members),
+            scope=split_scope(members, "test"),
             contexts=source,
-            hubs=hub_registry(),
         )
     assert not (run.root / "audit").exists()
+
+
+def test_the_population_is_the_split_before_its_cutoff_with_what_the_graph_revealed() -> None:
+    cutoff = timestamp("2025-01-01")
+
+    def member(account: str, partition: int, first_seen: int, known: int) -> dict[str, Any]:
+        return {
+            "account_id": account,
+            "partition": partition,
+            "first_seen_ts_ms": first_seen,
+            "observed_positive": known > 0,
+            "known_from_ms": known,
+        }
+
+    rows = [
+        member("A", 3, 1, 0),  # an account of the test split
+        member("B", 3, 1, cutoff - 1),  # revealed just before the cutoff
+        member("C", 3, 1, cutoff),  # revealed at the cutoff: not yet visible
+        member("D", 3, cutoff, 0),  # first seen at the cutoff: not in the population
+        member("E", 2, 1, 5),  # a validation account
+    ]
+    scope = TigerGraphScope(FakeTigerGraph(population=rows))
+    population = audit_population(scope, "unit_scope", "test", "2025-01-01")
+    assert population.to_dict("list") == {
+        "account_id": ["A", "B", "C"],
+        "split": ["test"] * 3,
+        "revealed": [False, True, False],
+    }
+    validation = audit_population(scope, "unit_scope", "validation", "2024-10-01")
+    assert validation.to_dict("list") == {
+        "account_id": ["E"],
+        "split": ["validation"],
+        "revealed": [True],
+    }

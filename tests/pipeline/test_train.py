@@ -167,16 +167,22 @@ def test_train_then_audit_write_exactly_the_files_of_the_run_and_dataset_tables(
             train_run(output, config=changed, data=data, resume=True)
         prep.assert_not_called()
     assert {name: (output.root / name).stat().st_mtime_ns for name in trained} == written
-    # The audit adds its files to the run's audit/ and reads the model's own dataset.
+    # The audits add their files to the run's audit/ and read the model's own dataset.
     truth = pd.DataFrame(scope_population(POPULATION))[["account_id"]]
     truth["is_mule"] = (truth.index % 3 == 0).astype(int)
+    truth["ring_id"] = -1
+    truth["label_source"] = "phantomledger_role"
     truth_path = tmp_path / "truth.parquet"
     truth.to_parquet(truth_path, index=False)
-    audit = evaluate_run(output, truth=ParquetTruth(truth_path), data=data)
-    assert audit["rejected_accounts"] == 0
-    assert files(output.root) == trained | {"audit/test.json", "audit/test.parquet"}
+    audits = evaluate_run(output, truth=ParquetTruth(truth_path), data=data)
+    assert [audits[split]["rejected_accounts"] for split in ("validation", "test")] == [0, 0]
+    audited = {
+        f"audit/{split}.{kind}" for split in ("validation", "test") for kind in ("json", "parquet")
+    }
+    assert files(output.root) == trained | audited
     assert files(data) == prepared
-    # The audit appends its line to the run's events.jsonl, after training's.
+    # The audits append their lines to the run's events.jsonl, after training's.
     recorded = read_events(output.events)
-    assert [event["event"] for event in recorded] == [*events, "audit"]
-    assert recorded[-1]["split"] == "test" and recorded[-1]["rejected_accounts"] == 0
+    assert [event["event"] for event in recorded] == [*events, "audit", "audit"]
+    assert [event["split"] for event in recorded[-2:]] == ["validation", "test"]
+    assert all(event["rejected_accounts"] == 0 for event in recorded[-2:])

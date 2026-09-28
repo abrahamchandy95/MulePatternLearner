@@ -8,7 +8,7 @@ those with particular values (a deterministic neighbourhood, random synthetic po
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from copy import deepcopy
 from dataclasses import asdict, replace
 import json
@@ -48,6 +48,7 @@ from mule_pattern_learner.data import manifest as data_manifest
 from mule_pattern_learner.data.hub_registry import HubRegistry
 from mule_pattern_learner.data.manifest import dataset_settings
 from mule_pattern_learner.data.observed_labels import align_observed_labels
+from mule_pattern_learner.evaluation import audit as evaluation_audit
 from mule_pattern_learner.inference.saved_model import SavedModel
 from mule_pattern_learner.model.build import build_model
 from mule_pattern_learner.paths import DatasetPaths
@@ -115,6 +116,35 @@ def scope_population(count: int = 200) -> list[dict[str, Any]]:
                 "group_id": f"G{i:04}",
                 "observed_positive": positive,
                 "known_from_ms": timestamp("2024-03-01") if positive else 0,
+            }
+        )
+    return rows
+
+
+def ground_truth_rows(population: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """The ground-truth query's rows of scope population rows: every label known.
+
+    In account order, the account at place i is a mule when the graph revealed it
+    (observed_positive) or when i leaves 3 divided by 7, a hidden mule. The mules at
+    places 14r to 14r + 13 form ring r, except the mules of every third ring (r divisible
+    by 3), which have no ring (-1). The label source is what the reveal records.
+    """
+    rows = []
+    ordered = sorted(population, key=lambda row: str(row["account_id"]))
+    for i, row in enumerate(ordered):
+        revealed = bool(row.get("observed_positive"))
+        mule = revealed or i % 7 == 3
+        ring = i // 14 if mule and (i // 14) % 3 else -1
+        source = f"phantomledger_role;unit;salt=42;{'revealed:digital' if revealed else 'hidden'}"
+        rows.append(
+            {
+                "account_id": str(row["account_id"]),
+                "is_mule": int(mule),
+                "mule_label_known": True,
+                "is_mule_masked": not revealed,
+                "pu_label": int(revealed),
+                "mule_ring_id": ring,
+                "mule_label_source": source if mule else "phantomledger_role",
             }
         )
     return rows
@@ -762,7 +792,7 @@ def prepared_dataset(
         assert loaded == dataset
         return deepcopy(manifest), accounts.copy()
 
-    for module in (trainer, data_manifest):
+    for module in (trainer, data_manifest, evaluation_audit):
         monkeypatch.setattr(module, "load_prepared", load)
     return dataset, manifest, accounts
 

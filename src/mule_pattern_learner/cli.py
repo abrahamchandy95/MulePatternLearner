@@ -40,7 +40,9 @@ def build_parser() -> argparse.ArgumentParser:
         "an interrupted run resumes, and a complete one is reported from its metrics.json",
     )
     evaluating = commands.add_parser(
-        "evaluate", help="Ground-truth audit of a run's model, written to the run's audit/"
+        "evaluate",
+        help="Ground-truth audits of a run's model on validation (for decisions) and test "
+        "(for reporting), written to the run's audit/",
     )
     evaluating.add_argument(
         "run",

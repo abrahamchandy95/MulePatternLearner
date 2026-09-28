@@ -1,76 +1,90 @@
-"""Optional post-training oracle evaluation, isolated from the trainer.
+"""The ground-truth audit of a run's model on one split, isolated from the trainer.
 
-The final audit writes a run's audit/test.json (the report), audit/test.parquet (the
-scored sample) and audit/test_rejected.txt (the accounts TigerGraph rejected, if any).
+An audit of a split writes the run's audit/<split>.json (the report),
+audit/<split>.parquet (the scored sample) and audit/<split>_rejected.txt (the accounts
+TigerGraph rejected, if any). `mule evaluate` audits validation and test: decisions use
+the validation audit, and the test audit is for reporting. audit runs the steps:
+audit_population reads the split's frozen population from the scope, audit_sample
+(evaluation.sample) draws the sample, score_sample scores it with the run's model, and
+write_audit writes the files. audit_inputs loads and checks the model and its dataset
+once for every split.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
+import numpy as np
 import pandas as pd
 
-from ..artifacts import write_audit_scores, write_json, write_rejected
+from ..artifacts import AUDIT_COLUMNS, write_audit_scores, write_json, write_rejected
 from ..contract.bounds import AUDIT_POPULATION, AUDIT_SAMPLE
-from ..contract.clock import cutoff_ms
+from ..contract.clock import timestamp
+from ..contract.graph_schema import SPLIT_PHASE
+from ..data.accounts import scope_accounts
+from ..data.contexts import ContextReader
+from ..data.hub_registry import HubRegistry, load_hub_registry
+from ..data.manifest import load_prepared
+from ..data.ports import ScopeReader
+from ..data.splits import eligible_mask, sample_keys
+from ..inference.predictor import Predictor
+from ..inference.rejections import exceeds_rejection_limit, rejection_summary
 from ..inference.saved_model import SavedModel
-from ..metrics import weighted_metrics
+from ..metrics import (
+    BOOTSTRAP_REPLICATES,
+    BOOTSTRAP_SEED,
+    INTERVAL,
+    REVIEW_BUDGETS,
+    bootstrap_intervals,
+    weighted_metrics,
+)
 from ..paths import DATA_DIR, DatasetPaths, RunPaths
 from ..runtime.progress import emit
-from .sample import audit_sample
-from .truth import TruthReader
+from .sample import AUDIT_NEGATIVES, audit_sample
+from .truth import checked_truth
 
-if TYPE_CHECKING:
-    from ..data.contexts import ContextReader
-    from ..data.hub_registry import HubRegistry
-    from ..data.ports import ScopeReader
+# The splits `mule evaluate` audits, and what each audit is for.
+AUDIT_SPLITS = {"validation": "decisions", "test": "reporting"}
 
 
-def audit_metrics(frame: pd.DataFrame, threshold: float) -> dict[str, Any]:
-    """The weighted metrics (``metrics.weighted_metrics``) of an audit sample.
+@dataclass(frozen=True)
+class AuditedRun:
+    """A run's frozen model and the prepared dataset it was trained on, loaded and checked.
 
-    Each account is weighted by 1 / its inclusion probability. Account IDs are not
-    read, so they cannot break ties.
+    ``hubs`` is the dataset's hub registry, which scoring uses as training did.
     """
-    import numpy as np
 
-    if not len(frame) or not frame.is_mule.isin([0, 1]).all():
-        raise ValueError("Weighted evaluation needs binary truth and nonempty predictions")
-    p = frame.inclusion_probability.to_numpy(float)
-    if not np.isfinite(p).all() or (p <= 0).any() or (p > 1).any():
-        raise ValueError("Invalid inclusion probabilities")
-    y, score = frame.is_mule.to_numpy(int), frame.score.to_numpy(float)
-    if not np.isfinite(score).all() or ((score < 0) | (score > 1)).any():
-        raise ValueError("Invalid prediction probabilities")
-    return {
-        **weighted_metrics(y, score, 1 / p, threshold),
-        "evaluation_sample": "all_test_positives_plus_uniform_negatives_inverse_probability_weighted",
-    }
+    paths: RunPaths
+    model: SavedModel
+    dataset: DatasetPaths
+    manifest: dict[str, Any]
+    hubs: HubRegistry
 
-
-# The split the final audit samples: its frozen population at the test cutoff.
-AUDITED_SPLIT = "test"
+    def audited(self, split: str) -> bool:
+        """Whether the run has the split's audit: its report is written last."""
+        return self.paths.audit_report(split).exists()
 
 
 def audit_inputs(
-    run: RunPaths, dataset: DatasetPaths | None = None, data: Path = DATA_DIR
-) -> tuple[SavedModel, DatasetPaths, dict[str, Any]]:
-    """The run's frozen model, its prepared dataset and the dataset's manifest, all checked.
+    run: RunPaths,
+    *,
+    data: Path = DATA_DIR,
+    dataset: DatasetPaths | None = None,
+    hubs: HubRegistry | None = None,
+) -> AuditedRun:
+    """The run's frozen model, its prepared dataset and the dataset's hub registry, checked.
 
-    The final audit reads nothing from the graph before these checks pass: an audit
-    the run already has, a model with more than one test cutoff and a missing or
-    changed dataset are refused. ``dataset`` defaults to the model's own in data.
+    An audit reads nothing from the graph before these checks pass: a model with other
+    than one cutoff in an audited split and a missing or changed dataset are refused.
+    ``dataset`` defaults to the model's own in data, and ``hubs`` to its registry.
     """
-    from ..data.manifest import load_prepared
-
-    split = AUDITED_SPLIT
-    for path in (run.audit_report(split), run.audit_scores(split), run.audit_rejected(split)):
-        if path.exists():
-            raise FileExistsError(path)
     saved = SavedModel.load(run.model)
-    if len(saved.config.dataset.dates.test) != 1:
-        raise ValueError("Final population audit requires one test cutoff")
+    dates = saved.config.dataset.dates
+    for split in AUDIT_SPLITS:
+        if len(dates[split]) != 1:
+            raise ValueError(f"An audit needs one {split} cutoff, not {len(dates[split])}")
     if dataset is None:
         dataset = saved.dataset(data)
     if dataset is None or not dataset.manifest.exists():
@@ -80,89 +94,163 @@ def audit_inputs(
         )
     manifest, _ = load_prepared(dataset)
     saved.check_dataset(dataset)
-    return saved, dataset, manifest
-
-
-def audit(
-    run: RunPaths,
-    truth: TruthReader,
-    *,
-    scope: ScopeReader,
-    contexts: ContextReader,
-    negative_limit: int = 2000,
-    dataset: DatasetPaths | None = None,
-    hubs: HubRegistry | None = None,
-) -> dict[str, Any]:
-    """Score a fresh final-only sample from the entire frozen test partition.
-
-    The model is the run's model.pt, and the audit goes into the run's audit/ files.
-    This POC audit bounds host metadata to one million test accounts. It never
-    changes a model and refuses to overwrite an existing audit. The
-    prepared dataset (``dataset`` or the one recorded in the model) supplies
-    the test cutoff clock and the hub registry, so scoring matches training. The test
-    population comes from ``scope`` and the contexts from ``contexts``, which the audit
-    closes; the pipeline opens both on a frozen source it has verified
-    (pipeline.evaluate.evaluate_run).
-
-    Accounts TigerGraph rejects are not scored. A rejected test positive, or a
-    rejected fraction of the sample above the model's
-    ``runtime.max_rejected_root_fraction`` (default 0), fails the audit before anything is
-    written: the weighted metrics would silently describe a censored population.
-    Rejected negatives within the limit are listed in audit/test_rejected.txt and
-    the metrics' ``evaluation_sample`` says that they were dropped.
-    """
-    from ..contract.graph_schema import SPLIT_PHASE
-    from ..data.accounts import scope_accounts
-    from ..data.contexts import close_source
-    from ..data.hub_registry import load_hub_registry
-    from ..data.splits import sample_keys
-    from ..inference.predictor import Predictor
-    from ..inference.rejections import exceeds_rejection_limit, rejection_summary
-
-    saved, dataset, manifest = audit_inputs(run, dataset)
-    split = AUDITED_SPLIT
-    config = saved.config
-    (date,) = config.dataset.dates.test
-    last_ms = cutoff_ms(date)
-    population: list[dict[str, Any]] = []
-    for row in scope_accounts(scope, config.scope.id, include_observed=False):
-        if row["partition"] == SPLIT_PHASE[split] and row["first_seen_ts_ms"] <= last_ms:
-            population.append({"account_id": row["account_id"], "split": split})
-            if len(population) > AUDIT_POPULATION:
-                raise ValueError(
-                    "Final audit metadata budget exceeded; use a streamed truth provider"
-                )
-    if not population:
-        raise ValueError("No eligible accounts in final test population")
-    answer = truth.read()
-    if "date" in answer and not answer.date.eq(date).all():
-        raise ValueError("Evaluation truth date differs from the frozen test cutoff")
-    selected = audit_sample(
-        pd.DataFrame(population),
-        answer,
-        negative_limit=negative_limit,
-        seed=config.dataset.split_seed,
-    )
-    if len(selected) > AUDIT_SAMPLE:
-        raise ValueError("Final scoring sample exceeds audit budget")
     registry = hubs if hubs is not None else load_hub_registry(dataset, manifest)
-    failed = True
-    try:
-        predictor = Predictor(saved, contexts, hubs=registry)
-        size = predictor.batch_size
-        # The prepared test keys: the dataset's cutoff clock, scope and phase 3.
-        with predictor.runtime():
-            frames, rejected = predictor.score_keys(
-                sample_keys(selected.iloc[start : start + size], date, manifest)
-                for start in range(0, len(selected), size)
-            )
-        failed = False
-    finally:
-        close_source(contexts, failed=failed)
+    return AuditedRun(run, saved, dataset, manifest, registry)
+
+
+def audit_population(scope: ScopeReader, scope_id: str, split: str, date: str) -> pd.DataFrame:
+    """The frozen population of a split at its cutoff: account_id, split and revealed.
+
+    These are the accounts of the split's partition of the scope that existed before
+    the cutoff (data.splits.eligible_mask), in account order. The population is read with
+    its observed labels: revealed says that the graph revealed the account's label
+    before the cutoff, as the proxy metrics see it. At most
+    contract.bounds.AUDIT_POPULATION accounts of the partition are held.
+    """
+    phase = SPLIT_PHASE[split]
+    rows: list[dict[str, Any]] = []
+    for row in scope_accounts(scope, scope_id, include_observed=True):
+        if row["partition"] == phase:
+            rows.append(row)
+            if len(rows) > AUDIT_POPULATION:
+                raise ValueError(
+                    f"The {split} population exceeds the audit's {AUDIT_POPULATION} accounts"
+                )
+    columns = ["account_id", "first_seen_ts_ms", "observed_positive", "known_from_ms"]
+    frame = pd.DataFrame(rows, columns=columns).assign(split=split)
+    frame = frame[eligible_mask(frame, split, date)]
+    revealed = frame.observed_positive.eq(True) & (frame.known_from_ms < timestamp(date))
+    return pd.DataFrame(
+        {
+            "account_id": frame.account_id.astype(str).to_numpy(),
+            "split": split,
+            "revealed": revealed.to_numpy(bool),
+        }
+    )
+
+
+def audit_metrics(frame: pd.DataFrame, threshold: float) -> dict[str, Any]:
+    """The weighted metrics (``metrics.weighted_metrics``) of an audit sample.
+
+    Each account is weighted by 1 / its inclusion probability. Account IDs are not
+    read, so they cannot break ties.
+    """
+    if not len(frame) or not frame.is_mule.isin([0, 1]).all():
+        raise ValueError("Weighted evaluation needs binary truth and nonempty predictions")
+    p = frame.inclusion_probability.to_numpy(float)
+    if not np.isfinite(p).all() or (p <= 0).any() or (p > 1).any():
+        raise ValueError("Invalid inclusion probabilities")
+    y, score = frame.is_mule.to_numpy(int), frame.score.to_numpy(float)
+    if not np.isfinite(score).all() or ((score < 0) | (score > 1)).any():
+        raise ValueError("Invalid prediction probabilities")
+    return weighted_metrics(y, score, 1 / p, threshold)
+
+
+def audit_intervals(frame: pd.DataFrame) -> dict[str, list[float] | None]:
+    """The ring-clustered bootstrap intervals of an audit sample's ranking metrics.
+
+    Mules are resampled by ring (ring_id; a mule without a ring alone) and non-mules
+    within their class, each keeping its inclusion weight (metrics.bootstrap_intervals).
+    """
+    return bootstrap_intervals(
+        frame.is_mule.to_numpy(int),
+        frame.score.to_numpy(float),
+        1 / frame.inclusion_probability.to_numpy(float),
+        frame.ring_id.to_numpy(int),
+    )
+
+
+def audit_constants(seed: int) -> dict[str, Any]:
+    """What an audit's numbers depend on besides the model, recorded in its report."""
+    return {
+        "audit_negatives": AUDIT_NEGATIVES,
+        "sample_seed": seed,
+        "review_budgets": list(REVIEW_BUDGETS),
+        "interval": INTERVAL,
+        "bootstrap_replicates": BOOTSTRAP_REPLICATES,
+        "bootstrap_seed": BOOTSTRAP_SEED,
+        "bootstrap": "positives_by_ring_negatives_within_class",
+    }
+
+
+def score_sample(
+    run: AuditedRun, sample: pd.DataFrame, date: str, contexts: ContextReader
+) -> tuple[dict[str, float], list[str], dict[str, Any]]:
+    """Score an audit sample with the run's model at its split's cutoff.
+
+    The keys are the prepared dataset's: its cutoff clock, scope and the split's phase,
+    and the hub registry is the dataset's, so scoring matches training. Returns the
+    scores of the accepted accounts by account id, the ids TigerGraph rejected and the
+    rejection summary (inference.rejections.rejection_summary). The caller closes
+    ``contexts``.
+    """
+    predictor = Predictor(run.model, contexts, hubs=run.hubs)
+    size = predictor.batch_size
+    with predictor.runtime():
+        frames, rejected = predictor.score_keys(
+            sample_keys(sample.iloc[start : start + size], date, run.manifest)
+            for start in range(0, len(sample), size)
+        )
     scores: dict[str, float] = {}
     for frame in frames:
         scores.update(zip(frame.account_id, frame.score.astype(float), strict=True))
-    selected["score"] = selected.account_id.astype(str).map(scores)
+    return scores, rejected, rejection_summary(predictor.contexts, len(rejected), predictor.totals)
+
+
+def write_audit(
+    run: RunPaths, split: str, report: dict[str, Any], scored: pd.DataFrame, rejected: list[str]
+) -> None:
+    """Write a split's audit: the scored sample, the rejected accounts, then the report.
+
+    The report comes last, so a split is audited exactly when its report exists; the
+    files an interrupted audit left are replaced.
+    """
+    run.audit_report(split).parent.mkdir(parents=True, exist_ok=True)
+    write_audit_scores(run.audit_scores(split), scored[list(AUDIT_COLUMNS)])
+    if rejected:
+        write_rejected(run.audit_rejected(split), rejected)
+    else:
+        run.audit_rejected(split).unlink(missing_ok=True)
+    write_json(run.audit_report(split), report)
+
+
+def audit(
+    run: AuditedRun,
+    split: str,
+    *,
+    truth: pd.DataFrame,
+    scope: ScopeReader,
+    contexts: ContextReader,
+) -> dict[str, Any]:
+    """Audit the run's model on a fresh sample of one split's entire frozen population.
+
+    ``truth`` is the ground truth (contract.graph_schema.TRUTH_COLUMNS), the split's
+    population comes from ``scope`` and the contexts from ``contexts``; the pipeline
+    opens both on a frozen source it has verified and closes the contexts
+    (pipeline.evaluate.evaluate_run). The audit never changes a model and refuses to
+    overwrite an audit the run already has.
+
+    Accounts TigerGraph rejects are not scored. A rejected positive, or a rejected
+    fraction of the sample above the model's ``runtime.max_rejected_root_fraction``
+    (default 0), fails the audit before anything is written: the weighted metrics
+    would silently describe a censored population. Rejected negatives within the limit
+    are listed in audit/<split>_rejected.txt, and the metrics' ``evaluation_sample``
+    says that they were dropped.
+    """
+    if split not in AUDIT_SPLITS:
+        raise ValueError(f"Audits cover {list(AUDIT_SPLITS)}, not {split!r}")
+    if run.audited(split):
+        raise FileExistsError(run.paths.audit_report(split))
+    config = run.model.config
+    (date,) = config.dataset.dates[split]
+    population = audit_population(scope, config.scope.id, split, date)
+    if not len(population):
+        raise ValueError(f"No eligible accounts in the {split} population")
+    selected = audit_sample(population, checked_truth(truth), seed=config.dataset.split_seed)
+    if len(selected) > AUDIT_SAMPLE:
+        raise ValueError(f"The {split} audit sample exceeds the audit's {AUDIT_SAMPLE} accounts")
+    scores, rejected, summary = score_sample(run, selected, date, contexts)
+    selected["score"] = selected.account_id.map(scores)
     unscored = selected[selected.score.isna()]
     scored = selected[selected.score.notna()].reset_index(drop=True)
     rejected_positives = int(unscored.is_mule.sum())
@@ -170,32 +258,40 @@ def audit(
     if exceeds_rejection_limit(len(unscored), rejected_positives, len(selected), limit):
         examples = unscored.account_id.astype(str).head(20).tolist()
         raise ValueError(
-            f"TigerGraph rejected {len(unscored)} of {len(selected)} final audit accounts "
-            f"({rejected_positives} test positives; max_rejected_root_fraction={limit}); "
-            f"statuses {dict(predictor.contexts.rejections)}; "
+            f"TigerGraph rejected {len(unscored)} of {len(selected)} {split} audit accounts "
+            f"({rejected_positives} {split} positives; max_rejected_root_fraction={limit}); "
+            f"statuses {dict(contexts.rejections)}; "
             f"first {examples}. Weighted metrics over the remaining accounts would describe "
             "a censored population, so no report was written"
         )
-    metrics = audit_metrics(scored, saved.threshold)
+    metrics = {
+        **audit_metrics(scored, run.model.threshold),
+        "evaluation_sample": f"all_{split}_positives_plus_uniform_negatives_"
+        "inverse_probability_weighted",
+    }
     if len(unscored):
         metrics["evaluation_sample"] += "_minus_rejected_negatives"
-    result = {
-        "selection": saved.selected_on,
-        "test_date": date,
-        "test_population_accounts": len(population),
+    mules = scored[scored.is_mule == 1]
+    report = {
+        "split": split,
+        "purpose": AUDIT_SPLITS[split],
+        "date": date,
+        "selection": run.model.selected_on,
+        "population_accounts": len(population),
         "metrics": metrics,
+        # The ring-clustered 90% bootstrap interval of each ranking metric.
+        "intervals": audit_intervals(scored),
+        "constants": audit_constants(config.dataset.split_seed),
+        "revealed_positives": int(mules.revealed.sum()),
+        "hidden_positives": int((~mules.revealed).sum()),
         "rejected_accounts": len(unscored),
         "rejected_positives": rejected_positives,
         "rejected_negatives": len(unscored) - rejected_positives,
-        **rejection_summary(predictor.contexts, len(rejected), predictor.totals),
+        **summary,
         "scope": config.scope.id,
         "model_changed": False,
     }
-    run.audit_report(split).parent.mkdir(parents=True, exist_ok=True)
-    write_json(run.audit_report(split), result)
-    write_audit_scores(run.audit_scores(split), scored)
-    if rejected:
-        write_rejected(run.audit_rejected(split), rejected)
+    write_audit(run.paths, split, report, scored, rejected)
     emit(
         {
             "event": "audit",
@@ -203,7 +299,7 @@ def audit(
             "date": date,
             "accounts": len(scored),
             "rejected_accounts": len(unscored),
-            "output": str(run.audit_report(split)),
+            "output": str(run.paths.audit_report(split)),
         }
     )
-    return result
+    return report

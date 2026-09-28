@@ -57,9 +57,19 @@ EPOCH_COLUMNS: tuple[str, ...] = (
 )
 # predictions/<split>.parquet: the scored observed-label rows of a split (float64 scores).
 PREDICTION_COLUMNS = ("account_id", "group_id", "date", "observed_label", "score")
-# audit/<split>.parquet: the scored accounts of a split's audit sample, with their truth
-# and the probability that the sample includes each one.
-AUDIT_COLUMNS = ("account_id", "split", "is_mule", "inclusion_probability", "score")
+# audit/<split>.parquet: the scored accounts of a split's audit sample, with their truth,
+# the probability that the sample includes each one, whether the graph revealed the
+# account's label before the split's cutoff, and its ring and label source (-1 and the
+# label's record for accounts without a ring).
+AUDIT_COLUMNS = (
+    "account_id",
+    "is_mule",
+    "inclusion_probability",
+    "score",
+    "revealed",
+    "ring_id",
+    "label_source",
+)
 
 
 def file_digest(path: Path) -> str:

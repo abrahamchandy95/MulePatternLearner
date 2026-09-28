@@ -1,1 +1,1 @@
-"""The ground-truth audit of a saved model; training never imports it."""
+"""The ground-truth audits of a run's model, of validation and test; training never imports it."""
