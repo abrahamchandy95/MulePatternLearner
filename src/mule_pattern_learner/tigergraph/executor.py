@@ -153,17 +153,20 @@ class QueryExecutor(Protocol):
 
 
 class ConnectionExecutor(QueryExecutor, Protocol):
-    """A QueryExecutor that also runs operations on its connection and read-only GSQL.
+    """A QueryExecutor that also runs operations on its connection and GSQL statements.
 
     The scope, provenance and installer functions use these; TigerGraphExecutor
-    retries both under its budgets. ``graph_name`` is the graph the connection uses.
+    retries both under its budgets, and an operation that writes passes attempts=1.
+    ``graph_name`` is the graph the connection uses.
     """
 
     client: Any
     graph_name: str
 
-    def call(self, operation: Callable[[Any], T], *, what: str) -> T: ...
-    def gsql(self, text: str, *, what: str = "gsql") -> str: ...
+    def call(
+        self, operation: Callable[[Any], T], *, what: str, attempts: int | None = None
+    ) -> T: ...
+    def gsql(self, text: str, *, what: str = "gsql", attempts: int | None = None) -> str: ...
 
 
 class TigerGraphExecutor:
@@ -333,7 +336,7 @@ class TigerGraphExecutor:
         timeout_retries: int = 1,
         detail: str = "",
     ) -> T:
-        """Run a read-only connection operation under the retry policy."""
+        """Run a connection operation under the retry policy; attempts=1 for writes."""
         return self._retry(
             lambda: operation(self.client.conn),
             what=what,
@@ -381,8 +384,8 @@ class TigerGraphExecutor:
             detail=detail,
         )
 
-    def gsql(self, text: str, *, what: str = "gsql") -> str:
-        """Read-only GSQL statement (for example SHOW QUERY) with resume detection."""
+    def gsql(self, text: str, *, what: str = "gsql", attempts: int | None = None) -> str:
+        """A GSQL statement with resume detection: SHOW QUERY, or a write with attempts=1."""
 
         def operation(conn: TigerGraphConnection) -> str:
             output = str(conn.gsql(text))
@@ -390,7 +393,7 @@ class TigerGraphExecutor:
                 raise TransientQueryError("TigerGraph returned an HTML page instead of GSQL output")
             return output
 
-        return self.call(operation, what=what)
+        return self.call(operation, what=what, attempts=attempts)
 
 
 # A named tuple of exception types: formatters targeting Python 3.14 rewrite

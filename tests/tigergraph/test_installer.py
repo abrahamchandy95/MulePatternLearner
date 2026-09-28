@@ -27,6 +27,7 @@ from mule_pattern_learner.contract.server import (
 from mule_pattern_learner.paths import GSQL_DIR
 from mule_pattern_learner.testing.fake_connection import executor
 from mule_pattern_learner.tigergraph import gsql_text, installer
+from mule_pattern_learner.tigergraph.executor import TransientQueryError
 
 INSTALL_FILES = ("queries/label_reveal.gsql", "queries/split_cutoffs.gsql")
 
@@ -219,6 +220,26 @@ def test_install_follows_an_asynchronous_request(monkeypatch: pytest.MonkeyPatch
     )
     with pytest.raises(RuntimeError, match="Semantic Check"):
         installer.install(executor(server))
+
+
+def test_install_writes_run_once_through_the_executor() -> None:
+    # A write that fails is not repeated behind the caller's back, even when its failure
+    # would clear: the one attempt's error names the operation.
+    server = InstallServer(stale=(CUTOFF_QUERY,))
+    real = server.gsql
+    writes: list[str] = []
+
+    def flaky(text: str) -> str:
+        if "SHOW QUERY" in text:
+            return real(text)
+        writes.append(text)
+        raise requests.ConnectionError("connection reset")
+
+    server.gsql = flaky
+    tg = executor(server)
+    with pytest.raises(TransientQueryError, match=r"CREATE QUERY .* 1 attempt"):
+        installer.install(tg)
+    assert len(writes) == 1 and tg.sleeps == [] and not server.installs
 
 
 def test_installed_queries_that_no_file_defines_are_listed_not_dropped() -> None:
