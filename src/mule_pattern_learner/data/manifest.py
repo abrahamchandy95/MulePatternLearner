@@ -42,16 +42,16 @@ def query_hashes() -> dict[str, str]:
 
 
 def changed_query_files(manifest: dict[str, Any]) -> list[str]:
-    """Query files preparation uses whose text is none of the texts it used.
+    """Query files preparation uses whose text is not the one the dataset recorded for them.
 
-    The manifest records each file's digest by its path, and files are compared by
-    digest alone: a file that moved with its text unchanged still matches, as every
-    query file did in the layered restructure. A recorded file that preparation no
-    longer uses cannot affect the dataset, so it is not compared: retiring a query file
-    leaves existing datasets usable.
+    The manifest records each file's digest by its path under the gsql folder, and each
+    file is compared with the digest recorded for its own path: a file recorded under
+    another path, or not at all, has changed. A recorded file that preparation no longer
+    uses cannot affect the dataset, so it is not compared: retiring a query file leaves
+    existing datasets usable.
     """
-    recorded = set(manifest.get("source", {}).get("query_hashes", {}).values())
-    return sorted(name for name, current in query_hashes().items() if current not in recorded)
+    recorded = manifest.get("source", {}).get("query_hashes", {})
+    return sorted(name for name, current in query_hashes().items() if recorded.get(name) != current)
 
 
 def check_query_hashes(manifest: dict[str, Any], dataset: DatasetPaths) -> None:
