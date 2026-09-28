@@ -254,7 +254,7 @@ MulePatternLearner/
 │   ├── model/              torch modules; imports contract and config only
 │   │   ├── inputs.py           ModelInputs
 │   │   ├── tgat.py             TGAT-style attention over hop-1 and hop-2 slots, summary branch, slot sum
-│   │   ├── summary_mlp.py      SummaryMLP (the no_attention and no_graph controls); not summary.py, which training/ has
+│   │   ├── summary_mlp.py      SummaryMLP (the no_attention control); not summary.py, which training/ has
 │   │   ├── loss.py             NonNegativePULoss
 │   │   └── build.py            build_model(), probabilities_from_logits()
 │   ├── batching/
@@ -281,7 +281,8 @@ MulePatternLearner/
 │   │   ├── score.py            score_accounts use case
 │   │   └── check.py            read-only readiness; one batch's digests and first loss
 │   ├── reporting/          style.py, training.py, ranking.py, scores.py, comparison.py, diagnostics.py, report.py
-│   ├── experiments/        variants.py, runner.py, comparison.py
+│   ├── experiments/        variants.py, runner.py, tables.py (summary.csv and comparison.csv; not comparison.py,
+│   │                       which reporting/ has)
 │   ├── diagnostics/        feature_table.py, baselines.py, learning_curve.py, univariate.py, drift.py, subgroups.py,
 │   │                       proxy_validity.py, reveal_spread.py, nnpu_simulation.py
 │   ├── reference/          CPU mirrors, never imported by runtime layers except diagnostics
@@ -547,7 +548,7 @@ DEFAULT_CONFIG = RunConfig()
 | Functions | Verbs for use cases and factories; `*_curve` returns arrays, `bootstrap_*` intervals, `plot_*` draws | `prepare_dataset`, `train_run`, `audit`, `capture_curve`, `plot_capture` |
 | Constants | UPPER_CASE, defined once | `BUILT_IN_GROUPS`, `GRAPH_NAME`, `REQUEST_CAP` |
 | Config keys | Section-qualified snake_case, no repeated section name, units as suffixes | `scope.id`, `loss.positive_weight`, `transport.max_outage_s` |
-| Variants | "Variant" everywhere (never "arm"). `baseline`, `no_<mechanism>`, `drop_<group>`, `add_<group>`, or a control's own name | `no_attention`, `no_graph`, `drop_pair_history`, `add_rolling_windows`, `prior_weight` |
+| Variants | "Variant" everywhere (never "arm"). `baseline`, `no_<mechanism>`, `drop_<group>`, or a control's own name | `no_attention`, `no_pool_counts`, `drop_pair_history`, `prior_weight` |
 | Concepts | One name each: "dataset" (not cohort or preparation); "source id" is the identity of the data loaded into the graph; "audit" is the ground-truth report and `evaluate` the command that writes it; the context source parameter is always `contexts` | |
 | Runs and figures | `results/<variant>/seed-<n>/`; `plots/<topic>_<figure>.png` | `audit_capture.png` |
 | GSQL | A file is named after the responsibility its queries share; query names are verb-first snake_case with no prefix (the graph is dedicated) | `hub_accounts.gsql` defines `list_hub_accounts` |
@@ -653,15 +654,10 @@ class Variant:
     def config(self, base: RunConfig, seed: int) -> RunConfig:
         return with_seed(self.change(base), seed)     # sets training.seed only
 
-ACCOUNT_AGGREGATES = ("entity_meta", "entity_age", "rolling_windows", "amount_ratios", "recency",
-                      "decayed_activity", "history_support")      # server-computed from the account's own events
 BASELINE = Variant("baseline", "The built-in run", lambda c: c)
 CONTROLS = (
     Variant("no_attention", "Does attention over sampled neighbours add anything beyond the root's own inputs, "
             "pool counts included?", lambda c: with_model(c, architecture="summary", slot_sum=False)),
-    Variant("no_graph", "How well does a table of the account's own activity aggregates rank mules, with no "
-            "neighbour, association or pool input?",
-            lambda c: with_model(with_groups(c, ACCOUNT_AGGREGATES), architecture="summary", slot_sum=False)),
     Variant("no_slot_sum", "Does the per-slot MLP sum help beyond attention?", lambda c: with_model(c, slot_sum=False)),
     Variant("no_pool_counts", "How much of the ranking comes from the candidate-pool counts?",
             lambda c: without_groups(c, POOL_GROUPS)),
@@ -672,25 +668,35 @@ CONTROLS = (
     drop_group("time_encoding"),
 )
 FEATURE_DROPS = tuple(drop_group(g) for g in BUILT_IN_GROUPS if g != "message_core")   # drops dependents too
-FEATURE_ADDS = tuple(add_group(g) for g in OPTIONAL_GROUPS)                           # adds requirements too
 SUITES = {"controls": (BASELINE, *CONTROLS),
-          "feature_drops": (BASELINE, *FEATURE_DROPS),
-          "feature_adds": (BASELINE, *FEATURE_ADDS)}
+          "feature_drops": (BASELINE, *FEATURE_DROPS)}
 SUITES["all"] = unique_by_name(*SUITES.values())
 SEEDS = (42, 43, 44)      # 42 is the built-in seed: `mule train` is baseline seed 42 and is reused
 ```
 
 **What the generated variants are.**
 - **Drops:** `drop_entity_meta`, `drop_hub_indicator`, `drop_time_encoding`, `drop_pair_history` (also removes both pool groups; its question says so), `drop_flow_timing` (also removes `pool_activity`), `drop_pool_activity` and `drop_pool_internal_inflows` (replaces `/tmp` `no_internal.toml`).
-- **Additions:** `add_entity_age`, `add_rolling_windows`, `add_amount_ratios` (adds `rolling_windows`), `add_recency`, `add_association_counts`, `add_pair_window_counts`, `add_decayed_activity`, `add_history_support`, `add_identity_order`, `add_device_ip_context`, `add_event_channel` and `add_sampler_meta`.
 - **Replaced `/tmp` files:** `tabular.toml` becomes `no_attention`, and `seed7.toml` is covered by the fixed seeds.
-- **Cost:** `no_attention` and `no_graph` fetch no children, so they cost about a fifteenth per batch.
+- **Cost:** `no_attention` fetches no children, so it costs about a fifteenth per batch.
+
+**No variant reads a group outside training** (the owner decision on feature groups). Training
+keeps only the built-in run's groups, so a variant can only drop groups or change the model, the
+loss or the training:
+- **`no_graph` goes.** Its question, how well a table of the account's own activity ranks mules
+  with no neighbour, association or pool input, is now the question of the diagnostics
+  baselines (`mule diagnose baselines`). Most of those account aggregates are analytics groups,
+  which `fetch_analytics_context` computes, so the baselines answer it from the analytics
+  features rather than from a training run.
+- **No feature additions, and no `feature_adds` suite.** `OPTIONAL_GROUPS` is gone with them.
+  Adding a group to training means moving it back into the training query on purpose (its
+  definition into `FEATURE_GROUPS`, the renderer and a new `CONTEXT_CONTRACT`); a drop variant
+  then measures it like any other training group.
 
 **The script** (`scripts/run_experiments.py`, about 30 lines, no flags besides `--help`):
 ```
 python scripts/run_experiments.py                          # suite "controls", seeds 42 43 44
 python scripts/run_experiments.py feature_drops            # a suite by name
-python scripts/run_experiments.py no_attention no_graph    # chosen variants (baseline always included)
+python scripts/run_experiments.py no_attention prior_weight  # chosen variants (baseline always included)
 python scripts/run_experiments.py --help                   # suites, variants, their questions and config changes
 ```
 Before training it validates every variant offline and prints the run matrix with a time bound
@@ -709,11 +715,11 @@ rewritten.
    - A TigerGraph outage (the executor's availability budget exhausted) stops the suite.
    - Exit status is 1 if anything failed.
 5. **Audit** validation and test for every complete run that lacks them. The audit sample depends only on scope, truth and `split_seed`, so every variant is scored on the same accounts.
-6. **Compare.** Write `summary.csv` (long format: variant, seed, split, metric, value, status, commit) and `comparison.csv`.
+6. **Compare** (`experiments/tables.py`). Write `summary.csv` (long format: variant, seed, split, metric, value, status, commit) and `comparison.csv`.
    - `comparison.csv` holds, per variant: the question, seeds, validation and test AP means, spread over seeds, intervals, paired validation delta, ROC AUC, recall and precision at the three budgets, mean best epoch, parameter count and training hours.
    - It flags runs that differ in git commit, dirty state, device or sampler backend.
    - Layout follows Ludwig's `MetricDiff` (https://github.com/ludwig-ai/ludwig/tree/main/ludwig) and GADBench's mean and spread over fixed seeds (https://github.com/squareRoot3/GADBench/tree/master).
-7. **Report** with `reporting.write_suite_report`. `report.md` ranks variants by the validation audit. It marks the test audit "for reporting, not selection", and warns that the pool groups were designed after reading test-split mules.
+7. **Report** with `reporting.report.write_suite_report`. `report.md` ranks variants by the validation audit. It marks the test audit "for reporting, not selection", and warns that the pool groups were designed after reading test-split mules.
 
 **Statistics.**
 - **Per run, per split:** weighted AP, ROC AUC, and recall and precision at the budgets. Each has a 90% bootstrap interval with 1,000 replicates and seed 0.
@@ -722,13 +728,13 @@ rewritten.
 - **Paired delta:** every replicate draws one resample of the shared accounts and rings and applies it to every run (`metrics.paired_replicates`). The statistic is seed-mean AP of the variant minus seed-mean AP of the baseline.
   - The interval covers audit-sample uncertainty for these seeds, not seed-to-seed variation. The per-seed deltas are plotted beside it.
   - A variant is marked "consistent" only when every seed's delta has the same sign and the interval excludes zero.
-  - With about 18 variants at 90%, about two will exclude zero by chance, so results are exploratory until repeated with more seeds.
+  - The `all` suite compares 12 variants with the baseline; at 90%, about one will exclude zero by chance, so results are exploratory until repeated with more seeds.
 - **Rejections:** accounts rejected in any run are left out of the pairing, and their count is reported.
 - **Sample size:** the diagnostic sample held 233 mules across the three splits (`mule_profile.md`), so expect wide intervals.
 
 **Cost.**
 - Measured on the CUDA host: about 3 s per step, and about 1 hour per graph run with early stopping.
-- The `controls` suite over three seeds is 24 runs: 18 graph runs and 6 summary runs. That is roughly a day back to back without the cache.
+- The `controls` suite over three seeds is 21 runs: 18 graph runs and 3 summary runs, of which the baseline's seed 42 is `mule train`'s run. That is roughly a day back to back without the cache.
 - The script prints this bound from the last run's `history.csv` before it starts.
 - The context cache lands before the first suite (see the migration plan).
 
@@ -757,7 +763,7 @@ No experiment writes to `/tmp`.
 |---|---|---|
 | `mpl_diag/stage_*.py`, `common.py`, `probe.py` | `diagnostics/feature_table.py`, `mule diagnose features` | Public functions of `evaluation.sample`, `ContextSource` and `batching.features` instead of `source._canonical`; train, validation and test samples |
 | `mpl_diag/bl_lib.py` | `metrics.py`; `split_rank_transform` to `diagnostics/drift.py` | removes the duplicate metrics |
-| `bl_models.py` A | `diagnostics/baselines.py` | adds single-feature rankings and the attribute-only floor |
+| `bl_models.py` A | `diagnostics/baselines.py` | adds single-feature rankings and the attribute-only floor; answers the question of the retired `no_graph` control from the analytics features (see Experiments) |
 | `bl_models.py` B | `diagnostics/learning_curve.py` | |
 | `bl_models.py` D, `bl_shift.py` | `diagnostics/drift.py` | |
 | `bl_models.py` A3, C, D1 | `docs/research/diagnostic-study.md` | one-off answers recorded |
@@ -819,7 +825,7 @@ No experiment writes to `/tmp`.
 | `L/experiments.py` | `experiments/variants.py` |
 | `L/history_reference.py` | `reference/gsql_features.py` |
 | `L/cli.py` | `cli.py` |
-| new | `__main__.py`, `data/ports.py`, `data/context_cache.py`, `artifacts.py`, `runtime/progress.py`, `reporting/`, `experiments/runner.py`, `comparison.py`, `diagnostics/`, `testing/` |
+| new | `__main__.py`, `data/ports.py`, `data/context_cache.py`, `artifacts.py`, `runtime/progress.py`, `reporting/`, `experiments/runner.py`, `experiments/tables.py`, `diagnostics/`, `testing/` |
 
 **Scripts** (`scripts/temporal/`)
 
@@ -1060,7 +1066,7 @@ The steps, in order:
       - The server step: the new `CONTEXT_CONTRACT` and the narrower flags of the owner decision on feature groups name new entries, so every context is requested once more; the old entries are never read again and age out under the cap. Removing `data/<dataset id>/contexts/` by hand reclaims the disk at once (the owner's call; nothing deletes it). An entry follows the context query's text only through `CONTEXT_CONTRACT` in its name, so the render test that derives the contract (see Naming conventions) must cover the whole rendered context query; until then `GOLDEN_QUERY_SHA256` pins the text byte for byte, so no entry can hold rows of another query. (Done in the server step: the contract covers the whole text but comments and whitespace.)
       - A run started before this step has a `history.csv` without `disk_hits`, and resuming it would append rows of another width; no such run exists outside tests, so there is no conversion.
       - The docs step: `docs/leakage_and_scaling.md` and the limits table of `docs/live_temporal_training.md` still give old request sizes and concurrency (16 contexts per request and a concurrency of 2 to 4, or 8), while the defaults are 8 and 16.
-14. **Experiments.** `variants.py`, `runner.py`, `comparison.py`, `scripts/run_experiments.py` and the tests described under Experiments.
+14. **Experiments.** `variants.py`, `runner.py`, `tables.py`, `reporting/comparison.py`, `scripts/run_experiments.py` and the tests described under Experiments.
     - From the mid-migration review: the pipeline functions connect on every call (`connect()` in each use case, and `evaluate_run` reads the whole truth each time); give them an optional connection or session so a suite connects once, prepares once and reads truth once. The executor raises `TransientQueryError` both when the outage budget runs out and when a suspected-deterministic failure repeats; add a subclass for the outage alone (for example `TigerGraphUnavailableError`) so the suite stops on an outage but carries on past one variant's own error. The feature additions and `OPTIONAL_GROUPS` are gone (owner decision: only the built-in run's groups stay in training); say what becomes of `no_graph` and `feature_adds`.
 15. **Diagnostics.** The modules, `mule diagnose`, and the research notes (with figures) filled from `archive/diagnostic-study`, after which `main` holds everything worth keeping from that branch. Gate: each analysis runs on a synthetic features table, and `feature_table` on `FakeTigerGraph` matches the batching features of the same keys.
     - From the mid-migration review: `scripts/simulate_label_reveal.py` runs its interpreted query through `client.conn`; `diagnostics/reveal_spread.py` replaces it and reads through the executor. The import contracts already name `diagnostics` (the ports, fakes and matplotlib contracts), so its modules are checked from their first commit.
