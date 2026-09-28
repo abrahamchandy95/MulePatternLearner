@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 
 from mule_pattern_learner.config import DEFAULT_CONFIG
+from mule_pattern_learner.contract.discovery import REVEAL_DEFAULTS
 from mule_pattern_learner.reference import label_reveal
 from mule_pattern_learner.testing.builders import reveal_inputs
 from mule_pattern_learner.tigergraph import reveal as tigergraph_reveal
@@ -50,7 +51,7 @@ def test_reveal_model_finds_reports_and_traces_and_reveals_within_budget(salt: i
 
 def test_reveal_model_uses_the_query_defaults_and_monitoring() -> None:
     params = tigergraph_reveal.reveal_parameters(*BUILT_IN, apply=False)
-    model = {key: tigergraph_reveal.REVEAL_DEFAULTS[key] for key in CERTAIN}
+    model = {key: REVEAL_DEFAULTS[key] for key in CERTAIN}
     implicit = label_reveal.plan(reveal_inputs(), params)
     explicit = label_reveal.plan(reveal_inputs(), {**params, **model})
     assert implicit["mules"] == explicit["mules"] and implicit["revealed"] == explicit["revealed"]

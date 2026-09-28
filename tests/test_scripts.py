@@ -13,7 +13,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-from types import ModuleType, SimpleNamespace
+from types import ModuleType
 from typing import Any
 
 import pytest
@@ -21,8 +21,8 @@ import pytest
 from mule_pattern_learner.experiments import runner
 from mule_pattern_learner.experiments.variants import SUITES, VARIANTS
 from mule_pattern_learner.paths import REPOSITORY_ROOT
-from mule_pattern_learner.reference import label_reveal
 from mule_pattern_learner.testing.builders import reveal_inputs
+from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
 
 SCRIPTS = REPOSITORY_ROOT / "scripts"
 # Every script; each must parse --help before connecting.
@@ -105,25 +105,12 @@ def test_scripts_import_and_print_help_without_connecting(
     assert "usage:" in capsys.readouterr().out
 
 
-class RevealInputs:
-    """The reveal's read-only inputs; the job itself must never run."""
-
-    def __init__(self) -> None:
-        self.client = SimpleNamespace(conn=SimpleNamespace(runInterpretedQuery=self.inputs))
-
-    def inputs(self, text: str, params: dict[str, Any]) -> list[dict[str, Any]]:
-        assert text == label_reveal.INPUTS_QUERY and set(params) == {"scope_id"}
-        return reveal_inputs()
-
-    def run(self, name: str, params: dict[str, Any], **kwargs: Any) -> list[dict[str, Any]]:
-        raise AssertionError(f"the simulation ran {name}")
-
-
 def test_the_reveal_simulation_runs_offline(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     simulate = load("simulate_label_reveal")
-    monkeypatch.setattr(simulate, "connect", lambda config: RevealInputs())
+    graph = FakeTigerGraph(reveal=reveal_inputs())
+    monkeypatch.setattr(simulate, "connect", lambda config: graph)
     monkeypatch.setattr(sys, "argv", ["simulate_label_reveal", "--runs", "3"])
     simulate.main()
     report = json.loads(capsys.readouterr().out)
@@ -133,6 +120,8 @@ def test_the_reveal_simulation_runs_offline(
         "validation": 1,
         "test": 1,
     }
+    # The inputs were read once and the job itself never ran.
+    assert graph.names() == ["reveal inputs"]
 
 
 def test_the_experiments_script_lists_the_variants_and_runs_the_names_given(

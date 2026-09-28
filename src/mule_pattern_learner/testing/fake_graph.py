@@ -58,6 +58,7 @@ from mule_pattern_learner.tigergraph.gsql_text import (
     parameter_names,
     repository_queries,
 )
+from mule_pattern_learner.tigergraph.reveal import REVEAL_INPUTS_QUERY
 
 
 def signature(path: str, name: str) -> frozenset[str]:
@@ -123,6 +124,7 @@ class FakeTigerGraph:
     `population` holds the rows the scope population query pages through;
     without include_observed their labels are withheld. `truth` holds the rows the
     ground-truth query pages through, with its field names (ground_truth_rows).
+    `reveal` holds what the reveal's interpreted inputs query prints (reveal_inputs).
 
     The connection's state: `scopes` maps scope ids to the attributes of their scope
     vertex, which the scope creation queries add; `counts` are the vertex counts by
@@ -154,6 +156,7 @@ class FakeTigerGraph:
         scope_policy: str = "linked",
         population: Iterable[dict[str, Any]] = (),
         truth: Iterable[dict[str, Any]] = (),
+        reveal: list[dict[str, Any]] | None = None,
         scopes: dict[str, dict[str, Any]] | None = None,
         counts: dict[str, int] | None = None,
         queries: Mapping[str, str] | None = None,
@@ -168,6 +171,7 @@ class FakeTigerGraph:
         self.scope_policy = scope_policy
         self.population = sorted(population, key=lambda row: str(row["account_id"]))
         self.truth = sorted(truth, key=lambda row: str(row["account_id"]))
+        self.reveal = reveal
         self.factory = factory or context
         self.statuses = statuses or {}
         self.hubs = list(hubs)
@@ -366,7 +370,8 @@ class FakeConnection:
 
     GSQL runs SHOW QUERY, CREATE OR REPLACE QUERY (which disables the endpoint until the
     query is installed again), DROP QUERY and the scope schema change; any other GSQL
-    fails. installQueries installs at once.
+    fails. installQueries installs at once. The one interpreted query it runs is the
+    reveal's inputs query, which prints the graph's `reveal` rows.
     """
 
     def __init__(self, graph: FakeTigerGraph, queries: dict[str, str]) -> None:
@@ -384,6 +389,12 @@ class FakeConnection:
     def getVertexCount(self, vertex_type: str, realtime: bool = False) -> dict[str, int]:
         assert vertex_type == "*", vertex_type
         return {**self.graph.counts, SCOPE_VERTEX: len(self.graph.scopes)}
+
+    def runInterpretedQuery(self, text: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+        assert text == REVEAL_INPUTS_QUERY and set(params) == {"scope_id"}, text[:80]
+        assert self.graph.reveal is not None, "the fake graph has no reveal inputs"
+        self.graph.calls.append(("reveal inputs", dict(params)))
+        return deepcopy(self.graph.reveal)
 
     def getSchema(self, force: bool = False) -> dict[str, Any]:
         names = ["Account", *([SCOPE_VERTEX] if self.graph.scope_vertex else [])]
