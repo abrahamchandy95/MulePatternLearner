@@ -9,7 +9,7 @@ those with particular values (a deterministic neighbourhood, random synthetic po
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import asdict, replace
 import json
@@ -57,10 +57,12 @@ from mule_pattern_learner.data.hub_registry import HubRegistry
 from mule_pattern_learner.data.manifest import dataset_settings
 from mule_pattern_learner.data.observed_labels import align_observed_labels
 from mule_pattern_learner.evaluation import audit as evaluation_audit
+from mule_pattern_learner.experiments.tables import COMPLETE, SuiteRun
+from mule_pattern_learner.experiments.variants import Variant
 from mule_pattern_learner.inference.saved_model import SavedModel
 from mule_pattern_learner.metrics import bootstrap_intervals, proxy_metrics, select_threshold
 from mule_pattern_learner.model.build import build_model
-from mule_pattern_learner.paths import DatasetPaths, RunPaths
+from mule_pattern_learner.paths import DatasetPaths, RunPaths, SuitePaths
 from mule_pattern_learner.sampling import candidates
 from mule_pattern_learner.tigergraph.context_query import query_context_rows
 from mule_pattern_learner.tigergraph.executor import QueryExecutor
@@ -826,9 +828,18 @@ REPORTED_STEPS = 100
 REPORTED_LOG_EVERY = 10
 
 
-def near_extremes(rng: np.random.Generator, positive: np.ndarray) -> np.ndarray:
-    """Scores near 0 and 1: most positives score near 1, and a few other accounts do too."""
-    high = np.where(positive, rng.random(len(positive)) < 0.62, rng.random(len(positive)) < 0.009)
+# The share of the mules a run of the reporting tests scores near 1.
+FOUND = 0.62
+
+
+def near_extremes(
+    rng: np.random.Generator, positive: np.ndarray, found: float = FOUND
+) -> np.ndarray:
+    """Scores near 0 and 1: most positives score near 1, and a few other accounts do too.
+
+    ``found`` is the share of positives that do; the run is better the higher it is.
+    """
+    high = np.where(positive, rng.random(len(positive)) < found, rng.random(len(positive)) < 0.009)
     logit = np.where(
         high,
         np.where(
@@ -841,20 +852,29 @@ def near_extremes(rng: np.random.Generator, positive: np.ndarray) -> np.ndarray:
     return 1 / (1 + np.exp(-logit))
 
 
-def audit_frame(rng: np.random.Generator, split: str) -> pd.DataFrame:
-    """A split's scored audit sample (artifacts.AUDIT_COLUMNS): every mule, 2,000 others."""
+def audit_frame(rng: np.random.Generator, split: str, found: float = FOUND) -> pd.DataFrame:
+    """A split's scored audit sample (artifacts.AUDIT_COLUMNS): every mule, 2,000 others.
+
+    The accounts, their truth, rings and revealed flags are the split's, the same in every
+    run, as the audit samples of a dataset are; the scores are the run's (near_extremes
+    with ``found``), and every run ranks the louder mules higher.
+    """
     _, accounts, mules, revealed, _ = REPORTED_SPLITS[split]
     negatives = 2000
+    sample = np.random.default_rng(zlib.crc32(split.encode()))
     is_mule = np.r_[np.ones(mules, np.int64), np.zeros(negatives, np.int64)]
-    score = near_extremes(rng, is_mule == 1)
+    loudness = sample.normal(0.0, 1.0, mules)
+    score = near_extremes(rng, is_mule == 1, found)
+    # Every run ranks the louder mules higher, give or take noise of its own.
+    rank = np.argsort(np.argsort(-(loudness + rng.normal(0.0, 0.7, mules))))
+    score[:mules] = np.sort(score[:mules])[::-1][rank]
     # The revealed mules are among the louder ones.
-    order = np.argsort(-(score[:mules] + rng.random(mules)))
     flags = np.zeros(len(is_mule), bool)
-    flags[order[:revealed]] = True
+    flags[np.argsort(-loudness)[:revealed]] = True
     # About two thirds of the mules are in rings of two to four.
     rings = np.full(len(is_mule), -1, np.int64)
     ringed = int(mules * 2 / 3)
-    rings[:ringed] = np.repeat(np.arange(ringed), rng.integers(2, 5, ringed))[:ringed]
+    rings[:ringed] = np.repeat(np.arange(ringed), sample.integers(2, 5, ringed))[:ringed]
     return pd.DataFrame(
         {
             "account_id": [f"{split[0].upper()}{i:06d}" for i in range(len(is_mule))],
@@ -868,14 +888,14 @@ def audit_frame(rng: np.random.Generator, split: str) -> pd.DataFrame:
     )
 
 
-def predictions_frame(rng: np.random.Generator, split: str) -> pd.DataFrame:
+def predictions_frame(rng: np.random.Generator, split: str, found: float = FOUND) -> pd.DataFrame:
     """A split's proxy predictions: its observed positives and 2,000 unlabelled accounts."""
     date, accounts, mules, _, positives = REPORTED_SPLITS[split]
     unlabelled = 2000
     observed = np.r_[np.ones(positives, np.int64), np.zeros(unlabelled, np.int64)]
     # The unlabelled sample holds the split's hidden mules at their population rate.
     hidden = rng.random(len(observed)) < (mules - positives) / accounts
-    score = near_extremes(rng, (observed == 1) | hidden)
+    score = near_extremes(rng, (observed == 1) | hidden, found)
     ids = [f"{split[0].upper()}P{i:06d}" for i in range(len(observed))]
     return pd.DataFrame(
         {
@@ -934,13 +954,22 @@ def history_rows(rng: np.random.Generator) -> list[dict[str, Any]]:
     return rows
 
 
-def write_run_files(run: RunPaths, *, seed: int = 0, audited: bool = True) -> RunPaths:
+def write_run_files(
+    run: RunPaths,
+    *,
+    seed: int = 0,
+    audited: bool = True,
+    config: RunConfig = DEFAULT_CONFIG,
+    found: float = FOUND,
+) -> RunPaths:
     """The files of a complete run that reporting reads, audited unless ``audited`` is False.
 
-    config.json, history.csv, epochs.csv, metrics.json and the proxy predictions, and the
-    audit report and scored sample of validation and test, drawn with ``seed``. There is
-    no model.pt: reporting never loads one. The audits' intervals come from 100
-    bootstrap replicates rather than the audit's 1,000, to keep the tests fast.
+    config.json (of ``config``), history.csv, epochs.csv, metrics.json and the proxy
+    predictions, and the audit report and scored sample of validation and test, drawn
+    with ``seed``; ``found`` is the share of mules the model scores near 1. The audits of
+    every run score the same accounts. There is no model.pt: reporting never loads one.
+    The audits' intervals come from 100 bootstrap replicates rather than the audit's
+    1,000, to keep the tests fast.
     """
     rng = np.random.default_rng(seed)
     run.root.mkdir(parents=True, exist_ok=True)
@@ -952,11 +981,11 @@ def write_run_files(run: RunPaths, *, seed: int = 0, audited: bool = True) -> Ru
         "dataset_id": "d" * 64,
         "started": "2026-09-28T09:00:00+00:00",
     }
-    write_run_config(run.config, DEFAULT_CONFIG, provenance)
+    write_run_config(run.config, config, provenance)
     history = history_rows(rng)
     for row in history:
         append_history(run.history, row)
-    predictions = {split: predictions_frame(rng, split) for split in REPORTED_SPLITS}
+    predictions = {split: predictions_frame(rng, split, found) for split in REPORTED_SPLITS}
     validation = predictions["validation"]
     threshold = select_threshold(validation.observed_label.to_numpy(), validation.score.to_numpy())
     proxy = {
@@ -1030,7 +1059,7 @@ def write_run_files(run: RunPaths, *, seed: int = 0, audited: bool = True) -> Ru
         return run
     run.audit_report("test").parent.mkdir(parents=True, exist_ok=True)
     for split, (date, accounts, _, _, _) in REPORTED_SPLITS.items():
-        frame = audit_frame(rng, split)
+        frame = audit_frame(rng, split, found)
         write_audit_scores(run.audit_scores(split), frame)
         y, weight = frame.is_mule.to_numpy(), 1 / frame.inclusion_probability.to_numpy()
         intervals = bootstrap_intervals(
@@ -1051,3 +1080,27 @@ def write_run_files(run: RunPaths, *, seed: int = 0, audited: bool = True) -> Ru
         }
         write_json(run.audit_report(split), report)
     return run
+
+
+def write_suite_runs(
+    suite: SuitePaths,
+    variants: Sequence[Variant],
+    seeds: Sequence[int],
+    found: Mapping[str, float] | None = None,
+) -> list[SuiteRun]:
+    """A suite's complete, audited runs (write_run_files), each variant's seeds in turn.
+
+    ``found`` gives a variant's share of mules scored near 1 (default FOUND), so the
+    variants rank differently; every audit scores the same accounts, so they pair.
+    """
+    runs = []
+    for index, variant in enumerate(variants):
+        for seed in seeds:
+            paths = write_run_files(
+                suite.run(variant.name, seed),
+                seed=1000 * index + seed,
+                config=variant.config(DEFAULT_CONFIG, seed),
+                found=(found or {}).get(variant.name, FOUND),
+            )
+            runs.append(SuiteRun(variant, seed, paths, COMPLETE))
+    return runs

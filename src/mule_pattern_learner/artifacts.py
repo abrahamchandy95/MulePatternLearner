@@ -73,6 +73,19 @@ AUDIT_COLUMNS = (
 )
 
 
+# A control-experiment suite's tables, which experiments.tables writes and reporting reads.
+# summary.csv: one row per run, split and metric, with the run's status (complete,
+# failed or stopped) and commit on each. Its metrics are those of the audit reports, the
+# run's own values (best_epoch, parameter_count, training_hours: no split) and these:
+SUMMARY_COLUMNS = ("variant", "seed", "split", "metric", "value", "status", "commit")
+# the validation proxy AP of the epoch training selected;
+PROXY_METRIC = "proxy_average_precision"
+# a run's validation audit AP on the accounts every audit of the suite scored, and its
+# difference from the baseline's of the same seed there.
+PAIRED_METRIC = "paired_average_precision"
+DELTA_METRIC = "average_precision_delta"
+
+
 def file_digest(path: Path) -> str:
     """The sha256 of a file's bytes, in hex; manifests and saved models record it."""
     with path.open("rb") as stream:
@@ -246,3 +259,41 @@ def read_audit_scores(path: Path) -> pd.DataFrame:
 def write_rejected(path: Path, ids: Iterable[str]) -> None:
     """The accounts TigerGraph rejected, one ID per line."""
     path.write_text("".join(value + "\n" for value in ids))
+
+
+def write_table(path: Path, frame: pd.DataFrame) -> None:
+    """Replace a CSV table (a suite's summary.csv or comparison.csv); missing values stay empty."""
+    with atomic_write(path) as pending:
+        frame.to_csv(pending, index=False)
+
+
+# The text columns of a suite's tables; an empty cell reads as an empty string.
+SUMMARY_TEXT = ("variant", "split", "metric", "status", "commit")
+COMPARISON_TEXT = ("variant", "question", "changes", "seeds", "differs")
+
+
+def _read_table(path: Path, text: tuple[str, ...]) -> pd.DataFrame:
+    frame = pd.read_csv(path, float_precision="round_trip", dtype=dict.fromkeys(text, str))
+    for column in text:
+        frame[column] = frame[column].fillna("")
+    return frame
+
+
+def read_summary(path: Path) -> pd.DataFrame:
+    """A suite's summary.csv (SUMMARY_COLUMNS in order)."""
+    frame = _read_table(path, SUMMARY_TEXT)
+    if tuple(frame.columns) != SUMMARY_COLUMNS:
+        raise ValueError(
+            f"{path} has the columns {list(frame.columns)}, not {list(SUMMARY_COLUMNS)}"
+        )
+    return frame
+
+
+def read_comparison(path: Path) -> pd.DataFrame:
+    """A suite's comparison.csv: one row per variant, in the suite's order."""
+    frame = _read_table(path, COMPARISON_TEXT)
+    if frame.columns[0] != "variant":
+        raise ValueError(
+            f"{path} is not a comparison table: its first column is {frame.columns[0]}"
+        )
+    return frame

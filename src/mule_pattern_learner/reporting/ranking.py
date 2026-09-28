@@ -132,15 +132,16 @@ def share_label(share: float) -> str:
     return f"{float(f'{share * 100:.2g}'):g}%"
 
 
-def top_share_axis(ax: Axes, start: float) -> None:
+def top_share_axis(ax: Axes, start: float, *, budgets: bool = True) -> None:
     """A log x axis of the top share of accounts, from start to all of them.
 
-    It is labelled at the powers of ten and at the review budgets.
+    It is labelled at the powers of ten and, unless ``budgets`` is False (a small panel
+    without room for 5% beside 10%), at the review budgets.
     """
     ax.set_xscale("log")
     ax.set_xlim(start, 1.0)
     decades = 10.0 ** np.arange(np.ceil(np.log10(start)), 1)
-    ticks = sorted({*decades.tolist(), *REVIEW_BUDGETS})
+    ticks = sorted({*decades.tolist(), *(REVIEW_BUDGETS if budgets else ())})
     ax.set_xticks(ticks, [share_label(tick) for tick in ticks])
     ax.xaxis.set_minor_formatter(NullFormatter())
 

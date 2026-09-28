@@ -85,7 +85,28 @@ def test_a_run_directory_names_every_file_of_the_run_directory_table(tmp_path: P
         "report.md",
     ]
     # Suites, diagnostics and the archive have their own directories under results/.
-    assert paths.suite_dir("controls", tmp_path) == tmp_path / "experiments" / "controls"
+    suite = paths.SuitePaths.of("controls", tmp_path)
+    assert suite.root == tmp_path / "experiments" / "controls" and suite.results == tmp_path
+    assert [path.relative_to(suite.root).as_posix() for path in suite_files(suite)] == [
+        "summary.csv",
+        "comparison.csv",
+        "plots",
+        "plots/comparison_ap.png",
+        "report.md",
+    ]
+    assert suite.run("no_attention", 43) == paths.RunPaths.of("no_attention", 43, tmp_path)
     assert paths.diagnostics_dir("abc", tmp_path) == tmp_path / "diagnostics" / "abc"
     assert paths.archive_dir(tmp_path) == tmp_path / "archive"
-    assert paths.suite_dir("controls").parent.parent == paths.RESULTS_DIR
+    moved = paths.archived_run(paths.RunPaths.of("no_attention", 43, tmp_path), "t", tmp_path)
+    assert moved.root == tmp_path / "archive" / "no_attention" / "seed-43" / "t"
+    assert paths.SuitePaths.of("controls").results == paths.RESULTS_DIR
+
+
+def suite_files(suite: paths.SuitePaths) -> list[Path]:
+    return [
+        suite.summary,
+        suite.comparison,
+        suite.plots,
+        suite.figure("comparison_ap"),
+        suite.report,
+    ]

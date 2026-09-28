@@ -29,9 +29,10 @@ from mule_pattern_learner.paths import (
     REPOSITORY_ROOT,
     RESULTS_DIR,
     RunPaths,
+    SuitePaths,
     archive_dir,
+    archived_run,
     diagnostics_dir,
-    suite_dir,
 )
 from mule_pattern_learner.tigergraph.gsql_text import definitions
 
@@ -229,9 +230,17 @@ def test_outputs_go_under_results_and_datasets_under_data() -> None:
     assert (DATA_DIR.name, RESULTS_DIR.name) == ("data", "results")
     run = RunPaths.of(BASELINE_VARIANT, 42)
     assert run.root.relative_to(RESULTS_DIR).as_posix() == "baseline/seed-42"
-    assert suite_dir("controls").relative_to(RESULTS_DIR).as_posix() == "experiments/controls"
+    suite = SuitePaths.of("controls")
+    assert suite.root.relative_to(RESULTS_DIR).as_posix() == "experiments/controls"
     assert diagnostics_dir("id").relative_to(RESULTS_DIR).as_posix() == "diagnostics/id"
     assert archive_dir().relative_to(RESULTS_DIR).as_posix() == "archive"
+    moved = archived_run(RunPaths.of("prior_weight", 43), "20260928T120000Z")
+    assert moved.root.relative_to(RESULTS_DIR).as_posix() == (
+        "archive/prior_weight/seed-43/20260928T120000Z"
+    )
+    for path in (suite.summary, suite.comparison, suite.figure("comparison_ap"), suite.report):
+        relative = path.relative_to(suite.root)
+        assert relative.as_posix() == relative.as_posix().lower(), relative
     files = [
         run.config,
         run.model,

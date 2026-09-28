@@ -91,8 +91,10 @@ def test_the_commands_take_no_options_and_default_to_the_baseline_run() -> None:
     scoring = parser.parse_args(["score", "new.txt"])
     assert (scoring.accounts, scoring.date) == (Path("new.txt"), None)
     assert parser.parse_args(["score", "new.txt", "2025-02-01"]).date == "2025-02-01"
-    assert parser.parse_args(["report"]).run == pipeline_train.BASELINE_RUN
-    assert parser.parse_args(["report", "results/x/seed-1"]).run == named.run
+    # report takes a run's directory, or a suite's.
+    assert parser.parse_args(["report"]).directory == pipeline_train.BASELINE_RUN.root
+    reported = parser.parse_args(["report", "results/experiments/controls"]).directory
+    assert reported == Path("results/experiments/controls")
 
 
 def test_each_command_runs_its_use_case_and_prints_one_json_result(
@@ -110,7 +112,7 @@ def test_each_command_runs_its_use_case_and_prints_one_json_result(
     monkeypatch.setattr(cli, "install_queries", use_case("install", {"installed": []}))
     monkeypatch.setattr(cli, "evaluate_run", use_case("evaluate", {"metrics": {}}))
     monkeypatch.setattr(cli, "score_accounts", use_case("score", {"accounts": 2}))
-    monkeypatch.setattr(cli, "report_run", use_case("report", {"figures": []}))
+    monkeypatch.setattr(cli, "report_directory", use_case("report", {"figures": []}))
     monkeypatch.setattr(cli, "check", use_case("check", {"status": "ready"}))
     for argv in (["install"], ["evaluate"], ["score", "new.txt"], ["report"], ["check"]):
         monkeypatch.setattr(sys, "argv", ["mule", *argv])
@@ -120,7 +122,7 @@ def test_each_command_runs_its_use_case_and_prints_one_json_result(
         ("install", ()),
         ("evaluate", (pipeline_train.BASELINE_RUN,)),
         ("score", (pipeline_train.BASELINE_RUN, Path("new.txt"), None)),
-        ("report", (pipeline_train.BASELINE_RUN,)),
+        ("report", (pipeline_train.BASELINE_RUN.root,)),
         ("check", ()),
     ]
     # A graph that is not ready is a failure, after the report is printed.
