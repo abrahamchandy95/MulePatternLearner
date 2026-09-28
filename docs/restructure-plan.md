@@ -201,12 +201,14 @@ MulePatternLearner/
 │   ├── metrics.py          pure numpy/sklearn: threshold, weighted AP/ROC AUC, PR/ROC/capture curves, tie-aware recall and
 │   │                       precision at review budgets, stratified, ring-clustered and paired bootstrap, weighted quantiles
 │   ├── contract/           definitions shared with GSQL; no I/O, no torch
-│   │   ├── server.py           GRAPH_NAME, SCOPE_VERTEX, query names and parameter sets, CONTEXT_CONTRACT,
-│   │   │                       RETIRED_QUERIES (the old names `mule install` drops)
+│   │   ├── server.py           GRAPH_NAME, SCOPE_VERTEX, query names and parameter sets, CONTEXT_CONTRACT and
+│   │   │                       ANALYTICS_CONTRACT, RETIRED_QUERIES (the old names `mule install` drops)
 │   │   ├── graph_schema.py     node types, relations, associations, rails, channels, strata, splits and phases, ContextKey,
 │   │   │                       context_scope, row columns (hub, oracle, account load, score)
 │   │   ├── feature_groups.py   FeatureGroup, FEATURE_GROUPS (the built-in run's groups), BUILT_IN_GROUPS, pool-count names,
 │   │   │                       bands and pass-through constants, FeaturePlan
+│   │   ├── analytics_features.py  ANALYTICS_GROUPS, the groups training never reads, with their windows, half-lives
+│   │   │                       and ratio bounds (no training module imports it)
 │   │   ├── sampler_plan.py     PoolPlan, SamplerPlan (also the config section type), selection-key version
 │   │   ├── bounds.py           every numeric bound once: request cap 64, fan-out 1 to 64, batch up to 128, seed limits,
 │   │   │                       pool ranges
@@ -227,7 +229,8 @@ MulePatternLearner/
 │   │   ├── gsql_text.py        read, strip comments from and normalise GSQL; query signatures
 │   │   ├── installer.py        install queries whose text differs; the one scope schema change when its vertex type is
 │   │   │                       missing; drop the installed queries on RETIRED_QUERIES
-│   │   ├── render.py           build-time generator of gsql/queries/training_context.gsql (the runtime never imports it)
+│   │   ├── render.py           build-time generator of gsql/queries/training_context.gsql and
+│   │   │                       gsql/analytics/analytics_context.gsql, and their contracts (the runtime never imports it)
 │   │   ├── context_query.py    TigerGraphContextFetcher: validation, bisection on timeout, per-row contract and encoding check
 │   │   ├── scope.py            TigerGraphScope: header, create, finalize, population pages, policy
 │   │   ├── cutoffs.py          TigerGraphCutoffs
@@ -261,7 +264,8 @@ MulePatternLearner/
 │   │   ├── limits.py           BatchLimits, BatchIndex (bounds from contract.bounds)
 │   │   └── assemble.py         RootBatch, build_batch(), to_device() (the one device rule)
 │   ├── inference/          saved_model.py, predictor.py (the one scoring loop), rejections.py, score_accounts.py,
-│   │                       saved_settings.py (configurations saved before RunConfig; until main is replaced)
+│   │                       saved_settings.py (configurations saved before RunConfig and SAVED_CONTRACT, the contract
+│   │                       of models saved before the server step; until main is replaced)
 │   ├── training/           trainer.py, objective.py, averaging.py, schedule.py, checkpoint.py, history.py, summary.py
 │   ├── evaluation/
 │   │   ├── truth.py            TruthReader protocol, ParquetTruth
@@ -303,6 +307,7 @@ MulePatternLearner/
 │   ├── evaluation/
 │   │   └── ground_truth.gsql       read_ground_truth (the oracle; evaluation and diagnostics only)
 │   ├── analytics/          queries used only for analysis (`mule diagnose`); training never calls them
+│   │   ├── analytics_context.gsql  fetch_analytics_context: every feature group; generated, do not edit
 │   │   ├── zelle_pair_gaps.gsql    encode_zelle_pair_gaps
 │   │   └── payment_pair_gaps.gsql  encode_payment_pair_gaps
 │   └── schema/
@@ -311,7 +316,7 @@ MulePatternLearner/
 │       └── scope_vertex.gsql       applied by `mule install` when the scope vertex type is missing
 ├── scripts/
 │   ├── run_experiments.py  control-experiment entry point (thin wrapper over experiments.runner)
-│   └── render_queries.py   regenerate, or `--check`, gsql/queries/training_context.gsql
+│   └── render_queries.py   regenerate, or `--check`, the two generated context queries
 ├── tests/
 │   ├── conftest.py         fixtures: test RunConfig, FakeTigerGraph, temporary data and results dirs
 │   ├── contract/ tigergraph/ data/ sampling/ model/ batching/ inference/ training/ evaluation/ pipeline/
@@ -438,6 +443,12 @@ source_modules = ["mule_pattern_learner.training", "mule_pattern_learner.data", 
                   "mule_pattern_learner.pipeline.score"]
 forbidden_modules = ["mule_pattern_learner.evaluation", "mule_pattern_learner.diagnostics",
                      "mule_pattern_learner.tigergraph.oracle"]
+
+[[tool.importlinter.contracts]]
+name = "Training never reads the analytics features"
+type = "forbidden"
+source_modules = ["<the source modules of the ground-truth contract above>"]
+forbidden_modules = ["mule_pattern_learner.contract.analytics_features"]
 
 [[tool.importlinter.contracts]]
 name = "Only reporting draws"
@@ -957,8 +968,8 @@ The steps, in order:
    - Gate: an offline end-to-end test asserts the run directory's file set; golden identical.
    - Names kept on purpose: `data.preparation.prepare` stays `prepare`, because `pipeline.prepare.prepare_dataset` is the use case callers run and two functions of one name would blur the layers. `_TrainingRun.score` keeps its name: it already runs the one scoring loop (`inference.predictor.score_batches`), which is what the renames table asks of it.
    - Left for a later code step: `build_batch` and `build_root_batch` still take `fanouts` beside the `sampler` section that holds them (both are required now, with the feature plan). Drop the parameter and read `sampler.fanouts` before the experiments step; about 50 test calls pass it.
-   - Left for the server step: the stale-query guards the removed `legacy` marker tracked, `_check_label_fields` in `data/accounts.py` (its masked-label check) and `check_graph_label_rows` in `tigergraph/labels.py`. Delete them once that step has installed every query under its new name and re-prepared the dataset: from then on no installed query and no prepared dataset can predate the masked-label predicate.
-   - Kept until the owner decides, in the server step: the scope-rule inference the marker also tracked (`inferred_scope_policy` in `tigergraph/scope.py`, from the `strict_mule_v1` era). The scope vertex stores no `scope.unowned` rule, so inferring it from the membership is the only check that an existing scope was created with the configured rule. Deleting it means storing the rule on the vertex (a schema change) or giving up that check.
+   - Done in the server step (see its settled list): the stale-query guards the removed `legacy` marker tracked, `_check_label_fields` in `data/accounts.py` (its masked-label check) and `check_graph_label_rows` in `tigergraph/labels.py`. Delete them once that step has installed every query under its new name and re-prepared the dataset: from then on no installed query and no prepared dataset can predate the masked-label predicate.
+   - Kept, as the server step settled: the scope-rule inference the marker also tracked (`inferred_scope_policy` in `tigergraph/scope.py`, from the `strict_mule_v1` era). The scope vertex stores no `scope.unowned` rule, so inferring it from the membership is the only check that an existing scope was created with the configured rule. Deleting it means storing the rule on the vertex (a schema change) or giving up that check.
    - Done in the audit step (see Audit additions): the fake graph absorbed the inline executors, and "final audit" became the ground-truth audit. The stub in `tests/pipeline/test_connect.py` stays: it replaces the `TigerGraphExecutor` class to record its constructor arguments and runs no query.
    - Left for the docs step: "arm" in `docs/feature_redesign.md` and `docs/temporal_training_end_to_end.md` (the owner's word is "variant"), and `<output>.rejected.txt` in `docs/live_temporal_training.md` (now `scores/<stem>_<date>_rejected.txt`). That guide also says to resume a run that stopped on rejected roots with a higher limit. The commands take no options, so only a Python caller can, and the guide must say how: `train_run(config=DEFAULT_CONFIG.with_changes({"runtime": {"max_rejected_root_fraction": 0.01}}), resume=True)` from `pipeline.train`.
    - Commits that fail the per-commit gate (the history is not rewritten, so bisect should skip them): `b0bbbaf`, `eeaf5d5` and `30d1461` of the deduplication step fail `ruff check --select I`, which `68e8297` fixes; `55bb769` and `90c0ed4` fail it too, which `6ad436f` fixes; `519d897` and `455654e` fail `tests/test_naming.py`, which `17cbaf3` fixes. Ruff's configuration now selects the import rules, so the plain `ruff check` catches this.
@@ -983,6 +994,24 @@ The steps, in order:
     - From the mid-migration review: the installer still writes (the scope schema change, CREATE, `installQueries`) through `executor.client.conn` rather than the executor, because the executor's retry errors would hide the install timeout the installer polls on. Route the writes through the executor with one attempt when this step runs `mule install` live. After the dataset is re-prepared, consider comparing the manifest's query hashes by file again (`data.manifest.changed_query_files` matches on content alone so that files moved in the layered restructure stay valid).
     - Gate offline: render check; golden identical except the query hash literal; the allow-list shrinks to the vertex, scope id and salts.
     - If declined, skip this step.
+    - Settled in this step's code (2026-09-28), for the owner's live run and the steps after it:
+      - The queries have the names of the owner decision on query names in `contract/server.py`, the GSQL files, the fakes, the tests and the guides; `temporal_fourier64` left `fourier64.gsql`, and the generated header names `scripts/render_queries.py`. `contract.server.RETIRED_QUERIES` lists the old names and the two retired queries, callers first, and the naming test allows them from there. Its allow-list keeps the scope vertex type, the two salts, the two values the old saved-settings conversion reads (`cohort_seed`, the variant `temporal`; they go with the conversion when main is replaced) and two names of pylibcugraph's API. The scope's edges and id need no entry, since neither holds a forbidden word.
+      - `CONTEXT_CONTRACT` is `"context_"` and the first 12 hex digits of the sha256 of the rendered training query without its contract literal, normalised by `gsql_text.normalized` (no comments, no whitespace), as `tigergraph.render.context_contract` computes it; `tests/tigergraph/test_render.py` keeps the two equal and `scripts/render_queries.py` names the value to set. It covers the whole query but comments, so the context cache's entries follow the query's text. `ANALYTICS_CONTRACT` is derived the same way from the analytics query, with `"analytics_"`.
+      - `FEATURE_GROUPS` is `BUILT_IN_GROUPS`. The other ten groups are `contract.analytics_features.ANALYTICS_GROUPS`, with their windows, half-lives and ratio bounds, and the import contract "Training never reads the analytics features" keeps every training module from importing them; `event_channel` and `sampler_meta` are gone, and each message still carries its channel and stratum. `tigergraph.render` renders both queries from the groups each computes; a group a query does not compute leaves no flag, accumulator, message field or statement. `fetch_training_context` has four flags (`entity_meta`, `time_encoding`, `pair_history`, `flow_timing`), each TRUE by default, one scan per relation and 27 fields per message. `fetch_analytics_context` (`gsql/analytics/analytics_context.gsql`) computes every group; rendered with the old flag order, the renderer gave the old query byte for byte, so it is that reviewed text under a new name, contract and TRUE defaults. Only `install(executor, analytics=True)` installs it. `FeaturePlan.query_flags(hop)` keeps its hop and the rule that TGAT children skip summary groups, which no training group TigerGraph computes triggers any more.
+      - The contract fingerprint covers the contract, the relations, rails and the registry's groups, no longer the old window feature list or the ratio bounds. A model saved before this step records its old value, `inference.saved_settings.SAVED_CONTRACT`, which `SavedModel.check_contract` accepts; `check_inputs` compares the input fingerprint with the plan's under the contract the model records (`FeaturePlan.fingerprint(contract)`). The saved-model fixtures keep their scores. A saved configuration that names a group that left training is refused as naming an unknown group.
+      - `GOLDEN_QUERY_SHA256` changed three times (the rename, the contract, the groups), and every other golden literal held each time: the batch, the steps, the APs, the threshold, the dataset rows, the audits, and the cache cold and warm.
+      - `mule install` routes every write through the executor with one attempt (`ConnectionExecutor.gsql` and `call` take `attempts`); the install request keeps its read timeout and polling, decided by the cause of the executor's error. After `verify_sources` passes it drops the installed queries of `RETIRED_QUERIES` in order (`installer.drop_retired`), checks each drop against the endpoint listing, and lists them under `dropped`; the installed queries no file defines are still only listed. `mule check` reports the retired queries still installed under `queries.retired`. `FakeTigerGraph` holds installed queries by name (`queries`), creates, installs and drops them, applies the scope schema change and records each write in `writes`.
+      - `data.manifest.changed_query_files` compares each file with the digest recorded for its own path again, so every dataset prepared before this step is refused and prepared again. `_check_label_fields` and `check_graph_label_rows` are deleted; `inferred_scope_policy` stays as the check that an existing scope was built with the configured `scope.unowned` rule, documented without earlier eras.
+    - Left for the owner, on the CUDA host, once no job of the old code runs anywhere:
+      - `mule install` (about 50 minutes; rerun if the 45-minute wait expires) installs every renamed query and then drops the retired ones; its result lists them under `dropped`, and `mule check` then reports `queries.retired` empty.
+      - The built-in run's `data/<dataset id>/` records the old query texts, so preparation refuses it and says so: move it aside by hand (its `contexts/` goes with it; nothing deletes it), and `mule train` prepares it again (about 6 minutes) before the baseline run.
+      - Repeat check (c): `mule check` prints the same digests and first loss as before this step.
+      - `pytest -m graph` checks the training query live; its analytics parts skip until `install(executor, analytics=True)` has installed the analytics queries.
+    - Left for later steps:
+      - Experiments: the variants that read analytics groups cannot train (`no_graph`, `feature_adds`; the owner decision on feature groups). Every variant of the built-in groups shares the context cache's entries at a hop exactly when it requests the same flags there, now the same at both hops.
+      - Diagnostics: `tigergraph.context_query.validate_context` validates training rows only (their node features are the training registry's), so the feature table reads `fetch_analytics_context` through a fetcher and validation of its own on the analytics side, with `ANALYTICS_CONTRACT`, `contract.analytics_features` and `reference.gsql_features`.
+      - Replace main: `SAVED_CONTRACT` goes with the conversion module; `check_contract` then compares with `contract_fingerprint()` alone, `check_inputs` calls `plan.fingerprint()`, and `FeaturePlan.fingerprint` loses its contract parameter.
+      - Docs: `docs/gsql_feature_catalog.md` still tabulates the window families as the training query once returned them (a note at its top says where they are computed now), and the schema jobs of `gsql/schema/` keep their old names (`add_temporal_training_scope`, `create_temporal_payment_schema`, `load_temporal_accounts`), which the naming test does not check.
 
     The baseline run (`mule train`, about an hour) can start once this step is done.
 11. **Audit additions.**
@@ -1027,8 +1056,8 @@ The steps, in order:
       - The golden run's literals hold with the cache off (the existing test), cold and warm (`test_the_golden_run_is_the_same_with_the_context_cache_cold_and_warm`); the warm run requests no context from the fake graph.
     - Left for later steps:
       - Set `CONTEXT_CACHE_ENTRIES` from the baseline run's `contexts.distinct` in `metrics.json`, the audits' contexts and the bytes per entry its `contexts/` directory shows.
-      - The experiments step: seeds and the variants that request the baseline's groups share entries, training and audits alike. That includes the controls that change only the loss, the weight average or the slot sum, and the drops of client-computed groups (the hub indicator and both pool groups), which are never requested. A variant that requests other groups at a hop has entries of its own at that hop; TGAT children skip summary groups, so a change of summary groups still shares the children. Suites should still pass one connection and truth, as the audit step left. Claims are per source: two sources over one dataset (two processes, or a suite that opens one per run at once) may both request a context the cache lacks; each writes its entry through its own pending file and the last replaces the other, so running variants one after another shares the most.
-      - The server step: the new `CONTEXT_CONTRACT` and the narrower flags of the owner decision on feature groups name new entries, so every context is requested once more; the old entries are never read again and age out under the cap. Removing `data/<dataset id>/contexts/` by hand reclaims the disk at once (the owner's call; nothing deletes it). An entry follows the context query's text only through `CONTEXT_CONTRACT` in its name, so the render test that derives the contract (see Naming conventions) must cover the whole rendered context query; until then `GOLDEN_QUERY_SHA256` pins the text byte for byte, so no entry can hold rows of another query.
+      - The experiments step: seeds and the variants that request the baseline's groups share entries, training and audits alike. That includes the controls that change only the loss, the weight average or the slot sum, and the drops of client-computed groups (the hub indicator and both pool groups), which are never requested. A variant that requests other groups at a hop has entries of its own at that hop; TGAT children skip summary groups, but since the server step no training group TigerGraph computes is one, so a variant's flags differ at both hops or at neither. Suites should still pass one connection and truth, as the audit step left. Claims are per source: two sources over one dataset (two processes, or a suite that opens one per run at once) may both request a context the cache lacks; each writes its entry through its own pending file and the last replaces the other, so running variants one after another shares the most.
+      - The server step: the new `CONTEXT_CONTRACT` and the narrower flags of the owner decision on feature groups name new entries, so every context is requested once more; the old entries are never read again and age out under the cap. Removing `data/<dataset id>/contexts/` by hand reclaims the disk at once (the owner's call; nothing deletes it). An entry follows the context query's text only through `CONTEXT_CONTRACT` in its name, so the render test that derives the contract (see Naming conventions) must cover the whole rendered context query; until then `GOLDEN_QUERY_SHA256` pins the text byte for byte, so no entry can hold rows of another query. (Done in the server step: the contract covers the whole text but comments and whitespace.)
       - A run started before this step has a `history.csv` without `disk_hits`, and resuming it would append rows of another width; no such run exists outside tests, so there is no conversion.
       - The docs step: `docs/leakage_and_scaling.md` and the limits table of `docs/live_temporal_training.md` still give old request sizes and concurrency (16 contexts per request and a concurrency of 2 to 4, or 8), while the defaults are 8 and 16.
 14. **Experiments.** `variants.py`, `runner.py`, `comparison.py`, `scripts/run_experiments.py` and the tests described under Experiments.
@@ -1038,7 +1067,7 @@ The steps, in order:
 16. **Docs.** The Diataxis tree and `architecture.md`. Gate: `test_doc_links.py` and the naming test.
     - From the mid-migration review: tell users that a dataset prepared before the restructure records no dataset settings, so training refuses it and it is prepared again; and choose one adapter naming rule in `architecture.md` (the naming table asks for `<Technology><Port>`, for example `TigerGraphScopeReader`, while the tree and the code use `TigerGraphScope` and `ParquetTruth`).
 17. **Replace main.** Gate: the full offline gate, `pytest -m cuda` on the CUDA host, and read-only `pytest -m graph`. No push until the owner confirms.
-    - First delete the old saved-settings conversion (owner decision), once the new baseline run has a ground-truth audit: `inference/saved_settings.py` and its test file, and the conversion in `SavedModel.config`, which then reads `RunConfig.from_dict` alone. The models saved before the restructure no longer load, so their `.pt` fixtures go too, with the saved-model test's cases that load them (the scores of the three models, the old dataset's scores, and the format and directory check); the case that prepares the old dataset's accounts and labels needs no model and can stay. Drop the module from `architecture.md` in the same commit.
+    - First delete the old saved-settings conversion (owner decision), once the new baseline run has a ground-truth audit: `inference/saved_settings.py` and its test file, and the conversion in `SavedModel.config`, which then reads `RunConfig.from_dict` alone. `SAVED_CONTRACT` goes with it: `SavedModel.check_contract` then accepts `contract_fingerprint()` alone, `check_inputs` calls `plan.fingerprint()`, and `FeaturePlan.fingerprint` loses its contract parameter. The models saved before the restructure no longer load, so their `.pt` fixtures go too, with the saved-model test's cases that load them (the scores of the three models, the old dataset's scores, and the format and directory check); the case that prepares the old dataset's accounts and labels needs no model and can stay. Drop the module from `architecture.md` in the same commit.
 
 ```
 git fetch origin && git fetch learner
