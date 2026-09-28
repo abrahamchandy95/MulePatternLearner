@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 import json
 from typing import Any
 
@@ -99,6 +99,11 @@ def recorded_settings(manifest: dict[str, Any]) -> dict[str, Any]:
     return settings
 
 
+def recorded_dataset_id(manifest: dict[str, Any]) -> str:
+    """The dataset id of the settings a dataset records: its directory's name."""
+    return fingerprint(recorded_settings(manifest))
+
+
 @dataclass(frozen=True)
 class PreparedSource:
     """The graph a dataset was prepared from, as its manifest records it.
@@ -124,6 +129,16 @@ def prepared_source(manifest: dict[str, Any]) -> PreparedSource:
         source_id=settings["source_id"],
         split_seed=settings["dataset"]["split_seed"],
     )
+
+
+def source_fingerprint(manifest: dict[str, Any]) -> str:
+    """The fingerprint of the graph a dataset was prepared from (prepared_source).
+
+    tigergraph.provenance.verify_frozen_source checks the live graph against these
+    counts and this scope before a run reads it, so the fingerprint names the frozen
+    source whose contexts the dataset's disk tier keeps.
+    """
+    return fingerprint(asdict(prepared_source(manifest)))
 
 
 def dataset_mismatches(config: RunConfig, manifest: dict[str, Any]) -> list[str]:

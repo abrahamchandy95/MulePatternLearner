@@ -2,10 +2,11 @@
 
 Batching, training and scoring read contexts through a ContextReader. ContextSource
 is the one that reads them from the graph: it requests each batch's contexts through
-a ContextFetcher (ports.py) and keeps a bounded LRU (context_cache.MemoryTier). It
-returns rows in key order, with None where TigerGraph rejected a request. Every
-reader counts what it was asked for in a ContextCounts. check_coverage and close_source work with any ContextReader,
-and a parameter that takes one is named ``contexts``. A ContextOpener opens the
+a ContextFetcher (ports.py), keeps a bounded LRU and, given a dataset's context cache,
+reads and writes a disk tier (context_cache.py). It returns rows in key order, with
+None where TigerGraph rejected a request. Every reader counts what it was asked for in
+a ContextCounts. check_coverage and close_source work with any ContextReader, and a
+parameter that takes one is named ``contexts``. A ContextOpener opens the
 source of a prepared dataset; the pipeline passes pipeline.connect.open_context_source
 to the use cases that need one.
 """
@@ -33,7 +34,7 @@ from ..contract.graph_schema import ContextKey
 from ..contract.sampler_plan import SamplerPlan
 from ..paths import DatasetPaths
 from ..runtime.workers import DaemonPool
-from .context_cache import MemoryTier
+from .context_cache import ContextCache, ContextTier, DiskTier, MemoryTier
 from .ports import ContextFetcher
 
 
@@ -98,16 +99,18 @@ def context_hash(key: ContextKey, hop: int) -> int:
 
 @dataclass
 class ContextCounts:
-    """What a context source was asked for: every context, the distinct ones, memory hits.
+    """What a context source was asked for: every context, the distinct ones, cache hits.
 
     requested counts the contexts fetches asked for (a key repeated within one fetch
-    once) and memory_hits those served from memory without a request. seen holds the
-    context_hash of every distinct (hop, key) asked for; a resumed run restores it,
-    so distinct counts every segment of the run.
+    once), memory_hits those served from memory and disk_hits those read from the disk
+    tier, both without a request. seen holds the context_hash of every distinct
+    (hop, key) asked for; a resumed run restores it, so distinct counts every segment
+    of the run.
     """
 
     requested: int = 0
     memory_hits: int = 0
+    disk_hits: int = 0
     seen: set[int] = field(default_factory=set[int])
 
     def ask(self, keys: Iterable[ContextKey], hop: int) -> None:
@@ -122,7 +125,7 @@ class ContextCounts:
 
 
 class ContextReader(Protocol):
-    """Model-facing port independent of the transport (HTTP today, a disk cache later).
+    """Model-facing port independent of the transport (HTTP, with or without a disk tier).
 
     fetch returns rows in key order, None where TigerGraph rejected a request
     (counted by status in rejections, once per rejected key and fetch, and in
@@ -149,17 +152,22 @@ class ContextReader(Protocol):
 
 
 class ContextSource:
-    """Fetch only requested batch contexts with a bounded in-memory LRU; no disk.
+    """Fetch only requested batch contexts, through a bounded LRU and an optional disk tier.
 
     The LRU is ``memory``, a context_cache.MemoryTier of ``capacity`` rows keyed by
-    (hop, ContextKey). Several batch-builder threads may call fetch concurrently:
-    they share one request pool of `concurrency` workers, a lock guards the LRU and
-    counters, a key already being fetched by another thread is awaited rather than
-    requested twice, and each fetch keeps at most `concurrency` of its own requests
-    in flight. The first request and
-    every `encoding_check_every`-th request ask TigerGraph for Fourier vectors
-    and verify them. This adapter bounds client memory, not TigerGraph scan work.
-    Train against a frozen source for reproducibility.
+    (hop, ContextKey). Given a dataset's context cache (``cache``), ``disk`` is its
+    context_cache.DiskTier: a context memory lacks is read from disk before it is
+    requested, and every row TigerGraph returns is written there as it came, so a later
+    source of the same dataset, feature flags and pools requests it no more. Rows read
+    from disk are served exactly as requested ones, and both go into the LRU. Several
+    batch-builder threads may call fetch concurrently: they share one request pool of
+    `concurrency` workers, a lock guards the LRU and counters, a key already being
+    fetched by another thread is awaited rather than requested twice, disk reads happen
+    outside the lock, and each fetch keeps at most `concurrency` of its own requests in
+    flight. The first request and every `encoding_check_every`-th request ask
+    TigerGraph for Fourier vectors and verify them. This adapter bounds client memory,
+    not TigerGraph scan work. Train against a frozen source for reproducibility: the
+    disk tier's entries are the frozen source's rows.
     """
 
     def __init__(
@@ -172,6 +180,7 @@ class ContextSource:
         request_batch_size: int = DEFAULT_CONFIG.transport.request_batch_size,
         concurrency: int = DEFAULT_CONFIG.transport.query_concurrency,
         encoding_check_every: int = DEFAULT_CONFIG.transport.encoding_check_every,
+        cache: ContextCache | None = None,
     ) -> None:
         if not QUERY_CONCURRENCY.holds(concurrency):
             raise ValueError(
@@ -187,6 +196,7 @@ class ContextSource:
         self._cadence = _EncodingCadence(encoding_check_every)
         self.pool = DaemonPool(concurrency, "context-requests")
         self.memory = MemoryTier(capacity)
+        self.disk = DiskTier(cache, plan=plan, sampler=sampler) if cache is not None else None
         self.database_calls = 0
         self.rejections: Counter[str] = Counter()
         self.rejections_by_hop: dict[int, Counter[str]] = {}
@@ -205,22 +215,29 @@ class ContextSource:
     def fetch(self, keys: list[ContextKey], *, hop: int = 1) -> list[dict[str, Any] | None]:
         _check_source_limits(keys, hop)
         unique = list(dict.fromkeys(keys))
+        stored = self._stored(unique, hop)
         shared: dict[ContextKey, Future[dict[ContextKey, dict[str, Any]]]] = {}
         blocks: list[tuple[list[ContextKey], Future[dict[ContextKey, dict[str, Any]]]]] = []
         with self._lock:
             if self._closed:
                 raise RuntimeError("Context source is closed")
             rows = self.memory.get(hop, unique)
+            memory_hits = len(rows)
+            # Rows read from disk go into the LRU with the fetched ones.
+            obtained: dict[ContextKey, dict[str, Any]] = {}
             missing = []
             for key in unique:
                 if key in rows:
                     continue
-                if (hop, key) in self._inflight:
+                if key in stored:
+                    rows[key] = obtained[key] = stored[key]
+                elif (hop, key) in self._inflight:
                     shared[key] = self._inflight[(hop, key)]
                 else:
                     missing.append(key)
             self.counts.ask(unique, hop)
-            self.counts.memory_hits += len(rows)
+            self.counts.memory_hits += memory_hits
+            self.counts.disk_hits += len(obtained)
             self.diagnostics["shared_inflight"] += len(shared)
             for start in range(0, len(missing), self.request_batch_size):
                 block = missing[start : start + self.request_batch_size]
@@ -234,7 +251,7 @@ class ContextSource:
             self._run_window(deque(blocks), hop, fetched)
         finally:
             with self._lock:
-                self.memory.put(hop, unique, fetched)
+                self.memory.put(hop, unique, {**obtained, **fetched})
                 for block, holder in blocks:
                     for key in block:
                         if self._inflight.get((hop, key)) is holder:
@@ -244,6 +261,21 @@ class ContextSource:
             rows[key] = holder.result()[key]
         with self._lock:
             return _resolve(keys, rows, self.rejections, self.rejections_by_hop, hop)
+
+    def _stored(self, unique: list[ContextKey], hop: int) -> dict[ContextKey, dict[str, Any]]:
+        """The disk tier's rows of the keys that neither memory nor another fetch holds.
+
+        The disk is read outside the lock; fetch then serves a row read here only if
+        the key is still neither in memory nor in flight, and otherwise drops it.
+        """
+        if self.disk is None:
+            return {}
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("Context source is closed")
+            held = self.memory.get(hop, unique)
+            absent = [k for k in unique if k not in held and (hop, k) not in self._inflight]
+        return {key: _canonical(row) for key, row in self.disk.get(hop, absent).items()}
 
     def _run_window(
         self,
@@ -301,6 +333,9 @@ class ContextSource:
                 self.diagnostics.update(diagnostics)
         with self._lock:
             self.database_calls += calls
+        if self.disk is not None:
+            # TigerGraph's own rows, before _canonical drops what serving does not use.
+            self.disk.put(hop, block, dict(zip(block, result, strict=True)))
         return [_canonical(row) for row in result]
 
     def close(self, *, wait: bool = True) -> None:
@@ -314,13 +349,25 @@ class ContextSource:
             self._closed = True
         self.pool.shutdown(wait=wait, cancel_futures=True)
         with self._lock:
-            self.memory.close()
+            for tier in self._tiers():
+                tier.close()
+
+    def _tiers(self) -> tuple[ContextTier, ...]:
+        """The cache tiers, in the order fetch consults them before TigerGraph."""
+        return (self.memory,) if self.disk is None else (self.memory, self.disk)
 
 
 def build_context_source(
-    fetcher: ContextFetcher, plan: FeaturePlan, sampler: SamplerPlan, transport: TransportConfig
+    fetcher: ContextFetcher,
+    plan: FeaturePlan,
+    sampler: SamplerPlan,
+    transport: TransportConfig,
+    cache: ContextCache | None = None,
 ) -> ContextSource:
-    """Live source with the LRU, request size and concurrency of a transport section."""
+    """Live source with the LRU, request size and concurrency of a transport section.
+
+    ``cache`` gives it the disk tier of a dataset's context cache.
+    """
     return ContextSource(
         fetcher,
         plan=plan,
@@ -329,6 +376,7 @@ def build_context_source(
         request_batch_size=transport.request_batch_size,
         concurrency=transport.query_concurrency,
         encoding_check_every=transport.encoding_check_every,
+        cache=cache,
     )
 
 

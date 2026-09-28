@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -80,6 +81,35 @@ def test_a_dataset_records_its_query_files_by_path_and_passes_its_own_check(
     assert set(recorded) == set(QUERY_FILES) == set(data_manifest.query_hashes())
     assert data_manifest.changed_query_files(manifest) == []
     data_manifest.load_prepared(dataset)
+
+
+def test_a_manifest_names_its_dataset_and_the_frozen_source_it_was_prepared_from(
+    tmp_path: Path,
+) -> None:
+    population = scoped_accounts()
+    executor = FakeTigerGraph({}, population=population)
+    config = unit_config(dataset={"seed_limits": {"train": 10, "validation": 10, "test": 10}})
+    manifest = prepare(
+        config,
+        UNIT_SOURCE,
+        DatasetPaths(tmp_path / "dataset"),
+        {"Account": len(population)},
+        TigerGraphObservedLabels(),
+        scope=TigerGraphScope(executor),
+        cutoffs=TigerGraphCutoffs(executor),
+        hub_reader=TigerGraphHubs(executor),
+    )
+    # The dataset id of its recorded settings is the one its directory is named by.
+    assert data_manifest.recorded_dataset_id(manifest) == data_manifest.dataset_id(
+        UNIT_SOURCE, config
+    )
+    # The frozen source is named by the counts and the scope the live graph is checked
+    # against, so other counts name another source of the same dataset id.
+    source = data_manifest.source_fingerprint(manifest)
+    changed = deepcopy(manifest)
+    changed["source"]["source_counts"]["Account"] += 1
+    assert data_manifest.source_fingerprint(changed) != source
+    assert data_manifest.recorded_dataset_id(changed) == data_manifest.recorded_dataset_id(manifest)
 
 
 def test_query_files_are_compared_by_their_text_not_their_path() -> None:
