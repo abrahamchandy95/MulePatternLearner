@@ -16,14 +16,15 @@ from collections.abc import Iterable, Iterator, Mapping, Sequence
 import contextlib
 from dataclasses import asdict, dataclass
 import gzip
+import itertools
 import json
 import os
 from pathlib import Path
+import secrets
 import threading
 from typing import Any, Protocol
 import zlib
 
-from ..artifacts import atomic_write
 from ..contract.bounds import CONTEXT_CACHE_ENTRIES
 from ..contract.feature_groups import FeaturePlan
 from ..contract.fingerprints import fingerprint
@@ -34,8 +35,9 @@ from ..paths import DatasetPaths
 from ..runtime.progress import warn
 from .manifest import recorded_dataset_id, source_fingerprint
 
-# The file name ending of a disk tier's entries.
+# The file name endings of a disk tier's entries, and of an entry being written.
 ENTRY_SUFFIX = ".json.gz"
+PENDING_SUFFIX = ".pending"
 # A disk tier over its capacity removes its least recently used entries until this share
 # of the capacity remains, so that it does not scan its directory on every write.
 EVICTED_DOWN_TO = 0.9
@@ -147,6 +149,23 @@ def entry_row(data: bytes, name: str, key: ContextKey) -> dict[str, Any]:
     return row
 
 
+def _write(path: Path, entry: bytes) -> None:
+    """Write an entry through a pending file of its own, then replace the entry with it.
+
+    Every write has its own pending name, so two processes writing one entry never
+    write into the same file: the entry is one of their complete files. The pending
+    file never outlives the write, unless its thread dies at interpreter exit.
+    """
+    pending = path.with_name(f"{path.name}.{secrets.token_hex(8)}{PENDING_SUFFIX}")
+    try:
+        with pending.open("xb") as stream:
+            stream.write(entry)
+        os.replace(pending, path)
+    finally:
+        with contextlib.suppress(OSError):
+            pending.unlink(missing_ok=True)
+
+
 class DiskTier:
     """The disk tier of a ContextSource: TigerGraph's rows, compressed, one file per context.
 
@@ -155,11 +174,12 @@ class DiskTier:
     CONTEXT_CONTRACT and the cache's dataset id and frozen source. It holds the row as
     the ContextFetcher returned it (its request position and any Fourier vectors of a
     spot check included) beside its own name, as gzip-compressed JSON in
-    <directory>/<first two hex digits>/<name>.json.gz, written atomically. get refuses
-    an entry that entry_row refuses, with a warning: the source requests that context
-    again and put replaces the entry. Beyond the cache's capacity, the least recently
-    used entries go (a hit refreshes an entry's time) until EVICTED_DOWN_TO of the
-    capacity remain; an entry that cannot be removed is warned about once and left. A
+    <directory>/<first two hex digits>/<name>.json.gz, written atomically through a
+    pending file of its own (_write). get refuses an entry that entry_row refuses, with
+    a warning: the source requests that context again and put replaces the entry.
+    Beyond the cache's capacity, the least recently used entries go (a hit refreshes an
+    entry's time) with any pending file as old, until EVICTED_DOWN_TO of the capacity
+    remain; an entry that cannot be removed is warned about once and left. A
     directory that cannot be written is warned about once, then only read. Neither
     fails a fetch. The source's request workers call get and put at once, so the counts
     take a lock: ``refused`` entries and ``evicted`` ones.
@@ -221,10 +241,9 @@ class DiskTier:
             try:
                 path.parent.mkdir(parents=True, exist_ok=True)
                 new = not path.exists()
-                with atomic_write(path) as pending:
-                    pending.write_bytes(gzip.compress(entry.encode(), mtime=0))
+                _write(path, gzip.compress(entry.encode(), mtime=0))
             except FileNotFoundError:
-                continue  # another writer of the same entry replaced it first
+                continue  # another process evicted the pending file, or removed the cache
             except OSError as error:
                 self._unwritable(error)
                 return
@@ -234,8 +253,8 @@ class DiskTier:
     def close(self) -> None:
         """Nothing to free: the tier holds no rows in memory."""
 
-    def _files(self) -> Iterator[Path]:
-        return self.cache.directory.glob(f"??/*{ENTRY_SUFFIX}")
+    def _files(self, suffix: str = ENTRY_SUFFIX) -> Iterator[Path]:
+        return self.cache.directory.glob(f"??/*{suffix}")
 
     def _added(self) -> None:
         with self._lock:
@@ -249,12 +268,14 @@ class DiskTier:
     def _evict(self) -> None:
         """Remove the least recently used entries until EVICTED_DOWN_TO remain.
 
-        Eviction never fails a fetch: an entry that cannot be removed is warned about
-        once and left. It is counted as removed, so that a directory whose entries
-        cannot go is scanned again only after another tenth of the capacity is written.
+        Pending files go in the same order: one being written is among the most recent,
+        and one a writer left when it died ages out like an entry. Eviction never fails a
+        fetch: an entry that cannot be removed is warned about once and left. It is
+        counted as removed, so that a directory whose entries cannot go is scanned again
+        only after another tenth of the capacity is written.
         """
         dated: list[tuple[int, str, Path]] = []
-        for path in self._files():
+        for path in itertools.chain(self._files(), self._files(PENDING_SUFFIX)):
             with contextlib.suppress(OSError):  # removed meanwhile, or not ours to read
                 dated.append((path.stat().st_mtime_ns, path.name, path))
         dated.sort()
