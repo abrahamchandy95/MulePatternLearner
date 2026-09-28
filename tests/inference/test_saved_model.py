@@ -29,12 +29,10 @@ import torch
 from mule_pattern_learner.config import DEFAULT_CONFIG, RunConfig
 from mule_pattern_learner.contract.clock import cutoff_ms
 from mule_pattern_learner.contract.feature_groups import (
-    CORE_GROUPS,
     FeaturePlan,
     contract_fingerprint,
     extraction_plan,
 )
-from mule_pattern_learner.contract.fingerprints import fingerprint
 from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.data.contexts import ContextSource, build_context_source
 from mule_pattern_learner.data.hub_registry import load_hub_registry
@@ -146,13 +144,13 @@ def test_models_saved_before_the_restructure_score_as_they_did(name: str) -> Non
 def test_the_built_in_inputs_keep_their_recorded_fingerprints() -> None:
     # What a model trained now records.
     assert contract_fingerprint() == (
-        "94e1ead2d353f17dd0d1772113226bd7fcd95d8c7eb79cb2493ee5b157a5020a"
+        "51bec43d1cf620b40dac7bee957f129d35f371eef4508f549b473d4768a29b28"
     )
     assert FeaturePlan().fingerprint() == (
-        "9b73ab52a59a1190edde312668374ac725c2c6d7d54ce7939f4384c851ebe4b6"
+        "94fe91577976ddb18b2fa63a1ff51cd3173bc93e616e3c7ccc3312e1049e49ea"
     )
     assert FeaturePlan(architecture="summary").fingerprint() == (
-        "6fcd1b6adb24d75ef1cc3f9c67600479a98eb17f5b52038c88d72ecad2ed342e"
+        "a768f5b406749101d592e5d5599261ef77a960e713e09395c0d86c6913861d1f"
     )
 
 
@@ -173,15 +171,16 @@ def test_models_saved_before_the_server_step_keep_their_contract() -> None:
         foreign.check_contract()
 
 
-def test_models_whose_columns_moved_are_refused(tmp_path: Path) -> None:
-    # Columns follow registry order now; before, the window groups' columns sat elsewhere.
-    plan = FeaturePlan((*CORE_GROUPS, "rolling_windows"))
-    recorded = fingerprint(
-        {"contract": contract_fingerprint(), "groups": sorted(plan.groups), "architecture": "split"}
+def test_models_that_read_a_group_training_left_are_refused() -> None:
+    # A model saved with a group that is analytics now names a group this code does not
+    # know, so it is refused instead of misread.
+    payload = SavedModel.load(FIXTURES / "built_in.pt").payload
+    groups = [*payload["config"]["feature_groups"], "rolling_windows"]
+    saved = SavedModel(
+        Path("model.pt"), {**payload, "config": {**payload["config"], "feature_groups": groups}}
     )
-    saved = SavedModel(tmp_path / "model.pt", {"input_fingerprint": recorded})
-    with pytest.raises(ValueError, match="input groups"):
-        saved.check_inputs(plan)
+    with pytest.raises(ValueError, match="unknown feature groups"):
+        _ = saved.config
 
 
 def fixture_source(config: RunConfig) -> ContextSource:

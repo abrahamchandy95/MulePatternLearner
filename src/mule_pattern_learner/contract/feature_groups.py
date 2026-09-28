@@ -1,8 +1,9 @@
 """The feature groups the context query and the batches share, and the feature plan.
 
-Every group lives in FEATURE_GROUPS, in the order that fixes column order. The pool
-groups are computed by the client from the context's candidate pool; the others come
-from TigerGraph.
+FEATURE_GROUPS holds the groups of the built-in run and no others (the owner decision
+on feature groups), in the order that fixes column order. The pool groups and the hub
+indicator are computed by the client; the others come from TigerGraph. The groups
+training does not read are analytics (contract.analytics_features).
 """
 
 from __future__ import annotations
@@ -12,37 +13,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from .fingerprints import fingerprint
-from .graph_schema import ASSOCIATIONS, CHANNELS, NODE_TYPES, PAYMENT_RELATIONS, RAILS, RELATIONS
+from .graph_schema import NODE_TYPES, PAYMENT_RELATIONS, RAILS, RELATIONS
 from .server import CONTEXT_CONTRACT
 from .time_basis import BASIS_ID
-
-WINDOWS = {"1h": 3_600_000, "1d": 86_400_000, "7d": 604_800_000, "30d": 2_592_000_000}
-AMOUNT_RATIO_WINDOWS = ("1d", "7d")
-AMOUNT_RATIO_FLOOR = 1.0
-AMOUNT_RATIO_CAP = 100.0
-AMOUNT_RATIO_FEATURES = tuple(f"{window}_out_in_amount_ratio" for window in AMOUNT_RATIO_WINDOWS)
-ROLLING_FIELDS = (
-    "out_count",
-    "in_count",
-    "out_amount",
-    "in_amount",
-    "out_missing",
-    "in_missing",
-    "out_zelle",
-    "in_zelle",
-    "out_unique",
-    "in_unique",
-)
-# The node features the contract fingerprint lists, in its order. Saved models record the
-# fingerprint, so the list stays as it is until the server step changes the contract.
-CONTRACT_FEATURES = (
-    tuple("type_" + t for t in NODE_TYPES)
-    + ("is_external", "is_deposit", "age_days")
-    + tuple(f"{window}_{field}" for window in WINDOWS for field in ROLLING_FIELDS)
-    + ("out_recency_days", "in_recency_days", "out_recency_present", "in_recency_present")
-    + tuple(f"{r}_{state}" for pair in ASSOCIATIONS for r in pair for state in ("active", "ended"))
-    + AMOUNT_RATIO_FEATURES
-)
 
 
 def contract_fingerprint() -> str:
@@ -55,14 +28,10 @@ def contract_fingerprint() -> str:
         {
             "version": CONTEXT_CONTRACT,
             "basis": BASIS_ID,
-            "features": CONTRACT_FEATURES,
             "relations": RELATIONS,
             "rails": RAILS,
             "groups": {k: vars(v) for k, v in FEATURE_GROUPS.items() if k not in POOL_GROUPS},
             "client_groups": sorted(CLIENT_GROUPS - set(POOL_GROUPS)),
-            "channels": CHANNELS,
-            "amount_ratio_floor": AMOUNT_RATIO_FLOOR,
-            "amount_ratio_cap": AMOUNT_RATIO_CAP,
         }
     )
 
@@ -77,7 +46,6 @@ def pool_definition(groups: Sequence[str]) -> dict[str, Any]:
     }
 
 
-HALF_LIVES = {"1d": 86_400_000, "7d": 604_800_000, "30d": 2_592_000_000, "90d": 7_776_000_000}
 # The pool groups: counts over the payment messages of the context's own candidate pool
 # (at most `recent + older + distinct` per relation), not over the account's whole
 # history, computed by the client (batching.pool_counts.pool_activity). The numbers are
@@ -116,45 +84,8 @@ FEATURE_GROUPS = {
         tuple("type_" + t for t in NODE_TYPES) + ("is_external", "is_deposit"),
         tuple("type_" + t for t in NODE_TYPES) + ("is_external", "is_deposit"),
     ),
-    "entity_age": FeatureGroup("node", ("age_days",)),
     # Client computed from the hub registry; never requested from TigerGraph.
     "hub_indicator": FeatureGroup("node", ("history_withheld",), identity=("history_withheld",)),
-    "history_support": FeatureGroup(
-        "summary", ("visible_event_count", "history_lt_5_events"), ("history_lt_5_events",)
-    ),
-    "rolling_windows": FeatureGroup(
-        "summary", tuple(f"{w}_{f}" for w in WINDOWS for f in ROLLING_FIELDS)
-    ),
-    "amount_ratios": FeatureGroup("summary", AMOUNT_RATIO_FEATURES, requires=("rolling_windows",)),
-    "recency": FeatureGroup(
-        "summary",
-        ("out_recency_days", "in_recency_days", "out_recency_present", "in_recency_present"),
-        # No identity columns: the two present flags get log1p like the day counts, as
-        # in the model this group was designed with.
-    ),
-    "association_counts": FeatureGroup(
-        "summary",
-        tuple(
-            f"{r}_{state}" for pair in ASSOCIATIONS for r in pair for state in ("active", "ended")
-        ),
-    ),
-    "decayed_activity": FeatureGroup(
-        "summary",
-        tuple(
-            f"decay_{h}_{d}_{v}"
-            for h in HALF_LIVES
-            for d in ("out", "in")
-            for v in ("count", "amount")
-        ),
-    ),
-    "identity_order": FeatureGroup(
-        "summary",
-        tuple(
-            f"{r}_{state}_last10"
-            for r in ("Account_Owned_By_Party", "Account_Bound_From_Token", "Account_Uses_Device")
-            for state in ("starts", "ends")
-        ),
-    ),
     # The pool groups are client computed from the context's payment messages and never
     # requested from TigerGraph. First-time counts read the pair_history fields and
     # pass-through counts the flow_timing fields.
@@ -172,9 +103,6 @@ FEATURE_GROUPS = {
         ("gap_present",)
         + tuple(f"age_fourier_{i}" for i in range(64))
         + tuple(f"gap_fourier_{i}" for i in range(64)),
-    ),
-    "pair_window_counts": FeatureGroup(
-        "message", ("pair_count_1h", "pair_count_1d", "pair_count_7d")
     ),
     "pair_history": FeatureGroup(
         "message",
@@ -194,13 +122,6 @@ FEATURE_GROUPS = {
         ),
         ("flow_present", "flow_censored", "flow_ratio_present", "flow_same_rail"),
     ),
-    "device_ip_context": FeatureGroup(
-        "message",
-        ("device_age_seconds", "device_present", "ip_age_seconds", "ip_present"),
-        ("device_present", "ip_present"),
-    ),
-    "event_channel": FeatureGroup("categorical", ("channel",)),
-    "sampler_meta": FeatureGroup("categorical", ("stratum",)),
 }
 CLIENT_GROUPS = frozenset({"hub_indicator", *POOL_GROUPS})
 # The built-in run's groups without the pool groups: the model the pool groups were
@@ -214,14 +135,8 @@ CORE_GROUPS = (
     "flow_timing",
 )
 # The groups of the built-in run (config.DEFAULT_CONFIG): the core groups plus the pool
-# groups.
+# groups, which are every group of the registry.
 BUILT_IN_GROUPS = (*CORE_GROUPS, *POOL_GROUPS)
-# Columns follow registry order. Before the layered restructure a fixed list placed the
-# columns of these groups elsewhere, so a plan with one of them fingerprints differently
-# now, and a model saved with such a plan is refused instead of misread.
-REORDERED_GROUPS = frozenset(
-    {"rolling_windows", "amount_ratios", "recency", "association_counts", "pair_window_counts"}
-)
 
 
 # The model architectures: "tgat" is the graph model (model.tgat.TGAT), "summary" the
@@ -288,17 +203,17 @@ class FeaturePlan:
         # The contract leaves the pool groups out, so a plan with one covers them here.
         if set(POOL_GROUPS) & set(self.groups):
             value["pool"] = pool_definition(self.groups)
-        if REORDERED_GROUPS & set(self.groups):
-            value["columns"] = "registry"
         return fingerprint(value)
 
     def query_flags(self, hop: int = 1) -> dict[str, bool]:
-        """GSQL `include_*` parameters for one hop.
+        """GSQL `include_*` parameters for one hop: one per group TigerGraph computes.
 
-        Channel/stratum are wire metadata even when their embeddings are off, and
-        client groups are never requested. TGAT models read only node and message
-        inputs of children, so their second hop skips every summary group. Summary
-        models fetch no children.
+        message_core is always computed and client groups are never requested; every
+        message carries its channel and sampling stratum. TGAT models read only node
+        and message inputs of children, so their second hop would skip a summary group
+        TigerGraph computed; none of the training groups is one (the summary groups are
+        the client's pool counts), so both hops send the same flags. Summary models
+        fetch no children.
         """
         if hop not in (1, 2):
             raise ValueError("Hop must be 1 or 2")
@@ -306,7 +221,7 @@ class FeaturePlan:
         return {
             "include_" + name: name in self.groups and not (skip_summary and spec.path == "summary")
             for name, spec in FEATURE_GROUPS.items()
-            if spec.path != "categorical" and name != "message_core" and name not in CLIENT_GROUPS
+            if name != "message_core" and name not in CLIENT_GROUPS
         }
 
 

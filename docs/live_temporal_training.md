@@ -33,11 +33,13 @@ flowchart LR
   Y[Evaluation truth] --> E
 ```
 
-The model receives 83 entity/context features and 135 numerical features per
-sampled relationship. The [GSQL catalog](gsql_feature_catalog.md) lists every
-family and the Fourier formula. GSQL computes activity, amounts, connectivity,
-recency, amount ratios, pair frequency and time vectors. Python applies fixed transforms and
-trains shared attention weights; labels are never input features.
+The model receives the built-in run's feature groups. GSQL computes the entity
+metadata, the payment amounts and time gaps, pair history and flow timing; Python adds
+the hub indicator and the candidate-pool counts, applies fixed transforms and trains
+shared attention weights; labels are never input features. The groups training does not
+read (windows, recency, amount ratios, association counts, decayed sums and more) are
+analytics, computed by `fetch_analytics_context`. The [GSQL catalog](gsql_feature_catalog.md)
+lists every family and the Fourier formula.
 
 A payment neighbor is represented using history strictly before that payment's
 sequence. The same account at two historical cutoffs is therefore two contexts.
@@ -343,10 +345,10 @@ and associations up to `K`. The second hop is payments only: `chosen = P[:K]`.
   `2*cutoff_seq` for the context seed, so its strict comparison matches the
   visibility contract.
 
-`event_channel` is no longer a default group: live data carries only `digital`,
-`branch_or_atm`, `bank` and `unknown`, one to one with rail. The `CHANNELS` order
-changed with the v5 contract, so checkpoints trained with that group under the v4
-contract are incompatible (the contract fingerprint refuses them).
+The channel and stratum embeddings (`event_channel`, `sampler_meta`) are gone: every
+message still carries its channel and sampling stratum, but no model reads them (live
+data carries only `digital`, `branch_or_atm`, `bank` and `unknown`, one to one with
+rail).
 
 The built-in run adds two groups that `CORE_GROUPS` lacks, `pool_activity` and
 `pool_internal_inflows`: counts over the root's candidate pool (distinct counterparties,

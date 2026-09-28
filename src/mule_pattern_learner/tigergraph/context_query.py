@@ -14,13 +14,7 @@ from typing import Any
 import numpy as np
 
 from ..contract.bounds import REQUEST_KEYS
-from ..contract.feature_groups import (
-    AMOUNT_RATIO_CAP,
-    AMOUNT_RATIO_FEATURES,
-    CLIENT_GROUPS,
-    FEATURE_GROUPS,
-    FeaturePlan,
-)
+from ..contract.feature_groups import CLIENT_GROUPS, FEATURE_GROUPS, FeaturePlan
 from ..contract.graph_schema import CHANNELS, NODE_TYPES, RAILS, RELATIONS, STRATA, ContextKey
 from ..contract.sampler_plan import SamplerPlan
 from ..contract.server import CONTEXT_CONTRACT, CONTEXT_QUERY
@@ -98,21 +92,13 @@ def validate_context(
     if len(messages) > response_bound(sampler, hop):
         raise ValueError("Query response exceeds the neighborhood bound")
     features: dict[str, Any] = row["features"]
-    if "amount_ratios" in plan.groups and any(
-        name not in features for name in AMOUNT_RATIO_FEATURES
-    ):
-        raise ValueError(
-            "GSQL response is missing amount ratios; install the current context query"
-        )
     if set(features) - KNOWN_NODE_FEATURES:
         raise ValueError("Unknown node feature in response")
     if features and not _finite_nonnegative(list(features.values())):
         raise ValueError("Features must be finite and nonnegative")
-    if any(features.get(name, 0) > AMOUNT_RATIO_CAP for name in AMOUNT_RATIO_FEATURES):
-        raise ValueError("GSQL amount ratio exceeds the feature contract")
     numeric = [
         (group, name)
-        for group in ("flow_timing", "pair_history", "device_ip_context")
+        for group in ("flow_timing", "pair_history")
         if group in plan.groups
         for name in FEATURE_GROUPS[group].names
     ]

@@ -262,7 +262,7 @@ def test_saved_models_with_the_slot_sum_score_like_the_trained_model(tmp_path: P
 
 
 def test_nonsense_options_are_rejected() -> None:
-    summary = FeaturePlan(("entity_meta", "decayed_activity", "history_support"), "summary")
+    summary = FeaturePlan(("entity_meta",), "summary")
     with pytest.raises(ValueError, match="TGAT needs a tgat feature plan, not 'summary'"):
         TGAT(16, 4, 0, plan=summary, slot_sum=True, first_fanout=16)
     for flag in (1, "yes", None):

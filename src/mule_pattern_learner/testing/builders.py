@@ -35,7 +35,6 @@ from mule_pattern_learner.config import DEFAULT_CONFIG, RunConfig
 from mule_pattern_learner.contract.clock import timestamp
 from mule_pattern_learner.contract.feature_groups import (
     CORE_GROUPS,
-    FEATURE_GROUPS,
     FeaturePlan,
     contract_fingerprint,
 )
@@ -204,7 +203,7 @@ def supplied_labels(per_split: int = 20) -> pd.DataFrame:
 
 
 def message(seq: int, ts: int, parent: ContextKey, **changes: Any) -> dict[str, Any]:
-    """One visible payment message carrying every v5 message field."""
+    """One visible payment message carrying every field the context query prints."""
     value: dict[str, Any] = {
         "node_type": "Account",
         "node_id": "neighbor",
@@ -220,9 +219,6 @@ def message(seq: int, ts: int, parent: ContextKey, **changes: Any) -> dict[str, 
         "age_ms": parent.cutoff_ms - ts,
         "gap_ms": 0,
         "gap_present": True,
-        "pair_count_1h": 1,
-        "pair_count_1d": 1,
-        "pair_count_7d": 1,
         "pair_prior_count": 1,
         "pair_first_age_seconds": 3600.0,
         "pair_first_present": True,
@@ -233,10 +229,6 @@ def message(seq: int, ts: int, parent: ContextKey, **changes: Any) -> dict[str, 
         "flow_amount_ratio": 0.0,
         "flow_ratio_present": False,
         "flow_same_rail": False,
-        "device_age_seconds": 0.0,
-        "device_present": False,
-        "ip_age_seconds": 0.0,
-        "ip_present": False,
         "peer_first_ms": 1,
         "peer_external": False,
         "peer_deposit": True,
@@ -264,8 +256,6 @@ def association(
             "flow_censored",
             "flow_ratio_present",
             "flow_same_rail",
-            "device_present",
-            "ip_present",
             "peer_external",
             "peer_deposit",
         ),
@@ -301,13 +291,7 @@ def encode(row: dict[str, Any]) -> dict[str, Any]:
 
 
 # The node features of a context row unless a builder names others.
-CONTEXT_FEATURES = {
-    "is_deposit": 1,
-    "age_days": 1,
-    "1d_out_count": 2,
-    "1d_out_in_amount_ratio": 0,
-    "7d_out_in_amount_ratio": 0,
-}
+CONTEXT_FEATURES = {"is_deposit": 1}
 
 
 def context(
@@ -513,9 +497,6 @@ def payment(
         "amount_present": bool(rng.integers(0, 4)),
         "gap_ms": int(rng.integers(0, ts)) if gap_present else 0,
         "gap_present": gap_present,
-        "pair_count_1h": int(rng.integers(0, 3)),
-        "pair_count_1d": int(rng.integers(0, 9)),
-        "pair_count_7d": int(rng.integers(0, 40)),
         "peer_first_ms": int(rng.integers(1, ts + 1)),
         "peer_external": bool(rng.integers(0, 2)),
         "peer_deposit": bool(rng.integers(0, 2)),
@@ -531,10 +512,6 @@ def payment(
         "flow_amount_ratio": float(rng.random() * 3) if flow else 0.0,
         "flow_ratio_present": flow,
         "flow_same_rail": flow and bool(rng.integers(0, 2)),
-        "device_age_seconds": float(rng.integers(0, 10**5)),
-        "device_present": bool(rng.integers(0, 2)),
-        "ip_age_seconds": float(rng.integers(0, 10**5)),
-        "ip_present": bool(rng.integers(0, 2)),
     }
     return message(seq, ts, key, **drawn)
 
@@ -580,15 +557,10 @@ def synthetic_row(
         for n in range(pool.associations if full else int(rng.integers(0, pool.associations + 1))):
             messages.append(synthetic_association(key, relation, f"{relation[-5:]}{n}", rng))
     rng.shuffle(messages)
-    features: dict[str, float] = {
+    features = {
         "is_external": float(rng.integers(0, 2)),
         "is_deposit": float(rng.integers(0, 2)),
-        "age_days": float(rng.random() * 400),
     }
-    for name in FEATURE_GROUPS["rolling_windows"].names[:21]:
-        features[name] = float(rng.integers(0, 20))
-    features.update({"1d_out_in_amount_ratio": 1.5, "7d_out_in_amount_ratio": 0.25})
-    features.update({"visible_event_count": 7.0, "decay_1d_out_count": 0.5})
     return context(key, messages, encodings=encodings, features=features)
 
 
@@ -665,8 +637,6 @@ def _message(parent: ContextKey, j: int) -> dict[str, Any]:
         amount=float(h % 500),
         gap_ms=(h % 50) * 60_000 if gap else 0,
         gap_present=gap,
-        pair_count_1h=0,
-        pair_count_7d=2,
         pair_prior_count=h % 4,
         pair_first_age_seconds=float(h % 10_000),
         flow_observation_seconds=600.0,

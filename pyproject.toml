@@ -160,6 +160,25 @@ forbidden_modules = [
 ]
 
 [[tool.importlinter.contracts]]
+name = "Training never reads the analytics features"
+type = "forbidden"
+source_modules = [
+    "mule_pattern_learner.training",
+    "mule_pattern_learner.data",
+    "mule_pattern_learner.batching",
+    "mule_pattern_learner.inference",
+    "mule_pattern_learner.sampling",
+    "mule_pattern_learner.model",
+    # The use cases of the pipeline that prepare, train, check and score.
+    "mule_pattern_learner.pipeline.connect",
+    "mule_pattern_learner.pipeline.prepare",
+    "mule_pattern_learner.pipeline.train",
+    "mule_pattern_learner.pipeline.check",
+    "mule_pattern_learner.pipeline.score",
+]
+forbidden_modules = ["mule_pattern_learner.contract.analytics_features"]
+
+[[tool.importlinter.contracts]]
 name = "Only reporting draws"
 type = "forbidden"
 source_modules = [

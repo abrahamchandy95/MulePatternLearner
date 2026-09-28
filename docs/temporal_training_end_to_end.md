@@ -227,7 +227,7 @@ each an entity at its own cutoff:
 | `max_history` | Visible events allowed per payment relation (2,048) |
 | `scope_id`, `visibility_phase` | Experiment scope and phase (1 train, 2 validation, 3 test); empty scope means unscoped |
 | `emit_encodings` | Also print the 64-dimensional Fourier vectors (only for periodic parity checks) |
-| `include_*` (14 flags) | Which feature groups to compute |
+| `include_*` (4 flags) | Which of the built-in run's server groups to compute: `entity_meta`, `time_encoding`, `pair_history`, `flow_timing` |
 
 Per request, the query:
 
@@ -246,7 +246,7 @@ Per request, the query:
 6. Reads active association tenures at `cutoff_seq - 1` and keeps the `k_assoc` most
    recent per relation.
 7. Enriches all kept events in set-based selects: counterparty type, ID, first-seen time,
-   external and deposit flags, and optional device and IP first-seen times.
+   and external and deposit flags.
 8. Prints one row. A per-request failure prints `{status, request_index}` and the query
    continues with the next request, so one bad key never costs the others.
 
@@ -255,18 +255,20 @@ The row returned for a request:
 - `status: "ok"`, `request_index`, `contract_version`, `basis_id`, the request key
   (`node_type`, `node_id`, `cutoff_seq`, `cutoff_ms`, `scope_id`, `visibility_phase`),
   `diagnostics` (non-USD and visible participation counts, never model inputs).
-- `features`: node features of the entity (v5 default: `is_external`, `is_deposit`;
-  optional summary groups add rolling windows, recency, association counts, decayed
-  activity and more; see the [catalog](gsql_feature_catalog.md)).
-- `messages`: the candidate pool. Each message has 34 fields: identity (`node_type`,
+- `features`: node features of the entity (`is_external`, `is_deposit`). The groups
+  training does not read, such as rolling windows, recency, association counts and
+  decayed activity, are computed only by the analytics context query,
+  `fetch_analytics_context` (see the [catalog](gsql_feature_catalog.md)).
+- `messages`: the candidate pool. Each message has 27 fields: identity (`node_type`,
   `node_id` of the counterparty, `relation`, `rail`, `channel`, `event_id`, `event_seq`,
   `event_ts_ms`, `stratum`), payload (`amount`, `amount_present`), time (`age_ms` = cutoff
   minus event time; `gap_ms`, `gap_present` = time since the previous event of the same
   directed pair and rail), pair history (`pair_prior_count`, `pair_first_age_seconds`,
-  `pair_first_present`, legacy `pair_count_1h/1d/7d`), flow timing (`flow_delay_seconds`,
+  `pair_first_present`), flow timing (`flow_delay_seconds`,
   `flow_present`, `flow_censored`, `flow_observation_seconds`, `flow_amount_ratio`,
-  `flow_ratio_present`, `flow_same_rail`), counterparty metadata (`peer_first_ms`,
-  `peer_external`, `peer_deposit`) and optional device and IP ages. Association messages
+  `flow_ratio_present`, `flow_same_rail`) and counterparty metadata (`peer_first_ms`,
+  `peer_external`, `peer_deposit`). The analytics query's messages add the pair window
+  counts and the device and IP ages. Association messages
   carry the tenure target with the parent's cutoff clocks.
 - `age_encoding`, `gap_encoding`: empty unless `emit_encodings` is set.
 

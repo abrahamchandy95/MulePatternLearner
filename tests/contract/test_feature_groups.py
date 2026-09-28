@@ -6,6 +6,7 @@ import pytest
 import torch
 
 from mule_pattern_learner.batching.assemble import build_batch
+from mule_pattern_learner.contract.analytics_features import ANALYTICS_GROUPS
 from mule_pattern_learner.contract.feature_groups import (
     BUILT_IN_GROUPS,
     CLIENT_GROUPS,
@@ -23,23 +24,28 @@ from mule_pattern_learner.testing.builders import context, message
 from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
 
-WINDOW_GROUPS = (
-    "entity_meta",
-    "entity_age",
-    "rolling_windows",
-    "recency",
-    "association_counts",
-    "amount_ratios",
-    "message_core",
-    "time_encoding",
-    "pair_window_counts",
+# What TigerGraph computes of the training groups: the include flags of the context query.
+SERVER_FLAGS = (
+    "include_entity_meta",
+    "include_time_encoding",
+    "include_pair_history",
+    "include_flow_timing",
 )
+
+
+def test_training_keeps_only_the_built_in_groups() -> None:
+    # The owner decision on feature groups: the registry is the built-in run's, and the
+    # groups training does not read are analytics.
+    assert set(FEATURE_GROUPS) == set(BUILT_IN_GROUPS)
+    assert not set(ANALYTICS_GROUPS) & set(FEATURE_GROUPS)
+    for group in (*ANALYTICS_GROUPS, "event_channel", "sampler_meta"):
+        with pytest.raises(ValueError, match="unknown"):
+            FeaturePlan(("message_core", group))
 
 
 def test_contract_constants_and_client_groups() -> None:
     assert CHANNELS[:4] == ("unknown", "digital", "branch_or_atm", "bank")
     assert CHANNELS[-1] == "other" and len(set(CHANNELS)) == len(CHANNELS)
-    assert "event_channel" not in CORE_GROUPS and "event_channel" in FEATURE_GROUPS
     assert CORE_GROUPS[:2] == ("entity_meta", "hub_indicator")
     assert CLIENT_GROUPS == {"hub_indicator", *POOL_GROUPS}
     assert FEATURE_GROUPS["hub_indicator"].identity == ("history_withheld",)
@@ -51,30 +57,29 @@ def test_contract_constants_and_client_groups() -> None:
     assert FeaturePlan() == FeaturePlan(BUILT_IN_GROUPS, "tgat")
 
 
-def test_query_flags_skip_child_summaries_only_for_tgat_models() -> None:
-    groups = ("entity_meta", "entity_age", "rolling_windows", "amount_ratios", "message_core")
-    groups += ("time_encoding", "flow_timing", "decayed_activity", "hub_indicator")
-    tgat, summary = FeaturePlan(groups, "tgat"), FeaturePlan(groups, "summary")
-    assert set(tgat.query_flags(2)) == set(tgat.query_flags(1))
-    assert tgat.query_flags(1)["include_rolling_windows"]
-    for name, on in tgat.query_flags(2).items():
-        spec = FEATURE_GROUPS[name.removeprefix("include_")]
-        assert on == (spec.path != "summary" and name.removeprefix("include_") in groups)
-    assert summary.query_flags(2) == summary.query_flags(1) == tgat.query_flags()
+def test_query_flags_name_each_server_group_and_follow_the_plan() -> None:
+    built_in = FeaturePlan()
+    assert tuple(built_in.query_flags()) == SERVER_FLAGS and all(built_in.query_flags().values())
+    # A drop variant keeps the flag and turns it off, at both hops and in either model.
+    dropped = FeaturePlan(
+        tuple(g for g in BUILT_IN_GROUPS if g not in ("flow_timing", "pool_activity"))
+    )
+    without = FeaturePlan(("entity_meta", "hub_indicator", "message_core"))
+    for plan in (built_in, dropped, without, FeaturePlan(CORE_GROUPS, "summary")):
+        expected = {flag: flag.removeprefix("include_") in plan.groups for flag in SERVER_FLAGS}
+        assert plan.query_flags(1) == plan.query_flags(2) == expected
     with pytest.raises(ValueError, match="Hop"):
-        tgat.query_flags(3)
+        built_in.query_flags(3)
 
 
 def test_extraction_plan_is_the_model_groups_without_the_client_groups() -> None:
     from mule_pattern_learner.contract.feature_groups import extraction_plan
 
-    tgat = extraction_plan(FeaturePlan((*CORE_GROUPS, "rolling_windows")))
-    assert set(tgat.groups) == set(CORE_GROUPS) - {"hub_indicator"} | {"rolling_windows"}
-    assert tgat.architecture == "tgat" and not tgat.query_flags(2)["include_rolling_windows"]
-    summary = extraction_plan(FeaturePlan(WINDOW_GROUPS, "summary"))
-    assert summary.architecture == "summary" and summary.query_flags(1)["include_rolling_windows"]
     built_in = extraction_plan(FeaturePlan())
     assert set(built_in.groups) == set(CORE_GROUPS) - {"hub_indicator"}
+    assert built_in.architecture == "tgat"
+    summary = extraction_plan(FeaturePlan(CORE_GROUPS, "summary"))
+    assert summary.architecture == "summary" and set(summary.groups) == set(built_in.groups)
 
 
 @pytest.mark.parametrize("group", list(FEATURE_GROUPS))
@@ -85,10 +90,6 @@ def test_each_group_has_consistent_transport_batch_and_model_width(group: str) -
     msg = message(80, 800, root)
     # A real zero-gap predecessor remains distinguishable from no predecessor.
     msg.update(
-        device_age_seconds=0,
-        device_present=False,
-        ip_age_seconds=0,
-        ip_present=False,
         pair_prior_count=1,
         pair_first_age_seconds=0,
         pair_first_present=True,
@@ -118,7 +119,7 @@ def test_each_group_has_consistent_transport_batch_and_model_width(group: str) -
 
 def test_registry_dependencies_fingerprints_and_unknown_fields():
     with pytest.raises(ValueError, match="dependencies"):
-        FeaturePlan(("message_core", "amount_ratios"))
+        FeaturePlan(("message_core", "pool_internal_inflows"))
     with pytest.raises(ValueError, match="unknown"):
         FeaturePlan(("message_core", "made_up"))
     a = FeaturePlan(CORE_GROUPS, "tgat")
@@ -126,7 +127,6 @@ def test_registry_dependencies_fingerprints_and_unknown_fields():
     assert a.fingerprint() != FeaturePlan(CORE_GROUPS, "summary").fingerprint()
     with pytest.raises(ValueError, match="Architecture must be one of"):
         FeaturePlan(CORE_GROUPS, "single")
-    assert not a.query_flags()["include_rolling_windows"]
     row = context(ContextKey("Account", "root", 100, 1000))
     row["features"]["fraud_label"] = 1
     with pytest.raises(ValueError, match="Unrecognized"):

@@ -5,14 +5,12 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-import numpy as np
 import pytest
 
 from mule_pattern_learner.contract.feature_groups import FeaturePlan
 from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
 from mule_pattern_learner.contract.server import CONTEXT_QUERY
-from mule_pattern_learner.reference.batch_features import node_features
 from mule_pattern_learner.testing.builders import (
     CORE_PLAN,
     SMALL_SAMPLER,
@@ -100,16 +98,12 @@ def test_basis_and_clock_corruption_are_rejected() -> None:
         validate_context(key, bad, plan=FeaturePlan(), sampler=SamplerPlan())
 
 
-def test_amount_ratios_are_required_from_gsql_and_preserved_by_tensor_conversion() -> None:
+def test_a_row_with_a_feature_training_does_not_read_is_refused() -> None:
+    # The training query computes no analytics group, so such a feature means another
+    # query answered.
     key = ContextKey("Account", "root", 100, 1000)
-    row = context(key)
-    row["features"].update({"1d_out_in_amount_ratio": 2.5, "7d_out_in_amount_ratio": 100.0})
-    plan = FeaturePlan(("entity_meta", "rolling_windows", "amount_ratios", "message_core"))
-    validate_context(key, row, plan, sampler=SamplerPlan())
-    features = node_features(row, plan)
-    ratio = plan.node_names.index
-    assert features[ratio("1d_out_in_amount_ratio")] == pytest.approx(np.log1p(2.5))
-    assert features[ratio("7d_out_in_amount_ratio")] == pytest.approx(np.log1p(100.0))
-    del row["features"]["1d_out_in_amount_ratio"]
-    with pytest.raises(ValueError, match="missing amount ratios"):
-        validate_context(key, row, plan, sampler=SamplerPlan())
+    validate_context(key, context(key), FeaturePlan(), sampler=SamplerPlan())
+    for name in ("age_days", "1d_out_count", "1d_out_in_amount_ratio", "visible_event_count"):
+        row = context(key, features={"is_deposit": 1, name: 1})
+        with pytest.raises(ValueError, match="Unknown node feature"):
+            validate_context(key, row, FeaturePlan(), sampler=SamplerPlan())
