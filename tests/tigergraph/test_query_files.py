@@ -17,7 +17,13 @@ from mule_pattern_learner.contract.server import (
 )
 from mule_pattern_learner.data.contexts import ContextSource
 from mule_pattern_learner.paths import GSQL_DIR
-from mule_pattern_learner.testing.builders import PLAN, SAMPLER, hub_rows, payments_context, root
+from mule_pattern_learner.testing.builders import (
+    CORE_PLAN,
+    SMALL_SAMPLER,
+    hub_rows,
+    payments_context,
+    root,
+)
 from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
 from mule_pattern_learner.tigergraph import gsql_text
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
@@ -76,9 +82,9 @@ def test_sent_parameters_match_the_repository_query_signatures() -> None:
 
     context = signature("queries/training_context.gsql", CONTEXT_QUERY)
     windows = (FeaturePlan(DEFAULT_FLAG_GROUPS, a) for a in ARCHITECTURES)
-    for plan in (PLAN, *windows):
+    for plan in (CORE_PLAN, *windows):
         server = FakeTigerGraph(factory=payments_context)
-        store = ContextSource(TigerGraphContextFetcher(server), plan=plan, sampler=SAMPLER)
+        store = ContextSource(TigerGraphContextFetcher(server), plan=plan, sampler=SMALL_SAMPLER)
         store.fetch([root(0)], hop=1)
         store.fetch([root(0)], hop=2)
         store.close()

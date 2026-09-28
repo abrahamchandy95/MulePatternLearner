@@ -16,11 +16,12 @@ from mule_pattern_learner.data.manifest import dataset_id, dataset_settings, que
 from mule_pattern_learner.paths import DatasetPaths
 from mule_pattern_learner.pipeline import prepare as pipeline_prepare
 from mule_pattern_learner.testing.builders import (
-    SNAPSHOT_SOURCE,
     UNIT_SOURCE,
-    example_config,
     unit_config,
 )
+
+# The source id an earlier preparation recorded, which the graph no longer derives.
+PREPARED_SOURCE = "unit_snapshot"
 
 
 @pytest.fixture
@@ -35,7 +36,7 @@ def write_manifest(
     config: RunConfig,
     hashes: dict[str, Any],
     status: str = "ready",
-    source_id: str = SNAPSHOT_SOURCE,
+    source_id: str = PREPARED_SOURCE,
 ) -> tuple[DatasetPaths, dict[str, Any]]:
     """A manifest in the directory of config's dataset of source_id under data."""
     manifest = {
@@ -150,9 +151,9 @@ def test_a_dataset_being_prepared_keeps_its_source_id(
     assert pipeline_prepare.prepare_dataset(config, data) == dataset
     assert steps == [
         "install",
-        f"scope unit_scope {SNAPSHOT_SOURCE} 42",
+        f"scope unit_scope {PREPARED_SOURCE} 42",
         "reveal",
-        f"prepare {SNAPSHOT_SOURCE} {dataset.root.name}",
+        f"prepare {PREPARED_SOURCE} {dataset.root.name}",
     ]
 
 
@@ -174,7 +175,7 @@ def test_datasets_of_several_sources_read_the_source_id_from_the_graph(
 def test_ready_pipeline_reuses_cache_without_connecting(tmp_path: Path) -> None:
     from mule_pattern_learner.pipeline.prepare import find_datasets, prepare_dataset
 
-    c = example_config()
+    c = unit_config()
     dataset, _ = write_manifest(tmp_path, c, query_hashes(), source_id=UNIT_SOURCE)
     with patch("mule_pattern_learner.pipeline.prepare.connect") as client:
         assert prepare_dataset(c, tmp_path) == dataset

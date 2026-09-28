@@ -15,14 +15,19 @@ from mule_pattern_learner.evaluation.truth import ParquetTruth
 from mule_pattern_learner.paths import RunPaths
 from mule_pattern_learner.pipeline import evaluate as pipeline_evaluate
 from mule_pattern_learner.runtime.progress import emit
-from mule_pattern_learner.testing.builders import base_config, prepared_dataset, saved_model
+from mule_pattern_learner.testing.builders import (
+    RUNTIME_CHANGES,
+    prepared_dataset,
+    saved_model,
+    unit_config,
+)
 from mule_pattern_learner.tigergraph.oracle import TigerGraphTruth
 
 
 def test_evaluate_run_connects_after_its_checks_and_reads_truth_on_that_connection(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    config = base_config()
+    config = unit_config(RUNTIME_CHANGES)
     dataset, _, _ = prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     run = RunPaths(tmp_path / "run")
     saved_model(run.model, config, dataset)

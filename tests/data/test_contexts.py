@@ -26,11 +26,8 @@ from mule_pattern_learner.data.hub_registry import HubRegistry
 from mule_pattern_learner.reference.batch_features import node_features
 from mule_pattern_learner.testing.builders import (
     CORE_PLAN,
-    PLAN,
-    SAMPLER,
     SMALL_SAMPLER,
     context,
-    context_row,
     event,
     message,
     neighbourhood,
@@ -69,7 +66,10 @@ def test_per_request_failures_become_none_and_are_counted() -> None:
         statuses={keys[1]: "history_capacity_exceeded", keys[3]: "missing_entity"}
     )
     store = ContextSource(
-        TigerGraphContextFetcher(server), plan=PLAN, sampler=SAMPLER, request_batch_size=16
+        TigerGraphContextFetcher(server),
+        plan=CORE_PLAN,
+        sampler=SMALL_SAMPLER,
+        request_batch_size=16,
     )
     rows = store.fetch(keys + [keys[1]])
     assert [row is None for row in rows] == [False, True, False, True, False, True]
@@ -78,7 +78,7 @@ def test_per_request_failures_become_none_and_are_counted() -> None:
     # Cached rejections are served without another call and counted again.
     assert store.fetch([keys[3]]) == [None] and store.database_calls == 1
     assert store.rejections["missing_entity"] == 2
-    assert query_context_batch(server, keys[:2], plan=PLAN, sampler=SAMPLER)[1] is None
+    assert query_context_batch(server, keys[:2], plan=CORE_PLAN, sampler=SMALL_SAMPLER)[1] is None
     # The same counts per hop: roots (hop 1) and children (hop 2) are reported apart.
     assert store.fetch([keys[1]], hop=2) == [None]
     assert store.rejections_by_hop == {
@@ -92,15 +92,17 @@ def test_per_request_failures_become_none_and_are_counted() -> None:
 def test_hop_pools_and_flags_are_sent_and_lru_is_keyed_by_hop() -> None:
     plan = FeaturePlan(("entity_meta", "message_core", "time_encoding", "rolling_windows"), "tgat")
     server = payments_graph()
-    store = ContextSource(TigerGraphContextFetcher(server), plan=plan, sampler=SAMPLER, capacity=8)
+    store = ContextSource(
+        TigerGraphContextFetcher(server), plan=plan, sampler=SMALL_SAMPLER, capacity=8
+    )
     key = root(0)
     store.fetch([key], hop=1)
     store.fetch([key], hop=2)
     store.fetch([key], hop=1)
     assert store.database_calls == 2 and len(server.calls) == 2
     first, second = context_calls(server)
-    assert {k: first[k] for k in SAMPLER.query_params(1)} == SAMPLER.query_params(1)
-    assert {k: second[k] for k in SAMPLER.query_params(2)} == SAMPLER.query_params(2)
+    assert {k: first[k] for k in SMALL_SAMPLER.query_params(1)} == SMALL_SAMPLER.query_params(1)
+    assert {k: second[k] for k in SMALL_SAMPLER.query_params(2)} == SMALL_SAMPLER.query_params(2)
     assert first["include_rolling_windows"] and not second["include_rolling_windows"]
     assert {k for k in first if k.startswith("include_")} == set(plan.query_flags(1))
     assert (1, key) in store.memory and (2, key) in store.memory
@@ -111,7 +113,10 @@ def test_hop_pools_and_flags_are_sent_and_lru_is_keyed_by_hop() -> None:
 
 def test_sources_count_requested_distinct_and_cached_contexts() -> None:
     store = ContextSource(
-        TigerGraphContextFetcher(payments_graph()), plan=PLAN, sampler=SAMPLER, capacity=8
+        TigerGraphContextFetcher(payments_graph()),
+        plan=CORE_PLAN,
+        sampler=SMALL_SAMPLER,
+        capacity=8,
     )
     keys = [root(i) for i in range(4)]
     # A key repeated within one fetch is asked for once.
@@ -149,7 +154,10 @@ def test_sources_count_requested_distinct_and_cached_contexts() -> None:
 
 def test_lru_is_bounded_and_close_releases_it() -> None:
     store = ContextSource(
-        TigerGraphContextFetcher(payments_graph()), plan=PLAN, sampler=SAMPLER, capacity=8
+        TigerGraphContextFetcher(payments_graph()),
+        plan=CORE_PLAN,
+        sampler=SMALL_SAMPLER,
+        capacity=8,
     )
     for start in range(0, 64, 16):
         store.fetch([root(i) for i in range(start, start + 16)])
@@ -172,8 +180,8 @@ def test_concurrent_fetches_share_requests_and_respect_concurrency() -> None:
     server = payments_graph(delay=0.01)
     store = ContextSource(
         TigerGraphContextFetcher(server),
-        plan=PLAN,
-        sampler=SAMPLER,
+        plan=CORE_PLAN,
+        sampler=SMALL_SAMPLER,
         capacity=4096,
         request_batch_size=4,
         concurrency=3,
@@ -214,8 +222,8 @@ def test_failed_request_propagates_to_every_waiting_fetch() -> None:
 
     store = ContextSource(
         TigerGraphContextFetcher(payments_graph(before=failing)),
-        plan=PLAN,
-        sampler=SAMPLER,
+        plan=CORE_PLAN,
+        sampler=SMALL_SAMPLER,
         concurrency=2,
     )
     errors: list[BaseException] = []
@@ -247,8 +255,8 @@ def test_close_without_wait_cancels_queued_requests_and_leaves_daemon_workers() 
     server = payments_graph(before=blocking)
     store = ContextSource(
         TigerGraphContextFetcher(server),
-        plan=PLAN,
-        sampler=SAMPLER,
+        plan=CORE_PLAN,
+        sampler=SMALL_SAMPLER,
         request_batch_size=1,
         concurrency=1,
     )
@@ -296,7 +304,10 @@ def test_timed_out_blocks_are_bisected_and_a_single_slow_key_is_fatal() -> None:
     keys = [root(i) for i in range(8)]
     server = slow(limit=2, slow_ids=set())
     store = ContextSource(
-        TigerGraphContextFetcher(server), plan=PLAN, sampler=SAMPLER, request_batch_size=8
+        TigerGraphContextFetcher(server),
+        plan=CORE_PLAN,
+        sampler=SMALL_SAMPLER,
+        request_batch_size=8,
     )
     rows = store.fetch(keys)
     assert [row and row["node_id"] for row in rows] == [key.node_id for key in keys]
@@ -305,7 +316,10 @@ def test_timed_out_blocks_are_bisected_and_a_single_slow_key_is_fatal() -> None:
     store.close()
     server = slow(limit=8, slow_ids={keys[5].node_id})
     store = ContextSource(
-        TigerGraphContextFetcher(server), plan=PLAN, sampler=SAMPLER, request_batch_size=8
+        TigerGraphContextFetcher(server),
+        plan=CORE_PLAN,
+        sampler=SMALL_SAMPLER,
+        request_batch_size=8,
     )
     with pytest.raises(ContextTimeoutError, match="A0005") as caught:
         store.fetch(keys)
@@ -321,18 +335,20 @@ def test_timed_out_blocks_are_bisected_and_a_single_slow_key_is_fatal() -> None:
         return responder.run(name, params)
 
     conn = FakeConn([timeout, answer, answer])
-    rows, calls = query_context_split(executor(conn), keys[:2], plan=PLAN, sampler=SAMPLER)
+    rows, calls = query_context_split(
+        executor(conn), keys[:2], plan=CORE_PLAN, sampler=SMALL_SAMPLER
+    )
     assert calls == 2 and [len(call[1]["node_ids"]) for call in conn.calls] == [2, 1, 1]
     conn = FakeConn([timeout, timeout, answer])
     with pytest.raises(ContextTimeoutError):
-        query_context_split(executor(conn), keys[:1], plan=PLAN, sampler=SAMPLER)
+        query_context_split(executor(conn), keys[:1], plan=CORE_PLAN, sampler=SMALL_SAMPLER)
     assert len(conn.calls) == 2
 
 
 def test_encoding_spot_checks_follow_the_cadence_and_are_stripped() -> None:
     server = payments_graph()
     store = ContextSource(
-        TigerGraphContextFetcher(server), plan=PLAN, sampler=SAMPLER, request_batch_size=1, concurrency=1,
+        TigerGraphContextFetcher(server), plan=CORE_PLAN, sampler=SMALL_SAMPLER, request_batch_size=1, concurrency=1,
         encoding_check_every=3,
     )  # fmt: skip
     rows = store.fetch([root(i) for i in range(7)])
@@ -349,16 +365,20 @@ def test_corrupted_or_missing_spot_check_vectors_fail() -> None:
         (payments_graph(encodings="perturbed"), "shared basis"),
         (payments_graph(encodings="omitted"), "do not cover"),
     ):
-        store = ContextSource(TigerGraphContextFetcher(server), plan=PLAN, sampler=SAMPLER)
+        store = ContextSource(
+            TigerGraphContextFetcher(server), plan=CORE_PLAN, sampler=SMALL_SAMPLER
+        )
         with pytest.raises(ValueError, match=expected):
             store.fetch([root(0)])
         store.close()
     key = root(0)
-    row = context_row(key, [event(990, key)], encodings=True)
-    validate_context(key, row, PLAN, SAMPLER)  # optional vectors are verified when present
+    row = context(key, [event(990, key)], encodings=True)
+    validate_context(
+        key, row, CORE_PLAN, SMALL_SAMPLER
+    )  # optional vectors are verified when present
     row["gap_encoding"]["payment_out:E990"][0] += 0.5
     with pytest.raises(ValueError, match="encoding"):
-        validate_context(key, row, PLAN, SAMPLER)
+        validate_context(key, row, CORE_PLAN, SMALL_SAMPLER)
 
 
 def test_the_context_source_serves_repeats_from_its_bounded_lru() -> None:

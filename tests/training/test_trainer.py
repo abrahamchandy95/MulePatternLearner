@@ -40,16 +40,15 @@ from mule_pattern_learner.model.loss import NonNegativePULoss
 from mule_pattern_learner.model.tgat import TGAT
 from mule_pattern_learner.paths import DatasetPaths, RunPaths
 from mule_pattern_learner.testing.builders import (
-    RUNTIME_SOURCE,
+    RUNTIME_CHANGES,
     UNIT_SOURCE,
     assigned_accounts,
-    base_config,
-    example_config,
     hub_registry,
     neighbourhood,
     prepared_dataset,
     scoped_accounts,
     supplied_labels,
+    unit_config,
 )
 from mule_pattern_learner.testing.fake_graph import FakeSource, FakeTigerGraph
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
@@ -116,7 +115,7 @@ def after_validation(nth: int) -> Callable[[list[ContextKey], int, Counter[str]]
 def test_two_epochs_equal_one_epoch_plus_resume(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, average: float
 ) -> None:
-    config = base_config(training={"weight_average_decay": average})
+    config = unit_config(RUNTIME_CHANGES, training={"weight_average_decay": average})
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     fit(tmp_path, "straight", config)
     with pytest.raises(RuntimeError, match="injected"):
@@ -146,7 +145,8 @@ def test_two_epochs_equal_one_epoch_plus_resume(
 def test_mid_epoch_step_checkpoint_resumes_exactly(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, average: float
 ) -> None:
-    config = base_config(
+    config = unit_config(
+        RUNTIME_CHANGES,
         runtime={"checkpoint_every_steps": 1},
         training={"steps_per_epoch": 4, "weight_average_decay": average},
     )
@@ -171,7 +171,7 @@ def test_mid_epoch_step_checkpoint_resumes_exactly(
 def test_a_resume_records_changed_host_settings(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    config = base_config()
+    config = unit_config(RUNTIME_CHANGES)
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     with pytest.raises(RuntimeError, match="injected"):
         fit(tmp_path, "run", config, contexts=FakeSource(config, fail=after_validation(1)))
@@ -196,8 +196,10 @@ def test_a_resumed_run_logs_each_interval_once(
 ) -> None:
     # Every step is logged but only epochs are checkpointed, so the failed segment logs
     # two steps of epoch 2 that the resumed run trains, and logs, again.
-    config = base_config(
-        training={"steps_per_epoch": 4}, runtime={"log_every_steps": 1, "prefetch_batches": 0}
+    config = unit_config(
+        RUNTIME_CHANGES,
+        training={"steps_per_epoch": 4},
+        runtime={"log_every_steps": 1, "prefetch_batches": 0},
     )
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     fit(tmp_path, "straight", config)
@@ -219,7 +221,7 @@ def test_a_resumed_run_logs_each_interval_once(
 def test_the_run_records_its_settings_provenance_and_epochs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    config = base_config()
+    config = unit_config(RUNTIME_CHANGES)
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     result = fit(tmp_path, "run", config)
     run = RunPaths(tmp_path / "run")
@@ -242,7 +244,7 @@ def test_the_run_records_its_settings_provenance_and_epochs(
     assert set(provenance["versions"]) == set(PACKAGES) and provenance["versions"]["torch"]
     assert (provenance["device"], provenance["sampler_backend"]) == ("cpu", "torch")
     assert (provenance["threads"], provenance["deterministic"]) == (1, True)
-    assert provenance["dataset_id"] == dataset_id(RUNTIME_SOURCE, config) == result["dataset_id"]
+    assert provenance["dataset_id"] == dataset_id(UNIT_SOURCE, config) == result["dataset_id"]
     # The metrics hold no history: its intervals and epochs have their own files.
     assert "history" not in json.loads(run.metrics.read_text())
     assert result["proxy_unlabeled_limit"] == config.training.proxy_unlabeled_limit
@@ -260,7 +262,7 @@ def test_the_run_records_its_settings_provenance_and_epochs(
 def test_prefetch_depth_and_resample_policy_do_not_break_determinism(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    config = base_config()
+    config = unit_config(RUNTIME_CHANGES)
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     fit(tmp_path, "inline", config.with_changes({"runtime": {"prefetch_batches": 0}}))
     fit(tmp_path, "threads", config.with_changes({"runtime": {"prefetch_batches": 4}}))
@@ -270,7 +272,7 @@ def test_prefetch_depth_and_resample_policy_do_not_break_determinism(
 def test_resume_refuses_a_changed_result_setting(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    config = base_config()
+    config = unit_config(RUNTIME_CHANGES)
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     with pytest.raises(RuntimeError):
         fit(tmp_path, "run", config, contexts=FakeSource(config, fail=after_validation(1)))
@@ -282,7 +284,7 @@ def test_resume_refuses_a_changed_result_setting(
 def test_resume_refuses_a_dataset_other_than_the_runs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    config = base_config()
+    config = unit_config(RUNTIME_CHANGES)
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
 
     def first_fetch(keys: list[ContextKey], hop: int, calls: Counter[str]) -> bool:
@@ -294,7 +296,7 @@ def test_resume_refuses_a_dataset_other_than_the_runs(
     assert RunPaths(tmp_path / "checkpointed").resume.exists()
     # Stopped before its first checkpoint: config.json names the dataset.
     assert not RunPaths(tmp_path / "early").resume.exists()
-    ours = dataset_id(RUNTIME_SOURCE, config)
+    ours = dataset_id(UNIT_SOURCE, config)
     # The graph was reloaded and a new dataset prepared for the same settings.
     other, _, _ = prepared_dataset(tmp_path / "other", config, monkeypatch, "another_source")
     theirs = dataset_id("another_source", config)
@@ -318,7 +320,7 @@ def test_resume_refuses_a_dataset_other_than_the_runs(
 def test_batches_use_train_mode_step_seeds_and_the_hub_registry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    config = base_config()
+    config = unit_config(RUNTIME_CHANGES)
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     calls: list[tuple[str, int, int, int]] = []
     backends: set[str | None] = set()
@@ -382,8 +384,10 @@ def test_batches_use_train_mode_step_seeds_and_the_hub_registry(
 def test_rejected_roots_are_dropped_and_reported(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    config = base_config(
-        training={"proxy_unlabeled_limit": 100}, runtime={"max_rejected_root_fraction": 0.2}
+    config = unit_config(
+        RUNTIME_CHANGES,
+        training={"proxy_unlabeled_limit": 100},
+        runtime={"max_rejected_root_fraction": 0.2},
     )
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     # Unlabeled validation, test and train accounts (4 of the 21 marginal train rows,
@@ -409,15 +413,17 @@ def test_rejected_roots_are_dropped_and_reported(
 def test_rejected_roots_fail_closed_by_default(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    config = base_config(training={"proxy_unlabeled_limit": 100})
+    config = unit_config(RUNTIME_CHANGES, training={"proxy_unlabeled_limit": 100})
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     # Default limit 0: one rejected unlabeled validation root fails epoch 1.
     with pytest.raises(ValueError, match=r"validation: TigerGraph rejected 1 of 23 roots"):
         fit(tmp_path, "one", config, contexts=FakeSource(config, reject=frozenset({"A001"})))
     assert not RunPaths(tmp_path / "one").model.exists()
     # A rejected observed positive always fails, whatever the limit.
-    loose = base_config(
-        training={"proxy_unlabeled_limit": 100}, runtime={"max_rejected_root_fraction": 1.0}
+    loose = unit_config(
+        RUNTIME_CHANGES,
+        training={"proxy_unlabeled_limit": 100},
+        runtime={"max_rejected_root_fraction": 1.0},
     )
     with pytest.raises(ValueError, match="1 observed positives"):
         fit(tmp_path, "pos", loose, contexts=FakeSource(loose, reject=frozenset({"A010"})))
@@ -434,7 +440,7 @@ def test_rejected_roots_fail_closed_by_default(
 def test_test_split_rejections_fail_after_the_model_is_saved(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    config = base_config(training={"proxy_unlabeled_limit": 100})
+    config = unit_config(RUNTIME_CHANGES, training={"proxy_unlabeled_limit": 100})
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     with pytest.raises(ValueError, match=r"test: TigerGraph rejected 1 of 22 roots"):
         fit(tmp_path, "run", config, contexts=FakeSource(config, reject=frozenset({"A002"})))
@@ -455,7 +461,7 @@ def test_test_split_rejections_fail_after_the_model_is_saved(
 def test_no_finite_validation_ap_refuses_to_save(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    config = base_config()
+    config = unit_config(RUNTIME_CHANGES)
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     real = trainer.proxy_metrics
 
@@ -471,7 +477,7 @@ def test_no_finite_validation_ap_refuses_to_save(
 def test_non_finite_evaluation_scores_raise_instead_of_counting_as_rejections(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    config = base_config()
+    config = unit_config(RUNTIME_CHANGES)
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     original = TGAT.forward
 
@@ -489,7 +495,7 @@ def test_non_finite_evaluation_scores_raise_instead_of_counting_as_rejections(
 def test_evaluation_scores_keep_float64_resolution_near_one(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    config = base_config()
+    config = unit_config(RUNTIME_CHANGES)
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     original = TGAT.forward
 
@@ -512,7 +518,9 @@ def test_evaluation_scores_keep_float64_resolution_near_one(
 def test_patience_zero_disables_early_stopping(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    config = base_config(training={"epochs": 3, "patience": 0, "steps_per_epoch": 1})
+    config = unit_config(
+        RUNTIME_CHANGES, training={"epochs": 3, "patience": 0, "steps_per_epoch": 1}
+    )
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     ap = iter([0.5, 0.4, 0.3])  # validation never improves after epoch 1
     real = trainer.proxy_metrics
@@ -533,7 +541,7 @@ def test_patience_zero_disables_early_stopping(
 def test_resume_refuses_a_different_sampler_backend_unless_configured(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    config = base_config()
+    config = unit_config(RUNTIME_CHANGES)
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     fit(tmp_path, "straight", config)
     with pytest.raises(RuntimeError, match="injected"):
@@ -544,7 +552,7 @@ def test_resume_refuses_a_different_sampler_backend_unless_configured(
     torch.save({**state, "sampler_backend": "cugraph"}, path)
     with pytest.raises(ValueError, match="sampled with the cugraph backend .* resolves torch"):
         fit(tmp_path, "run", config, resume=True)
-    explicit = base_config(sampler={"backend": "torch"})
+    explicit = unit_config(RUNTIME_CHANGES, sampler={"backend": "torch"})
     result = fit(tmp_path, "run", explicit, resume=True)
     assert result["status"] == "complete" and result["sampler_backend"] == "torch"
     # The change of stream is recorded with the run's events.
@@ -559,10 +567,10 @@ def test_missing_hub_indicator_warns_once_at_start(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     groups = [g for g in CORE_GROUPS if g != "hub_indicator"]
-    config = base_config(features=groups, training={"epochs": 1})
+    config = unit_config(RUNTIME_CHANGES, features=groups, training={"epochs": 1})
     plan = config.feature_plan()
     warn_hub_stubs(HubRegistry.empty(), plan)
-    warn_hub_stubs(hub_registry(), base_config().feature_plan())
+    warn_hub_stubs(hub_registry(), unit_config(RUNTIME_CHANGES).feature_plan())
     assert capsys.readouterr().out == ""
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     fit(tmp_path, "run", config)
@@ -574,7 +582,7 @@ def test_missing_hub_indicator_warns_once_at_start(
 def test_run_directory_is_created_only_after_the_source_opens(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    config = base_config()
+    config = unit_config(RUNTIME_CHANGES)
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
 
     def refuse(dataset: DatasetPaths, manifest: dict[str, Any], config: RunConfig) -> NoReturn:
@@ -590,7 +598,7 @@ def test_run_directory_is_created_only_after_the_source_opens(
         )
     assert not RunPaths(tmp_path / "m").root.exists()
     # A source built with another sampler is rejected before anything is written.
-    other = base_config(sampler={"relation_fanouts": [3, 2]})
+    other = unit_config(RUNTIME_CHANGES, sampler={"relation_fanouts": [3, 2]})
     with pytest.raises(ValueError, match="sampler"):
         fit(tmp_path, "m", config, contexts=FakeSource(other))
     assert not RunPaths(tmp_path / "m").root.exists()
@@ -599,7 +607,7 @@ def test_run_directory_is_created_only_after_the_source_opens(
 def test_non_finite_loss_stops_before_any_checkpoint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    config = base_config(runtime={"checkpoint_every_steps": 1})
+    config = unit_config(RUNTIME_CHANGES, runtime={"checkpoint_every_steps": 1})
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     original = NonNegativePULoss.forward
 
@@ -614,7 +622,7 @@ def test_non_finite_loss_stops_before_any_checkpoint(
 
 
 def test_train_restores_global_torch_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    config = base_config(training={"epochs": 1})
+    config = unit_config(RUNTIME_CHANGES, training={"epochs": 1})
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     threads = torch.get_num_threads()
     torch.use_deterministic_algorithms(False)
@@ -632,7 +640,7 @@ def test_train_restores_global_torch_state(tmp_path: Path, monkeypatch: pytest.M
 
 @pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS unavailable")
 def test_fake_end_to_end_training_on_mps(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    config = base_config(runtime={"device": "mps"})
+    config = unit_config(RUNTIME_CHANGES, runtime={"device": "mps"})
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     result = fit(tmp_path, "mps", config)
     assert result["device"] == "mps" and result["status"] == "complete"
@@ -644,7 +652,7 @@ def test_fake_end_to_end_training_on_mps(tmp_path: Path, monkeypatch: pytest.Mon
 @pytest.mark.cuda
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA unavailable")
 def test_fake_end_to_end_training_on_cuda(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    config = base_config(runtime={"device": "cuda", "deterministic": "strict"})
+    config = unit_config(RUNTIME_CHANGES, runtime={"device": "cuda", "deterministic": "strict"})
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     assert fit(tmp_path, "cuda", config)["status"] == "complete"
 
@@ -653,7 +661,7 @@ def test_averaged_run_validates_and_saves_the_average(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # One epoch, so the selected state is the average at its end.
-    config = base_config(training={"weight_average_decay": 0.9, "epochs": 1})
+    config = unit_config(RUNTIME_CHANGES, training={"weight_average_decay": 0.9, "epochs": 1})
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     result = fit(tmp_path, "averaged", config)
     assert result["best_epoch"] == 1
@@ -710,7 +718,7 @@ def prepared(
 
 
 def test_hidden_truth_cannot_change_updates_or_checkpoint_selection(tmp_path: Path) -> None:
-    c = example_config()
+    c = unit_config()
     dataset, executor = prepared(tmp_path, c)
     assert executor.names().count(HUB_QUERY) == 1
     first = train(
@@ -745,7 +753,7 @@ def test_hidden_truth_cannot_change_updates_or_checkpoint_selection(tmp_path: Pa
 
 
 def test_preparation_requests_no_context_and_training_keeps_a_bounded_lru(tmp_path: Path) -> None:
-    c = example_config()
+    c = unit_config()
     dataset, executor = prepared(tmp_path, c)
     load_prepared(dataset)
     assert not executor.requested
@@ -756,7 +764,7 @@ def test_preparation_requests_no_context_and_training_keeps_a_bounded_lru(tmp_pa
 
 
 def test_training_end_to_end_with_candidate_pool_neighbour_messages(tmp_path: Path) -> None:
-    c = example_config()
+    c = unit_config()
     # N3 is a hub at every root cutoff; N5 always exceeds its history capacity.
     dataset, executor = prepared(
         tmp_path,
@@ -817,7 +825,7 @@ def test_training_end_to_end_with_candidate_pool_neighbour_messages(tmp_path: Pa
 
 def test_rejected_roots_within_the_limit_are_dropped_and_counted(tmp_path: Path) -> None:
     # Rejected roots fail closed by default; this run tolerates up to 5% per split.
-    c = example_config(runtime={"max_rejected_root_fraction": 0.05})
+    c = unit_config(runtime={"max_rejected_root_fraction": 0.05})
     # An unlabeled validation account, scored (and rejected) in every epoch. A rejected
     # observed positive would fail the run at any limit.
     validation = assigned_accounts().query("split == 'validation'").account_id
@@ -840,7 +848,7 @@ def test_rejected_roots_within_the_limit_are_dropped_and_counted(tmp_path: Path)
 
 
 def test_rejected_roots_fail_the_run_under_the_default_limit(tmp_path: Path) -> None:
-    c = example_config()
+    c = unit_config()
     validation = assigned_accounts().query("split == 'validation'").account_id
     dataset, executor = prepared(
         tmp_path, c, factory=neighbourhood, statuses={str(validation.iloc[20]): "invisible_entity"}

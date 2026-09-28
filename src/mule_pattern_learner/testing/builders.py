@@ -1,11 +1,14 @@
 """Builders of test data: configurations, accounts, labels, contexts and messages.
 
-Nothing here opens a connection. The builders come from several test modules and
-still differ in detail (several build messages); they are shared, not yet merged.
+Nothing here opens a connection. There is one configuration builder (unit_config), whose
+datasets are prepared from one source id (UNIT_SOURCE), one payment message (message),
+one association (association) and one context row (context); the other builders are
+those with particular values (a deterministic neighbourhood, random synthetic pools).
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import asdict, replace
 import json
@@ -56,26 +59,28 @@ from mule_pattern_learner.training import trainer
 if TYPE_CHECKING:
     import pytest
 
-# The source ids the test datasets are prepared from.
+# The source id the test datasets are prepared from.
 UNIT_SOURCE = "unit_fixture"
-SNAPSHOT_SOURCE = "unit_snapshot"
-RUNTIME_SOURCE = "unit_runtime"
+# The built-in run, small, in a unit scope, on the CPU.
+UNIT_CHANGES: dict[str, Any] = {
+    "scope": {"id": "unit_scope"},
+    "model": {"hidden": 16, "dropout": 0.0},
+    "training": {"epochs": 2, "batch_size": 16, "steps_per_epoch": 2},
+    "runtime": {"device": "cpu", "threads": 1},
+}
 
 
-def example_config(**sections: Any) -> RunConfig:
-    """A small, explicit unit run of the built-in settings in an example scope.
+def unit_config(*changes: Mapping[str, Any], **sections: Any) -> RunConfig:
+    """The tests' run: the built-in settings with UNIT_CHANGES, then each table of changes.
 
-    Each keyword names a section and a table of the fields it changes, as in
-    RunConfig.with_changes. Tests prepare it from the source id UNIT_SOURCE, with the
-    labels the graph reveals (scoped_accounts).
+    A table maps sections to the fields it changes, as in RunConfig.with_changes; each
+    keyword names a section and its table (applied last). RUNTIME_CHANGES is the runtime
+    tests' table. Tests prepare the run's datasets from UNIT_SOURCE.
     """
-    small = {
-        "scope": {"id": "example_strict_scope", "create": False},
-        "model": {"hidden": 16, "dropout": 0.0},
-        "training": {"epochs": 2, "batch_size": 16, "steps_per_epoch": 2},
-        "runtime": {"device": "cpu", "threads": 1},
-    }
-    return DEFAULT_CONFIG.with_changes(small).with_changes(sections)
+    config = DEFAULT_CONFIG.with_changes(UNIT_CHANGES)
+    for table in (*changes, sections):
+        config = config.with_changes(dict(table))
+    return config
 
 
 def fixture_accounts(count: int = 1000, date: str = "2024-07-01") -> pd.DataFrame:
@@ -206,8 +211,9 @@ def association(
     relation: str = "Account_Owned_By_Party",
     node_type: str = "Party",
     node_id: str = "owner",
+    **changes: Any,
 ) -> dict[str, Any]:
-    """A valid-time association, emitted at the context cutoff."""
+    """A valid-time association, emitted at the context cutoff; `changes` replace fields."""
     zeros = {k: 0 for k, v in message(1, 1, parent).items() if isinstance(v, int | float)}
     flags = dict.fromkeys(
         (
@@ -238,6 +244,7 @@ def association(
         "event_seq": parent.cutoff_seq,
         "event_ts_ms": parent.cutoff_ms,
         "peer_first_ms": 1,
+        **changes,
     }
 
 
@@ -253,8 +260,22 @@ def encode(row: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
+# The node features of a context row unless a builder names others.
+CONTEXT_FEATURES = {
+    "is_deposit": 1,
+    "age_days": 1,
+    "1d_out_count": 2,
+    "1d_out_in_amount_ratio": 0,
+    "7d_out_in_amount_ratio": 0,
+}
+
+
 def context(
-    key: ContextKey, messages: list[dict[str, Any]] | None = None, *, encodings: bool = True
+    key: ContextKey,
+    messages: list[dict[str, Any]] | None = None,
+    *,
+    encodings: bool = True,
+    features: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     """An ok context row; `encodings` also prints the Fourier vectors (a spot check)."""
     row: dict[str, Any] = {
@@ -262,13 +283,7 @@ def context(
         "status": "ok",
         "contract_version": CONTEXT_CONTRACT,
         "basis_id": BASIS_ID,
-        "features": {
-            "is_deposit": 1,
-            "age_days": 1,
-            "1d_out_count": 2,
-            "1d_out_in_amount_ratio": 0,
-            "7d_out_in_amount_ratio": 0,
-        },
+        "features": dict(CONTEXT_FEATURES if features is None else features),
         "messages": list(messages or []),
         "age_encoding": {},
         "gap_encoding": {},
@@ -359,64 +374,19 @@ def query_context_batch(
     ]
 
 
-# Contexts and messages of the transport tests.
-PLAN = FeaturePlan(("entity_meta", "message_core", "time_encoding"), "tgat")
-SAMPLER = SamplerPlan(
-    roots=PoolPlan(recent=4, older=2, distinct=1, associations=2, max_history=2048),
-    children=PoolPlan(recent=2, associations=0, max_history=1024),
-)
-
-
 def event(
     seq: int, parent: ContextKey, *, relation: str = "payment_out", gap: int = 5
 ) -> dict[str, Any]:
+    """A card payment of 12.5 at sequence ``seq``, 10 ms before the cutoff per sequence."""
     ts = parent.cutoff_ms - 10 * (parent.cutoff_seq - seq)
-    return {
-        "node_type": "Account",
-        "node_id": f"peer{seq}",
-        "relation": relation,
-        "rail": "card",
-        "channel": "digital",
-        "stratum": "recent",
-        "event_id": f"E{seq}",
-        "event_seq": seq,
-        "event_ts_ms": ts,
-        "amount": 12.5,
-        "amount_present": True,
-        "age_ms": parent.cutoff_ms - ts,
-        "gap_ms": gap,
-        "gap_present": gap > 0,
-        "peer_first_ms": 1,
-        "peer_external": False,
-        "peer_deposit": True,
-    }
-
-
-def context_row(
-    key: ContextKey, messages: list[dict[str, Any]], *, encodings: bool
-) -> dict[str, Any]:
-    row: dict[str, Any] = {
-        **asdict(key),
-        "status": "ok",
-        "contract_version": CONTEXT_CONTRACT,
-        "basis_id": BASIS_ID,
-        "features": {
-            "type_Account": 1,
-            "is_deposit": 1,
-            "1d_out_in_amount_ratio": 0,
-            "7d_out_in_amount_ratio": 0,
-        },
-        "messages": deepcopy(messages),
-        "age_encoding": {},
-        "gap_encoding": {},
-    }
-    return encode(row) if encodings else row
+    changes = {"node_id": f"peer{seq}", "relation": relation, "rail": "card", "amount": 12.5}
+    return message(seq, ts, parent, event_id=f"E{seq}", gap_ms=gap, gap_present=gap > 0, **changes)
 
 
 def payments_context(key: ContextKey) -> dict[str, Any]:
     """An ok context of two payments before the cutoff, the second without a gap."""
     messages = [event(key.cutoff_seq - 1, key), event(key.cutoff_seq - 3, key, gap=0)]
-    return context_row(key, messages, encodings=False)
+    return context(key, messages, encodings=False)
 
 
 def root(i: int, **changes: Any) -> ContextKey:
@@ -451,11 +421,6 @@ def hub_rows(cutoffs: list[int], scope_id: str = "") -> list[dict[str, Any]]:
             "hubs": hubs,
         }
     ]
-
-
-def unit_config(**sections: Any) -> RunConfig:
-    """The built-in run in a unit scope; its datasets come from SNAPSHOT_SOURCE."""
-    return DEFAULT_CONFIG.with_changes({"scope": {"id": "unit_scope"}}).with_changes(sections)
 
 
 # The plan and pools of the batch and context source tests.
@@ -498,17 +463,14 @@ def payment(
     ts = seq * MS_PER_SEQ
     gap_present = bool(rng.integers(0, 2))
     flow = bool(rng.integers(0, 2))
-    return {
-        "node_type": "Account",
+    # The fields are drawn in this order.
+    drawn = {
         "node_id": peer,
         "relation": relation,
         "rail": "zelle" if relation.startswith("zelle") else str(rng.choice(RAILS[2:])),
         "event_id": f"E{relation[0]}{seq}",
-        "event_seq": seq,
-        "event_ts_ms": ts,
         "amount": float(rng.integers(0, 5000)) / 7,
         "amount_present": bool(rng.integers(0, 4)),
-        "age_ms": key.cutoff_ms - ts,
         "gap_ms": int(rng.integers(0, ts)) if gap_present else 0,
         "gap_present": gap_present,
         "pair_count_1h": int(rng.integers(0, 3)),
@@ -534,37 +496,23 @@ def payment(
         "ip_age_seconds": float(rng.integers(0, 10**5)),
         "ip_present": bool(rng.integers(0, 2)),
     }
+    return message(seq, ts, key, **drawn)
 
 
 def synthetic_association(
     key: ContextKey, relation: str, peer: str, rng: np.random.Generator
 ) -> dict[str, Any]:
     typ = ASSOCIATION_TARGET[relation]
-    zero = {name: 0 for name in payment(key, "zelle_out", 1, "x", "recent", rng) if name}
-    return zero | {
-        "node_type": typ,
-        "node_id": peer,
-        "relation": relation,
-        "rail": "unknown",
-        "event_id": "",
-        "event_seq": key.cutoff_seq,
-        "event_ts_ms": key.cutoff_ms,
-        "amount": 0.0,
-        "amount_present": False,
-        "gap_present": False,
-        "peer_first_ms": int(rng.integers(1, key.cutoff_ms + 1)),
-        "peer_external": typ == "Account" and bool(rng.integers(0, 2)),
-        "peer_deposit": typ == "Account" and bool(rng.integers(0, 2)),
-        "channel": "unknown",
-        "stratum": "association",
-        "pair_first_present": False,
-        "flow_present": False,
-        "flow_censored": False,
-        "flow_ratio_present": False,
-        "flow_same_rail": False,
-        "device_present": False,
-        "ip_present": False,
-    }
+    return association(
+        key,
+        relation=relation,
+        node_type=typ,
+        node_id=peer,
+        amount=0.0,
+        peer_first_ms=int(rng.integers(1, key.cutoff_ms + 1)),
+        peer_external=typ == "Account" and bool(rng.integers(0, 2)),
+        peer_deposit=typ == "Account" and bool(rng.integers(0, 2)),
+    )
 
 
 def synthetic_row(
@@ -601,20 +549,7 @@ def synthetic_row(
         features[name] = float(rng.integers(0, 20))
     features.update({"1d_out_in_amount_ratio": 1.5, "7d_out_in_amount_ratio": 0.25})
     features.update({"visible_event_count": 7.0, "decay_1d_out_count": 0.5})
-    row: dict[str, Any] = {
-        "node_type": key.node_type,
-        "node_id": key.node_id,
-        "cutoff_seq": key.cutoff_seq,
-        "cutoff_ms": key.cutoff_ms,
-        "scope_id": key.scope_id,
-        "visibility_phase": key.visibility_phase,
-        "status": "ok",
-        "features": features,
-        "messages": messages,
-        "age_encoding": {},
-        "gap_encoding": {},
-    }
-    return encode(row) if encodings else row
+    return context(key, messages, encodings=encodings, features=features)
 
 
 def roots(n: int = 8, cutoff: int = 400, scope: str = "s", phase: int = 1) -> list[ContextKey]:
@@ -678,88 +613,45 @@ def _message(parent: ContextKey, j: int) -> dict[str, Any]:
     seq = parent.cutoff_seq - 1 - 5 * j - h % 5
     ts = parent.cutoff_ms - (j + 1) * 3_600_000 - h % 997
     gap = j % 3 != 0
-    return {
-        "node_type": "Account",
-        "node_id": f"P{h % 11}",
-        "relation": relation,
-        "rail": "zelle" if relation.startswith("zelle") else "ach",
-        "channel": "digital",
-        "stratum": ("recent", "older", "distinct")[j % 3],
-        "event_id": f"E{parent.node_id}.{seq}",
-        "event_seq": seq,
-        "event_ts_ms": ts,
-        "amount": float(h % 500),
-        "amount_present": True,
-        "age_ms": parent.cutoff_ms - ts,
-        "gap_ms": (h % 50) * 60_000 if gap else 0,
-        "gap_present": gap,
-        "pair_count_1h": 0,
-        "pair_count_1d": 1,
-        "pair_count_7d": 2,
-        "pair_prior_count": h % 4,
-        "pair_first_age_seconds": float(h % 10_000),
-        "pair_first_present": True,
-        "flow_delay_seconds": 0.0,
-        "flow_present": False,
-        "flow_censored": True,
-        "flow_observation_seconds": 600.0,
-        "flow_amount_ratio": 0.0,
-        "flow_ratio_present": False,
-        "flow_same_rail": False,
-        "device_age_seconds": 0.0,
-        "device_present": False,
-        "ip_age_seconds": 0.0,
-        "ip_present": False,
-        "peer_first_ms": 1_000,
-        "peer_external": h % 5 == 0,
-        "peer_deposit": h % 5 != 0,
-    }
-
-
-def _association(parent: ContextKey, j: int) -> dict[str, Any]:
-    template = _message(parent, 0)
-    zero = {k: 0 for k, v in template.items() if isinstance(v, (int, float))}
-    return {
-        **zero,
-        "node_type": "Party",
-        "node_id": f"Q{hash64(parent.node_id, j) % 5}",
-        "relation": "Account_Owned_By_Party",
-        "rail": "unknown",
-        "channel": "unknown",
-        "stratum": "association",
-        "event_id": "",
-        "event_seq": parent.cutoff_seq,
-        "event_ts_ms": parent.cutoff_ms,
-        "amount_present": False,
-        "gap_present": False,
-        "pair_first_present": False,
-        "flow_present": False,
-        "flow_censored": False,
-        "flow_ratio_present": False,
-        "flow_same_rail": False,
-        "device_present": False,
-        "ip_present": False,
-        "peer_external": False,
-        "peer_deposit": False,
-        "peer_first_ms": 1_000,
-    }
+    return message(
+        seq,
+        ts,
+        parent,
+        node_id=f"P{h % 11}",
+        relation=relation,
+        rail="zelle" if relation.startswith("zelle") else "ach",
+        stratum=("recent", "older", "distinct")[j % 3],
+        event_id=f"E{parent.node_id}.{seq}",
+        amount=float(h % 500),
+        gap_ms=(h % 50) * 60_000 if gap else 0,
+        gap_present=gap,
+        pair_count_1h=0,
+        pair_count_7d=2,
+        pair_prior_count=h % 4,
+        pair_first_age_seconds=float(h % 10_000),
+        flow_observation_seconds=600.0,
+        peer_first_ms=1_000,
+        peer_external=h % 5 == 0,
+        peer_deposit=h % 5 != 0,
+    )
 
 
 def fake_context(key: ContextKey) -> dict[str, Any]:
+    """The context FakeSource serves: a few hashed payments and at most one owner."""
     messages: list[dict[str, Any]] = []
     if key.node_type == "Account":
         count = 3 + hash64(key.node_id, key.cutoff_seq) % 6
         messages = [_message(key, j) for j in range(count) if key.cutoff_seq - 5 * j > 10]
-        messages += [_association(key, j) for j in range(hash64(key.node_id) % 2)]
-    return {
-        **asdict(key),
-        "status": "ok",
-        "features": {"is_external": 0.0, "is_deposit": 1.0},
-        "messages": messages,
-    }
+        messages += [
+            association(key, node_id=f"Q{hash64(key.node_id, j) % 5}", peer_first_ms=1_000)
+            for j in range(hash64(key.node_id) % 2)
+        ]
+    features = {"is_external": 0.0, "is_deposit": 1.0}
+    return context(key, messages, encodings=False, features=features)
 
 
-# A small model without the slot sum, validated on its raw weights, over small pools.
+# The runtime tests' changes to unit_config: a small model without the slot sum, validated
+# on its raw weights, over small pools, with seeds and dates of its own.
 RUNTIME_CHANGES: dict[str, Any] = {
     "scope": {"id": "unit_scope"},
     "dataset": {"dates": deepcopy(DATES), "seed": 7, "split_seed": 7},
@@ -790,15 +682,6 @@ RUNTIME_CHANGES: dict[str, Any] = {
     },
     "runtime": {"device": "cpu", "threads": 1, "log_every_steps": 2, "prefetch_batches": 2},
 }
-
-
-def base_config(**sections: Any) -> RunConfig:
-    """The runtime tests' run; its datasets come from RUNTIME_SOURCE.
-
-    Each keyword names a section and a table of the fields it changes, as in
-    RunConfig.with_changes.
-    """
-    return DEFAULT_CONFIG.with_changes(RUNTIME_CHANGES).with_changes(sections)
 
 
 def accounts_frame() -> pd.DataFrame:
@@ -850,7 +733,7 @@ def prepared_dataset(
     path: Path,
     config: RunConfig,
     monkeypatch: pytest.MonkeyPatch,
-    source_id: str = RUNTIME_SOURCE,
+    source_id: str = UNIT_SOURCE,
 ) -> tuple[DatasetPaths, dict[str, Any], pd.DataFrame]:
     """A prepared dataset in directory path; load_prepared is replaced by its in-memory copy.
 
