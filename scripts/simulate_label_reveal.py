@@ -1,7 +1,8 @@
 """Simulate the label reveal over many salts to show how its outcome varies.
 
-Read-only. Fetches the reveal's inputs once (reference.label_reveal.INPUTS_QUERY, which
-tests/integration/test_label_reveal.py also runs), then runs reference.label_reveal.plan,
+Read-only. Fetches the reveal's inputs once through the executor
+(tigergraph.reveal.TigerGraphRevealInputReader, which
+tests/integration/test_label_reveal.py also uses), then runs reference.label_reveal.plan,
 the Python mirror of reveal_mule_labels with the job's own hash and defaults,
 once per salt. Prints, per split, the mules and the median and 5th to 95th percentile
 of the mules discovered before the split's cutoff (eligible) and of those revealed. It
@@ -20,8 +21,8 @@ import numpy as np
 from mule_pattern_learner.config import DEFAULT_CONFIG
 from mule_pattern_learner.contract.graph_schema import PHASE_SPLIT
 from mule_pattern_learner.pipeline.connect import connect
-from mule_pattern_learner.reference.label_reveal import INPUTS_QUERY, counts_by_split, plan
-from mule_pattern_learner.tigergraph.reveal import reveal_parameters
+from mule_pattern_learner.reference.label_reveal import counts_by_split, plan
+from mule_pattern_learner.tigergraph.reveal import TigerGraphRevealInputReader, reveal_parameters
 
 
 def spread(values: list[int]) -> dict[str, float]:
@@ -44,9 +45,7 @@ def main() -> None:
     if args.budget is not None:
         params["budget"] = args.budget
     executor = connect(config.transport)
-    inputs = executor.client.conn.runInterpretedQuery(
-        INPUTS_QUERY, {"scope_id": params["scope_id"]}
-    )
+    inputs = TigerGraphRevealInputReader(executor).read(config.scope.id)
     salts = range(args.first_salt, args.first_salt + args.runs)
     plans = [plan(inputs, {**params, "salt": salt}) for salt in salts]
     eligible = [counts_by_split(result, "eligible") for result in plans]

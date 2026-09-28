@@ -1,12 +1,12 @@
 """A Python mirror of the label reveal job (reveal_mule_labels).
 
 `plan` recomputes the job's discovery channel, discovery time, eligibility and
-revealed set for every internal mule from the rows INPUTS_QUERY prints, with the
-job's own hash (tigergraph.reveal.reveal_uniforms) and parameter defaults
-(tigergraph.reveal.REVEAL_DEFAULTS). It reads nothing itself:
+revealed set for every internal mule from the rows the reveal's inputs query prints
+(tigergraph.reveal.REVEAL_INPUTS_QUERY), with the job's own hash
+(contract.discovery.reveal_uniforms) and parameter defaults
+(contract.discovery.REVEAL_DEFAULTS). It reads nothing itself:
 tests/integration/test_label_reveal.py compares it with a dry run of the installed
-job (dry_run_differences), and scripts/simulate_label_reveal.py runs it over many
-salts.
+job (dry_run_differences), and diagnostics.reveal_spread runs it over many salts.
 """
 
 from __future__ import annotations
@@ -14,44 +14,11 @@ from __future__ import annotations
 import math
 from typing import Any
 
+from ..contract.discovery import REVEAL_DEFAULTS, reveal_uniforms
 from ..contract.graph_schema import PHASE_SPLIT
-from ..contract.server import GRAPH_NAME
-from ..tigergraph.reveal import REVEAL_DEFAULTS, reveal_uniforms
 
 DAY = 86400000.0
 NEVER = 1.0e15
-# Read-only interpreted query: every input of the reveal, with the job's traversals.
-# The first result holds the mules (split, draw key, first observation and the
-# "event_seq:label_available_ts_ms" fraud-labelled Zelle inflows), the next two the
-# Zelle and payment events between two mules.
-INPUTS_QUERY = f"""
-INTERPRET QUERY (STRING scope_id) FOR GRAPH {GRAPH_NAME} {{
-  MaxAccum<INT> @part;
-  MinAccum<INT> @key;
-  OrAccum @mule;
-  ListAccum<STRING> @inflows;
-  SetAccum<STRING> @ends;
-  Scopes = {{Temporal_Training_Scope.*}};
-  Ready = SELECT r FROM Scopes:r WHERE r.scope_id == scope_id;
-  M = {{Account.*}};
-  M = SELECT a FROM M:a WHERE a.is_mule == 1 AND NOT a.is_external POST-ACCUM a.@mule += TRUE;
-  S = SELECT a FROM Ready:r -(Training_Scope_Has_Entity>:e)- Account:a WHERE a.@mule ACCUM a.@part += e.partition;
-  K1 = SELECT t FROM M:a -(Account_Initiated_Transaction>:e)- Payment_Transaction:t ACCUM a.@key += t.event_seq;
-  K2 = SELECT z FROM M:a -(Account_Sent_Zelle_Transfer>:e)- Zelle_Transfer:z ACCUM a.@key += z.event_seq;
-  F = SELECT z FROM M:a -(Account_Received_Zelle_Transfer>:e)- Zelle_Transfer:z
-      WHERE z.fraud_label == 1 AND z.label_known
-      ACCUM a.@inflows += (to_string(z.event_seq) + ":" + to_string(z.label_available_ts_ms));
-  LZ = SELECT z FROM M:a -((Account_Sent_Zelle_Transfer>|Account_Received_Zelle_Transfer>):e)- Zelle_Transfer:z
-       ACCUM z.@ends += a.id;
-  LP = SELECT t FROM M:a -((Account_Initiated_Transaction>|Account_Received_Transaction>):e)- Payment_Transaction:t
-       ACCUM t.@ends += a.id;
-  LZ = SELECT z FROM LZ:z WHERE z.@ends.size() > 1;
-  LP = SELECT t FROM LP:t WHERE t.@ends.size() > 1;
-  PRINT M[M.id, M.first_seen_ts_ms, M.@part, M.@key, M.@inflows];
-  PRINT LZ[LZ.event_seq, LZ.event_ts_ms, LZ.@ends] AS zelle_links;
-  PRINT LP[LP.event_seq, LP.event_ts_ms, LP.@ends] AS payment_links;
-}}
-"""
 
 
 def lognormal(median: float, sigma: float, u1: float, u2: float) -> float:
