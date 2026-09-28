@@ -9,8 +9,9 @@ a PNG at style.DPI under plots/<topic>_<figure>.png (paths.RunPaths.figure).
 run are saved (pipeline.train), `mule evaluate` the audit figures once the audits are
 (pipeline.evaluate), and `mule report` redraws all of them from the files, offline
 (report_run). Each then rewrites report.md, the run's tables with links to the figures
-it has. A figure that fails to draw does not stop the others or report.md; the error is
-raised after them, naming every figure that failed.
+it has. A figure that fails to draw does not stop the others or report.md, and leaves
+no older drawing under its name; the error is raised after them, naming every figure
+that failed.
 """
 
 from __future__ import annotations
@@ -215,7 +216,8 @@ def draw(
 ) -> dict[str, Any]:
     """Save every figure, then report.md; raise after both if any figure failed.
 
-    Returns report.md's path and the figures drawn.
+    A figure that fails loses its older PNG, so report.md links only figures drawn from
+    the files as they are. Returns report.md's path and the figures drawn.
     """
     drawn: list[str] = []
     failed: dict[str, Exception] = {}
@@ -224,6 +226,8 @@ def draw(
             save_figure(run.figure(name), drawing, size)
         except Exception as error:  # the other figures and report.md are still written
             failed[name] = error
+            # No older drawing stays under its name for report.md to link as current.
+            run.figure(name).unlink(missing_ok=True)
         else:
             drawn.append(name)
     report = write_report(run)

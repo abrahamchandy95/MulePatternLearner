@@ -491,8 +491,9 @@ The run directory holds:
   the audit figures (`audit_precision_recall.png`, `audit_roc.png`, `audit_capture.png`,
   `audit_threshold.png`, `audit_score_distribution.png` and `audit_revealed_hidden.png`)
   and rewrites `report.md`; `mule report` redraws all of them from the saved files,
-  offline. A figure that fails to draw loses no other file: the command fails after the
-  other figures and `report.md` are written.
+  offline. A figure that fails to draw loses no other file, and no older drawing of it
+  is left for `report.md` to link: the command fails after the other figures and
+  `report.md` are written.
 
 Running `train` again continues from `resume.pt` and reproduces the uninterrupted run
 exactly. It refuses a changed result-affecting setting but allows transport
