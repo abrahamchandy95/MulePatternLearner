@@ -1,7 +1,7 @@
 """The scripts import, show help without side effects, and run offline.
 
-The live checks are integration tests now (tests/integration); two scripts remain:
-render_queries.py and simulate_label_reveal.py.
+The live checks are integration tests now (tests/integration); three scripts remain:
+render_queries.py, run_experiments.py and simulate_label_reveal.py.
 """
 
 from __future__ import annotations
@@ -18,13 +18,15 @@ from typing import Any
 
 import pytest
 
+from mule_pattern_learner.experiments import runner
+from mule_pattern_learner.experiments.variants import SUITES, VARIANTS
 from mule_pattern_learner.paths import REPOSITORY_ROOT
 from mule_pattern_learner.reference import label_reveal
 from mule_pattern_learner.testing.builders import reveal_inputs
 
 SCRIPTS = REPOSITORY_ROOT / "scripts"
 # Every script; each must parse --help before connecting.
-SCRIPT_NAMES = ("render_queries", "simulate_label_reveal")
+SCRIPT_NAMES = ("render_queries", "run_experiments", "simulate_label_reveal")
 
 
 def load(name: str) -> ModuleType:
@@ -131,3 +133,34 @@ def test_the_reveal_simulation_runs_offline(
         "validation": 1,
         "test": 1,
     }
+
+
+def test_the_experiments_script_lists_the_variants_and_runs_the_names_given(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    script = load("run_experiments")
+    monkeypatch.setattr(sys, "argv", ["run_experiments", "--help"])
+    with pytest.raises(SystemExit):
+        script.main()
+    shown = capsys.readouterr().out
+    assert all(name in shown for name in [*SUITES, *VARIANTS])
+    assert "(loss.positive_weight = prior)" in shown
+    # The names go to run_suite as given; the exit status says whether all completed.
+    ran: list[tuple[str, ...]] = []
+
+    def run_suite(names: list[str]) -> dict[str, Any]:
+        ran.append(tuple(names))
+        return {"status": "complete" if names else "failed"}
+
+    monkeypatch.setattr(runner, "run_suite", run_suite)
+    for argv, status in ((["no_attention", "controls"], 0), ([], 1)):
+        monkeypatch.setattr(sys, "argv", ["run_experiments", *argv])
+        assert script.main() == status
+        assert json.loads(capsys.readouterr().out)["status"] in ("complete", "failed")
+    assert ran == [("no_attention", "controls"), ()]
+    # An unknown name is refused before anything runs.
+    monkeypatch.setattr(sys, "argv", ["run_experiments", "no_graph"])
+    with pytest.raises(SystemExit) as refused:
+        script.main()
+    assert refused.value.code == 2 and len(ran) == 2
+    assert "Unknown suites or variants ['no_graph']" in capsys.readouterr().err
