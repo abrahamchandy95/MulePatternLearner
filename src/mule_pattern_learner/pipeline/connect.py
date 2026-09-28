@@ -4,8 +4,8 @@ connect reads the connection settings from the repository .env when it is called
 builds the executor with a transport section's retry budgets. context_source is the
 one place a context source is built, for a configuration on a connection:
 open_context_source opens that of a prepared dataset on the frozen graph, with the
-dataset's disk tier, and the pipeline hands it to the use cases that open one (a
-data.contexts.ContextOpener).
+dataset's disk tier unless `mule check` asks for none, and the pipeline hands it to the
+use cases that open one (a data.contexts.ContextOpener).
 """
 
 from __future__ import annotations
@@ -54,14 +54,15 @@ def context_source(
 
 
 def open_context_source(
-    dataset: DatasetPaths, manifest: dict[str, Any], config: RunConfig
+    dataset: DatasetPaths, manifest: dict[str, Any], config: RunConfig, *, cached: bool = True
 ) -> ContextSource:
     """Open the live source of a prepared dataset for a training or scoring configuration.
 
     It is the configuration's context_source, whose candidate pools must be the
     prepared ones, on a connection with the configuration's transport section whose
     source is checked to be the frozen one; only then does it get the dataset's disk
-    tier (data.context_cache.ContextCache.of).
+    tier (data.context_cache.ContextCache.of). ``cached=False`` leaves the disk tier
+    out, so every context memory lacks is requested from TigerGraph (`mule check`).
     """
     if sampler_pools(config.sampler) != recorded_settings(manifest)["sampler_pools"]:
         raise ValueError(
@@ -70,4 +71,5 @@ def open_context_source(
         )
     executor = connect(config.transport)
     verify_frozen_source(executor, manifest)
-    return context_source(executor, config, ContextCache.of(dataset, manifest))
+    cache = ContextCache.of(dataset, manifest) if cached else None
+    return context_source(executor, config, cache)

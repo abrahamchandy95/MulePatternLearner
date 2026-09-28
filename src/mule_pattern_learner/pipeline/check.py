@@ -5,7 +5,10 @@ than contract.server.GRAPH_NAME) and reports whether the scope vertex type exist
 queries are installed with the repository text and, on a CUDA host, what the cuGraph
 probe found. When all of them are ready and the run's dataset is prepared in data/, it
 builds the first training batch the way train() builds it and runs one optimizer step
-(first_step). The report has the digest of every batch tensor
+(first_step). Its source has no disk tier: the batch's contexts are requested from
+TigerGraph, not read from the dataset's context cache, so the installed context query
+and its first Fourier spot check run, and the REST calls and seconds are the graph's.
+The report has the digest of every batch tensor
 (batching.assemble.tensor_digests, the definition the golden-run test pins) and the
 step's loss and objective, the first values train() logs. Two code versions built the
 same batch and step when both print the same digests and loss on one machine and
@@ -215,7 +218,7 @@ def check(config: RunConfig = DEFAULT_CONFIG, data: Path = DATA_DIR) -> dict[str
         (dataset,) = found
         manifest, _ = load_prepared(dataset)
         started = time.perf_counter()
-        contexts = open_context_source(dataset, manifest, config)
+        contexts = open_context_source(dataset, manifest, config, cached=False)
         report["source_open_seconds"] = time.perf_counter() - started
         failed = True
         try:
