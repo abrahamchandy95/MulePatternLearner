@@ -1,4 +1,8 @@
-"""Install and verify only the query definitions the training pipeline uses."""
+"""Install and verify only the query definitions the training pipeline uses.
+
+Every write (the scope schema change, CREATE and the install request) runs through the
+executor with one attempt, so it is never repeated behind the caller's back.
+"""
 
 from __future__ import annotations
 
@@ -15,7 +19,13 @@ from ..contract.server import (
 )
 from ..paths import GSQL_DIR
 from ..runtime.progress import emit
-from .executor import AVAILABILITY, SERVER_TIMEOUT, ConnectionExecutor, failure_class
+from .executor import (
+    AVAILABILITY,
+    SERVER_TIMEOUT,
+    ConnectionExecutor,
+    TransientQueryError,
+    failure_class,
+)
 from .gsql_text import definitions, normalized, parameter_names, repository_queries
 
 BUILTIN_ENDPOINT_PARAMETERS = frozenset({"query", "read_committed"})
@@ -136,6 +146,16 @@ def _created(output: str) -> bool:
     )
 
 
+def _unanswered(error: Exception) -> bool:
+    """Whether the install request failed because the client gave up waiting.
+
+    The executor wraps the client's error after its one attempt; the client's own error
+    (its cause) says whether the server may still be compiling.
+    """
+    cause = error.__cause__ if isinstance(error, TransientQueryError) else error
+    return failure_class(cause or error) in (AVAILABILITY, SERVER_TIMEOUT)
+
+
 def install(
     executor: ConnectionExecutor,
     *,
@@ -162,11 +182,10 @@ def install(
     requestId, when a server returns one, is polled with getQueryInstallationStatus.
     Success is decided by verify_sources, not by a status message.
     """
-    conn = executor.client.conn
     logs: dict[str, Any] = {}
     if not has_scope_vertex(executor):
         migration = GSQL_DIR / "schema/scope_vertex.gsql"
-        result = str(conn.gsql(migration.read_text()))
+        result = executor.gsql(migration.read_text(), what="scope schema change", attempts=1)
         if "Local schema change succeeded" not in result:
             raise RuntimeError(result)
         logs["scope_schema"] = result
@@ -184,7 +203,11 @@ def install(
         chosen = [queries[name][1] for name in names if queries[name][0] == relative]
         if not chosen:
             continue
-        output = str(conn.gsql(f"USE GRAPH {GRAPH_NAME}\n" + "\n\n".join(chosen) + "\n"))
+        output = executor.gsql(
+            f"USE GRAPH {GRAPH_NAME}\n" + "\n\n".join(chosen) + "\n",
+            what="CREATE QUERY " + relative,
+            attempts=1,
+        )
         if not _created(output):
             raise RuntimeError(output)
         logs[relative] = output
@@ -192,9 +215,13 @@ def install(
     status: Any = None
     try:
         with executor.client.request_timeout(read_s=deadline_s):
-            status = conn.installQueries(names, wait=False)
+            status = executor.call(
+                lambda conn: conn.installQueries(names, wait=False),
+                what="installQueries",
+                attempts=1,
+            )
     except Exception as error:
-        if failure_class(error) not in (AVAILABILITY, SERVER_TIMEOUT):
+        if not _unanswered(error):
             raise
         emit(
             {

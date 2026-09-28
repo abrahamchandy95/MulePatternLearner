@@ -223,7 +223,9 @@ class FakeTigerGraph:
         """A connection operation, run once (the real executor would retry it)."""
         return operation(self.client.conn)
 
-    def gsql(self, text: str, *, what: str = "gsql") -> str:
+    def gsql(self, text: str, *, what: str = "gsql", attempts: int | None = None) -> str:
+        if "SHOW QUERY" not in text:
+            assert attempts == 1, f"{what} writes, so it must run once"
         return self.client.conn.gsql(text)
 
     def names(self) -> list[str]:
