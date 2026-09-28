@@ -16,7 +16,7 @@ from ..config import RunConfig, RuntimeConfig
 from ..contract.feature_groups import FeaturePlan
 from ..contract.graph_schema import EVALUATION_PROTOCOL
 from ..paths import REPOSITORY_ROOT
-from .history import RunTotals
+from .history import RunTotals, disk_hit_rate
 from .objective import objective_name
 from .schedule import EvaluationSample
 
@@ -118,6 +118,7 @@ def run_summary(
     limit: float,
 ) -> dict[str, Any]:
     """The metrics.json record of a complete run (its epochs are in epochs.csv)."""
+    contexts = progress.context_counts()
     return {
         "status": "complete",
         "dataset_id": dataset_id,
@@ -138,7 +139,7 @@ def run_summary(
         "database_calls_during_training": progress.calls(),
         # Wall-clock seconds of every segment of the run, test scoring included.
         "elapsed_seconds": round(time.perf_counter() - progress.started, 3),
-        "contexts": progress.context_counts(),
+        "contexts": {**contexts, "disk_hit_rate": disk_hit_rate(contexts)},
         "rejections": progress.rejections(),
         "sampler_backend": progress.backend,
         "sampler_totals": dict(progress.totals),

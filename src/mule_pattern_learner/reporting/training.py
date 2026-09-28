@@ -174,12 +174,13 @@ def _count(value: float, position: object) -> str:
 
 
 def plot_context_counts(ax: Axes, history: pd.DataFrame) -> Axes:
-    """The run's contexts requested, distinct and served from memory, as training went on."""
+    """The run's contexts requested, distinct, and served from memory or disk, over training."""
     x = training_position(history)
     counts = (
         ("contexts_requested", "requested"),
         ("contexts_distinct", "distinct"),
         ("memory_hits", "served from memory"),
+        ("disk_hits", "read from the disk cache"),
     )
     for index, (column, label) in enumerate(counts):
         ax.plot(x, history[column], label=label, **measure(index))
@@ -188,7 +189,7 @@ def plot_context_counts(ax: Axes, history: pd.DataFrame) -> Axes:
     ax.yaxis.set_major_formatter(FuncFormatter(_count))
     ax.set_ylabel("Contexts, run total")
     ax.legend(loc="upper left")
-    ax.set_title("Contexts requested, distinct and served from memory")
+    ax.set_title("Contexts requested, distinct, and served from memory or disk")
     return ax
 
 

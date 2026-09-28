@@ -11,6 +11,7 @@ epochs.csv (artifacts.HISTORY_COLUMNS and EPOCH_COLUMNS).
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Mapping
 import time
 from typing import Any
 
@@ -52,12 +53,13 @@ class RunTotals:
         return dict(self.base_rejections + Counter(self.contexts.rejections))
 
     def context_counts(self) -> dict[str, int]:
-        """Contexts requested, distinct and served from memory in every segment."""
+        """Contexts requested, distinct, and served from memory or disk in every segment."""
         counts = self.contexts.counts
         return {
             "requested": self.base_contexts["requested"] + counts.requested,
             "distinct": counts.distinct,
             "memory_hits": self.base_contexts["memory_hits"] + counts.memory_hits,
+            "disk_hits": self.base_contexts["disk_hits"] + counts.disk_hits,
         }
 
     def saved(self) -> dict[str, Any]:
@@ -71,7 +73,7 @@ class RunTotals:
             "totals": dict(self.totals),
             "database_calls": self.calls(),
             "rejections": self.rejections(),
-            "contexts": {"requested": counts["requested"], "memory_hits": counts["memory_hits"]},
+            "contexts": {name: counts[name] for name in ("requested", "memory_hits", "disk_hits")},
             # The distinct contexts asked for, as their context_hash values.
             "context_keys": torch.tensor(sorted(self.contexts.counts.seen), dtype=torch.int64),
         }
@@ -94,12 +96,23 @@ class RunTotals:
             "contexts_requested": contexts["requested"],
             "contexts_distinct": contexts["distinct"],
             "memory_hits": contexts["memory_hits"],
+            "disk_hits": contexts["disk_hits"],
             "rejections": self.rejections(),
             "stub_children": int(self.totals["stub_children"]),
             "rejected_children": int(self.totals["rejected_children"]),
             "sampler_backend": self.backend,
             "elapsed_seconds": round(time.perf_counter() - self.started, 3),
         }
+
+
+def disk_hit_rate(contexts: Mapping[str, int]) -> float | None:
+    """The share of the contexts memory did not serve that the disk cache served.
+
+    ``contexts`` are RunTotals.context_counts. A context another thread was requesting
+    at the time counts as not served. None when memory served every context.
+    """
+    looked_up = contexts["requested"] - contexts["memory_hits"]
+    return contexts["disk_hits"] / looked_up if looked_up else None
 
 
 class LogInterval:
