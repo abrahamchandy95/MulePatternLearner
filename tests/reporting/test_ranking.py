@@ -2,14 +2,22 @@
 
 from __future__ import annotations
 
+import matplotlib
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
+from matplotlib.text import Annotation
+from matplotlib.transforms import Bbox
 import numpy as np
 import pytest
 from sklearn.metrics import average_precision_score, roc_auc_score
 
-from mule_pattern_learner.metrics import capture_at_budgets, ranking_metrics
+from mule_pattern_learner.metrics import (
+    REVIEW_BUDGETS,
+    budget_name,
+    capture_at_budgets,
+    ranking_metrics,
+)
 from mule_pattern_learner.reporting.ranking import (
     SplitScores,
     plot_capture,
@@ -17,13 +25,15 @@ from mule_pattern_learner.reporting.ranking import (
     plot_roc,
     share_label,
 )
-from mule_pattern_learner.reporting.style import SPLIT_COLOURS, number
+from mule_pattern_learner.reporting.style import PANEL, RC, SPLIT_COLOURS, number
 
 # Four accounts: a mule of weight 1 at 0.9, a non-mule of weight 2 and a mule of weight 4
 # tied at 0.5, and a non-mule of weight 8 at 0.1 (as in tests/test_metrics.py).
 Y = np.array([1, 0, 1, 0])
 SCORE = np.array([0.9, 0.5, 0.5, 0.1])
 WEIGHT = np.array([1.0, 2.0, 4.0, 8.0])
+# The review budgets' names in the metrics: 1pct, 5pct and 10pct.
+BUDGETS = [budget_name(fraction) for fraction in REVIEW_BUDGETS]
 
 
 def split_scores(y: np.ndarray, score: np.ndarray, weight: np.ndarray) -> SplitScores:
@@ -117,6 +127,60 @@ def test_the_capture_labels_move_clear_of_each_other() -> None:
     boxes = [text.get_window_extent() for text in ax.texts]
     assert len(boxes) == 6
     assert not any(box.overlaps(other) for i, box in enumerate(boxes) for other in boxes[i + 1 :])
+
+
+def distance(box: Bbox, point: np.ndarray) -> float:
+    """Pixels from a box to a point, 0 inside it."""
+    x, y = point
+    return float(np.hypot(max(box.x0 - x, 0, x - box.x1), max(box.y0 - y, 0, y - box.y1)))
+
+
+def test_each_capture_label_sits_by_its_own_split_marker() -> None:
+    # 20 mules among 1,000 accounts ranked by score, at the ranks given: test finds one
+    # mule more than validation in the top 1% and 10%, validation one more in the top 5%,
+    # so the markers sit close.
+    ranks = {
+        "validation": [*range(4), *range(11, 21), 60, 61, *range(200, 204)],
+        "test": [*range(5), *range(20, 28), *range(51, 55), 300, 301, 302],
+    }
+    splits = {}
+    for split, mules in ranks.items():
+        y = np.zeros(1000, np.int64)
+        y[mules] = 1
+        splits[split] = split_scores(y, 1 - np.arange(1000) / 1000, np.ones(1000))
+    recalls = {s: [splits[s].metrics[f"recall_at_{n}"] for n in BUDGETS] for s in splits}
+    assert recalls == {"validation": [0.2, 0.7, 0.8], "test": [0.25, 0.65, 0.85]}
+    # As report.py draws it, so the labels are placed where the layout puts the axes.
+    with matplotlib.rc_context(RC):
+        figure = Figure(figsize=PANEL, layout="constrained")
+        ax = plot_capture(figure.add_subplot(), splits, title="t")
+        figure.draw_without_rendering()
+    markers = {
+        (split, fraction): ax.transData.transform((fraction, recalls[split][i]))
+        for split in splits
+        for i, fraction in enumerate(REVIEW_BUDGETS)
+    }
+    radius = 3.5 * figure.dpi / 72
+    split_of = {colour: split for split, colour in SPLIT_COLOURS.items()}
+    assert len(ax.texts) == 6
+    for label in ax.texts:
+        assert isinstance(label, Annotation)
+        # In its split's colour, anchored at its split's marker, with its recorded numbers.
+        split, (fraction, recall) = split_of[str(label.get_color())], label.xy
+        index = REVIEW_BUDGETS.index(fraction)
+        assert recall == recalls[split][index]
+        metrics = splits[split].metrics
+        name = BUDGETS[index]
+        assert label.get_text() == (
+            f"{number(metrics[f'recall_at_{name}'])} / {number(metrics[f'precision_at_{name}'])}"
+        )
+        # Nearer its own marker than the other split's at the budget, and covering no marker.
+        box = label.get_window_extent()
+        other = next(s for s in splits if s != split)
+        assert distance(box, markers[split, fraction]) < distance(box, markers[other, fraction])
+        assert all(distance(box, point) > radius for point in markers.values())
+        # Inside the axes.
+        assert ax.bbox.y0 <= box.y0 and box.y1 <= ax.bbox.y1
 
 
 def test_shares_print_as_percentages_to_two_digits() -> None:
