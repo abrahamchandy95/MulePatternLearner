@@ -13,7 +13,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from matplotlib.axes import Axes
+from matplotlib.text import Annotation
 from matplotlib.ticker import NullFormatter, PercentFormatter
+from matplotlib.transforms import Bbox
 import numpy as np
 from numpy.typing import NDArray
 
@@ -143,17 +145,37 @@ def top_share_axis(ax: Axes, start: float) -> None:
     ax.xaxis.set_minor_formatter(NullFormatter())
 
 
+def _clear(label: Annotation, placed: list[Bbox], direction: int) -> None:
+    """Move a label up (direction 1) or down (-1) until it overlaps none of those placed.
+
+    The label is offset from its point in points, and it joins the placed labels.
+    """
+    figure = label.get_figure(root=True)
+    assert figure is not None
+    for _ in range(len(placed)):
+        box = label.get_window_extent()
+        hit = next((other for other in placed if box.overlaps(other)), None)
+        if hit is None:
+            break
+        pixels = hit.y1 - box.y0 + 1 if direction > 0 else hit.y0 - box.y1 - 1
+        x, y = label.xyann
+        label.xyann = (x, y + pixels * 72 / figure.dpi)
+    placed.append(label.get_window_extent())
+
+
 def plot_capture(ax: Axes, splits: Mapping[str, SplitScores], *, title: str) -> Axes:
     """The share of mules found against the share of accounts reviewed, highest scores first.
 
     The x axis is logarithmic, so the review budgets of 1, 5 and 10% and the accounts
     above them stay apart. The dashed line is a random ranking and the dotted one a
     perfect ranking; each review budget's marker is labelled with the split's recorded
-    recall and precision there.
+    recall and precision there, and a label that would cover another moves clear of it.
     """
     shares = [scores.prevalence for scores in splits.values() if scores.y.any()]
     start = min([1e-4, *(share / 2 for share in shares)])
     grid = np.geomspace(start, 1.0, 200)
+    # Each split's labels, and whether they sit above its markers.
+    labels: list[tuple[list[Annotation], bool]] = []
     for position, (split, scores) in enumerate(splits.items()):
         if not scores.y.any():
             continue
@@ -167,6 +189,7 @@ def plot_capture(ax: Axes, splits: Mapping[str, SplitScores], *, title: str) -> 
         # The first split's labels sit above and left of its markers, the second's below
         # and right, clear of the curves that rise through them.
         above = position % 2 == 0
+        labels.append(([], above))
         for fraction in REVIEW_BUDGETS:
             name = budget_name(fraction)
             recall = float(scores.metrics[f"recall_at_{name}"])
@@ -182,7 +205,7 @@ def plot_capture(ax: Axes, splits: Mapping[str, SplitScores], *, title: str) -> 
                 linestyle="none",
                 zorder=3,
             )
-            ax.annotate(
+            label = ax.annotate(
                 f"{number(recall)} / {number(precision)}",
                 (fraction, recall),
                 xytext=(-8, 6) if above else (8, -6),
@@ -191,9 +214,15 @@ def plot_capture(ax: Axes, splits: Mapping[str, SplitScores], *, title: str) -> 
                 va="bottom" if above else "top",
                 color=SECONDARY_INK,
                 fontsize=7.5,
-                bbox={"boxstyle": "square,pad=0.1", "facecolor": SURFACE, "edgecolor": "none"},
+                bbox={
+                    "boxstyle": "square,pad=0.1",
+                    "facecolor": SURFACE,
+                    "edgecolor": "none",
+                    "alpha": 0.75,
+                },
                 zorder=4,
             )
+            labels[-1][0].append(label)
     ax.plot(grid, grid, color=MUTED, linestyle="--", linewidth=1.0, label="random ranking")
     ax.plot([], [], color=MUTED, linestyle=":", linewidth=1.0, label="perfect ranking")
     ax.plot(
@@ -204,7 +233,13 @@ def plot_capture(ax: Axes, splits: Mapping[str, SplitScores], *, title: str) -> 
     ax.yaxis.set_major_formatter(PercentFormatter(1.0))
     ax.set_xlabel("Top share of accounts reviewed, by score (log scale)")
     ax.set_ylabel("Share of mules found (recall)")
-    # Where the curves leave room, which depends on the run.
-    ax.legend(loc="best")
+    placed: list[Bbox] = []
+    for split_labels, above in labels:
+        # The labels above move up past those on their left, the labels below move down
+        # past those on their right.
+        for label in split_labels if above else split_labels[::-1]:
+            _clear(label, placed, 1 if above else -1)
+    # Below the axes, clear of the curves and their labels.
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.16), ncols=3)
     ax.set_title(title)
     return ax
