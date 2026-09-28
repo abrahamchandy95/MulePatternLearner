@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from matplotlib.artist import Artist
 from matplotlib.axes import Axes
 from matplotlib.lines import Line2D
-from matplotlib.ticker import PercentFormatter
+from matplotlib.ticker import MaxNLocator, PercentFormatter
 from matplotlib.transforms import offset_copy
 import numpy as np
 from numpy.typing import NDArray
@@ -298,19 +298,28 @@ def plot_capture_overlay(
 
 
 def plot_validation_overlay(
-    ax: Axes, variant: MeanCurve, baseline: MeanCurve | None, *, prevalence: float | None
+    ax: Axes,
+    variant: MeanCurve,
+    baseline: MeanCurve | None,
+    *,
+    prevalence: float | None,
+    last_epoch: int,
 ) -> Axes:
     """One variant's seed-mean proxy validation AP per epoch against the baseline's.
 
     An epoch's mean is over the seeds that trained it (early stopping ends seeds at
-    different epochs). ``prevalence`` is the AP of a random ranking, drawn dashed grey.
+    different epochs). ``prevalence`` is the AP of a random ranking, drawn dashed grey,
+    and ``last_epoch`` the last epoch any run of the suite trained, so the panels share
+    their epochs.
     """
     if prevalence is not None:
         ax.axhline(prevalence, color=MUTED, linestyle="--", linewidth=0.9)
     if baseline is not None and variant.name != BASELINE_VARIANT:
-        ax.plot(baseline.x, baseline.y, color=BASELINE, linewidth=1.4)
+        ax.plot(baseline.x, baseline.y, color=BASELINE, linewidth=1.4, marker="o", markersize=2.5)
     colour = _colour(variant.name, "validation")
     ax.plot(variant.x, variant.y, color=colour, linewidth=1.8, marker="o", markersize=3)
+    ax.set_xlim(0.5, last_epoch + 0.5)
+    ax.xaxis.set_major_locator(MaxNLocator(integer=True, min_n_ticks=1))
     ax.set_ylim(bottom=0)
     ax.set_title(f"{variant.name} ({variant.seeds} seeds)", fontsize=9)
     return ax

@@ -671,6 +671,7 @@ def suite_drawings(files: SuiteFiles) -> dict[str, tuple[Drawing, tuple[float, f
         panels_size(len(order)),
     )
     curves = {name: mean_epochs(name, files.epochs[name]) for name in audited}
+    last = max(int(curve.x.max()) for curve in curves.values())
     drawings["comparison_validation"] = (
         panels(
             [
@@ -679,6 +680,7 @@ def suite_drawings(files: SuiteFiles) -> dict[str, tuple[Drawing, tuple[float, f
                     variant=curves[name],
                     baseline=curves.get(BASELINE_VARIANT),
                     prevalence=files.prevalence,
+                    last_epoch=last,
                 )
                 for name in order
             ],
@@ -760,6 +762,8 @@ def suite_text(suite: SuitePaths, files: SuiteFiles) -> str:
             f"; {dirty} of the complete runs had uncommitted changes." if dirty else "."
         )
     unpaired = comparison.unpaired_accounts.dropna()
+    # The variants compared with the baseline.
+    variants = max(len(comparison) - 1, 0)
     lines += [
         "",
         "Decisions use the validation audit; the test audit is for reporting, not selection. "
@@ -776,9 +780,9 @@ def suite_text(suite: SuitePaths, files: SuiteFiles) -> str:
         "standard deviation beside it). The delta is the variant's mean AP minus the "
         "baseline's over the seeds both completed, on those same accounts; a consistent "
         "delta has one sign in every seed and an interval that excludes zero. "
-        f"With {max(len(comparison) - 1, 0)} variants at {INTERVAL:.0%}, about "
-        f"{max(len(comparison) - 1, 0) * (1 - INTERVAL):.1f} would exclude zero by chance, so "
-        "a single consistent delta is exploratory until repeated with more seeds.",
+        f"With {variants} variant{'' if variants == 1 else 's'} at {INTERVAL:.0%}, about "
+        f"{variants * (1 - INTERVAL):.1f} would exclude zero by chance, so a single "
+        "consistent delta is exploratory until repeated with more seeds.",
         "",
     ]
     if len(unpaired) and unpaired.iloc[0] > 0:
