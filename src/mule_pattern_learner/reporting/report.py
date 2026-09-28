@@ -329,13 +329,14 @@ def audit_section(run: RunPaths) -> list[str]:
         _threshold_row(metrics),
         ["Rejected accounts", *(number(r["rejected_accounts"]) for r in reports.values())],
     ]
+    level = next(iter(reports.values()))["constants"]["interval"]
     return [
         "## Ground-truth audit",
         "",
         "Decisions use the validation audit; the test audit is for reporting. Each audit "
         "scores every mule of its split and a uniform sample of the other accounts, "
-        "weighted to the split's whole population; intervals are ring-clustered bootstrap "
-        "intervals of the level the report records.",
+        "weighted to the split's whole population. In parentheses: the ring-clustered "
+        f"{level:.0%} bootstrap interval.",
         "",
         *table(header, rows),
         "",
@@ -381,7 +382,7 @@ def training_section(run: RunPaths) -> list[str]:
     return [
         "## Training",
         "",
-        *table(["", ""], run_rows),
+        *table(["Run", ""], run_rows),
         "",
         "The proxy scores each split's revealed mules against a sample of unlabelled "
         "accounts, which count as negatives: it is what training selects on, not the "

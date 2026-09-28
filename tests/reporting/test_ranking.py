@@ -107,6 +107,18 @@ def test_the_capture_figure_marks_the_recorded_budgets_on_its_curve() -> None:
     assert ticks == ["0.01%", "0.1%", "1%", "5%", "10%", "100%"]
 
 
+def test_the_capture_labels_move_clear_of_each_other() -> None:
+    # Two splits with the same curve, flat from 5% to 10%: every label starts crowded.
+    y = np.r_[np.ones(10, np.int64), np.zeros(990, np.int64)]
+    score = np.r_[np.linspace(0.9, 0.99, 10), np.linspace(0.0, 0.5, 990)]
+    scores = split_scores(y, score, np.ones(1000))
+    ax = axes()
+    plot_capture(ax, {"validation": scores, "test": scores}, title="t")
+    boxes = [text.get_window_extent() for text in ax.texts]
+    assert len(boxes) == 6
+    assert not any(box.overlaps(other) for i, box in enumerate(boxes) for other in boxes[i + 1 :])
+
+
 def test_shares_print_as_percentages_to_two_digits() -> None:
     assert [share_label(s) for s in (1e-5, 0.0001, 0.0123, 0.05, 1.0)] == [
         "0.001%",
