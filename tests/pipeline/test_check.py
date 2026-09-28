@@ -62,8 +62,11 @@ def test_a_ready_graph_gets_one_batch_and_one_training_step(
     monkeypatch.setattr(pipeline_check, "connect", lambda transport: fake)
     opened: list[DatasetPaths] = []
 
-    def open_source(path: DatasetPaths, manifest: dict[str, Any], config: RunConfig) -> Any:
-        assert config == CONFIG
+    def open_source(
+        path: DatasetPaths, manifest: dict[str, Any], config: RunConfig, *, cached: bool = True
+    ) -> Any:
+        # Without the context cache, so the batch runs the installed context query.
+        assert config == CONFIG and not cached
         opened.append(path)
         return ContextSource(
             TigerGraphContextFetcher(fake),

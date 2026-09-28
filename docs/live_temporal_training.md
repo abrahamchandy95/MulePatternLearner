@@ -201,8 +201,8 @@ queued requests are cancelled, and requests already in flight finish on their ow
 or are dropped when the process exits, so neither the error nor the exit waits for
 a REST retry chain.
 
-Training, `mule check` and the audits read and write the prepared dataset's context
-cache, `data/<dataset id>/contexts/`, once the frozen-source check has passed on their
+Training and the audits read and write the prepared dataset's context cache,
+`data/<dataset id>/contexts/`, once the frozen-source check has passed on their
 connection. A context the LRU does not hold is read from the cache before it is
 requested, and every row TigerGraph returns is kept there as it came, one
 gzip-compressed JSON file per context, so the next run of the dataset (another seed or
@@ -217,7 +217,9 @@ again. Beyond 1.5 million entries (`contract.bounds.CONTEXT_CACHE_ENTRIES`, roug
 10 GB, an estimate until a baseline run measures its distinct contexts) the least
 recently used entries are removed until 90% remain. A cache directory that cannot be
 written gives one `context_cache_unwritable` warning and is then only read. `mule
-score` reads the live graph without the frozen-source check, so it has no cache.
+score` reads the live graph without the frozen-source check, so it has no cache, and
+`mule check` passes the check but requests its batch from the graph, so that the
+installed context query runs.
 
 Every failure is classified before it is retried, and each class has its own
 budget:
@@ -547,7 +549,9 @@ Qualify the graph and one configured batch without saving a model or writing to 
 graph. `mule check` reports the graph name, the scope vertex type, the installed query
 text and, on a CUDA host, the cuGraph probe; with the run's dataset prepared it then
 builds the first training batch and runs one optimizer step on the configured device.
-The report has REST calls, retries, seconds, stub and rejected counts, the sampler
+It requests the batch's contexts from TigerGraph rather than reading them from the
+dataset's context cache, so the installed context query and its first Fourier spot
+check run. The report has REST calls, retries, seconds, stub and rejected counts, the sampler
 backend, a digest of every batch tensor and the step's loss and objective. Two code
 versions that print the same digests and loss on one machine and device built the same
 first batch and step:

@@ -64,6 +64,9 @@ def test_the_transport_section_sets_the_source_and_the_retry_budgets(
         UNUSED.contexts, dataset_id("d", DEFAULT_CONFIG), source_fingerprint(manifest)
     )
     store.close()
+    # mule check's source has none.
+    with connect.open_context_source(UNUSED, manifest, training, cached=False) as store:
+        assert store.disk is None
     changed = training.with_changes({"sampler": {"roots": {"recent": 5}}})
     seen.clear()
     with pytest.raises(ValueError, match="pools differ"):
