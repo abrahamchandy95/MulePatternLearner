@@ -442,11 +442,17 @@ from the repository, its REST endpoint is missing or disabled, or the endpoint's
 parameters differ. Queries that call a stale query are installed with it (a change
 to `encode_fourier64` also reinstalls `fetch_training_context`). Only
 stale definitions are created again, because `CREATE OR REPLACE` disables an
-installed endpoint until it is installed again, and the command prints which
-queries it installs, which are up to date and which installed queries no repository
-file defines (listed, never dropped). The pair_time64 parity queries of
-`gsql/analytics/` are never installed by `mule install` or `mule train`;
-`tigergraph.installer.install(executor, analytics=True)` installs them.
+installed endpoint until it is installed again. Once every query is installed and
+verified, the install drops the queries the rename retired (`contract.server.RETIRED_QUERIES`:
+the old `temporal_*` names, `temporal_training_population`, `temporal_fourier64`,
+`zelle_pair_time64` and `payment_pair_time64`) that are still installed, callers first,
+and never any other query. Run it only when no job of the code before the rename is
+running anywhere, since that code calls the old names. The command prints which
+queries it installs, which are up to date, which it dropped and which installed
+queries no repository file defines (listed, never dropped). Every write runs once:
+a failed one is reported, never repeated. The analytics queries of `gsql/analytics/`
+(the analytics context and the pair-gap queries) are never installed by `mule install`
+or `mule train`; `tigergraph.installer.install(executor, analytics=True)` installs them.
 
 On TigerGraph 4.2.5 the install request answers only when compilation finishes,
 so it runs with a 45-minute read timeout. When the client gives up first (read

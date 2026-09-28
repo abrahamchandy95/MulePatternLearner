@@ -1,7 +1,7 @@
-"""Install and verify only the query definitions the training pipeline uses.
+"""Install and verify the query definitions the training pipeline uses; drop the retired.
 
-Every write (the scope schema change, CREATE and the install request) runs through the
-executor with one attempt, so it is never repeated behind the caller's back.
+Every write (the scope schema change, CREATE, the install request and each DROP) runs
+through the executor with one attempt, so it is never repeated behind the caller's back.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from typing import Any
 from ..contract.server import (
     ANALYTICS_QUERY_FILES,
     GRAPH_NAME,
+    RETIRED_QUERIES,
     SCOPE_VERTEX,
     TRAINING_QUERY_FILES,
 )
@@ -41,7 +42,8 @@ def _show_query(executor: ConnectionExecutor, name: str) -> str:
 def undefined_queries(executor: ConnectionExecutor) -> list[str]:
     """Installed queries that no GSQL file of the repository defines (read-only).
 
-    `mule install` lists them and drops nothing: the server step retires them.
+    `mule install` lists them after dropping the retired ones (drop_retired): what is
+    left belongs to someone else, and nothing drops it.
     """
     defined = repository_queries((*TRAINING_QUERY_FILES, *ANALYTICS_QUERY_FILES))
     return sorted(set(installed_endpoints(executor)) - set(defined))
@@ -146,6 +148,32 @@ def _created(output: str) -> bool:
     )
 
 
+def retired_installed(executor: ConnectionExecutor) -> list[str]:
+    """The RETIRED_QUERIES still installed, in their order, callers first (read-only)."""
+    installed = installed_endpoints(executor)
+    return [name for name in RETIRED_QUERIES if name in installed]
+
+
+def drop_retired(executor: ConnectionExecutor) -> list[str]:
+    """Drop every installed query of RETIRED_QUERIES, callers first; the names dropped.
+
+    The names are the ones the queries were installed under before the server step
+    renamed them (the owner decision on retired queries). A name that is not installed
+    is skipped, and no other query is ever touched. TigerGraph refuses to drop a query
+    another installed query calls, so each drop is checked against the endpoint
+    listing, and one that leaves its query installed raises with TigerGraph's answer.
+    """
+    names = retired_installed(executor)
+    for name in names:
+        output = executor.gsql(
+            f"USE GRAPH {GRAPH_NAME}\nDROP QUERY {name}", what="DROP QUERY " + name, attempts=1
+        )
+        if name in installed_endpoints(executor):
+            raise RuntimeError(f"DROP QUERY {name} left it installed: {output}")
+    emit({"event": "drop_retired", "dropped": names})
+    return names
+
+
 def _unanswered(error: Exception) -> bool:
     """Whether the install request failed because the client gave up waiting.
 
@@ -165,7 +193,7 @@ def install(
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
 ) -> dict[str, Any]:
-    """Create and install only the training queries that are stale on the server.
+    """Create and install only the stale queries, then drop the retired ones.
 
     A query is stale when SHOW QUERY differs from the repository, its endpoint is
     missing or disabled, or its endpoint parameters differ (see query_problems);
@@ -180,7 +208,9 @@ def install(
     connection, gateway error), the endpoint listing is polled every `poll_s`
     seconds until every installed query is enabled or the deadline passes. A
     requestId, when a server returns one, is polled with getQueryInstallationStatus.
-    Success is decided by verify_sources, not by a status message.
+    Success is decided by verify_sources, not by a status message. Only once it has
+    passed, so every renamed query is installed, are the retired queries dropped
+    (drop_retired); the result lists them under "dropped".
     """
     logs: dict[str, Any] = {}
     if not has_scope_vertex(executor):
@@ -198,6 +228,7 @@ def install(
     emit({"event": "install", "stale": names, "up_to_date": logs["up_to_date"]})
     if not names:
         logs["verified"] = verify_sources(executor, files)
+        logs["dropped"] = drop_retired(executor)
         return logs
     for relative in files:
         chosen = [queries[name][1] for name in names if queries[name][0] == relative]
@@ -258,6 +289,7 @@ def install(
         _await_enabled(executor, names, started, deadline_s, poll_s, sleep, clock)
     logs["install"] = status
     logs["verified"] = verify_sources(executor, files)
+    logs["dropped"] = drop_retired(executor)
     return logs
 
 

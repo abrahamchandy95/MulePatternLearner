@@ -106,7 +106,7 @@ stubs](#hubs-and-stubs)).
 
 | Stage | Command | TigerGraph work | Writes to TigerGraph? |
 |---|---|---|---|
-| Install queries | first `mule train` (or `mule install`) | Creates and compiles the training queries that are stale, plus the queries that call them | Query catalog (and the Temporal_Training_Scope schema if it is missing) |
+| Install queries | first `mule train` (or `mule install`) | Creates and compiles the training queries that are stale, plus the queries that call them, then drops the retired queries still installed | Query catalog (and the Temporal_Training_Scope schema if it is missing) |
 | Create the experiment scope | first `train`, when the scope is missing | Partitions every Account and Party into train, validation or test | One scope vertex and one membership edge per Account and Party |
 | Reveal known mules | first strict `train`, when the graph has no known labels | Simulates each mule's discovery and reveals up to 20 per split ([label reveal](label_reveal.md)) | The label-contract attributes of every internal Account |
 | Prepare the dataset | every `mule train` | Pages the population, resolves cutoffs, builds the hub registry | No |
