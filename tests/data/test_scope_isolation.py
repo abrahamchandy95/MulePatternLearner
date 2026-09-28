@@ -42,7 +42,7 @@ from mule_pattern_learner.testing.builders import (
     scoped_accounts,
     unit_config,
 )
-from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
+from mule_pattern_learner.testing.fake_graph import FakeTigerGraph, page
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher, validate_context
 from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffs
 from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
@@ -233,6 +233,12 @@ def test_the_graph_truth_pages_the_label_contract() -> None:
     # Each mule's ring and every label's source come with it.
     assert truth.ring_id.tolist() == [r["mule_ring_id"] for r in rows]
     assert set(truth.label_source) == {"phantomledger_role"}
+
+    # GSQL prints the rows of a vertex set under attributes, and they read the same.
+    def wrapped(params: dict[str, Any]) -> list[dict[str, Any]]:
+        return [{"status": "ok"}, {"accounts": [{"attributes": r} for r in page(rows, params)]}]
+
+    assert TigerGraphTruth(FakeTigerGraph(answers={TRUTH_QUERY: wrapped})).read().equals(truth)
 
     unordered = [
         {"account_id": a, "is_mule": 0, "mule_label_known": True, "mule_ring_id": -1} for a in "BA"
