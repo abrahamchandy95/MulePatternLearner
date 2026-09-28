@@ -557,7 +557,7 @@ The constants that hold these values get new names; only the persisted values st
 | `training_objective.png` | `plot_objective` | history.csv | Loss and unclamped nnPU objective per interval, rolling mean, epoch boundaries |
 | `training_corrections.png` | `plot_corrections` | history.csv | Share of steps whose non-negative correction fired |
 | `validation_ranking.png` | `plot_validation_ranking` | epochs.csv | Proxy AP and ROC AUC per epoch, selected epoch, prevalence line, which weights were validated |
-| `training_throughput.png` | `plot_throughput` | history.csv | Seconds per step, batch wait, contexts requested, distinct and cached |
+| `training_throughput.png` | `plot_throughput`, `plot_context_counts` | history.csv | Seconds per step and batch wait; below, contexts requested, distinct and cached |
 | `proxy_precision_recall.png` | `plot_precision_recall` | predictions/*.parquet | Validation and test PR on observed labels, titled as a proxy |
 | `run_health.png` | `plot_run_health` | metrics.json, history.csv | Rejections by split and status, stub children, sampler backend totals, database calls |
 | `audit_precision_recall.png` | `plot_precision_recall` | audit/*.parquet, *.json | Weighted PR per split, chance line, AP with its ring-clustered 90% interval |
@@ -565,7 +565,7 @@ The constants that hold these values get new names; only the persisted values st
 | `audit_capture.png` | `plot_capture` | audit/*.parquet | Cumulative gains per split, random and perfect lines, markers at 1%, 5% and 10% labelled with recall and precision |
 | `audit_threshold.png` | `plot_threshold_metrics` | audit/test.parquet | Weighted precision, recall and F1 against threshold, the selected threshold |
 | `audit_score_distribution.png` | `plot_score_distribution` | audit/test.parquet | Weighted densities of log10 odds, mules against non-mules, threshold line |
-| `audit_revealed_hidden.png` | `plot_revealed_vs_hidden` | audit/test.parquet | ECDF of percentile rank, revealed against hidden mules, points and medians |
+| `audit_revealed_hidden.png` | `plot_revealed_vs_hidden` | audit/test.parquet | ECDF of the rank from the top (one minus the percentile rank, on a log axis), revealed against hidden mules, points and medians |
 | `comparison_ap.png` | `plot_comparison` | summary.csv, comparison.csv | Validation-audit and test-audit AP per variant (two panels): one dot per seed, seed mean, interval, baseline line |
 | `comparison_delta.png` | `plot_paired_delta` | comparison.csv | Validation-audit AP minus baseline: paired interval, per-seed deltas, zero line, sorted |
 | `comparison_budget.png` | `plot_budget_recall` | summary.csv | Recall at 1%, 5% and 10% per variant (validation audit) |
@@ -959,6 +959,12 @@ The steps, in order:
       - The diagnostics step adds `mule diagnose proxy-validity` over `diagnostics.proxy_validity.proxy_validity(run, truth)`, which returns the long table and writes nothing.
       - The fake graph does not answer the reveal or the label-contract query, so the pipeline's end-to-end test still replaces the reveal; `tests/tigergraph/test_reveal.py`, `test_labels.py` and `test_installer.py` and `tests/test_scripts.py` keep their own executors or connections for the queries and writes they script.
 12. **Plots and reports.** `reporting/`, `mule report`, automatic plots. Gate: every figure smoke-renders from synthetic files to a non-empty PNG under its fixed name; the matplotlib and torch contracts pass.
+    - Settled in this step, for the steps after it:
+      - `reporting/style.py` holds the fixed colours (mule, non-mule, baseline, each audited split; the measures a figure compares take `MEASURES` in order, each with its own line style), the sizes, `DPI = 150` and the matplotlib settings, applied with `matplotlib.rc_context`. `training.py`, `ranking.py` and `scores.py` hold the plot functions; `ranking.SplitScores` is a split's scored accounts (unit weights for the proxy, inverse inclusion probabilities for an audit) with the metrics and intervals its file records, which the labels print, so a figure shows the recorded numbers.
+      - `reporting/report.py` alone reads files and saves figures (`paths.RunPaths.figure(name)`). `pipeline.train.train_run` calls `write_training_report` after the trainer returns, and `pipeline.evaluate.evaluate_run` calls `write_audit_report` after the audits it ran; a complete run reported, or a run whose audits are all recorded, is left as it was. `mule report [RUN]` is `report_run`: the training figures of a complete run, the audit figures of the audited splits (those of the test split alone need its audit), then `report.md`. A figure that fails is recorded, the others and `report.md` are still written, and the call then raises naming every failed figure.
+      - Scores sit near 0 and 1, so the threshold and density figures use log10 odds (within plus or minus 16, since a float64 score rounds to 1 above a logit of about 37), and the capture and revealed-and-hidden figures a log axis of the top share of accounts, labelled at the review budgets. The precision-recall steps keep only the blocks that add recall, so the area under them is the recorded AP.
+      - `metrics.budget_name` names a review budget's metrics; `testing.builders.write_run_files` writes a complete, audited run shaped like the reference runs (47,749 test accounts, 40 mules, scores near 0 and 1) for the reporting tests.
+    - Left for later steps: `mule report` reports a run directory; the experiments step adds `reporting/comparison.py` and suite directories (`write_suite_report`), and the diagnostics step `reporting/diagnostics.py` and diagnostics directories, each with its own figures from the Plots table.
 13. **Context cache**, before any suite.
     - A disk tier inside `ContextSource` under `data/<dataset id>/contexts/`, with a size cap.
     - Keyed by hop, `ContextKey`, requested group flags, pool fingerprint, `CONTEXT_CONTRACT` and dataset id. It stores raw TigerGraph rows compressed, and the frozen-source check invalidates it.
