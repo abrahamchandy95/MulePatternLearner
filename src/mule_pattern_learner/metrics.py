@@ -4,7 +4,7 @@ Everything here is pure numpy and scikit-learn: arrays in, numbers out. The prox
 metrics (proxy_metrics) score observed labels as they are; the weighted metrics estimate population
 values from a sample in which each account stands for ``weight`` accounts. Both share
 the thresholded precision, recall and F1 (threshold_metrics) and the tie-aware review
-budgets (capture_at_budgets).
+budgets (capture_at_budgets). weighted_quantiles summarises such a sample's values.
 """
 
 from __future__ import annotations
@@ -325,3 +325,18 @@ def paired_replicates(
             value = statistic(y[rows], score[rows], weight[rows])
             result[row, column] = np.nan if value is None else value
     return result
+
+
+def weighted_quantiles(
+    values: NDArray[Any], weight: NDArray[Any], quantiles: Sequence[float]
+) -> NDArray[np.float64]:
+    """Quantiles of a weighted sample: each value stands for ``weight`` population values.
+
+    The values are sorted, and each takes the middle of its weight's share of the
+    cumulative weight; a quantile between two of them is interpolated linearly.
+    """
+    x, w = np.asarray(values, dtype=np.float64), np.asarray(weight, dtype=np.float64)
+    order = np.argsort(x, kind="stable")
+    x, w = x[order], w[order]
+    middle = (np.cumsum(w) - 0.5 * w) / w.sum()
+    return np.interp(np.asarray(quantiles, dtype=np.float64), middle, x)

@@ -22,6 +22,7 @@ import pandas as pd
 import torch
 
 from mule_pattern_learner.artifacts import (
+    FEATURE_TABLE_COLUMNS,
     append_history,
     file_digest,
     write_audit_scores,
@@ -50,7 +51,7 @@ from mule_pattern_learner.contract.graph_schema import (
     ContextKey,
 )
 from mule_pattern_learner.contract.sampler_plan import PoolPlan, SamplerPlan
-from mule_pattern_learner.contract.server import CONTEXT_CONTRACT
+from mule_pattern_learner.contract.server import ANALYTICS_CONTRACT, CONTEXT_CONTRACT
 from mule_pattern_learner.contract.time_basis import BASIS_ID, fourier64
 from mule_pattern_learner.data import manifest as data_manifest
 from mule_pattern_learner.data.hub_registry import HubRegistry
@@ -1104,3 +1105,71 @@ def write_suite_runs(
             )
             runs.append(SuiteRun(variant, seed, paths, COMPLETE))
     return runs
+
+
+# A synthetic diagnostic feature table for the analyses' tests: per split, its mules and
+# sampled non-mules (each non-mule standing for FEATURE_WEIGHT accounts), and the months
+# of history its cutoff has seen.
+FEATURE_SAMPLE = {"train": (40, 400, 6), "validation": (12, 300, 9), "test": (15, 300, 12)}
+FEATURE_WEIGHT = 25.0
+
+
+def feature_frame(seed: int = 0) -> pd.DataFrame:
+    """A diagnostic feature table (artifacts.FEATURE_TABLE_COLUMNS, then features).
+
+    Mules have more distinct payers, first-time internal inflows and 30-day inflows than
+    other accounts; the visible event count and the pair history grow with the months a
+    split's cutoff has seen (drift); the account's age is one value per split; the entity
+    flags are the same for every account; the pair window counts are noise. A third of
+    each split's mules, the loudest, are revealed, most mules are in rings of three, and
+    the third train non-mule is rejected, without features.
+    """
+    rng = np.random.default_rng(seed)
+    frames = []
+    for split, (mules, negatives, months) in FEATURE_SAMPLE.items():
+        mule = np.r_[np.ones(mules), np.zeros(negatives)].astype(np.int64)
+        loud = rng.normal(0.0, 1.0, len(mule)) + mule
+        count = len(mule)
+        features = {
+            "model__type_Account": np.ones(count),
+            "model__is_deposit": np.ones(count),
+            "model__history_withheld": np.zeros(count),
+            "model__pool_in_unique": np.log1p(rng.poisson(3 + 2.5 * mule + 0.5 * loud.clip(0))),
+            "model__pool_first_in_internal": np.log1p(rng.poisson(0.3 + 1.5 * mule)),
+            "messages__mean_amount": rng.normal(4.0 + 0.3 * mule, 1.0),
+            "messages__max_pair_prior_count": np.log1p(rng.poisson(0.4 * months, count)),
+            "messages__stratum_distinct": rng.poisson(4 + 2 * mule).astype(np.float64),
+            "account__visible_event_count": rng.poisson(25 * months + 40 * mule).astype(float),
+            "account__30d_in_count": rng.poisson(5 + 3 * mule + loud.clip(0)).astype(float),
+            "account__age_days": np.full(count, 30.5 * months),
+            "message_context__mean_pair_count_7d": rng.gamma(2.0, 1.0, count),
+        }
+        revealed = np.zeros(count, bool)
+        revealed[np.argsort(-np.where(mule == 1, loud, -np.inf))[: mules // 3]] = True
+        rings = np.where((mule == 1) & (np.arange(count) < mules - 2), np.arange(count) // 3, -1)
+        frame = pd.DataFrame(
+            {
+                "account_id": [f"{split[0].upper()}{i:05d}" for i in range(count)],
+                "split": split,
+                "date": DATES[split][0],
+                "is_mule": mule,
+                "revealed": revealed,
+                "ring_id": rings.astype(np.int64),
+                "label_source": np.where(
+                    mule == 1, "phantomledger_role;unit", "phantomledger_role"
+                ),
+                "inclusion_probability": np.where(mule == 1, 1.0, 1 / FEATURE_WEIGHT),
+                "weight": np.where(mule == 1, 1.0, FEATURE_WEIGHT),
+                "rejected": False,
+                "context_contract": CONTEXT_CONTRACT,
+                "analytics_contract": ANALYTICS_CONTRACT,
+                **features,
+            }
+        )
+        if split == "train":
+            frame.loc[mules + 2, "rejected"] = True
+            frame.loc[mules + 2, list(features)] = np.nan
+        frames.append(frame)
+    table = pd.concat(frames, ignore_index=True)
+    assert tuple(table.columns[: len(FEATURE_TABLE_COLUMNS)]) == FEATURE_TABLE_COLUMNS
+    return table
