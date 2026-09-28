@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+import shutil
 from types import SimpleNamespace
 from typing import Any
 
@@ -124,13 +125,19 @@ def test_evaluate_run_connects_after_its_checks_and_reads_truth_once_on_that_con
 POPULATION = 200
 
 
-def audited_graph(tmp_path: Path, config: RunConfig) -> tuple[FakeTigerGraph, Path]:
-    """A fake graph with ground truth, and config's dataset prepared from it in data."""
+def audited_graph(
+    tmp_path: Path, config: RunConfig, statuses: dict[ContextKey | str, str] | None = None
+) -> tuple[FakeTigerGraph, Path]:
+    """A fake graph with ground truth, and config's dataset prepared from it in data.
+
+    ``statuses`` are the graph's per-request statuses (FakeTigerGraph).
+    """
     population = scope_population(POPULATION)
     header = {"ready": True, "source_id": UNIT_SOURCE, "split_seed": config.dataset.split_seed}
     graph = FakeTigerGraph(
         factory=neighbourhood,
         hubs=[("N3", cutoff) for cutoff in (101, 102, 103)],
+        statuses=statuses,
         population=population,
         truth=ground_truth_rows(population),
         scopes={config.scope.id: header},
@@ -219,3 +226,28 @@ def test_evaluate_run_audits_validation_and_test_on_the_fake_graph(
         third, truth=ParquetTruth(tmp_path / "truth.parquet"), data=data
     )
     assert parquet["test"]["metrics"] == reports[0]["test"]["metrics"]
+
+
+def test_each_split_reports_the_rejections_of_its_own_audit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = unit_config()
+    # A child over its history capacity, which both splits' contexts reach.
+    graph, data = audited_graph(tmp_path, config, {"N5": "history_capacity_exceeded"})
+    monkeypatch.setattr(pipeline_evaluate, "connect", connecting(graph))
+    dataset = DatasetPaths.of(dataset_id(UNIT_SOURCE, config), data)
+    both, alone = RunPaths(tmp_path / "both"), RunPaths(tmp_path / "alone")
+    for run in (both, alone):
+        saved_model(run.model, config, dataset)
+    reports = pipeline_evaluate.evaluate_run(both, data=data)
+    # The same model audits test alone once its validation report exists.
+    alone.audit_report("validation").parent.mkdir(parents=True)
+    shutil.copy(both.audit_report("validation"), alone.audit_report("validation"))
+    test = pipeline_evaluate.evaluate_run(alone, data=data)["test"]
+    # Both splits share a context source, yet the test report counts only its own audit's.
+    assert test == reports["test"]
+    for report in reports.values():
+        children = report["rejected_children_by_status"]
+        assert report["rejected_children"] > 0 and set(children) == {"history_capacity_exceeded"}
+        assert report["rejection_events_by_status"] == children
+        assert report["rejected"] == 0 and report["rejected_roots_by_status"] == {}
