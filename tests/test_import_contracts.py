@@ -1,8 +1,8 @@
 """The import contracts that list every package but a few leave none out.
 
 import-linter checks only the source modules a contract names, so a package missing
-from such a list goes unchecked. reporting and diagnostics do not exist yet; the
-contracts name them in the ".**" form, which matches nothing until they are created.
+from such a list goes unchecked. reporting does not exist yet; the contracts name it in
+the ".**" form, which matches nothing until it is created.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from mule_pattern_learner.paths import REPOSITORY_ROOT
 
 PACKAGE = "mule_pattern_learner"
 # The packages of the design record's tree that later steps create.
-PLANNED = frozenset({"reporting", "diagnostics"})
+PLANNED = frozenset({"reporting"})
 # The contracts that list every top-level module but those they allow.
 ENUMERATED = {
     "Only reporting draws": {"reporting"},
