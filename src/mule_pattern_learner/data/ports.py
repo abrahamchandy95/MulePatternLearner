@@ -1,6 +1,6 @@
 """The read ports of the data layer, owned by the code that reads through them.
 
-Preparation, the context source, scoring and the final audit read the graph only
+Preparation, the context source, scoring and the ground-truth audit read the graph only
 through these protocols. The tigergraph adapters satisfy them structurally, and only
 the pipeline builds those adapters. Ground truth has its own port,
 evaluation.truth.TruthReader, so it is not even on training's import surface.

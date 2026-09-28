@@ -562,21 +562,32 @@ The command uses the model's `max_query_attempts` and `max_outage_s`. An
 account with no history can be scored from available metadata, but accuracy on
 such accounts must be measured separately.
 
-`mule evaluate [RUN]` scores all test positives and weighted sampled negatives of the
-frozen test partition with the model of a run directory (`results/baseline/seed-42/`
-by default). Truth comes from the graph's label contract
-(`temporal_get_account_supervision`, the oracle endpoint training never calls); an
-account whose label is not known counts as unknown, never as a negative. It takes the
-test cutoff and hub registry from the model's prepared dataset (the dataset id recorded
-in `model.pt`), and the retry budgets from the model. It writes `audit/test.json` (the report) and `audit/test.parquet` (the
-scored sample) into the run directory, and refuses a run that already has them. It
-fails before writing anything when a test positive is rejected or the rejected
+`mule evaluate [RUN]` audits the model of a run directory (`results/baseline/seed-42/`
+by default) on the frozen validation and test partitions: decisions use the validation
+audit, and the test audit is for reporting. Each audit scores all positives and
+2,000 uniformly sampled negatives of its split's population at the split's cutoff. The
+sample depends only on the scope, the truth and `dataset.split_seed`, so every run of a
+dataset is audited on the same accounts. Truth comes from the graph's label contract
+(`temporal_get_account_supervision`, the oracle endpoint training never calls) and is
+read once for both splits; an account whose label is not known counts as unknown, never
+as a negative. The audits take the cutoffs and hub registry from the model's prepared
+dataset (the dataset id recorded in `model.pt`), and the retry budgets from the model.
+Each split gets `audit/<split>.json` (the report) and `audit/<split>.parquet` (the
+scored sample: `account_id, is_mule, inclusion_probability, score, revealed, ring_id,
+label_source`, where `revealed` says that the graph revealed the account's label before
+the cutoff). A split the run already has is reported as it is and never rewritten. An
+audit fails before writing anything when a positive is rejected or the rejected
 fraction exceeds the model's `max_rejected_root_fraction`, because weighted metrics
 would then describe a censored population. Rejected negatives within the limit are
-listed in `audit/test_rejected.txt`, and the metrics' `evaluation_sample` ends in
+listed in `audit/<split>_rejected.txt`, and the metrics' `evaluation_sample` ends in
 `_minus_rejected_negatives`.
 
-The report's `metrics` estimate the whole test population, each sampled account
+The report's `intervals` give each ranking metric (AP, ROC AUC and the review budgets
+below) a 90% interval from 1,000 bootstrap replicates drawn with seed 0: mules are
+resampled by ring (a mule without a ring alone) and non-mules within their class, each
+keeping its inclusion weight. `constants` records these settings with the sample's.
+
+The report's `metrics` estimate the split's whole population, each sampled account
 standing for 1 / `inclusion_probability` accounts: `estimated_population`,
 `weighted_prevalence`, `average_precision`, `roc_auc`, and `precision`, `recall` and
 `f1` at the frozen threshold. `precision_at_1pct` and `recall_at_1pct` (and the same at

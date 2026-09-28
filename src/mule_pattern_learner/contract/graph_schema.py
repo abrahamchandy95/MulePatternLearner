@@ -115,6 +115,12 @@ HUB_COLUMNS: dict[str, type[int] | type[str]] = {
 }
 HUB_REASONS = ("visible_history",)
 
+# The columns of the oracle's truth table (tigergraph.oracle, evaluation.truth), read from
+# the ground-truth query. is_mule is 1 or 0, and -1 where the label is not known; ring_id
+# is the account's ring of mules, -1 for none; label_source says where the label came
+# from (the reveal records its version, its salt and whether the mule was revealed).
+TRUTH_COLUMNS = ("account_id", "is_mule", "ring_id", "label_source")
+
 
 # Account CSV/PSV input columns (gsql/schema/account_loading.gsql): five
 # account facts, then the ten supervision fields of the label contract.

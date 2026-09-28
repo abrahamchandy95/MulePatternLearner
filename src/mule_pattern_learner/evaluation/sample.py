@@ -2,34 +2,47 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
+
+from ..contract.graph_schema import TRUTH_COLUMNS
+
+# The negatives an audit sample draws from its split; every positive is kept.
+AUDIT_NEGATIVES = 2000
 
 
 def audit_sample(
-    universe: pd.DataFrame, truth: pd.DataFrame, *, negative_limit: int = 2000, seed: int = 42
+    population: pd.DataFrame,
+    truth: pd.DataFrame,
+    *,
+    seed: int,
+    negatives: int = AUDIT_NEGATIVES,
 ) -> pd.DataFrame:
-    """Final-only case/control sample with known inclusion probabilities.
+    """Case/control sample of one split's population with known inclusion probabilities.
 
-    The caller supplies the COMPLETE frozen test population, not the preparation
-    reservoir. This function must never feed training or threshold selection.
-    Unknown truth is an error: otherwise neither prevalence nor weights is known.
+    The caller supplies the COMPLETE frozen population of the split (audit_population),
+    not the preparation reservoir; the sample must never feed training or threshold
+    selection. It keeps every positive and draws ``negatives`` negatives uniformly with
+    ``seed`` (dataset.split_seed), so it depends only on the population, the truth and
+    the seed: every run of a dataset is audited on the same accounts. The rows, in
+    account order, carry the population's columns, the truth's (TRUTH_COLUMNS) and
+    inclusion_probability. Unknown truth is an error: otherwise neither prevalence nor
+    weights is known.
     """
-    import numpy as np
-
-    if negative_limit < 1 or "split" not in universe or not universe.split.eq("test").all():
-        raise ValueError("Provide a complete test-only population and positive sample limit")
-    if universe.account_id.duplicated().any() or truth.account_id.duplicated().any():
-        raise ValueError("Final population and truth must have unique account IDs")
-    if "is_mule" in universe:
+    if negatives < 1 or "split" not in population or population.split.nunique() != 1:
+        raise ValueError("Provide the complete population of one split and a positive count")
+    if population.account_id.duplicated().any() or truth.account_id.duplicated().any():
+        raise ValueError("The population and the truth must have unique account IDs")
+    if "is_mule" in population:
         raise ValueError("Evaluation population must be label-blind")
-    frame = universe.merge(
-        truth[["account_id", "is_mule"]], on="account_id", how="left", validate="one_to_one"
+    frame = population.merge(
+        truth[list(TRUTH_COLUMNS)], on="account_id", how="left", validate="one_to_one"
     )
     if not frame.is_mule.isin([0, 1]).all():
         raise ValueError("Complete binary truth is required for population-weighted evaluation")
     positive = frame[frame.is_mule == 1].copy()
     negative = frame[frame.is_mule == 0].sort_values("account_id")
-    n = min(len(negative), negative_limit)
+    n = min(len(negative), negatives)
     chosen = np.random.default_rng(seed).choice(len(negative), size=n, replace=False)
     negative_sample = negative.iloc[chosen].copy()
     positive["inclusion_probability"] = 1.0

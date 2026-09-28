@@ -212,7 +212,13 @@ def test_bounded_seed_reservoir_does_not_enrich_the_nnpu_marginal() -> None:
 
 def test_the_graph_truth_pages_the_label_contract() -> None:
     rows = [
-        {"account_id": f"A{i:05}", "is_mule": i % 2, "mule_label_known": i % 3 != 0}
+        {
+            "account_id": f"A{i:05}",
+            "is_mule": i % 2,
+            "mule_label_known": i % 3 != 0,
+            "mule_ring_id": i // 10 if i % 2 else -1,
+            "mule_label_source": "phantomledger_role",
+        }
         for i in range(10050)
     ]
     graph = FakeTigerGraph(truth=rows)
@@ -224,8 +230,13 @@ def test_the_graph_truth_pages_the_label_contract() -> None:
     assert truth.account_id.tolist() == [r["account_id"] for r in rows]
     # An account whose label is not known is -1, never a negative.
     assert truth.is_mule.tolist() == [r["is_mule"] if r["mule_label_known"] else -1 for r in rows]
+    # Each mule's ring and every label's source come with it.
+    assert truth.ring_id.tolist() == [r["mule_ring_id"] for r in rows]
+    assert set(truth.label_source) == {"phantomledger_role"}
 
-    unordered = [{"account_id": a, "is_mule": 0, "mule_label_known": True} for a in "BA"]
+    unordered = [
+        {"account_id": a, "is_mule": 0, "mule_label_known": True, "mule_ring_id": -1} for a in "BA"
+    ]
     graph = FakeTigerGraph(
         answers={TRUTH_QUERY: lambda p: [{"status": "ok", "accounts": unordered}]}
     )

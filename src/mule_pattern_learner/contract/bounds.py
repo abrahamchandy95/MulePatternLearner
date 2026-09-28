@@ -80,7 +80,8 @@ EVALUATION_SEED = Bound(0, 2**63 - 1)
 SEED_LIMIT = Bound(1, 20_000)
 POSITIVE_POOL = 40_000
 DATASET_ROWS = 100_000
-# The final audit: test population accounts it reads, and sample accounts it scores.
+# The ground-truth audit of a split: the accounts of the split's partition it holds, and
+# the sample accounts it scores.
 AUDIT_POPULATION = 1_000_000
 AUDIT_SAMPLE = 100_000
 # Known mules the reveal may reveal per split.

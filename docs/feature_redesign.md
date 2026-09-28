@@ -97,19 +97,19 @@ Compare them using the same revealed labels, dates, prior and observed validatio
 proxy, then freeze this setting before feature comparisons. Hidden truth is never
 read by preparation, training, early stopping or threshold selection.
 
-The separate `mule evaluate` command enumerates the whole frozen test partition,
-includes every truth-positive test account and a uniform sample of truth-negative
-accounts, then computes inverse-inclusion-probability-weighted metrics at the
+The separate `mule evaluate` command enumerates the whole frozen validation and test
+partitions, includes every truth-positive account of each and a uniform sample of
+truth-negative accounts, then computes inverse-inclusion-probability-weighted metrics at the
 frozen checkpoint threshold, and weighted precision and recall in the top 1, 5 and
 10% of the estimated population (`precision_at_1pct`, `recall_at_1pct` and the same
 at `5pct` and `10pct`; see the [commands](live_temporal_training.md#commands) of the
 live training guide). This avoids depending on the few hidden positives
 that happen to fall into the training preparation reservoir. It requires complete
-binary truth for that test population and one test date. It is a bounded POC audit
+binary truth for those populations and one date per split. It is a bounded POC audit
 (up to one million test metadata rows and 100,000 scored rows), not a production
-truth service. Weighted metrics are sample estimates; uncertainty intervals and
-ring-level bootstrap remain future evaluation work. Test reports cannot be used
-for feature selection. Which mules are observed is decided once in the graph by the
+truth service. Weighted metrics are sample estimates, each ranking metric with a
+ring-clustered 90% bootstrap interval. Decisions use the validation audit; test reports
+cannot be used for feature selection. Which mules are observed is decided once in the graph by the
 [label reveal](label_reveal.md).
 
 ## Commands and experiment order

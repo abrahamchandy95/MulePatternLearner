@@ -111,7 +111,7 @@ stubs](#hubs-and-stubs)).
 | Prepare the dataset | every `mule train` | Pages the population, resolves cutoffs, builds the hub registry | No |
 | Train | `mule train` | Two rounds of context queries per step | No |
 | Check readiness | `mule check` | Reads the schema and the query catalog, then the contexts of one training batch | No |
-| Score, evaluate | `mule score`, `mule evaluate` | Context queries for the scored accounts; `mule evaluate` also pages the test population and reads the graph's label contract | No |
+| Score, evaluate | `mule score`, `mule evaluate` | Context queries for the scored accounts; `mule evaluate` also pages the validation and test populations and reads the graph's label contract | No |
 
 `mule` is `python -m mule_pattern_learner` (the entry point exists
 after `pip install -e .`; the project needs an editable install because it reads `gsql/`
@@ -727,12 +727,13 @@ dataset; different dataset settings name another dataset, prepared beside it.
   do not depend on scope or cutoff), would reduce TigerGraph time per step.
 - The optional pair-window counts scan each sender's full outgoing history; keep them as a
   control, not for large runs.
-- `mule evaluate` needs complete 0/1 truth for the test population, which the graph's
-  label contract provides. Its report estimates population metrics from a weighted sample: AP, ROC
-  AUC, precision and recall at the frozen threshold, and precision and recall in the
-  top 1, 5 and 10% of the estimated population (`precision_at_1pct`, `recall_at_1pct`
-  and so on; see the [commands](live_temporal_training.md#commands) of the live
-  training guide). They carry no uncertainty intervals yet.
+- `mule evaluate` needs complete 0/1 truth for the validation and test populations,
+  which the graph's label contract provides. Each report estimates population metrics
+  from a weighted sample: AP, ROC AUC, precision and recall at the frozen threshold,
+  and precision and recall in the top 1, 5 and 10% of the estimated population
+  (`precision_at_1pct`, `recall_at_1pct` and so on; see the
+  [commands](live_temporal_training.md#commands) of the live training guide), each
+  ranking metric with a ring-clustered 90% bootstrap interval.
 - No mule-detection quality has been established. With 20 revealed training positives,
   compare `positive_weight` settings and several seeds on validation before drawing
   conclusions.

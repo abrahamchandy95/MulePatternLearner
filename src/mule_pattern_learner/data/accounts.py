@@ -24,8 +24,8 @@ def scope_accounts(
 ) -> Iterator[dict[str, Any]]:
     """The scope's accounts in account order, page by page from the scope reader.
 
-    The one pager of the scope population: the seed reservoirs and the final audit both
-    read it here. Rows carry observed labels only with include_observed.
+    The one pager of the scope population: the seed reservoirs and the ground-truth audit
+    both read it here. Rows carry observed labels only with include_observed.
     """
     for page in scope.population_pages(scope_id, include_observed=include_observed):
         yield from page
