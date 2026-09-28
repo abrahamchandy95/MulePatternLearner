@@ -115,6 +115,18 @@ def test_the_capture_figure_marks_the_recorded_budgets_on_its_curve() -> None:
     assert ax.get_xscale() == "log"
     ticks = [label.get_text() for label in ax.get_xticklabels()]
     assert ticks == ["0.01%", "0.1%", "1%", "5%", "10%", "100%"]
+    # The split's own perfect ranking, in its colour, finds every mule at its prevalence.
+    perfect = next(line for line in ax.get_lines() if line.get_label() == "test perfect ranking")
+    assert perfect.get_color() == SPLIT_COLOURS["test"]
+    assert ys(perfect) == pytest.approx(np.minimum(np.array(xs(perfect)) / scores.prevalence, 1))
+    legend = ax.get_legend()
+    assert legend is not None
+    assert [text.get_text() for text in legend.get_texts()] == [
+        "test",
+        "test perfect ranking",
+        "random ranking",
+        "review budget: recall / precision",
+    ]
 
 
 def test_the_capture_labels_move_clear_of_each_other() -> None:

@@ -5,8 +5,10 @@ never change colour, and neither do the audited splits; the measures a figure co
 (a loss and an objective, precision, recall and F1) take MEASURES in order, each with its
 own line style too, since some of those colours sit close for colour-blind readers. The
 hues are the categorical steps of a palette checked for colour-blind separation; lines
-and bars of the lighter ones always carry a legend or a label. Reference lines (chance,
-random, perfect, a threshold) are grey or ink, never a data colour.
+and bars of the lighter ones always carry a legend or a label. A reference line of the
+whole figure (a random ranking, a threshold, a run's average) is grey or ink, never a
+data colour; one that belongs to a split or a group (its chance or perfect ranking, its
+median) takes that one's colour, dashed or dotted and thin.
 """
 
 from __future__ import annotations

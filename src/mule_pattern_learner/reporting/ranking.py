@@ -253,13 +253,14 @@ def plot_capture(ax: Axes, splits: Mapping[str, SplitScores], *, title: str) -> 
     """The share of mules found against the share of accounts reviewed, highest scores first.
 
     The x axis is logarithmic, so the review budgets of 1, 5 and 10% and the accounts
-    above them stay apart. The dashed line is a random ranking and the dotted one a
-    perfect ranking. Each review budget's marker is labelled, in its split's colour, with
-    the split's recorded recall and precision there. At each budget the split with the
-    higher recall has its label above and left of its marker and the other below and
-    right, so neither label sits by the other split's marker. A label that would leave
-    the axes, cover a marker or another label, or sit nearer another marker than its own
-    tries the other sides of its marker, and moves up or down clear if none suits.
+    above them stay apart. The dashed grey line is a random ranking, and each split's
+    dotted line its perfect ranking. Each review budget's marker is labelled, in its
+    split's colour, with the split's recorded recall and precision there. At each budget
+    the split with the higher recall has its label above and left of its marker and the
+    other below and right, so neither label sits by the other split's marker. A label
+    that would leave the axes, cover a marker or another label, or sit nearer another
+    marker than its own tries the other sides of its marker, and moves up or down clear
+    if none suits.
     """
     drawn = {split: scores for split, scores in splits.items() if scores.y.any()}
     start = min([1e-4, *(scores.prevalence / 2 for scores in drawn.values())])
@@ -272,8 +273,16 @@ def plot_capture(ax: Axes, splits: Mapping[str, SplitScores], *, title: str) -> 
         # Linear between block ends: a budget inside a block of tied scores takes the same
         # share of each of its accounts.
         ax.plot(reviewed[1:] / reviewed[-1], found[1:] / found[-1], color=colour, label=split)
+        # A perfect ranking finds every mule once the split's prevalence is reviewed.
         perfect = np.minimum(grid / scores.prevalence, 1.0)
-        ax.plot(grid, perfect, color=MUTED, linestyle=":", linewidth=1.0)
+        ax.plot(
+            grid,
+            perfect,
+            color=colour,
+            linestyle=":",
+            linewidth=1.0,
+            label=f"{split} perfect ranking",
+        )
         recorded[split] = [
             (
                 float(scores.metrics[f"recall_at_{budget_name(fraction)}"]),
@@ -293,7 +302,6 @@ def plot_capture(ax: Axes, splits: Mapping[str, SplitScores], *, title: str) -> 
             zorder=3,
         )
     ax.plot(grid, grid, color=MUTED, linestyle="--", linewidth=1.0, label="random ranking")
-    ax.plot([], [], color=MUTED, linestyle=":", linewidth=1.0, label="perfect ranking")
     ax.plot(
         [], [], marker="o", color=MUTED, linestyle="none", label="review budget: recall / precision"
     )
