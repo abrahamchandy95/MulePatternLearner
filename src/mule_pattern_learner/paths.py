@@ -135,6 +135,10 @@ class RunPaths:
         """The directory of the run's figures."""
         return self.root / "plots"
 
+    def figure(self, name: str) -> Path:
+        """One of the run's figures, a PNG named <topic>_<figure> (reporting.report)."""
+        return self.plots / f"{name}.png"
+
     @property
     def report(self) -> Path:
         """The run's tables, with links to its figures."""

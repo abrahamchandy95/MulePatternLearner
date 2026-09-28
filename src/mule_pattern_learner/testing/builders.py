@@ -8,6 +8,7 @@ those with particular values (a deterministic neighbourhood, random synthetic po
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Iterable, Mapping
 from copy import deepcopy
 from dataclasses import asdict, replace
@@ -20,7 +21,15 @@ import numpy as np
 import pandas as pd
 import torch
 
-from mule_pattern_learner.artifacts import file_digest
+from mule_pattern_learner.artifacts import (
+    append_history,
+    file_digest,
+    write_audit_scores,
+    write_epochs,
+    write_json,
+    write_predictions,
+    write_run_config,
+)
 from mule_pattern_learner.batching import assemble
 from mule_pattern_learner.config import DEFAULT_CONFIG, RunConfig
 from mule_pattern_learner.contract.clock import timestamp
@@ -50,8 +59,9 @@ from mule_pattern_learner.data.manifest import dataset_settings
 from mule_pattern_learner.data.observed_labels import align_observed_labels
 from mule_pattern_learner.evaluation import audit as evaluation_audit
 from mule_pattern_learner.inference.saved_model import SavedModel
+from mule_pattern_learner.metrics import bootstrap_intervals, proxy_metrics, select_threshold
 from mule_pattern_learner.model.build import build_model
-from mule_pattern_learner.paths import DatasetPaths
+from mule_pattern_learner.paths import DatasetPaths, RunPaths
 from mule_pattern_learner.sampling import candidates
 from mule_pattern_learner.tigergraph.context_query import query_context_rows
 from mule_pattern_learner.tigergraph.executor import QueryExecutor
@@ -828,3 +838,236 @@ def saved_model(
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(payload, path)
     return path
+
+
+# The files of a complete, audited run for the reporting tests, shaped like the reference
+# runs (docs/research/reference-run.md): each audited split weighs its 2,000 sampled
+# non-mules and every mule to about 47,000 accounts, the test split's 47,749 with 40
+# mules, and the scores sit near 0 and 1.
+REPORTED_SPLITS = {
+    # split: (cutoff, population accounts, mules, revealed mules, observed positives)
+    "validation": ("2024-10-01", 47_120, 38, 11, 11),
+    "test": ("2025-01-01", 47_749, 40, 11, 12),
+}
+REPORTED_EPOCHS = 11
+REPORTED_SELECTED = 5
+REPORTED_STEPS = 100
+REPORTED_LOG_EVERY = 10
+
+
+def near_extremes(rng: np.random.Generator, positive: np.ndarray) -> np.ndarray:
+    """Scores near 0 and 1: most positives score near 1, and a few other accounts do too."""
+    high = np.where(positive, rng.random(len(positive)) < 0.62, rng.random(len(positive)) < 0.009)
+    logit = np.where(
+        high,
+        np.where(
+            positive, rng.normal(12.0, 3.0, len(positive)), rng.normal(9.0, 3.0, len(positive))
+        ),
+        np.where(
+            positive, rng.normal(-4.0, 3.5, len(positive)), rng.normal(-8.5, 2.5, len(positive))
+        ),
+    )
+    return 1 / (1 + np.exp(-logit))
+
+
+def audit_frame(rng: np.random.Generator, split: str) -> pd.DataFrame:
+    """A split's scored audit sample (artifacts.AUDIT_COLUMNS): every mule, 2,000 others."""
+    _, accounts, mules, revealed, _ = REPORTED_SPLITS[split]
+    negatives = 2000
+    is_mule = np.r_[np.ones(mules, np.int64), np.zeros(negatives, np.int64)]
+    score = near_extremes(rng, is_mule == 1)
+    # The revealed mules are among the louder ones.
+    order = np.argsort(-(score[:mules] + rng.random(mules)))
+    flags = np.zeros(len(is_mule), bool)
+    flags[order[:revealed]] = True
+    # About two thirds of the mules are in rings of two to four.
+    rings = np.full(len(is_mule), -1, np.int64)
+    ringed = int(mules * 2 / 3)
+    rings[:ringed] = np.repeat(np.arange(ringed), rng.integers(2, 5, ringed))[:ringed]
+    return pd.DataFrame(
+        {
+            "account_id": [f"{split[0].upper()}{i:06d}" for i in range(len(is_mule))],
+            "is_mule": is_mule,
+            "inclusion_probability": np.where(is_mule == 1, 1.0, negatives / (accounts - mules)),
+            "score": score,
+            "revealed": flags,
+            "ring_id": rings,
+            "label_source": "phantomledger_role",
+        }
+    )
+
+
+def predictions_frame(rng: np.random.Generator, split: str) -> pd.DataFrame:
+    """A split's proxy predictions: its observed positives and 2,000 unlabelled accounts."""
+    date, accounts, mules, _, positives = REPORTED_SPLITS[split]
+    unlabelled = 2000
+    observed = np.r_[np.ones(positives, np.int64), np.zeros(unlabelled, np.int64)]
+    # The unlabelled sample holds the split's hidden mules at their population rate.
+    hidden = rng.random(len(observed)) < (mules - positives) / accounts
+    score = near_extremes(rng, (observed == 1) | hidden)
+    ids = [f"{split[0].upper()}P{i:06d}" for i in range(len(observed))]
+    return pd.DataFrame(
+        {
+            "account_id": ids,
+            "group_id": [f"G{i:06d}" for i in range(len(observed))],
+            "date": date,
+            "observed_label": observed,
+            "score": score,
+        }
+    )
+
+
+def history_rows(rng: np.random.Generator) -> list[dict[str, Any]]:
+    """history.csv of the run: 10 log intervals of 10 steps in each of its 11 epochs."""
+    rows: list[dict[str, Any]] = []
+    totals = Counter[str]()
+    for epoch in range(1, REPORTED_EPOCHS + 1):
+        for step in range(REPORTED_LOG_EVERY, REPORTED_STEPS + 1, REPORTED_LOG_EVERY):
+            position = epoch - 1 + step / REPORTED_STEPS
+            loss = 0.22 + 0.55 * np.exp(-position / 1.6) + rng.normal(0, 0.025)
+            corrected = int(rng.binomial(REPORTED_LOG_EVERY, min(0.02 + 0.03 * position, 0.4)))
+            requested = int(rng.normal(1088, 40)) * REPORTED_LOG_EVERY
+            hits = int(requested * min(0.12 + 0.03 * position, 0.45))
+            totals.update(
+                requested=requested,
+                memory_hits=hits,
+                database_calls=(requested - hits) // 8,
+                stub_children=int(rng.poisson(6)),
+            )
+            seen = 900_000 * (1 - np.exp(-totals["requested"] / 900_000))
+            rows.append(
+                {
+                    "epoch": epoch,
+                    "step": step,
+                    "date": "2024-07-01",
+                    "loss": float(loss),
+                    "objective": float(loss - 0.03 * corrected * rng.random()),
+                    "corrected_steps": corrected,
+                    "steps": REPORTED_STEPS,
+                    "seconds_per_step": float(3.0 + rng.normal(0, 0.2) - 0.1 * (step == 10)),
+                    "batch_wait_seconds": float(max(0.35 + rng.normal(0, 0.12), 0.0)),
+                    "database_calls": totals["database_calls"],
+                    "contexts_requested": totals["requested"],
+                    "contexts_distinct": int(seen),
+                    "memory_hits": totals["memory_hits"],
+                    "rejected_roots": 0,
+                    "stub_children": totals["stub_children"],
+                }
+            )
+    return rows
+
+
+def write_run_files(run: RunPaths, *, seed: int = 0, audited: bool = True) -> RunPaths:
+    """The files of a complete run that reporting reads, audited unless ``audited`` is False.
+
+    config.json, history.csv, epochs.csv, metrics.json and the proxy predictions, and the
+    audit report and scored sample of validation and test, drawn with ``seed``. There is
+    no model.pt: reporting never loads one. The audits' intervals come from 100
+    bootstrap replicates rather than the audit's 1,000, to keep the tests fast.
+    """
+    rng = np.random.default_rng(seed)
+    run.root.mkdir(parents=True, exist_ok=True)
+    provenance = {
+        "git_commit": "0" * 40,
+        "git_dirty": False,
+        "device": "cuda",
+        "sampler_backend": "cugraph",
+        "dataset_id": "d" * 64,
+        "started": "2026-09-28T09:00:00+00:00",
+    }
+    write_run_config(run.config, DEFAULT_CONFIG, provenance)
+    history = history_rows(rng)
+    for row in history:
+        append_history(run.history, row)
+    predictions = {split: predictions_frame(rng, split) for split in REPORTED_SPLITS}
+    validation = predictions["validation"]
+    threshold = select_threshold(validation.observed_label.to_numpy(), validation.score.to_numpy())
+    proxy = {
+        split: proxy_metrics(frame.observed_label.to_numpy(), frame.score.to_numpy(), threshold)
+        for split, frame in predictions.items()
+    }
+    for split, frame in predictions.items():
+        write_predictions(run.predictions(split), frame)
+    selected_ap = float(proxy["validation"]["average_precision"])
+    epochs = []
+    for epoch in range(1, REPORTED_EPOCHS + 1):
+        ap = selected_ap if epoch == REPORTED_SELECTED else selected_ap * rng.uniform(0.3, 0.95)
+        epochs.append(
+            {
+                "epoch": epoch,
+                "loss": 0.22 + 0.55 * np.exp(-(epoch - 0.5) / 1.6),
+                "steps": REPORTED_STEPS,
+                "validation_ap": ap if epoch > 1 else selected_ap * 0.2,
+                "validation_roc_auc": min(0.8 + 0.03 * epoch, 0.96) - rng.uniform(0, 0.02),
+                "weights": "averaged",
+                "selected": epoch == REPORTED_SELECTED,
+                "stopped": epoch == REPORTED_EPOCHS,
+            }
+        )
+    write_epochs(run.epochs, epochs)
+    write_json(
+        run.metrics,
+        {
+            "status": "complete",
+            "dataset_id": provenance["dataset_id"],
+            "seed": 42,
+            "known_mules": {"train": 20, "validation": 11, "test": 12},
+            "device": "cuda",
+            "loss": "nnPU",
+            "class_prior": 0.001,
+            "positive_weight": 0.999,
+            "objective": "imbalanced_nnPU",
+            "parameter_count": 101_121,
+            "best_epoch": REPORTED_SELECTED,
+            "observed_label_proxy": proxy,
+            "validation_proxy": proxy["validation"],
+            "database_calls_during_training": history[-1]["database_calls"],
+            "elapsed_seconds": 3.4 * 3600,
+            "contexts": {
+                "requested": history[-1]["contexts_requested"],
+                "distinct": history[-1]["contexts_distinct"],
+                "memory_hits": history[-1]["memory_hits"],
+            },
+            "rejections": {"history_capacity_exceeded": 412, "hub_stub": 38},
+            "sampler_backend": "cugraph",
+            "sampler_totals": {
+                "rejected_roots": 0,
+                "roots": 70_400,
+                "contexts": history[-1]["contexts_requested"],
+                "stub_children": history[-1]["stub_children"],
+                "rejected_children": 412,
+                "first_edges": 1_126_400,
+                "second_edges": 4_505_600,
+            },
+            "rejected_roots": {
+                split: {"requested": requested, "rejected": 0, "positive": 0, "unlabeled": 0}
+                for split, requested in (("train", 70_400), ("validation", 2_011), ("test", 2_012))
+            },
+            "max_rejected_root_fraction": 0.0,
+        },
+    )
+    if not audited:
+        return run
+    run.audit_report("test").parent.mkdir(parents=True, exist_ok=True)
+    for split, (date, accounts, _, _, _) in REPORTED_SPLITS.items():
+        frame = audit_frame(rng, split)
+        write_audit_scores(run.audit_scores(split), frame)
+        y, weight = frame.is_mule.to_numpy(), 1 / frame.inclusion_probability.to_numpy()
+        intervals = bootstrap_intervals(
+            y, frame.score.to_numpy(), weight, frame.ring_id.to_numpy(), replicates=100
+        )
+        mules = frame[frame.is_mule == 1]
+        report = {
+            "split": split,
+            "purpose": evaluation_audit.AUDIT_SPLITS[split],
+            "date": date,
+            "population_accounts": accounts,
+            "metrics": evaluation_audit.audit_metrics(frame, threshold),
+            "intervals": intervals,
+            "constants": evaluation_audit.audit_constants(42),
+            "revealed_positives": int(mules.revealed.sum()),
+            "hidden_positives": int((~mules.revealed).sum()),
+            "rejected_accounts": 0,
+        }
+        write_json(run.audit_report(split), report)
+    return run

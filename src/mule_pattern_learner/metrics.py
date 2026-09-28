@@ -141,6 +141,11 @@ def _share(cumulative: NDArray[np.float64]) -> NDArray[np.float64]:
     return cumulative / total if total else np.zeros_like(cumulative)
 
 
+def budget_name(fraction: float) -> str:
+    """How the metrics of a review budget name it: 0.05 is "5pct" (precision_at_5pct)."""
+    return f"{round(fraction * 100)}pct"
+
+
 def capture_at_budgets(
     y: NDArray[Any], score: NDArray[Any], weight: NDArray[Any]
 ) -> dict[str, float]:
@@ -163,7 +168,7 @@ def capture_at_budgets(
     for fraction in REVIEW_BUDGETS:
         size = fraction * float(reviewed[-1])
         hits = float(np.interp(size, reviewed, found))
-        name = f"{round(fraction * 100)}pct"
+        name = budget_name(fraction)
         result[f"precision_at_{name}"] = hits / size
         result[f"recall_at_{name}"] = hits / max(float(found[-1]), 1)
     return result

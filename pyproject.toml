@@ -99,10 +99,8 @@ root_package = "mule_pattern_learner"
 include_external_packages = true
 
 # The contracts of the Layering rules in docs/restructure-plan.md. Every contract holds
-# without exceptions: none of them ignores an import. The package that does not exist yet
-# (reporting) is an optional layer, or matches no module, until it is created.
-# The contracts that list every package but the ones they allow list those two as well;
-# tests/test_import_contracts.py checks that each lists every package.
+# without exceptions: none of them ignores an import. tests/test_import_contracts.py
+# checks that the contracts which list every package but the ones they allow list each.
 
 [[tool.importlinter.contracts]]
 name = "Layers run one way"
@@ -112,7 +110,7 @@ layers = [
     "cli",
     "experiments | diagnostics",
     "pipeline",
-    "training | evaluation | (reporting) | tigergraph",
+    "training | evaluation | reporting | tigergraph",
     "inference",
     "batching",
     "data | sampling | model",
@@ -133,8 +131,7 @@ source_modules = [
     "mule_pattern_learner.inference",
     "mule_pattern_learner.sampling",
     "mule_pattern_learner.model",
-    # reporting does not exist yet; the ".**" form names it anyway.
-    "mule_pattern_learner.reporting.**",
+    "mule_pattern_learner.reporting",
     "mule_pattern_learner.diagnostics",
 ]
 forbidden_modules = ["mule_pattern_learner.tigergraph", "pyTigerGraph"]
@@ -195,8 +192,7 @@ allow_indirect_imports = true
 [[tool.importlinter.contracts]]
 name = "Reporting reads files, not models or the graph"
 type = "forbidden"
-# reporting does not exist yet; its plots step names the package itself.
-source_modules = ["mule_pattern_learner.reporting.**"]
+source_modules = ["mule_pattern_learner.reporting"]
 forbidden_modules = [
     "torch",
     "mule_pattern_learner.model",
@@ -227,7 +223,7 @@ source_modules = [
     "mule_pattern_learner.pipeline",
     "mule_pattern_learner.experiments",
     "mule_pattern_learner.reference",
-    "mule_pattern_learner.reporting.**",
+    "mule_pattern_learner.reporting",
     "mule_pattern_learner.diagnostics",
 ]
 forbidden_modules = ["mule_pattern_learner.testing"]
@@ -255,7 +251,7 @@ source_modules = [
     "mule_pattern_learner.pipeline",
     "mule_pattern_learner.experiments",
     "mule_pattern_learner.testing",
-    "mule_pattern_learner.reporting.**",
+    "mule_pattern_learner.reporting",
 ]
 forbidden_modules = ["mule_pattern_learner.reference"]
 # cli reaches reference only through diagnostics

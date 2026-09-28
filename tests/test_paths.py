@@ -56,6 +56,7 @@ def test_a_run_directory_names_every_file_of_the_run_directory_table(tmp_path: P
         run.scores("new_accounts", "2025-01-01"),
         run.scores_rejected("new_accounts", "2025-01-01"),
         run.plots,
+        run.figure("audit_capture"),
         run.report,
     ]
     assert [path.relative_to(run.root).as_posix() for path in names] == [
@@ -73,6 +74,7 @@ def test_a_run_directory_names_every_file_of_the_run_directory_table(tmp_path: P
         "scores/new_accounts_2025-01-01.parquet",
         "scores/new_accounts_2025-01-01_rejected.txt",
         "plots",
+        "plots/audit_capture.png",
         "report.md",
     ]
     # Suites, diagnostics and the archive have their own directories under results/.
