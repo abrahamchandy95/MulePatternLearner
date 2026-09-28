@@ -270,6 +270,39 @@ def test_the_disk_tier_evicts_its_least_recently_used_entries_beyond_its_capacit
     assert later.evicted == 2
 
 
+def test_an_entry_that_cannot_be_evicted_is_warned_about_once_and_left(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    tier = DiskTier(cache_in(tmp_path, capacity=2), plan=CORE_PLAN, sampler=SMALL_SAMPLER)
+    rows = {key: {"status": "missing_entity"} for key in KEYS}
+
+    def put(key: ContextKey, age: int) -> None:
+        tier.put(1, [key], rows)
+        os.utime(entry(tier, key), ns=(10**9 * age, 10**9 * age))
+
+    put(KEYS[0], 1)
+    put(KEYS[1], 2)
+    stuck, unlink = entry(tier, KEYS[0]), Path.unlink
+
+    def refuse(path: Path, missing_ok: bool = False) -> None:
+        if path == stuck:
+            raise PermissionError(13, "Permission denied", str(path))
+        unlink(path, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", refuse)
+    capsys.readouterr()
+    # Beyond its capacity of 2 the tier keeps one entry: the oldest cannot go, the next can.
+    put(KEYS[2], 3)
+    assert stuck.exists() and not entry(tier, KEYS[1]).exists() and tier.evicted == 1
+    # The stuck entry counts as removed until the next eviction, which warns no more.
+    put(KEYS[3], 4)
+    put(KEYS[4], 5)
+    assert stuck.exists() and tier.evicted == 3
+    assert [key for key in KEYS[1:5] if entry(tier, key).exists()] == [KEYS[4]]
+    printed = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [line["warning"] for line in printed] == ["context_cache_eviction_failed"]
+
+
 def test_a_cache_that_cannot_be_written_is_warned_about_once_and_left_alone(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
