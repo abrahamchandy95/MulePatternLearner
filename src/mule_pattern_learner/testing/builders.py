@@ -919,7 +919,10 @@ def predictions_frame(rng: np.random.Generator, split: str) -> pd.DataFrame:
 
 
 def history_rows(rng: np.random.Generator) -> list[dict[str, Any]]:
-    """history.csv of the run: 10 log intervals of 10 steps in each of its 11 epochs."""
+    """history.csv of the run: 10 log intervals of 10 steps in each of its 11 epochs.
+
+    The dataset's disk cache already held about a third of the contexts memory did not.
+    """
     rows: list[dict[str, Any]] = []
     totals = Counter[str]()
     for epoch in range(1, REPORTED_EPOCHS + 1):
@@ -929,10 +932,12 @@ def history_rows(rng: np.random.Generator) -> list[dict[str, Any]]:
             corrected = int(rng.binomial(REPORTED_LOG_EVERY, min(0.02 + 0.03 * position, 0.4)))
             requested = int(rng.normal(1088, 40)) * REPORTED_LOG_EVERY
             hits = int(requested * min(0.12 + 0.03 * position, 0.45))
+            disk = int((requested - hits) * rng.uniform(0.3, 0.4))
             totals.update(
                 requested=requested,
                 memory_hits=hits,
-                database_calls=(requested - hits) // 8,
+                disk_hits=disk,
+                database_calls=(requested - hits - disk) // 8,
                 stub_children=int(rng.poisson(6)),
             )
             seen = 900_000 * (1 - np.exp(-totals["requested"] / 900_000))
@@ -951,6 +956,7 @@ def history_rows(rng: np.random.Generator) -> list[dict[str, Any]]:
                     "contexts_requested": totals["requested"],
                     "contexts_distinct": int(seen),
                     "memory_hits": totals["memory_hits"],
+                    "disk_hits": totals["disk_hits"],
                     "rejected_roots": 0,
                     "stub_children": totals["stub_children"],
                 }
@@ -1028,6 +1034,9 @@ def write_run_files(run: RunPaths, *, seed: int = 0, audited: bool = True) -> Ru
                 "requested": history[-1]["contexts_requested"],
                 "distinct": history[-1]["contexts_distinct"],
                 "memory_hits": history[-1]["memory_hits"],
+                "disk_hits": history[-1]["disk_hits"],
+                "disk_hit_rate": history[-1]["disk_hits"]
+                / (history[-1]["contexts_requested"] - history[-1]["memory_hits"]),
             },
             "rejections": {"history_capacity_exceeded": 412, "hub_stub": 38},
             "sampler_backend": "cugraph",

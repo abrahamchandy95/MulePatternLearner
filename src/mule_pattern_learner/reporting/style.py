@@ -2,8 +2,9 @@
 
 A colour means the same thing in every figure. Mules, non-mules and the baseline run
 never change colour, and neither do the audited splits; the measures a figure compares
-(a loss and an objective, precision, recall and F1) take MEASURES in order, each with its
-own line style too, since some of those colours sit close for colour-blind readers. The
+(a loss and an objective, precision, recall and F1, the context counts) take MEASURES in
+order, each with its own line style too, since some of those colours sit close for
+colour-blind readers. The
 hues are the categorical steps of a palette checked for colour-blind separation; lines
 and bars of the lighter ones always carry a legend or a label. A reference line of the
 whole figure (a random ranking, a threshold, a run's average) is grey or ink, never a
@@ -39,8 +40,9 @@ SPLIT_COLOURS = {"validation": "#4a3aa7", "test": "#008300"}
 # Hidden mules are the mules the model never saw labelled; revealed ones recede.
 HIDDEN = MULE
 REVEALED = MUTED
-MEASURES = ("#1baf7a", "#e34948", "#eda100")
-MEASURE_LINES = ("-", "--", ":")
+# Aqua, red, yellow and magenta: the palette's steps that no fixed colour above takes.
+MEASURES = ("#1baf7a", "#e34948", "#eda100", "#e87ba4")
+MEASURE_LINES = ("-", "--", ":", "-.")
 
 # matplotlib settings for matplotlib.rc_context, around a figure's creation and drawing.
 RC: dict[RcKeyType, Any] = {

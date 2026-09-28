@@ -40,6 +40,7 @@ HISTORY = pd.DataFrame(
         "contexts_requested": [100, 200, 400],
         "contexts_distinct": [90, 170, 300],
         "memory_hits": [5, 20, 60],
+        "disk_hits": [0, 30, 100],
     }
 )
 EPOCHS = pd.DataFrame(
@@ -126,6 +127,7 @@ def test_the_throughput_panels_draw_seconds_and_context_totals() -> None:
         [100, 200, 400],
         [90, 170, 300],
         [5, 20, 60],
+        [0, 30, 100],
     ]
 
 

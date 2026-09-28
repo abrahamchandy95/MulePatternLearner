@@ -362,9 +362,13 @@ def training_section(run: RunPaths) -> list[str]:
         ["Objective", f"{metrics['objective']} (positive weight {metrics['positive_weight']})"],
         ["Database calls", number(metrics["database_calls_during_training"])],
         [
-            "Contexts requested / distinct / from memory",
-            " / ".join(number(contexts[key]) for key in ("requested", "distinct", "memory_hits")),
+            "Contexts requested / distinct / from memory / from disk",
+            " / ".join(
+                number(contexts.get(key))
+                for key in ("requested", "distinct", "memory_hits", "disk_hits")
+            ),
         ],
+        ["Disk cache hit rate", number(contexts.get("disk_hit_rate"))],
         [
             "Rejected roots: " + " / ".join(rejected),
             " / ".join(number(counts["rejected"]) for counts in rejected.values()),
