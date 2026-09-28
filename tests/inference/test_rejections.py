@@ -2,15 +2,22 @@
 
 from __future__ import annotations
 
+from collections import Counter
+
 import numpy as np
 import pytest
 
+from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.inference.rejections import (
+    SourceRejections,
     TrainingRejections,
     check_split_rejections,
     exceeds_rejection_limit,
     rejection_counts,
+    rejection_summary,
 )
+from mule_pattern_learner.testing.builders import unit_config
+from mule_pattern_learner.testing.fake_graph import FakeSource
 
 LABELS = np.array([1, 0, 0, 0, 1, 0])
 STATUSES = {"missing_entity": 1}
@@ -63,3 +70,32 @@ def test_training_rejections_count_the_epoch_against_the_limit_and_resume() -> N
     assert resumed.totals()["rejected"] == 2 and resumed.epoch["rejected"] == 1
     with pytest.raises(ValueError, match="1 observed positives"):
         resumed.count(1, np.array([0, 1, 0, 0]), step, 100, lambda: STATUSES)
+
+
+def test_a_summary_since_a_copy_of_the_counters_leaves_out_what_came_before() -> None:
+    source = FakeSource(unit_config(), reject=frozenset({"ghost", "gone"}))
+    ghost, gone = ContextKey("Account", "ghost", 1, 1), ContextKey("Account", "gone", 1, 1)
+    source.fetch([ghost, gone], hop=2)
+    before = SourceRejections.of(source)
+    source.fetch([ghost])
+    source.fetch([gone], hop=2)
+    # The copy keeps its counts while the source's grow.
+    assert before.by_status == Counter({"missing_entity": 2})
+    assert before.by_hop == {2: Counter({"missing_entity": 2})}
+    later = rejection_summary(source, 1, Counter({"rejected_children": 1}), since=before)
+    assert later["rejected_roots_by_status"] == {"missing_entity": 1}
+    assert later["rejected_children_by_status"] == {"missing_entity": 1}
+    assert later["rejection_events_by_status"] == {"missing_entity": 2}
+    # Without since, the summary is the source's whole life.
+    whole = rejection_summary(source, 1, Counter())
+    assert whole["rejected_children_by_status"] == {"missing_entity": 3}
+    assert whole["rejection_events_by_status"] == {"missing_entity": 4}
+    # A hop with nothing new reports no statuses.
+    assert rejection_summary(source, 0, Counter(), since=SourceRejections.of(source)) == {
+        "rejected": 0,
+        "rejected_roots_by_status": {},
+        "rejected_children": 0,
+        "rejected_children_by_status": {},
+        "stub_children": 0,
+        "rejection_events_by_status": {},
+    }

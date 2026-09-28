@@ -30,7 +30,11 @@ from ..data.manifest import load_prepared
 from ..data.ports import ScopeReader
 from ..data.splits import eligible_mask, sample_keys
 from ..inference.predictor import Predictor
-from ..inference.rejections import exceeds_rejection_limit, rejection_summary
+from ..inference.rejections import (
+    SourceRejections,
+    exceeds_rejection_limit,
+    rejection_summary,
+)
 from ..inference.saved_model import SavedModel
 from ..metrics import (
     BOOTSTRAP_REPLICATES,
@@ -181,10 +185,11 @@ def score_sample(
     The keys are the prepared dataset's: its cutoff clock, scope and the split's phase,
     and the hub registry is the dataset's, so scoring matches training. Returns the
     scores of the accepted accounts by account id, the ids TigerGraph rejected and the
-    rejection summary (inference.rejections.rejection_summary). The caller closes
-    ``contexts``.
+    rejection summary (inference.rejections.rejection_summary) of this sample alone,
+    whatever ``contexts`` served before. The caller closes ``contexts``.
     """
     predictor = Predictor(run.model, contexts, hubs=run.hubs)
+    before = SourceRejections.of(contexts)
     size = predictor.batch_size
     with predictor.runtime():
         frames, rejected = predictor.score_keys(
@@ -194,7 +199,8 @@ def score_sample(
     scores: dict[str, float] = {}
     for frame in frames:
         scores.update(zip(frame.account_id, frame.score.astype(float), strict=True))
-    return scores, rejected, rejection_summary(predictor.contexts, len(rejected), predictor.totals)
+    summary = rejection_summary(contexts, len(rejected), predictor.totals, since=before)
+    return scores, rejected, summary
 
 
 def write_audit(
@@ -227,8 +233,9 @@ def audit(
     ``truth`` is the ground truth (contract.graph_schema.TRUTH_COLUMNS), the split's
     population comes from ``scope`` and the contexts from ``contexts``; the pipeline
     opens both on a frozen source it has verified and closes the contexts
-    (pipeline.evaluate.evaluate_run). The audit never changes a model and refuses to
-    overwrite an audit the run already has.
+    (pipeline.evaluate.evaluate_run). The report's rejection counts are this audit's
+    alone, whatever ``contexts`` served before, so splits can share a source. The audit
+    never changes a model and refuses to overwrite an audit the run already has.
 
     Accounts TigerGraph rejects are not scored. A rejected positive, or a rejected
     fraction of the sample above the model's ``runtime.max_rejected_root_fraction``
@@ -260,7 +267,7 @@ def audit(
         raise ValueError(
             f"TigerGraph rejected {len(unscored)} of {len(selected)} {split} audit accounts "
             f"({rejected_positives} {split} positives; max_rejected_root_fraction={limit}); "
-            f"statuses {dict(contexts.rejections)}; "
+            f"statuses {summary['rejection_events_by_status']}; "
             f"first {examples}. Weighted metrics over the remaining accounts would describe "
             "a censored population, so no report was written"
         )

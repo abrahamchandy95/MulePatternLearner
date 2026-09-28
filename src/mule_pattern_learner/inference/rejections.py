@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -116,8 +117,33 @@ class TrainingRejections:
         self.run, self.epoch = Counter(saved["run"]), Counter(saved["epoch"])
 
 
+@dataclass(frozen=True)
+class SourceRejections:
+    """A context source's rejection counters at one moment: by status, and by hop."""
+
+    by_status: Counter[str]
+    by_hop: dict[int, Counter[str]]
+
+    @classmethod
+    def of(cls, contexts: ContextReader) -> SourceRejections:
+        """A copy of the source's counters, which its later fetches leave as they are."""
+        by_hop = {hop: Counter(counts) for hop, counts in contexts.rejections_by_hop.items()}
+        return cls(Counter(contexts.rejections), by_hop)
+
+    def since(self, earlier: SourceRejections) -> SourceRejections:
+        """The rejections served after ``earlier``, a copy of the same source's counters."""
+        by_hop = {
+            hop: counts - earlier.by_hop.get(hop, Counter()) for hop, counts in self.by_hop.items()
+        }
+        return SourceRejections(self.by_status - earlier.by_status, by_hop)
+
+
 def rejection_summary(
-    contexts: ContextReader, rejected_roots: int, totals: Counter[str]
+    contexts: ContextReader,
+    rejected_roots: int,
+    totals: Counter[str],
+    *,
+    since: SourceRejections | None = None,
 ) -> dict[str, Any]:
     """Root and child rejections reported separately.
 
@@ -125,14 +151,19 @@ def rejection_summary(
     the child contexts masked out of scored batches. ``rejection_events_by_status``
     is the source's raw counter: every rejected row served by a fetch at either hop,
     cache replays included, so it is not a count of accounts. The source's per-hop
-    counts (``rejections_by_hop``) give the root and child statuses.
+    counts (``rejections_by_hop``) give the root and child statuses. The counters are
+    the source's whole life unless ``since`` (SourceRejections.of, taken before the set
+    was scored) leaves out what it served earlier, so that each set scored on a shared
+    source reports its own.
     """
-    by_hop = contexts.rejections_by_hop
+    served = SourceRejections.of(contexts)
+    if since is not None:
+        served = served.since(since)
     return {
         "rejected": rejected_roots,
-        "rejected_roots_by_status": dict(by_hop.get(1, {})),
+        "rejected_roots_by_status": dict(served.by_hop.get(1, {})),
         "rejected_children": int(totals["rejected_children"]),
-        "rejected_children_by_status": dict(by_hop.get(2, {})),
+        "rejected_children_by_status": dict(served.by_hop.get(2, {})),
         "stub_children": int(totals["stub_children"]),
-        "rejection_events_by_status": dict(contexts.rejections),
+        "rejection_events_by_status": dict(served.by_status),
     }
