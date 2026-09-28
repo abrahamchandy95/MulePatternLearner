@@ -119,6 +119,15 @@ def test_a_failing_figure_leaves_the_others_and_report_md_then_raises(
     assert drawn == set(TRAINING_FIGURES) - {"training_corrections"}
     assert "plots/training_corrections.png" not in run.report.read_text()
     assert "plots/training_objective.png" in run.report.read_text()
+    # A redraw that fails leaves no older drawing of the figure for report.md to link.
+    monkeypatch.undo()
+    write_training_report(run)
+    assert "plots/training_corrections.png" in run.report.read_text()
+    monkeypatch.setattr(report, "plot_corrections", broken)
+    with pytest.raises(RuntimeError, match="training_corrections"):
+        write_training_report(run)
+    assert not run.figure("training_corrections").exists()
+    assert "plots/training_corrections.png" not in run.report.read_text()
 
 
 def test_report_needs_a_complete_run_or_an_audit(tmp_path: Path) -> None:
