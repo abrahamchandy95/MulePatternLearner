@@ -25,11 +25,15 @@ from typing import Any, Literal
 from pyTigerGraph.common.exception import TigerGraphException
 
 from mule_pattern_learner.config import RunConfig
+from mule_pattern_learner.contract.analytics_features import ANALYTICS_GROUPS
 from mule_pattern_learner.contract.bounds import REQUEST_KEYS
 from mule_pattern_learner.contract.feature_groups import FeaturePlan, extraction_plan
 from mule_pattern_learner.contract.graph_schema import PAYMENT_RELATIONS, ContextKey
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
 from mule_pattern_learner.contract.server import (
+    ANALYTICS_CONTEXT_FILE,
+    ANALYTICS_CONTEXT_QUERY,
+    ANALYTICS_CONTRACT,
     ANALYTICS_QUERY_FILES,
     CONTEXT_QUERY,
     CONTEXT_QUERY_FILE,
@@ -67,6 +71,20 @@ def signature(path: str, name: str) -> frozenset[str]:
 
 
 CONTEXT_PARAMETERS = signature(CONTEXT_QUERY_FILE, CONTEXT_QUERY)
+ANALYTICS_PARAMETERS = signature(ANALYTICS_CONTEXT_FILE, ANALYTICS_CONTEXT_QUERY)
+# The parameters an analytics request must name: the keys, the pool and the scope; the
+# include flags and emit_encodings have defaults.
+ANALYTICS_REQUIRED = frozenset(
+    name for name in ANALYTICS_PARAMETERS if not name.startswith("include_")
+) - {"emit_encodings"}
+# The analytics message fields of a message the fake graph's analytics query prints: the
+# pair window counts and the device and IP ages, none of them seen.
+ANALYTICS_MESSAGE_FIELDS: dict[str, float | bool] = {
+    name: (False if name.endswith("_present") else 0.0)
+    for spec in ANALYTICS_GROUPS.values()
+    if spec.path == "message"
+    for name in spec.names
+}
 HUB_PARAMETERS = signature("queries/hub_accounts.gsql", HUB_QUERY)
 SCOPE_POLICY_PARAMETERS = signature("queries/training_scope.gsql", SCOPE_POLICY_QUERY)
 POPULATION_PARAMETERS = signature("queries/training_scope.gsql", POPULATION_QUERY)
@@ -125,6 +143,10 @@ class FakeTigerGraph:
     without include_observed their labels are withheld. `truth` holds the rows the
     ground-truth query pages through, with its field names (ground_truth_rows).
     `reveal` holds what the reveal's interpreted inputs query prints (reveal_inputs).
+    The analytics context query answers each key with its context row (as the context
+    query would, cut to the requested pool), relabelled with ANALYTICS_CONTRACT, its
+    messages carrying the analytics message fields unseen and its node features joined
+    by `analytics(key)`, the analytics node features of the key (default: none).
 
     The connection's state: `scopes` maps scope ids to the attributes of their scope
     vertex, which the scope creation queries add; `counts` are the vertex counts by
@@ -157,6 +179,7 @@ class FakeTigerGraph:
         population: Iterable[dict[str, Any]] = (),
         truth: Iterable[dict[str, Any]] = (),
         reveal: list[dict[str, Any]] | None = None,
+        analytics: Callable[[ContextKey], dict[str, float]] | None = None,
         scopes: dict[str, dict[str, Any]] | None = None,
         counts: dict[str, int] | None = None,
         queries: Mapping[str, str] | None = None,
@@ -172,6 +195,7 @@ class FakeTigerGraph:
         self.population = sorted(population, key=lambda row: str(row["account_id"]))
         self.truth = sorted(truth, key=lambda row: str(row["account_id"]))
         self.reveal = reveal
+        self.analytics = analytics or no_analytics
         self.factory = factory or context
         self.statuses = statuses or {}
         self.hubs = list(hubs)
@@ -204,6 +228,8 @@ class FakeTigerGraph:
             assert options.get("attempts") == 1, f"{name} writes, so it must run once"
         if name == CONTEXT_QUERY:
             return self.context_rows(params)
+        if name == ANALYTICS_CONTEXT_QUERY:
+            return self.analytics_rows(params)
         if name == HUB_QUERY:
             return self.hub_rows(params)
         if name == SCOPE_POLICY_QUERY:
@@ -281,6 +307,30 @@ class FakeTigerGraph:
             with self.lock:
                 self.active -= 1
 
+    def analytics_rows(self, params: dict[str, Any]) -> list[dict[str, Any]]:
+        """One row per requested key, as fetch_analytics_context prints it (see the class)."""
+        missing = ANALYTICS_REQUIRED - set(params)
+        assert not missing and set(params) <= ANALYTICS_PARAMETERS, set(params) ^ missing
+        keys = request_keys(params)
+        assert REQUEST_KEYS.holds(len(keys))
+        with self.lock:
+            self.requested.extend(keys)
+        rows = []
+        for index, key in enumerate(keys):
+            status = self.status(key)
+            if status is not None:
+                rows.append({"status": status, "request_index": index})
+                continue
+            row = deepcopy(self.rows[key]) if key in self.rows else self.factory(key)
+            row["messages"] = [
+                {**item, **ANALYTICS_MESSAGE_FIELDS} for item in pooled(row["messages"], params)
+            ]
+            row["features"] = {**row["features"], **self.analytics(key)}
+            row["contract_version"] = ANALYTICS_CONTRACT
+            row["age_encoding"], row["gap_encoding"] = {}, {}
+            rows.append({**row, "request_index": index})
+        return rows
+
     def hub_rows(self, params: dict[str, Any]) -> list[dict[str, Any]]:
         assert set(params) == HUB_PARAMETERS, set(params) ^ HUB_PARAMETERS
         cutoffs = sorted(set(params["cutoff_seqs"]))
@@ -349,6 +399,11 @@ class FakeTigerGraph:
             return [{"status": "invalid_scope"}]
         self.scopes[params["scope_id"]]["ready"] = True
         return [{"status": "ok", "members": members}]
+
+
+def no_analytics(key: ContextKey) -> dict[str, float]:
+    """The analytics node features of a key when a test names none: none."""
+    return {}
 
 
 def page(rows: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:

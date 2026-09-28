@@ -2,12 +2,15 @@
 
 render.py renders the query; this module is its client side. It validates every
 returned context against its key, clocks and the feature contract, and splits a
-multi-key request that TigerGraph times out on.
+multi-key request that TigerGraph times out on. The analytics query's client
+(analytics_query.py) shares the checks (check_context), the handling of a call's rows
+(indexed_rows) and the bisection (bisected).
 """
 
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Callable, Iterable
 from dataclasses import asdict
 from typing import Any
 
@@ -66,6 +69,17 @@ def response_bound(sampler: SamplerPlan, hop: int) -> int:
     return sampler.response_bound(hop)
 
 
+def numeric_fields(groups: Iterable[str]) -> tuple[tuple[str, str], ...]:
+    """The message fields of these groups that must be finite and nonnegative, by group."""
+    chosen = set(groups)
+    return tuple(
+        (group, name)
+        for group in ("flow_timing", "pair_history")
+        if group in chosen
+        for name in FEATURE_GROUPS[group].names
+    )
+
+
 def validate_context(
     key: ContextKey,
     row: dict[str, Any],
@@ -82,26 +96,56 @@ def validate_context(
     basis in one vectorized call. Returns the number of messages whose channel
     is outside CHANNELS; those are allowed and mapped to "other" downstream.
     """
+    return check_context(
+        key,
+        row,
+        sampler,
+        hop,
+        contract=CONTEXT_CONTRACT,
+        query=CONTEXT_QUERY,
+        node_features=KNOWN_NODE_FEATURES,
+        numeric=numeric_fields(plan.groups),
+        flow="flow_timing" in plan.groups,
+        require_encodings=require_encodings and "time_encoding" in plan.groups,
+    )
+
+
+def check_context(
+    key: ContextKey,
+    row: dict[str, Any],
+    sampler: SamplerPlan,
+    hop: int,
+    *,
+    contract: str,
+    query: str,
+    node_features: frozenset[str],
+    numeric: tuple[tuple[str, str], ...],
+    flow: bool,
+    require_encodings: bool,
+) -> int:
+    """Check one context row of a context query against its key, clocks and contract.
+
+    ``contract`` is what the query's rows print and ``query`` its name, ``node_features``
+    the node features it may return and ``numeric`` the (group, field) message fields
+    that must be finite and nonnegative; ``flow`` checks the flow fields' consistency.
+    validate_context checks the training query's rows, and
+    analytics_query.validate_analytics_context those of the analytics query. Returns the
+    number of messages whose channel is outside CHANNELS.
+    """
     if any(row.get(name) != value for name, value in asdict(key).items()):
         raise ValueError("Returned context differs from requested entity/cutoff")
-    if row.get("contract_version") != CONTEXT_CONTRACT:
-        raise ValueError("Missing current feature contract; install the current context query")
+    if row.get("contract_version") != contract:
+        raise ValueError(f"Missing current feature contract; install the current {query}")
     if row.get("basis_id") != BASIS_ID:
         raise ValueError("Fourier basis mismatch")
     messages: list[dict[str, Any]] = row["messages"]
     if len(messages) > response_bound(sampler, hop):
         raise ValueError("Query response exceeds the neighborhood bound")
     features: dict[str, Any] = row["features"]
-    if set(features) - KNOWN_NODE_FEATURES:
+    if set(features) - node_features:
         raise ValueError("Unknown node feature in response")
     if features and not _finite_nonnegative(list(features.values())):
         raise ValueError("Features must be finite and nonnegative")
-    numeric = [
-        (group, name)
-        for group in ("flow_timing", "pair_history")
-        if group in plan.groups
-        for name in FEATURE_GROUPS[group].names
-    ]
     if numeric and messages:
         table = [[message.get(name) for _, name in numeric] for message in messages]
         if not _finite_nonnegative(table):
@@ -109,7 +153,6 @@ def validate_context(
                 for group, name in numeric:
                     if not _finite_nonnegative([message.get(name)]):
                         raise ValueError(f"Missing or invalid {group} field: {name}")
-    flow = "flow_timing" in plan.groups
     unknown_channels = 0
     events: list[dict[str, Any]] = []
     for message in messages:
@@ -144,7 +187,7 @@ def validate_context(
             raise ValueError("Association context changed the cutoff")
     age_map: dict[str, Any] = row.get("age_encoding") or {}
     gap_map: dict[str, Any] = row.get("gap_encoding") or {}
-    if age_map or gap_map or (require_encodings and "time_encoding" in plan.groups):
+    if age_map or gap_map or require_encodings:
         _check_encodings(events, age_map, gap_map)
     return unknown_channels
 
@@ -194,15 +237,8 @@ def query_context_rows(
     timeout_retries: int = 1,
 ) -> list[dict[str, Any]]:
     """One REST call; validated ok rows or per-request status rows, in key order."""
-    if not batch or len({(k.scope_id, k.visibility_phase) for k in batch}) != 1:
-        raise ValueError("Query batch must have one visibility scope and phase")
-    if len(batch) > REQUEST_KEYS.high:
-        raise ValueError(f"A context request carries at most {REQUEST_KEYS.high} keys")
     params = {
-        "node_types": [key.node_type for key in batch],
-        "node_ids": [key.node_id for key in batch],
-        "cutoff_seqs": [key.cutoff_seq for key in batch],
-        "cutoff_times": [key.cutoff_ms for key in batch],
+        **batch_params(batch),
         **sampler.query_params(hop),
         "emit_encodings": emit_encodings,
         **plan.query_flags(hop),
@@ -210,6 +246,42 @@ def query_context_rows(
         "visibility_phase": batch[0].visibility_phase,
     }
     result = executor.run(CONTEXT_QUERY, params, timeout_retries=timeout_retries)
+
+    def check(key: ContextKey, row: dict[str, Any]) -> int:
+        return validate_context(key, row, plan, sampler, hop, require_encodings=emit_encodings)
+
+    rows = indexed_rows(result, batch, check, diagnostics)
+    if diagnostics is not None and emit_encodings:
+        diagnostics["encoding_checks"] += 1
+    return rows
+
+
+def batch_params(batch: list[ContextKey]) -> dict[str, Any]:
+    """The key parameters of one context request: the entities and cutoffs, their scope."""
+    if not batch or len({(k.scope_id, k.visibility_phase) for k in batch}) != 1:
+        raise ValueError("Query batch must have one visibility scope and phase")
+    if len(batch) > REQUEST_KEYS.high:
+        raise ValueError(f"A context request carries at most {REQUEST_KEYS.high} keys")
+    return {
+        "node_types": [key.node_type for key in batch],
+        "node_ids": [key.node_id for key in batch],
+        "cutoff_seqs": [key.cutoff_seq for key in batch],
+        "cutoff_times": [key.cutoff_ms for key in batch],
+    }
+
+
+def indexed_rows(
+    result: list[dict[str, Any]],
+    batch: list[ContextKey],
+    check: Callable[[ContextKey, dict[str, Any]], int],
+    diagnostics: Counter[str] | None = None,
+) -> list[dict[str, Any]]:
+    """One call's rows in key order: ok rows checked by ``check``, others per-request statuses.
+
+    Every request index must be answered exactly once; a status outside
+    PER_REQUEST_STATUSES, or a call-level status, is an error. ``check`` returns the
+    messages whose channel is unknown, which ``diagnostics`` counts.
+    """
     indexed: dict[int, dict[str, Any]] = {}
     for row in result:
         if "request_index" not in row:
@@ -227,16 +299,12 @@ def query_context_rows(
         row = indexed[index]
         status = row.get("status")
         if status == "ok":
-            unknown = validate_context(
-                key, row, plan, sampler, hop, require_encodings=emit_encodings
-            )
+            unknown = check(key, row)
             if diagnostics is not None and unknown:
                 diagnostics["unknown_channel"] += unknown
         elif status not in PER_REQUEST_STATUSES:
             raise ValueError(f"Unknown per-request status from TigerGraph: {row}")
         rows.append(row)
-    if diagnostics is not None and emit_encodings:
-        diagnostics["encoding_checks"] += 1
     return rows
 
 
@@ -278,25 +346,39 @@ def query_context_split(
     emit_encodings: bool = False,
     diagnostics: Counter[str] | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
-    """query_context_rows that bisects a block TigerGraph times out on; (rows, calls).
+    """query_context_rows that bisects a block TigerGraph times out on; (rows, calls)."""
 
-    A multi-key request that exceeds the server timeout is split in two halves
-    at once instead of being repeated, which isolates a slow key in about
-    log2(block) extra calls. A single key is retried once and then raises
-    ContextTimeoutError naming it; it is never mapped to None, because which
-    keys time out depends on server load.
-    """
-    try:
-        rows = query_context_rows(
+    def request(keys: list[ContextKey], timeout_retries: int) -> list[dict[str, Any]]:
+        return query_context_rows(
             executor,
-            batch,
+            keys,
             plan=plan,
             sampler=sampler,
             hop=hop,
             emit_encodings=emit_encodings,
             diagnostics=diagnostics,
-            timeout_retries=0 if len(batch) > 1 else 1,
+            timeout_retries=timeout_retries,
         )
+
+    return bisected(request, batch, hop, diagnostics)
+
+
+def bisected(
+    request: Callable[[list[ContextKey], int], list[dict[str, Any]]],
+    batch: list[ContextKey],
+    hop: int,
+    diagnostics: Counter[str] | None = None,
+) -> tuple[list[dict[str, Any]], int]:
+    """A context request that bisects a block TigerGraph times out on; (rows, calls).
+
+    ``request(keys, timeout_retries)`` makes one REST call. A multi-key request that
+    exceeds the server timeout is split in two halves at once instead of being
+    repeated, which isolates a slow key in about log2(block) extra calls. A single key
+    is retried once and then raises ContextTimeoutError naming it; it is never mapped to
+    None, because which keys time out depends on server load.
+    """
+    try:
+        rows = request(batch, 0 if len(batch) > 1 else 1)
     except ServerTimeoutError as error:
         if len(batch) == 1:
             raise ContextTimeoutError(batch[0], hop, error_summary(error)) from error
@@ -311,14 +393,7 @@ def query_context_split(
         if diagnostics is not None:
             diagnostics["timeout_splits"] += 1
         middle = len(batch) // 2
-        options: dict[str, Any] = {
-            "plan": plan,
-            "sampler": sampler,
-            "hop": hop,
-            "emit_encodings": emit_encodings,
-            "diagnostics": diagnostics,
-        }
-        left, left_calls = query_context_split(executor, batch[:middle], **options)
-        right, right_calls = query_context_split(executor, batch[middle:], **options)
+        left, left_calls = bisected(request, batch[:middle], hop, diagnostics)
+        right, right_calls = bisected(request, batch[middle:], hop, diagnostics)
         return left + right, left_calls + right_calls
     return rows, 1
