@@ -1,4 +1,4 @@
-"""mule: train, evaluate and score the built-in mule detection run on TigerGraph.
+"""mule: train, evaluate, score and report the built-in mule detection run on TigerGraph.
 
 The commands need nothing but the TigerGraph connection in .env and take no options:
 the settings are built in (config.DEFAULT_CONFIG), and RUN defaults to the built-in
@@ -18,6 +18,7 @@ from .pipeline.evaluate import evaluate_run
 from .pipeline.prepare import install_queries
 from .pipeline.score import score_accounts
 from .pipeline.train import BASELINE_RUN, train_run
+from .reporting.report import report_run
 from .runtime.device import reserve_deterministic_cublas
 
 
@@ -36,13 +37,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     commands.add_parser(
         "train",
-        help=f"Prepare the dataset as needed, then train the built-in run into {baseline}/; "
-        "an interrupted run resumes, and a complete one is reported from its metrics.json",
+        help=f"Prepare the dataset as needed, then train the built-in run into {baseline}/ "
+        "with its training figures; an interrupted run resumes, and a complete one is "
+        "reported from its metrics.json",
     )
     evaluating = commands.add_parser(
         "evaluate",
         help="Ground-truth audits of a run's model on validation (for decisions) and test "
-        "(for reporting), written to the run's audit/",
+        "(for reporting), written to the run's audit/ with the audit figures",
     )
     evaluating.add_argument(
         "run",
@@ -58,6 +60,18 @@ def build_parser() -> argparse.ArgumentParser:
     scoring.add_argument("accounts", type=Path, metavar="ACCOUNTS", help="one account id per line")
     scoring.add_argument(
         "date", nargs="?", metavar="DATE", help="ISO date (default: the model's test cutoff)"
+    )
+    reporting = commands.add_parser(
+        "report",
+        help="Redraw a run's figures and report.md from the files it saved, offline",
+    )
+    reporting.add_argument(
+        "run",
+        nargs="?",
+        type=run_directory,
+        default=BASELINE_RUN,
+        metavar="RUN",
+        help=f"run directory (default: {baseline})",
     )
     commands.add_parser(
         "check",
@@ -79,6 +93,8 @@ def run_command(args: argparse.Namespace) -> dict[str, Any]:
             return evaluate_run(args.run)
         case "score":
             return score_accounts(BASELINE_RUN, args.accounts, args.date)
+        case "report":
+            return report_run(args.run)
         case "check":
             return check()
         case other:

@@ -483,7 +483,16 @@ The run directory holds:
   weights were validated, the selected epoch and early stopping);
 - `resume.pt`, written atomically every epoch and every `checkpoint_every_steps` steps;
 - `model.pt`, `predictions/validation.parquet`, `predictions/test.parquet` and
-  `metrics.json` once the run is complete.
+  `metrics.json` once the run is complete;
+- `plots/` and `report.md`, drawn from those files once every one of them is saved:
+  the training figures (`training_objective.png`, `training_corrections.png`,
+  `validation_ranking.png`, `training_throughput.png`, `proxy_precision_recall.png` and
+  `run_health.png`) and the run's tables with links to its figures. `mule evaluate` adds
+  the audit figures (`audit_precision_recall.png`, `audit_roc.png`, `audit_capture.png`,
+  `audit_threshold.png`, `audit_score_distribution.png` and `audit_revealed_hidden.png`)
+  and rewrites `report.md`; `mule report` redraws all of them from the saved files,
+  offline. A figure that fails to draw loses no other file: the command fails after the
+  other figures and `report.md` are written.
 
 Running `train` again continues from `resume.pt` and reproduces the uninterrupted run
 exactly. It refuses a changed result-affecting setting but allows transport

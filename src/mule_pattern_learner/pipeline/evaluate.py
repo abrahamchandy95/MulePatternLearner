@@ -10,6 +10,7 @@ from ..data.contexts import close_source
 from ..evaluation.audit import AUDIT_SPLITS, audit, audit_inputs
 from ..evaluation.truth import TruthReader
 from ..paths import DATA_DIR, RunPaths
+from ..reporting.report import write_audit_report
 from ..runtime.progress import recording
 from ..tigergraph.oracle import TigerGraphTruth
 from ..tigergraph.provenance import verify_frozen_source
@@ -29,7 +30,8 @@ def evaluate_run(
     budgets, and its source must still be the frozen one the dataset was prepared from.
     Truth is read once for both splits: the graph's oracle truth unless ``truth``
     supplies another reader (the tests' ParquetTruth). The lines the audits print are
-    appended to the run's events.jsonl.
+    appended to the run's events.jsonl. Once a split is audited here, the audit figures
+    and report.md are drawn again (reporting.report.write_audit_report).
     """
     inputs = audit_inputs(run, data=data)
     reports = {
@@ -52,4 +54,6 @@ def evaluate_run(
                 failed = False
             finally:
                 close_source(contexts, failed=failed)
+        # After the audits' files: a figure that fails loses no audit.
+        write_audit_report(run)
     return {split: reports[split] for split in AUDIT_SPLITS}

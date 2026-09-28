@@ -240,8 +240,9 @@ def test_each_split_reports_the_rejections_of_its_own_audit(
     for run in (both, alone):
         saved_model(run.model, config, dataset)
     reports = pipeline_evaluate.evaluate_run(both, data=data)
-    # The same model audits test alone once its validation report exists.
+    # The same model audits test alone once its validation audit exists.
     alone.audit_report("validation").parent.mkdir(parents=True)
+    shutil.copy(both.audit_scores("validation"), alone.audit_scores("validation"))
     shutil.copy(both.audit_report("validation"), alone.audit_report("validation"))
     test = pipeline_evaluate.evaluate_run(alone, data=data)["test"]
     # Both splits share a context source, yet the test report counts only its own audit's.
