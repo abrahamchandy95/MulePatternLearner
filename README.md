@@ -81,7 +81,7 @@ option besides `--help`.
 | `mule train` | Prepares as needed (install, scope, reveal, dataset), then trains the built-in run into `results/baseline/seed-42/` with its training figures in `plots/` and `report.md`, resumes it, or reports it when it is complete |
 | `mule evaluate [RUN]` | Ground-truth audits of the run's model on the frozen validation and test partitions, written to the run's `audit/` with the audit figures in `plots/`: decisions use the validation audit, and the test audit is for reporting; `RUN` defaults to `results/baseline/seed-42` |
 | `mule score ACCOUNTS [DATE]` | Scores the accounts listed in a file (one id per line) with the built-in run's model; `DATE` defaults to the test cutoff. Writes `scores/<file stem>_<date>.parquet` in the run, and the ids TigerGraph rejects to `scores/<file stem>_<date>_rejected.txt` |
-| `mule report [RUN]` | Redraws the run's figures (`plots/<topic>_<figure>.png`) and `report.md` from the files it saved, offline: the training figures of a complete run and the audit figures of its audits |
+| `mule report [RUN]` | Redraws the run's figures (`plots/<topic>_<figure>.png`) and `report.md` from the files it saved, offline: the training figures of a complete run and the audit figures of its audits. Given a suite's directory (`results/experiments/<suite>`), it redraws the suite's comparison figures and `report.md` instead |
 | `mule check` | Read-only readiness: the graph, its installed queries and the cuGraph probe, then one training batch with its tensor digests and the first loss. The batch needs the built-in run's prepared dataset in `data/` (see below) |
 | `mule install` | Adds the scope vertex type if it is missing, installs the queries whose text differs, drops the queries retired by the rename that are still installed (`train` does this too) and lists installed queries that no file defines |
 
@@ -99,6 +99,32 @@ on a fresh graph; on a graph where they are in place it only reads.
 `python -m mule_pattern_learner` runs the same commands. Each prints one JSON result.
 The end-to-end guide describes
 [what runs where](docs/temporal_training_end_to_end.md#what-runs-where).
+
+## Control experiments
+
+The control experiments train variants of the built-in run over the seeds 42, 43 and 44,
+audit them and compare them with the baseline:
+
+```bash
+python scripts/run_experiments.py                           # the controls suite
+python scripts/run_experiments.py feature_drops             # a suite by name
+python scripts/run_experiments.py no_attention prior_weight  # chosen variants
+python scripts/run_experiments.py --help                    # suites, variants, questions, changes
+```
+
+The variants are declared in `src/mule_pattern_learner/experiments/variants.py`: the
+controls (`no_attention`, `no_slot_sum`, `no_pool_counts`, `prior_weight`,
+`no_weight_average` and `drop_time_encoding`) and one `drop_<group>` variant per feature
+group of the built-in run. Every run of a suite trains on the built-in run's dataset, the
+baseline's seed 42 is the run `mule train` makes, and each run goes to
+`results/<variant>/seed-<n>/` with its own figures and audits. The script validates every
+variant offline and prints the run matrix with a time bound before it trains; it keeps
+complete runs, moves a run whose settings differ to `results/archive/` (nothing is deleted)
+and trains it again, and stops on a TigerGraph outage while carrying on past a run's own
+error. It always rewrites `summary.csv`, `comparison.csv`, the comparison figures and
+`report.md` under `results/experiments/<suite>/`. The report ranks the variants by the
+validation audit with paired intervals against the baseline; the test audit is for
+reporting, not selection.
 
 ## Documentation
 
@@ -142,7 +168,8 @@ fixture vertices and removes them again:
 .venv/bin/python -m pytest -m graph_write --allow-graph-writes
 ```
 
-`scripts/render_queries.py` regenerates the context query, and
+`scripts/render_queries.py` regenerates the context query,
+`scripts/run_experiments.py` runs the control experiments, and
 `scripts/simulate_label_reveal.py` shows how the label reveal varies with its salt; each
 prints its purpose with `--help` without connecting. The one-time schema installer
 scripts, already run against the live graph, are kept in git history.
