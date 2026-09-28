@@ -18,7 +18,7 @@ from .pipeline.evaluate import evaluate_run
 from .pipeline.prepare import install_queries
 from .pipeline.score import score_accounts
 from .pipeline.train import BASELINE_RUN, train_run
-from .reporting.report import report_run
+from .reporting.report import report_directory
 from .runtime.device import reserve_deterministic_cublas
 
 
@@ -64,15 +64,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     reporting = commands.add_parser(
         "report",
-        help="Redraw a run's figures and report.md from the files it saved, offline",
+        help="Redraw the figures and report.md of a run, or of a control-experiment suite "
+        "(results/experiments/<suite>), from the files it saved, offline",
     )
     reporting.add_argument(
-        "run",
+        "directory",
         nargs="?",
-        type=run_directory,
-        default=BASELINE_RUN,
+        type=Path,
+        default=BASELINE_RUN.root,
         metavar="RUN",
-        help=f"run directory (default: {baseline})",
+        help=f"run or suite directory (default: {baseline})",
     )
     commands.add_parser(
         "check",
@@ -95,7 +96,7 @@ def run_command(args: argparse.Namespace) -> dict[str, Any]:
         case "score":
             return score_accounts(BASELINE_RUN, args.accounts, args.date)
         case "report":
-            return report_run(args.run)
+            return report_directory(args.directory)
         case "check":
             return check()
         case other:

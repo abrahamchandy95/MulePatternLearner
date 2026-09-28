@@ -174,6 +174,11 @@ def capture_at_budgets(
     return result
 
 
+def average_precision(y: NDArray[Any], score: NDArray[Any], weight: NDArray[Any]) -> float | None:
+    """Weighted average precision (sklearn's, with sample weights); None without positives."""
+    return float(average_precision_score(y, score, sample_weight=weight)) if y.any() else None
+
+
 def ranking_metrics(
     y: NDArray[Any], score: NDArray[Any], weight: NDArray[Any]
 ) -> dict[str, float | None]:
@@ -182,9 +187,7 @@ def ranking_metrics(
     AP is None without positives and ROC AUC None without both classes.
     """
     return {
-        "average_precision": float(average_precision_score(y, score, sample_weight=weight))
-        if y.any()
-        else None,
+        "average_precision": average_precision(y, score, weight),
         "roc_auc": float(roc_auc_score(y, score, sample_weight=weight))
         if len(np.unique(y)) == 2
         else None,

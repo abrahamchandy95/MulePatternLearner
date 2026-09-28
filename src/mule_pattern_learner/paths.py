@@ -4,8 +4,8 @@ Prepared datasets live in data/<dataset id>/ (DATA_DIR), and everything the comm
 write lives under results/ (RESULTS_DIR): one training run in
 results/<variant>/seed-<n>/, a control-experiment suite in results/experiments/<suite>/,
 the diagnostics of a dataset in results/diagnostics/<dataset id>/, and runs moved aside
-because their settings changed in results/archive/. DatasetPaths and RunPaths name each
-file; nothing else joins a file name onto one of these directories.
+because their settings changed in results/archive/. DatasetPaths, RunPaths and SuitePaths
+name each file; nothing else joins a file name onto one of these directories.
 """
 
 from __future__ import annotations
@@ -150,9 +150,53 @@ class RunPaths:
         return self.root / "report.md"
 
 
-def suite_dir(suite: str, results: Path = RESULTS_DIR) -> Path:
-    """The comparison tables and figures of a control-experiment suite."""
-    return results / "experiments" / suite
+@dataclass(frozen=True)
+class SuitePaths:
+    """The comparison tables, figures and report of a control-experiment suite.
+
+    The suite's runs are the runs of the same results directory,
+    <results>/<variant>/seed-<n>/, which other suites and `mule train` share.
+    """
+
+    root: Path
+
+    @classmethod
+    def of(cls, suite: str, results: Path = RESULTS_DIR) -> SuitePaths:
+        """The directory of a suite: <results>/experiments/<suite>/."""
+        return cls(results / "experiments" / suite)
+
+    @property
+    def results(self) -> Path:
+        """The results directory that holds the suite's runs."""
+        return self.root.parent.parent
+
+    def run(self, variant: str, seed: int) -> RunPaths:
+        """One run of the suite: <results>/<variant>/seed-<seed>/."""
+        return RunPaths.of(variant, seed, self.results)
+
+    @property
+    def summary(self) -> Path:
+        """Every run's metrics, one per row (experiments.tables)."""
+        return self.root / "summary.csv"
+
+    @property
+    def comparison(self) -> Path:
+        """One row per variant, compared with the baseline (experiments.tables)."""
+        return self.root / "comparison.csv"
+
+    @property
+    def plots(self) -> Path:
+        """The directory of the suite's figures."""
+        return self.root / "plots"
+
+    def figure(self, name: str) -> Path:
+        """One of the suite's figures, a PNG named <topic>_<figure> (reporting.report)."""
+        return self.plots / f"{name}.png"
+
+    @property
+    def report(self) -> Path:
+        """The suite's tables, with links to its figures."""
+        return self.root / "report.md"
 
 
 def diagnostics_dir(dataset_id: str, results: Path = RESULTS_DIR) -> Path:
@@ -163,3 +207,8 @@ def diagnostics_dir(dataset_id: str, results: Path = RESULTS_DIR) -> Path:
 def archive_dir(results: Path = RESULTS_DIR) -> Path:
     """Where results whose settings changed are moved; nothing there is deleted."""
     return results / "archive"
+
+
+def archived_run(run: RunPaths, moment: str, results: Path = RESULTS_DIR) -> RunPaths:
+    """Where a run of results is moved at a moment: archive/<variant>/seed-<n>/<moment>/."""
+    return RunPaths(archive_dir(results) / run.root.relative_to(results) / moment)
