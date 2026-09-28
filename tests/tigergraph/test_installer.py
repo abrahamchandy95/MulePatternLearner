@@ -294,11 +294,12 @@ def test_nothing_is_dropped_when_the_install_fails_or_a_drop_is_refused(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     graph = FakeTigerGraph(queries={name: old_query(name) for name in RETIRED_QUERIES})
-    conn = graph.client.conn
-    real = conn.gsql
-    monkeypatch.setattr(
-        conn, "gsql", lambda text: "Semantic Check Error" if "CREATE" in text else real(text)
-    )
+    real = graph.client.conn.gsql
+
+    def failing(text: str) -> str:
+        return "Semantic Check Error" if "CREATE" in text else real(text)
+
+    monkeypatch.setattr(graph.client.conn, "gsql", failing)
     with pytest.raises(RuntimeError, match="Semantic Check"):
         installer.install(graph)
     assert drops(graph) == [] and installer.retired_installed(graph) == list(RETIRED_QUERIES)
@@ -306,9 +307,10 @@ def test_nothing_is_dropped_when_the_install_fails_or_a_drop_is_refused(
     graph = FakeTigerGraph(
         queries={**installed_repository(), "temporal_fourier64_values": old_query("x")}
     )
-    refusal = "Query temporal_fourier64_values cannot be dropped: other queries call it"
-    monkeypatch.setattr(
-        graph.client.conn, "gsql", lambda text: refusal if "DROP" in text else "Query not found"
-    )
+
+    def refusing(text: str) -> str:
+        return "Query temporal_fourier64_values cannot be dropped: other queries call it"
+
+    monkeypatch.setattr(graph.client.conn, "gsql", refusing)
     with pytest.raises(RuntimeError, match="left it installed.*cannot be dropped"):
         installer.drop_retired(graph)
