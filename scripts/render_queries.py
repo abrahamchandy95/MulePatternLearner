@@ -1,11 +1,16 @@
-"""Regenerate gsql/queries/training_context.gsql after editing its shared contract."""
+"""Regenerate gsql/queries/training_context.gsql after editing its shared contract.
+
+A changed query needs a new contract.server.CONTEXT_CONTRACT, the value the rendered
+text derives (tigergraph.render.context_contract); the script names it and exits 1
+until it is set.
+"""
 
 import argparse
 import sys
 
-from mule_pattern_learner.contract.server import CONTEXT_QUERY_FILE
+from mule_pattern_learner.contract.server import CONTEXT_CONTRACT, CONTEXT_QUERY_FILE
 from mule_pattern_learner.paths import GSQL_DIR
-from mule_pattern_learner.tigergraph.render import render_context_query
+from mule_pattern_learner.tigergraph.render import context_contract, render_context_query
 
 
 def main() -> int:
@@ -18,6 +23,10 @@ def main() -> int:
     args = parser.parse_args()
     path = GSQL_DIR / CONTEXT_QUERY_FILE
     text = render_context_query()
+    contract = context_contract()
+    if contract != CONTEXT_CONTRACT:
+        print(f"set contract.server.CONTEXT_CONTRACT = {contract!r}, then render again")
+        return 1
     if args.check:
         same = path.read_text() == text
         print(f"{path.name} {'matches' if same else 'differs from'} the generator")

@@ -3,6 +3,9 @@
 The generated text is the single source of `gsql/queries/training_context.gsql`
 (re-render with `scripts/render_queries.py`). It runs unchanged
 through INTERPRET (see `as_interpreted`), so parity checks never need an install.
+Every row it returns prints contract.server.CONTEXT_CONTRACT, which names the query's
+text: `context_contract` derives it from the rendered text, and a test keeps the two
+equal, so a changed query cannot ship under the old contract.
 
 Processing is per request, but set-based inside a request: role, peer, device/IP
 and prior-pair lookups for the sampled events are single SELECTs over all of them
@@ -13,6 +16,7 @@ changes: `emit_encodings`, per-request statuses (a failed request prints a statu
 row and the call continues) and `missing_entity` for unknown IDs.
 """
 
+import hashlib
 import re
 
 from ..contract.bounds import POOL, REQUEST_KEYS
@@ -26,6 +30,7 @@ from ..contract.feature_groups import (
 )
 from ..contract.graph_schema import ASSOCIATION_TARGETS, ASSOCIATIONS, NODE_TYPES
 from ..contract.server import CONTEXT_CONTRACT, CONTEXT_QUERY, FOURIER_QUERY, GRAPH_NAME
+from .gsql_text import normalized
 
 # The groups whose include_* parameter defaults to TRUE in the rendered query. Callers
 # pass every flag, so the defaults only keep the installed text as it is until the
@@ -884,8 +889,8 @@ MESSAGES = """    FOREACH item IN @@events DO
 """
 
 
-def render_context_query() -> str:
-    """The exact text of gsql/queries/training_context.gsql."""
+def render_context_query(contract: str = CONTEXT_CONTRACT) -> str:
+    """The exact text of gsql/queries/training_context.gsql, printing `contract`."""
     defaults = FeaturePlan(DEFAULT_FLAG_GROUPS, "tgat").query_flags()
     flags = ",\n  ".join(f"BOOL {name} = {str(value).upper()}" for name, value in defaults.items())
     parts = [_header(flags), _root_catalog(), _request_setup()]
@@ -907,9 +912,20 @@ def render_context_query() -> str:
         "\n".join(
             line.rstrip()
             for line in "".join(parts)
-            .replace("__CONTRACT__", CONTEXT_CONTRACT)
+            .replace("__CONTRACT__", contract)
             .replace("__FOURIER__", FOURIER_QUERY)
             .splitlines()
         )
         + "\n"
     )
+
+
+def context_contract() -> str:
+    """The contract the rendered context query should print (CONTEXT_CONTRACT).
+
+    "context_" and the first 12 hex digits of the sha256 of the query's normalised text
+    (gsql_text.normalized: no comments, no whitespace) rendered with an empty contract
+    literal, so the value covers the whole query but itself.
+    """
+    text = normalized(render_context_query(contract=""))
+    return "context_" + hashlib.sha256(text.encode()).hexdigest()[:12]

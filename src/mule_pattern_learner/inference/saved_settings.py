@@ -1,9 +1,11 @@
-"""Configurations saved before the typed configuration, converted to RunConfig.
+"""Models saved before the restructure: their configurations and their contract.
 
 A model saved before RunConfig holds a flat table of the old setting names instead of
 RunConfig.to_dict(). converted_run_config converts it through SAVED_SETTINGS, the one
 table from old names to RunConfig fields (and SAVED_VALUES, the values that name
-something else now), so such models load and score as they did.
+something else now), so such models load and score as they did. A model saved before
+the server step records SAVED_CONTRACT, the contract of the context query it was
+trained on, which SavedModel accepts beside this code's.
 
 The conversion stays until the new baseline run has a ground-truth audit, so that the
 models trained before the restructure can still be compared with it, and goes when main
@@ -18,6 +20,13 @@ from typing import Any
 from ..config import DEFAULT_CONFIG, RunConfig
 from ..contract.feature_groups import BUILT_IN_GROUPS
 from ..contract.sampler_plan import PoolPlan
+
+# The contract fingerprint (contract.feature_groups.contract_fingerprint) every model
+# saved before the server step records: that of the context query before the rename.
+# The query computes the groups a saved configuration names as it computed them then, so
+# such a model reads the inputs it was trained on, and its input fingerprint is its
+# plan's under this contract (FeaturePlan.fingerprint).
+SAVED_CONTRACT = "530e46c91b07b254d38722e57117b917761d2b68176e7eb1cb5e2e9de32307da"
 
 # Where each setting of a configuration saved before the typed configuration lives in
 # RunConfig: the dotted name of its field, or None for a setting that names nothing

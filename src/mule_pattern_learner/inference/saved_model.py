@@ -8,8 +8,9 @@ it relies on.
 
 A model saved before FORMAT 1 records no format, and names its dataset by directory
 instead of by dataset id. One saved before the typed configuration also holds a flat
-table of the old setting names, which SavedModel.config converts
-(inference.saved_settings), so such models load and score as they did.
+table of the old setting names, which SavedModel.config converts, and one saved before
+the server step renamed the queries records the contract of then (both in
+inference.saved_settings), so such models load and score as they did.
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ from ..contract.graph_schema import EVALUATION_PROTOCOL
 from ..contract.time_basis import BASIS_ID
 from ..data.manifest import manifest_digest
 from ..paths import DATA_DIR, DatasetPaths
-from .saved_settings import converted_run_config
+from .saved_settings import SAVED_CONTRACT, converted_run_config
 
 
 @dataclass(frozen=True)
@@ -139,9 +140,13 @@ class SavedModel:
         return DatasetPaths(Path(value)) if value else None
 
     def check_contract(self) -> None:
-        """Refuse a model saved under another feature or time-basis contract."""
+        """Refuse a model saved under another feature or time-basis contract.
+
+        A model saved before the server step records SAVED_CONTRACT, which reads the
+        same inputs of the groups it can name.
+        """
         if (
-            self.payload["contract"] != contract_fingerprint()
+            self.payload["contract"] not in (contract_fingerprint(), SAVED_CONTRACT)
             or self.payload["basis_id"] != BASIS_ID
         ):
             raise ValueError("The model's feature/time contract differs from this sampler")
@@ -150,9 +155,10 @@ class SavedModel:
         """Refuse a model whose inputs differ from those of its configuration.
 
         The input fingerprint also covers the pool groups' definitions (amount bands,
-        pass-through thresholds), which the contract fingerprint leaves out.
+        pass-through thresholds), which the contract fingerprint leaves out. It is the
+        plan's under the contract the model records (check_contract accepts it).
         """
-        if self.payload.get("input_fingerprint") != plan.fingerprint():
+        if self.payload.get("input_fingerprint") != plan.fingerprint(self.payload.get("contract")):
             raise ValueError(
                 "The model's input groups or pool definitions differ from its configuration"
             )
