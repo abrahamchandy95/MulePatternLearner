@@ -159,9 +159,10 @@ class DiskTier:
     an entry that entry_row refuses, with a warning: the source requests that context
     again and put replaces the entry. Beyond the cache's capacity, the least recently
     used entries go (a hit refreshes an entry's time) until EVICTED_DOWN_TO of the
-    capacity remain. A directory that cannot be written is warned about once, then only
-    read. The source's request workers call get and put at once, so the counts take a
-    lock: ``refused`` entries and ``evicted`` ones.
+    capacity remain; an entry that cannot be removed is warned about once and left. A
+    directory that cannot be written is warned about once, then only read. Neither
+    fails a fetch. The source's request workers call get and put at once, so the counts
+    take a lock: ``refused`` entries and ``evicted`` ones.
     """
 
     def __init__(self, cache: ContextCache, *, plan: FeaturePlan, sampler: SamplerPlan) -> None:
@@ -175,6 +176,7 @@ class DiskTier:
         self._entries: int | None = None
         self.writable = True
         self.refused = self.evicted = 0
+        self._unremovable_warned = False
 
     def name(self, hop: int, key: ContextKey) -> str:
         """The name of a context's entry: the fingerprint of what its row depends on."""
@@ -245,16 +247,25 @@ class DiskTier:
                 self._evict()
 
     def _evict(self) -> None:
-        """Remove the least recently used entries until EVICTED_DOWN_TO remain."""
+        """Remove the least recently used entries until EVICTED_DOWN_TO remain.
+
+        Eviction never fails a fetch: an entry that cannot be removed is warned about
+        once and left. It is counted as removed, so that a directory whose entries
+        cannot go is scanned again only after another tenth of the capacity is written.
+        """
         dated: list[tuple[int, str, Path]] = []
         for path in self._files():
-            with contextlib.suppress(FileNotFoundError):
+            with contextlib.suppress(OSError):  # removed meanwhile, or not ours to read
                 dated.append((path.stat().st_mtime_ns, path.name, path))
         dated.sort()
         keep = int(self.cache.capacity * EVICTED_DOWN_TO)
         for _, _, path in dated[: max(len(dated) - keep, 0)]:
-            path.unlink(missing_ok=True)
-            self.evicted += 1
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as error:
+                self._unremovable(path, error)
+            else:
+                self.evicted += 1
         self._entries = min(len(dated), keep)
 
     def _refuse(self, path: Path, reason: str) -> None:
@@ -264,6 +275,17 @@ class DiskTier:
             "context_cache_refused",
             f"Refused the cached context {path.name}: {reason}. It is requested from "
             "TigerGraph again.",
+        )
+
+    def _unremovable(self, path: Path, error: OSError) -> None:
+        """Warn once that an entry could not be evicted; called under the lock."""
+        if self._unremovable_warned:
+            return
+        self._unremovable_warned = True
+        warn(
+            "context_cache_eviction_failed",
+            f"Cannot remove the cached context {path.name} ({error}); entries that cannot "
+            f"be removed stay, so {self.cache.directory} may grow past its capacity.",
         )
 
     def _unwritable(self, error: OSError) -> None:

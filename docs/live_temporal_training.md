@@ -215,11 +215,12 @@ check before any entry is read. An entry that cannot be read, or that belongs to
 another context, is refused with a `context_cache_refused` warning and requested
 again. Beyond 1.5 million entries (`contract.bounds.CONTEXT_CACHE_ENTRIES`, roughly
 10 GB, an estimate until a baseline run measures its distinct contexts) the least
-recently used entries are removed until 90% remain. A cache directory that cannot be
-written gives one `context_cache_unwritable` warning and is then only read. `mule
-score` reads the live graph without the frozen-source check, so it has no cache, and
-`mule check` passes the check but requests its batch from the graph, so that the
-installed context query runs.
+recently used entries are removed until 90% remain; an entry that cannot be removed
+gives one `context_cache_eviction_failed` warning and stays. A cache directory that
+cannot be written gives one `context_cache_unwritable` warning and is then only read.
+Neither fails the run. `mule score` reads the live graph without the frozen-source
+check, so it has no cache, and `mule check` passes the check but requests its batch
+from the graph, so that the installed context query runs.
 
 Every failure is classified before it is retried, and each class has its own
 budget:
