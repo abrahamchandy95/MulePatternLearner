@@ -1,8 +1,8 @@
 """The files of datasets and runs: column schemas, reading and writing.
 
-paths.DatasetPaths and paths.RunPaths say where each file lives; this module says what
-the tables and JSON files of a run hold, and holds the one atomic write and the one
-file digest. model.pt and resume.pt are torch payloads, which
+paths.DatasetPaths, paths.RunPaths, paths.SuitePaths and paths.DiagnosticsPaths say
+where each file lives; this module says what the tables and JSON files of runs, suites
+and diagnostic studies hold, and holds the one atomic write and the one file digest. model.pt and resume.pt are torch payloads, which
 inference.saved_model.SavedModel and training.checkpoint.ResumeState define.
 """
 
@@ -296,4 +296,86 @@ def read_comparison(path: Path) -> pd.DataFrame:
         raise ValueError(
             f"{path} is not a comparison table: its first column is {frame.columns[0]}"
         )
+    return frame
+
+
+# A diagnostic study's tables (results/diagnostics/<dataset id>/<analysis>.csv), which the
+# analyses of diagnostics write and reporting reads: long format, as summary.csv, one row
+# per measurement. Each table has its analysis' key columns, then the metric and its
+# value; the baselines give a metric's bootstrap interval as its low and high ends. A key
+# that does not apply to a row is empty.
+DIAGNOSTIC_TABLES: dict[str, tuple[str, ...]] = {
+    "univariate": ("feature", "family", "split", "metric", "value"),
+    "drift": ("feature", "family", "model", "setup", "split", "metric", "value"),
+    "baselines": ("baseline", "features", "model", "split", "metric", "value", "low", "high"),
+    "learning_curve": ("model", "labels", "mules", "repeat", "split", "metric", "value"),
+    "subgroups": ("split", "subset", "rank", "metric", "value"),
+    "proxy_validity": ("split", "subset", "metric", "value"),
+    "reveal_spread": ("salt", "split", "metric", "value"),
+    "nnpu_simulation": ("positive_weight", "seed", "metric", "value"),
+}
+DIAGNOSTIC_TEXT = (
+    "feature",
+    "family",
+    "model",
+    "setup",
+    "split",
+    "metric",
+    "baseline",
+    "features",
+    "labels",
+    "subset",
+)
+# features.parquet: the diagnostic feature table (diagnostics.feature_table), one row per
+# sampled account with these columns first, then its features, each named
+# <family>__<name>. weight is 1 / inclusion_probability, and rejected marks an account
+# TigerGraph rejected, whose features are missing. The two contracts name the query texts
+# the features were read with.
+FEATURE_TABLE_COLUMNS = (
+    "account_id",
+    "split",
+    "date",
+    "is_mule",
+    "revealed",
+    "ring_id",
+    "label_source",
+    "inclusion_probability",
+    "weight",
+    "rejected",
+    "context_contract",
+    "analytics_contract",
+)
+
+
+def write_diagnostic_table(path: Path, analysis: str, frame: pd.DataFrame) -> None:
+    """Replace an analysis' table (DIAGNOSTIC_TABLES[analysis], its columns in order)."""
+    columns = DIAGNOSTIC_TABLES[analysis]
+    if tuple(frame.columns) != columns:
+        raise ValueError(f"The {analysis} table has the columns {list(frame.columns)}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_table(path, frame)
+
+
+def read_diagnostic_table(path: Path, analysis: str) -> pd.DataFrame:
+    """An analysis' table; its text keys read as strings, an empty one as an empty string."""
+    columns = DIAGNOSTIC_TABLES[analysis]
+    frame = _read_table(path, tuple(c for c in DIAGNOSTIC_TEXT if c in columns))
+    if tuple(frame.columns) != columns:
+        raise ValueError(f"{path} has the columns {list(frame.columns)}, not {list(columns)}")
+    return frame
+
+
+def write_feature_table(path: Path, frame: pd.DataFrame) -> None:
+    """Replace features.parquet: FEATURE_TABLE_COLUMNS, then the feature columns."""
+    if tuple(frame.columns[: len(FEATURE_TABLE_COLUMNS)]) != FEATURE_TABLE_COLUMNS:
+        raise ValueError(f"A feature table starts with {list(FEATURE_TABLE_COLUMNS)}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with atomic_write(path) as pending:
+        frame.to_parquet(pending, index=False)
+
+
+def read_feature_table(path: Path) -> pd.DataFrame:
+    frame = pd.read_parquet(path)
+    if tuple(frame.columns[: len(FEATURE_TABLE_COLUMNS)]) != FEATURE_TABLE_COLUMNS:
+        raise ValueError(f"{path} is not a feature table: it has the columns {frame.columns}")
     return frame

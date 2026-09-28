@@ -95,7 +95,16 @@ def test_a_run_directory_names_every_file_of_the_run_directory_table(tmp_path: P
         "report.md",
     ]
     assert suite.run("no_attention", 43) == paths.RunPaths.of("no_attention", 43, tmp_path)
-    assert paths.diagnostics_dir("abc", tmp_path) == tmp_path / "diagnostics" / "abc"
+    study = paths.DiagnosticsPaths.of("abc", tmp_path)
+    assert study.root == tmp_path / "diagnostics" / "abc"
+    files = [study.features, study.table("proxy-validity"), study.plots, study.figure("drift")]
+    assert [path.relative_to(study.root).as_posix() for path in [*files, study.report]] == [
+        "features.parquet",
+        "proxy_validity.csv",
+        "plots",
+        "plots/drift.png",
+        "report.md",
+    ]
     assert paths.archive_dir(tmp_path) == tmp_path / "archive"
     moved = paths.archived_run(paths.RunPaths.of("no_attention", 43, tmp_path), "t", tmp_path)
     assert moved.root == tmp_path / "archive" / "no_attention" / "seed-43" / "t"

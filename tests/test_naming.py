@@ -28,11 +28,11 @@ from mule_pattern_learner.paths import (
     DATA_DIR,
     REPOSITORY_ROOT,
     RESULTS_DIR,
+    DiagnosticsPaths,
     RunPaths,
     SuitePaths,
     archive_dir,
     archived_run,
-    diagnostics_dir,
 )
 from mule_pattern_learner.tigergraph.gsql_text import definitions
 
@@ -232,7 +232,12 @@ def test_outputs_go_under_results_and_datasets_under_data() -> None:
     assert run.root.relative_to(RESULTS_DIR).as_posix() == "baseline/seed-42"
     suite = SuitePaths.of("controls")
     assert suite.root.relative_to(RESULTS_DIR).as_posix() == "experiments/controls"
-    assert diagnostics_dir("id").relative_to(RESULTS_DIR).as_posix() == "diagnostics/id"
+    study = DiagnosticsPaths.of("id")
+    assert study.root.relative_to(RESULTS_DIR).as_posix() == "diagnostics/id"
+    for path in (study.features, study.table("learning-curve"), study.figure("drift")):
+        relative = path.relative_to(study.root)
+        assert relative.as_posix() == relative.as_posix().lower(), relative
+    assert study.table("learning-curve").name == "learning_curve.csv"
     assert archive_dir().relative_to(RESULTS_DIR).as_posix() == "archive"
     moved = archived_run(RunPaths.of("prior_weight", 43), "20260928T120000Z")
     assert moved.root.relative_to(RESULTS_DIR).as_posix() == (
