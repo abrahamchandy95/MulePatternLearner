@@ -4,8 +4,9 @@ Prepared datasets live in data/<dataset id>/ (DATA_DIR), and everything the comm
 write lives under results/ (RESULTS_DIR): one training run in
 results/<variant>/seed-<n>/, a control-experiment suite in results/experiments/<suite>/,
 the diagnostics of a dataset in results/diagnostics/<dataset id>/, and runs moved aside
-because their settings changed in results/archive/. DatasetPaths, RunPaths and SuitePaths
-name each file; nothing else joins a file name onto one of these directories.
+because their settings changed in results/archive/. DatasetPaths, RunPaths, SuitePaths and
+DiagnosticsPaths name each file; nothing else joins a file name onto one of these
+directories.
 """
 
 from __future__ import annotations
@@ -199,9 +200,43 @@ class SuitePaths:
         return self.root / "report.md"
 
 
-def diagnostics_dir(dataset_id: str, results: Path = RESULTS_DIR) -> Path:
-    """The diagnostic study of a prepared dataset."""
-    return results / "diagnostics" / dataset_id
+@dataclass(frozen=True)
+class DiagnosticsPaths:
+    """The diagnostic study of a prepared dataset: its feature table, tables and figures.
+
+    Each analysis of `mule diagnose` writes one table, <analysis>.csv, the analysis
+    named with underscores (learning_curve.csv for learning-curve).
+    """
+
+    root: Path
+
+    @classmethod
+    def of(cls, dataset_id: str, results: Path = RESULTS_DIR) -> DiagnosticsPaths:
+        """The directory of a dataset's study: <results>/diagnostics/<dataset id>/."""
+        return cls(results / "diagnostics" / dataset_id)
+
+    @property
+    def features(self) -> Path:
+        """The sampled accounts of each split with their features (diagnostics.feature_table)."""
+        return self.root / "features.parquet"
+
+    def table(self, analysis: str) -> Path:
+        """One analysis' table, in long format (artifacts.DIAGNOSTIC_TABLES)."""
+        return self.root / f"{analysis.replace('-', '_')}.csv"
+
+    @property
+    def plots(self) -> Path:
+        """The directory of the study's figures."""
+        return self.root / "plots"
+
+    def figure(self, name: str) -> Path:
+        """One of the study's figures, a PNG named after its analysis (reporting.report)."""
+        return self.plots / f"{name}.png"
+
+    @property
+    def report(self) -> Path:
+        """The study's tables, with links to its figures."""
+        return self.root / "report.md"
 
 
 def archive_dir(results: Path = RESULTS_DIR) -> Path:

@@ -18,6 +18,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping
 from copy import deepcopy
+from pathlib import Path
 import threading
 import time
 from typing import Any, Literal
@@ -49,20 +50,30 @@ from mule_pattern_learner.contract.server import (
     TRUTH_QUERY,
 )
 from mule_pattern_learner.data.contexts import ContextCounts
-from mule_pattern_learner.paths import GSQL_DIR
+from mule_pattern_learner.data.manifest import dataset_id
+from mule_pattern_learner.data.preparation import prepare
+from mule_pattern_learner.paths import GSQL_DIR, DatasetPaths
 from mule_pattern_learner.testing.builders import (
+    UNIT_SOURCE,
     context,
     encode,
     fake_context,
+    ground_truth_rows,
+    neighbourhood,
+    scope_population,
     synthetic_row,
 )
 from mule_pattern_learner.testing.fake_connection import FakeClient
+from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffs
 from mule_pattern_learner.tigergraph.gsql_text import (
     definitions,
     parameter_names,
     repository_queries,
 )
+from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
+from mule_pattern_learner.tigergraph.labels import TigerGraphObservedLabels
 from mule_pattern_learner.tigergraph.reveal import REVEAL_INPUTS_QUERY
+from mule_pattern_learner.tigergraph.scope import TigerGraphScope
 
 
 def signature(path: str, name: str) -> frozenset[str]:
@@ -399,6 +410,44 @@ class FakeTigerGraph:
             return [{"status": "invalid_scope"}]
         self.scopes[params["scope_id"]]["ready"] = True
         return [{"status": "ok", "members": members}]
+
+
+# The accounts of the scope prepared_graph builds.
+PREPARED_ACCOUNTS = 200
+
+
+def prepared_graph(
+    data: Path, config: RunConfig, **options: Any
+) -> tuple[FakeTigerGraph, DatasetPaths]:
+    """A fake graph with a scope and its ground truth, and config's dataset prepared from it.
+
+    The scope holds PREPARED_ACCOUNTS accounts (scope_population), every label known
+    (ground_truth_rows); each context is a deterministic neighbourhood, and N3 is a hub
+    at the three cutoffs. The dataset is prepared in data from UNIT_SOURCE. ``options``
+    are FakeTigerGraph's (statuses, analytics, reveal, ...).
+    """
+    population = scope_population(PREPARED_ACCOUNTS)
+    header = {"ready": True, "source_id": UNIT_SOURCE, "split_seed": config.dataset.split_seed}
+    settings: dict[str, Any] = {
+        "factory": neighbourhood,
+        "hubs": [("N3", cutoff) for cutoff in (101, 102, 103)],
+        "population": population,
+        "truth": ground_truth_rows(population),
+        "scopes": {config.scope.id: header},
+    }
+    graph = FakeTigerGraph(**{**settings, **options})
+    dataset = DatasetPaths.of(dataset_id(UNIT_SOURCE, config), data)
+    prepare(
+        config,
+        UNIT_SOURCE,
+        dataset,
+        {"Account": PREPARED_ACCOUNTS},
+        TigerGraphObservedLabels(),
+        scope=TigerGraphScope(graph),
+        cutoffs=TigerGraphCutoffs(graph),
+        hub_reader=TigerGraphHubs(graph),
+    )
+    return graph, dataset
 
 
 def no_analytics(key: ContextKey) -> dict[str, float]:

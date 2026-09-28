@@ -17,7 +17,6 @@ from mule_pattern_learner.contract.feature_groups import extraction_plan
 from mule_pattern_learner.contract.graph_schema import PHASE_SPLIT, ContextKey
 from mule_pattern_learner.contract.server import CONTEXT_QUERY, TRUTH_QUERY
 from mule_pattern_learner.data.manifest import dataset_id
-from mule_pattern_learner.data.preparation import prepare
 from mule_pattern_learner.evaluation.audit import AUDIT_SPLITS
 from mule_pattern_learner.evaluation.truth import ParquetTruth
 from mule_pattern_learner.paths import DatasetPaths, RunPaths
@@ -29,17 +28,16 @@ from mule_pattern_learner.testing.builders import (
     RUNTIME_CHANGES,
     UNIT_SOURCE,
     ground_truth_rows,
-    neighbourhood,
     prepared_dataset,
     saved_model,
     scope_population,
     unit_config,
 )
-from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
-from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffs
-from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
-from mule_pattern_learner.tigergraph.labels import TigerGraphObservedLabels
-from mule_pattern_learner.tigergraph.scope import TigerGraphScope
+from mule_pattern_learner.testing.fake_graph import (
+    PREPARED_ACCOUNTS,
+    FakeTigerGraph,
+    prepared_graph,
+)
 
 
 def test_evaluate_run_connects_after_its_checks_and_reads_truth_once_on_that_connection(
@@ -127,7 +125,7 @@ def test_evaluate_run_connects_after_its_checks_and_reads_truth_once_on_that_con
 
 
 # The accounts of the fake scope.
-POPULATION = 200
+POPULATION = PREPARED_ACCOUNTS
 
 
 def audited_graph(
@@ -137,27 +135,8 @@ def audited_graph(
 
     ``statuses`` are the graph's per-request statuses (FakeTigerGraph).
     """
-    population = scope_population(POPULATION)
-    header = {"ready": True, "source_id": UNIT_SOURCE, "split_seed": config.dataset.split_seed}
-    graph = FakeTigerGraph(
-        factory=neighbourhood,
-        hubs=[("N3", cutoff) for cutoff in (101, 102, 103)],
-        statuses=statuses,
-        population=population,
-        truth=ground_truth_rows(population),
-        scopes={config.scope.id: header},
-    )
     data = tmp_path / "data"
-    prepare(
-        config,
-        UNIT_SOURCE,
-        DatasetPaths.of(dataset_id(UNIT_SOURCE, config), data),
-        {"Account": POPULATION},
-        TigerGraphObservedLabels(),
-        scope=TigerGraphScope(graph),
-        cutoffs=TigerGraphCutoffs(graph),
-        hub_reader=TigerGraphHubs(graph),
-    )
+    graph, _ = prepared_graph(data, config, statuses=statuses)
     return graph, data
 
 
