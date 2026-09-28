@@ -21,6 +21,7 @@ from mule_pattern_learner.tigergraph.executor import (
     SERVER_TIMEOUT,
     ServerTimeoutError,
     TigerGraphExecutor,
+    TigerGraphUnavailableError,
     TransientQueryError,
     failure_class,
 )
@@ -146,13 +147,13 @@ def test_fast_outages_are_bounded_by_the_wall_clock_not_by_attempts() -> None:
     conn = FakeConn([requests.ConnectionError("refused")] * 100)
     tg = executor(conn, max_attempts=3, max_outage_s=120)
     started = tg.clock.now
-    with pytest.raises(TransientQueryError, match=r"unavailable for 120s"):
+    with pytest.raises(TigerGraphUnavailableError, match=r"unavailable for 120s"):
         tg.run("q", {})
     assert tg.clock.now - started == pytest.approx(120) and len(conn.calls) > 3
     assert sum(tg.sleeps) == pytest.approx(120)
     # max_outage_s = 0 fails on the first availability failure.
     conn = FakeConn([requests.ConnectionError("refused"), [{"status": "ok"}]])
-    with pytest.raises(TransientQueryError, match="after 1 attempt"):
+    with pytest.raises(TigerGraphUnavailableError, match="after 1 attempt"):
         executor(conn, max_outage_s=0).run("q", {})
 
 
@@ -160,9 +161,27 @@ def test_slow_failing_attempts_count_toward_max_query_attempts() -> None:
     tg = executor(FakeConn([]), max_attempts=3, max_outage_s=3600)
     gateway = http_error(504, b"upstream request timeout")
     tg.client.conn.outcomes = [slow(tg.clock, 45, gateway) for _ in range(10)]
-    with pytest.raises(TransientQueryError, match="after 3 attempt.*max_query_attempts = 3"):
+    with pytest.raises(TigerGraphUnavailableError, match="after 3 attempt.*max_query_attempts = 3"):
         tg.run("q", {})
     assert len(tg.client.conn.calls) == 3
+
+
+def test_only_retries_that_end_unavailable_are_an_outage() -> None:
+    # An outage: the graph did not answer, whatever the request.
+    for error in (requests.ConnectionError("down"), http_error(503)):
+        conn = FakeConn([error] * 3)
+        with pytest.raises(TigerGraphUnavailableError, match="3 attempt"):
+            executor(conn).run("q", {}, attempts=3)
+    # The request's own transient failures are not: a timeout, a repeated bare 500.
+    for error in (TigerGraphException("x", "REST-3002"), http_error(500)):
+        conn = FakeConn([error] * 3)
+        with pytest.raises(TransientQueryError) as raised:
+            executor(conn).run("q", {})
+        assert not isinstance(raised.value, TigerGraphUnavailableError), error
+    # The failure that ends the retries decides: a bare 500, then a refused connection.
+    conn = FakeConn([http_error(500), requests.ConnectionError("down")])
+    with pytest.raises(TigerGraphUnavailableError):
+        executor(conn).run("q", {}, attempts=2)
 
 
 def test_permanent_errors_and_writes_are_not_retried() -> None:

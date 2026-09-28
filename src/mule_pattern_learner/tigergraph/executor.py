@@ -32,6 +32,17 @@ class ServerTimeoutError(TransientQueryError):
     """TigerGraph exceeded its query timeout on every allowed attempt of one request."""
 
 
+class TigerGraphUnavailableError(TransientQueryError):
+    """TigerGraph stayed unavailable until an operation's retries ran out: an outage.
+
+    The retries ended on an availability failure (see failure_class), because the outage
+    budget or the attempts allowed ran out. Nothing about the request itself failed, so a
+    suite of runs stops on it rather than failing one run after another, while the other
+    transient errors (a server timeout, a repeated suspected-deterministic failure)
+    belong to the request that raised them.
+    """
+
+
 # Failure classes. Availability failures clear when the server (or the path to it)
 # recovers and are retried under a wall-clock budget. Suspected-deterministic failures
 # would fail the same way again, so they get at most one retry; server timeouts are a
@@ -176,8 +187,9 @@ class TigerGraphExecutor:
     repository .env by pipeline.connect); credentials never enter cache metadata.
     - Availability failures are retried with capped, jittered exponential backoff
       until `max_outage_s` seconds have passed since the operation's first such
-      failure. Worker threads share one "backoff until" time, so they pause
-      together instead of hammering a resuming workspace.
+      failure, and then raise TigerGraphUnavailableError. Worker threads share one
+      "backoff until" time, so they pause together instead of hammering a resuming
+      workspace.
     - Server timeouts are retried `timeout_retries` times (default once) and then
       raise ServerTimeoutError; other suspected-deterministic failures are
       retried once.
@@ -297,7 +309,10 @@ class TigerGraphExecutor:
                 elif attempts is None and counted >= self.max_attempts:
                     exhausted, reason = True, f"max_query_attempts = {self.max_attempts}"
                 if exhausted:
-                    failure = ServerTimeoutError if kind == SERVER_TIMEOUT else TransientQueryError
+                    failure = {
+                        SERVER_TIMEOUT: ServerTimeoutError,
+                        AVAILABILITY: TigerGraphUnavailableError,
+                    }.get(kind, TransientQueryError)
                     raise failure(
                         f"{label} failed after {total} attempt(s) ({reason}): {error_summary(error)}"
                     ) from error
