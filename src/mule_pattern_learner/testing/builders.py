@@ -794,6 +794,7 @@ def prepared_dataset(
             "source_id": source_id,
             "settings": dataset_settings(source_id, config),
             "scope_id": config.scope.id,
+            "source_counts": {"Account": len(accounts)},
         },
     }
     dataset.manifest.write_text(json.dumps(manifest))

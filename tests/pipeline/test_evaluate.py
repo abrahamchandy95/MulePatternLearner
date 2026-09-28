@@ -15,7 +15,7 @@ from mule_pattern_learner.artifacts import AUDIT_COLUMNS, read_audit_scores, rea
 from mule_pattern_learner.config import RunConfig, TransportConfig
 from mule_pattern_learner.contract.feature_groups import extraction_plan
 from mule_pattern_learner.contract.graph_schema import PHASE_SPLIT, ContextKey
-from mule_pattern_learner.contract.server import TRUTH_QUERY
+from mule_pattern_learner.contract.server import CONTEXT_QUERY, TRUTH_QUERY
 from mule_pattern_learner.data.manifest import dataset_id
 from mule_pattern_learner.data.preparation import prepare
 from mule_pattern_learner.evaluation.truth import ParquetTruth
@@ -96,11 +96,13 @@ def test_evaluate_run_connects_after_its_checks_and_reads_truth_once_on_that_con
     contexts = validation["contexts"]
     assert test["contexts"] is contexts and test["truth"] is validation["truth"]
     assert validation["scope"].executor is executor and contexts.fetcher.executor is executor
-    # The source requests the model's inputs with its pools, and is closed afterwards.
+    # The source requests the model's inputs with its pools, reads and writes the
+    # dataset's context cache, and is closed afterwards.
     assert (contexts.plan, contexts.sampler) == (
         extraction_plan(config.feature_plan()),
         config.sampler,
     )
+    assert contexts.disk.cache.directory == dataset.contexts
     with pytest.raises(RuntimeError, match="closed"):
         contexts.fetch([ContextKey("Account", "A000", 1, 1)])
     # The lines the audits print go to the run's events.jsonl.
@@ -178,9 +180,13 @@ def test_evaluate_run_audits_validation_and_test_on_the_fake_graph(
     runs = [RunPaths(tmp_path / name) for name in ("first", "second")]
     for run, shift in zip(runs, (0.0, 2.0), strict=True):
         saved_model(run.model, config, dataset, logit_shift=shift)
-    reports = [pipeline_evaluate.evaluate_run(run, data=data) for run in runs]
-    # Truth is read once per run, for both splits.
+    reports = [pipeline_evaluate.evaluate_run(runs[0], data=data)]
+    requested = graph.names().count(CONTEXT_QUERY)
+    reports.append(pipeline_evaluate.evaluate_run(runs[1], data=data))
+    # Truth is read once per run, for both splits. Both runs audit the same accounts, so
+    # the second reads every context from the dataset's cache.
     assert graph.names().count(TRUTH_QUERY) == 2
+    assert graph.names().count(CONTEXT_QUERY) == requested > 0
     population = pd.DataFrame(scope_population(POPULATION))
     truth = pd.DataFrame(ground_truth_rows(scope_population(POPULATION))).set_index("account_id")
     for split in ("validation", "test"):

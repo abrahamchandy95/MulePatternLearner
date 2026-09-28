@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from ..artifacts import read_json
+from ..data.context_cache import ContextCache
 from ..data.contexts import close_source
 from ..evaluation.audit import AUDIT_SPLITS, audit, audit_inputs
 from ..evaluation.truth import TruthReader
@@ -27,7 +28,9 @@ def evaluate_run(
     run has already audited is reported from its audit/<split>.json and left as it was.
     The others are audited on one connection, opened once the model and its dataset
     (the model's own in data) passed their checks. The connection has the model's retry
-    budgets, and its source must still be the frozen one the dataset was prepared from.
+    budgets, and its source must still be the frozen one the dataset was prepared from;
+    the audits then read and write the dataset's disk tier, which every run of the
+    dataset shares, so the audits of the next run request none of the same contexts.
     Truth is read once for both splits: the graph's oracle truth unless ``truth``
     supplies another reader (the tests' ParquetTruth). The lines the audits print are
     appended to the run's events.jsonl. Once a split is audited here, the audit figures
@@ -44,7 +47,8 @@ def evaluate_run(
             verify_frozen_source(executor, inputs.manifest)
             answer = (truth if truth is not None else TigerGraphTruth(executor)).read()
             scope = TigerGraphScope(executor)
-            contexts = context_source(executor, inputs.model.config)
+            cache = ContextCache.of(inputs.dataset, inputs.manifest)
+            contexts = context_source(executor, inputs.model.config, cache)
             failed = True
             try:
                 for split in pending:

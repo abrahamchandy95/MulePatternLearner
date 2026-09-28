@@ -13,12 +13,14 @@ import pytest
 
 from mule_pattern_learner.config import DEFAULT_CONFIG, TransportConfig
 from mule_pattern_learner.contract.server import SCOPE_POLICY_QUERY
-from mule_pattern_learner.data.manifest import dataset_settings
+from mule_pattern_learner.data.context_cache import ContextCache
+from mule_pattern_learner.data.manifest import dataset_id, dataset_settings, source_fingerprint
 from mule_pattern_learner.paths import DatasetPaths
 from mule_pattern_learner.pipeline import connect
 from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
 
-# open_context_source reads the dataset from its manifest; the directory is not read.
+# open_context_source reads the dataset from its manifest; nothing fetches, so the
+# directory of its context cache is not read.
 UNUSED = DatasetPaths(Path("unused"))
 
 
@@ -36,7 +38,12 @@ def test_the_transport_section_sets_the_source_and_the_retry_budgets(
             seen.update(kwargs)
 
     monkeypatch.setattr(connect, "TigerGraphExecutor", Executor)
-    manifest = {"source": {"settings": dataset_settings("d", DEFAULT_CONFIG)}}
+    manifest = {
+        "source": {
+            "source_counts": {"Account": 10},
+            "settings": dataset_settings("d", DEFAULT_CONFIG),
+        }
+    }
     transport = {
         "request_batch_size": 32,
         "query_concurrency": 4,
@@ -50,6 +57,12 @@ def test_the_transport_section_sets_the_source_and_the_retry_budgets(
     assert seen == {"settings": settings, "max_attempts": 3, "max_outage_s": 120}
     assert (store.request_batch_size, store.concurrency, store.capacity) == (32, 4, 1024)
     assert store.encoding_check_every == 8
+    # The source reads and writes the dataset's context cache, named by the dataset and
+    # the frozen source its manifest records.
+    assert store.disk is not None
+    assert store.disk.cache == ContextCache(
+        UNUSED.contexts, dataset_id("d", DEFAULT_CONFIG), source_fingerprint(manifest)
+    )
     store.close()
     changed = training.with_changes({"sampler": {"roots": {"recent": 5}}})
     seen.clear()
