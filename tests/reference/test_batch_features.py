@@ -10,8 +10,6 @@ from mule_pattern_learner.batching.assemble import build_batch, child_key
 from mule_pattern_learner.batching.limits import BatchIndex
 from mule_pattern_learner.contract.feature_groups import (
     CORE_GROUPS,
-    FEATURE_GROUPS,
-    POOL_GROUPS,
     FeaturePlan,
 )
 from mule_pattern_learner.contract.graph_schema import (
@@ -30,9 +28,10 @@ from mule_pattern_learner.reference.batch_features import (
 from mule_pattern_learner.testing.builders import POOLED, context, roots, slots
 from mule_pattern_learner.testing.fake_graph import FakeStore
 
-# Every group but sampler_meta and the pool groups, whose counts batches give the roots
-# only while the scalar features give them to every context.
-V4_GROUPS = tuple(g for g in FEATURE_GROUPS if g not in ("sampler_meta", *POOL_GROUPS))
+# The core groups without the time encoding: the drop variant whose edges carry no
+# Fourier columns. The pool groups stay out of both plans, since batches give their counts
+# to the roots only while the scalar features give them to every context.
+WITHOUT_TIME = tuple(g for g in CORE_GROUPS if g != "time_encoding")
 
 
 def reference_batch(
@@ -94,8 +93,8 @@ def reference_batch(
 @pytest.mark.parametrize("mode", ["eval", "train"])
 @pytest.mark.parametrize(
     "plan",
-    [FeaturePlan(CORE_GROUPS, "tgat"), FeaturePlan(V4_GROUPS, "tgat")],
-    ids=["default", "all-but-pools"],
+    [FeaturePlan(CORE_GROUPS, "tgat"), FeaturePlan(WITHOUT_TIME, "tgat")],
+    ids=["core", "without-time-encoding"],
 )
 def test_vectorised_assembly_matches_the_scalar_features_bit_for_bit(
     mode: str, plan: FeaturePlan

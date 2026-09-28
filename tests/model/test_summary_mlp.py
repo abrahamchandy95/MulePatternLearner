@@ -7,7 +7,7 @@ import torch
 
 from mule_pattern_learner.batching.assemble import build_batch
 from mule_pattern_learner.config import DEFAULT_CONFIG
-from mule_pattern_learner.contract.feature_groups import FeaturePlan
+from mule_pattern_learner.contract.feature_groups import BUILT_IN_GROUPS, FeaturePlan
 from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
 from mule_pattern_learner.data.contexts import ContextSource
@@ -45,7 +45,7 @@ def test_the_architecture_chooses_the_model() -> None:
 
 def test_summary_models_fetch_only_the_roots_and_have_no_graph_parameters() -> None:
     root = ContextKey("Account", "root", 100, 1000)
-    summary = FeaturePlan(("decayed_activity",), "summary")
+    summary = FeaturePlan(BUILT_IN_GROUPS, "summary")
     executor = FakeTigerGraph({root: context(root, [message(80, 800, root)])})
     source = ContextSource(TigerGraphContextFetcher(executor), plan=summary, sampler=SamplerPlan())
     batch = build_batch(source, [root], plan=summary, fanouts=(8, 4), sampler=SamplerPlan())

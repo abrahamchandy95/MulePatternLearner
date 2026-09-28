@@ -6,7 +6,7 @@ import re
 
 import pytest
 
-from mule_pattern_learner.contract.feature_groups import ARCHITECTURES, FeaturePlan
+from mule_pattern_learner.contract.feature_groups import ARCHITECTURES, CORE_GROUPS, FeaturePlan
 from mule_pattern_learner.contract.server import (
     CONTEXT_QUERY,
     CREATE_SCOPE_QUERY,
@@ -29,7 +29,7 @@ from mule_pattern_learner.tigergraph import gsql_text
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
 from mule_pattern_learner.tigergraph.gsql_text import definitions, parameter_names
 from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
-from mule_pattern_learner.tigergraph.render import DEFAULT_FLAG_GROUPS
+from mule_pattern_learner.tigergraph.render import render_analytics_query
 
 GSQL = GSQL_DIR / "queries"
 ORACLE = (
@@ -81,8 +81,8 @@ def test_sent_parameters_match_the_repository_query_signatures() -> None:
         return gsql_text.parameter_names(text)
 
     context = signature("queries/training_context.gsql", CONTEXT_QUERY)
-    windows = (FeaturePlan(DEFAULT_FLAG_GROUPS, a) for a in ARCHITECTURES)
-    for plan in (CORE_PLAN, *windows):
+    architectures = (FeaturePlan(CORE_GROUPS, a) for a in ARCHITECTURES)
+    for plan in (CORE_PLAN, *architectures):
         server = FakeTigerGraph(factory=payments_context)
         store = ContextSource(TigerGraphContextFetcher(server), plan=plan, sampler=SMALL_SAMPLER)
         store.fetch([root(0)], hop=1)
@@ -98,7 +98,9 @@ def test_sent_parameters_match_the_repository_query_signatures() -> None:
     assert policy == {"scope_id"}
 
 
-def test_per_request_failures_continue_and_call_errors_return(text: str) -> None:
+@pytest.mark.parametrize("query", ["training", "analytics"])
+def test_per_request_failures_continue_and_call_errors_return(text: str, query: str) -> None:
+    text = text if query == "training" else render_analytics_query()
     for code in PER_REQUEST:
         prints = [
             m.end() for m in re.finditer(rf'PRINT "{code}" AS status, i AS request_index', text)
@@ -423,14 +425,15 @@ def test_scope_policy_query_classifies_unowned_accounts() -> None:
 @pytest.mark.parametrize(
     "name",
     [
-        "training_context.gsql",
-        "hub_accounts.gsql",
-        "training_scope.gsql",
-        "split_cutoffs.gsql",
+        "queries/training_context.gsql",
+        "queries/hub_accounts.gsql",
+        "queries/training_scope.gsql",
+        "queries/split_cutoffs.gsql",
+        "analytics/analytics_context.gsql",
     ],
 )
 def test_brackets_balance(name: str) -> None:
-    query = re.sub(r'"[^"\n]*"', '""', (GSQL / name).read_text())
+    query = re.sub(r'"[^"\n]*"', '""', (GSQL_DIR / name).read_text())
     query = re.sub(r"/\*.*?\*/", "", query, flags=re.S)
     for opening, closing in ("()", "{}", "[]"):
         assert query.count(opening) == query.count(closing), (name, opening)

@@ -33,6 +33,7 @@ def test_missing_required_message_fields_raise_instead_of_defaulting() -> None:
     # Fields of groups outside the plan stay optional.
     store = FakeStore(sampler)
     message = payment(key, "zelle_out", 50, "peer", "recent", rng)
-    del message["device_present"]
+    del message["flow_present"]
     store.row(key)["messages"] = [message]
-    build_batch(store, [key], fanouts=(4, 2), plan=plan, sampler=sampler)
+    without_flows = FeaturePlan(tuple(g for g in CORE_GROUPS if g != "flow_timing"), "tgat")
+    build_batch(store, [key], fanouts=(4, 2), plan=without_flows, sampler=sampler)

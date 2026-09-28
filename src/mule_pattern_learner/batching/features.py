@@ -21,7 +21,6 @@ from ..contract.feature_groups import (
 from ..contract.graph_schema import CHANNELS, RAILS, RELATION_INDEX, STRATA
 from .pool_counts import pool_activity
 
-DAY_MS = 86_400_000
 # Columns kept as they are; every other column gets log1p.
 IDENTITY = frozenset(
     {"gap_present"} | {n for spec in FEATURE_GROUPS.values() for n in spec.identity}
@@ -103,8 +102,6 @@ def base_matrix(
             values[:, j] = _column(messages, "peer_external")
         elif name == "is_deposit":
             values[:, j] = _column(messages, "peer_deposit")
-        elif name == "age_days":
-            values[:, j] = (cutoff - first) / DAY_MS
         elif name == "history_withheld":
             values[:, j] = withheld
     log = _log_columns(names)

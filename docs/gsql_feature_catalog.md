@@ -2,6 +2,13 @@
 
 The [feature-group redesign](feature_redesign.md) documents the window-free feature groups, optional summaries, sampler, and migration. Fixed 83/135 dimensions below describe the window groups as the query returns them (the `include_*` defaults). The built-in v5 run (`DEFAULT_CONFIG`) and its candidate pools are described in [training from the live temporal graph](live_temporal_training.md#candidate-pools-and-resampling).
 
+Training keeps only the built-in run's groups: `fetch_training_context` computes
+`entity_meta`, `message_core`, `time_encoding`, `pair_history` and `flow_timing`, and
+the client adds the hub indicator and the pool counts. The window, summary, pair-count
+and device/IP features this catalog also describes are analytics: the analytics context
+query `fetch_analytics_context` (`gsql/analytics/analytics_context.gsql`, rendered by the
+same generator) computes them beside the training groups, and training never calls it.
+
 This describes the package's TGAT-style path. The live strict path
 applies server-side ownership-group partitions before sampling and feature
 aggregation; see [leakage and scaling](leakage_and_scaling.md).
@@ -52,7 +59,7 @@ The query never exports raw oracle truth or the synthetic mask.
 | `k_assoc` | 0..8 | Valid-time associations per association relation (0 for payments-only children). |
 | `max_history` | 32..4096 | Visible events per relation above which the request is rejected. |
 | `emit_encodings` | default FALSE | When TRUE, `age_encoding` and `gap_encoding` hold Fourier vectors; otherwise they are empty maps and no `encode_fourier64` call runs. |
-| `include_*` | 14 flags | Exactly the non-categorical, non-client groups of `FeaturePlan.query_flags()`; there is no `include_hub_indicator` or flag for a pool group ([client-computed groups](#client-computed-groups)). |
+| `include_*` | 4 flags | Exactly the groups of `FeaturePlan.query_flags()`: `entity_meta`, `time_encoding`, `pair_history`, `flow_timing`, each TRUE by default; there is no `include_hub_indicator` or flag for a pool group ([client-computed groups](#client-computed-groups)). The analytics query has 14, one per group TigerGraph computes. |
 | `scope_id`, `visibility_phase` | phase 1..3 | Strict scope filtering, applied before any feature or sampling. |
 
 A failed request never aborts the call: it prints `{status, request_index}` and
@@ -70,8 +77,8 @@ The client computes Fourier features on the training device from `age_ms` and
 numpy `fourier64` (tolerance 1e-5).
 
 Roles, peer metadata, device/IP context and the prior-pair scan are set-based
-SELECTs over all sampled events of a request. When `include_pair_window_counts`
-is on, the prior-pair scan supplies the pair clock, so the chronology pass (and
+SELECTs over all sampled events of a request. In the analytics query, when
+`include_pair_window_counts` is on, the prior-pair scan supplies the pair clock, so the chronology pass (and
 its `nonmonotonic_pair_clock` check) is skipped. Rolling-window and decayed sums
 keep the original traversal order, so their floating-point values are identical
 to the earlier query text. The exact repository text also runs under INTERPRET:
@@ -269,6 +276,11 @@ learns how to combine them. Computing them in GSQL works today; sending scalar
 deltas and expanding them on the GPU is also a viable bandwidth optimization.
 
 ## Other queries
+
+`fetch_analytics_context` takes the context query's parameters, with an `include_*`
+flag for every group TigerGraph computes, and returns the same rows with every feature
+group this catalog describes. It is for analysis only: `install(executor,
+analytics=True)` installs it, and training never calls it.
 
 `read_ground_truth` and
 `validate_label_contract` expose complete supervision. The installer

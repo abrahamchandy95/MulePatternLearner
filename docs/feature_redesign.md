@@ -3,9 +3,11 @@
 This implements the first feature experiment stage of the feature plan v4 draft
 (retired; the draft is in git history). The built-in run (`DEFAULT_CONFIG` in
 `config.py`) keeps memoryless TGAT and removes every hard-window input.
-Features are hypotheses; no mule-detection lift has been established. Every group
-stays in the registry and the query, so a variant of the built-in run can select any
-of them to compare against the built-in groups.
+Features are hypotheses; no mule-detection lift has been established. Training keeps
+only the built-in run's groups (the owner decision on feature groups): the other groups
+below are computed by the analytics context query, `fetch_analytics_context` in
+`gsql/analytics/analytics_context.gsql`, which training never calls, and the
+`event_channel` and `sampler_meta` embeddings are gone.
 
 ## Implemented inputs
 

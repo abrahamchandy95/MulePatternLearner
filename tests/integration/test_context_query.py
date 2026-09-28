@@ -2,7 +2,8 @@
 
 Read-only. The accounts are the first of the built-in scope's population, chosen
 without labels, scored at the test cutoff. `mule check` covers the rest of the live
-training path: one batch and one training step.
+training path: one batch and one training step. The pair counts are analytics, so they
+are checked on the analytics context query, when it is installed.
 """
 
 from __future__ import annotations
@@ -15,7 +16,12 @@ from mule_pattern_learner.config import DEFAULT_CONFIG
 from mule_pattern_learner.contract.feature_groups import FeaturePlan
 from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
-from mule_pattern_learner.contract.server import CONTEXT_QUERY, PAYMENT_PAIR_QUERY, ZELLE_PAIR_QUERY
+from mule_pattern_learner.contract.server import (
+    ANALYTICS_CONTEXT_QUERY,
+    CONTEXT_QUERY,
+    PAYMENT_PAIR_QUERY,
+    ZELLE_PAIR_QUERY,
+)
 from mule_pattern_learner.data.splits import resolve_cutoff
 from mule_pattern_learner.tigergraph.context_query import validate_context
 from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffs
@@ -25,7 +31,6 @@ from mule_pattern_learner.tigergraph.installer import (
     query_problems,
     verify_sources,
 )
-from mule_pattern_learner.tigergraph.render import DEFAULT_FLAG_GROUPS
 from mule_pattern_learner.tigergraph.scope import TigerGraphScope
 
 pytestmark = pytest.mark.graph
@@ -91,9 +96,9 @@ def test_a_context_row_matches_its_contract_and_numpy_fourier64(
     graph: TigerGraphExecutor, sampled: tuple[ContextKey, dict[str, Any]]
 ) -> None:
     key, row = sampled
-    # The request names no flags or pools beyond per_relation, so it gets the defaults.
-    defaults = FeaturePlan(DEFAULT_FLAG_GROUPS, "tgat")
-    validate_context(key, row, defaults, SamplerPlan(), require_encodings=True)
+    # The request names no flags or pools beyond per_relation, so it gets the defaults:
+    # every flag on, the built-in run's groups.
+    validate_context(key, row, FeaturePlan(), SamplerPlan(), require_encodings=True)
 
 
 def test_the_seed_event_is_excluded_until_the_next_cutoff(
@@ -108,18 +113,11 @@ def test_the_seed_event_is_excluded_until_the_next_cutoff(
     ]
     rows = context_rows(graph, request(boundary, 1))
     before, after = sorted(rows, key=lambda value: value["request_index"])
-    counts = (before["features"].get("1h_out_count", 0), after["features"].get("1h_out_count", 0))
-    assert counts[1] - counts[0] == 1
-    amounts = (
-        before["features"].get("1h_out_amount", 0),
-        after["features"].get("1h_out_amount", 0),
-    )
-    assert abs(amounts[1] - amounts[0] - event["amount"]) < 1e-4
     assert not any(m["event_id"] == event["event_id"] for m in before["messages"])
     assert any(m["event_id"] == event["event_id"] for m in after["messages"])
 
 
-def test_pair_gaps_match_the_analytics_queries(
+def test_pair_gaps_and_counts_match_the_analytics_queries(
     graph: TigerGraphExecutor, sampled: tuple[ContextKey, dict[str, Any]]
 ) -> None:
     problems = query_problems(graph, ANALYTICS_QUERY_FILES)
@@ -129,6 +127,10 @@ def test_pair_gaps_match_the_analytics_queries(
             f"({problems}); install(executor, analytics=True) installs them"
         )
     key, row = sampled
+    # The same request of the analytics query samples the same messages, with their pair
+    # window counts.
+    (counted,) = checked_rows(graph.run(ANALYTICS_CONTEXT_QUERY, request([key], 2)))
+    windows = {m["event_id"]: m for m in counted["messages"] if m["event_id"]}
     checked = []
     for relation in PAYMENT_RELATIONS:
         message = next((m for m in row["messages"] if m["relation"] == relation), None)
@@ -166,7 +168,7 @@ def test_pair_gaps_match_the_analytics_queries(
                 if item.get("event_seq", message["event_seq"]) < message["event_seq"]
                 and message["event_ts_ms"] - item["event_ts_ms"] < window
             )
-            assert message[field] == expected, (relation, field)
+            assert windows[message["event_id"]][field] == expected, (relation, field)
         checked.append(relation)
     if not checked:
         pytest.skip("the sampled account's payments have no Account counterparty")

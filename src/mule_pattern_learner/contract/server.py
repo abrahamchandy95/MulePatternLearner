@@ -16,7 +16,10 @@ folder (paths.GSQL_DIR).
 from __future__ import annotations
 
 GRAPH_NAME = "Mule_Pattern_Learner"
-CONTEXT_CONTRACT = "context_fec1e02425ca"
+CONTEXT_CONTRACT = "context_ea06fba776ba"
+# What the analytics context query prints instead, derived from its text in the same way
+# (tigergraph.render.analytics_contract).
+ANALYTICS_CONTRACT = "analytics_e00dc31245d4"
 # The vertex type of the experiment scopes (gsql/schema/scope_vertex.gsql). It is part of
 # the graph's schema, so it keeps the name it was created with.
 SCOPE_VERTEX = "Temporal_Training_Scope"
@@ -37,7 +40,10 @@ REVEAL_UNIFORMS_QUERY = "draw_reveal_uniforms"
 LABEL_CONTRACT_QUERY = "validate_label_contract"
 # The oracle: evaluation and diagnostics only.
 TRUTH_QUERY = "read_ground_truth"
-# Analytics: the persisted pair encodings, checked against the context query.
+# Analytics: every feature group of a context, those training reads and those it does
+# not (contract.analytics_features), and the persisted pair encodings, checked against
+# the context query.
+ANALYTICS_CONTEXT_QUERY = "fetch_analytics_context"
 ZELLE_PAIR_QUERY = "encode_zelle_pair_gaps"
 PAYMENT_PAIR_QUERY = "encode_payment_pair_gaps"
 
@@ -64,8 +70,9 @@ RETIRED_QUERIES = (
     "temporal_training_population",
 )
 
-# The generated context query (tigergraph.render, scripts/render_queries.py).
+# The generated context queries (tigergraph.render, scripts/render_queries.py).
 CONTEXT_QUERY_FILE = "queries/training_context.gsql"
+ANALYTICS_CONTEXT_FILE = "analytics/analytics_context.gsql"
 # The queries preparation runs; a prepared dataset records their source hashes.
 QUERY_FILES = (
     "queries/fourier64.gsql",
@@ -83,10 +90,11 @@ TRAINING_QUERY_FILES = (
     "queries/label_contract.gsql",
     "queries/label_reveal.gsql",
 )
-# Analytics queries: parity tools for the persisted pair encodings. Training never calls
-# them, so only the code that uses them installs them (installer.install with
-# analytics=True).
+# Analytics queries: the analytics context and the parity tools for the persisted pair
+# encodings. Training never calls them, so only the code that uses them installs them
+# (installer.install with analytics=True).
 ANALYTICS_QUERY_FILES = (
+    ANALYTICS_CONTEXT_FILE,
     "analytics/zelle_pair_gaps.gsql",
     "analytics/payment_pair_gaps.gsql",
 )

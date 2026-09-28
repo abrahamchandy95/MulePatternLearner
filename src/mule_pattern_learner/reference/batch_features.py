@@ -12,7 +12,7 @@ from typing import Any
 import numpy as np
 
 from ..batching.assemble import child_key
-from ..batching.features import DAY_MS, IDENTITY, NODE_NAMES
+from ..batching.features import IDENTITY, NODE_NAMES
 from ..batching.pool_counts import pool_activity
 from ..contract.feature_groups import POOL_GROUPS, FeaturePlan
 from ..contract.time_basis import fourier64
@@ -47,7 +47,6 @@ def base_features(
         "type_" + key.node_type: 1,
         "is_external": message["peer_external"],
         "is_deposit": message["peer_deposit"],
-        "age_days": (key.cutoff_ms - first_ms) / DAY_MS,
         "history_withheld": int(history_withheld),
     }
     return np.asarray(

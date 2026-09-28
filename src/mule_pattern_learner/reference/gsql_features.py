@@ -11,7 +11,7 @@ from collections import defaultdict
 import math
 from typing import Any
 
-from ..contract.feature_groups import HALF_LIVES
+from ..contract.analytics_features import HALF_LIVES
 from ..contract.graph_schema import ContextKey
 from ..contract.sampler_plan import PoolPlan
 

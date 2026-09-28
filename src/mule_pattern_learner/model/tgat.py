@@ -15,7 +15,7 @@ from torch import nn
 
 from ..contract.bounds import FANOUT, HEADS, HIDDEN
 from ..contract.feature_groups import FeaturePlan
-from ..contract.graph_schema import CHANNELS, RAILS, RELATIONS, STRATA
+from ..contract.graph_schema import RAILS, RELATIONS
 
 
 class AttentionBlock(nn.Module):
@@ -112,10 +112,6 @@ class TGAT(nn.Module):
         self.relation = nn.Embedding(len(RELATIONS), hidden)
         self.rail = nn.Embedding(len(RAILS), hidden)
         self.edge = nn.Linear(len(plan.edge_names), hidden)
-        self.channel = (
-            nn.Embedding(len(CHANNELS), hidden) if "event_channel" in plan.groups else None
-        )
-        self.stratum = nn.Embedding(len(STRATA), hidden) if "sampler_meta" in plan.groups else None
         self.layers = nn.ModuleList([AttentionBlock(hidden, heads, dropout) for _ in range(2)])
         # Built only when on, so a model without it keeps its parameters and initial weights.
         self.first_fanout = first_fanout
@@ -134,16 +130,11 @@ class TGAT(nn.Module):
         return module(x) if module is not None else x.new_zeros((*x.shape[:-1], self.hidden))
 
     def edge_embedding(self, batch: dict[str, torch.Tensor], prefix: str) -> torch.Tensor:
-        value = (
+        return (
             self.edge(batch[prefix + "edge"])
             + self.relation(batch[prefix + "relation"])
             + self.rail(batch[prefix + "rail"])
         )
-        if self.channel is not None:
-            value = value + self.channel(batch[prefix + "channel"])
-        if self.stratum is not None:
-            value = value + self.stratum(batch[prefix + "stratum"])
-        return value
 
     def encode(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
         x = self.project(self.node, batch["x"][..., list(self.node_indices)])

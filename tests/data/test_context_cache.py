@@ -28,6 +28,8 @@ from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetch
 KEYS = [root(i, cutoff_ms=1000 * 3_600_000) for i in range(6)]
 # The one key the fake graph rejects.
 REJECTED = KEYS[4]
+# A drop variant's source: it requests the groups of CORE_PLAN but flow_timing.
+WITHOUT_FLOWS = FeaturePlan(tuple(g for g in CORE_GROUPS if g != "flow_timing"))
 
 
 def test_the_memory_tier_marks_a_fetch_in_key_order_before_it_evicts() -> None:
@@ -182,9 +184,7 @@ def test_an_entry_is_named_by_everything_its_row_depends_on(
         tier.name(1, KEYS[1]),
         tier.name(1, replace(KEYS[0], visibility_phase=2)),
         # The groups the source requests, and the candidate pool of the hop.
-        DiskTier(cache, plan=FeaturePlan((*CORE_GROUPS, "recency")), sampler=SMALL_SAMPLER).name(
-            1, KEYS[0]
-        ),
+        DiskTier(cache, plan=WITHOUT_FLOWS, sampler=SMALL_SAMPLER).name(1, KEYS[0]),
         DiskTier(
             cache,
             plan=CORE_PLAN,
@@ -202,12 +202,11 @@ def test_an_entry_is_named_by_everything_its_row_depends_on(
     # The children's pool does not name a root's entry.
     children = replace(SMALL_SAMPLER, children=replace(SMALL_SAMPLER.children, max_history=1024))
     assert DiskTier(cache, plan=CORE_PLAN, sampler=children).name(1, KEYS[0]) == name
-    # A source that requests another summary group reads none of these roots, but shares
-    # the children, whose flags are the same: TGAT reads no summary group of a child.
+    # A source that requests other groups reads none of these entries, at either hop.
     read_all(source(graph(), cache))
     other = graph()
-    read_all(source(other, cache, plan=FeaturePlan((*CORE_GROUPS, "recency"))))
-    assert other.requested == KEYS
+    read_all(source(other, cache, plan=WITHOUT_FLOWS))
+    assert other.requested == [*KEYS, *KEYS[:3]]
     with pytest.raises(ValueError, match="at least one entry"):
         cache_in(tmp_path, capacity=0)
     # The feature contract names every entry.

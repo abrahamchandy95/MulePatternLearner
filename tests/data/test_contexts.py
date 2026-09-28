@@ -90,7 +90,7 @@ def test_per_request_failures_become_none_and_are_counted() -> None:
 
 
 def test_hop_pools_and_flags_are_sent_and_lru_is_keyed_by_hop() -> None:
-    plan = FeaturePlan(("entity_meta", "message_core", "time_encoding", "rolling_windows"), "tgat")
+    plan = FeaturePlan(("entity_meta", "message_core", "time_encoding"), "tgat")
     server = payments_graph()
     # Every pool parameter differs by hop, the history bound too.
     sampler = replace(SMALL_SAMPLER, children=replace(SMALL_SAMPLER.children, max_history=1024))
@@ -104,8 +104,9 @@ def test_hop_pools_and_flags_are_sent_and_lru_is_keyed_by_hop() -> None:
     assert {k: first[k] for k in sampler.query_params(1)} == sampler.query_params(1)
     assert {k: second[k] for k in sampler.query_params(2)} == sampler.query_params(2)
     assert (first["max_history"], second["max_history"]) == (2048, 1024)
-    assert first["include_rolling_windows"] and not second["include_rolling_windows"]
-    assert {k for k in first if k.startswith("include_")} == set(plan.query_flags(1))
+    for flags, hop in ((first, 1), (second, 2)):
+        assert {k: v for k, v in flags.items() if k.startswith("include_")} == plan.query_flags(hop)
+    assert first["include_time_encoding"] and not first["include_flow_timing"]
     assert (1, key) in store.memory.rows and (2, key) in store.memory.rows
     with pytest.raises(ValueError, match="hop"):
         store.fetch([key], hop=3)
@@ -425,7 +426,7 @@ def test_hops_use_their_own_pools_and_only_spot_checks_carry_encodings() -> None
     first = next(params for name, params in executor.calls if name == CONTEXT_QUERY)
     assert first["emit_encodings"] is True and "include_hub_indicator" not in first
     children = [p for n, p in executor.calls if n == CONTEXT_QUERY][1:]
-    assert all(not p["emit_encodings"] and not p["include_pair_window_counts"] for p in children)
+    assert all(not p["emit_encodings"] and p["include_time_encoding"] for p in children)
 
 
 def test_same_context_in_two_scopes_or_hops_is_never_shared() -> None:

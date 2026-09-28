@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
-import numpy as np
 import pandas as pd
 import pytest
 import torch
@@ -116,7 +115,7 @@ def _first_children(
 
 def test_hub_children_become_local_stubs_and_mark_outer_peers() -> None:
     sampler = POOLED
-    plan = FeaturePlan((*CORE_GROUPS, "entity_age"), "tgat")
+    plan = FeaturePlan(CORE_GROUPS, "tgat")
     store = FakeStore(sampler)
     keys = roots(6)
     children = _first_children(store, keys, sampler)
@@ -155,7 +154,6 @@ def test_hub_children_become_local_stubs_and_mark_outer_peers() -> None:
             "type_Account": 1.0,
             "is_external": float(message["peer_external"]),
             "is_deposit": float(message["peer_deposit"]),
-            "age_days": float(np.log1p((key.cutoff_ms - message["peer_first_ms"]) / 86_400_000)),
             "history_withheld": 1.0,
         }
         for name, value in expected.items():
@@ -236,7 +234,7 @@ def test_tigergraph_cannot_supply_client_features() -> None:
 
 
 def test_summary_models_fetch_only_roots() -> None:
-    plan = FeaturePlan(("decayed_activity",), "summary")
+    plan = FeaturePlan(("entity_meta",), "summary")
     store = FakeStore(RESAMPLE)
     stats: dict[str, Any] = {}
     batch = build_batch(store, roots(3), plan=plan, sampler=RESAMPLE, stats=stats, fanouts=(8, 4))

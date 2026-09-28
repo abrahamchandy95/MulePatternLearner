@@ -23,7 +23,11 @@ import torch
 
 from mule_pattern_learner.batching.assemble import build_batch
 from mule_pattern_learner.config import DEFAULT_CONFIG, RunConfig
-from mule_pattern_learner.contract.feature_groups import FeaturePlan, contract_fingerprint
+from mule_pattern_learner.contract.feature_groups import (
+    FeaturePlan,
+    contract_fingerprint,
+    extraction_plan,
+)
 from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
 from mule_pattern_learner.contract.server import GRAPH_NAME, SCOPE_VERTEX
@@ -38,17 +42,6 @@ from mule_pattern_learner.tigergraph.executor import TigerGraphExecutor
 
 pytestmark = pytest.mark.graph_write
 
-# The test's own checks read the window counts and amounts, their ratios and the pair
-# window counts, and its invariance checks also cover the age, recency and association
-# groups, so the source requests these besides what the model reads.
-CHECKED_GROUPS = (
-    "entity_age",
-    "rolling_windows",
-    "amount_ratios",
-    "recency",
-    "association_counts",
-    "pair_window_counts",
-)
 # The fixture's clock: event n happens at BASE + 100 n milliseconds.
 BASE = 1710000000000
 
@@ -60,8 +53,8 @@ def model_config() -> RunConfig:
 
 
 def source_plan(model: FeaturePlan) -> FeaturePlan:
-    """What the test's source requests: the checked groups and every model input."""
-    return FeaturePlan(tuple(dict.fromkeys((*model.groups, *CHECKED_GROUPS))), model.architecture)
+    """What the test's source requests: the model's inputs, which its checks read."""
+    return extraction_plan(model)
 
 
 class TemporaryVertices:
@@ -208,19 +201,15 @@ def test_held_out_and_future_data_never_change_training_inputs(
             for kind, name in [("Account", "a"), ("Token", "token"), ("Device", "device")]
         ]
         baseline = fetch_all(keys)
-        assert baseline[0]["features"]["1h_out_count"] == 5
-        assert baseline[0]["features"]["1h_out_amount"] == 50
-        for window in ("1d", "7d"):
-            assert baseline[0]["features"][window + "_out_in_amount_ratio"] == 50
-            assert baseline[2]["features"][window + "_out_in_amount_ratio"] == 0
+        # A's five payments, of 10.0 each, and its deposit flag; the device has neither.
+        events = [m for m in baseline[0]["messages"] if m["event_id"]]
+        assert len(events) == 5 and sum(m["amount"] for m in events) == 50
+        assert baseline[0]["features"] == {"is_deposit": 1}
+        assert baseline[2]["features"] == {}
         for name in ("z2", "p2"):
-            event = next(
-                m for m in baseline[0]["messages"] if m["event_id"] == vertices.prefix + name
-            )
+            event = next(m for m in events if m["event_id"] == vertices.prefix + name)
             assert event["gap_present"] and event["gap_ms"] == 1000
-            assert all(
-                event[field] == 1 for field in ("pair_count_1h", "pair_count_1d", "pair_count_7d")
-            )
+            assert event["pair_prior_count"] == 1 and event["pair_first_present"]
         # Held-out events and associations leave the training inputs as they were.
         hidden = payment("heldout_in", 400, b, a)
         payment("heldout_out", 410, a, b, "Payment_Transaction")
@@ -252,7 +241,7 @@ def test_held_out_and_future_data_never_change_training_inputs(
             "Hidden mutation/future event or association changed training inputs"
         )
         shared = fetch_all([replace(key, scope_id="", visibility_phase=3) for key in keys])
-        assert shared[0]["features"] != baseline[0]["features"], (
+        assert shared[0]["messages"] != baseline[0]["messages"], (
             "Fixture did not exercise exclusion"
         )
         # A held-out root is a per-request rejection: None, counted by status.

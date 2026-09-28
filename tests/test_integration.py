@@ -122,18 +122,10 @@ def test_the_isolation_source_requests_what_the_fixture_checks_and_the_model_rea
     config = isolation.model_config()
     plan = isolation.source_plan(config.feature_plan())
     # The values the fixture asserts on: first-hop root features and message fields.
-    checked = {
-        "1h_out_count",
-        "1h_out_amount",
-        "1d_out_in_amount_ratio",
-        "7d_out_in_amount_ratio",
-        "pair_count_1h",
-        "pair_count_1d",
-        "pair_count_7d",
-    }
+    checked = {"is_deposit", "amount", "gap_present", "pair_prior_count", "pair_first_present"}
     assert checked <= set(plan.node_names + plan.edge_names)
     flags = plan.query_flags(1)
-    for group in ("rolling_windows", "amount_ratios", "pair_window_counts"):
+    for group in ("entity_meta", "time_encoding", "pair_history"):
         assert flags["include_" + group], group
     # The model it trains and the predictor that scores it read nothing the source skips.
     fetcher = TigerGraphContextFetcher(FakeTigerGraph())

@@ -26,7 +26,7 @@ from ..contract.graph_schema import ContextKey
 from ..contract.sampler_plan import SamplerPlan
 from ..sampling.backend import batch_backend, select_resampled
 from ..sampling.candidates import CandidateTable
-from .features import DAY_MS, base_matrix, edge_block, node_matrix
+from .features import base_matrix, edge_block, node_matrix
 from .limits import BatchIndex, BatchLimits
 from .time_encoding import fourier64_torch
 
@@ -84,7 +84,6 @@ def _stub_row(key: ContextKey, message: dict[str, Any]) -> dict[str, Any]:
         "features": {
             "is_external": float(bool(message["peer_external"])),
             "is_deposit": float(bool(message["peer_deposit"])),
-            "age_days": (key.cutoff_ms - first_ms) / DAY_MS,
             "history_withheld": 1.0,
         },
         "messages": [],
