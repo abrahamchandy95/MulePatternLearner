@@ -7,9 +7,10 @@ printed only when `emit_encodings` is set, every request index gets exactly one 
 per-request failures are status rows, account queries page by account id, and the
 queries that write run with one attempt. `call` and `gsql` run on its connection
 (FakeConnection), which answers SHOW QUERY with the installed text, lists the installed
-endpoints and reports the schema, the vertex counts and the scope headers. It is the
-one fake executor. FakeStore and FakeSource stand in for context sources, for the tests
-that need no graph behind them.
+endpoints, creates, installs and drops queries and reports the schema, the vertex counts
+and the scope headers; every GSQL statement that writes must run with one attempt too.
+It is the one fake executor. FakeStore and FakeSource stand in for context sources, for
+the tests that need no graph behind them.
 """
 
 from __future__ import annotations
@@ -125,9 +126,11 @@ class FakeTigerGraph:
 
     The connection's state: `scopes` maps scope ids to the attributes of their scope
     vertex, which the scope creation queries add; `counts` are the vertex counts by
-    type (default: the population's accounts); the installed queries are the
-    repository's, except those `stale` names, whose installed text differs; and
-    `scope_vertex` says whether the schema has the scope vertex type.
+    type (default: the population's accounts); `queries` maps the installed queries to
+    their text (default: every repository query), except that `stale` names queries
+    whose installed text differs until they are created again; and `scope_vertex` says
+    whether the schema has the scope vertex type. `writes` records the GSQL statements
+    that change it and the install requests, in order.
 
     A context request waits `delay` seconds before it is answered, and `encodings`
     injects the Fourier faults of context_rows.
@@ -153,6 +156,7 @@ class FakeTigerGraph:
         truth: Iterable[dict[str, Any]] = (),
         scopes: dict[str, dict[str, Any]] | None = None,
         counts: dict[str, int] | None = None,
+        queries: Mapping[str, str] | None = None,
         stale: Iterable[str] = (),
         scope_vertex: bool = True,
         delay: float = 0.0,
@@ -172,10 +176,11 @@ class FakeTigerGraph:
         self.counts = dict(counts) if counts is not None else {"Account": len(self.population)}
         self.stale = frozenset(stale)
         self.scope_vertex = scope_vertex
+        self.writes: list[str] = []
         self.delay, self.encodings = delay, encodings
         self.before = before
         self.answers = dict(answers or {})
-        self.client = FakeClient(FakeConnection(self))
+        self.client = FakeClient(FakeConnection(self, repository(queries)))
         self.requested: list[ContextKey] = []
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.pools: Counter[tuple[int, ...]] = Counter()
@@ -348,14 +353,26 @@ def page(rows: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, A
     return after[: params["batch_size"]]
 
 
-class FakeConnection:
-    """The pyTigerGraph connection of a FakeTigerGraph: schema, counts and installed queries.
+def repository(queries: Mapping[str, str] | None) -> dict[str, str]:
+    """The installed text of each query: queries, or every repository query by default."""
+    if queries is None:
+        files = (*TRAINING_QUERY_FILES, *ANALYTICS_QUERY_FILES)
+        return {name: text for name, (_, text) in repository_queries(files).items()}
+    return dict(queries)
 
-    GSQL other than SHOW QUERY fails: the fake graph runs no GSQL that writes.
+
+class FakeConnection:
+    """The pyTigerGraph connection of a FakeTigerGraph: schema, counts and queries.
+
+    GSQL runs SHOW QUERY, CREATE OR REPLACE QUERY (which disables the endpoint until the
+    query is installed again), DROP QUERY and the scope schema change; any other GSQL
+    fails. installQueries installs at once.
     """
 
-    def __init__(self, graph: FakeTigerGraph) -> None:
+    def __init__(self, graph: FakeTigerGraph, queries: dict[str, str]) -> None:
         self.graph = graph
+        self.shown = queries
+        self.enabled = dict.fromkeys(queries, True)
 
     def getVerticesById(self, vertex_type: str, ids: list[str]) -> list[dict[str, Any]]:
         assert vertex_type == SCOPE_VERTEX, vertex_type
@@ -372,27 +389,48 @@ class FakeConnection:
         names = ["Account", *([SCOPE_VERTEX] if self.graph.scope_vertex else [])]
         return {"VertexTypes": [{"Name": name} for name in names]}
 
-    def installed(self) -> dict[str, str]:
-        """The installed text of every repository query; a stale one differs."""
-        queries = repository_queries((*TRAINING_QUERY_FILES, *ANALYTICS_QUERY_FILES))
-        shown = {name: text for name, (_, text) in queries.items()}
-        for name in self.graph.stale:
-            shown[name] = shown[name].replace("{", "{ INT stale_marker = 0;", 1)
-        return shown
+    def text(self, name: str) -> str:
+        """What SHOW QUERY prints of a query: a stale one's text differs from its file's."""
+        text = self.shown[name]
+        return text.replace("{", "{ INT stale_marker = 0;", 1) if name in self.graph.stale else text
 
     def getInstalledQueries(self) -> dict[str, dict[str, Any]]:
         builtin = {"query", "read_committed"}
         return {
             f"GET /query/{GRAPH_NAME}/{name}": {
                 "enabled": True,
-                "parameters": {key: {} for key in parameter_names(text) | builtin},
+                "parameters": {key: {} for key in parameter_names(self.text(name)) | builtin},
             }
-            for name, text in self.installed().items()
+            for name in self.shown
+            if self.enabled[name]
         }
 
+    def installQueries(self, names: list[str], wait: bool = False) -> dict[str, Any]:
+        self.graph.writes.append("INSTALL QUERY " + ", ".join(names))
+        for name in names:
+            self.enabled[name] = True
+        return {"error": False, "message": "Query installation finished: SUCCESS"}
+
     def gsql(self, text: str) -> str:
-        assert "SHOW QUERY" in text, "the fake graph runs no GSQL that writes"
-        return self.installed().get(text.rsplit(" ", 1)[1], "Query not found")
+        if "SHOW QUERY" in text:
+            name = text.rsplit(" ", 1)[1]
+            return self.text(name) if name in self.shown else "Query not found"
+        self.graph.writes.append(text)
+        if "DROP QUERY" in text:
+            name = text.rsplit(" ", 1)[1]
+            self.shown.pop(name)
+            self.enabled.pop(name)
+            return f"Successfully dropped queries on the graph '{GRAPH_NAME}': [{name}]."
+        if "SCHEMA_CHANGE JOB" in text:
+            self.graph.scope_vertex = True
+            return "Local schema change succeeded."
+        created = definitions(text)
+        assert created, "the fake graph runs no other GSQL"
+        for name, definition in created.items():
+            self.shown[name] = definition
+            self.enabled[name] = False
+        self.graph.stale = self.graph.stale - set(created)
+        return f"Successfully created queries: [{', '.join(created)}]."
 
 
 LINKED_COUNTS = {

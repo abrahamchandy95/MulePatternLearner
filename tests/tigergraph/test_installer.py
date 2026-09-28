@@ -13,19 +13,20 @@ import pytest
 import requests
 
 from mule_pattern_learner.contract.server import (
-    ANALYTICS_QUERY_FILES,
     CONTEXT_QUERY,
     CUTOFF_QUERY,
     FOURIER_QUERY,
     GRAPH_NAME,
     HUB_QUERY,
     QUERY_FILES,
+    RETIRED_QUERIES,
     REVEAL_QUERY,
     REVEAL_UNIFORMS_QUERY,
     TRAINING_QUERY_FILES,
 )
 from mule_pattern_learner.paths import GSQL_DIR
 from mule_pattern_learner.testing.fake_connection import executor
+from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
 from mule_pattern_learner.tigergraph import gsql_text, installer
 from mule_pattern_learner.tigergraph.executor import TransientQueryError
 
@@ -242,11 +243,72 @@ def test_install_writes_run_once_through_the_executor() -> None:
     assert len(writes) == 1 and tg.sleeps == [] and not server.installs
 
 
-def test_installed_queries_that_no_file_defines_are_listed_not_dropped() -> None:
-    files = (*TRAINING_QUERY_FILES, *ANALYTICS_QUERY_FILES)
-    names = [*gsql_text.repository_queries(files), "temporal_training_population"]
-    listed = {f"GET /query/{GRAPH_NAME}/{name}": endpoint(set()) for name in names}
-    gsql: list[str] = []
-    conn = SimpleNamespace(getInstalledQueries=lambda: listed, gsql=gsql.append)
-    assert installer.undefined_queries(executor(conn)) == ["temporal_training_population"]
-    assert gsql == []
+def old_query(name: str) -> str:
+    """An installed query of the code before the server step, under its old name."""
+    return f"CREATE QUERY {name}(INT unused = 0) FOR GRAPH {GRAPH_NAME} SYNTAX V2 {{ PRINT 1; }}"
+
+
+def installed_repository() -> dict[str, str]:
+    """The text of every training query, as a current graph has it installed."""
+    return {
+        name: text for name, (_, text) in gsql_text.repository_queries(TRAINING_QUERY_FILES).items()
+    }
+
+
+def drops(graph: FakeTigerGraph) -> list[str]:
+    return [write.rsplit(" ", 1)[1] for write in graph.writes if "DROP QUERY" in write]
+
+
+def test_install_drops_the_retired_queries_callers_first_and_nothing_else() -> None:
+    # A graph as the code before the server step left it: every old name installed,
+    # none of the new ones, and a query that is neither the repository's nor retired.
+    old = {name: old_query(name) for name in RETIRED_QUERIES}
+    graph = FakeTigerGraph(queries={**old, "match_parties": old_query("match_parties")})
+    logs = installer.install(graph)
+    names = list(installed_repository())
+    assert logs["installed"] == logs["verified"] == names
+    assert logs["dropped"] == drops(graph) == list(RETIRED_QUERIES)
+    # Nothing is dropped before every renamed query is installed.
+    first = next(i for i, write in enumerate(graph.writes) if "DROP QUERY" in write)
+    assert graph.writes[first - 1] == "INSTALL QUERY " + ", ".join(names)
+    assert all(write.startswith(f"USE GRAPH {GRAPH_NAME}\n") for write in graph.writes[first:])
+    assert set(installer.installed_endpoints(graph)) == {*names, "match_parties"}
+    assert installer.undefined_queries(graph) == ["match_parties"]
+    # A second run finds everything in place: it installs and drops nothing.
+    graph.writes.clear()
+    again = installer.install(graph)
+    assert again["installed"] == [] and again["dropped"] == [] and graph.writes == []
+
+
+def test_only_the_retired_queries_still_installed_are_dropped_in_their_order() -> None:
+    left = ("temporal_training_population", "temporal_fourier64", "temporal_fourier64_values")
+    graph = FakeTigerGraph(queries={**installed_repository(), **{n: old_query(n) for n in left}})
+    logs = installer.install(graph)
+    # Nothing was stale, so nothing is created or installed, and the order is the list's.
+    assert logs["installed"] == [] and logs["dropped"] == drops(graph)
+    assert drops(graph) == [name for name in RETIRED_QUERIES if name in left]
+    assert installer.retired_installed(graph) == []
+
+
+def test_nothing_is_dropped_when_the_install_fails_or_a_drop_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph = FakeTigerGraph(queries={name: old_query(name) for name in RETIRED_QUERIES})
+    conn = graph.client.conn
+    real = conn.gsql
+    monkeypatch.setattr(
+        conn, "gsql", lambda text: "Semantic Check Error" if "CREATE" in text else real(text)
+    )
+    with pytest.raises(RuntimeError, match="Semantic Check"):
+        installer.install(graph)
+    assert drops(graph) == [] and installer.retired_installed(graph) == list(RETIRED_QUERIES)
+    # A drop TigerGraph refuses (another installed query calls it) stops the drops.
+    graph = FakeTigerGraph(
+        queries={**installed_repository(), "temporal_fourier64_values": old_query("x")}
+    )
+    refusal = "Query temporal_fourier64_values cannot be dropped: other queries call it"
+    monkeypatch.setattr(
+        graph.client.conn, "gsql", lambda text: refusal if "DROP" in text else "Query not found"
+    )
+    with pytest.raises(RuntimeError, match="left it installed.*cannot be dropped"):
+        installer.drop_retired(graph)

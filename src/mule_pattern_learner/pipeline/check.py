@@ -2,8 +2,8 @@
 
 check connects with the run's transport section (the connection refuses a graph other
 than contract.server.GRAPH_NAME) and reports whether the scope vertex type exists, which training
-queries are installed with the repository text and, on a CUDA host, what the cuGraph
-probe found. When all of them are ready and the run's dataset is prepared in data/, it
+queries are installed with the repository text, which retired queries `mule install`
+would drop and, on a CUDA host, what the cuGraph probe found. When all of them are ready and the run's dataset is prepared in data/, it
 builds the first training batch the way train() builds it and runs one optimizer step
 (first_step). Its source has no disk tier: the batch's contexts are requested from
 TigerGraph, not read from the dataset's context cache, so the installed context query
@@ -43,7 +43,7 @@ from ..sampling.cugraph_sampler import cugraph_usable
 from ..tigergraph.context_query import TigerGraphContextFetcher
 from ..tigergraph.executor import ConnectionExecutor, TigerGraphExecutor
 from ..tigergraph.gsql_text import repository_queries
-from ..tigergraph.installer import has_scope_vertex, query_problems
+from ..tigergraph.installer import has_scope_vertex, query_problems, retired_installed
 from ..training.objective import nnpu_objective, nnpu_step
 from ..training.schedule import TrainingStep, epoch_schedule
 from ..training.trainer import build_optimizer, check_limits, training_samples
@@ -61,7 +61,11 @@ def rest_calls(contexts: ContextReader) -> tuple[int, dict[str, int]]:
 
 
 def graph_readiness(executor: ConnectionExecutor) -> dict[str, Any]:
-    """The graph name, the scope vertex type and the installed training queries."""
+    """The graph name, the scope vertex type and the installed training queries.
+
+    The retired queries still installed are reported, not a problem: training never
+    calls them, and `mule install` drops them.
+    """
     problems = query_problems(executor)
     names = repository_queries(TRAINING_QUERY_FILES)
     return {
@@ -70,6 +74,7 @@ def graph_readiness(executor: ConnectionExecutor) -> dict[str, Any]:
         "queries": {
             "up_to_date": [name for name in names if name not in problems],
             "stale": problems,
+            "retired": retired_installed(executor),
         },
     }
 

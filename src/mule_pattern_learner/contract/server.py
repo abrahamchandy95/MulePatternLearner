@@ -9,7 +9,7 @@ without it, saved models record it through their contract fingerprint and the co
 cache names its entries with it. It is "context_" and the first 12 hex digits of the
 sha256 of the normalised rendered query without it (tigergraph.render.context_contract),
 and a render test keeps the two equal. RETIRED_QUERIES are the names the queries were
-installed under before. GSQL files are named by their path relative to the repository's gsql
+installed under before, which `mule install` drops. GSQL files are named by their path relative to the repository's gsql
 folder (paths.GSQL_DIR).
 """
 
@@ -50,7 +50,8 @@ PAYMENT_PAIR_QUERY = "encode_payment_pair_gaps"
 # The names the queries were installed under before the server step renamed them, and
 # the two it retired: the public Fourier wrapper, which only a deleted verification
 # script called, and the population query of the removed shared_history protocol.
-# Callers come before the queries they call.
+# `mule install` drops those still installed in this order, callers before the queries
+# they call, and no other query (tigergraph.installer.drop_retired).
 RETIRED_QUERIES = (
     "temporal_training_context",
     "temporal_fourier64",

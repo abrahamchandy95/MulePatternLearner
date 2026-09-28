@@ -32,8 +32,9 @@ def install_queries(config: RunConfig = DEFAULT_CONFIG) -> dict[str, Any]:
     """What `mule install` does, on a connection with config's retry budgets.
 
     It adds the scope vertex type if it is missing, installs the training queries whose
-    text differs (installer.install) and lists the installed queries that no repository
-    file defines, which it leaves in place.
+    text differs and then drops the retired queries still installed (installer.install),
+    and lists the installed queries that no repository file defines, which it leaves in
+    place.
     """
     executor = connect(config.transport)
     result = install(executor)

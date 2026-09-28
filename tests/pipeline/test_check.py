@@ -11,8 +11,10 @@ import pytest
 from mule_pattern_learner.config import RunConfig
 from mule_pattern_learner.contract.feature_groups import extraction_plan
 from mule_pattern_learner.contract.server import (
+    CONTEXT_QUERY,
     CUTOFF_QUERY,
     GRAPH_NAME,
+    RETIRED_QUERIES,
     TRAINING_QUERY_FILES,
 )
 from mule_pattern_learner.data.contexts import ContextSource
@@ -79,7 +81,7 @@ def test_a_ready_graph_gets_one_batch_and_one_training_step(
     assert report["status"] == "ready" and report["problems"] == [] and opened == [dataset]
     assert report["graph"] == GRAPH_NAME and report["scope_schema"] == "present"
     queries = gsql_text.repository_queries(TRAINING_QUERY_FILES)
-    assert report["queries"] == {"up_to_date": list(queries), "stale": {}}
+    assert report["queries"] == {"up_to_date": list(queries), "stale": {}, "retired": []}
     assert report["dataset"] == dataset.root.name and report["graph_writes"] == 0
     step = report["first_step"]
     assert step["status"] == "passed" and step["roots"] == step["accepted_roots"] == 32
@@ -96,7 +98,13 @@ def test_a_ready_graph_gets_one_batch_and_one_training_step(
 def test_a_graph_that_is_not_ready_is_reported_without_a_batch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    server = FakeTigerGraph(stale=[CUTOFF_QUERY], scope_vertex=False)
+    queries = gsql_text.repository_queries(TRAINING_QUERY_FILES)
+    installed = {name: text for name, (_, text) in queries.items()}
+    server = FakeTigerGraph(
+        queries={**installed, RETIRED_QUERIES[0]: installed[CONTEXT_QUERY]},
+        stale=[CUTOFF_QUERY],
+        scope_vertex=False,
+    )
     monkeypatch.setattr(pipeline_check, "connect", lambda transport: server)
 
     def refuse(*_: object) -> None:
@@ -107,6 +115,8 @@ def test_a_graph_that_is_not_ready_is_reported_without_a_batch(
     assert report["status"] == "not_ready" and "first_step" not in report
     assert report["scope_schema"] == "missing" and report["dataset"] is None
     assert report["queries"]["stale"] == {CUTOFF_QUERY: ["differs from repository source"]}
+    # A retired query still installed is reported, and dropping it is left to mule install.
+    assert report["queries"]["retired"] == [RETIRED_QUERIES[0]] and server.writes == []
     # Nothing but reads: SHOW QUERY, the endpoint listing and the schema.
     assert server.calls == []
     assert CUTOFF_QUERY not in report["queries"]["up_to_date"]

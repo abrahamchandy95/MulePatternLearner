@@ -33,7 +33,8 @@ def build_parser() -> argparse.ArgumentParser:
     commands.add_parser(
         "install",
         help="Add the scope vertex type if it is missing, install the training queries whose "
-        "text differs and list installed queries no file defines (train does this too)",
+        "text differs, drop the retired queries still installed (train does this too) and "
+        "list installed queries no file defines",
     )
     commands.add_parser(
         "train",
