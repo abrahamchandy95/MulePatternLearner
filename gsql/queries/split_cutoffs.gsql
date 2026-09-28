@@ -4,7 +4,7 @@ USE GRAPH Mule_Pattern_Learner
    A full scan is intentional; unknown association timestamps are not invented.
    Associations after the last witnessed sequence remain conservatively hidden.
    Every requested cutoff is a key of last_visible_seqs, 0 when nothing is visible. */
-CREATE OR REPLACE QUERY temporal_training_cutoffs(LIST<UINT> cutoff_times)
+CREATE OR REPLACE QUERY resolve_split_cutoffs(LIST<UINT> cutoff_times)
 FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
   ListAccum<UINT> @@times;
   MapAccum<UINT, MaxAccum<UINT>> @@sequences;

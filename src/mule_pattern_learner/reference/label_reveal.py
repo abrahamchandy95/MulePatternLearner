@@ -1,4 +1,4 @@
-"""A Python mirror of the label reveal job (temporal_reveal_mule_labels).
+"""A Python mirror of the label reveal job (reveal_mule_labels).
 
 `plan` recomputes the job's discovery channel, discovery time, eligibility and
 revealed set for every internal mule from the rows INPUTS_QUERY prints, with the

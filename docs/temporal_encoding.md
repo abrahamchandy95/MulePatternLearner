@@ -7,31 +7,26 @@ features are returned by the query and are never stored on a payment.
 
 ## Run in TigerGraph
 
-The standalone calculator needs no graph data:
-
-```gsql
-USE GRAPH Mule_Pattern_Learner
-RUN QUERY temporal_fourier64(60000)
-```
-
-It returns a 64-value encoding for a gap of 60,000 milliseconds. Negative input
-returns `invalid_delta_t`. The shared subquery `temporal_fourier64_values` accepts
-an unsigned millisecond delta and returns the vector for use by other GSQL queries.
+The subquery `encode_fourier64` accepts an unsigned millisecond delta and returns
+its 64-value encoding to the queries that call it, so it has no REST endpoint of its
+own. The context query prints the vectors it computed when `emit_encodings` is set,
+and the client compares them with `contract.time_basis.fourier64`, the same basis in
+numpy.
 
 For an account pair, replace the example IDs and cutoffs with actual values:
 
 ```gsql
 // sender, recipient type, recipient ID, seed sequence, seed milliseconds,
 // persist, maximum complete pair-history size
-RUN QUERY zelle_pair_time64("account-A", "Account", "account-B",
+RUN QUERY encode_zelle_pair_gaps("account-A", "Account", "account-B",
                            1000000, 1800000000000, false, 1000)
 
 // Unresolved external recipient: use its opaque token ID.
-RUN QUERY zelle_pair_time64("account-A", "Token", "opaque-token-id",
+RUN QUERY encode_zelle_pair_gaps("account-A", "Token", "opaque-token-id",
                            1000000, 1800000000000, false, 1000)
 
 // The same calculation for a non-Zelle rail, kept separate from other rails.
-RUN QUERY payment_pair_time64("account-A", "Account", "account-B",
+RUN QUERY encode_payment_pair_gaps("account-A", "Account", "account-B",
                              1000000, 1800000000000, "ach", false, 1000)
 ```
 

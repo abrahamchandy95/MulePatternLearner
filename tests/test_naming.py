@@ -6,7 +6,9 @@ the GSQL query names. Prose (docstrings, comments, messages and the guides) is n
 
 A name is split into words at underscores, hyphens, dots and case changes, and no
 word may be one of FORBIDDEN. The values TigerGraph and saved files hold keep their
-names; ALLOWED lists them, each with the reason it stays.
+names; ALLOWED lists them, each with the reason it stays. The names the queries were
+installed under before the server step renamed them are contract.server.RETIRED_QUERIES,
+which `mule install` drops, so they are allowed from there.
 """
 
 from __future__ import annotations
@@ -63,32 +65,9 @@ ALLOWED = {
     "marginal_cohort": "the salt of the reservoir ranks; a new value selects other accounts",
     "cohort_seed": "a key of configurations saved before the typed configuration",
     "temporal": "the variant value of configurations saved before the typed configuration",
-    "temporal_training_population": (
-        "a query no file defines any more, still installed until the server step retires it"
-    ),
     # pylibcugraph's API, which the tests' mock library imitates.
     "heterogeneous_uniform_temporal_neighbor_sample": "a pylibcugraph function",
     "temporal_sampling_comparison": "a parameter of pylibcugraph's samplers",
-}
-# The queries installed on the server, which keep their names until the server step
-# renames them once (the owner decision on query names) to the name given, or retires
-# them (None).
-INSTALLED_QUERIES: dict[str, str | None] = {
-    "temporal_training_context": "fetch_training_context",
-    "temporal_fourier64_values": "encode_fourier64",
-    "temporal_fourier64": None,
-    "temporal_create_training_scope": "create_training_scope",
-    "temporal_finalize_training_scope": "finalize_training_scope",
-    "temporal_scope_population": "list_scope_accounts",
-    "temporal_scope_policy": "summarize_scope_policy",
-    "temporal_training_cutoffs": "resolve_split_cutoffs",
-    "temporal_hub_registry": "list_hub_accounts",
-    "temporal_reveal_mule_labels": "reveal_mule_labels",
-    "temporal_reveal_uniforms": "draw_reveal_uniforms",
-    "temporal_validate_account_supervision": "validate_label_contract",
-    "temporal_get_account_supervision": "read_ground_truth",
-    "zelle_pair_time64": "encode_zelle_pair_gaps",
-    "payment_pair_time64": "encode_payment_pair_gaps",
 }
 # The folders whose file names are checked; the guides move and get kebab-case names
 # in the docs step.
@@ -203,7 +182,7 @@ def test_names_in_strings_are_new_or_persisted() -> None:
         used.update(defined_names(tree))
         for value in name_literals(tree):
             used.add(value)
-            if value not in INSTALLED_QUERIES and forbidden(value):
+            if value not in server.RETIRED_QUERIES and forbidden(value):
                 problems.append(f"{path.relative_to(REPOSITORY_ROOT)}: {value!r}")
     assert sorted(set(problems)) == []
     # Every allowed value is still in use, so the list only shrinks.
@@ -218,21 +197,20 @@ def good_query_name(name: str) -> bool:
     )
 
 
-def test_query_names_start_with_a_verb_or_wait_for_the_server_step() -> None:
+def test_query_names_start_with_a_verb_and_retired_names_are_gone() -> None:
     names = query_names()
-    assert [name for name in names - INSTALLED_QUERIES.keys() if not good_query_name(name)] == []
-    # A query renamed on the server leaves the list; a retired one leaves the files.
-    assert set(INSTALLED_QUERIES) <= names
-    renamed = [new for new in INSTALLED_QUERIES.values() if new is not None]
-    assert [name for name in renamed if not good_query_name(name)] == []
+    assert [name for name in sorted(names) if not good_query_name(name)] == []
+    # No file defines a retired name, so `mule install` never drops a query it installs.
+    retired = server.RETIRED_QUERIES
+    assert len(set(retired)) == len(retired) and not set(retired) & names
 
 
-def test_the_server_contract_names_every_installed_query_once() -> None:
-    # Adapters, fakes and tests take the names from contract.server, so the server step
-    # renames each there; a retired query has no name there.
+def test_the_server_contract_names_every_query_once() -> None:
+    # Adapters, fakes and tests take the names from contract.server, and every query a
+    # GSQL file defines has its name there.
     names = [value for key, value in vars(server).items() if key.endswith("_QUERY")]
     assert len(names) == len(set(names))
-    assert set(names) == {name for name, new in INSTALLED_QUERIES.items() if new is not None}
+    assert set(names) == query_names()
 
 
 def test_the_command_line_is_mule_with_six_commands() -> None:

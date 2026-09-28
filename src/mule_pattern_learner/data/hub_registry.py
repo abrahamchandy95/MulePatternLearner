@@ -10,7 +10,7 @@ Leakage:
   decides it (all-time degree is reported for information only).
 - Scope: with a scope_id, TigerGraph counts per visibility phase only the
   events whose Account endpoints are all allowed in that phase (the endpoint
-  rule of temporal_training_context), and a hub must itself be allowed in the
+  rule of fetch_training_context), and a hub must itself be allowed in the
   phase. Held-out partitions therefore cannot change a phase-1 stub decision.
   Rows carry their phase and `is_stub` is keyed by (root cutoff, phase).
   Without a scope_id (`mule score`) counts are unscoped and

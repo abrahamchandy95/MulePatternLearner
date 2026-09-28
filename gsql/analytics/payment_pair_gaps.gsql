@@ -7,7 +7,7 @@ USE GRAPH Mule_Pattern_Learner
    All matching history before the cutoff is needed to find true predecessors.
    An oversized or malformed history returns a status without writes.
 */
-CREATE OR REPLACE QUERY payment_pair_time64(
+CREATE OR REPLACE QUERY encode_payment_pair_gaps(
   VERTEX<Account> sender,
   STRING recipient_type,
   STRING recipient_id,
@@ -118,10 +118,10 @@ CREATE OR REPLACE QUERY payment_pair_time64(
     gap_ms = 0;
     IF have_previous THEN
       gap_ms = item.event_ts_ms - previous_ts_ms;
-      @@gap_encoding = temporal_fourier64_values(gap_ms);
+      @@gap_encoding = encode_fourier64(gap_ms);
     END;
     age_ms = seed_ts_ms - item.event_ts_ms;
-    @@age_encoding = temporal_fourier64_values(age_ms);
+    @@age_encoding = encode_fourier64(age_ms);
     IF age_ms < 3600000 THEN count_1h = count_1h + 1; END;
     IF age_ms < 86400000 THEN count_24h = count_24h + 1; END;
     IF age_ms < 604800000 THEN count_7d = count_7d + 1; END;

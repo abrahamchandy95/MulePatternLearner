@@ -24,8 +24,8 @@ USE GRAPH Mule_Pattern_Learner
    Any other value is invalid_parameters. Components that contain a Party keep exactly
    the same component, hash partition and group_id under every policy: the component
    labels and the hash expression do not depend on the policy, and only unowned accounts
-   are ever moved. temporal_scope_policy reads the policy back from stored membership. */
-CREATE OR REPLACE QUERY temporal_create_training_scope(
+   are ever moved. summarize_scope_policy reads the policy back from stored membership. */
+CREATE OR REPLACE QUERY create_training_scope(
   STRING scope_id, STRING source_id, UINT split_seed = 42, INT max_iterations = 100,
   STRING unowned_policy = "independent"
 ) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
@@ -124,9 +124,9 @@ CREATE OR REPLACE QUERY temporal_create_training_scope(
     @@shared_accounts AS shared_accounts, @@linked_accounts AS linked_accounts;
 }
 
-/* include_observed = TRUE maps only the label contract's revealed positive (see
-   temporal_training_population): withheld labels and label knowledge never leave. */
-CREATE OR REPLACE QUERY temporal_scope_population(
+/* include_observed = TRUE maps only the label contract's revealed positive: withheld
+   labels and label knowledge never leave. */
+CREATE OR REPLACE QUERY list_scope_accounts(
   STRING scope_id, STRING after_id = "", INT batch_size = 10000,
   BOOL include_observed = FALSE
 ) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
@@ -155,7 +155,7 @@ CREATE OR REPLACE QUERY temporal_scope_population(
 }
 
 /* A separate query sees committed membership writes and verifies completeness. */
-CREATE OR REPLACE QUERY temporal_finalize_training_scope(STRING scope_id, UINT expected_members)
+CREATE OR REPLACE QUERY finalize_training_scope(STRING scope_id, UINT expected_members)
 FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
   SumAccum<UINT> @@members;
   SumAccum<UINT> @@invalid;
@@ -191,7 +191,7 @@ FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
    Policies that write identical membership cannot be told apart and need not be: without
    unowned external accounts all three agree, and shared equals linked when no internal
    account has exactly one owned deposit counterparty. */
-CREATE OR REPLACE QUERY temporal_scope_policy(STRING scope_id)
+CREATE OR REPLACE QUERY summarize_scope_policy(STRING scope_id)
 FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
   MaxAccum<STRING> @group;
   OrAccum @classified;

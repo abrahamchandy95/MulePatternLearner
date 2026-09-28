@@ -10,19 +10,18 @@ aggregation; see [leakage and scaling](leakage_and_scaling.md).
 
 | Query | Inputs and output | When used |
 |---|---|---|
-| `temporal_create_training_scope` | Creates a frozen, label-blind Account/Party ownership-group partition. `unowned_policy` places Accounts whose ownership component has no Party: `"independent"` (the query's default, the original behaviour) gives each its own hash partition; `"shared"` gives unowned external accounts and unowned bank ledger accounts (`account_type = "gl"`) partition 1 (visible in every phase) and group ID `shared:<component>`, while other unowned internal accounts keep their own hash partition; `"linked"` (the client default) is `"shared"` plus: an unowned internal account whose distinct owned internal deposit counterparties (the other endpoint of any Payment_Transaction or Zelle_Transfer, all time) are exactly one account takes that account's component, partition and group ID. Any other value is `invalid_parameters`. Components with a Party keep the same component and hash partition under every policy. Also prints `unowned_policy`, `shared_accounts` and `linked_accounts`. | Once per strict scope, on the first `mule train` when `scope.id` does not exist (`scope.create = False` forbids it); writes only experiment membership. |
-| `temporal_finalize_training_scope` | Checks committed membership count/attributes and marks the scope ready. | After scope creation; incomplete scopes fail closed. |
-| `temporal_scope_policy` | Read-only. For a ready scope, prints `members` (all member Accounts and Parties), `unowned_accounts` and six counts of unowned member Accounts (no `Account_Owned_By_Party` edge) by class and side: `shared_internal`, `shared_external` (group ID starts with `shared:`), `independent_internal`, `independent_external` (group ID is the account's own component), `linked_internal`, `linked_external` (any other group ID), plus `shared_ledger` of `ledger_accounts` (unowned bank ledger accounts, counted apart from `shared_internal`). The client infers the creation policy from them. `scope_not_ready` otherwise. | When a strict preparation reuses or creates a scope, and when every streamed run opens. |
-| `temporal_scope_population` | Pages internal deposit accounts with preassigned partition, first-seen clocks and optional observed supervision (`include_observed`, default FALSE): `observed_positive` is the label contract's revealed positive, and only such an account has a nonzero `known_from_ms`. | Strict preparation; bounded reservoir selection, never model features. |
-| `temporal_training_cutoffs` | Converts exclusive calendar cutoffs to sequence watermarks using payments and entity first observations. Every requested cutoff key is present, 0 when nothing is visible. | Preparation and `mule score`. Scans history; not a constant-time lookup. |
-| `temporal_hub_registry` | For 1 to 24 cutoff sequences, lists Accounts whose visible history (events before the cutoff, all currencies) in some payment relation exceeds `threshold`; the only reason is `visible_history`. With `scope_id` empty the counts are unscoped and every row has `visibility_phase` 3. With a `scope_id` (the scope must be ready, else `scope_not_ready`) it counts per phase 1, 2 and 3 only events whose From/To Account endpoints are all members with partition at most that phase, the endpoint rule of `temporal_training_context`, and the hub itself must be allowed in the phase. Rows are `(account_id, cutoff_seq, visibility_phase, max_visible, max_degree, reason)`; `max_degree`, the all-time relation outdegree, is informational only. The response echoes `cutoff_seqs`, `threshold` and `scope_id`. O(1) outdegree prefilter; read-only. | Preparation (dataset cutoffs; the scope for `strict_inductive`) and `mule score` (the requested cutoff, unscoped). |
-| `temporal_training_context` | Accepts 1 to 64 entity/time contexts plus scope and phase, and returns one candidate pool per context. Filters excluded Account/Party contributions before rolling features, neighbor selection and pair history. | Every batch (roots, then children). |
-| `temporal_fourier64_values` | Encodes a nonnegative millisecond delta into 32 sine/cosine pairs. | Called inside temporal queries. |
-| `temporal_fourier64` | Public validation wrapper for the same calculation. | Diagnostics and parity checks. |
-| `temporal_reveal_mule_labels` | Reads ground truth once: simulates each internal mule's discovery (victim reports, network trace, monitoring) and, with `apply = TRUE`, writes the Account label contract with up to `budget` revealed positives per split ([label reveal](label_reveal.md)). A graph with known labels is left alone unless `force = TRUE`. | First `mule train` on a graph without known labels. |
-| `temporal_reveal_uniforms` | The reveal's deterministic uniforms for one key and salt. | Called inside `temporal_reveal_mule_labels`. |
-| `temporal_validate_account_supervision` | Counts label-contract violations, known labels, true mules and revealed positives. | After each reveal check in strict preparation, also when the labels were already revealed; every violation count must be zero. |
-| `temporal_get_account_supervision` | Pages oracle truth and the label fields per Account. | Only `mule evaluate`, after model selection. |
+| `create_training_scope` | Creates a frozen, label-blind Account/Party ownership-group partition. `unowned_policy` places Accounts whose ownership component has no Party: `"independent"` (the query's default, the original behaviour) gives each its own hash partition; `"shared"` gives unowned external accounts and unowned bank ledger accounts (`account_type = "gl"`) partition 1 (visible in every phase) and group ID `shared:<component>`, while other unowned internal accounts keep their own hash partition; `"linked"` (the client default) is `"shared"` plus: an unowned internal account whose distinct owned internal deposit counterparties (the other endpoint of any Payment_Transaction or Zelle_Transfer, all time) are exactly one account takes that account's component, partition and group ID. Any other value is `invalid_parameters`. Components with a Party keep the same component and hash partition under every policy. Also prints `unowned_policy`, `shared_accounts` and `linked_accounts`. | Once per strict scope, on the first `mule train` when `scope.id` does not exist (`scope.create = False` forbids it); writes only experiment membership. |
+| `finalize_training_scope` | Checks committed membership count/attributes and marks the scope ready. | After scope creation; incomplete scopes fail closed. |
+| `summarize_scope_policy` | Read-only. For a ready scope, prints `members` (all member Accounts and Parties), `unowned_accounts` and six counts of unowned member Accounts (no `Account_Owned_By_Party` edge) by class and side: `shared_internal`, `shared_external` (group ID starts with `shared:`), `independent_internal`, `independent_external` (group ID is the account's own component), `linked_internal`, `linked_external` (any other group ID), plus `shared_ledger` of `ledger_accounts` (unowned bank ledger accounts, counted apart from `shared_internal`). The client infers the creation policy from them. `scope_not_ready` otherwise. | When a strict preparation reuses or creates a scope, and when every streamed run opens. |
+| `list_scope_accounts` | Pages internal deposit accounts with preassigned partition, first-seen clocks and optional observed supervision (`include_observed`, default FALSE): `observed_positive` is the label contract's revealed positive, and only such an account has a nonzero `known_from_ms`. | Strict preparation; bounded reservoir selection, never model features. |
+| `resolve_split_cutoffs` | Converts exclusive calendar cutoffs to sequence watermarks using payments and entity first observations. Every requested cutoff key is present, 0 when nothing is visible. | Preparation and `mule score`. Scans history; not a constant-time lookup. |
+| `list_hub_accounts` | For 1 to 24 cutoff sequences, lists Accounts whose visible history (events before the cutoff, all currencies) in some payment relation exceeds `threshold`; the only reason is `visible_history`. With `scope_id` empty the counts are unscoped and every row has `visibility_phase` 3. With a `scope_id` (the scope must be ready, else `scope_not_ready`) it counts per phase 1, 2 and 3 only events whose From/To Account endpoints are all members with partition at most that phase, the endpoint rule of `fetch_training_context`, and the hub itself must be allowed in the phase. Rows are `(account_id, cutoff_seq, visibility_phase, max_visible, max_degree, reason)`; `max_degree`, the all-time relation outdegree, is informational only. The response echoes `cutoff_seqs`, `threshold` and `scope_id`. O(1) outdegree prefilter; read-only. | Preparation (dataset cutoffs; the scope for `strict_inductive`) and `mule score` (the requested cutoff, unscoped). |
+| `fetch_training_context` | Accepts 1 to 64 entity/time contexts plus scope and phase, and returns one candidate pool per context. Filters excluded Account/Party contributions before rolling features, neighbor selection and pair history. | Every batch (roots, then children). |
+| `encode_fourier64` | Encodes a nonnegative millisecond delta into 32 sine/cosine pairs. | Called inside the context query and the pair-gap queries. |
+| `reveal_mule_labels` | Reads ground truth once: simulates each internal mule's discovery (victim reports, network trace, monitoring) and, with `apply = TRUE`, writes the Account label contract with up to `budget` revealed positives per split ([label reveal](label_reveal.md)). A graph with known labels is left alone unless `force = TRUE`. | First `mule train` on a graph without known labels. |
+| `draw_reveal_uniforms` | The reveal's deterministic uniforms for one key and salt. | Called inside `reveal_mule_labels`. |
+| `validate_label_contract` | Counts label-contract violations, known labels, true mules and revealed positives. | After each reveal check in strict preparation, also when the labels were already revealed; every violation count must be zero. |
+| `read_ground_truth` | Pages oracle truth and the label fields per Account. | Only `mule evaluate`, after model selection. |
 
 `training_context.gsql` is generated by
 `python scripts/render_queries.py` from the shared Python
@@ -44,7 +43,7 @@ The query never exports raw oracle truth or the synthetic mask.
 
 ## Context query contract
 
-`temporal_training_context` parameters, in signature order:
+`fetch_training_context` parameters, in signature order:
 
 | Parameter | Bounds | Meaning |
 |---|---|---|
@@ -52,7 +51,7 @@ The query never exports raw oracle truth or the synthetic mask.
 | `per_relation`, `k_old`, `k_div` | 1..32, 0..16, 0..16 | Candidate pool per payment relation: most recent, rank quantiles, new peers. |
 | `k_assoc` | 0..8 | Valid-time associations per association relation (0 for payments-only children). |
 | `max_history` | 32..4096 | Visible events per relation above which the request is rejected. |
-| `emit_encodings` | default FALSE | When TRUE, `age_encoding` and `gap_encoding` hold Fourier vectors; otherwise they are empty maps and no `temporal_fourier64_values` call runs. |
+| `emit_encodings` | default FALSE | When TRUE, `age_encoding` and `gap_encoding` hold Fourier vectors; otherwise they are empty maps and no `encode_fourier64` call runs. |
 | `include_*` | 14 flags | Exactly the non-categorical, non-client groups of `FeaturePlan.query_flags()`; there is no `include_hub_indicator` or flag for a pool group ([client-computed groups](#client-computed-groups)). |
 | `scope_id`, `visibility_phase` | phase 1..3 | Strict scope filtering, applied before any feature or sampling. |
 
@@ -237,7 +236,7 @@ prove that 64 dimensions is optimal; the no-Fourier ablation measures their valu
 query calculates vectors only for its selected payment messages.** It does not
 materialize vectors for every transaction in the database.
 
-`zelle_pair_time64` and `payment_pair_time64` independently query an exact
+`encode_zelle_pair_gaps` and `encode_payment_pair_gaps` independently query an exact
 sender/recipient pair up to a cutoff. They return predecessor gaps, cutoff ages
 and prior pair counts. The ordinary-payment query also separates rails.
 `max_events` defaults to 1,000 and cannot exceed 10,000; oversized pair histories
@@ -271,8 +270,8 @@ deltas and expanding them on the GPU is also a viable bandwidth optimization.
 
 ## Other queries
 
-`temporal_get_account_supervision` and
-`temporal_validate_account_supervision` expose complete supervision. The installer
+`read_ground_truth` and
+`validate_label_contract` expose complete supervision. The installer
 installs them with the training queries for the label reveal's contract check and
 for oracle evaluation, but no feature, population or context query calls them, and
 training never reads their output.
@@ -280,7 +279,7 @@ training never reads their output.
 The live context query returns a bounded candidate pool per relation, then Python
 selects the layer fanouts (default 16 and 4 in the v5 profile). A small output is
 not proof of a cheap query: rolling summaries and predecessor searches still
-traverse candidate history, which is why hub accounts from `temporal_hub_registry`
+traverse candidate history, which is why hub accounts from `list_hub_accounts`
 are never expanded as children. The sampler enforces strict scopes.
 Time-organized adjacency and server-side rollups remain required work for larger
 deployments. The bounded client response is not a bound on server scan memory or

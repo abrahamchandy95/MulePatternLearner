@@ -2,7 +2,7 @@ USE GRAPH Mule_Pattern_Learner
 
 /* Oracle supervision export, deliberately separate from feature queries.
    A page is bounded; subsequent pages use the last returned account_id. */
-CREATE OR REPLACE QUERY temporal_get_account_supervision(
+CREATE OR REPLACE QUERY read_ground_truth(
   STRING after_id = "", INT batch_size = 1000
 ) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
   IF batch_size < 1 OR batch_size > 10000 THEN
