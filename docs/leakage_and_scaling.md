@@ -110,8 +110,14 @@ truth file is appropriate only when that is the declared target definition.
 ## Bounded transport rather than full feature replication
 
 `ContextReader` is the model-facing interface. Its implementation,
-`ContextSource`, requests the current batch from TigerGraph, retains 64
-contexts in memory by default (hard maximum 256), and writes no disk context cache.
+`ContextSource`, requests the current batch from TigerGraph and retains 256
+contexts in memory by default (hard maximum 4,096). For a prepared dataset on its
+frozen source it also keeps every row TigerGraph returned in the dataset's context
+cache, `data/<dataset id>/contexts/` (at most 1.5 million contexts), so a later run of
+the dataset reads them from disk instead of requesting them again. The cache holds
+contexts only, each named by its key, the requested feature flags and pools, the
+context contract, the dataset id and the frozen source's counts: it never holds
+labels, and a changed graph fails the frozen-source check before it is read.
 Each HTTP request is capped at 16 contexts; query concurrency and queued results are
 bounded to two by default, with a configurable maximum of four.
 

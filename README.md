@@ -68,7 +68,8 @@ It uses CUDA when available (then Apple MPS, then CPU) and writes the run to
 `plots/` and `report.md`, the run's tables with links to its figures. On a fresh graph the first run
 installs the training queries, creates the frozen scope and reveals the known mules in
 the graph ([label reveal](docs/label_reveal.md)); every run then prepares its dataset in
-`data/<dataset id>/`. Run the same command again to resume an interrupted run; on a
+`data/<dataset id>/`, where `contexts/` keeps the contexts runs of the dataset read from
+the graph, so later runs and audits request them no more. Run the same command again to resume an interrupted run; on a
 complete run it prints the run's `metrics.json` and changes nothing. The
 settings are built in:
 `DEFAULT_CONFIG` in `src/mule_pattern_learner/config.py`, frozen dataclasses with one
