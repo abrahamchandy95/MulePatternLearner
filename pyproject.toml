@@ -99,8 +99,8 @@ root_package = "mule_pattern_learner"
 include_external_packages = true
 
 # The contracts of the Layering rules in docs/restructure-plan.md. Every contract holds
-# without exceptions: none of them ignores an import. Packages that do not exist yet
-# (reporting, diagnostics) are optional layers, or match no module, until they are created.
+# without exceptions: none of them ignores an import. The package that does not exist yet
+# (reporting) is an optional layer, or matches no module, until it is created.
 # The contracts that list every package but the ones they allow list those two as well;
 # tests/test_import_contracts.py checks that each lists every package.
 
@@ -110,7 +110,7 @@ type = "layers"
 containers = ["mule_pattern_learner"]
 layers = [
     "cli",
-    "experiments | (diagnostics)",
+    "experiments | diagnostics",
     "pipeline",
     "training | evaluation | (reporting) | tigergraph",
     "inference",
@@ -133,9 +133,9 @@ source_modules = [
     "mule_pattern_learner.inference",
     "mule_pattern_learner.sampling",
     "mule_pattern_learner.model",
-    # reporting and diagnostics do not exist yet; the ".**" form names them anyway.
+    # reporting does not exist yet; the ".**" form names it anyway.
     "mule_pattern_learner.reporting.**",
-    "mule_pattern_learner.diagnostics.**",
+    "mule_pattern_learner.diagnostics",
 ]
 forbidden_modules = ["mule_pattern_learner.tigergraph", "pyTigerGraph"]
 
@@ -186,7 +186,7 @@ source_modules = [
     "mule_pattern_learner.experiments",
     "mule_pattern_learner.reference",
     "mule_pattern_learner.testing",
-    "mule_pattern_learner.diagnostics.**",
+    "mule_pattern_learner.diagnostics",
 ]
 forbidden_modules = ["matplotlib"]
 # pipeline, cli, experiments and diagnostics call reporting
@@ -228,7 +228,7 @@ source_modules = [
     "mule_pattern_learner.experiments",
     "mule_pattern_learner.reference",
     "mule_pattern_learner.reporting.**",
-    "mule_pattern_learner.diagnostics.**",
+    "mule_pattern_learner.diagnostics",
 ]
 forbidden_modules = ["mule_pattern_learner.testing"]
 
