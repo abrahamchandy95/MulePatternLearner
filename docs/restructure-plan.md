@@ -17,12 +17,12 @@ Where the owner decisions below differ from the proposal that follows, the decis
    | `mule score ACCOUNTS [DATE]` | Scores the accounts listed in a file; the date defaults to the test cutoff |
    | `mule check` | Read-only readiness: connection, installed queries, cuGraph probe, one batch with tensor digests and the first loss |
    | `mule diagnose [ANALYSIS]` | Re-runs the diagnostic study (all analyses by default) |
-   | `mule install` | Installs queries whose text differs (train already does this), then drops the installed queries that no file defines |
+   | `mule install` | Installs queries whose text differs (train already does this), then drops the retired queries that are still installed |
 
    `RUN` defaults to the baseline run. There is no `--config`, `--split`, `--truth`, `--force`,
    `--drop`, `--batch` or `prepare` command. Retiring installed queries is not a flag either:
-   `mule install` drops the ones no file defines (decided later, see "`mule install` drops the
-   legacy queries" below).
+   `mule install` drops the old names on a fixed list (decided later, see "`mule install` drops
+   the legacy queries" below).
 3. **Control experiments** run as `python scripts/run_experiments.py [SUITE or VARIANT ...]`
    with no flags: suite `controls` by default, seeds fixed in code (42, 43, 44), suites and
    variants listed under `--help`, completed runs skipped, mismatched runs moved to
@@ -53,13 +53,35 @@ Where the owner decisions below differ from the proposal that follows, the decis
    | `temporal_fourier64` (public wrapper) | retired (only a deleted verification script called it) | |
 
    The rename happens once, in the server step, after live parity with the unchanged queries.
-   Files are named after the responsibility their queries share.
-5. **Window and account-aggregate computations the model does not use belong to analytics.**
-   In the server step, feature groups that neither the built-in run nor a declared training
-   variant uses move out of the training context query into a query under `gsql/analytics/`,
-   used by `mule diagnose`. The exact split is decided (and confirmed with the owner) in that step;
-   until then all groups stay in the context query unchanged. Narrowed later (see "Training keeps
-   only the feature groups it trains on" below): only the built-in run's groups stay.
+   Files are named after the responsibility their queries share. Decided on 2026-09-28 for that
+   step: the new names replace the old ones wherever they are spelled (the constants of
+   `contract/server.py`, the GSQL files, the fakes and the tests), so the allow-list of
+   `tests/test_naming.py` keeps only the scope vertex type and its edges, the scope id and the
+   salts (besides the keys the old saved-settings conversion reads until main is replaced, and
+   two names of pylibcugraph's API). `CONTEXT_CONTRACT` becomes `"context_"` followed by the
+   first 12 hex digits of the sha256 of the normalised rendered context query without its
+   contract literal, and a render test keeps the two equal.
+5. **Training keeps only the feature groups the built-in run trains on** (decided on
+   2026-09-28; it replaces the proposal's "all 20 feature groups stay" and the earlier rule
+   that moved only the groups neither the built-in run nor a declared training variant used).
+   - The training context query computes the server-side groups of `BUILT_IN_GROUPS`
+     (`entity_meta`, `message_core`, `time_encoding`, `pair_history` and `flow_timing`) and the
+     wire metadata the client needs, each message's channel and sampling stratum. The client
+     computes `hub_indicator`, `pool_activity` and `pool_internal_inflows` as before.
+   - Every other group leaves the training registry (`contract.feature_groups.FEATURE_GROUPS`),
+     the model's feature plan and the training query: `entity_age`, `history_support`,
+     `rolling_windows`, `amount_ratios`, `recency`, `association_counts`, `decayed_activity`,
+     `identity_order`, `pair_window_counts`, `device_ip_context`, and the unused `event_channel`
+     and `sampler_meta` embeddings. They move to analytics: a query under `gsql/analytics/`,
+     named verb-first after its responsibility, computes them for analysis (`mule diagnose`)
+     beside the two pair-gap queries, and their Python mirrors live on the analytics side
+     (reference or diagnostics), never in training.
+   - Each remaining training group keeps its include flag, so the feature-drop variants still
+     work. The variants that read other groups cannot train from the context query any more:
+     the `no_graph` control (its account aggregates are mostly outside the built-in run) and
+     the `feature_adds` suite (`OPTIONAL_GROUPS`). The experiments step says what becomes of
+     them, for example an analysis of `mule diagnose` over the analytics query.
+   - Until the server step the query text stays byte-identical, so all groups stay in it.
 6. **Decisions use the validation ground-truth audit.** The test audit is for reporting only.
 7. **Replacing main** is a fast-forward; pushing to `origin` and `learner` needs the owner's
    confirmation at that time.
@@ -103,26 +125,19 @@ Decided on 2026-09-28, on questions the mid-migration review raised:
 12. **The dataset id's scope settings are `scope.id` and `scope.unowned` only**, as implemented
     (see Configuration).
 
-Decided on 2026-09-28, after the audit and plots steps:
+Decided on 2026-09-28, after the audit and plots steps (the decision on feature groups made
+then is the one under "Training keeps only the feature groups the built-in run trains on"
+above):
 
-13. **Training keeps only the feature groups it trains on.** From the server step on, the training
-    context query and `contract.feature_groups.FEATURE_GROUPS` hold the groups of the built-in run
-    (`BUILT_IN_GROUPS`) and nothing else. Every other group is analytics: its computation moves
-    out of the context query into a query under `gsql/analytics/`, which `mule diagnose` uses.
-    This replaces the proposal's "all 20 feature groups stay" and the rule on window and
-    account-aggregate computations above ("neither the built-in run nor a declared training
-    variant"). Until the server step the query text stays byte-identical, so all groups stay in
-    it. The variants that read other groups cannot train from the context query any more: the
-    `no_graph` control (its account aggregates are mostly outside the built-in run) and the
-    `feature_adds` suite (`OPTIONAL_GROUPS`). The experiments step says what becomes of them,
-    for example an analysis of `mule diagnose` over the analytics query; drops of built-in groups
-    stay variants.
-14. **`mule install` drops the legacy queries.** After installing the queries whose text differs,
-    it drops the installed queries that no repository file defines (the old names, once the server
-    step has installed the new ones), with no flag. This replaces the server step's one-off call.
-    Like the rename it waits until no old-code run is active anywhere, since the old code calls the
-    old names.
-15. **`learner` and `origin` end with the same `main`.** The replace-main step pushes the one
+13. **`mule install` drops the legacy queries.** Once every query of the repository is
+    installed, `mule install` (and so the install that `mule train` runs as needed) drops each
+    installed query named on the fixed list `contract.server.RETIRED_QUERIES`: every old
+    `temporal_*` name, `temporal_training_population`, `temporal_fourier64`, `zelle_pair_time64`
+    and `payment_pair_time64`. It drops callers before the queries they call, skips the names
+    that are not installed and never touches any other query, and its JSON result lists what it
+    dropped. There is no flag, and this replaces the server step's one-off call. Like the rename
+    it waits until no old-code run is active anywhere, since the old code calls the old names.
+14. **`learner` and `origin` end with the same `main`.** The replace-main step pushes the one
     fast-forwarded `main` to both remotes, so `learner/main` and `origin/main` name the same
     commit. The pushes still wait for the owner's confirmation at that time.
 
@@ -186,7 +201,8 @@ MulePatternLearner/
 │   ├── metrics.py          pure numpy/sklearn: threshold, weighted AP/ROC AUC, PR/ROC/capture curves, tie-aware recall and
 │   │                       precision at review budgets, stratified, ring-clustered and paired bootstrap, weighted quantiles
 │   ├── contract/           definitions shared with GSQL; no I/O, no torch
-│   │   ├── server.py           GRAPH_NAME, SCOPE_VERTEX, query names and parameter sets, CONTEXT_CONTRACT
+│   │   ├── server.py           GRAPH_NAME, SCOPE_VERTEX, query names and parameter sets, CONTEXT_CONTRACT,
+│   │   │                       RETIRED_QUERIES (the old names `mule install` drops)
 │   │   ├── graph_schema.py     node types, relations, associations, rails, channels, strata, splits and phases, ContextKey,
 │   │   │                       context_scope, row columns (hub, oracle, account load, score)
 │   │   ├── feature_groups.py   FeatureGroup, FEATURE_GROUPS (the built-in run's groups), BUILT_IN_GROUPS, pool-count names,
@@ -210,7 +226,7 @@ MulePatternLearner/
 │   │   ├── executor.py         QueryExecutor protocol; TigerGraphExecutor: failure classes, retry and outage budgets, paging
 │   │   ├── gsql_text.py        read, strip comments from and normalise GSQL; query signatures
 │   │   ├── installer.py        install queries whose text differs; the one scope schema change when its vertex type is
-│   │   │                       missing; drop the installed queries no file defines
+│   │   │                       missing; drop the installed queries on RETIRED_QUERIES
 │   │   ├── render.py           build-time generator of gsql/queries/training_context.gsql (the runtime never imports it)
 │   │   ├── context_query.py    TigerGraphContextFetcher: validation, bisection on timeout, per-row contract and encoding check
 │   │   ├── scope.py            TigerGraphScope: header, create, finalize, population pages, policy
@@ -342,7 +358,7 @@ MulePatternLearner/
 
 | Command | What it does | Graph writes |
 |---|---|---|
-| `mule install` | Adds the scope vertex type if missing, installs pipeline queries whose text differs, and drops installed queries that no file defines (from the server step on; until then it lists them). | yes |
+| `mule install` | Adds the scope vertex type if missing, installs pipeline queries whose text differs, and drops the retired queries (`contract.server.RETIRED_QUERIES`) that are still installed, callers first (from the server step on; until then it lists the installed queries no file defines). | yes |
 | `mule train` | Prepares the dataset in `data/<dataset id>/` as needed, then the built-in run into `results/baseline/seed-42/`; resumes an interrupted run; a complete matching run is reported and left untouched; a mismatching one is an error that names the differing keys. Writes the training plots. | first run only: install, scope and reveal |
 | `mule evaluate [RUN]` | Ground-truth audits of validation and test, plus audit plots. | no |
 | `mule score ACCOUNTS [DATE]` | Scores the accounts listed in a file, one id per line; DATE defaults to the test cutoff. Replaces `score` and `score-new`. | no |
@@ -556,7 +572,11 @@ DEFAULT_CONFIG = RunConfig()
 - the `Temporal_Training_Scope` vertex type and its edges;
 - the scope id `strict_mule_v2`;
 - the salt values in `contract/salts.py` (`"temporal_live_step"`, the reservoir and split salts);
-- until the server step: the query names and the `CONTEXT_CONTRACT` value.
+- until main is replaced: the keys and values the old saved-settings conversion reads (`cohort_seed`, the
+  variant `temporal`).
+
+The old query names are not on the allow-list: `contract.server.RETIRED_QUERIES` lists them for
+`mule install` to drop, and the naming test takes them from there.
 
 The constants that hold these values get new names; only the persisted values stay.
 
@@ -957,8 +977,8 @@ The steps, in order:
     - In the same render, fix the generated header of `gsql/queries/training_context.gsql` (written by `tigergraph/render.py`): it still names `scripts/temporal/render_training_queries.py`, which is now `scripts/render_queries.py`. Byte identity keeps it until then.
     - Run `mule install` (about 50 minutes; rerun if the 45-minute wait expires). The new dataset is re-prepared (about 6 minutes).
     - Repeat check (c): the digests must be unchanged.
-    - Then drop the retired names, callers first: `mule install` drops every installed query that no file defines (owner decision), so this step gives it that behaviour and runs it.
-    - Move the groups outside `BUILT_IN_GROUPS` out of the context query and `FEATURE_GROUPS` into a query under `gsql/analytics/` (owner decision), and confirm the split with the owner before installing.
+    - Then drop the retired names, callers first: `mule install` drops every installed query on `RETIRED_QUERIES` (owner decision), so this step gives it that behaviour and runs it.
+    - Move the groups outside `BUILT_IN_GROUPS` out of the context query and `FEATURE_GROUPS` into a query under `gsql/analytics/` (owner decision; the owner confirmed the split on 2026-09-28).
     - The renames are the constants of `contract/server.py` (and the allow-list of `tests/test_naming.py`, which a test keeps equal to them); some test texts of GSQL still spell the old names and fail until updated.
     - From the mid-migration review: the installer still writes (the scope schema change, CREATE, `installQueries`) through `executor.client.conn` rather than the executor, because the executor's retry errors would hide the install timeout the installer polls on. Route the writes through the executor with one attempt when this step runs `mule install` live. After the dataset is re-prepared, consider comparing the manifest's query hashes by file again (`data.manifest.changed_query_files` matches on content alone so that files moved in the layered restructure stay valid).
     - Gate offline: render check; golden identical except the query hash literal; the allow-list shrinks to the vertex, scope id and salts.
