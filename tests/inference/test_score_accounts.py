@@ -13,7 +13,7 @@ import pyarrow.parquet as pq
 from mule_pattern_learner.contract.server import HUB_QUERY
 from mule_pattern_learner.inference import score_accounts
 from mule_pattern_learner.inference.rejections import rejection_summary
-from mule_pattern_learner.testing.builders import HUB, base_config, saved_model
+from mule_pattern_learner.testing.builders import HUB, RUNTIME_CHANGES, saved_model, unit_config
 from mule_pattern_learner.testing.fake_graph import FakeSource, FakeTigerGraph
 from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffs
 from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
@@ -25,7 +25,7 @@ def scoring_graph() -> FakeTigerGraph:
 
 
 def test_score_new_writes_only_ok_rows_and_lists_rejected_ids(tmp_path: Path) -> None:
-    config = base_config()
+    config = unit_config(RUNTIME_CHANGES)
     model = saved_model(tmp_path / "model.pt", config)
     executor = scoring_graph()
     source = FakeSource(config, reject=frozenset({"ghost_1", "ghost_2"}))
@@ -60,7 +60,7 @@ def test_score_new_writes_only_ok_rows_and_lists_rejected_ids(tmp_path: Path) ->
 
 
 def test_score_new_keeps_float64_resolution_near_one(tmp_path: Path) -> None:
-    config = base_config()
+    config = unit_config(RUNTIME_CHANGES)
     # Logits near 20, where a float32 probability is exactly 1 for every account.
     model = saved_model(tmp_path / "model.pt", config, logit_shift=20.0)
     output = tmp_path / "scores.parquet"
@@ -81,7 +81,7 @@ def test_score_new_keeps_float64_resolution_near_one(tmp_path: Path) -> None:
 
 
 def test_score_new_reports_root_and_child_rejections_separately(tmp_path: Path) -> None:
-    config = base_config()
+    config = unit_config(RUNTIME_CHANGES)
     model = saved_model(tmp_path / "model.pt", config)
     # P5 and P7 are peers (children) of the scored accounts, never roots.
     source = FakeSource(config, reject=frozenset({"ghost", "P5", "P7"}))

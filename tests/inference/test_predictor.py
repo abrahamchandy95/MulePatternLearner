@@ -17,14 +17,14 @@ from mule_pattern_learner.inference.predictor import (
     score_batch,
 )
 from mule_pattern_learner.pipeline.connect import context_source
-from mule_pattern_learner.testing.builders import example_config, neighbourhood, saved_model
+from mule_pattern_learner.testing.builders import neighbourhood, saved_model, unit_config
 from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
 
 
 def test_embeddings_leave_the_logits_unchanged_and_rejected_roots_are_listed(
     tmp_path: Path,
 ) -> None:
-    config = example_config()
+    config = unit_config()
     path = saved_model(tmp_path / "model.pt", config)
     executor = FakeTigerGraph(factory=neighbourhood, statuses={"A0002": "missing_entity"})
     predictor = Predictor(path, context_source(executor, config), device="cpu")
@@ -47,7 +47,7 @@ def test_embeddings_leave_the_logits_unchanged_and_rejected_roots_are_listed(
 def test_scoring_uses_the_saved_runtime_and_restores_the_global_torch_state(
     tmp_path: Path,
 ) -> None:
-    config = example_config(runtime={"device": "cpu", "threads": 1, "deterministic": True})
+    config = unit_config(runtime={"device": "cpu", "threads": 1, "deterministic": True})
     path = saved_model(tmp_path / "model.pt", config)
     contexts = context_source(FakeTigerGraph(factory=neighbourhood), config)
     original, threads = torch.get_num_threads(), 3

@@ -17,10 +17,11 @@ from mule_pattern_learner.evaluation.audit import audit
 from mule_pattern_learner.paths import RunPaths
 from mule_pattern_learner.testing.builders import (
     CUTOFFS,
-    base_config,
+    RUNTIME_CHANGES,
     hub_registry,
     prepared_dataset,
     saved_model,
+    unit_config,
 )
 from mule_pattern_learner.testing.fake_graph import FakeSource, FakeTigerGraph
 from mule_pattern_learner.tigergraph.scope import TigerGraphScope
@@ -35,7 +36,7 @@ def split_graph(accounts: pd.DataFrame) -> FakeTigerGraph:
 def test_the_audit_scores_through_the_dataset_clock_and_hubs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    config = base_config(runtime={"max_rejected_root_fraction": 0.1})
+    config = unit_config(RUNTIME_CHANGES, runtime={"max_rejected_root_fraction": 0.1})
     dataset, _, accounts = prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     run = RunPaths(tmp_path / "run")
     saved_model(run.model, config, dataset)
@@ -92,7 +93,7 @@ def test_the_audit_scores_through_the_dataset_clock_and_hubs(
 def test_the_audit_fails_on_censored_rejections(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, limit: float, rejected_index: int
 ) -> None:
-    config = base_config(runtime={"max_rejected_root_fraction": limit})
+    config = unit_config(RUNTIME_CHANGES, runtime={"max_rejected_root_fraction": limit})
     dataset, _, accounts = prepared_dataset(tmp_path / "dataset", config, monkeypatch)
     run = RunPaths(tmp_path / "run")
     saved_model(run.model, config, dataset)

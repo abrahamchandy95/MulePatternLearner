@@ -14,14 +14,14 @@ from mule_pattern_learner.contract.server import (
     SCOPE_POLICY_QUERY,
 )
 from mule_pattern_learner.paths import GSQL_DIR
-from mule_pattern_learner.testing.builders import SNAPSHOT_SOURCE, scope_population, unit_config
+from mule_pattern_learner.testing.builders import UNIT_SOURCE, scope_population, unit_config
 from mule_pattern_learner.testing.fake_graph import FakeTigerGraph, policy_counts
 from mule_pattern_learner.tigergraph import gsql_text, scope
 
 
 def ensure(server: FakeTigerGraph, config: ScopeConfig) -> None:
     """ensure_scope for the unit snapshot and the built-in split seed."""
-    scope.ensure_scope(server, config, source_id=SNAPSHOT_SOURCE, split_seed=42)
+    scope.ensure_scope(server, config, source_id=UNIT_SOURCE, split_seed=42)
 
 
 def test_missing_scope_is_created_unless_forbidden() -> None:
@@ -36,12 +36,12 @@ def test_missing_scope_is_created_unless_forbidden() -> None:
     assert server.names() == [CREATE_SCOPE_QUERY, FINALIZE_SCOPE_QUERY, SCOPE_POLICY_QUERY]
     _, create = server.calls[0]
     assert create["unowned_policy"] == "linked"
-    assert (create["source_id"], create["split_seed"]) == (SNAPSHOT_SOURCE, 42)
+    assert (create["source_id"], create["split_seed"]) == (UNIT_SOURCE, 42)
     assert "shared_unowned" not in create
     assert server.calls[1][1] == {"scope_id": "unit_scope", "expected_members": 3}
     assert server.scopes["unit_scope"] == {
         "ready": True,
-        "source_id": SNAPSHOT_SOURCE,
+        "source_id": UNIT_SOURCE,
         "split_seed": 42,
     }
     for policy in ("independent", "shared"):
@@ -56,7 +56,7 @@ def existing(header: dict[str, Any], policy: str) -> FakeTigerGraph:
 
 
 def test_existing_scope_must_have_the_configured_unowned_policy() -> None:
-    header = {"ready": True, "source_id": SNAPSHOT_SOURCE, "split_seed": 42}
+    header = {"ready": True, "source_id": UNIT_SOURCE, "split_seed": 42}
     config = unit_config().scope
     for policy in ("independent", "shared", "linked"):
         assert scope.inferred_scope_policy(policy_counts(policy)) == policy

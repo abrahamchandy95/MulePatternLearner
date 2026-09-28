@@ -22,9 +22,9 @@ from mule_pattern_learner.paths import DatasetPaths
 from mule_pattern_learner.pipeline import check as pipeline_check
 from mule_pattern_learner.testing.builders import (
     UNIT_SOURCE,
-    example_config,
     neighbourhood,
     scoped_accounts,
+    unit_config,
 )
 from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
 from mule_pattern_learner.tigergraph import gsql_text
@@ -34,7 +34,7 @@ from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
 from mule_pattern_learner.tigergraph.labels import TigerGraphObservedLabels
 from mule_pattern_learner.tigergraph.scope import TigerGraphScope
 
-CONFIG = example_config(training={"batch_size": 32}, sampler={"fanouts": [8, 2]})
+CONFIG = unit_config(training={"batch_size": 32}, sampler={"fanouts": [8, 2]})
 
 
 def prepared(data: Path, config: RunConfig) -> tuple[DatasetPaths, FakeTigerGraph]:

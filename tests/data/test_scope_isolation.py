@@ -38,9 +38,9 @@ from mule_pattern_learner.pipeline.connect import context_source
 from mule_pattern_learner.testing.builders import (
     UNIT_SOURCE,
     context,
-    example_config,
     message,
     scoped_accounts,
+    unit_config,
 )
 from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher, validate_context
@@ -240,7 +240,7 @@ def test_strict_preparation_and_nnpu_use_the_correct_phase_end_to_end(tmp_path: 
     from mule_pattern_learner.data.preparation import prepare
     from mule_pattern_learner.training.trainer import train
 
-    cfg = example_config(
+    cfg = unit_config(
         scope={"id": "unit_strict"},
         dataset={"seed_limits": {"train": 10, "validation": 10, "test": 10}},
     )

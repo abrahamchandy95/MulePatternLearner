@@ -29,6 +29,7 @@ from ..sampling.candidates import (
 )
 from ..sampling.cugraph_sampler import CuGraphSampler
 from ..sampling.torch_sampler import TorchGroupedSampler
+from .builders import association, message
 
 # 0.999 quantile of chi-square with 11 degrees of freedom.
 CHI2_999 = {11: 31.26}
@@ -36,16 +37,14 @@ CHI2_999 = {11: 31.26}
 Runs = list[tuple[str, Callable[[int], np.ndarray]]]
 
 
-def message(relation: str, seq: int, key: ContextKey, n: int) -> dict[str, Any]:
-    payment = RELATIONS.index(relation) < PAYMENT_COUNT
-    return {
-        "relation": relation,
-        "node_type": "Account" if payment else "Party",
-        "node_id": f"{relation}-{n}",
-        "event_id": f"{relation}:{seq}" if payment else "",
-        "event_seq": seq if payment else key.cutoff_seq,
-        "event_ts_ms": seq * 1000 if payment else key.cutoff_ms,
-    }
+def candidate(relation: str, seq: int, key: ContextKey, n: int) -> dict[str, Any]:
+    """The n-th candidate of a relation: a payment at seq, or an association at the cutoff."""
+    node_id = f"{relation}-{n}"
+    if RELATIONS.index(relation) < PAYMENT_COUNT:
+        return message(
+            seq, seq * 1000, key, relation=relation, node_id=node_id, event_id=f"{relation}:{seq}"
+        )
+    return association(key, relation=relation, node_id=node_id)
 
 
 def synthetic_table(
@@ -65,9 +64,9 @@ def synthetic_table(
             )
             if r < PAYMENT_COUNT:
                 seqs = rng.choice(np.arange(1, cutoff), min(count, cutoff - 1), replace=False)
-                messages += [message(relation, int(s), key, n) for n, s in enumerate(seqs)]
+                messages += [candidate(relation, int(s), key, n) for n, s in enumerate(seqs)]
             elif full is None:
-                messages += [message(relation, 0, key, n) for n in range(count)]
+                messages += [candidate(relation, 0, key, n) for n in range(count)]
         keys.append(key)
         rows.append({"messages": messages})
     return CandidateTable.build(keys, rows)

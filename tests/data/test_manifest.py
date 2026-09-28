@@ -12,7 +12,6 @@ from mule_pattern_learner.data.preparation import prepare
 from mule_pattern_learner.paths import DatasetPaths
 from mule_pattern_learner.testing.builders import (
     UNIT_SOURCE,
-    example_config,
     scoped_accounts,
     unit_config,
 )
@@ -65,7 +64,7 @@ def test_a_dataset_records_its_query_files_by_path_and_passes_its_own_check(
 ) -> None:
     population = scoped_accounts()
     executor = FakeTigerGraph({}, population=population)
-    config = example_config(dataset={"seed_limits": {"train": 10, "validation": 10, "test": 10}})
+    config = unit_config(dataset={"seed_limits": {"train": 10, "validation": 10, "test": 10}})
     dataset = DatasetPaths(tmp_path / "dataset")
     manifest = prepare(
         config,

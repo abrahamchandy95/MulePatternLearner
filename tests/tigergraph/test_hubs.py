@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +18,7 @@ from mule_pattern_learner.data.hub_registry import (
     load_hub_registry,
 )
 from mule_pattern_learner.paths import DatasetPaths
-from mule_pattern_learner.testing.builders import SAMPLER, hub_rows
+from mule_pattern_learner.testing.builders import SMALL_SAMPLER, hub_rows
 from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
 from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
 
@@ -69,7 +70,9 @@ def test_hub_registry_parse_save_load_and_stub_semantics(tmp_path: Path) -> None
         load_hub_registry(dataset, manifest)
     empty = HubRegistry.empty()
     assert not empty.is_stub("Account", "H1", 123, 1) and len(empty) == 0
-    assert hub_threshold(SAMPLER) == 1024
+    # The threshold is the children pool's history bound.
+    narrow = replace(SMALL_SAMPLER, children=replace(SMALL_SAMPLER.children, max_history=1024))
+    assert hub_threshold(narrow) == 1024
 
 
 @pytest.mark.parametrize(

@@ -14,10 +14,9 @@ from mule_pattern_learner.contract.sampler_plan import SamplerPlan
 from mule_pattern_learner.contract.server import CONTEXT_QUERY
 from mule_pattern_learner.reference.batch_features import node_features
 from mule_pattern_learner.testing.builders import (
-    PLAN,
-    SAMPLER,
+    CORE_PLAN,
+    SMALL_SAMPLER,
     context,
-    context_row,
     event,
     message,
     query_context_batch,
@@ -30,10 +29,10 @@ from mule_pattern_learner.tigergraph.context_query import validate_context
 
 def test_validation_errors_from_a_response_are_never_retried() -> None:
     key = root(1)
-    bad = {**context_row(key, [], encodings=False), "request_index": 0, "cutoff_seq": 999}
+    bad = {**context(key, [], encodings=False), "request_index": 0, "cutoff_seq": 999}
     conn = FakeConn([[bad], [bad]])
     with pytest.raises(ValueError, match="differs"):
-        query_context_batch(executor(conn), [key], plan=PLAN, sampler=SAMPLER)
+        query_context_batch(executor(conn), [key], plan=CORE_PLAN, sampler=SMALL_SAMPLER)
     assert len(conn.calls) == 1
 
 
@@ -51,26 +50,28 @@ def test_call_level_errors_and_malformed_responses_raise(
 ) -> None:
     fake = FakeTigerGraph(answers={CONTEXT_QUERY: lambda params: rows})
     with pytest.raises(ValueError, match=message):
-        query_context_batch(fake, [root(0)], plan=PLAN, sampler=SAMPLER)
+        query_context_batch(fake, [root(0)], plan=CORE_PLAN, sampler=SMALL_SAMPLER)
 
 
 def test_response_bound_is_per_hop() -> None:
     key = root(0)
-    many = [event(key.cutoff_seq - 1 - i, key) for i in range(SAMPLER.children.response_bound + 1)]
-    row = context_row(key, many, encodings=False)
-    validate_context(key, row, PLAN, SAMPLER, 1)
+    many = [
+        event(key.cutoff_seq - 1 - i, key) for i in range(SMALL_SAMPLER.children.response_bound + 1)
+    ]
+    row = context(key, many, encodings=False)
+    validate_context(key, row, CORE_PLAN, SMALL_SAMPLER, 1)
     with pytest.raises(ValueError, match="bound"):
-        validate_context(key, row, PLAN, SAMPLER, 2)
+        validate_context(key, row, CORE_PLAN, SMALL_SAMPLER, 2)
 
 
 def test_unknown_channel_is_counted_but_unknown_rail_is_rejected() -> None:
     key = root(0)
-    row = context_row(key, [event(990, key)], encodings=False)
+    row = context(key, [event(990, key)], encodings=False)
     row["messages"][0]["channel"] = "carrier_pigeon"
-    assert validate_context(key, row, PLAN, SAMPLER) == 1
+    assert validate_context(key, row, CORE_PLAN, SMALL_SAMPLER) == 1
     row["messages"][0]["rail"] = "carrier_pigeon"
     with pytest.raises(ValueError, match="rail"):
-        validate_context(key, row, PLAN, SAMPLER)
+        validate_context(key, row, CORE_PLAN, SMALL_SAMPLER)
 
 
 def test_future_and_same_event_are_rejected() -> None:
