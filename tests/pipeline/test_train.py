@@ -115,6 +115,13 @@ def files(directory: Path) -> set[str]:
     return {p.relative_to(directory).as_posix() for p in directory.rglob("*") if p.is_file()}
 
 
+def dataset_files(data: Path) -> tuple[set[str], set[str]]:
+    """The files under data: the datasets' tables, and the entries of their context caches."""
+    written = files(data)
+    cached = {name for name in written if name.split("/")[1] == "contexts"}
+    return written - cached, cached
+
+
 def test_train_then_audit_write_exactly_the_files_of_the_run_and_dataset_tables(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -130,7 +137,8 @@ def test_train_then_audit_write_exactly_the_files_of_the_run_and_dataset_tables(
     output = RunPaths.of(BASELINE_VARIANT, config.training.seed, results)
     result = train_run(output, config=config, data=data)
     assert result["status"] == "complete"
-    # The dataset is data/<dataset id>/, and nothing else is written there.
+    # The dataset is data/<dataset id>/, and nothing else is written there: its tables,
+    # and its context cache with one entry for every distinct context the run requested.
     identity = dataset_id(FAKE_SOURCE, config)
     prepared = {
         f"{identity}/manifest.json",
@@ -138,7 +146,10 @@ def test_train_then_audit_write_exactly_the_files_of_the_run_and_dataset_tables(
         f"{identity}/observed_labels.parquet",
         f"{identity}/hubs.parquet",
     }
-    assert result["dataset_id"] == identity and files(data) == prepared
+    tables, cached = dataset_files(data)
+    assert result["dataset_id"] == identity and tables == prepared
+    assert {name.split("/")[0] for name in cached} == {identity}
+    assert len(cached) == result["contexts"]["distinct"] > 0
     trained = {
         "config.json",
         "model.pt",
@@ -188,7 +199,9 @@ def test_train_then_audit_write_exactly_the_files_of_the_run_and_dataset_tables(
     } | {f"plots/{name}.png" for name in AUDIT_FIGURES}
     assert files(output.root) == trained | audited
     assert "## Ground-truth audit" in output.report.read_text()
-    assert files(data) == prepared
+    # The audits add the contexts of their samples to the dataset's cache.
+    tables, audit_cached = dataset_files(data)
+    assert tables == prepared and cached < audit_cached
     # The audits append their lines to the run's events.jsonl, after training's.
     recorded = read_events(output.events)
     assert [event["event"] for event in recorded] == [*events, "audit", "audit"]

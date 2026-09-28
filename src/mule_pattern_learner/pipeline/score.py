@@ -25,7 +25,8 @@ def score_accounts(run: RunPaths, accounts: Path, date: str | None = None) -> di
     scores/<file stem>_<date>_rejected.txt, and the lines scoring prints are appended to
     the run's events.jsonl. Existing outputs are refused before connecting; the
     connection has the model's retry budgets, and its installed queries must be the
-    repository's before any account is scored.
+    repository's before any account is scored. The graph need not be the frozen source
+    of a dataset, so the source has no disk tier.
     """
     if not accounts.is_file():
         raise FileNotFoundError(f"No account file {accounts}")
