@@ -36,6 +36,7 @@ from ..artifacts import (
     read_json,
     read_predictions,
 )
+from ..contract.graph_schema import HELD_OUT_SPLITS
 from ..metrics import REVIEW_BUDGETS, budget_name
 from ..paths import RunPaths
 from .ranking import SplitScores, plot_capture, plot_precision_recall, plot_roc
@@ -50,8 +51,6 @@ from .training import (
     plot_validation_ranking,
 )
 
-# The splits the proxy predicts and the audits cover.
-SPLITS = ("validation", "test")
 # The figures of each kind, and what report.md calls them.
 TRAINING_FIGURES = {
     "training_objective": "Training loss and nnPU objective",
@@ -115,7 +114,7 @@ def training_files(run: RunPaths) -> TrainingFiles:
     """history.csv, epochs.csv, metrics.json and the proxy predictions of a complete run."""
     metrics = read_json(run.metrics)
     predictions = {}
-    for split in SPLITS:
+    for split in HELD_OUT_SPLITS:
         frame = read_predictions(run.predictions(split))
         predictions[split] = SplitScores(
             y=frame.observed_label.to_numpy(np.int64),
@@ -128,7 +127,7 @@ def training_files(run: RunPaths) -> TrainingFiles:
 
 def audited_splits(run: RunPaths) -> list[str]:
     """The splits the run has audited: a split's report is written last."""
-    return [split for split in SPLITS if run.audit_report(split).exists()]
+    return [split for split in HELD_OUT_SPLITS if run.audit_report(split).exists()]
 
 
 def audit_files(run: RunPaths) -> dict[str, SplitScores]:
@@ -352,7 +351,7 @@ def training_section(run: RunPaths) -> list[str]:
     """report.md's training tables and figures, for a complete run."""
     metrics = read_json(run.metrics)
     epochs = read_epochs(run.epochs)
-    proxy = {split: metrics["observed_label_proxy"][split] for split in SPLITS}
+    proxy = {split: metrics["observed_label_proxy"][split] for split in HELD_OUT_SPLITS}
     contexts = metrics["contexts"]
     rejected = metrics["rejected_roots"]
     run_rows = [
@@ -371,7 +370,7 @@ def training_section(run: RunPaths) -> list[str]:
             " / ".join(number(counts["rejected"]) for counts in rejected.values()),
         ],
     ]
-    empty: dict[str, Mapping[str, Any]] = {split: {} for split in SPLITS}
+    empty: dict[str, Mapping[str, Any]] = {split: {} for split in HELD_OUT_SPLITS}
     proxy_rows = [
         [
             "Observed positives / accounts",
@@ -392,7 +391,7 @@ def training_section(run: RunPaths) -> list[str]:
         "accounts, which count as negatives: it is what training selects on, not the "
         "ground truth.",
         "",
-        *table(["Proxy", *SPLITS], proxy_rows),
+        *table(["Proxy", *HELD_OUT_SPLITS], proxy_rows),
         "",
         *figure_links(run, TRAINING_FIGURES),
     ]

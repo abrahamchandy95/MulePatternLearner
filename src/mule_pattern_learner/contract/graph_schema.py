@@ -41,6 +41,8 @@ RAILS = ("unknown", "zelle", "ach", "card", "cash", "check", "internal")
 # The scope visibility phase of each split; unscoped contexts use phase 3.
 SPLIT_PHASE = {"train": 1, "validation": 2, "test": 3}
 SPLITS = tuple(SPLIT_PHASE)
+# The splits held out from training: the proxy predicts them and the audits cover them.
+HELD_OUT_SPLITS: tuple[str, ...] = ("validation", "test")
 PHASE_SPLIT = {phase: split for split, phase in SPLIT_PHASE.items()}
 
 

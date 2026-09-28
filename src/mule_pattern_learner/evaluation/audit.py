@@ -22,7 +22,7 @@ import pandas as pd
 from ..artifacts import AUDIT_COLUMNS, write_audit_scores, write_json, write_rejected
 from ..contract.bounds import AUDIT_POPULATION, AUDIT_SAMPLE
 from ..contract.clock import timestamp
-from ..contract.graph_schema import SPLIT_PHASE
+from ..contract.graph_schema import HELD_OUT_SPLITS, SPLIT_PHASE
 from ..data.accounts import scope_accounts
 from ..data.contexts import ContextReader
 from ..data.hub_registry import HubRegistry, load_hub_registry
@@ -49,8 +49,9 @@ from ..runtime.progress import emit
 from .sample import AUDIT_NEGATIVES, audit_sample
 from .truth import checked_truth
 
-# The splits `mule evaluate` audits, and what each audit is for.
-AUDIT_SPLITS = {"validation": "decisions", "test": "reporting"}
+# The splits `mule evaluate` audits, and what each audit is for: decisions use the
+# validation audit, and the test audit is for reporting.
+AUDIT_SPLITS = dict(zip(HELD_OUT_SPLITS, ("decisions", "reporting"), strict=True))
 
 
 @dataclass(frozen=True)
