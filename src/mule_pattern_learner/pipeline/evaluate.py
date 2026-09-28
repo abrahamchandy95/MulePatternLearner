@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
+
 from ..artifacts import read_json
 from ..data.context_cache import ContextCache
 from ..data.contexts import close_source
@@ -16,11 +18,33 @@ from ..runtime.progress import recording
 from ..tigergraph.oracle import TigerGraphTruth
 from ..tigergraph.provenance import verify_frozen_source
 from ..tigergraph.scope import TigerGraphScope
-from .connect import connect, context_source
+from .connect import Session, connect, context_source
+
+
+class SharedTruth:
+    """The graph's oracle truth on a session's connection, read once for all its audits.
+
+    The first audit that needs truth reads it (connecting the session if nothing has
+    yet), and every later audit gets the same table, so a suite of runs reads truth
+    once, and not at all when every run it names is audited already.
+    """
+
+    def __init__(self, session: Session) -> None:
+        self.session = session
+        self.table: pd.DataFrame | None = None
+
+    def read(self) -> pd.DataFrame:
+        if self.table is None:
+            self.table = TigerGraphTruth(self.session.executor()).read()
+        return self.table
 
 
 def evaluate_run(
-    run: RunPaths, *, truth: TruthReader | None = None, data: Path = DATA_DIR
+    run: RunPaths,
+    *,
+    truth: TruthReader | None = None,
+    data: Path = DATA_DIR,
+    session: Session | None = None,
 ) -> dict[str, Any]:
     """The audits of a run's frozen model on validation and test, by split.
 
@@ -32,9 +56,11 @@ def evaluate_run(
     the audits then read and write the dataset's disk tier, which every run of the
     dataset shares, so the audits of the next run request none of the same contexts.
     Truth is read once for both splits: the graph's oracle truth unless ``truth``
-    supplies another reader (the tests' ParquetTruth). The lines the audits print are
-    appended to the run's events.jsonl. Once a split is audited here, the audit figures
-    and report.md are drawn again (reporting.report.write_audit_report).
+    supplies another reader (the tests' ParquetTruth, or a suite's SharedTruth). With a
+    ``session`` the audits run on its connection, which a suite of runs shares. The lines
+    the audits print are appended to the run's events.jsonl. Once a split is audited
+    here, the audit figures and report.md are drawn again
+    (reporting.report.write_audit_report).
     """
     inputs = audit_inputs(run, data=data)
     reports = {
@@ -43,7 +69,8 @@ def evaluate_run(
     pending = [split for split in AUDIT_SPLITS if split not in reports]
     if pending:
         with recording(run.events):
-            executor = connect(inputs.model.config.transport)
+            transport = inputs.model.config.transport
+            executor = session.executor() if session is not None else connect(transport)
             verify_frozen_source(executor, inputs.manifest)
             answer = (truth if truth is not None else TigerGraphTruth(executor)).read()
             scope = TigerGraphScope(executor)

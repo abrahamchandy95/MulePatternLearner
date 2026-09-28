@@ -25,7 +25,7 @@ from ..tigergraph.labels import TigerGraphObservedLabels
 from ..tigergraph.provenance import resolve_source_id, source_counts
 from ..tigergraph.reveal import ensure_revealed_labels
 from ..tigergraph.scope import TigerGraphScope, ensure_scope
-from .connect import connect
+from .connect import Session, connect
 
 
 def install_queries(config: RunConfig = DEFAULT_CONFIG) -> dict[str, Any]:
@@ -57,15 +57,17 @@ def find_datasets(config: RunConfig, data: Path = DATA_DIR) -> list[DatasetPaths
     return found
 
 
-def prepare_dataset(config: RunConfig, data: Path = DATA_DIR) -> DatasetPaths:
+def prepare_dataset(
+    config: RunConfig, data: Path = DATA_DIR, *, session: Session | None = None
+) -> DatasetPaths:
     """The ready dataset of config under data, prepared (or resumed) as needed.
 
     A ready dataset of config is reused without connecting, but only after its GSQL
     hashes match the current ones. Otherwise the graph is brought to a trainable state
-    first: stale queries are installed, the scope is created if missing, and known
-    mules are revealed if the graph has none. A dataset being prepared keeps its
-    source id; with none, or several (the graph was reloaded), the source id is read
-    from the graph.
+    first, on the session's connection if there is one: stale queries are installed,
+    the scope is created if missing, and known mules are revealed if the graph has none.
+    A dataset being prepared keeps its source id; with none, or several (the graph was
+    reloaded), the source id is read from the graph.
     """
     found = find_datasets(config, data)
     source_id: str | None = None
@@ -77,7 +79,7 @@ def prepare_dataset(config: RunConfig, data: Path = DATA_DIR) -> DatasetPaths:
             # The trainer re-verifies artifacts before use. No database connection is needed.
             return dataset
         source_id = manifest["source"]["source_id"]
-    executor = connect(config.transport)
+    executor = session.executor() if session is not None else connect(config.transport)
     install(executor)
     counts = source_counts(executor)
     if source_id is None:

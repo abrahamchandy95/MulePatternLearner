@@ -139,7 +139,9 @@ def test_train_prepares_then_trains_or_resumes_the_baseline_run(
     trained: list[tuple[RunConfig, DatasetPaths, RunPaths, dict[str, Any]]] = []
     dataset = DatasetPaths.of("id", tmp_path / "data")
 
-    def prepare(c: RunConfig, data: Path) -> DatasetPaths:
+    def prepare(c: RunConfig, data: Path, *, session: object) -> DatasetPaths:
+        # `mule train` connects on its own.
+        assert session is None
         prepared.append((c, data))
         return dataset
 

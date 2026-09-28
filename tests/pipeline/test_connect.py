@@ -118,6 +118,14 @@ def test_a_resumed_stream_checks_the_frozen_source_before_fetching(
     with pytest.raises(ValueError, match="counts changed"):
         connect.open_context_source(UNUSED, manifest, config)
     graph.counts["Account"] -= 1
+    # A session's sources share its one connection, and each checks the frozen source.
+    session = connect.Session(config.with_changes({"transport": {"max_outage_s": 90}}).transport)
+    budgets.clear()
+    graph.calls.clear()
+    for _ in range(2):
+        connect.open_context_source(UNUSED, manifest, config, session=session).close()
+    assert budgets == [(3, 90)]
+    assert graph.names() == [SCOPE_POLICY_QUERY] * 2
     graph.scopes["scope"]["ready"] = False
     with pytest.raises(ValueError, match="no longer valid"):
         connect.open_context_source(UNUSED, manifest, config)
