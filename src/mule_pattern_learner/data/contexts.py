@@ -103,9 +103,10 @@ class ContextCounts:
 
     requested counts the contexts fetches asked for (a key repeated within one fetch
     once), memory_hits those served from memory and disk_hits those read from the disk
-    tier, both without a request. seen holds the context_hash of every distinct
-    (hop, key) asked for; a resumed run restores it, so distinct counts every segment
-    of the run.
+    tier, both without a request. A context that a fetch awaited from another counts as
+    a disk hit when the other read it from disk. seen holds the context_hash of every
+    distinct (hop, key) asked for; a resumed run restores it, so distinct counts every
+    segment of the run.
     """
 
     requested: int = 0
@@ -122,6 +123,14 @@ class ContextCounts:
     @property
     def distinct(self) -> int:
         return len(self.seen)
+
+
+@dataclass(frozen=True)
+class _Obtained:
+    """What a fetch obtained for the keys it claimed: their rows, and those read from disk."""
+
+    rows: dict[ContextKey, dict[str, Any]]
+    from_disk: frozenset[ContextKey]
 
 
 class ContextReader(Protocol):
@@ -158,13 +167,16 @@ class ContextSource:
     (hop, ContextKey). Given a dataset's context cache (``cache``), ``disk`` is its
     context_cache.DiskTier: a context memory lacks is read from disk before it is
     requested, and every row TigerGraph returns is written there as it came, so a later
-    source of the same dataset, feature flags and pools requests it no more. Rows read
-    from disk are served exactly as requested ones, and both go into the LRU. Several
-    batch-builder threads may call fetch concurrently: they share one request pool of
-    `concurrency` workers, a lock guards the LRU and counters, a key already being
-    fetched by another thread is awaited rather than requested twice, disk reads happen
-    outside the lock, and each fetch keeps at most `concurrency` of its own requests in
-    flight. The first request and every `encoding_check_every`-th request ask
+    source of the same dataset, feature flags and pools requests it no more while its
+    entry lasts. Rows read from disk are served exactly as requested ones, and both go
+    into the LRU. Several batch-builder threads may call fetch concurrently: they share
+    one request pool of `concurrency` workers, and a lock guards the LRU and counters.
+    Under the lock a fetch claims the keys that neither memory holds nor another fetch
+    has claimed; it reads them from disk outside the lock and requests only those the
+    disk lacks, keeping at most `concurrency` of its own requests in flight. A fetch
+    that asks for a claimed key awaits the claim rather than reading or requesting the
+    key again, so each context is requested once while its entry lasts, however the LRU
+    churns. The first request and every `encoding_check_every`-th request ask
     TigerGraph for Fourier vectors and verify them. This adapter bounds client memory,
     not TigerGraph scan work. Train against a frozen source for reproducibility: the
     disk tier's entries are the frozen source's rows.
@@ -203,7 +215,8 @@ class ContextSource:
         self.counts = ContextCounts()
         self.diagnostics: Counter[str] = Counter()
         self._lock = threading.Lock()
-        self._inflight: dict[tuple[int, ContextKey], Future[dict[ContextKey, dict[str, Any]]]] = {}
+        # The claim of every key a fetch is reading from disk or requesting.
+        self._inflight: dict[tuple[int, ContextKey], Future[_Obtained]] = {}
         self._closed = False
 
     def __enter__(self) -> ContextSource:
@@ -215,104 +228,91 @@ class ContextSource:
     def fetch(self, keys: list[ContextKey], *, hop: int = 1) -> list[dict[str, Any] | None]:
         _check_source_limits(keys, hop)
         unique = list(dict.fromkeys(keys))
-        stored = self._stored(unique, hop)
-        shared: dict[ContextKey, Future[dict[ContextKey, dict[str, Any]]]] = {}
-        blocks: list[tuple[list[ContextKey], Future[dict[ContextKey, dict[str, Any]]]]] = []
+        shared: dict[ContextKey, Future[_Obtained]] = {}
+        claimed: list[ContextKey] = []
+        claim: Future[_Obtained] = Future()
+        claim.set_running_or_notify_cancel()
         with self._lock:
             if self._closed:
                 raise RuntimeError("Context source is closed")
             rows = self.memory.get(hop, unique)
-            memory_hits = len(rows)
-            # Rows read from disk go into the LRU with the fetched ones.
-            obtained: dict[ContextKey, dict[str, Any]] = {}
-            missing = []
             for key in unique:
                 if key in rows:
                     continue
-                if key in stored:
-                    rows[key] = obtained[key] = stored[key]
-                elif (hop, key) in self._inflight:
+                if (hop, key) in self._inflight:
                     shared[key] = self._inflight[(hop, key)]
                 else:
-                    missing.append(key)
+                    claimed.append(key)
+                    self._inflight[(hop, key)] = claim
             self.counts.ask(unique, hop)
-            self.counts.memory_hits += memory_hits
-            self.counts.disk_hits += len(obtained)
+            self.counts.memory_hits += len(rows)
             self.diagnostics["shared_inflight"] += len(shared)
-            for start in range(0, len(missing), self.request_batch_size):
-                block = missing[start : start + self.request_batch_size]
-                holder: Future[dict[ContextKey, dict[str, Any]]] = Future()
-                holder.set_running_or_notify_cancel()
-                for key in block:
-                    self._inflight[(hop, key)] = holder
-                blocks.append((block, holder))
-        fetched: dict[ContextKey, dict[str, Any]] = {}
-        try:
-            self._run_window(deque(blocks), hop, fetched)
-        finally:
-            with self._lock:
-                self.memory.put(hop, unique, {**obtained, **fetched})
-                for block, holder in blocks:
-                    for key in block:
-                        if self._inflight.get((hop, key)) is holder:
-                            del self._inflight[(hop, key)]
-        rows.update(fetched)
+        rows.update(self._obtain(unique, claimed, hop, claim).rows)
+        from_disk = 0
         for key, holder in shared.items():
-            rows[key] = holder.result()[key]
+            other = holder.result()
+            rows[key] = other.rows[key]
+            from_disk += key in other.from_disk
         with self._lock:
+            # A context the claiming fetch read from disk reached this one without a request.
+            self.counts.disk_hits += from_disk
             return _resolve(keys, rows, self.rejections, self.rejections_by_hop, hop)
 
-    def _stored(self, unique: list[ContextKey], hop: int) -> dict[ContextKey, dict[str, Any]]:
-        """The disk tier's rows of the keys that neither memory nor another fetch holds.
+    def _obtain(
+        self,
+        unique: list[ContextKey],
+        claimed: list[ContextKey],
+        hop: int,
+        claim: Future[_Obtained],
+    ) -> _Obtained:
+        """Read the claimed keys from disk, request those it lacks, then answer the claim.
 
-        The disk is read outside the lock; fetch then serves a row read here only if
-        the key is still neither in memory nor in flight, and otherwise drops it.
+        The disk is read outside the lock: no other fetch reads or requests a claimed
+        key, it awaits the claim. The rows obtained go into the LRU with every key of
+        the fetch (``unique``), and the claim is released with them, or with the error.
         """
-        if self.disk is None:
-            return {}
-        with self._lock:
-            if self._closed:
-                raise RuntimeError("Context source is closed")
-            held = self.memory.get(hop, unique)
-            absent = [k for k in unique if k not in held and (hop, k) not in self._inflight]
-        return {key: _canonical(row) for key, row in self.disk.get(hop, absent).items()}
+        stored: dict[ContextKey, dict[str, Any]] = {}
+        fetched: dict[ContextKey, dict[str, Any]] = {}
+        try:
+            if self.disk is not None and claimed:
+                stored = {key: _canonical(row) for key, row in self.disk.get(hop, claimed).items()}
+                with self._lock:
+                    self.counts.disk_hits += len(stored)
+            missing = [key for key in claimed if key not in stored]
+            size = self.request_batch_size
+            blocks = deque(missing[start : start + size] for start in range(0, len(missing), size))
+            self._run_window(blocks, hop, fetched)
+        except BaseException as error:
+            claim.set_exception(error)
+            raise
+        finally:
+            with self._lock:
+                self.memory.put(hop, unique, {**stored, **fetched})
+                for key in claimed:
+                    if self._inflight.get((hop, key)) is claim:
+                        del self._inflight[(hop, key)]
+        obtained = _Obtained({**stored, **fetched}, frozenset(stored))
+        claim.set_result(obtained)
+        return obtained
 
     def _run_window(
-        self,
-        blocks: deque[tuple[list[ContextKey], Future[dict[ContextKey, dict[str, Any]]]]],
-        hop: int,
-        fetched: dict[ContextKey, dict[str, Any]],
+        self, blocks: deque[list[ContextKey]], hop: int, fetched: dict[ContextKey, dict[str, Any]]
     ) -> None:
-        """Keep at most `concurrency` of this fetch's requests in flight."""
-        running: dict[Future[list[dict[str, Any]]], tuple[list[ContextKey], Future[Any]]] = {}
+        """Request the blocks, keeping at most `concurrency` of this fetch's requests in flight."""
+        running: dict[Future[list[dict[str, Any]]], list[ContextKey]] = {}
         try:
             while blocks or running:
                 while blocks and len(running) < self.concurrency:
-                    block, holder = blocks.popleft()
+                    block = blocks.popleft()
                     with self._lock:
                         emit = self._cadence.next()
-                    try:
-                        future = self.pool.submit(self._query, block, hop, emit)
-                    except BaseException:
-                        blocks.appendleft((block, holder))
-                        raise
-                    running[future] = (block, holder)
+                    running[self.pool.submit(self._query, block, hop, emit)] = block
                 done, _ = wait(running, return_when=FIRST_COMPLETED)
                 for future in done:
-                    block, holder = running.pop(future)
-                    try:
-                        entries = dict(zip(block, future.result(), strict=True))
-                    except BaseException:
-                        blocks.appendleft((block, holder))
-                        raise
-                    fetched.update(entries)
-                    holder.set_result(entries)
-        except BaseException as error:
-            for future, pair in running.items():
+                    fetched.update(zip(running.pop(future), future.result(), strict=True))
+        except BaseException:
+            for future in running:
                 future.cancel()
-                blocks.append(pair)
-            for _, holder in blocks:
-                holder.set_exception(error)
             raise
 
     def _query(self, block: list[ContextKey], hop: int, emit: bool) -> list[dict[str, Any]]:
