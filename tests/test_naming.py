@@ -59,6 +59,7 @@ ALLOWED = {
     "Temporal_Training_Scope": "the scope vertex type, part of the graph's schema",
     "temporal_live_step": "the salt of the per-step draws; a new value changes every step",
     "marginal_cohort": "the salt of the reservoir ranks; a new value selects other accounts",
+    # The old saved-settings conversion reads these until main is replaced.
     "cohort_seed": "a key of configurations saved before the typed configuration",
     "temporal": "the variant value of configurations saved before the typed configuration",
     # pylibcugraph's API, which the tests' mock library imitates.
