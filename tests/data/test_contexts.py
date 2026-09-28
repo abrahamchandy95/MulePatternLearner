@@ -92,17 +92,18 @@ def test_per_request_failures_become_none_and_are_counted() -> None:
 def test_hop_pools_and_flags_are_sent_and_lru_is_keyed_by_hop() -> None:
     plan = FeaturePlan(("entity_meta", "message_core", "time_encoding", "rolling_windows"), "tgat")
     server = payments_graph()
-    store = ContextSource(
-        TigerGraphContextFetcher(server), plan=plan, sampler=SMALL_SAMPLER, capacity=8
-    )
+    # Every pool parameter differs by hop, the history bound too.
+    sampler = replace(SMALL_SAMPLER, children=replace(SMALL_SAMPLER.children, max_history=1024))
+    store = ContextSource(TigerGraphContextFetcher(server), plan=plan, sampler=sampler, capacity=8)
     key = root(0)
     store.fetch([key], hop=1)
     store.fetch([key], hop=2)
     store.fetch([key], hop=1)
     assert store.database_calls == 2 and len(server.calls) == 2
     first, second = context_calls(server)
-    assert {k: first[k] for k in SMALL_SAMPLER.query_params(1)} == SMALL_SAMPLER.query_params(1)
-    assert {k: second[k] for k in SMALL_SAMPLER.query_params(2)} == SMALL_SAMPLER.query_params(2)
+    assert {k: first[k] for k in sampler.query_params(1)} == sampler.query_params(1)
+    assert {k: second[k] for k in sampler.query_params(2)} == sampler.query_params(2)
+    assert (first["max_history"], second["max_history"]) == (2048, 1024)
     assert first["include_rolling_windows"] and not second["include_rolling_windows"]
     assert {k for k in first if k.startswith("include_")} == set(plan.query_flags(1))
     assert (1, key) in store.memory and (2, key) in store.memory
