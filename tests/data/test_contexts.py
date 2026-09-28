@@ -106,7 +106,7 @@ def test_hop_pools_and_flags_are_sent_and_lru_is_keyed_by_hop() -> None:
     assert (first["max_history"], second["max_history"]) == (2048, 1024)
     assert first["include_rolling_windows"] and not second["include_rolling_windows"]
     assert {k for k in first if k.startswith("include_")} == set(plan.query_flags(1))
-    assert (1, key) in store.memory and (2, key) in store.memory
+    assert (1, key) in store.memory.rows and (2, key) in store.memory.rows
     with pytest.raises(ValueError, match="hop"):
         store.fetch([key], hop=3)
     store.close()
@@ -162,17 +162,17 @@ def test_lru_is_bounded_and_close_releases_it() -> None:
     )
     for start in range(0, 64, 16):
         store.fetch([root(i) for i in range(start, start + 16)])
-        assert len(store.memory) <= 8
+        assert len(store.memory.rows) <= 8
     # Recency follows key order, not request completion order, and rows carry no
     # request position, so a refetch in another grouping returns identical rows.
     keys = [root(i) for i in range(100, 180)]
     rows = store.fetch(keys)
-    assert list(store.memory) == [(1, key) for key in keys[-8:]]
+    assert list(store.memory.rows) == [(1, key) for key in keys[-8:]]
     calls = store.database_calls
     assert store.fetch(keys[-8:]) == rows[-8:] and store.database_calls == calls
     assert store.fetch(keys[:2]) == rows[:2] and "request_index" not in (rows[0] or {})
     store.close()
-    assert not store.memory
+    assert not store.memory.rows
     with pytest.raises(RuntimeError, match="closed"):
         store.fetch([root(0)])
 
@@ -391,7 +391,7 @@ def test_the_context_source_serves_repeats_from_its_bounded_lru() -> None:
         sampler=SamplerPlan(),
     )
     rows = memory.fetch(keys)
-    assert len(memory.memory) == 3
+    assert len(memory.memory.rows) == 3
     calls = memory.database_calls
     assert memory.fetch(keys[-3:]) == rows[-3:]
     assert memory.database_calls == calls

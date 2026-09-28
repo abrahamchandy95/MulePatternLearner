@@ -2,9 +2,9 @@
 
 Batching, training and scoring read contexts through a ContextReader. ContextSource
 is the one that reads them from the graph: it requests each batch's contexts through
-a ContextFetcher (ports.py) and keeps a bounded LRU. It returns rows in key order,
-with None where TigerGraph rejected a request. Every reader counts what it was asked
-for in a ContextCounts. check_coverage and close_source work with any ContextReader,
+a ContextFetcher (ports.py) and keeps a bounded LRU (context_cache.MemoryTier). It
+returns rows in key order, with None where TigerGraph rejected a request. Every
+reader counts what it was asked for in a ContextCounts. check_coverage and close_source work with any ContextReader,
 and a parameter that takes one is named ``contexts``. A ContextOpener opens the
 source of a prepared dataset; the pipeline passes pipeline.connect.open_context_source
 to the use cases that need one.
@@ -12,7 +12,7 @@ to the use cases that need one.
 
 from __future__ import annotations
 
-from collections import Counter, OrderedDict, deque
+from collections import Counter, deque
 from collections.abc import Iterable
 from concurrent.futures import FIRST_COMPLETED, Future, wait
 from dataclasses import dataclass, field
@@ -33,6 +33,7 @@ from ..contract.graph_schema import ContextKey
 from ..contract.sampler_plan import SamplerPlan
 from ..paths import DatasetPaths
 from ..runtime.workers import DaemonPool
+from .context_cache import MemoryTier
 from .ports import ContextFetcher
 
 
@@ -150,12 +151,12 @@ class ContextReader(Protocol):
 class ContextSource:
     """Fetch only requested batch contexts with a bounded in-memory LRU; no disk.
 
-    The LRU is keyed by (hop, ContextKey) because roots and children use
-    different candidate pools and feature flags. Several batch-builder threads
-    may call fetch concurrently: they share one request pool of `concurrency`
-    workers, a lock guards the LRU and counters, a key already being fetched by
-    another thread is awaited rather than requested twice, and each fetch keeps
-    at most `concurrency` of its own requests in flight. The first request and
+    The LRU is ``memory``, a context_cache.MemoryTier of ``capacity`` rows keyed by
+    (hop, ContextKey). Several batch-builder threads may call fetch concurrently:
+    they share one request pool of `concurrency` workers, a lock guards the LRU and
+    counters, a key already being fetched by another thread is awaited rather than
+    requested twice, and each fetch keeps at most `concurrency` of its own requests
+    in flight. The first request and
     every `encoding_check_every`-th request ask TigerGraph for Fourier vectors
     and verify them. This adapter bounds client memory, not TigerGraph scan work.
     Train against a frozen source for reproducibility.
@@ -185,7 +186,7 @@ class ContextSource:
         self.concurrency, self.encoding_check_every = concurrency, encoding_check_every
         self._cadence = _EncodingCadence(encoding_check_every)
         self.pool = DaemonPool(concurrency, "context-requests")
-        self.memory: OrderedDict[tuple[int, ContextKey], dict[str, Any]] = OrderedDict()
+        self.memory = MemoryTier(capacity)
         self.database_calls = 0
         self.rejections: Counter[str] = Counter()
         self.rejections_by_hop: dict[int, Counter[str]] = {}
@@ -204,18 +205,17 @@ class ContextSource:
     def fetch(self, keys: list[ContextKey], *, hop: int = 1) -> list[dict[str, Any] | None]:
         _check_source_limits(keys, hop)
         unique = list(dict.fromkeys(keys))
-        rows: dict[ContextKey, dict[str, Any]] = {}
         shared: dict[ContextKey, Future[dict[ContextKey, dict[str, Any]]]] = {}
         blocks: list[tuple[list[ContextKey], Future[dict[ContextKey, dict[str, Any]]]]] = []
         with self._lock:
             if self._closed:
                 raise RuntimeError("Context source is closed")
+            rows = self.memory.get(hop, unique)
             missing = []
             for key in unique:
-                cached = self.memory.get((hop, key))
-                if cached is not None:
-                    rows[key] = cached
-                elif (hop, key) in self._inflight:
+                if key in rows:
+                    continue
+                if (hop, key) in self._inflight:
                     shared[key] = self._inflight[(hop, key)]
                 else:
                     missing.append(key)
@@ -234,14 +234,7 @@ class ContextSource:
             self._run_window(deque(blocks), hop, fetched)
         finally:
             with self._lock:
-                # Cache in key order, so LRU recency does not depend on thread timing.
-                for key in unique:
-                    if key in fetched and self.capacity:
-                        self.memory[(hop, key)] = fetched[key]
-                    if (hop, key) in self.memory:
-                        self.memory.move_to_end((hop, key))
-                while len(self.memory) > self.capacity:
-                    self.memory.popitem(last=False)
+                self.memory.put(hop, unique, fetched)
                 for block, holder in blocks:
                     for key in block:
                         if self._inflight.get((hop, key)) is holder:
@@ -321,7 +314,7 @@ class ContextSource:
             self._closed = True
         self.pool.shutdown(wait=wait, cancel_futures=True)
         with self._lock:
-            self.memory.clear()
+            self.memory.close()
 
 
 def build_context_source(
