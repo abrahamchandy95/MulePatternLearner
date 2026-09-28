@@ -3,17 +3,20 @@
 GRAPH_NAME is the graph every query is installed on; the connection refuses another
 (tigergraph.executor). The query names are the names the repository's GSQL files
 install, verb first and without a prefix since the graph is dedicated, and every
-adapter, fake and installer takes them from here. CONTEXT_CONTRACT is printed by the
-context query and recorded by saved models, so it keeps its value until the query
-names change on the server. RETIRED_QUERIES are the names the queries were installed
-under before. GSQL files are named by their path relative to the repository's gsql
+adapter, fake and installer takes them from here. CONTEXT_CONTRACT names the text of
+the context query: every row the query returns prints it, the client refuses a row
+without it, saved models record it through their contract fingerprint and the context
+cache names its entries with it. It is "context_" and the first 12 hex digits of the
+sha256 of the normalised rendered query without it (tigergraph.render.context_contract),
+and a render test keeps the two equal. RETIRED_QUERIES are the names the queries were
+installed under before. GSQL files are named by their path relative to the repository's gsql
 folder (paths.GSQL_DIR).
 """
 
 from __future__ import annotations
 
 GRAPH_NAME = "Mule_Pattern_Learner"
-CONTEXT_CONTRACT = "temporal_live_v5_candidate_pools"
+CONTEXT_CONTRACT = "context_fec1e02425ca"
 # The vertex type of the experiment scopes (gsql/schema/scope_vertex.gsql). It is part of
 # the graph's schema, so it keeps the name it was created with.
 SCOPE_VERTEX = "Temporal_Training_Scope"

@@ -16,7 +16,6 @@ from mule_pattern_learner.contract.feature_groups import (
 )
 from mule_pattern_learner.contract.graph_schema import CHANNELS, ContextKey
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
-from mule_pattern_learner.contract.server import CONTEXT_CONTRACT
 from mule_pattern_learner.data.contexts import ContextSource
 from mule_pattern_learner.model.tgat import TGAT
 from mule_pattern_learner.reference.batch_features import node_features
@@ -38,7 +37,6 @@ WINDOW_GROUPS = (
 
 
 def test_contract_constants_and_client_groups() -> None:
-    assert CONTEXT_CONTRACT == "temporal_live_v5_candidate_pools"
     assert CHANNELS[:4] == ("unknown", "digital", "branch_or_atm", "bank")
     assert CHANNELS[-1] == "other" and len(set(CHANNELS)) == len(CHANNELS)
     assert "event_channel" not in CORE_GROUPS and "event_channel" in FEATURE_GROUPS

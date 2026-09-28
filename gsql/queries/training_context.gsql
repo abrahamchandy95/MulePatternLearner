@@ -1822,7 +1822,7 @@ CREATE OR REPLACE QUERY fetch_training_context(
     @@diagnostics += ("excluded_non_usd_events" -> @@excluded_currency);
     @@diagnostics += ("visible_payment_participations" -> @@visible_count);
     PRINT "ok" AS status, i AS request_index,
-      "temporal_live_v5_candidate_pools" AS contract_version, @@diagnostics AS diagnostics,
+      "context_fec1e02425ca" AS contract_version, @@diagnostics AS diagnostics,
       root_type AS node_type, root_id AS node_id,
       seed_seq AS cutoff_seq, seed_ts_ms AS cutoff_ms,
       scope_id AS scope_id, visibility_phase AS visibility_phase,

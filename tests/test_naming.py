@@ -57,10 +57,6 @@ FORBIDDEN = frozenset(
 # The persisted values that keep a forbidden word, and why.
 ALLOWED = {
     "Temporal_Training_Scope": "the scope vertex type, part of the graph's schema",
-    "temporal_live_v5_candidate_pools": (
-        "CONTEXT_CONTRACT, which the installed context query prints and saved models "
-        "record; it changes in the server step"
-    ),
     "temporal_live_step": "the salt of the per-step draws; a new value changes every step",
     "marginal_cohort": "the salt of the reservoir ranks; a new value selects other accounts",
     "cohort_seed": "a key of configurations saved before the typed configuration",

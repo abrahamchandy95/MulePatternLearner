@@ -4,17 +4,25 @@ from __future__ import annotations
 
 import re
 
+import pytest
+
 from mule_pattern_learner.contract.feature_groups import (
     CLIENT_GROUPS,
     CORE_GROUPS,
     FEATURE_GROUPS,
     FeaturePlan,
 )
-from mule_pattern_learner.contract.server import FOURIER_QUERY
+from mule_pattern_learner.contract.server import CONTEXT_CONTRACT, FOURIER_QUERY
 from mule_pattern_learner.paths import GSQL_DIR
-from mule_pattern_learner.tigergraph.render import as_interpreted, render_context_query
+from mule_pattern_learner.tigergraph import render
+from mule_pattern_learner.tigergraph.render import (
+    as_interpreted,
+    context_contract,
+    render_context_query,
+)
 
 GSQL = GSQL_DIR / "queries"
+header = render._header  # pyright: ignore[reportPrivateUsage]
 
 
 def test_query_renderer_matches_reviewed_source_and_uses_no_labels() -> None:
@@ -47,6 +55,23 @@ def signature(query: str) -> str:
 
 def test_rendered_file_is_byte_identical(text: str) -> None:
     assert (GSQL / "training_context.gsql").read_text() == text
+
+
+def test_the_contract_is_derived_from_the_rendered_query(
+    text: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A changed query needs a new CONTEXT_CONTRACT; the failure prints the value to set.
+    assert CONTEXT_CONTRACT == context_contract(), context_contract()
+    assert text.count(f'"{CONTEXT_CONTRACT}" AS contract_version') == 1
+
+    # Comments and whitespace do not count; any other change names a new contract.
+    def commented(flags: str) -> str:
+        return "/* a comment */ " + header(flags)
+
+    monkeypatch.setattr(render, "_header", commented)
+    assert context_contract() == CONTEXT_CONTRACT
+    monkeypatch.setattr(render, "CONTEXT_QUERY", "fetch_other_context")
+    assert context_contract() != CONTEXT_CONTRACT
 
 
 def test_flags_are_exactly_the_non_client_groups(text: str) -> None:

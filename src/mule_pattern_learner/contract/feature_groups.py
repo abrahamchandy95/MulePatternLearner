@@ -274,10 +274,14 @@ class FeaturePlan:
     def edge_names(self) -> tuple[str, ...]:
         return self.names("message")
 
-    def fingerprint(self) -> str:
-        """The model inputs: contract, groups, architecture and any pool definitions."""
+    def fingerprint(self, contract: str | None = None) -> str:
+        """The model inputs: contract, groups, architecture and any pool definitions.
+
+        ``contract`` is the contract fingerprint the inputs are read under, this code's
+        (contract_fingerprint) unless a saved model names the one it was trained under.
+        """
         value: dict[str, Any] = {
-            "contract": contract_fingerprint(),
+            "contract": contract_fingerprint() if contract is None else contract,
             "groups": sorted(self.groups),
             "architecture": RECORDED_ARCHITECTURES[self.architecture],
         }

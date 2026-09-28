@@ -43,6 +43,7 @@ from mule_pattern_learner.data.preparation import prepare
 from mule_pattern_learner.data.splits import eligible_mask, sample_keys
 from mule_pattern_learner.inference.predictor import Predictor
 from mule_pattern_learner.inference.saved_model import SavedModel
+from mule_pattern_learner.inference.saved_settings import SAVED_CONTRACT
 from mule_pattern_learner.paths import DATA_DIR, DatasetPaths, RunPaths
 from mule_pattern_learner.testing.builders import neighbourhood, scope_population
 from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
@@ -143,15 +144,33 @@ def test_models_saved_before_the_restructure_score_as_they_did(name: str) -> Non
 
 
 def test_the_built_in_inputs_keep_their_recorded_fingerprints() -> None:
+    # What a model trained now records.
     assert contract_fingerprint() == (
-        "530e46c91b07b254d38722e57117b917761d2b68176e7eb1cb5e2e9de32307da"
+        "94e1ead2d353f17dd0d1772113226bd7fcd95d8c7eb79cb2493ee5b157a5020a"
     )
     assert FeaturePlan().fingerprint() == (
-        "9cf8c7606ce403da4e74757799aa77cfa6fdcd0736686b23c38bce592fd08238"
+        "9b73ab52a59a1190edde312668374ac725c2c6d7d54ce7939f4384c851ebe4b6"
     )
     assert FeaturePlan(architecture="summary").fingerprint() == (
-        "77c38ffb11af48f5485d4e1efc9cd92e826990d3650738864b4a18cfc478be58"
+        "6fcd1b6adb24d75ef1cc3f9c67600479a98eb17f5b52038c88d72ecad2ed342e"
     )
+
+
+def test_models_saved_before_the_server_step_keep_their_contract() -> None:
+    # The fixtures record the contract of the context query before the rename, and their
+    # plans' input fingerprints under it.
+    recorded = {"built_in": FeaturePlan(), "tabular": FeaturePlan(architecture="summary")}
+    for name, plan in recorded.items():
+        saved = SavedModel.load(FIXTURES / f"{name}.pt")
+        assert saved.payload["contract"] == SAVED_CONTRACT != contract_fingerprint()
+        assert saved.payload["input_fingerprint"] == plan.fingerprint(SAVED_CONTRACT)
+        saved.check_contract()
+        saved.check_inputs(plan)
+    # Any other contract is refused.
+    payload = SavedModel.load(FIXTURES / "built_in.pt").payload
+    foreign = SavedModel(Path("model.pt"), {**payload, "contract": "another"})
+    with pytest.raises(ValueError, match="contract differs"):
+        foreign.check_contract()
 
 
 def test_models_whose_columns_moved_are_refused(tmp_path: Path) -> None:
