@@ -21,6 +21,7 @@ from mule_pattern_learner.metrics import (
     ring_clusters,
     roc_curve,
     weighted_metrics,
+    weighted_quantiles,
 )
 
 # Four accounts: a mule of weight 1 at 0.9, a non-mule of weight 2 and a mule of weight 4
@@ -269,3 +270,12 @@ def test_paired_replicates_apply_one_resample_to_every_run() -> None:
     # Each column is the statistic of that run on the shared resamples.
     shared = [ap(y[r], second[r], weight[r]) for r in resamples(y, rings, replicates=30)]
     assert values[:, 2].tolist() == shared
+
+
+def test_weighted_quantiles_interpolate_between_the_middles_of_the_weights() -> None:
+    values, weight = np.array([3.0, 1.0, 2.0]), np.array([1.0, 1.0, 2.0])
+    # Sorted 1, 2, 3 with weights 1, 2, 1: middles at 1/8, 1/2 and 7/8 of the weight.
+    found = weighted_quantiles(values, weight, [0.0, 0.125, 0.5, 0.6875, 1.0])
+    assert found.tolist() == [1.0, 1.0, 2.0, 2.5, 3.0]
+    unit = weighted_quantiles(np.arange(5.0), np.ones(5), [0.5])
+    assert unit.tolist() == [2.0]
