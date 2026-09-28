@@ -106,10 +106,10 @@ def test_stream_retention_is_bounded_across_many_disjoint_batches() -> None:
     )
     for start in range(0, 512, 16):
         backend.fetch([ContextKey("Account", str(i), 100, 1000) for i in range(start, start + 16)])
-        assert len(backend.memory) <= 8
+        assert len(backend.memory.rows) <= 8
     assert backend.database_calls == 32
     backend.close()
-    assert not backend.memory
+    assert not backend.memory.rows
 
 
 def test_new_account_scoring_needs_neither_training_dataset_nor_labels(tmp_path: Path) -> None:

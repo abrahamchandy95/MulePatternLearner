@@ -760,7 +760,7 @@ def test_preparation_requests_no_context_and_training_keeps_a_bounded_lru(tmp_pa
     source = build_context_source(executor, c, capacity=4)
     result = train(c, dataset, RunPaths(tmp_path / "model"), contexts=source)
     assert result["database_calls_during_training"] > 0
-    assert len(source.memory) <= 4
+    assert len(source.memory.rows) <= 4
 
 
 def test_training_end_to_end_with_candidate_pool_neighbour_messages(tmp_path: Path) -> None:
