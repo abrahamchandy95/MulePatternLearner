@@ -21,6 +21,7 @@ from mule_pattern_learner.data.preparation import prepare
 from mule_pattern_learner.evaluation.truth import ParquetTruth
 from mule_pattern_learner.paths import DatasetPaths, RunPaths
 from mule_pattern_learner.pipeline import evaluate as pipeline_evaluate
+from mule_pattern_learner.reporting.report import AUDIT_FIGURES
 from mule_pattern_learner.runtime.progress import emit
 from mule_pattern_learner.testing.builders import (
     RUNTIME_CHANGES,
@@ -201,9 +202,14 @@ def test_evaluate_run_audits_validation_and_test_on_the_fake_graph(
         # Both runs are scored on the same accounts, whatever their scores.
         assert samples[0].account_id.tolist() == samples[1].account_id.tolist()
         assert not samples[0].score.equals(samples[1].score)
-    # A run with both audits is reported as it is, without connecting.
+    # A run with both audits is reported as it is, without connecting, and its figures
+    # and report.md are left as they were.
+    drawn = [*runs[0].plots.glob("*.png"), runs[0].report]
+    assert len(drawn) == 1 + len(AUDIT_FIGURES)
+    written = {path: path.stat().st_mtime_ns for path in drawn}
     monkeypatch.setattr(pipeline_evaluate, "connect", connecting(None))
     assert pipeline_evaluate.evaluate_run(runs[0], data=data) == reports[0]
+    assert {path: path.stat().st_mtime_ns for path in drawn} == written
     # An interrupted evaluation audits only the split it lacks.
     runs[0].audit_report("test").unlink()
     monkeypatch.setattr(pipeline_evaluate, "connect", connecting(graph))
