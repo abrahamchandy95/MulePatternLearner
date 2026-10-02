@@ -185,21 +185,18 @@ evaluate_run(run)
 For comparisons over seeds with paired intervals, declare a variant and use the
 experiments script instead ([Run the control experiments](run-control-experiments.md)).
 
-## Datasets and models from before
+## Datasets and models of earlier code
 
-- **A dataset prepared before the layered restructure** lived inside its run directory or
-  under `artifacts/`, records no dataset settings and is not named by a dataset id, so
-  this code never finds it: `mule train` prepares a new one in `data/<dataset id>/` (about
-  6 minutes).
-- **A dataset prepared before the queries were renamed** records other query texts, and
-  preparation refuses it ("was built from different GSQL sources"). Run `mule install`,
-  move the directory aside (its `contexts/` goes with it; nothing deletes it), and run
-  `mule train` to prepare it again.
-- **A model saved before the restructure** still loads and scores (`mule score`), through
-  the conversion of old saved settings (`inference.saved_settings`), but `mule evaluate`
-  refuses it: its dataset was prepared from other query texts and records no dataset
-  settings. Audit it with the code it was trained with. The conversion is deleted once
-  the new baseline run has an audit.
+This code reads only the datasets and models it writes:
+
+- **A dataset** is found by the dataset id of its settings in `data/<dataset id>/`, so a
+  dataset kept anywhere else, or one that records no dataset settings, is never read, and
+  `mule train` prepares a new one (about 6 minutes). A dataset prepared from other query
+  texts is refused ("was built from different GSQL sources"): run `mule install`, move the
+  directory aside (its `contexts/` goes with it; nothing deletes it), and run `mule train`
+  to prepare it again.
+- **A model** must record `SavedModel.FORMAT` and this code's contract fingerprint, so a
+  `model.pt` of earlier code is refused. Train it again with this code.
 
 ## When something is refused
 
@@ -214,6 +211,7 @@ experiments script instead ([Run the control experiments](run-control-experiment
 | `TigerGraph rejected ... training roots so far` or `validation: TigerGraph rejected ... roots` | Roots failed a per-request check beyond the rejection limit, or an observed positive was rejected; the statuses say why ([When TigerGraph rejects roots](#when-tigergraph-rejects-roots)) |
 | `The run in ... is complete with other settings` | A finished run of other settings is in the directory; move it aside to train these |
 | `Resumed configuration differs from the run` | An interrupted run of other settings is in the directory; move it aside, or resume it with its own settings |
+| `... records no format` or `... is a model of format ...` | The model was saved by other code; train it again with this code |
 | `The model's input groups or pool definitions differ from its configuration` | The model read a pool group whose definition has changed since; score with a model trained under the current one |
 | `Training queries require Mule_Pattern_Learner` | `GRAPHNAME` in `.env` names another graph |
 | A `cugraph_probe` warning | pylibcugraph or the GPU failed the probe; training continues with the torch sampler; run `mule check` and the `cuda` tests |

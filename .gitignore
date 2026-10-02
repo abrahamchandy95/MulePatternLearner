@@ -170,7 +170,7 @@ desktop.ini
 # Local research attachments.
 /docs/*.pdf
 
-# Fixtures the tests load: models and a prepared dataset written before the restructure
+# Fixtures the tests load: models and the prepared dataset they were trained on
 # (tests/inference/test_saved_model.py).
 !tests/inference/fixtures/saved_models/*.pt
 !tests/inference/fixtures/saved_models/dataset/*

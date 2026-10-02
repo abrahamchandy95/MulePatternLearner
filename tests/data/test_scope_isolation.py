@@ -31,6 +31,7 @@ from mule_pattern_learner.contract.server import (
 from mule_pattern_learner.contract.time_basis import BASIS_ID
 from mule_pattern_learner.data.accounts import select_accounts
 from mule_pattern_learner.data.contexts import ContextSource
+from mule_pattern_learner.inference.saved_model import SavedModel
 from mule_pattern_learner.inference.score_accounts import score_new_accounts
 from mule_pattern_learner.model.build import build_model
 from mule_pattern_learner.paths import DatasetPaths, RunPaths
@@ -130,6 +131,7 @@ def test_new_account_scoring_needs_neither_training_dataset_nor_labels(tmp_path:
     model_file = tmp_path / "model.pt"
     torch.save(
         {
+            "format": SavedModel.FORMAT,
             "state_dict": model.state_dict(),
             "contract": contract_fingerprint(),
             "basis_id": BASIS_ID,

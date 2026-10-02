@@ -117,6 +117,7 @@ def slot_mlp(model: TGAT) -> nn.Module:
 def payload(config: RunConfig, model: TGAT, contract: str, inputs: str) -> dict[str, Any]:
     """A model.pt payload as training saves it, with the fields scoring checks."""
     return {
+        "format": SavedModel.FORMAT,
         "state_dict": model.state_dict(),
         "config": config.to_dict(),
         "contract": contract,

@@ -15,8 +15,8 @@ from .tgat import check_width, projection
 class SummaryMLP(nn.Module):
     """A projection of every root column, then the head TGAT puts on its embedding.
 
-    The projection is created before the head, so a seed gives the same initial weights
-    as the summary model of the same settings saved before the layered restructure.
+    The projection is created before the head, so a seed always gives the same initial
+    weights.
     """
 
     def __init__(self, hidden: int, dropout: float, *, plan: FeaturePlan) -> None:

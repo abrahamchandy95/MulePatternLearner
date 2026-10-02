@@ -4,18 +4,12 @@ SavedModel.selected builds its payload: the selected weights, the configuration
 (RunConfig.to_dict()), the fingerprint of the feature plan, the threshold, the id and
 manifest digest of the dataset and SavedModel.FORMAT, with what the run was trained on
 for the record. Readers load it once and pass the SavedModel on; each checks only what
-it relies on.
-
-A model saved before FORMAT 1 records no format, and names its dataset by directory
-instead of by dataset id. One saved before the typed configuration also holds a flat
-table of the old setting names, which SavedModel.config converts, and one saved before
-the server step renamed the queries records the contract of then (both in
-inference.saved_settings), so such models load and score as they did.
+it relies on. A payload of another format, or of none, is refused.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -28,15 +22,13 @@ from ..contract.graph_schema import EVALUATION_PROTOCOL
 from ..contract.time_basis import BASIS_ID
 from ..data.manifest import manifest_digest
 from ..paths import DATA_DIR, DatasetPaths
-from .saved_settings import SAVED_CONTRACT, converted_run_config
 
 
 @dataclass(frozen=True)
 class SavedModel:
     """A model.pt payload and where it was read from."""
 
-    # The payload layout this code writes. A payload without a format is older, and
-    # loads through the conversions of config and dataset.
+    # The payload layout this code writes and reads.
     FORMAT: ClassVar[int] = 1
 
     path: Path
@@ -88,7 +80,9 @@ class SavedModel:
     def load(cls, path: Path) -> SavedModel:
         payload = torch.load(path, map_location="cpu", weights_only=True)
         recorded = payload.get("format")
-        if recorded is not None and recorded != cls.FORMAT:
+        if recorded is None:
+            raise ValueError(f"{path} records no format; this code reads format {cls.FORMAT}")
+        if recorded != cls.FORMAT:
             raise ValueError(
                 f"{path} is a model of format {recorded}; this code reads {cls.FORMAT}"
             )
@@ -106,11 +100,8 @@ class SavedModel:
 
     @property
     def config(self) -> RunConfig:
-        """The training configuration, converted when the model predates RunConfig."""
-        saved = self.payload["config"]
-        if set(saved) == {field.name for field in fields(RunConfig)}:
-            return RunConfig.from_dict(saved)
-        return converted_run_config(saved)
+        """The training configuration (RunConfig.to_dict())."""
+        return RunConfig.from_dict(self.payload["config"])
 
     @property
     def state_dict(self) -> dict[str, torch.Tensor]:
@@ -126,27 +117,17 @@ class SavedModel:
 
     @property
     def dataset_id(self) -> str | None:
-        """The id of the dataset the model was trained on; None before FORMAT 1."""
+        """The id of the dataset the model was trained on, if it records one."""
         return self.payload.get("dataset_id")
 
     def dataset(self, data: Path = DATA_DIR) -> DatasetPaths | None:
-        """The prepared dataset the model was trained on: its dataset id's directory in data.
-
-        A model saved before FORMAT 1 recorded the directory itself, if anything.
-        """
-        if self.dataset_id is not None:
-            return DatasetPaths.of(self.dataset_id, data)
-        value = self.payload.get("dataset")
-        return DatasetPaths(Path(value)) if value else None
+        """The prepared dataset the model was trained on: its dataset id's directory in data."""
+        return DatasetPaths.of(self.dataset_id, data) if self.dataset_id is not None else None
 
     def check_contract(self) -> None:
-        """Refuse a model saved under another feature or time-basis contract.
-
-        A model saved before the server step records SAVED_CONTRACT, which reads the
-        same inputs of the groups it can name.
-        """
+        """Refuse a model saved under another feature or time-basis contract."""
         if (
-            self.payload["contract"] not in (contract_fingerprint(), SAVED_CONTRACT)
+            self.payload["contract"] != contract_fingerprint()
             or self.payload["basis_id"] != BASIS_ID
         ):
             raise ValueError("The model's feature/time contract differs from this sampler")
@@ -155,10 +136,9 @@ class SavedModel:
         """Refuse a model whose inputs differ from those of its configuration.
 
         The input fingerprint also covers the pool groups' definitions (amount bands,
-        pass-through thresholds), which the contract fingerprint leaves out. It is the
-        plan's under the contract the model records (check_contract accepts it).
+        pass-through thresholds), which the contract fingerprint leaves out.
         """
-        if self.payload.get("input_fingerprint") != plan.fingerprint(self.payload.get("contract")):
+        if self.payload.get("input_fingerprint") != plan.fingerprint():
             raise ValueError(
                 "The model's input groups or pool definitions differ from its configuration"
             )

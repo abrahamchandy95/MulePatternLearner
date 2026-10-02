@@ -66,8 +66,8 @@ class TGAT(nn.Module):
 
     Beside attention, a summary branch reads the root's summary columns, and the slot
     sum (when on) adds a per-slot MLP summed over the hop-1 slots. Its submodules are
-    created in a fixed order, so a seed gives the same initial weights as the model of
-    the same settings saved before the layered restructure.
+    created in a fixed order, so a seed always gives the same initial weights (the
+    golden run pins them).
     """
 
     def __init__(

@@ -102,7 +102,7 @@ contract                                         definitions shared with GSQL
 | `sampling` | Candidate tables and the torch and cuGraph subset samplers |
 | `model` | The torch modules (`TGAT`, `SummaryMLP`), the nnPU loss and the model builder; it imports only `contract` and `config` |
 | `batching` | Contexts to tensors: feature matrices, pool counts, the device-side Fourier basis, batch limits and assembly |
-| `inference` | `model.pt` (`SavedModel`), the one scoring loop (`predictor`), rejection limits and scoring arbitrary accounts; until main is replaced, the conversion of settings saved before the restructure (`saved_settings`) |
+| `inference` | `model.pt` (`SavedModel`), the one scoring loop (`predictor`), rejection limits and scoring arbitrary accounts |
 | `training` | The trainer and its schedule, objective, weight average, resume state, history and summary |
 | `evaluation` | The truth port, the audit sample and the ground-truth audit |
 | `reporting` | Every figure and `report.md`, from saved files only; the only package that imports matplotlib |
@@ -297,8 +297,7 @@ at import. There is no configuration file, no `--config` and no option: another 
 identifiers the code defines, the command line, the run paths and the GSQL query names;
 it does not check prose. The values TigerGraph and saved files hold keep their names,
 each allowed there with its reason: the `Temporal_Training_Scope` vertex type, the salts
-of the seeded draws (`temporal_live_step`, `marginal_cohort`), and until main is
-replaced the keys the old saved-settings conversion reads. The schema's jobs keep their installed names
+of the seeded draws (`temporal_live_step`, `marginal_cohort`). The schema's jobs keep their installed names
 (`load_temporal_accounts` among them). The old query names are not allowed anywhere but
 `contract.server.RETIRED_QUERIES`, which `mule install` drops.
 
@@ -349,11 +348,11 @@ The owner's decisions that shape the code, each with its reason.
   moved to `results/archive/` and never deleted, the tables and figures always written.
   Nothing is read from or written to `/tmp`, so every suite can be repeated from the
   commit.
-- **The old saved-settings conversion stays until the new baseline run has an audit**
-  (decided on 2026-09-28), so the best model of the old code can still be compared. It
-  lives in `inference/saved_settings.py` with `SAVED_CONTRACT`, the contract of models
-  saved before the queries were renamed, which `SavedModel.check_contract` still accepts.
-  The step that replaces main deletes it, with the fixtures of the old models.
+- **Only what this code writes is read.** The owner retrains from scratch with this
+  code, so `SavedModel` reads only a payload of its own `FORMAT` and contract, a dataset
+  is used only when the settings and query texts it records are this code's, and nothing
+  converts the settings, contracts or datasets of earlier code: each conversion was a
+  second path to keep correct. The saved-model test's fixtures are models this code saved.
 
 Other choices and their reasons:
 
