@@ -322,12 +322,18 @@ def build_feature_table(
     return pd.concat(frames, ignore_index=True)
 
 
-def current(frame: pd.DataFrame) -> bool:
-    """Whether a feature table was read with the query texts of this code."""
+def current(frame: pd.DataFrame, plan: FeaturePlan) -> bool:
+    """Whether a feature table is the one this code would read for a feature plan.
+
+    It must have been read with this code's query texts and hold exactly the columns
+    this code writes for the plan; on the frozen source such a table is read again
+    the same, so `mule diagnose` keeps it.
+    """
     return bool(
         len(frame)
         and frame.context_contract.eq(CONTEXT_CONTRACT).all()
         and frame.analytics_contract.eq(ANALYTICS_CONTRACT).all()
+        and feature_columns(frame) == feature_names(plan)
     )
 
 

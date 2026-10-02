@@ -1,4 +1,4 @@
-"""The command line: one entry point, the cuBLAS workspace, six commands without options."""
+"""The command line: one entry point, the cuBLAS workspace, seven commands without options."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from mule_pattern_learner.paths import DATA_DIR, REPOSITORY_ROOT, DatasetPaths, 
 from mule_pattern_learner.pipeline import train as pipeline_train
 from mule_pattern_learner.pipeline.connect import open_context_source
 
-COMMANDS = ("install", "train", "evaluate", "score", "report", "check")
+COMMANDS = ("install", "train", "evaluate", "score", "report", "diagnose", "check")
 
 
 def test_python_m_runs_the_command_line() -> None:
@@ -91,10 +91,15 @@ def test_the_commands_take_no_options_and_default_to_the_baseline_run() -> None:
     scoring = parser.parse_args(["score", "new.txt"])
     assert (scoring.accounts, scoring.date) == (Path("new.txt"), None)
     assert parser.parse_args(["score", "new.txt", "2025-02-01"]).date == "2025-02-01"
-    # report takes a run's directory, or a suite's.
+    # report takes a run's directory, a suite's or a study's.
     assert parser.parse_args(["report"]).directory == pipeline_train.BASELINE_RUN.root
     reported = parser.parse_args(["report", "results/experiments/controls"]).directory
     assert reported == Path("results/experiments/controls")
+    # diagnose runs every analysis, or the one named.
+    assert parser.parse_args(["diagnose"]).analysis is None
+    assert parser.parse_args(["diagnose", "learning-curve"]).analysis == "learning-curve"
+    with pytest.raises(SystemExit):
+        parser.parse_args(["diagnose", "no_graph"])
 
 
 def test_each_command_runs_its_use_case_and_prints_one_json_result(
@@ -114,7 +119,9 @@ def test_each_command_runs_its_use_case_and_prints_one_json_result(
     monkeypatch.setattr(cli, "score_accounts", use_case("score", {"accounts": 2}))
     monkeypatch.setattr(cli, "report_directory", use_case("report", {"figures": []}))
     monkeypatch.setattr(cli, "check", use_case("check", {"status": "ready"}))
-    for argv in (["install"], ["evaluate"], ["score", "new.txt"], ["report"], ["check"]):
+    monkeypatch.setattr(cli, "diagnose_built_in", use_case("diagnose", {"status": "complete"}))
+    commands = (["install"], ["evaluate"], ["score", "new.txt"], ["report"], ["check"])
+    for argv in (*commands, ["diagnose"], ["diagnose", "drift"]):
         monkeypatch.setattr(sys, "argv", ["mule", *argv])
         cli.main()
         json.loads(capsys.readouterr().out)
@@ -124,14 +131,48 @@ def test_each_command_runs_its_use_case_and_prints_one_json_result(
         ("score", (pipeline_train.BASELINE_RUN, Path("new.txt"), None)),
         ("report", (pipeline_train.BASELINE_RUN.root,)),
         ("check", ()),
+        ("diagnose", (None,)),
+        ("diagnose", ("drift",)),
     ]
-    # A graph that is not ready is a failure, after the report is printed.
+    # A graph that is not ready, or a study missing an analysis' inputs, is a failure,
+    # after the result is printed.
     monkeypatch.setattr(cli, "check", use_case("check", {"status": "not_ready"}))
-    monkeypatch.setattr(sys, "argv", ["mule", "check"])
-    with pytest.raises(SystemExit) as stopped:
-        cli.main()
-    assert stopped.value.code == 1
-    assert json.loads(capsys.readouterr().out) == {"status": "not_ready"}
+    monkeypatch.setattr(cli, "diagnose_built_in", use_case("diagnose", {"status": "incomplete"}))
+    for command, status in (("check", "not_ready"), ("diagnose", "incomplete")):
+        monkeypatch.setattr(sys, "argv", ["mule", command])
+        with pytest.raises(SystemExit) as stopped:
+            cli.main()
+        assert stopped.value.code == 1
+        assert json.loads(capsys.readouterr().out) == {"status": status}
+
+
+def test_diagnose_studies_the_built_in_run_on_its_dataset_with_one_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dataset = DatasetPaths.of("id", tmp_path / "data")
+    prepared: list[object] = []
+    studied: list[dict[str, Any]] = []
+
+    def prepare(c: RunConfig, *, session: object) -> DatasetPaths:
+        assert c is DEFAULT_CONFIG
+        prepared.append(session)
+        return dataset
+
+    def diagnose(names: tuple[str, ...], **kwargs: Any) -> dict[str, Any]:
+        studied.append({"names": names, **kwargs})
+        return {"status": "complete"}
+
+    monkeypatch.setattr(cli, "prepare_dataset", prepare)
+    monkeypatch.setattr(cli, "diagnose", diagnose)
+    assert cli.diagnose_built_in("drift") == {"status": "complete"}
+    (study,) = studied
+    assert study["names"] == ("drift",) and study["run"] == pipeline_train.BASELINE_RUN
+    assert study["config"] is DEFAULT_CONFIG and study["dataset"] == dataset
+    # The study's graph reads use the session the dataset was prepared on.
+    (session,) = prepared
+    assert study["graph"].session is session and study["graph"].dataset == dataset
+    cli.diagnose_built_in(None)
+    assert studied[-1]["names"] == cli.ANALYSES
 
 
 def test_train_prepares_then_trains_or_resumes_the_baseline_run(

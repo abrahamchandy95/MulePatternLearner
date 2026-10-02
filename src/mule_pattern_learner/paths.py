@@ -225,6 +225,16 @@ class DiagnosticsPaths:
         return self.root / f"{analysis.replace('-', '_')}.csv"
 
     @property
+    def study(self) -> Path:
+        """What each analysis last did, and the dataset and run they studied."""
+        return self.root / "study.json"
+
+    @property
+    def events(self) -> Path:
+        """The structured lines `mule diagnose` printed for this study, one JSON object each."""
+        return self.root / "events.jsonl"
+
+    @property
     def plots(self) -> Path:
         """The directory of the study's figures."""
         return self.root / "plots"

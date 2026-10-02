@@ -137,11 +137,14 @@ def test_each_split_holds_its_audit_sample_with_truth_and_weights(
         assert np.allclose(rows.weight, 1 / rows.inclusion_probability)
         observed = members.set_index("account_id").observed_positive
         assert rows.revealed.tolist() == observed.loc[rows.account_id].tolist()
-    assert current(table)
+    plan = config.feature_plan()
+    assert current(table, plan)
     assert set(table.context_contract) == {CONTEXT_CONTRACT}
     assert set(table.analytics_contract) == {ANALYTICS_CONTRACT}
     stale = table.assign(analytics_contract="analytics_old")
-    assert not current(stale) and not current(table.iloc[:0])
+    assert not current(stale, plan) and not current(table.iloc[:0], plan)
+    # A table of other columns, from older code or another plan, is not current either.
+    assert not current(table.drop(columns="messages__peers"), plan)
 
 
 def test_the_training_families_equal_the_batching_features_of_the_same_keys(

@@ -97,10 +97,13 @@ def test_a_run_directory_names_every_file_of_the_run_directory_table(tmp_path: P
     assert suite.run("no_attention", 43) == paths.RunPaths.of("no_attention", 43, tmp_path)
     study = paths.DiagnosticsPaths.of("abc", tmp_path)
     assert study.root == tmp_path / "diagnostics" / "abc"
-    files = [study.features, study.table("proxy-validity"), study.plots, study.figure("drift")]
+    files = [study.features, study.table("proxy-validity"), study.study, study.events]
+    files += [study.plots, study.figure("drift")]
     assert [path.relative_to(study.root).as_posix() for path in [*files, study.report]] == [
         "features.parquet",
         "proxy_validity.csv",
+        "study.json",
+        "events.jsonl",
         "plots",
         "plots/drift.png",
         "report.md",

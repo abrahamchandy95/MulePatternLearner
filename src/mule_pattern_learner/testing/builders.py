@@ -27,7 +27,9 @@ from mule_pattern_learner.artifacts import (
     append_history,
     file_digest,
     write_audit_scores,
+    write_diagnostic_table,
     write_epochs,
+    write_feature_table,
     write_json,
     write_predictions,
     write_run_config,
@@ -77,7 +79,7 @@ from mule_pattern_learner.metrics import (
     select_threshold,
 )
 from mule_pattern_learner.model.build import build_model
-from mule_pattern_learner.paths import DatasetPaths, RunPaths, SuitePaths
+from mule_pattern_learner.paths import DatasetPaths, DiagnosticsPaths, RunPaths, SuitePaths
 from mule_pattern_learner.sampling import candidates
 from mule_pattern_learner.tigergraph.context_query import query_context_rows
 from mule_pattern_learner.tigergraph.executor import QueryExecutor
@@ -1290,3 +1292,28 @@ def _diagnostic_tables(seed: int) -> dict[str, pd.DataFrame]:
         "reveal_spread": reveal_spread(reveal_population(seed), params, salts=range(50)),
         "nnpu_simulation": nnpu_simulation(seeds=(1, 2), problem=small),
     }
+
+
+def write_study_files(study: DiagnosticsPaths, seed: int = 0) -> DiagnosticsPaths:
+    """The files of a synthetic diagnostic study that reporting reads.
+
+    features.parquet (feature_frame), every analysis' table (diagnostic_tables) and a
+    study.json that records each analysis as written, the built-in run as compared and
+    the built-in reveal's salt and budget.
+    """
+    study.root.mkdir(parents=True, exist_ok=True)
+    write_feature_table(study.features, feature_frame(seed))
+    outcomes = {"features": {"status": "written", "rows": len(feature_frame(seed))}}
+    for name, table in diagnostic_tables(seed).items():
+        write_diagnostic_table(study.table(name), name, table)
+        outcomes[name.replace("_", "-")] = {"status": "written", "rows": len(table)}
+    scope = DEFAULT_CONFIG.scope
+    record = {
+        "dataset_id": study.root.name,
+        "run": "baseline/seed-42",
+        "run_compared": True,
+        "reveal": {"salt": scope.reveal_salt, "budget": scope.reveal_per_split},
+        "analyses": outcomes,
+    }
+    write_json(study.study, record)
+    return study
