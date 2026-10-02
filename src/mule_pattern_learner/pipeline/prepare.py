@@ -18,13 +18,13 @@ from ..config import DEFAULT_CONFIG, RunConfig
 from ..data.manifest import check_query_hashes, dataset_id, read_manifest, write_manifest
 from ..data.preparation import prepare
 from ..paths import DATA_DIR, DatasetPaths, datasets
-from ..tigergraph.cutoffs import TigerGraphCutoffs
-from ..tigergraph.hubs import TigerGraphHubs
+from ..tigergraph.cutoffs import TigerGraphCutoffReader
+from ..tigergraph.hubs import TigerGraphHubReader
 from ..tigergraph.installer import install, undefined_queries
-from ..tigergraph.labels import TigerGraphObservedLabels
+from ..tigergraph.labels import TigerGraphObservedLabelReader
 from ..tigergraph.provenance import resolve_source_id, source_counts
 from ..tigergraph.reveal import ensure_revealed_labels
-from ..tigergraph.scope import TigerGraphScope, ensure_scope
+from ..tigergraph.scope import TigerGraphScopeReader, ensure_scope
 from .connect import Session, connect
 
 
@@ -95,10 +95,10 @@ def prepare_dataset(
         source_id,
         dataset,
         counts,
-        TigerGraphObservedLabels(),
-        scope=TigerGraphScope(executor),
-        cutoffs=TigerGraphCutoffs(executor),
-        hub_reader=TigerGraphHubs(executor),
+        TigerGraphObservedLabelReader(),
+        scope=TigerGraphScopeReader(executor),
+        cutoffs=TigerGraphCutoffReader(executor),
+        hub_reader=TigerGraphHubReader(executor),
     )
     if source_counts(executor) != counts:
         result["status"] = "source_changed"

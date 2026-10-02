@@ -18,7 +18,7 @@ from mule_pattern_learner.contract.graph_schema import PHASE_SPLIT, ContextKey
 from mule_pattern_learner.contract.server import CONTEXT_QUERY, TRUTH_QUERY
 from mule_pattern_learner.data.manifest import dataset_id
 from mule_pattern_learner.evaluation.audit import AUDIT_SPLITS
-from mule_pattern_learner.evaluation.truth import ParquetTruth
+from mule_pattern_learner.evaluation.truth import ParquetTruthReader
 from mule_pattern_learner.paths import DatasetPaths, RunPaths
 from mule_pattern_learner.pipeline import connect as pipeline_connect
 from mule_pattern_learner.pipeline import evaluate as pipeline_evaluate
@@ -117,7 +117,7 @@ def test_evaluate_run_connects_after_its_checks_and_reads_truth_once_on_that_con
         def __init__(self, on: Any) -> None:
             oracles.append(on)
 
-    monkeypatch.setattr(pipeline_evaluate, "TigerGraphTruth", Oracle)
+    monkeypatch.setattr(pipeline_evaluate, "TigerGraphTruthReader", Oracle)
     fresh = RunPaths(tmp_path / "fresh")
     saved_model(fresh.model, config, dataset)
     pipeline_evaluate.evaluate_run(fresh, data=tmp_path)
@@ -216,7 +216,7 @@ def test_evaluate_run_audits_validation_and_test_on_the_fake_graph(
     third = RunPaths(tmp_path / "third")
     saved_model(third.model, config, dataset)
     parquet = pipeline_evaluate.evaluate_run(
-        third, truth=ParquetTruth(tmp_path / "truth.parquet"), data=data
+        third, truth=ParquetTruthReader(tmp_path / "truth.parquet"), data=data
     )
     assert parquet["test"]["metrics"] == reports[0]["test"]["metrics"]
 

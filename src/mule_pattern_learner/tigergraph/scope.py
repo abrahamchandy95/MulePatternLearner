@@ -2,7 +2,7 @@
 
 ensure_scope creates a scope on first use; every later preparation and every
 streamed run verifies its header (ready, source, split seed) and the scope.unowned
-rule its membership was created with. TigerGraphScope reads the scope's accounts.
+rule its membership was created with. TigerGraphScopeReader reads the scope's accounts.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ from .executor import (
 )
 
 
-class TigerGraphScope:
+class TigerGraphScopeReader:
     """The ScopeReader of data.ports: the scope population query, paged by account."""
 
     def __init__(self, executor: QueryExecutor) -> None:

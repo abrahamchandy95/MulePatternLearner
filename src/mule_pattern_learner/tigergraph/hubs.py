@@ -56,7 +56,7 @@ def _parse_hubs(
     return pd.DataFrame(records, columns=list(HUB_COLUMNS))
 
 
-class TigerGraphHubs:
+class TigerGraphHubReader:
     """The HubReader of data.ports: the read-only hub query (contract.server.HUB_QUERY)."""
 
     def __init__(self, executor: QueryExecutor, *, timeout_s: float = 1800.0) -> None:

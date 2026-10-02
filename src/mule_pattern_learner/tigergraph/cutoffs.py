@@ -6,7 +6,7 @@ from ..contract.server import CUTOFF_QUERY
 from .executor import QueryExecutor, checked_rows, printed
 
 
-class TigerGraphCutoffs:
+class TigerGraphCutoffReader:
     """The CutoffReader of data.ports: the cutoff query (contract.server.CUTOFF_QUERY)."""
 
     def __init__(self, executor: QueryExecutor) -> None:

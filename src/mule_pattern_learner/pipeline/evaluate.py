@@ -15,9 +15,9 @@ from ..evaluation.truth import TruthReader
 from ..paths import DATA_DIR, RunPaths
 from ..reporting.report import write_audit_report
 from ..runtime.progress import recording
-from ..tigergraph.oracle import TigerGraphTruth
+from ..tigergraph.oracle import TigerGraphTruthReader
 from ..tigergraph.provenance import verify_frozen_source
-from ..tigergraph.scope import TigerGraphScope
+from ..tigergraph.scope import TigerGraphScopeReader
 from .connect import Session, connect, context_source
 
 
@@ -35,7 +35,7 @@ class SharedTruth:
 
     def read(self) -> pd.DataFrame:
         if self.table is None:
-            self.table = TigerGraphTruth(self.session.executor()).read()
+            self.table = TigerGraphTruthReader(self.session.executor()).read()
         return self.table
 
 
@@ -56,10 +56,10 @@ def evaluate_run(
     the audits then read and write the dataset's disk tier, which every run of the
     dataset shares, so the audits of the next run request none of the same contexts.
     Truth is read once for both splits: the graph's oracle truth unless ``truth``
-    supplies another reader (the tests' ParquetTruth, or a suite's SharedTruth). With a
-    ``session`` the audits run on its connection, which a suite of runs shares. The lines
-    the audits print are appended to the run's events.jsonl. Once a split is audited
-    here, the audit figures and report.md are drawn again
+    supplies another reader (the tests' ParquetTruthReader, or a suite's SharedTruth).
+    With a ``session`` the audits run on its connection, which a suite of runs shares.
+    The lines the audits print are appended to the run's events.jsonl. Once a split is
+    audited here, the audit figures and report.md are drawn again
     (reporting.report.write_audit_report).
     """
     inputs = audit_inputs(run, data=data)
@@ -72,8 +72,8 @@ def evaluate_run(
             transport = inputs.model.config.transport
             executor = session.executor() if session is not None else connect(transport)
             verify_frozen_source(executor, inputs.manifest)
-            answer = (truth if truth is not None else TigerGraphTruth(executor)).read()
-            scope = TigerGraphScope(executor)
+            answer = (truth if truth is not None else TigerGraphTruthReader(executor)).read()
+            scope = TigerGraphScopeReader(executor)
             cache = ContextCache.of(inputs.dataset, inputs.manifest)
             contexts = context_source(executor, inputs.model.config, cache)
             failed = True

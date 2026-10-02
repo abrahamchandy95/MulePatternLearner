@@ -53,8 +53,8 @@ from mule_pattern_learner.testing.fake_graph import (
 )
 from mule_pattern_learner.tigergraph.analytics_query import TigerGraphAnalyticsFetcher
 from mule_pattern_learner.tigergraph.context_query import query_context_rows
-from mule_pattern_learner.tigergraph.oracle import TigerGraphTruth
-from mule_pattern_learner.tigergraph.scope import TigerGraphScope
+from mule_pattern_learner.tigergraph.oracle import TigerGraphTruthReader
+from mule_pattern_learner.tigergraph.scope import TigerGraphScopeReader
 
 FIRST_SEEN = timestamp("2024-01-01")
 # The account every query rejects.
@@ -108,8 +108,8 @@ def built(
             config,
             manifest,
             load_hub_registry(dataset, manifest),
-            scope=TigerGraphScope(graph),
-            truth=TigerGraphTruth(graph).read(),
+            scope=TigerGraphScopeReader(graph),
+            truth=TigerGraphTruthReader(graph).read(),
             contexts=contexts,
             analytics=TigerGraphAnalyticsFetcher(graph),
         )
@@ -214,5 +214,5 @@ def test_a_split_with_several_cutoffs_is_refused(tmp_path: Path) -> None:
     config = unit_config(dataset={"dates": {"train": ["2024-05-01", "2024-07-01"]}})
     with pytest.raises(ValueError, match="one train cutoff, not 2"):
         feature_table.split_sample(
-            TigerGraphScope(FakeTigerGraph()), config, "train", pd.DataFrame()
+            TigerGraphScopeReader(FakeTigerGraph()), config, "train", pd.DataFrame()
         )

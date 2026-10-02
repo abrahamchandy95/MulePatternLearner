@@ -9,7 +9,7 @@ import pytest
 
 from mule_pattern_learner.contract.server import LABEL_CONTRACT_QUERY
 from mule_pattern_learner.tigergraph.labels import (
-    TigerGraphObservedLabels,
+    TigerGraphObservedLabelReader,
     validate_supervision,
 )
 
@@ -35,7 +35,7 @@ class Audit:
 
 
 def test_the_population_rows_give_the_revealed_positives_and_their_clocks() -> None:
-    labels = TigerGraphObservedLabels().read(POPULATION)
+    labels = TigerGraphObservedLabelReader().read(POPULATION)
     assert labels.known_positive.tolist() == [True, True, False]
     assert labels.known_from_ms.tolist() == [1_000, 2_000, 0]
     # Only revealed train positives are training labels.

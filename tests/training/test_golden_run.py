@@ -69,12 +69,12 @@ from mule_pattern_learner.testing.builders import (
 )
 from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
-from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffs
-from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
-from mule_pattern_learner.tigergraph.labels import TigerGraphObservedLabels
-from mule_pattern_learner.tigergraph.oracle import TigerGraphTruth
+from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffReader
+from mule_pattern_learner.tigergraph.hubs import TigerGraphHubReader
+from mule_pattern_learner.tigergraph.labels import TigerGraphObservedLabelReader
+from mule_pattern_learner.tigergraph.oracle import TigerGraphTruthReader
 from mule_pattern_learner.tigergraph.render import render_context_query
-from mule_pattern_learner.tigergraph.scope import TigerGraphScope
+from mule_pattern_learner.tigergraph.scope import TigerGraphScopeReader
 from mule_pattern_learner.training import trainer
 from mule_pattern_learner.training.schedule import step_seed
 
@@ -128,10 +128,10 @@ def prepare_golden(directory: Path) -> tuple[RunConfig, DatasetPaths, FakeTigerG
         GOLDEN_SOURCE,
         dataset,
         {"Account": POPULATION},
-        TigerGraphObservedLabels(),
-        scope=TigerGraphScope(executor),
-        cutoffs=TigerGraphCutoffs(executor),
-        hub_reader=TigerGraphHubs(executor),
+        TigerGraphObservedLabelReader(),
+        scope=TigerGraphScopeReader(executor),
+        cutoffs=TigerGraphCutoffReader(executor),
+        hub_reader=TigerGraphHubReader(executor),
     )
     return config, dataset, executor
 
@@ -414,12 +414,12 @@ def test_the_golden_run_audits_validation_and_test(tmp_path: Path) -> None:
     golden_run(tmp_path)
     config, executor = golden_config(), golden_executor()
     oracle = FakeTigerGraph(truth=ground_truth_rows(scope_population(POPULATION)))
-    truth = TigerGraphTruth(oracle).read()
+    truth = TigerGraphTruthReader(oracle).read()
     inputs = audit_inputs(RunPaths(tmp_path / "run"), dataset=DatasetPaths(tmp_path / "dataset"))
     observed = {}
     with golden_source(executor, config) as contexts:
         for split in GOLDEN_AUDIT:
-            scope = TigerGraphScope(executor)
+            scope = TigerGraphScopeReader(executor)
             report = audit(inputs, split, truth=truth, scope=scope, contexts=contexts)
             observed[split] = audit_numbers(report)
     problems = audit_differences(observed)
