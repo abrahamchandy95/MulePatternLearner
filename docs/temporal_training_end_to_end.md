@@ -113,6 +113,7 @@ stubs](#hubs-and-stubs)).
 | Train | `mule train` | Two rounds of context queries per step | No |
 | Check readiness | `mule check` | Reads the schema and the query catalog, then the contexts of one training batch | No |
 | Score, evaluate | `mule score`, `mule evaluate` | Context queries for the scored accounts; `mule evaluate` also pages the validation and test populations and reads the graph's label contract | No |
+| Diagnose | `mule diagnose [ANALYSIS]` | Installs the analytics queries whose text differs, then reads the ground truth, the populations, the training and analytics context queries of every split's audit sample, and the reveal's inputs | The analytics queries in the query catalog (the install also drops the retired queries still installed) |
 
 `mule` is `python -m mule_pattern_learner` (the entry point exists
 after `pip install -e .`; the project needs an editable install because it reads `gsql/`
