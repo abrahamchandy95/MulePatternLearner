@@ -54,12 +54,7 @@ def verify_frozen_source(executor: ConnectionExecutor, manifest: dict[str, Any])
     """
     verify_sources(executor)
     source = prepared_source(manifest)
-    recorded = {
-        name: count
-        for name, count in source.counts.items()
-        if name not in EXPERIMENT_METADATA_TYPES
-    }
-    if source_counts(executor) != recorded:
+    if source_counts(executor) != source.counts:
         raise ValueError("Live graph counts changed; freeze the source and prepare a new dataset")
     try:
         verify_scope(
