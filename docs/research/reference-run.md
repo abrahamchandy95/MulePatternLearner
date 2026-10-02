@@ -3,9 +3,9 @@
 Three full training runs on the CUDA host, on the same dataset and the same revealed labels.
 They record where the model stood before the restructuring and why the built-in settings are
 what they are. The checkpoints of runs 1 and 2 load only with the code at the `pre-restructure`
-tag. The scripts and notes of the diagnostic study that sits between runs 2 and 3 are
-on the branch `archive/diagnostic-study`, under `research-archive/` (start with its
-`README.md`).
+tag. The diagnostic study that sits between runs 2 and 3 is recorded in
+[the diagnostic study](diagnostic-study.md), [the mule profile](mule-profile.md) and
+[the nnPU positive weight](nnpu-positive-weight.md).
 
 ## How the numbers are measured
 
@@ -89,16 +89,8 @@ validation audit; the test audit is for reporting.
 
 ## Where the details are
 
-On `archive/diagnostic-study` (for example
-`git show archive/diagnostic-study:research-archive/README.md`):
-
-| File under `research-archive/` | What it holds |
+| Note | What it holds |
 |---|---|
-| `mpl_diag/shift_review.md` | the static review that found the constant root input |
-| `mpl_diag/baselines.md` | baselines on the root features and the label-count curve |
-| `mpl_diag/pool_activity_check.md` | logistic regression on pool counts, per training setting |
-| `mpl_diag/mule_profile.md` | what separates mules from other accounts; revealed versus hidden mules |
-| `nnpu_sim/` | the simulation of the nnPU positive weight |
-
-The migration turns these into `docs/research/diagnostic-study.md`,
-`docs/research/mule-profile.md` and `docs/research/nnpu-positive-weight.md`.
+| [The diagnostic study](diagnostic-study.md) | the constant root input, the baselines on the root features and the pool counts, the label-count curve, the cutoff shift, and where each script of the study went |
+| [The mule profile](mule-profile.md) | what separates mules from other accounts; revealed against hidden mules; the detection ceiling |
+| [The nnPU positive weight](nnpu-positive-weight.md) | the collapse of run 1 and the simulation of the positive weight |
