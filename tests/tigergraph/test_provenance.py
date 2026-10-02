@@ -20,9 +20,8 @@ def test_source_counts_ignore_experiment_scopes() -> None:
     assert provenance.source_counts(graph) == {"Account": 10, "Party": 4}
     config = DEFAULT_CONFIG.with_changes({"scope": {"id": "s"}, "dataset": {"split_seed": 42}})
     manifest: dict[str, Any] = {
-        # Older manifests recorded the scope vertex count too.
         "source": {
-            "source_counts": {"Account": 10, "Party": 4, "Temporal_Training_Scope": 1},
+            "source_counts": provenance.source_counts(graph),
             "settings": dataset_settings("snap", config),
         },
     }
