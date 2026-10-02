@@ -168,6 +168,10 @@ analysis whose inputs are missing is skipped with its reason, and the command th
   [GSQL temporal encoding](docs/temporal_encoding.md): the graph and the 64-dimensional
   payment-gap and cutoff-age encodings.
 - [GSQL guide](gsql/README.md): which query files exist and how they are installed.
+- [Research notes](docs/research/reference-run.md): the reference runs, and the diagnostic
+  study behind the built-in run's pool counts and positive weight
+  ([the study](docs/research/diagnostic-study.md), [the mule profile](docs/research/mule-profile.md),
+  [the nnPU positive weight](docs/research/nnpu-positive-weight.md)).
 
 ## Development
 
