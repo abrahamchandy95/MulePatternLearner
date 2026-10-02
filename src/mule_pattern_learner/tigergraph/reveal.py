@@ -1,12 +1,12 @@
 """Reveal the known mules in the graph once, through the Account label contract.
 
 A fresh PhantomLedger load masks every mule, so training would have no positives.
-The first run calls the reveal query (gsql/queries/label_reveal.gsql),
-which simulates when a bank would have discovered each mule (victim reports, network
-tracing, monitoring; see docs/label_reveal.md) and reveals up to
-`scope.reveal_per_split` discovered mules per split. Training then reads only the revealed positives and
-their discovery clocks; ground truth stays in the
-graph for the oracle audit.
+The first run calls the reveal query (gsql/queries/label_reveal.gsql), which simulates
+when a bank would have discovered each mule (victim reports, network tracing,
+monitoring; see docs/explanation/label-reveal.md) and reveals up to
+`scope.reveal_per_split` discovered mules per split. Training then reads only the
+revealed positives and their discovery clocks; ground truth stays in the graph for the
+oracle audit.
 """
 
 from __future__ import annotations

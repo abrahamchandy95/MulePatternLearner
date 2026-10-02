@@ -22,11 +22,11 @@ FOR GRAPH Mule_Pattern_Learner RETURNS (ListAccum<DOUBLE>) SYNTAX V2 {
   RETURN @@u;
 }
 
-/* Reveal known mules once, through the Account label contract (docs/account_mule_labels.md).
+/* Reveal known mules once, through the Account label contract (docs/reference/labels.md).
 
    The simulator's ground truth (is_mule) is read here and never by training. Each
    internal mule gets a simulated DISCOVERY TIME from the channels banks really use
-   (docs/label_reveal.md has the sources and the offline check):
+   (docs/explanation/label-reveal.md has the sources and the offline check):
    - victim report: each fraud-labelled Zelle inflow is reported by its victim with
      probability p_report after a scam-type reporting delay, reaches the mule's bank
      after a notification lag, and is acted on with probability p_action_first (the
