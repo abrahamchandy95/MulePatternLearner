@@ -13,6 +13,7 @@ import pytest
 import requests
 
 from mule_pattern_learner.contract.server import (
+    ANALYTICS_QUERY_FILES,
     CONTEXT_QUERY,
     CUTOFF_QUERY,
     FOURIER_QUERY,
@@ -314,3 +315,21 @@ def test_nothing_is_dropped_when_the_install_fails_or_a_drop_is_refused(
     monkeypatch.setattr(graph.client.conn, "gsql", refusing)
     with pytest.raises(RuntimeError, match="left it installed.*cannot be dropped"):
         installer.drop_retired(graph)
+
+
+def test_the_analytics_queries_are_installed_only_when_asked_for() -> None:
+    # A graph with every training query installed and no analytics query.
+    graph = FakeTigerGraph(queries=installed_repository())
+    analytics = list(gsql_text.repository_queries(ANALYTICS_QUERY_FILES))
+    logs = installer.install(graph)
+    assert logs["installed"] == [] and graph.writes == []
+    assert not set(analytics) & set(installer.installed_endpoints(graph))
+    # With analytics, exactly those are created and installed, and the training queries
+    # stay as they were; a second install finds them in place.
+    logs = installer.install(graph, analytics=True)
+    assert logs["installed"] == analytics
+    assert [w for w in graph.writes if w.startswith("INSTALL")] == [
+        "INSTALL QUERY " + ", ".join(analytics)
+    ]
+    graph.writes.clear()
+    assert installer.install(graph, analytics=True)["installed"] == [] and graph.writes == []
