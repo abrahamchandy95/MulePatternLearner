@@ -178,14 +178,22 @@ def baseline_rows(table: pd.DataFrame) -> list[tuple[str, str, str, str]]:
     return rows
 
 
-def plot_baselines(ax: Axes, table: pd.DataFrame, *, split: str, labels: bool = True) -> Axes:
-    """Each baseline's audit AP on one split, with its ring-clustered interval.
+def plot_baselines(
+    ax: Axes,
+    table: pd.DataFrame,
+    *,
+    split: str,
+    labels: bool = True,
+    interval: str = "ring-clustered 90% interval",
+) -> Axes:
+    """Each baseline's audit AP on one split, with its interval.
 
     The run (ink) is the model's recorded audit; the PU baselines are fitted at the train
     cutoff on the revealed train mules; the single features rank with no training; the
     dashed line is chance, a random ranking's AP (the weighted prevalence). The x axis is
     logarithmic, since AP spans chance to far above it. ``labels`` False leaves the row
-    names to a panel beside this one.
+    names to a panel beside this one; ``interval`` names the intervals the table holds
+    (the baselines' are ring-clustered, metrics.bootstrap_intervals).
     """
     rows = baseline_rows(table)
     chosen = table[(table.split == split) & (table.metric == "average_precision")]
@@ -208,7 +216,7 @@ def plot_baselines(ax: Axes, table: pd.DataFrame, *, split: str, labels: bool = 
         ("the run's audit", _dot(BASELINE)),
         ("fitted on the revealed train mules", _dot(colour)),
         ("one feature, no training", _dot(colour, hollow=True)),
-        ("ring-clustered 90% interval", {"color": colour, "linewidth": 2.2}),
+        (interval, {"color": colour, "linewidth": 2.2}),
     ]
     chance = chosen[chosen.baseline == "chance"]
     if len(chance):
@@ -226,14 +234,22 @@ def plot_baselines(ax: Axes, table: pd.DataFrame, *, split: str, labels: bool = 
     return ax
 
 
-def plot_label_curve(ax: Axes, table: pd.DataFrame, *, split: str = "test") -> Axes:
-    """Audit AP against the number of oracle-labelled train mules a learner was fitted on.
+# The metrics a label-count curve can draw, and how its labels name them.
+CURVE_NAMES = {"average_precision": ("average precision", "AP"), "roc_auc": ("ROC AUC", "ROC AUC")}
+
+
+def plot_label_curve(
+    ax: Axes, table: pd.DataFrame, *, split: str = "test", metric: str = "average_precision"
+) -> Axes:
+    """An audit metric against the number of oracle-labelled train mules a learner had.
 
     Per learner, the mean over the random draws of k mules and the range of the draws;
     a star is the learner fitted on the revealed train mules alone, the labels training
-    has, and the ink line the run's audit AP, at the revealed count (dotted).
+    has, and the ink line the run's audit, at the revealed count (dotted). ``metric`` is
+    the average precision, which a mule or two at the top moves, or the ROC AUC.
     """
-    chosen = table[(table.split == split) & (table.metric == "average_precision")]
+    name, short = CURVE_NAMES[metric]
+    chosen = table[(table.split == split) & (table.metric == metric)]
     random = chosen[chosen.labels == "random"]
     for index, kind in enumerate(LEARNERS):
         mine = random[random.model == kind]
@@ -262,16 +278,23 @@ def plot_label_curve(ax: Axes, table: pd.DataFrame, *, split: str = "test") -> A
         ax.axhline(row.value, color=BASELINE, linewidth=1.2)
         ax.axvline(row.mules, color=BASELINE, linestyle=":", linewidth=1.0)
         handles.append(Line2D([], [], color=BASELINE, linewidth=1.2))
-        labels.append(f"the run's audit: AP {number(row.value)}, {int(row.mules)} revealed mules")
+        labels.append(
+            f"the run's audit: {short} {number(row.value)}, {int(row.mules)} revealed mules"
+        )
     handles.append(Line2D([], [], **_dot(MUTED, marker="*", size=12)))
     labels.append("fitted on the revealed train mules only")
     ax.set_xscale("log")
     counts = sorted(int(k) for k in chosen.mules.unique())
     ax.set_xticks(counts, [str(k) for k in counts])
     ax.xaxis.set_minor_formatter(NullFormatter())
-    ax.set_ylim(bottom=0)
+    if metric == "roc_auc":
+        ax.axhline(0.5, color=MUTED, linestyle="--", linewidth=1.0)
+        handles.append(Line2D([], [], color=MUTED, linestyle="--", linewidth=1.0))
+        labels.append("chance")
+    else:
+        ax.set_ylim(bottom=0)
     ax.set_xlabel("Train mules with oracle labels (log scale)")
-    ax.set_ylabel(f"{split.capitalize()} audit average precision")
+    ax.set_ylabel(f"{split.capitalize()} audit {name}")
     legend_below(ax, handles, labels)
     ax.set_title(f"Label-count curve, {split} audit, {PURPOSES[split]}")
     return ax
