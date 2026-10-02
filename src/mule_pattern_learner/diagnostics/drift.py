@@ -136,10 +136,3 @@ def shift_cost(frame: pd.DataFrame, *, seed: int = 0) -> list[tuple[Any, ...]]:
 def drift(frame: pd.DataFrame, *, seed: int = 0) -> pd.DataFrame:
     """The drift table: the feature shift rows, then the shift cost rows."""
     return pd.DataFrame(feature_shift(frame) + shift_cost(frame, seed=seed), columns=list(COLUMNS))
-
-
-def strongest_shifts(table: pd.DataFrame, count: int = 25) -> list[str]:
-    """The features whose non-mules shift most from train (largest absolute SMD), first."""
-    smd = table[table.metric == "smd"]
-    largest = smd.assign(size=smd.value.abs()).groupby("feature")["size"].max()
-    return largest.sort_values(ascending=False, kind="stable").head(count).index.tolist()

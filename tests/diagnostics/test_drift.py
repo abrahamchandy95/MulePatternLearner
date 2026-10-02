@@ -7,12 +7,7 @@ import pandas as pd
 import pytest
 
 from mule_pattern_learner.artifacts import DIAGNOSTIC_TABLES
-from mule_pattern_learner.diagnostics.drift import (
-    SETUPS,
-    drift,
-    split_rank_transform,
-    strongest_shifts,
-)
+from mule_pattern_learner.diagnostics.drift import SETUPS, drift, split_rank_transform
 from mule_pattern_learner.testing.builders import feature_frame
 
 
@@ -23,9 +18,10 @@ def table() -> pd.DataFrame:
 
 def test_the_features_that_grow_with_history_shift_the_most(table: pd.DataFrame) -> None:
     assert tuple(table.columns) == DIAGNOSTIC_TABLES["drift"]
-    shifted = strongest_shifts(table, 2)
-    assert shifted == ["account__visible_event_count", "messages__max_pair_prior_count"]
     smd = table[table.metric == "smd"].pivot_table(index="feature", columns="split", values="value")
+    largest = smd.abs().max(axis=1).sort_values(ascending=False)
+    shifted = largest.index[:2].tolist()
+    assert shifted == ["account__visible_event_count", "messages__max_pair_prior_count"]
     # A year of history shifts further than nine months, and noise barely shifts.
     assert (smd.loc[shifted, "test"] > smd.loc[shifted, "validation"]).all()
     noise = smd.loc["message_context__mean_pair_count_7d"].to_numpy(np.float64)

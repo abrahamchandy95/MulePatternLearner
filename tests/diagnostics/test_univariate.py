@@ -6,7 +6,7 @@ import numpy as np
 from sklearn.metrics import average_precision_score, roc_auc_score
 
 from mule_pattern_learner.artifacts import DIAGNOSTIC_TABLES
-from mule_pattern_learner.diagnostics.univariate import strongest, univariate, varying
+from mule_pattern_learner.diagnostics.univariate import univariate, varying
 from mule_pattern_learner.testing.builders import feature_frame
 
 
@@ -33,7 +33,7 @@ def test_each_feature_that_varies_on_train_is_ranked_in_every_split() -> None:
     assert table.family[table.feature == name].unique().tolist() == ["model"]
 
 
-def test_average_precision_ranks_in_the_train_direction_and_strongest_uses_validation() -> None:
+def test_average_precision_ranks_in_the_train_direction() -> None:
     frame = feature_frame()
     table = univariate(frame)
     auc = table[table.metric == "roc_auc"].pivot_table(
@@ -53,7 +53,4 @@ def test_average_precision_ranks_in_the_train_direction_and_strongest_uses_valid
         & (table.metric == "average_precision")
     ].value
     assert found.tolist() == [expected]
-    top = strongest(table, count=3)
-    distance = (auc.validation - 0.5).abs().sort_values(ascending=False)
-    assert top == distance.index[:3].tolist()
     assert np.isfinite(table.value).all()

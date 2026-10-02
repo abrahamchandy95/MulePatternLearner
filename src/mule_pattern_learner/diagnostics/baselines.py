@@ -17,7 +17,8 @@ them, single-feature rankings with no training: the features whose train ROC AUC
 farthest from 0.5, each in its train direction. All are scored on the validation audit
 sample (for decisions) and the test one (for reporting), with the metrics and the
 ring-clustered intervals of the audits (metrics.bootstrap_intervals), so they compare
-with a run's audits of the same accounts, which the table adds as `model` rows.
+with a run's audits of the same accounts, which the table adds as `model` rows. The
+`chance` rows are what a random ranking scores there in expectation.
 """
 
 from __future__ import annotations
@@ -37,7 +38,13 @@ from sklearn.preprocessing import FunctionTransformer, StandardScaler
 
 from ..artifacts import DIAGNOSTIC_TABLES
 from ..contract.graph_schema import HELD_OUT_SPLITS
-from ..metrics import BOOTSTRAP_REPLICATES, bootstrap_intervals, ranking_metrics
+from ..metrics import (
+    BOOTSTRAP_REPLICATES,
+    REVIEW_BUDGETS,
+    bootstrap_intervals,
+    budget_name,
+    ranking_metrics,
+)
 from .feature_table import FAMILIES, family_of, usable
 from .univariate import varying, weighted_auc
 
@@ -175,6 +182,23 @@ def scored_rows(
     return rows
 
 
+def chance_rows(split: str, part: pd.DataFrame) -> list[tuple[Any, ...]]:
+    """What a random ranking scores on a split in expectation: the `chance` rows.
+
+    Its AP is the split's weighted prevalence and its ROC AUC 0.5, and each review
+    budget finds that share of the mules at the prevalence's precision. They have no
+    interval.
+    """
+    y = part.is_mule.to_numpy(np.int64)
+    weight = part.weight.to_numpy(np.float64)
+    prevalence = float(weight[y == 1].sum() / weight.sum())
+    values = {"average_precision": prevalence, "roc_auc": 0.5}
+    for fraction in REVIEW_BUDGETS:
+        values[f"precision_at_{budget_name(fraction)}"] = prevalence
+        values[f"recall_at_{budget_name(fraction)}"] = fraction
+    return [("chance", "", "", split, m, v, np.nan, np.nan) for m, v in values.items()]
+
+
 def audit_rows(run: str, audits: Mapping[str, Mapping[str, Any]]) -> list[tuple[Any, ...]]:
     """A run's recorded audit metrics and intervals as `model` rows, per audited split."""
     rows = []
@@ -219,6 +243,8 @@ def baselines(
         for split, part in held.items():
             score = direction * part[name].to_numpy(np.float64)
             records += scored_rows("single_feature", name, "raw", split, part, score, replicates)
+    for split, part in held.items():
+        records += chance_rows(split, part)
     records += audit_rows(run, audits or {})
     return pd.DataFrame(records, columns=list(COLUMNS))
 

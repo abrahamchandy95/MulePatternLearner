@@ -12,6 +12,7 @@ from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import asdict, replace
+import functools
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -57,16 +58,30 @@ from mule_pattern_learner.data import manifest as data_manifest
 from mule_pattern_learner.data.hub_registry import HubRegistry
 from mule_pattern_learner.data.manifest import dataset_settings
 from mule_pattern_learner.data.observed_labels import align_observed_labels
+from mule_pattern_learner.diagnostics.baselines import baselines
+from mule_pattern_learner.diagnostics.drift import drift
+from mule_pattern_learner.diagnostics.learning_curve import learning_curve
+from mule_pattern_learner.diagnostics.nnpu_simulation import Problem, nnpu_simulation
+from mule_pattern_learner.diagnostics.proxy_validity import validity_table
+from mule_pattern_learner.diagnostics.reveal_spread import reveal_spread
+from mule_pattern_learner.diagnostics.subgroups import subgroups
+from mule_pattern_learner.diagnostics.univariate import univariate
 from mule_pattern_learner.evaluation import audit as evaluation_audit
 from mule_pattern_learner.experiments.tables import COMPLETE, SuiteRun
 from mule_pattern_learner.experiments.variants import Variant
 from mule_pattern_learner.inference.saved_model import SavedModel
-from mule_pattern_learner.metrics import bootstrap_intervals, proxy_metrics, select_threshold
+from mule_pattern_learner.metrics import (
+    bootstrap_intervals,
+    proxy_metrics,
+    ranking_metrics,
+    select_threshold,
+)
 from mule_pattern_learner.model.build import build_model
 from mule_pattern_learner.paths import DatasetPaths, RunPaths, SuitePaths
 from mule_pattern_learner.sampling import candidates
 from mule_pattern_learner.tigergraph.context_query import query_context_rows
 from mule_pattern_learner.tigergraph.executor import QueryExecutor
+from mule_pattern_learner.tigergraph.reveal import reveal_parameters
 from mule_pattern_learner.training import trainer
 
 if TYPE_CHECKING:
@@ -1173,3 +1188,105 @@ def feature_frame(seed: int = 0) -> pd.DataFrame:
     table = pd.concat(frames, ignore_index=True)
     assert tuple(table.columns[: len(FEATURE_TABLE_COLUMNS)]) == FEATURE_TABLE_COLUMNS
     return table
+
+
+# The mules of a synthetic reveal per split partition (train, validation, test), as many
+# as the reference dataset has.
+REVEAL_MULES = {1: 160, 2: 33, 3: 40}
+
+
+def reveal_population(seed: int = 0) -> list[dict[str, Any]]:
+    """What the reveal's inputs query prints for REVEAL_MULES mules, drawn with seed.
+
+    Each mule is first seen at the start of 2024 and, four times in five, receives up to
+    eleven fraud-labelled inflows an hour apart in a burst at a random day of the year,
+    so whether a bank would have discovered it by its split's cutoff varies by salt.
+    """
+    rng = np.random.default_rng(seed)
+    day, start = 86_400_000, timestamp("2024-01-01")
+    mules = []
+    for part, count in REVEAL_MULES.items():
+        for _ in range(count):
+            key = 1000 + len(mules)
+            inflows = int(rng.integers(1, 12)) if rng.random() < 0.8 else 0
+            burst = start + int(rng.integers(0, 365)) * day
+            attributes = {
+                "M.id": f"M{key}",
+                "M.first_seen_ts_ms": start,
+                "M.@part": part,
+                "M.@key": key,
+                "M.@inflows": [f"{key * 100 + i}:{burst + i * 3_600_000}" for i in range(inflows)],
+            }
+            mules.append({"v_id": f"M{key}", "attributes": attributes})
+    return [{"M": mules}, {"zelle_links": []}, {"payment_links": []}]
+
+
+def proxy_predictions(
+    rng: np.random.Generator, split: str, found: float = FOUND
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """A split's proxy predictions and the truth of their accounts.
+
+    The predictions are predictions_frame's; a few of the unlabelled accounts are hidden
+    mules, which the run scores lower than the revealed ones, as a proxy trained on the
+    revealed mules does.
+    """
+    frame = predictions_frame(rng, split, found)
+    observed = frame.observed_label.to_numpy() == 1
+    hidden = ~observed & (rng.random(len(frame)) < 0.004)
+    frame.loc[hidden, "score"] = near_extremes(rng, np.ones(int(hidden.sum()), bool), found / 3)
+    truth = pd.DataFrame(
+        {
+            "account_id": frame.account_id,
+            "is_mule": (observed | hidden).astype(np.int64),
+            "ring_id": -1,
+            "label_source": "phantomledger_role",
+        }
+    )
+    return frame, truth
+
+
+def diagnostic_tables(seed: int = 0) -> dict[str, pd.DataFrame]:
+    """Every analysis' table of a synthetic diagnostic study (artifacts.DIAGNOSTIC_TABLES).
+
+    The feature table's analyses run on feature_frame, with the audit reports of a
+    synthetic run beside them; the subgroups on that run's audit samples (audit_frame);
+    the proxy validity on proxy_predictions; the reveal spread over 50 salts of
+    reveal_population; the nnPU simulation on a small, short problem. The baselines'
+    intervals take 40 replicates and the curve two draws, and the tables of a seed are
+    computed once per process (each call gets copies), to keep the tests fast.
+    """
+    return {name: table.copy() for name, table in _diagnostic_tables(seed).items()}
+
+
+@functools.cache
+def _diagnostic_tables(seed: int) -> dict[str, pd.DataFrame]:
+    rng = np.random.default_rng(seed)
+    frame = feature_frame(seed)
+    samples = {split: audit_frame(rng, split) for split in REPORTED_SPLITS}
+    audits = {
+        split: {
+            "metrics": ranking_metrics(
+                sample.is_mule.to_numpy(),
+                sample.score.to_numpy(),
+                1 / sample.inclusion_probability.to_numpy(),
+            ),
+            "intervals": {"average_precision": [0.05, 0.4], "roc_auc": [0.85, 0.95]},
+        }
+        for split, sample in samples.items()
+    }
+    predicted = {split: proxy_predictions(rng, split) for split in REPORTED_SPLITS}
+    truth = pd.concat([found for _, found in predicted.values()], ignore_index=True)
+    params = reveal_parameters(DEFAULT_CONFIG.scope, DEFAULT_CONFIG.dataset.dates, apply=False)
+    small = Problem(marginal=2_000, test_positives=30, test_negatives=30_000, steps=20, epochs=3)
+    return {
+        "univariate": univariate(frame),
+        "drift": drift(frame),
+        "baselines": baselines(frame, run="baseline/seed-42", audits=audits, replicates=40),
+        "learning_curve": learning_curve(frame, repeats=2, audits=audits),
+        "subgroups": subgroups(samples),
+        "proxy_validity": validity_table(
+            {split: rows for split, (rows, _) in predicted.items()}, truth, 0.5
+        ),
+        "reveal_spread": reveal_spread(reveal_population(seed), params, salts=range(50)),
+        "nnpu_simulation": nnpu_simulation(seeds=(1, 2), problem=small),
+    }

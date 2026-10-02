@@ -16,6 +16,7 @@ that (evaluation.audit).
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
@@ -70,19 +71,28 @@ def split_validity(
     return result
 
 
-def proxy_validity(run: RunPaths, truth: pd.DataFrame) -> pd.DataFrame:
-    """The oracle metrics of a complete run's proxy predictions, in long format.
+def validity_table(
+    predictions: Mapping[str, pd.DataFrame], truth: pd.DataFrame, threshold: float
+) -> pd.DataFrame:
+    """The oracle metrics of each split's proxy predictions, in long format.
 
     One row per split, subset and metric (COLUMNS); a metric that is undefined for a
-    subset (AP without mules, ROC AUC without both classes) is NaN. The threshold is the
-    one training chose on validation (metrics.json).
+    subset (AP without mules, ROC AUC without both classes) is NaN.
     """
     answer = checked_truth(truth)
-    threshold = float(read_json(run.metrics)["validation_proxy"]["threshold"])
     rows: list[tuple[str, str, str, float]] = []
-    for split in HELD_OUT_SPLITS:
-        found = split_validity(read_predictions(run.predictions(split)), answer, threshold)
-        for subset, metrics in found.items():
+    for split, frame in predictions.items():
+        for subset, metrics in split_validity(frame, answer, threshold).items():
             for metric, value in metrics.items():
                 rows.append((split, subset, metric, np.nan if value is None else float(value)))
     return pd.DataFrame(rows, columns=list(COLUMNS))
+
+
+def proxy_validity(run: RunPaths, truth: pd.DataFrame) -> pd.DataFrame:
+    """The validity table of a complete run's proxy predictions of validation and test.
+
+    The threshold is the one training chose on validation (metrics.json).
+    """
+    threshold = float(read_json(run.metrics)["validation_proxy"]["threshold"])
+    predictions = {split: read_predictions(run.predictions(split)) for split in HELD_OUT_SPLITS}
+    return validity_table(predictions, truth, threshold)
