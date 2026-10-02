@@ -216,6 +216,7 @@ MulePatternLearner/
 │   │   ├── fingerprints.py     fingerprint (sha256 of JSON), stable_hash (blake2b, sampler keys), hash64; the docstring says
 │   │   │                       why there are three (persisted draws)
 │   │   ├── clock.py            timestamp parsing, cutoff_ms
+│   │   ├── discovery.py        the reveal's draws (reveal_uniforms) and parameter defaults, which its job and mirror share
 │   │   └── salts.py            frozen RNG salt values
 │   ├── runtime/
 │   │   ├── device.py           CUDA, then MPS, then CPU; determinism; reserve_deterministic_cublas() (called first by every
@@ -232,12 +233,14 @@ MulePatternLearner/
 │   │   ├── render.py           build-time generator of gsql/queries/training_context.gsql and
 │   │   │                       gsql/analytics/analytics_context.gsql, and their contracts (the runtime never imports it)
 │   │   ├── context_query.py    TigerGraphContextFetcher: validation, bisection on timeout, per-row contract and encoding check
+│   │   ├── analytics_query.py  TigerGraphAnalyticsFetcher: fetch_analytics_context's requests and checks (diagnostics only)
 │   │   ├── scope.py            TigerGraphScope: header, create, finalize, population pages, policy
 │   │   ├── cutoffs.py          TigerGraphCutoffs
 │   │   ├── hubs.py             TigerGraphHubs: hub query, rows parsed into data.hub_registry.HubRegistry
 │   │   ├── labels.py           TigerGraphObservedLabels; label-contract audit
 │   │   ├── reveal.py           the one-time reveal (writes; runs only when the graph has no revealed mules)
-│   │   ├── oracle.py           TigerGraphTruth: is_mule, ring id, label source (evaluation and diagnostics only)
+│   │   ├── oracle.py           TigerGraphTruth: is_mule, ring id, label source; TigerGraphRevealInputReader: the reveal's
+│   │   │                       inputs (evaluation and diagnostics only)
 │   │   └── provenance.py       vertex counts, derived source id, frozen-source check
 │   ├── data/
 │   │   ├── ports.py            ContextFetcher, ScopeReader, CutoffReader, HubReader, ObservedLabelReader
@@ -279,12 +282,15 @@ MulePatternLearner/
 │   │   ├── train.py            train_run(): trainer, then run report
 │   │   ├── evaluate.py         evaluate_run(): audits, then audit report
 │   │   ├── score.py            score_accounts use case
-│   │   └── check.py            read-only readiness; one batch's digests and first loss
+│   │   ├── check.py            read-only readiness; one batch's digests and first loss
+│   │   └── diagnose.py         TigerGraphStudyReader: the graph reads of `mule diagnose`, which alone installs the
+│   │                           analytics queries
 │   ├── reporting/          style.py, training.py, ranking.py, scores.py, comparison.py, diagnostics.py, report.py
 │   ├── experiments/        variants.py, runner.py, tables.py (summary.csv and comparison.csv; not comparison.py,
 │   │                       which reporting/ has)
 │   ├── diagnostics/        feature_table.py, baselines.py, learning_curve.py, univariate.py, drift.py, subgroups.py,
-│   │                       proxy_validity.py, reveal_spread.py, nnpu_simulation.py
+│   │                       proxy_validity.py, reveal_spread.py, nnpu_simulation.py; study.py (`mule diagnose`: the
+│   │                       analyses in order, their tables and study.json, through the StudyReader port)
 │   ├── reference/          CPU mirrors, never imported by runtime layers except diagnostics
 │   │   ├── gsql_features.py    mirror of the context query's features
 │   │   ├── label_reveal.py     mirror of the reveal job
@@ -340,7 +346,7 @@ MulePatternLearner/
     ├── baseline/seed-42/             what `mule train` writes
     ├── <variant>/seed-<n>/           one training run of a control experiment
     ├── experiments/<suite>/          summary.csv, comparison.csv, report.md, plots/
-    ├── diagnostics/<dataset id>/     features.parquet, <analysis>.csv, report.md, plots/
+    ├── diagnostics/<dataset id>/     features.parquet, <analysis>.csv, study.json, events.jsonl, report.md, plots/
     └── archive/                      results moved aside because their settings changed (never deleted)
 ```
 
@@ -369,7 +375,7 @@ MulePatternLearner/
 | `mule evaluate [RUN]` | Ground-truth audits of validation and test, plus audit plots. | no |
 | `mule score ACCOUNTS [DATE]` | Scores the accounts listed in a file, one id per line; DATE defaults to the test cutoff. Replaces `score` and `score-new`. | no |
 | `mule report [RUN]` | Redraws figures and `report.md` from the files already in a run, suite or diagnostics directory. Offline. | no |
-| `mule diagnose [ANALYSIS]` | `features`, `baselines`, `learning-curve`, `univariate`, `drift`, `subgroups`, `proxy-validity`, `reveal-spread` or `nnpu-simulation`; all of them by default. | no |
+| `mule diagnose [ANALYSIS]` | `features`, `univariate`, `drift`, `baselines`, `learning-curve`, `subgroups`, `proxy-validity`, `reveal-spread` or `nnpu-simulation`; all of them by default, in this order. The study of the built-in run's dataset, beside the built-in run, in `results/diagnostics/<dataset id>/`; exits 1 when an analysis lacked its inputs. | the analytics queries where their text differs (the only command that installs them; the install also drops the retired queries still installed); before the dataset is prepared, what `mule train` prepares |
 | `mule check` | Connection, graph-name match, scope schema, installed query text, sampler probe, then one batch and one training step with tensor digests and the first loss. | no |
 
 `RUN` defaults to `results/baseline/seed-42`.
@@ -630,10 +636,10 @@ The constants that hold these values get new names; only the persisted values st
 | `comparison_capture.png` | `plot_capture_overlay` | audit/validation.parquet files | Seed-mean validation capture curves on the log top-share axis: one panel per variant, the baseline in ink in each |
 | `comparison_validation.png` | `plot_validation_overlay` | epochs.csv files | Seed-mean proxy AP per epoch: one panel per variant, the baseline in ink in each |
 | `comparison_proxy_vs_audit.png` | `plot_proxy_vs_audit` | summary.csv (metrics.json, audit/validation.json) | Selected proxy AP against validation-audit AP per run, with Spearman's rank correlation: is the proxy informative? |
-| `label_curve.png` | `plot_label_curve` | learning_curve.csv | Test audit AP against oracle-labelled training mules (log x), LR and HGB bands, model line, revealed-count marker |
+| `label_curve.png` | `plot_label_curve` | learning_curve.csv | Validation and test audit AP (stacked) against oracle-labelled training mules (log x), LR and HGB bands, model line, revealed-count marker; `metric="roc_auc"` draws ROC AUC |
 | `univariate_auc.png` | `plot_univariate` | univariate.csv | Weighted ROC AUC per feature and split, top 30 |
 | `drift.png` | `plot_drift` | drift.csv | Standardised mean difference of non-mule features at validation and test cutoffs against train |
-| `baselines.png` | `plot_baselines` | baselines.csv | AP with intervals per baseline family, single-feature rankings, the model |
+| `baselines.png` | `plot_baselines` | baselines.csv | Validation and test audit AP (side by side, log x) with intervals per baseline family and learner, the attribute floor, single-feature rankings, the run, chance |
 | `ap_concentration.png` | `plot_ap_concentration` | subgroups.csv | Cumulative AP against number of top-ranked mules |
 | `ring_coverage.png` | `plot_ring_coverage` | subgroups.csv | Share of test rings with a member in the top 1%, 5% and 10% |
 | `proxy_validity.png` | `plot_proxy_validity` | proxy_validity.csv | Oracle metrics of the proxy predictions: all, hidden only, revealed only |
@@ -1083,6 +1089,22 @@ The steps, in order:
       - Docs: `docs/how-to/run-control-experiments.md` from the README's section on control experiments and this record's Experiments section.
 15. **Diagnostics.** The modules, `mule diagnose`, and the research notes (with figures) filled from `archive/diagnostic-study`, after which `main` holds everything worth keeping from that branch. Gate: each analysis runs on a synthetic features table, and `feature_table` on `FakeTigerGraph` matches the batching features of the same keys.
     - From the mid-migration review: `scripts/simulate_label_reveal.py` runs its interpreted query through `client.conn`; `diagnostics/reveal_spread.py` replaces it and reads through the executor. The import contracts already name `diagnostics` (the ports, fakes and matplotlib contracts), so its modules are checked from their first commit.
+    - Settled in this step (2026-10-03), for the steps after it:
+      - Every analysis is a function of its inputs that returns a long table of `artifacts.DIAGNOSTIC_TABLES` (the key columns, then `metric` and `value`; the baselines add `low` and `high`): `univariate`, `drift` (with `split_rank_transform`), `baselines`, `learning_curve`, `subgroups`, `proxy_validity` (`validity_table` on predictions in memory), `reveal_spread` and `nnpu_simulation`. `diagnostics.study` runs them for `mule diagnose` and writes them; none of them writes a file itself.
+      - The feature table (`diagnostics.feature_table`, `features.parquet`: `artifacts.FEATURE_TABLE_COLUMNS`, then `<family>__<name>` columns of the families `model`, `messages`, `account` and `message_context`) samples each split as its audit does (`evaluation.audit.audit_population`, `evaluation.sample.audit_sample` with `AUDIT_NEGATIVES` and the split seed), so the baselines and a run's audits rank the same accounts. Each account is read at its split's cutoff and visibility: the training families through the dataset's context source (`batching.features.node_matrix`, and summaries of `edge_block` over the hop-1 pool), the analytics families through the `AnalyticsFetcher` port (`tigergraph.analytics_query.TigerGraphAnalyticsFetcher`, whose rows `validate_analytics_context` checks against `ANALYTICS_CONTRACT`). An account either query rejects keeps its row, marked, without features. The gate holds on `FakeTigerGraph`: the training families equal what `batching.features` computes from the training query's rows of the same keys, and the account family equals `reference.gsql_features.account_features`, which now mirrors every analytics group a payment history determines (association counts and identity order need the root's associations and are not mirrored). Every other analysis runs on the synthetic `testing.builders.feature_frame`.
+      - A feature table is current when it was read with this code's two contracts and holds exactly the columns this code writes for the plan (`feature_table.current(frame, plan)`); `mule diagnose` keeps a current one, since the frozen source would give it again, and the analyses of the table build it first when it is missing or stale. Deleting `features.parquet` reads it anew.
+      - The baselines answer the question of the retired `no_graph` control: PU logistic regression and gradient boosting with the study's fixed settings, fitted at the train cutoff on the revealed train mules against the population-weighted rest, on the families `account` (the analytics features, which no model reads), `model`, `messages` and `all`, beside the attribute floor, the five single features farthest from 0.5 on train, the `chance` rows (a random ranking's expectation) and the run's audits as `model` rows, all with ring-clustered intervals on the validation and test audit samples.
+      - `mule diagnose [ANALYSIS]` is `cli.diagnose_built_in`: `prepare_dataset` on a `pipeline.connect.Session`, then `diagnostics.study.diagnose` with `pipeline.diagnose.TigerGraphStudyReader` on that session. The CLI composes the two because `diagnostics` may not import `pipeline`: the contract "Use cases reach TigerGraph only through ports" checks indirect imports. The study reads the graph only through its `StudyReader` port: `oracle()` (a `TruthReader`, `pipeline.evaluate.SharedTruth`, so truth is read once), `scope()`, `contexts()` (with the dataset's disk tier), `analytics()`, `reveal_inputs()` and `reveal_parameters()`. The reader checks the frozen source on its first read, and installs the analytics queries where their text differs (`installer.install(executor, analytics=True)`, which also drops the retired queries still installed) before it hands out the analytics fetcher, so `mule diagnose` is the only command that installs them.
+      - The study writes `features.parquet`, `<analysis>.csv`, `study.json` (`paths.DiagnosticsPaths.study`: the dataset, the run compared, the reveal's salt and budget, and each analysis' last outcome, kept for the analyses a call does not run), `events.jsonl`, then the figures and `report.md` (`reporting.report.write_diagnostics_report`; `mule report` redraws a directory that holds `study.json`). The run compared is the built-in run, and only if its `config.json` names this dataset; an analysis whose inputs are missing (no such run, another dataset, no audit, no `metrics.json`) is skipped with its reason, the result's status is `incomplete` and the command exits 1. The baselines and the curve then go without the run's rows.
+      - `reporting/diagnostics.py` holds the nine figures of the Plots table and chooses their rows (`strongest_features`, `strongest_shifts`), since reporting may not import diagnostics. `plot_label_curve` takes the metric to draw and `plot_baselines` the name of its intervals, for the research figures.
+      - The reveal's inputs query reads the ground truth, so it and `TigerGraphRevealInputReader` live in `tigergraph.oracle`, which the contract "Training never reads ground truth" keeps from training; `tigergraph.reveal`, which preparation imports, holds the job alone. `scripts/simulate_label_reveal.py` is gone: `mule diagnose reveal-spread` replays the mirror over the salts 0 to 999 with the built-in budget.
+      - The research notes `docs/research/diagnostic-study.md`, `mule-profile.md` and `nnpu-positive-weight.md` hold the study's findings and numbers with the test-audit optimism stated, and `docs/research/figures/` six PNGs drawn with the new plot functions from the archived CSVs and feature table (the nnPU one from the module's offline run, since the study kept no output). Drawing them checked the ports against the study: `univariate` reproduces its 166 ROC AUCs, `drift` its shift ROC AUCs and shares above train's 90th percentile exactly, and the baselines' PU setup its AP of 0.0357 (LR) and 0.0570 (HGB) on all 165 features.
+      - `main`, once restructure replaces it, holds everything worth keeping from `archive/diagnostic-study`; what was deliberately not carried over, and why, is listed in the diagnostic-study note (`head_src/`, `flags_check.py`, the extended fetch, the study's own seed-7 sample, the data files, the never-archived `mpl_arms/fake/`, the profile scripts' one-off analyses, and the nnPU simulation's logistic surrogate and trajectories).
+    - Left for later steps:
+      - The owner, on the CUDA host, once the baseline run is trained and audited: `mule diagnose`. Its first run installs the three analytics queries (`fetch_analytics_context` is the text of the old all-groups context query under a new name, so expect an install of the order of the server step's, about 50 minutes for every query) and reads the feature table, about 6,200 accounts through both context queries; the run's analyses need `mule evaluate` first. Then `pytest -m graph` checks the analytics mirror against the installed query (`tests/integration/test_feature_parity.py`), which no test has done yet.
+      - The analytics query's rows are not cached: a rebuilt feature table requests them all again (the training query's rows go through the dataset's disk tier). A figure whose table is gone keeps its old PNG in `plots/`, though `report.md` no longer links it.
+      - The docs step: `docs/how-to/run-diagnostics.md` from the README's Diagnostics section and this record, and the `StudyReader` port and the CLI's composition of the study in `architecture.md`.
+      - Replace main, and afterwards: with the owner's confirmation, `archive/diagnostic-study` can go with the other branches; nothing on it is still needed.
 16. **Docs.** The Diataxis tree and `architecture.md`. Gate: `test_doc_links.py` and the naming test.
     - From the mid-migration review: tell users that a dataset prepared before the restructure records no dataset settings, so training refuses it and it is prepared again; and choose one adapter naming rule in `architecture.md` (the naming table asks for `<Technology><Port>`, for example `TigerGraphScopeReader`, while the tree and the code use `TigerGraphScope` and `ParquetTruth`).
 17. **Replace main.** Gate: the full offline gate, `pytest -m cuda` on the CUDA host, and read-only `pytest -m graph`. No push until the owner confirms.
