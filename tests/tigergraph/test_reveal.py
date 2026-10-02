@@ -1,4 +1,4 @@
-"""The one-time label reveal: its parameters, first-run behaviour and inputs reader."""
+"""The one-time label reveal: its parameters, first-run behaviour and query files."""
 
 from typing import Any
 
@@ -14,8 +14,6 @@ from mule_pattern_learner.contract.server import (
     TRUTH_QUERY,
 )
 from mule_pattern_learner.paths import GSQL_DIR
-from mule_pattern_learner.testing.builders import reveal_inputs
-from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
 from mule_pattern_learner.tigergraph import labels as tigergraph_labels
 from mule_pattern_learner.tigergraph import reveal as tigergraph_reveal
 from mule_pattern_learner.tigergraph.gsql_text import repository_queries
@@ -120,14 +118,3 @@ def test_reveal_queries_are_installed_with_training_and_read_truth_only_there() 
         "queries/split_cutoffs.gsql",
     ):
         assert "is_mule" not in (GSQL_DIR / relative).read_text()
-
-
-def test_the_inputs_of_the_reveal_are_read_through_the_executor() -> None:
-    graph = FakeTigerGraph(reveal=reveal_inputs())
-    rows = tigergraph_reveal.TigerGraphRevealInputReader(graph).read("scope")
-    assert rows == reveal_inputs() and graph.calls == [("reveal inputs", {"scope_id": "scope"})]
-    # Nothing was written, and no installed query ran: the job itself never runs.
-    assert graph.writes == [] and graph.names() == ["reveal inputs"]
-    empty = FakeTigerGraph(reveal=[{"zelle_links": []}])
-    with pytest.raises(ValueError, match="no mules result"):
-        tigergraph_reveal.TigerGraphRevealInputReader(empty).read("scope")

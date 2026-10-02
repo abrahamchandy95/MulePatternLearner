@@ -1,7 +1,7 @@
 """Simulate the label reveal over many salts to show how its outcome varies.
 
 Read-only. Fetches the reveal's inputs once through the executor
-(tigergraph.reveal.TigerGraphRevealInputReader, which
+(tigergraph.oracle.TigerGraphRevealInputReader, which
 tests/integration/test_label_reveal.py also uses), then runs reference.label_reveal.plan,
 the Python mirror of reveal_mule_labels with the job's own hash and defaults,
 once per salt. Prints, per split, the mules and the median and 5th to 95th percentile
@@ -22,7 +22,8 @@ from mule_pattern_learner.config import DEFAULT_CONFIG
 from mule_pattern_learner.contract.graph_schema import PHASE_SPLIT
 from mule_pattern_learner.pipeline.connect import connect
 from mule_pattern_learner.reference.label_reveal import counts_by_split, plan
-from mule_pattern_learner.tigergraph.reveal import TigerGraphRevealInputReader, reveal_parameters
+from mule_pattern_learner.tigergraph.oracle import TigerGraphRevealInputReader
+from mule_pattern_learner.tigergraph.reveal import reveal_parameters
 
 
 def spread(values: list[int]) -> dict[str, float]:

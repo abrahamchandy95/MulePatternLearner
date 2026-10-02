@@ -2,7 +2,7 @@
 
 `plan` recomputes the job's discovery channel, discovery time, eligibility and
 revealed set for every internal mule from the rows the reveal's inputs query prints
-(tigergraph.reveal.REVEAL_INPUTS_QUERY), with the job's own hash
+(tigergraph.oracle.REVEAL_INPUTS_QUERY), with the job's own hash
 (contract.discovery.reveal_uniforms) and parameter defaults
 (contract.discovery.REVEAL_DEFAULTS). It reads nothing itself:
 tests/integration/test_label_reveal.py compares it with a dry run of the installed
