@@ -1,8 +1,9 @@
-"""Names follow the Naming conventions of the design record (docs/restructure-plan.md).
+"""Names follow the naming rules of docs/architecture.md (its Naming).
 
-Checked: file and folder names, the identifiers the code defines (read from the AST),
-string literals that are names rather than prose, the command line, the run paths and
-the GSQL query names. Prose (docstrings, comments, messages and the guides) is not.
+Checked: file and folder names (the guides' in kebab-case), the identifiers the code
+defines (read from the AST), string literals that are names rather than prose, the
+command line, the run paths and the GSQL query names. Prose (docstrings, comments,
+messages and the guides' text) is not.
 
 A name is split into words at underscores, hyphens, dots and case changes, and no
 word may be one of FORBIDDEN. The values TigerGraph and saved files hold keep their
@@ -67,9 +68,10 @@ ALLOWED = {
     "heterogeneous_uniform_temporal_neighbor_sample": "a pylibcugraph function",
     "temporal_sampling_comparison": "a parameter of pylibcugraph's samplers",
 }
-# The folders whose file names are checked; the guides move and get kebab-case names
-# in the docs step.
-CHECKED_FOLDERS = ("src", "tests", "scripts", "gsql")
+# The folders whose file names are checked.
+CHECKED_FOLDERS = ("src", "tests", "scripts", "gsql", "docs")
+# A guide's or a docs folder's name: lowercase words joined by hyphens.
+KEBAB_CASE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 COMMANDS = ("install", "train", "evaluate", "score", "report", "diagnose", "check")
 MARKERS = {"graph", "graph_write", "cuda"}
 # The verbs a GSQL query name starts with (the graph is dedicated, so there is no prefix).
@@ -152,6 +154,16 @@ def test_file_and_folder_names_are_lowercase_and_free_of_old_words() -> None:
                 problems.append(f"{path}: {part} is not lower case")
             if forbidden(stem):
                 problems.append(f"{path}: {part}")
+    assert problems == []
+
+
+def test_guides_and_their_folders_have_kebab_case_names() -> None:
+    # Figures keep the names of the plots they are copies of (plots/<topic>_<figure>.png).
+    problems = []
+    for path in tracked("docs"):
+        relative = path.relative_to(REPOSITORY_ROOT / "docs")
+        names = [*relative.parts[:-1], path.stem] if path.suffix == ".md" else relative.parts[:-1]
+        problems += [f"{relative}: {name}" for name in names if not KEBAB_CASE.fullmatch(name)]
     assert problems == []
 
 

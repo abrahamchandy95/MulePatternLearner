@@ -1,206 +1,151 @@
 # Mule Pattern Learner
 
-Learns mule and money-laundering patterns from payment data by training a temporal graph
-neural network directly from TigerGraph.
+Learns to rank money-mule accounts from payment data by training a temporal graph neural
+network directly from TigerGraph.
 
 Every account is scored at a calendar cutoff from its own payment history and the history
-of its counterparties, exactly as it looked before that cutoff. TigerGraph does the heavy
-work: it filters events by time and by experiment partition, computes the features and
-returns a bounded pool of candidate neighbours for each account over REST. The client
-resamples a fixed fanout from those pools (with cuGraph on the GPU when CUDA is available)
-and trains a TGAT-style temporal attention model with a non-negative positive-unlabeled
-(nnPU) loss. No account ID is a model parameter, so the same weights score accounts that
-never appeared in training.
+of its counterparties, exactly as they looked before that cutoff. TigerGraph does the
+heavy work: it filters events by time and by experiment partition, computes the features
+and returns a bounded pool of candidate neighbours for each account over REST. The client
+resamples a fixed fan-out from those pools (with cuGraph on a CUDA GPU) and trains a
+TGAT-style temporal attention model with a non-negative positive-unlabelled (nnPU) loss on
+the few mules the graph reveals. No account id is a model parameter, so the same weights
+score accounts that never appeared in training.
 
-The project contains:
-
-1. **A GSQL layer** (`gsql/`): the temporal payment schema and Account label contract,
-   the cutoff-aware training queries, the experiment scope, the hub registry, the Fourier
-   time encoding and the one-time label reveal.
-2. **A Python layer** (`src/mule_pattern_learner/`, command `mule`)
-   that installs those queries, prepares a bounded dataset, streams batches from
-   TigerGraph, trains, scores and evaluates.
-
-You need a working TigerGraph instance whose graph `Mule_Pattern_Learner` follows the
-[temporal payment schema](docs/temporal_schema.md) and holds the loaded data.
+The repository holds the GSQL (`gsql/`: the schema, the training and evaluation queries,
+and the analytics queries) and the Python package `mule_pattern_learner` with its command
+`mule`, which installs the queries, prepares a bounded dataset, trains, audits against the
+ground truth, scores and reports. You need a TigerGraph graph `Mule_Pattern_Learner` with
+the data loaded ([Set up a graph](docs/how-to/set-up-a-graph.md)).
 
 ## Setup
 
-Python 3.12 or newer.
+Python 3.12 or newer, installed in editable mode, since the commands read `gsql/` from
+the repository:
 
 ```bash
-pip install -e .                 # training
-pip install -e ".[dev]"          # training and dev tools
-pip install -e ".[dev,cuda12]" --extra-index-url=https://pypi.nvidia.com  # CUDA 12 hosts
-pip install -e ".[dev,cuda13]"   # CUDA 13 hosts (install the matching CUDA torch wheel first)
+pip install -e ".[dev]"
 ```
 
-Install in editable mode: the commands read `gsql/` from the repository.
-
-Copy `.env.example` to `.env` and fill in the TigerGraph connection (read by
-`Settings`; environment variables override it):
-
-```
-HOST=https://your-tg-host
-GRAPHNAME=Mule_Pattern_Learner
-SECRET=your_restpp_secret
-```
-
-The graph is created from `gsql/schema/schema.gsql`. This repository ships
-only the Account loading contract (`gsql/schema/account_loading.gsql`); the
-payment events, associations, tokens and other entities are loaded by the external
-data producer (for the reference snapshot, an export of the PhantomLedger
-simulator).
-
-## Commands
-
-With the data loaded in TigerGraph, one command trains the model. It needs nothing but
-`.env`: no configuration file, no dataset identifier, no label file and no prepared
-artifacts to copy.
+On a CUDA host, install the CUDA torch wheel first, then the cuGraph extra that matches
+its CUDA major version. For CUDA 12:
 
 ```bash
-mule train
+pip install torch==2.13.0 --index-url https://download.pytorch.org/whl/cu129
+pip install -e ".[dev,cuda12]" --extra-index-url=https://pypi.nvidia.com
 ```
 
-It uses CUDA when available (then Apple MPS, then CPU) and writes the run to
-`results/baseline/seed-42/`: `model.pt`, `metrics.json`, `history.csv`, `epochs.csv`,
-`events.jsonl` and the other files of the run directory, then the training figures in
-`plots/` and `report.md`, the run's tables with links to its figures. On a fresh graph the first run
-installs the training queries, creates the frozen scope and reveals the known mules in
-the graph ([label reveal](docs/label_reveal.md)); every run then prepares its dataset in
-`data/<dataset id>/`, where `contexts/` keeps the contexts runs of the dataset read from
-the graph, so later runs and audits request them no more. Run the same command again to resume an interrupted run; on a
-complete run it prints the run's `metrics.json` and changes nothing. The
-settings are built in:
-`DEFAULT_CONFIG` in `src/mule_pattern_learner/config.py`, frozen dataclasses with one
-section per concern. No command reads a configuration file, and no command takes an
-option besides `--help`.
-
-| Command | What it does |
-|---|---|
-| `mule train` | Prepares as needed (install, scope, reveal, dataset), then trains the built-in run into `results/baseline/seed-42/` with its training figures in `plots/` and `report.md`, resumes it, or reports it when it is complete |
-| `mule evaluate [RUN]` | Ground-truth audits of the run's model on the frozen validation and test partitions, written to the run's `audit/` with the audit figures in `plots/`: decisions use the validation audit, and the test audit is for reporting; `RUN` defaults to `results/baseline/seed-42` |
-| `mule score ACCOUNTS [DATE]` | Scores the accounts listed in a file (one id per line) with the built-in run's model; `DATE` defaults to the test cutoff. Writes `scores/<file stem>_<date>.parquet` in the run, and the ids TigerGraph rejects to `scores/<file stem>_<date>_rejected.txt` |
-| `mule report [RUN]` | Redraws the run's figures (`plots/<topic>_<figure>.png`) and `report.md` from the files it saved, offline: the training figures of a complete run and the audit figures of its audits. Given a suite's directory (`results/experiments/<suite>`) or a study's (`results/diagnostics/<dataset id>`), it redraws that one's figures and `report.md` instead |
-| `mule diagnose [ANALYSIS]` | The diagnostic study of the built-in run's dataset against the ground truth, beside the built-in run, into `results/diagnostics/<dataset id>/`: every analysis by default, or the one named (see Diagnostics below). The only command that installs the analytics queries, where their text differs |
-| `mule check` | Read-only readiness: the graph, its installed queries and the cuGraph probe, then one training batch with its tensor digests and the first loss. The batch needs the built-in run's prepared dataset in `data/` (see below) |
-| `mule install` | Adds the scope vertex type if it is missing, installs the queries whose text differs, drops the queries retired by the rename that are still installed (`train` does this too) and lists installed queries that no file defines |
-
-`mule check` reads its batch from the built-in run's prepared dataset, which `mule train`
-prepares before it trains. To prepare the dataset without training, for example to check
-a graph before a long training run, call the same step from Python:
+For CUDA 13:
 
 ```bash
-python -c "from mule_pattern_learner.config import DEFAULT_CONFIG; from mule_pattern_learner.pipeline.prepare import prepare_dataset; print(prepare_dataset(DEFAULT_CONFIG).root)"
+pip install torch==2.13.0 --index-url https://download.pytorch.org/whl/cu130
+pip install -e ".[dev,cuda13]"
 ```
 
-Like `mule train`, it installs the queries, creates the scope and reveals the known mules
-on a fresh graph; on a graph where they are in place it only reads.
+Copy `.env.example` to `.env` and fill in the connection (`HOST`, `GRAPHNAME`, `SECRET`);
+environment variables override it. Nothing else is configured: the settings are built in
+(`DEFAULT_CONFIG` in `src/mule_pattern_learner/config.py`), and no command takes an option
+besides `--help`.
 
-`python -m mule_pattern_learner` runs the same commands. Each prints one JSON result.
-The end-to-end guide describes
-[what runs where](docs/temporal_training_end_to_end.md#what-runs-where).
+## Train, audit and report
+
+```bash
+mule check       # read-only readiness: the graph, its queries, cuGraph, one batch
+mule train       # prepare as needed, then train the built-in run
+mule evaluate    # ground-truth audits of validation and test
+mule report      # redraw the figures and report.md, offline
+```
+
+`mule train` writes the run to `results/baseline/seed-42/`: the model, its proxy
+predictions and metrics, its history, the training figures in `plots/` and `report.md`.
+On a fresh graph its first run installs the queries, creates the frozen experiment scope
+and reveals the mules a bank would have discovered; every run then prepares its dataset
+in `data/<dataset id>/`, whose context cache spares later runs and audits the same
+requests. Run it again to resume an interrupted run; on a complete run it prints the
+run's `metrics.json` and changes nothing.
+
+`mule evaluate` audits the model against the ground truth on validation (for decisions)
+and test (for reporting), weighting a sample of every mule and 2,000 non-mules to the
+whole split, with 90% intervals. `mule score ACCOUNTS [DATE]` scores the accounts listed
+in a file, and `mule install` installs the queries ahead of time. `python -m
+mule_pattern_learner` runs the same commands; each prints one JSON result.
+[Train and evaluate](docs/how-to/train-and-evaluate.md) walks through it, the CUDA host
+included, and [Command line](docs/reference/cli.md) lists every command.
 
 ## Control experiments
 
-The control experiments train variants of the built-in run over the seeds 42, 43 and 44,
-audit them and compare them with the baseline:
-
 ```bash
-python scripts/run_experiments.py                           # the controls suite
-python scripts/run_experiments.py feature_drops             # a suite by name
+python scripts/run_experiments.py                            # the controls suite
+python scripts/run_experiments.py feature_drops              # a suite by name
 python scripts/run_experiments.py no_attention prior_weight  # chosen variants
-python scripts/run_experiments.py --help                    # suites, variants, questions, changes
+python scripts/run_experiments.py --help                     # suites, variants, questions
 ```
 
-The variants are declared in `src/mule_pattern_learner/experiments/variants.py`: the
-controls (`no_attention`, `no_slot_sum`, `no_pool_counts`, `prior_weight`,
-`no_weight_average` and `drop_time_encoding`) and one `drop_<group>` variant per feature
-group of the built-in run. Every run of a suite trains on the built-in run's dataset, the
-baseline's seed 42 is the run `mule train` makes, and each run goes to
-`results/<variant>/seed-<n>/` with its own figures and audits. The script validates every
-variant offline and prints the run matrix with a time bound before it trains; it keeps
-complete runs, moves a run whose settings differ to `results/archive/` (nothing is deleted)
-and trains it again, and stops on a TigerGraph outage while carrying on past a run's own
-error. It always rewrites `summary.csv`, `comparison.csv`, the comparison figures and
-`report.md` under `results/experiments/<suite>/`. The report ranks the variants by the
-validation audit with paired intervals against the baseline; the test audit is for
-reporting, not selection.
+The script trains variants of the built-in run (declared in
+`src/mule_pattern_learner/experiments/variants.py`) over the seeds 42, 43 and 44, audits
+them, and compares each with the baseline on the same accounts, with paired intervals, in
+`results/experiments/<suite>/`. Complete runs are kept, and runs whose settings differ are
+moved to `results/archive/`, never deleted. [Run the control
+experiments](docs/how-to/run-control-experiments.md) has the details.
 
 ## Diagnostics
 
-`mule diagnose` studies the built-in run's dataset with the ground truth, for analysis
-only: nothing it computes feeds a model. Each analysis writes one long table to
-`results/diagnostics/<dataset id>/`, and the command then draws the study's figures and
-`report.md`:
+```bash
+mule diagnose                # every analysis
+mule diagnose baselines      # one of them
+```
 
-| Analysis | What it asks |
-|---|---|
-| `features` | The feature table: each split's audit sample at its cutoff, with the training query's model inputs and candidate pool and the analytics query's account history. A table read with the current query texts is kept; delete `features.parquet` to read it again |
-| `univariate` | How well each feature alone ranks the mules of each split |
-| `drift` | How each feature of the non-mules shifts between the splits' cutoffs, and what that costs a learner |
-| `baselines` | How well a table of the account's own activity ranks mules, with no neighbour, association or pool input (the question of the retired `no_graph` control), beside the run's audits |
-| `learning-curve` | How ranking quality grows with the number of labelled training mules |
-| `subgroups` | Which mules the run's audits find: revealed or hidden, how few make its AP, which rings |
-| `proxy-validity` | How well the run's proxy predictions rank the ground truth, hidden and revealed mules apart |
-| `reveal-spread` | How the one-time label reveal's outcome varies with its salt, replayed offline |
-| `nnpu-simulation` | Whether the nnPU positive weight alone explains the collapse of textbook nnPU, on a synthetic problem (offline) |
-
-The analyses of the feature table build it first when it is missing. The run's analyses
-need the built-in run trained on the same dataset and, for `subgroups`, audited; an
-analysis whose inputs are missing is skipped with its reason, and the command then exits 1.
+`mule diagnose` studies the built-in run's dataset against the ground truth, for analysis
+only: the features one at a time, their drift between cutoffs, baselines on the account's
+own activity, a label-count curve, which mules the run finds, how valid its proxy metrics
+are, the label reveal over salts and the nnPU positive weight on a synthetic problem. It
+writes to `results/diagnostics/<dataset id>/` and is the only command that installs the
+analytics queries. [Run the diagnostics](docs/how-to/run-diagnostics.md) describes each
+analysis.
 
 ## Documentation
 
-- [End-to-end guide](docs/temporal_training_end_to_end.md): the data in TigerGraph, every
-  query and what it pulls, per-batch sampling with cuGraph, the training loop and the
-  CUDA runbook. Start here.
-- [Live temporal training](docs/live_temporal_training.md): behaviour details and
-  configuration semantics.
-- [GSQL feature catalog](docs/gsql_feature_catalog.md): the exact model inputs.
-- [Feature redesign](docs/feature_redesign.md): the window-free feature groups and the
-  sampler options.
-- [Leakage and scaling](docs/leakage_and_scaling.md): read before choosing an
-  evaluation protocol.
-- [Label reveal](docs/label_reveal.md) and [Account mule labels](docs/account_mule_labels.md):
-  how known mules become observed positives, and the Account label contract.
-- [Temporal payment schema](docs/temporal_schema.md) and
-  [GSQL temporal encoding](docs/temporal_encoding.md): the graph and the 64-dimensional
-  payment-gap and cutoff-age encodings.
-- [GSQL guide](gsql/README.md): which query files exist and how they are installed.
-- [Research notes](docs/research/reference-run.md): the reference runs, and the diagnostic
-  study behind the built-in run's pool counts and positive weight
-  ([the study](docs/research/diagnostic-study.md), [the mule profile](docs/research/mule-profile.md),
-  [the nnPU positive weight](docs/research/nnpu-positive-weight.md)).
+- [Architecture](docs/architecture.md): the layers, ports and import contracts, the data
+  flow from TigerGraph to `results/`, and the decisions behind them.
+- How-to guides: [Set up a graph](docs/how-to/set-up-a-graph.md),
+  [Train and evaluate](docs/how-to/train-and-evaluate.md),
+  [Run the control experiments](docs/how-to/run-control-experiments.md),
+  [Score new accounts](docs/how-to/score-new-accounts.md),
+  [Run the diagnostics](docs/how-to/run-diagnostics.md).
+- Reference: [Command line](docs/reference/cli.md),
+  [Configuration](docs/reference/configuration.md), [Outputs](docs/reference/outputs.md),
+  [Features](docs/reference/features.md), [Schema](docs/reference/schema.md),
+  [Labels](docs/reference/labels.md), [Queries](docs/reference/queries.md).
+- Explanation: [Training](docs/explanation/training.md),
+  [Sampling](docs/explanation/sampling.md),
+  [Feature design](docs/explanation/feature-design.md),
+  [Time encoding](docs/explanation/time-encoding.md),
+  [Leakage and scaling](docs/explanation/leakage-and-scaling.md),
+  [Label reveal](docs/explanation/label-reveal.md).
+- Research: [the reference runs](docs/research/reference-run.md),
+  [the diagnostic study](docs/research/diagnostic-study.md),
+  [the mule profile](docs/research/mule-profile.md) and
+  [the nnPU positive weight](docs/research/nnpu-positive-weight.md).
+- [The GSQL folder](gsql/README.md): which query lives where, and who installs it.
 
 ## Development
 
 ```bash
-.venv/bin/python -m pytest tests -q
 .venv/bin/ruff check src tests scripts
 .venv/bin/ruff format --check src tests scripts
 .venv/bin/basedpyright src
-.venv/bin/lint-imports
+.venv/bin/basedpyright tests scripts
+.venv/bin/python -m pytest -q
 .venv/bin/python scripts/render_queries.py --check
+.venv/bin/lint-imports
 ```
 
-The tests never connect to TigerGraph unless a marker selects them. The integration
-tests in `tests/integration/` are deselected by default: `-m graph` runs the read-only
-checks against the graph in `.env`, `-m cuda` the cuGraph checks on a CUDA host, and
-`-m graph_write --allow-graph-writes` the scope isolation test, which writes temporary
-fixture vertices and removes them again:
-
-```bash
-.venv/bin/python -m pytest -m graph
-.venv/bin/python -m pytest -m cuda
-.venv/bin/python -m pytest -m graph_write --allow-graph-writes
-```
-
-`scripts/render_queries.py` regenerates the context queries and
-`scripts/run_experiments.py` runs the control experiments; each prints its purpose with
-`--help` without connecting (how the label reveal varies with its salt is
-`mule diagnose reveal-spread`). The one-time schema installer
-scripts, already run against the live graph, are kept in git history.
+The tests never connect to TigerGraph unless a marker selects them: `-m graph` runs the
+read-only checks against the graph in `.env`, `-m cuda` the cuGraph checks on a CUDA host,
+and `-m graph_write --allow-graph-writes` the scope isolation test, which writes fixture
+vertices and removes them again ([Command line](docs/reference/cli.md#tests-that-need-the-graph-or-a-gpu)).
+`scripts/render_queries.py` regenerates the two context queries after their Python
+contracts change.
 
 ## License
 

@@ -24,7 +24,7 @@ validity intervals. Historical event context uses event_seq < seed_seq.
 
 Known-time fields are deferred until source feeds are confirmed. Valid time
 alone cannot exclude a backdated correction learned after a historical seed.
-This file contains graph DDL only. temporal_account_loading.gsql defines the
+This file contains graph DDL only. account_loading.gsql defines the
 fifteen-column Account upload contract, including supervision.
 */
 

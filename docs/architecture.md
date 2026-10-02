@@ -293,12 +293,12 @@ at import. There is no configuration file, no `--config` and no option: another 
 | Tests | `tests/<package>/test_<module>.py`; markers `graph`, `graph_write`, `cuda` | `tests/sampling/test_cugraph_sampler.py` |
 | Docs | Kebab-case in the Diataxis folders | `docs/how-to/run-control-experiments.md` |
 
-`tests/test_naming.py` checks file and folder names, the identifiers
-the code defines, the command line, the run paths and the GSQL query names; it does not
-check prose. The values TigerGraph and saved files hold keep their names, each allowed
-there with its reason: the `Temporal_Training_Scope` vertex type, the salts of the seeded
-draws (`temporal_live_step`, `marginal_cohort`), and until main is replaced the keys the
-old saved-settings conversion reads. The schema's jobs keep their installed names
+`tests/test_naming.py` checks file and folder names (the docs' included), the
+identifiers the code defines, the command line, the run paths and the GSQL query names;
+it does not check prose. The values TigerGraph and saved files hold keep their names,
+each allowed there with its reason: the `Temporal_Training_Scope` vertex type, the salts
+of the seeded draws (`temporal_live_step`, `marginal_cohort`), and until main is
+replaced the keys the old saved-settings conversion reads. The schema's jobs keep their installed names
 (`load_temporal_accounts` among them). The old query names are not allowed anywhere but
 `contract.server.RETIRED_QUERIES`, which `mule install` drops.
 

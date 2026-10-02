@@ -98,7 +98,7 @@ force-sort-within-sections = true
 root_package = "mule_pattern_learner"
 include_external_packages = true
 
-# The contracts of the Layering rules in docs/restructure-plan.md. Every contract holds
+# The import contracts of docs/architecture.md (its Layers). Every contract holds
 # without exceptions: none of them ignores an import. tests/test_import_contracts.py
 # checks that the contracts which list every package but the ones they allow list each.
 
