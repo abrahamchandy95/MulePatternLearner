@@ -2,10 +2,10 @@
 
 Three full training runs on the CUDA host, on the same dataset and the same revealed labels.
 They record where the model stood before the restructuring and why the built-in settings are
-what they are. The checkpoints of runs 1 and 2 load only with the code at the `pre-restructure`
-tag. The diagnostic study that sits between runs 2 and 3 is recorded in
-[the diagnostic study](diagnostic-study.md), [the mule profile](mule-profile.md) and
-[the nnPU positive weight](nnpu-positive-weight.md).
+what they are. Their checkpoints load only with the code before the layered restructure,
+such as commit 08b487e, its last. The diagnostic study that sits between runs 2 and 3 is
+recorded in [the diagnostic study](diagnostic-study.md), [the mule profile](mule-profile.md)
+and [the nnPU positive weight](nnpu-positive-weight.md).
 
 ## How the numbers are measured
 
@@ -14,7 +14,7 @@ tag. The diagnostic study that sits between runs 2 and 3 is recorded in
   its proxy prevalence is 0.0055 and its AP moves in large steps. The selected ("best") epoch
   is the one with the highest validation proxy AP, and training stops after 6 epochs without
   improvement.
-- **The ground-truth audit** (`mule-temporal evaluate-final`) scores all 40 test mules plus
+- **The ground-truth audit** (that code's `evaluate-final` command) scores all 40 test mules plus
   2,000 uniform non-mules, weighted by inverse inclusion probability to the 47,749 test accounts
   (prevalence 0.00084). The sample depends only on the test population, the truth and the split
   seed, so runs 2 and 3 were audited on the same accounts. Recall in the top k% is the share of

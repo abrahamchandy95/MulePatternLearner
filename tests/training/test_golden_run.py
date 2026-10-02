@@ -347,9 +347,10 @@ def frame_digest(frame: pd.DataFrame) -> str:
     return hashlib.sha256(frame.to_csv(index=False).encode()).hexdigest()
 
 
-def test_the_golden_settings_select_the_accounts_the_tag_selected(tmp_path: Path) -> None:
+def test_the_golden_settings_select_the_recorded_accounts(tmp_path: Path) -> None:
     # The dataset's accounts and observed labels feed every other literal. They were
-    # recorded with the code at the tag pre-restructure, which prepared the same rows.
+    # recorded with the code of commit 08b487e, the last before the layered restructure,
+    # which prepared the same rows.
     _, dataset, _ = prepare_golden(tmp_path)
     files = {"accounts": dataset.accounts, "observed_labels": dataset.observed_labels}
     for name, (rows, digest) in GOLDEN_DATASET.items():
