@@ -1,7 +1,7 @@
 # Outputs
 
 Every file the commands write, and where. There are two roots, both gitignored:
-prepared datasets, the inputs to training, live in `data/<dataset id>/`, and everything
+prepared datasets, the inputs to training, go in `data/<dataset id>/`, and everything
 the commands write lives under `results/`. `paths.DatasetPaths`, `paths.RunPaths`,
 `paths.SuitePaths` and `paths.DiagnosticsPaths` name each file, and `artifacts` defines
 what the tables and JSON files hold. A file a command replaces is written to a pending

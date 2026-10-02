@@ -1,4 +1,4 @@
-"""Explicit batch limits and disposable temporal-ID indexing.
+"""Explicit batch limits and disposable batch-local IDs of (vertex, cutoff) keys.
 
 No global ID table grows with the database or across batches. Limits bound this
 pipeline's allocations; they cannot guarantee free memory in other processes.

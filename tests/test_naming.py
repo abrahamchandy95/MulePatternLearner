@@ -6,10 +6,12 @@ command line, the run paths and the GSQL query names. Prose (docstrings, comment
 messages and the guides' text) is not.
 
 A name is split into words at underscores, hyphens, dots and case changes, and no
-word may be one of FORBIDDEN. The values TigerGraph and saved files hold keep their
+word may be one of FORBIDDEN. The values the graph and the seeded draws hold keep their
 names; ALLOWED lists them, each with the reason it stays. The names the queries were
 installed under before the server step renamed them are contract.server.RETIRED_QUERIES,
-which `mule install` drops, so they are allowed from there.
+which `mule install` drops, so they are allowed from there. Names another library
+defines are that library's: the code only reads them (pylibcugraph's sampler), and the
+tests' imitation of pylibcugraph gives them as keyword arguments.
 """
 
 from __future__ import annotations
@@ -38,7 +40,7 @@ from mule_pattern_learner.paths import (
 from mule_pattern_learner.tigergraph.gsql_text import definitions
 
 # Words no name may contain: the old layout's prefixes and grab-bag modules, and the
-# owner's vocabulary ("dataset", never "cohort"; "variant", never "arm").
+# words "dataset" and "variant" replaced (docs/architecture.md, Naming).
 FORBIDDEN = frozenset(
     {
         "temporal",
@@ -56,14 +58,13 @@ FORBIDDEN = frozenset(
         "arms",
     }
 )
-# The persisted values that keep a forbidden word, and why.
+# The persisted values that keep a forbidden word, and why. The scope's edge types
+# (Entity_In_Training_Scope and its reverse) and the built-in scope id (strict_mule_v2)
+# are persisted too, and hold no forbidden word.
 ALLOWED = {
     "Temporal_Training_Scope": "the scope vertex type, part of the graph's schema",
     "temporal_live_step": "the salt of the per-step draws; a new value changes every step",
     "marginal_cohort": "the salt of the reservoir ranks; a new value selects other accounts",
-    # pylibcugraph's API, which the tests' mock library imitates.
-    "heterogeneous_uniform_temporal_neighbor_sample": "a pylibcugraph function",
-    "temporal_sampling_comparison": "a parameter of pylibcugraph's samplers",
 }
 # The folders whose file names are checked.
 CHECKED_FOLDERS = ("src", "tests", "scripts", "gsql", "docs")

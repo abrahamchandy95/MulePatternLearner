@@ -99,7 +99,7 @@ def test_availability_failures_are_retried_with_capped_exponential_backoff() -> 
         (http_error(400), None),
         (http_error(401), None),
         (http_error(404), None),
-        (TigerGraphException("Query temporal_x is not installed", "REST-1000"), None),
+        (TigerGraphException("Query fetch_x is not installed", "REST-1000"), None),
         (ValueError("Returned context differs"), None),
         (KeyError("results"), None),
     ],
@@ -189,7 +189,7 @@ def test_permanent_errors_and_writes_are_not_retried() -> None:
         http_error(404),
         http_error(401),
         http_error(400, {"error": True, "message": "bad parameter"}),
-        TigerGraphException("Query temporal_x is not installed", "REST-1000"),
+        TigerGraphException("Query fetch_x is not installed", "REST-1000"),
         KeyError("results"),
     ):
         conn = FakeConn([error, [{"status": "ok"}]])

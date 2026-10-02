@@ -1,4 +1,4 @@
-"""Datasets live in data/<dataset id>/ and runs in results/<variant>/seed-<n>/."""
+"""Datasets go in data/<dataset id>/ and runs in results/<variant>/seed-<n>/."""
 
 from __future__ import annotations
 

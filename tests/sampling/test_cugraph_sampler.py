@@ -55,10 +55,14 @@ class MockPLC:
         self.__version__, self.leak, self.drop = version, leak, drop
         self.jitter, self.broken, self.seed_labels = jitter, broken, seed_labels
         self.calls: list[dict[str, Any]] = []
+        # The release's sampling function under pylibcugraph's own name, given as a
+        # keyword since the name is pylibcugraph's (tests/test_naming.py).
         if unified:
-            self.neighbor_sample = self._unified
+            vars(self).update(dict(neighbor_sample=self._unified))
         else:
-            self.heterogeneous_uniform_temporal_neighbor_sample = self._heterogeneous
+            vars(self).update(
+                dict(heterogeneous_uniform_temporal_neighbor_sample=self._heterogeneous)
+            )
 
     @staticmethod
     def ResourceHandle(handle: Any = None) -> SimpleNamespace:
@@ -98,8 +102,12 @@ class MockPLC:
         assert np.asarray(times).dtype == np.int64 and np.asarray(labels).dtype == np.int64
         assert isinstance(fan, np.ndarray) and fan.dtype == np.int32
         assert len(fan) % num_edge_types == 0 and num_edge_types > 1
-        assert kw["temporal_sampling_comparison"] == "strictly_decreasing"
-        assert kw["with_replacement"] is False and kw["compression"] == "COO"
+        options = dict(
+            temporal_sampling_comparison="strictly_decreasing",
+            with_replacement=False,
+            compression="COO",
+        )
+        assert {name: kw[name] for name in options} == options
         assert labels[-1] == len(seeds)
         rng = np.random.default_rng(random_state + len(self.calls) * self.jitter)
         names = ("majors", "minors", "edge_id", "edge_type", "edge_start_time", "batch_id")
@@ -235,7 +243,7 @@ def test_cugraph_sampler_rejects_leaks_bad_versions_and_quota_overruns() -> None
     table = CandidateTable.build(keys, rows)
     quotas = candidates.relation_quotas(RESAMPLE, 1)
     leaky = CuGraphSampler(MockPLC(leak=True), to_device=host)
-    with pytest.raises(RuntimeError, match="temporal leakage"):
+    with pytest.raises(RuntimeError, match="leakage from the future"):
         leaky.subset(table, quotas, random_state=1, device="cpu")
     greedy = CuGraphSampler(MockPLC(), to_device=host)
     with pytest.raises(RuntimeError, match="fan-out"):
@@ -307,7 +315,7 @@ def test_cugraph_probe_passes_on_a_correct_sampler(unified: bool) -> None:
         ({"broken": True}, "no kernel image"),
         ({"drop": True}, "under-sampled"),
         ({"jitter": True}, "different subsets"),
-        ({"leak": True}, "temporal leakage"),
+        ({"leak": True}, "leakage from the future"),
     ],
 )
 def test_cugraph_probe_reports_runtime_failures(fault: dict[str, Any], reason: str) -> None:

@@ -96,7 +96,7 @@ roles. [Label reveal](../explanation/label-reveal.md) explains the discovery mod
 
 ## Loading accounts
 
-The loading job `load_temporal_accounts` (`gsql/schema/account_loading.gsql`) reads an
+The loading job `load_accounts` (`gsql/schema/account_loading.gsql`) reads an
 Account CSV with a header in exactly this column order
 (`contract.graph_schema.ACCOUNT_LOAD_COLUMNS`):
 
@@ -130,7 +130,7 @@ masked; the second turned an earlier boolean label into the integer `is_mule`. T
 appends a replaced attribute to storage, so `is_mule` is stored last, and the loading
 job maps the unchanged CSV order onto that storage order. The graph also keeps an older
 five-column job, `mt_load_account`, for compatibility; it skips the label fields, which
-only `load_temporal_accounts` loads.
+only `load_accounts` loads.
 
 ## Zelle transfer labels
 

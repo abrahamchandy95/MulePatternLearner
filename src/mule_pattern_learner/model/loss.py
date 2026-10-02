@@ -39,7 +39,7 @@ class NonNegativePULoss(Module):
                        i.e. push the negative risk back up toward 0.
 
     The loss returned for backprop follows the nnPU rule; the always-unclamped
-    value is returned beside it for monitoring (the live trainer logs its mean and
+    value is returned beside it for monitoring (the trainer logs its mean and
     the steps where the correction fired).
 
     Args:

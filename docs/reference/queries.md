@@ -88,7 +88,7 @@ the sha256 of the rendered query without that literal, with comments and whitesp
 removed. A render test keeps the constant equal to the text, so a changed query cannot
 ship without a new contract, and the client refuses a row of another contract. The
 repository text also runs under `INTERPRET` (`tigergraph.render.as_interpreted` swaps
-only the header), which the live tests use.
+only the header), which the tests against the graph use.
 
 ### encode_fourier64
 
@@ -298,16 +298,11 @@ prepared from other query texts is refused.
 
 Once every query is installed and verified, the install drops each installed query named
 on `contract.server.RETIRED_QUERIES`: the names the queries had before they were named
-after their responsibility (`temporal_training_context`, `temporal_fourier64_values`,
-`temporal_reveal_mule_labels`, `temporal_reveal_uniforms`,
-`temporal_create_training_scope`, `temporal_finalize_training_scope`,
-`temporal_scope_population`, `temporal_scope_policy`, `temporal_training_cutoffs`,
-`temporal_hub_registry`, `temporal_validate_account_supervision`,
-`temporal_get_account_supervision`, `zelle_pair_time64` and `payment_pair_time64`), and
-two retired queries, the public Fourier wrapper `temporal_fourier64` and the population
-query `temporal_training_population`. It drops callers before the queries they call,
-skips the names that are not installed, checks each drop against the endpoint listing and
-lists what it dropped under `dropped`. It never touches any other query: installed
-queries that no repository file defines are only listed (`not_defined`). Code from before
-the rename calls the old names, so run it only when no such job is running anywhere.
+after their responsibility, and two retired queries, the public Fourier wrapper and the
+population query of the removed `shared_history` protocol. It drops callers before the
+queries they call, skips the names that are not installed, checks each drop against the
+endpoint listing and lists what it dropped under `dropped`. It never touches any other
+query: installed queries that no repository file defines are only listed
+(`not_defined`). Code from before the rename calls the old names, so run it only when no
+such job is running anywhere.
 `mule check` lists the retired queries still installed under `queries.retired`.

@@ -134,7 +134,7 @@ def prepared_source(manifest: dict[str, Any]) -> PreparedSource:
 def source_fingerprint(manifest: dict[str, Any]) -> str:
     """The fingerprint of the graph a dataset was prepared from (prepared_source).
 
-    tigergraph.provenance.verify_frozen_source checks the live graph against these
+    tigergraph.provenance.verify_frozen_source checks the graph against these
     counts and this scope before a run reads it, so the fingerprint names the frozen
     source whose contexts the dataset's disk tier keeps.
     """

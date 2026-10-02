@@ -1,16 +1,16 @@
 # Mule Pattern Learner
 
-Learns to rank money-mule accounts from payment data by training a temporal graph neural
-network directly from TigerGraph.
+Learns to rank money-mule accounts from payment data by training a graph neural network
+over time-stamped payments, directly from TigerGraph.
 
 Every account is scored at a calendar cutoff from its own payment history and the history
 of its counterparties, exactly as they looked before that cutoff. TigerGraph does the
 heavy work: it filters events by time and by experiment partition, computes the features
 and returns a bounded pool of candidate neighbours for each account over REST. The client
 resamples a fixed fan-out from those pools (with cuGraph on a CUDA GPU) and trains a
-TGAT-style temporal attention model with a non-negative positive-unlabelled (nnPU) loss on
-the few mules the graph reveals. No account id is a model parameter, so the same weights
-score accounts that never appeared in training.
+TGAT-style attention model over time-stamped messages with a non-negative
+positive-unlabelled (nnPU) loss on the few mules the graph reveals. No account id is a
+model parameter, so the same weights score accounts that never appeared in training.
 
 The repository holds the GSQL (`gsql/`: the schema, the training and evaluation queries,
 and the analytics queries) and the Python package `mule_pattern_learner` with its command

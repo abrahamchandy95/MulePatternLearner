@@ -205,7 +205,7 @@ This code reads only the datasets and models it writes:
 | `Installed query differs from repository source or is not installed` | Run `mule install`; it recompiles only the stale queries |
 | `Queries [...] are still not installed after ...s` | The 45-minute wait for compilation ran out; run `mule install` again later, which installs only what is still stale |
 | `Prepared dataset ... was built from different GSQL sources` | The query files changed after preparation; install them, then move the dataset aside so it is prepared again |
-| `Live graph counts changed; freeze the source and prepare a new dataset` | The graph was modified after preparation; freeze it and prepare a new dataset |
+| `Graph counts changed; freeze the source and prepare a new dataset` | The graph was modified after preparation; freeze it and prepare a new dataset |
 | `Scope ... was created with scope.unowned = ...` | The scope was created with another rule; use the stored rule or a new `scope.id` |
 | `Account label contract violated after the reveal` | The label attributes are inconsistent; run `validate_label_contract` ([Labels](../reference/labels.md)) |
 | `TigerGraph rejected ... training roots so far` or `validation: TigerGraph rejected ... roots` | Roots failed a per-request check beyond the rejection limit, or an observed positive was rejected; the statuses say why ([When TigerGraph rejects roots](#when-tigergraph-rejects-roots)) |

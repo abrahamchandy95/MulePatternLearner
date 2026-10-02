@@ -86,7 +86,7 @@ def open_context_source(
     cached: bool = True,
     session: Session | None = None,
 ) -> ContextSource:
-    """Open the live source of a prepared dataset for a training or scoring configuration.
+    """Open a prepared dataset's context source for a training or scoring configuration.
 
     It is the configuration's context_source, whose candidate pools must be the
     prepared ones, on a connection with the configuration's transport section (the

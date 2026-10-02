@@ -587,7 +587,7 @@ def test_run_directory_is_created_only_after_the_source_opens(
     prepared_dataset(tmp_path / "dataset", config, monkeypatch)
 
     def refuse(dataset: DatasetPaths, manifest: dict[str, Any], config: RunConfig) -> NoReturn:
-        raise ValueError("Live graph counts changed")
+        raise ValueError("Graph counts changed")
 
     with pytest.raises(ValueError, match="counts changed"):
         trainer.train(

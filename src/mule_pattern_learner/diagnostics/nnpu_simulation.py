@@ -17,8 +17,8 @@ the trainer's. For each positive weight and seed the table records the kept epoc
 test AP, ROC AUC and precision in the top 1%, the mean scores of the labelled positives
 and of the test negatives, and whether the run collapsed: the mean score of its labelled
 positives is below COLLAPSE, so it scores even the positives it trains on near zero, the
-constant scorer that costs the textbook objective only the prior. The live counterpart is
-the prior_weight control variant.
+constant scorer that costs the textbook objective only the prior. Its counterpart on the
+graph is the prior_weight control variant.
 """
 
 from __future__ import annotations

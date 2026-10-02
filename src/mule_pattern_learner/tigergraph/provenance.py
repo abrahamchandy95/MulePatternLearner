@@ -1,4 +1,4 @@
-"""The live provenance of a prepared dataset: vertex counts, source id, queries and scope.
+"""A prepared dataset's provenance: the graph's vertex counts, source id, queries and scope.
 
 source_counts and resolve_source_id name the loaded snapshot before preparation;
 verify_frozen_source rechecks it before a streamed run (see scope.py for the scope
@@ -21,7 +21,7 @@ EXPERIMENT_METADATA_TYPES = frozenset({SCOPE_VERTEX})
 
 
 def source_counts(executor: ConnectionExecutor) -> dict[str, int]:
-    """Live vertex counts by type, excluding experiment metadata vertex types."""
+    """The graph's vertex counts by type, excluding experiment metadata vertex types."""
     raw = executor.call(lambda conn: conn.getVertexCount("*", realtime=True), what="getVertexCount")
     if not isinstance(raw, dict):
         raise ValueError("TigerGraph did not return counts by vertex type")
@@ -46,7 +46,7 @@ def resolve_source_id(executor: ConnectionExecutor, scope_id: str, counts: dict[
 
 
 def verify_frozen_source(executor: ConnectionExecutor, manifest: dict[str, Any]) -> None:
-    """Recheck live provenance on every streamed run, including prepared-data reuse.
+    """Recheck the graph's provenance on every streamed run, including prepared-data reuse.
 
     Counts and headers catch drift, but cannot prove absence of same-count edits.
     The experiment still requires an operationally frozen source. Scope vertices
@@ -55,7 +55,7 @@ def verify_frozen_source(executor: ConnectionExecutor, manifest: dict[str, Any])
     verify_sources(executor)
     source = prepared_source(manifest)
     if source_counts(executor) != source.counts:
-        raise ValueError("Live graph counts changed; freeze the source and prepare a new dataset")
+        raise ValueError("Graph counts changed; freeze the source and prepare a new dataset")
     try:
         verify_scope(
             executor,

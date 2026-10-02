@@ -1,6 +1,6 @@
-"""Repository paths, and where prepared datasets and the commands' outputs live.
+"""Repository paths, and where prepared datasets and the commands' outputs go.
 
-Prepared datasets live in data/<dataset id>/ (DATA_DIR), and everything the commands
+Prepared datasets go in data/<dataset id>/ (DATA_DIR), and everything the commands
 write lives under results/ (RESULTS_DIR): one training run in
 results/<variant>/seed-<n>/, a control-experiment suite in results/experiments/<suite>/,
 the diagnostics of a dataset in results/diagnostics/<dataset id>/, and runs moved aside

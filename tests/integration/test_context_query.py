@@ -1,8 +1,8 @@
 """The installed context query on the graph: its text, time encodings and cutoff boundary.
 
 Read-only. The accounts are the first of the built-in scope's population, chosen
-without labels, scored at the test cutoff. `mule check` covers the rest of the live
-training path: one batch and one training step. The pair counts are analytics, so they
+without labels, scored at the test cutoff. `mule check` covers the rest of the
+training path on the graph: one batch and one training step. The pair counts are analytics, so they
 are checked on the analytics context query, when it is installed.
 """
 

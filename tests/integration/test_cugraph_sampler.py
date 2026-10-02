@@ -38,7 +38,7 @@ pytestmark = pytest.mark.cuda
 
 # Seeds of the uniformity test.
 SEEDS = 600
-# Training roots of the live batch.
+# Training roots of the batch read from the graph.
 ROOTS = 32
 # The pools and fan-outs of the synthetic checks.
 SAMPLER = SamplerPlan(
