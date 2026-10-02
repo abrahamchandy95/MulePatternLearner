@@ -45,7 +45,7 @@ def test_every_baseline_is_scored_on_validation_and_test_with_intervals(
     assert set(table.split) == {"validation", "test"}
     singles = table[table.baseline == "single_feature"]
     assert singles.features.nunique() == SINGLE_FEATURES and set(singles.model) == {"raw"}
-    ranking = table[table.baseline != "model"]
+    ranking = table[~table.baseline.isin(["model", "chance"])]
     assert {"average_precision", "roc_auc", "recall_at_1pct", "precision_at_10pct"} <= set(
         ranking.metric
     )
@@ -65,10 +65,17 @@ def test_the_attribute_floor_ranks_at_chance_and_no_model_reads_the_cutoff(
         index=["model", "split"], columns="metric", values="value"
     )
     assert np.allclose(floor.roc_auc, 0.5)
+    chance = table[table.baseline == "chance"]
+    assert chance[["low", "high"]].isna().all().all()
     for split in ("validation", "test"):
         part = frame[(frame.split == split) & ~frame.rejected]
         prevalence = part.weight[part.is_mule == 1].sum() / part.weight.sum()
         assert np.allclose(floor.xs(split, level="split").average_precision, prevalence)
+        # A random ranking's expectation: the prevalence, 0.5, and each budget's share.
+        expected = chance[chance.split == split].set_index("metric").value
+        assert expected["average_precision"] == pytest.approx(prevalence)
+        assert expected["roc_auc"] == 0.5 and expected["recall_at_5pct"] == 0.05
+        assert expected["precision_at_10pct"] == pytest.approx(prevalence)
     for families in BASELINE_FAMILIES.values():
         assert not CUTOFF_COLUMNS & set(model_columns(frame, families))
 

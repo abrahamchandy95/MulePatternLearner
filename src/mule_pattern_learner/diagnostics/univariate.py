@@ -64,14 +64,3 @@ def univariate(frame: pd.DataFrame) -> pd.DataFrame:
                 if number is not None
             ]
     return pd.DataFrame(records, columns=list(COLUMNS))
-
-
-def strongest(table: pd.DataFrame, split: str = "validation", count: int = 30) -> list[str]:
-    """The features whose ROC AUC on a split is farthest from 0.5, strongest first.
-
-    Decisions use the validation split, so the figure ranks the features there.
-    """
-    auc = table[(table.split == split) & (table.metric == "roc_auc")]
-    distance = (auc.value - 0.5).abs().to_numpy()
-    order = np.argsort(-distance, kind="stable")
-    return auc.feature.iloc[order].head(count).tolist()
