@@ -103,6 +103,18 @@ def test_the_baselines_mark_chance_at_the_prevalence_and_the_run_in_ink(
         assert len(ax.get_yticklabels()) == len(rows)
     bare = drawn(lambda ax: figures.plot_baselines(ax, table, split="test", labels=False))
     assert not any(label.get_visible() for label in bare.get_yticklabels() if label.get_text())
+    # The intervals are named as the table has them: ring-clustered unless told otherwise.
+    for ax, name in (
+        (bare, "ring-clustered 90% interval"),
+        (
+            drawn(
+                lambda ax: figures.plot_baselines(ax, table, split="test", interval="stratified")
+            ),
+            "stratified",
+        ),
+    ):
+        legend = ax.get_legend()
+        assert legend is not None and name in [text.get_text() for text in legend.get_texts()]
 
 
 def test_the_label_curve_marks_the_run_at_the_revealed_count(
@@ -117,6 +129,15 @@ def test_the_label_curve_marks_the_run_at_the_revealed_count(
         ink = [line for line in ax.get_lines() if line.get_color() == BASELINE]
         assert {ys(line)[0] for line in ink} >= {run.value}
         assert {xs(line)[0] for line in ink} >= {run.mules}
+    # The ROC AUC version marks chance, and the run's audit AUC.
+    ax = drawn(lambda ax: figures.plot_label_curve(ax, table, metric="roc_auc"))
+    assert ax.get_ylabel() == "Test audit ROC AUC"
+    assert [ys(line) for line in ax.get_lines() if line.get_color() == MUTED] == [[0.5, 0.5]]
+    run = table[(table.model == "model") & (table.split == "test") & (table.metric == "roc_auc")]
+    legend = ax.get_legend()
+    assert legend is not None
+    texts = [text.get_text() for text in legend.get_texts()]
+    assert f"the run's audit: ROC AUC {run.value.iloc[0]:.3f}" in " ".join(texts)
 
 
 def test_the_run_figures_draw_each_audited_split(tables: dict[str, pd.DataFrame]) -> None:
