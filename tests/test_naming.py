@@ -70,7 +70,7 @@ ALLOWED = {
 # The folders whose file names are checked; the guides move and get kebab-case names
 # in the docs step.
 CHECKED_FOLDERS = ("src", "tests", "scripts", "gsql")
-COMMANDS = ("install", "train", "evaluate", "score", "report", "check")
+COMMANDS = ("install", "train", "evaluate", "score", "report", "diagnose", "check")
 MARKERS = {"graph", "graph_write", "cuda"}
 # The verbs a GSQL query name starts with (the graph is dedicated, so there is no prefix).
 QUERY_VERBS = frozenset(
@@ -211,7 +211,7 @@ def test_the_server_contract_names_every_query_once() -> None:
     assert set(names) == query_names()
 
 
-def test_the_command_line_is_mule_with_six_commands() -> None:
+def test_the_command_line_is_mule_with_seven_commands() -> None:
     project = tomllib.loads((REPOSITORY_ROOT / "pyproject.toml").read_text())
     assert project["project"]["scripts"] == {"mule": "mule_pattern_learner.cli:main"}
     parser = cli.build_parser()

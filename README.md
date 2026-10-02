@@ -81,7 +81,8 @@ option besides `--help`.
 | `mule train` | Prepares as needed (install, scope, reveal, dataset), then trains the built-in run into `results/baseline/seed-42/` with its training figures in `plots/` and `report.md`, resumes it, or reports it when it is complete |
 | `mule evaluate [RUN]` | Ground-truth audits of the run's model on the frozen validation and test partitions, written to the run's `audit/` with the audit figures in `plots/`: decisions use the validation audit, and the test audit is for reporting; `RUN` defaults to `results/baseline/seed-42` |
 | `mule score ACCOUNTS [DATE]` | Scores the accounts listed in a file (one id per line) with the built-in run's model; `DATE` defaults to the test cutoff. Writes `scores/<file stem>_<date>.parquet` in the run, and the ids TigerGraph rejects to `scores/<file stem>_<date>_rejected.txt` |
-| `mule report [RUN]` | Redraws the run's figures (`plots/<topic>_<figure>.png`) and `report.md` from the files it saved, offline: the training figures of a complete run and the audit figures of its audits. Given a suite's directory (`results/experiments/<suite>`), it redraws the suite's comparison figures and `report.md` instead |
+| `mule report [RUN]` | Redraws the run's figures (`plots/<topic>_<figure>.png`) and `report.md` from the files it saved, offline: the training figures of a complete run and the audit figures of its audits. Given a suite's directory (`results/experiments/<suite>`) or a study's (`results/diagnostics/<dataset id>`), it redraws that one's figures and `report.md` instead |
+| `mule diagnose [ANALYSIS]` | The diagnostic study of the built-in run's dataset against the ground truth, beside the built-in run, into `results/diagnostics/<dataset id>/`: every analysis by default, or the one named (see Diagnostics below). The only command that installs the analytics queries, where their text differs |
 | `mule check` | Read-only readiness: the graph, its installed queries and the cuGraph probe, then one training batch with its tensor digests and the first loss. The batch needs the built-in run's prepared dataset in `data/` (see below) |
 | `mule install` | Adds the scope vertex type if it is missing, installs the queries whose text differs, drops the queries retired by the rename that are still installed (`train` does this too) and lists installed queries that no file defines |
 
@@ -125,6 +126,29 @@ error. It always rewrites `summary.csv`, `comparison.csv`, the comparison figure
 `report.md` under `results/experiments/<suite>/`. The report ranks the variants by the
 validation audit with paired intervals against the baseline; the test audit is for
 reporting, not selection.
+
+## Diagnostics
+
+`mule diagnose` studies the built-in run's dataset with the ground truth, for analysis
+only: nothing it computes feeds a model. Each analysis writes one long table to
+`results/diagnostics/<dataset id>/`, and the command then draws the study's figures and
+`report.md`:
+
+| Analysis | What it asks |
+|---|---|
+| `features` | The feature table: each split's audit sample at its cutoff, with the training query's model inputs and candidate pool and the analytics query's account history. A table read with the current query texts is kept; delete `features.parquet` to read it again |
+| `univariate` | How well each feature alone ranks the mules of each split |
+| `drift` | How each feature of the non-mules shifts between the splits' cutoffs, and what that costs a learner |
+| `baselines` | How well a table of the account's own activity ranks mules, with no neighbour, association or pool input (the question of the retired `no_graph` control), beside the run's audits |
+| `learning-curve` | How ranking quality grows with the number of labelled training mules |
+| `subgroups` | Which mules the run's audits find: revealed or hidden, how few make its AP, which rings |
+| `proxy-validity` | How well the run's proxy predictions rank the ground truth, hidden and revealed mules apart |
+| `reveal-spread` | How the one-time label reveal's outcome varies with its salt, replayed offline |
+| `nnpu-simulation` | Whether the nnPU positive weight alone explains the collapse of textbook nnPU, on a synthetic problem (offline) |
+
+The analyses of the feature table build it first when it is missing. The run's analyses
+need the built-in run trained on the same dataset and, for `subgroups`, audited; an
+analysis whose inputs are missing is skipped with its reason, and the command then exits 1.
 
 ## Documentation
 

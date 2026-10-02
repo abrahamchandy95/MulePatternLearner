@@ -2,7 +2,8 @@
 
 The commands need nothing but the TigerGraph connection in .env and take no options:
 the settings are built in (config.DEFAULT_CONFIG), and RUN defaults to the built-in
-run's directory, results/baseline/seed-42. Each command prints one JSON result.
+run's directory, results/baseline/seed-42. Each command prints one JSON result, and
+exits 1 when the graph is not ready (check) or the study is incomplete (diagnose).
 """
 
 from __future__ import annotations
@@ -12,10 +13,14 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .config import DEFAULT_CONFIG
+from .diagnostics.study import ANALYSES, INCOMPLETE, analyses, diagnose
 from .paths import REPOSITORY_ROOT, RunPaths
 from .pipeline.check import check
+from .pipeline.connect import Session
+from .pipeline.diagnose import TigerGraphStudyReader
 from .pipeline.evaluate import evaluate_run
-from .pipeline.prepare import install_queries
+from .pipeline.prepare import install_queries, prepare_dataset
 from .pipeline.score import score_accounts
 from .pipeline.train import BASELINE_RUN, train_run
 from .reporting.report import report_directory
@@ -64,8 +69,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     reporting = commands.add_parser(
         "report",
-        help="Redraw the figures and report.md of a run, or of a control-experiment suite "
-        "(results/experiments/<suite>), from the files it saved, offline",
+        help="Redraw the figures and report.md of a run, a control-experiment suite "
+        "(results/experiments/<suite>) or a diagnostic study (results/diagnostics/<dataset "
+        "id>), from the files it saved, offline",
     )
     reporting.add_argument(
         "directory",
@@ -73,7 +79,21 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=BASELINE_RUN.root,
         metavar="RUN",
-        help=f"run or suite directory (default: {baseline})",
+        help=f"run, suite or study directory (default: {baseline})",
+    )
+    diagnosing = commands.add_parser(
+        "diagnose",
+        help="Run the diagnostic study of the built-in run's dataset against the ground "
+        "truth, beside the built-in run, into results/diagnostics/<dataset id>/ with its "
+        "figures; the only command that installs the analytics queries (where their text "
+        "differs)",
+    )
+    diagnosing.add_argument(
+        "analysis",
+        nargs="?",
+        choices=ANALYSES,
+        metavar="ANALYSIS",
+        help=f"one of {', '.join(ANALYSES)} (default: all of them, in this order)",
     )
     commands.add_parser(
         "check",
@@ -81,6 +101,23 @@ def build_parser() -> argparse.ArgumentParser:
         "batch's tensor digests and the first training loss",
     )
     return parser
+
+
+def diagnose_built_in(analysis: str | None) -> dict[str, Any]:
+    """`mule diagnose [ANALYSIS]`: the study of the built-in run's dataset and run.
+
+    The dataset is prepared as `mule train` prepares it, so a ready one needs no
+    connection, and the study's graph reads share that session's one connection.
+    """
+    session = Session(DEFAULT_CONFIG.transport)
+    dataset = prepare_dataset(DEFAULT_CONFIG, session=session)
+    return diagnose(
+        analyses(analysis),
+        config=DEFAULT_CONFIG,
+        dataset=dataset,
+        run=BASELINE_RUN,
+        graph=TigerGraphStudyReader(DEFAULT_CONFIG, dataset, session),
+    )
 
 
 def run_command(args: argparse.Namespace) -> dict[str, Any]:
@@ -99,6 +136,8 @@ def run_command(args: argparse.Namespace) -> dict[str, Any]:
             return report_directory(args.directory)
         case "check":
             return check()
+        case "diagnose":
+            return diagnose_built_in(args.analysis)
         case other:
             raise ValueError(f"Unknown command {other!r}")
 
@@ -109,7 +148,7 @@ def main() -> None:
     result = run_command(build_parser().parse_args())
     # One line, like the event lines before it.
     print(json.dumps(result, allow_nan=False))
-    if result.get("status") == "not_ready":
+    if result.get("status") in ("not_ready", INCOMPLETE):
         raise SystemExit(1)
 
 

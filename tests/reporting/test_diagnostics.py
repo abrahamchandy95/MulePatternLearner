@@ -1,8 +1,11 @@
-"""The figures of a diagnostic study, drawn from synthetic tables on a Figure of their own."""
+"""A diagnostic study's figures, each on a Figure of its own, then its PNGs and report.md."""
 
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
+import re
+import struct
 
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
@@ -11,9 +14,18 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from mule_pattern_learner.paths import DiagnosticsPaths
 from mule_pattern_learner.reporting import diagnostics as figures
-from mule_pattern_learner.reporting.style import BASELINE, MUTED
-from mule_pattern_learner.testing.builders import diagnostic_tables
+from mule_pattern_learner.reporting.report import (
+    ANALYSIS_FIGURES,
+    DIAGNOSTICS_FIGURES,
+    report_directory,
+    write_diagnostics_report,
+)
+from mule_pattern_learner.reporting.style import BASELINE, DPI, MUTED
+from mule_pattern_learner.testing.builders import diagnostic_tables, write_study_files
+
+PNG = b"\x89PNG\r\n\x1a\n"
 
 
 @pytest.fixture(scope="module")
@@ -154,3 +166,86 @@ def test_the_nnpu_figure_labels_each_weight_with_its_collapsed_seeds(
     seeds = wide.groupby(level="positive_weight").size()
     for tick, count, total in zip(ticks, collapsed, seeds, strict=True):
         assert tick.endswith(f"\n{count} of {total} collapsed")
+
+
+@pytest.fixture(scope="module")
+def reported(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> tuple[DiagnosticsPaths, dict[str, object]]:
+    """A synthetic study's files, reported once."""
+    study = DiagnosticsPaths.of("abcdef0123456789", tmp_path_factory.mktemp("results"))
+    write_study_files(study)
+    return study, write_diagnostics_report(study)
+
+
+def test_every_study_figure_renders_to_a_png_under_its_fixed_name(
+    reported: tuple[DiagnosticsPaths, dict[str, object]],
+) -> None:
+    study, result = reported
+    assert list(DIAGNOSTICS_FIGURES) == [
+        "baselines",
+        "label_curve",
+        "univariate_auc",
+        "drift",
+        "ap_concentration",
+        "ring_coverage",
+        "proxy_validity",
+        "reveal_spread",
+        "nnpu_simulation",
+    ]
+    assert sorted(n for names in ANALYSIS_FIGURES.values() for n in names) == sorted(
+        DIAGNOSTICS_FIGURES
+    )
+    assert result["figures"] == [str(study.figure(name)) for name in DIAGNOSTICS_FIGURES]
+    for name in DIAGNOSTICS_FIGURES:
+        data = study.figure(name).read_bytes()
+        assert data[:8] == PNG and len(data) > 20_000, name
+        width, height = struct.unpack(">II", data[16:24])
+        assert width >= 7 * DPI and height >= 4 * DPI, name
+    # The paired figures are two panels wide or tall.
+    width, _ = struct.unpack(">II", study.figure("baselines").read_bytes()[16:24])
+    _, height = struct.unpack(">II", study.figure("label_curve").read_bytes()[16:24])
+    assert width >= 12 * DPI and height >= 10 * DPI
+
+
+def test_the_study_report_has_each_analysis_with_its_figures(
+    reported: tuple[DiagnosticsPaths, dict[str, object]],
+) -> None:
+    study, result = reported
+    assert result["report"] == str(study.report)
+    text = study.report.read_text()
+    assert text.startswith("# Diagnostics of dataset `abcdef012345`\n\nCompared with the run")
+    assert "pool groups (pool_activity and pool_internal_inflows) were designed after" in text
+    headings = re.findall(r"^## (.+)$", text, flags=re.MULTILINE)
+    assert headings == [
+        "Feature table",
+        "Baselines",
+        "Label-count curve",
+        "Each feature alone",
+        "Drift",
+        "Revealed and hidden mules, AP concentration and rings",
+        "Proxy validity",
+        "The label reveal over salts",
+        "The nnPU positive weight, simulated",
+    ]
+    assert "| chance (a random ranking) |" in text and "no_graph" in text
+    links = re.findall(r"!\[[^\]]+\]\(([^)]+)\)", text)
+    assert links == [f"plots/{name}.png" for name in DIAGNOSTICS_FIGURES]
+    # The reveal's counts are whole, and its configured salt's outcome is beside them.
+    (row,) = re.findall(r"^\| train \| 160 \| .+$", text, flags=re.MULTILINE)
+    assert ".000" not in row
+
+
+def test_report_redraws_a_study_directory_from_the_tables_it_holds(tmp_path: Path) -> None:
+    study = write_study_files(DiagnosticsPaths.of("abc", tmp_path))
+    for name in ("subgroups", "nnpu_simulation"):
+        study.table(name).unlink()
+    result = report_directory(study.root)
+    drawn = {Path(str(path)).stem for path in result["figures"]}
+    assert drawn == set(DIAGNOSTICS_FIGURES) - {
+        "ap_concentration",
+        "ring_coverage",
+        "nnpu_simulation",
+    }
+    assert "## Proxy validity" in study.report.read_text()
+    assert "## The nnPU positive weight" not in study.report.read_text()
