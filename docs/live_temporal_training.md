@@ -451,7 +451,8 @@ queries it installs, which are up to date, which it dropped and which installed
 queries no repository file defines (listed, never dropped). Every write runs once:
 a failed one is reported, never repeated. The analytics queries of `gsql/analytics/`
 (the analytics context and the pair-gap queries) are never installed by `mule install`
-or `mule train`; `tigergraph.installer.install(executor, analytics=True)` installs them.
+or `mule train`; `mule diagnose` installs them where their text differs
+(`tigergraph.installer.install(executor, analytics=True)`).
 
 On TigerGraph 4.2.5 the install request answers only when compilation finishes,
 so it runs with a 45-minute read timeout. When the client gives up first (read

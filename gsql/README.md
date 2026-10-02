@@ -20,8 +20,8 @@ applied once and are kept in git history; only the training scope schema change,
 run fresh graph DDL on the populated instance. Schema changes may invalidate
 compiled queries and positional loading jobs; verify and restore both afterwards.
 
-The analytics queries are installed only by `install(executor, analytics=True)`;
-training never calls them. `analytics/analytics_context.gsql` is generated beside the
+The analytics queries are installed only by `mule diagnose`, where their text differs
+(`install(executor, analytics=True)`); training never calls them. `analytics/analytics_context.gsql` is generated beside the
 training context query: it computes the training groups as that query does, and the
 groups training does not read (windows, recency, amount ratios, association counts,
 decayed sums, identity order, pair window counts and device and IP ages). The pair
