@@ -126,8 +126,8 @@ def run_name(run: RunPaths) -> str:
 class Study:
     """One `mule diagnose` call: its settings, inputs and the outcome of each analysis.
 
-    ``run`` is the run compared with; ``compared`` says why it is not, when it is not
-    (no config.json, or trained on another dataset).
+    ``run`` is the run compared with, when it can be (unusable_run says why not);
+    ``frame`` is the feature table once this call has read or built it.
     """
 
     config: RunConfig
@@ -277,16 +277,19 @@ def diagnose(
     """Run the named analyses of a prepared dataset's study, then draw its report.
 
     The study's directory is results/diagnostics/<dataset id>/. The lines the analyses
-    print go to its events.jsonl, study.json is written once they have run, and the
-    figures and report.md after that, so a figure that fails loses no table.
+    print go to its events.jsonl, and study.json is written once they have run, or once
+    one of them failed, recording those that ran; the figures and report.md come after
+    every analysis, so a figure that fails loses no table.
     """
     paths = DiagnosticsPaths.of(dataset.root.name, results)
     study = Study(config, dataset, run, paths, graph)
     paths.root.mkdir(parents=True, exist_ok=True)
     with recording(paths.events):
-        for name in names:
-            study.analyse(name)
-        write_json(paths.study, study.record())
+        try:
+            for name in names:
+                study.analyse(name)
+        finally:
+            write_json(paths.study, study.record())
     skipped = {n: o["reason"] for n, o in study.outcomes.items() if o["status"] == SKIPPED}
     report = write_diagnostics_report(paths)
     return {
