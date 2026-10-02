@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import replace
 import json
+import re
 from typing import Any
 
 import pytest
@@ -22,6 +24,10 @@ from mule_pattern_learner.config import (
     differing_settings,
 )
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
+from mule_pattern_learner.paths import REPOSITORY_ROOT
+
+# A row of the configuration reference: the setting and its built-in value, as code.
+REFERENCE_ROW = re.compile(r"^\| `([a-z_.]+)` \| `([^`]*)` \|", re.M)
 
 
 def test_sections_refuse_values_outside_their_ranges() -> None:
@@ -119,3 +125,22 @@ def test_the_fingerprint_covers_what_can_change_results() -> None:
     assert differing_settings(other.results_view(), DEFAULT_CONFIG.results_view()) == [
         "dataset.seed"
     ]
+
+
+def settings(value: Any, path: str = "") -> Iterator[tuple[str, Any]]:
+    """Every setting of a to_dict table by its dotted name, with its value."""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            yield from settings(item, f"{path}.{key}" if path else key)
+    else:
+        yield path, value
+
+
+def test_the_configuration_reference_lists_every_setting_with_its_value() -> None:
+    page = (REPOSITORY_ROOT / "docs/reference/configuration.md").read_text()
+    rows = REFERENCE_ROW.findall(page)
+    names = [name for name, _ in rows]
+    assert len(names) == len(set(names))
+    # Each value as config.json records it.
+    expected = {name: json.dumps(value) for name, value in settings(DEFAULT_CONFIG.to_dict())}
+    assert dict(rows) == expected

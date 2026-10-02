@@ -4,15 +4,20 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+import re
 from typing import Any
 
 import pandas as pd
 import pytest
 
 from mule_pattern_learner.artifacts import (
+    AUDIT_COLUMNS,
+    DIAGNOSTIC_TABLES,
     EPOCH_COLUMNS,
+    FEATURE_TABLE_COLUMNS,
     HISTORY_COLUMNS,
     PREDICTION_COLUMNS,
+    SUMMARY_COLUMNS,
     append_history,
     atomic_write,
     file_digest,
@@ -29,6 +34,13 @@ from mule_pattern_learner.artifacts import (
     write_run_config,
 )
 from mule_pattern_learner.config import DEFAULT_CONFIG
+from mule_pattern_learner.paths import REPOSITORY_ROOT, DiagnosticsPaths, RunPaths
+from mule_pattern_learner.reporting.report import (
+    AUDIT_FIGURES,
+    DIAGNOSTICS_FIGURES,
+    SUITE_FIGURES,
+    TRAINING_FIGURES,
+)
 
 
 def test_atomic_writes_replace_the_file_only_after_the_block_succeeds(tmp_path: Path) -> None:
@@ -141,3 +153,31 @@ def test_run_configurations_round_trip_with_their_fingerprint(tmp_path: Path) ->
     assert read_run_config(path) == config
     assert read_json(path)["fingerprint"] == config.fingerprint()
     assert read_json(path)["provenance"] == {"device": "cpu"}
+
+
+def test_the_outputs_reference_names_every_file_column_and_figure() -> None:
+    page = (REPOSITORY_ROOT / "docs/reference/outputs.md").read_text()
+    # The code spans of the page, outside its fenced block.
+    named = set(re.findall(r"`([^`\n]+)`", re.sub(r"^```.*?^```", "", page, flags=re.S | re.M)))
+    run = RunPaths(REPOSITORY_ROOT)
+    files = [
+        path.relative_to(run.root).as_posix()
+        for path in (run.config, run.model, run.resume, run.history, run.epochs, run.events)
+    ]
+    files += [run.metrics.name, run.report.name, DiagnosticsPaths(REPOSITORY_ROOT).study.name]
+    columns = [
+        *HISTORY_COLUMNS,
+        *EPOCH_COLUMNS,
+        *PREDICTION_COLUMNS,
+        *AUDIT_COLUMNS,
+        *SUMMARY_COLUMNS,
+        *FEATURE_TABLE_COLUMNS,
+        *(column for table in DIAGNOSTIC_TABLES.values() for column in table),
+    ]
+    figures = [
+        f"{name}.png"
+        for kind in (TRAINING_FIGURES, AUDIT_FIGURES, SUITE_FIGURES, DIAGNOSTICS_FIGURES)
+        for name in kind
+    ]
+    tables = [f"{name}.csv" for name in DIAGNOSTIC_TABLES]
+    assert [name for name in (*files, *columns, *figures, *tables) if name not in named] == []
