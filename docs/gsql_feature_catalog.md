@@ -278,8 +278,9 @@ deltas and expanding them on the GPU is also a viable bandwidth optimization.
 
 `fetch_analytics_context` takes the context query's parameters, with an `include_*`
 flag for every group TigerGraph computes, and returns the same rows with every feature
-group this catalog describes. It is for analysis only: `install(executor,
-analytics=True)` installs it, and training never calls it.
+group this catalog describes. It is for analysis only: `mule diagnose` installs it
+where its text differs (`install(executor, analytics=True)`) and reads it for its feature
+table, and training never calls it.
 
 `read_ground_truth` and
 `validate_label_contract` expose complete supervision. The installer
