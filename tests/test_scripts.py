@@ -1,7 +1,8 @@
 """The scripts import, show help without side effects, and run offline.
 
-The live checks are integration tests now (tests/integration); three scripts remain:
-render_queries.py, run_experiments.py and simulate_label_reveal.py.
+The live checks are integration tests now (tests/integration), and the reveal's
+simulation is `mule diagnose reveal-spread`; two scripts remain: render_queries.py and
+run_experiments.py.
 """
 
 from __future__ import annotations
@@ -21,12 +22,10 @@ import pytest
 from mule_pattern_learner.experiments import runner
 from mule_pattern_learner.experiments.variants import SUITES, VARIANTS
 from mule_pattern_learner.paths import REPOSITORY_ROOT
-from mule_pattern_learner.testing.builders import reveal_inputs
-from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
 
 SCRIPTS = REPOSITORY_ROOT / "scripts"
 # Every script; each must parse --help before connecting.
-SCRIPT_NAMES = ("render_queries", "run_experiments", "simulate_label_reveal")
+SCRIPT_NAMES = ("render_queries", "run_experiments")
 
 
 def load(name: str) -> ModuleType:
@@ -103,25 +102,6 @@ def test_scripts_import_and_print_help_without_connecting(
         module.main()
     assert stopped.value.code == 0
     assert "usage:" in capsys.readouterr().out
-
-
-def test_the_reveal_simulation_runs_offline(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    simulate = load("simulate_label_reveal")
-    graph = FakeTigerGraph(reveal=reveal_inputs())
-    monkeypatch.setattr(simulate, "connect", lambda config: graph)
-    monkeypatch.setattr(sys, "argv", ["simulate_label_reveal", "--runs", "3"])
-    simulate.main()
-    report = json.loads(capsys.readouterr().out)
-    assert report["salts"] == [0, 2]
-    assert {name: split["mules"] for name, split in report["splits"].items()} == {
-        "train": 2,
-        "validation": 1,
-        "test": 1,
-    }
-    # The inputs were read once and the job itself never ran.
-    assert graph.names() == ["reveal inputs"]
 
 
 def test_the_experiments_script_lists_the_variants_and_runs_the_names_given(
