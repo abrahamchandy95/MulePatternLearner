@@ -364,7 +364,7 @@ def build_context_source(
     transport: TransportConfig,
     cache: ContextCache | None = None,
 ) -> ContextSource:
-    """Live source with the LRU, request size and concurrency of a transport section.
+    """A source with the LRU, request size and concurrency of a transport section.
 
     ``cache`` gives it the disk tier of a dataset's context cache.
     """

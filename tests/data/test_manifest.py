@@ -103,7 +103,7 @@ def test_a_manifest_names_its_dataset_and_the_frozen_source_it_was_prepared_from
     assert data_manifest.recorded_dataset_id(manifest) == data_manifest.dataset_id(
         UNIT_SOURCE, config
     )
-    # The frozen source is named by the counts and the scope the live graph is checked
+    # The frozen source is named by the counts and the scope the graph is checked
     # against, so other counts name another source of the same dataset id.
     source = data_manifest.source_fingerprint(manifest)
     changed = deepcopy(manifest)
@@ -116,7 +116,7 @@ def test_query_files_are_compared_by_their_path_and_text() -> None:
     current = data_manifest.query_hashes()
     # The same texts recorded under other paths, as the datasets prepared before the
     # layered restructure recorded them, are not this code's files.
-    moved = {f"temporal/{Path(name).name}": text for name, text in current.items()}
+    moved = {f"moved/{Path(name).name}": text for name, text in current.items()}
     assert data_manifest.changed_query_files({"source": {"query_hashes": moved}}) == sorted(current)
     # Two files' texts recorded under each other's paths do not match either.
     first, second = sorted(current)[:2]

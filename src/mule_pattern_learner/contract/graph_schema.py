@@ -78,7 +78,7 @@ class ContextKey:
 
 
 # Unknown categorical values have a dedicated bucket, never an observed category.
-# Live data only carries digital, branch_or_atm, bank and unknown, 1:1 with rail.
+# The loaded data only carries digital, branch_or_atm, bank and unknown, 1:1 with rail.
 CHANNELS = (
     "unknown",
     "digital",

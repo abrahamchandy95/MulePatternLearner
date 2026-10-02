@@ -1,5 +1,5 @@
 /*
-Temporal mule detection and Zelle transfer schema. Target: TigerGraph 4.2.5.
+Mule detection and Zelle transfer schema. Target: TigerGraph 4.2.5.
 Fresh-graph DDL only; never run it on a populated graph. The one-off migrations
 that brought the populated graph to this schema are kept in git history.
 
@@ -31,7 +31,7 @@ fifteen-column Account upload contract, including supervision.
 CREATE GRAPH Mule_Pattern_Learner ()
 USE GRAPH Mule_Pattern_Learner
 
-CREATE SCHEMA_CHANGE JOB create_temporal_payment_schema
+CREATE SCHEMA_CHANGE JOB create_payment_schema
 FOR GRAPH Mule_Pattern_Learner {
 
   ADD VERTEX Party (
@@ -263,5 +263,5 @@ FOR GRAPH Mule_Pattern_Learner {
   ) WITH REVERSE_EDGE="IP_Observed_In_Transaction";
 }
 
-RUN SCHEMA_CHANGE JOB create_temporal_payment_schema
-DROP JOB create_temporal_payment_schema
+RUN SCHEMA_CHANGE JOB create_payment_schema
+DROP JOB create_payment_schema

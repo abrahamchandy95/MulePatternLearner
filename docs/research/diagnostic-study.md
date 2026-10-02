@@ -248,7 +248,7 @@ These answered a question once and are not rerun:
 | `shift_review.md` | this note and the shift analysis |
 | `extract_notes.md` | this note ([The question and the data](#the-question-and-the-data)) |
 | `profile/p1_groups.py` to `p11_misc.py`, `load_messages.py`, `mule_profile.md` | [the mule profile](mule-profile.md) |
-| `nnpu_sim/sim.py`, `grid.py`, `traj.py` | `diagnostics/nnpu_simulation.py`, `mule diagnose nnpu-simulation`, and [the nnPU positive weight](nnpu-positive-weight.md); the live test is the `prior_weight` variant |
+| `nnpu_sim/sim.py`, `grid.py`, `traj.py` | `diagnostics/nnpu_simulation.py`, `mule diagnose nnpu-simulation`, and [the nnPU positive weight](nnpu-positive-weight.md); its test on the graph is the `prior_weight` variant |
 | `mpl_arms/tabular.toml`, `no_internal.toml`, `seed7.toml` | the variants `no_attention` and `drop_pool_internal_inflows`, and the fixed seeds 42, 43 and 44 |
 | `simulate_label_reveal.py`, the repository's script until commit 050ba17 | `diagnostics/reveal_spread.py`, `mule diagnose reveal-spread` |
 

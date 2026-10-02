@@ -33,7 +33,7 @@ the Account loader:
 gsql gsql/schema/account_loading.gsql
 ```
 
-It creates `load_temporal_accounts`, which reads an Account CSV with the fifteen columns
+It creates `load_accounts`, which reads an Account CSV with the fifteen columns
 of the label contract in a fixed order ([Labels](../reference/labels.md#loading-accounts)).
 Whatever loads the rest must keep the schema's contract: one chronological sequence
 domain for payments and association changes, positive sequences, edge clocks equal to
@@ -101,7 +101,7 @@ only read.
 
 Keep the graph frozen while it is used: every run checks the vertex counts, the installed
 query texts and the scope against what its dataset recorded and refuses a changed graph
-("Live graph counts changed"). After a reload or a material change, the old dataset and
+("Graph counts changed"). After a reload or a material change, the old dataset and
 scope describe data that is gone. Give the built-in run a new `scope.id` (the default of
 `config.ScopeConfig`), so the next `mule train` creates a scope on the new data and
 prepares a new dataset; the old scope vertex is experiment metadata and does no harm.

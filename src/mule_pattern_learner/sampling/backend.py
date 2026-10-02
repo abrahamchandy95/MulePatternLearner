@@ -6,7 +6,7 @@ into the fanout slots, reserving a few for associations. Two interchangeable sub
 samplers exist:
 
 - `TorchGroupedSampler`: random keys plus a segmented rank; runs on CPU, MPS or CUDA.
-- `CuGraphSampler`: pylibcugraph's heterogeneous temporal sampler on one CUDA GPU.
+- `CuGraphSampler`: pylibcugraph's heterogeneous time-bounded sampler on one CUDA GPU.
 
 Evaluation always uses device-independent hash keys on the torch path, so scores do
 not depend on the machine or the backend. The hop enters those keys through

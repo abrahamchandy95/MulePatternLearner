@@ -103,8 +103,8 @@ class ContextCache:
 
     ``dataset_id`` is the dataset's id, and ``source`` the fingerprint of the frozen
     source its manifest records (data.manifest.source_fingerprint): the vertex counts and
-    the scope that tigergraph.provenance.verify_frozen_source checks against the live
-    graph before a source opens the cache. Both name every entry, so that check is what
+    the scope that tigergraph.provenance.verify_frozen_source checks against the graph
+    before a source opens the cache. Both name every entry, so that check is what
     invalidates the cache: once the graph's counts change, a run stops before it reads
     an entry, and a dataset prepared again from the changed graph never finds the old
     graph's entries. ``capacity`` is the most entries the cache keeps.

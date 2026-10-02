@@ -1,4 +1,4 @@
-"""Live provenance checks ignore experiment scope vertices."""
+"""Provenance checks ignore experiment scope vertices."""
 
 from __future__ import annotations
 

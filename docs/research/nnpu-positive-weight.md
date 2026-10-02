@@ -16,10 +16,10 @@ the validation proxy AP was 0.017 at a proxy prevalence of 0.0055, and the test 
 AUC 0.73.
 
 The balanced weight is imbalanced nnPU (Su, Chen and Xu, IJCAI 2021) with a balanced target
-prior of 0.5, up to a constant factor. A 40-step live run with it reached validation proxy
-AP 0.063 (ROC AUC 0.90) and test proxy AP 0.050 (ROC AUC 0.87), and it became the built-in
-setting. Run 2 trained with it reached a ground-truth audit ROC AUC of 0.782; run 3, which
-adds the pool counts and the slot sum, 0.931.
+prior of 0.5, up to a constant factor. A 40-step run on the graph with it reached
+validation proxy AP 0.063 (ROC AUC 0.90) and test proxy AP 0.050 (ROC AUC 0.87), and it
+became the built-in setting. Run 2 trained with it reached a ground-truth audit ROC AUC of
+0.782; run 3, which adds the pool counts and the slot sum, 0.931.
 
 ## The simulation
 
@@ -63,10 +63,10 @@ weight is the one to keep.
 ## Testing it again
 
 The simulation is a model of the problem, not the problem: its positives are one shifted
-Gaussian, and its marginal holds no hidden mule that resembles the revealed ones. The live
-test is the `prior_weight` control variant (`loss.positive_weight = "prior"`), which the
-control experiments train over the seeds 42, 43 and 44 and compare with the baseline on the
-validation audit (`python scripts/run_experiments.py`).
+Gaussian, and its marginal holds no hidden mule that resembles the revealed ones. Its test
+on the graph is the `prior_weight` control variant (`loss.positive_weight = "prior"`), which
+the control experiments train over the seeds 42, 43 and 44 and compare with the baseline on
+the validation audit (`python scripts/run_experiments.py`).
 
 ## Not carried over
 

@@ -2,7 +2,7 @@
 
 tests/sampling/test_cugraph_sampler.py runs these checks on a mock pylibcugraph and
 tests/integration/test_cugraph_sampler.py on a GPU: exactly min(candidates, fan-out)
-per (context, relation) (hop 2 payments-only), strict temporal validity (candidates
+per (context, relation) (hop 2 payments-only), strict time validity (candidates
 exactly at the cutoff included), uniform inclusion by a chi-square test over many
 seeds, and determinism for a fixed seed. The torch sampler is checked beside cuGraph;
 the two draw different, equally distributed subsets for one seed, and only evaluation,

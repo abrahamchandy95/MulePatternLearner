@@ -1,6 +1,6 @@
 """The scripts import, show help without side effects, and run offline.
 
-The live checks are integration tests now (tests/integration), and the reveal's
+The checks against the graph are integration tests now (tests/integration), and the reveal's
 simulation is `mule diagnose reveal-spread`; two scripts remain: render_queries.py and
 run_experiments.py.
 """

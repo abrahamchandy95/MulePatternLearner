@@ -146,7 +146,7 @@ adjudicated negative without a contract that says so.
 
 A dataset records the graph's vertex counts, its scope and the hashes of the query files
 it was prepared with. Every run that reads the graph for a dataset (training, its resume,
-the audits, the diagnostics) first checks the installed query texts, the live counts
+the audits, the diagnostics) first checks the installed query texts, the vertex counts
 (scope vertices aside, since they are experiment metadata) and the scope's header and
 rule, and refuses to run if any changed. Counts cannot detect a same-count edit, and a
 change made while a run is in progress is not detected, so keep the graph frozen for the
@@ -174,8 +174,9 @@ batch's contexts through bounded installed-query REST calls and returns rows in 
   requested at that hop, the context contract, the dataset id and the frozen source, so a
   variant of other groups has entries of its own and a changed graph fails the
   frozen-source check before any entry is read. It never holds labels. Only connections
-  that passed that check open it; `mule score` reads a live graph that need not be any
-  dataset's source, and has none ([Outputs](../reference/outputs.md#a-prepared-dataset-datadataset-id)).
+  that passed that check open it; `mule score` reads whatever graph it connects to, which
+  need not be any dataset's source, and has none
+  ([Outputs](../reference/outputs.md#a-prepared-dataset-datadataset-id)).
 - **Seeds.** Preparation pages the scope population 10,000 rows at a time and keeps
   label-blind hash reservoirs (20,000 train, 2,000 validation and 2,000 test accounts)
   plus the observed positives, discarding each page after selection. The wider graph is
@@ -248,13 +249,13 @@ materialise the event-intrinsic pair features, which do not depend on scope or c
 | Option | Advantages | Costs and open work |
 |---|---|---|
 | Bounded custom REST requests (this pipeline) | Simple, minimal client retention | Round trips, JSON overhead and repeated scans |
-| TigerGraph GDS with Kafka-backed batches | Bounded delivery and prefetch, decoupled producer and consumer | Broker, security and Cloud configuration; custom temporal and visibility semantics still needed |
+| TigerGraph GDS with Kafka-backed batches | Bounded delivery and prefetch, decoupled producer and consumer | Broker, security and Cloud configuration; custom time and visibility semantics still needed |
 | Scoped sharded exports to storage near the GPUs | Repeatable multi-epoch training, distributed readers | Snapshot refresh and storage cost; export only the relevant partitions |
 | A sampler service with a shared cache | Reuse across GPU workers and epochs | Operational complexity; keys must include snapshot, scope and cutoff |
 
 Check the installed version's documentation before choosing GDS: `filter_by` selects
 seeds, not every traversed neighbour, so a seed filter alone is no inductive boundary,
-and a temporal transform after fetching cannot undo leaked server-side aggregates. The
+and a time filter after fetching cannot undo leaked server-side aggregates. The
 [documented HTTP and Kafka difference](https://www.tigergraph.com/docs/pytigergraph/1.6/gds/dataloaders)
 matters too: HTTP may collect batches before iteration, while Kafka delivers them
 incrementally. Do not infer bounded streaming from an iterator API.
@@ -266,8 +267,8 @@ embedding.
 
 ## References
 
-- [TGAT: Inductive Representation Learning on Temporal Graphs](https://arxiv.org/abs/2002.07962)
-- [Temporal Graph Benchmark](https://arxiv.org/abs/2307.01026)
+- [TGAT (Xu et al., ICLR 2020)](https://arxiv.org/abs/2002.07962)
+- [TGB, the benchmark (Huang et al., 2023)](https://arxiv.org/abs/2307.01026)
 - [TGB evaluation rules](https://tgb-website.pages.dev/docs/leader_rules/)
 - [TigerGraph data loaders](https://www.tigergraph.com/docs/pytigergraph/1.8/gds/dataloaders)
 - [TigerGraph GDS factory functions](https://www.tigergraph.com/docs/pytigergraph/1.8/gds/factory-functions)

@@ -55,12 +55,12 @@ packages = ["src/mule_pattern_learner"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # Tests import the installed package (pip install -e), never src/ through sys.path. Tests
-# marked graph, graph_write or cuda need a live graph or a GPU, so they are deselected
+# marked graph, graph_write or cuda need TigerGraph or a GPU, so they are deselected
 # unless -m names them: a -m on the command line replaces this one, and -m "" runs all.
 addopts = ["--import-mode=importlib", "-m", "not graph and not graph_write and not cuda"]
 markers = [
-    "graph: reads from the live TigerGraph named in .env; excluded by default (-m graph)",
-    "graph_write: writes to the live TigerGraph named in .env; excluded by default (-m graph_write)",
+    "graph: reads from the TigerGraph named in .env; excluded by default (-m graph)",
+    "graph_write: writes to the TigerGraph named in .env; excluded by default (-m graph_write)",
     "cuda: needs a CUDA device; excluded by default (-m cuda)",
 ]
 

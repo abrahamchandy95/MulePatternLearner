@@ -95,7 +95,7 @@ contract                                         definitions shared with GSQL
 | Package | Responsibility |
 |---|---|
 | `contract` | What the GSQL and the client share, with no I/O and no torch: query names, `CONTEXT_CONTRACT` and the retired names (`server`), the graph's types, relations and splits (`graph_schema`), the training feature groups (`feature_groups`) and the analytics ones (`analytics_features`), the sampler plan, every numeric bound (`bounds`), the time basis, fingerprints, clocks, the reveal's draws and the frozen salts |
-| `config`, `paths` | The run's settings as frozen dataclasses, `DEFAULT_CONFIG` the built-in run; where datasets and results live and the name of every file |
+| `config`, `paths` | The run's settings as frozen dataclasses, `DEFAULT_CONFIG` the built-in run; where datasets and results go and the name of every file |
 | `artifacts`, `metrics` | The column schemas and reading and writing of every file, with the one atomic write and file digest; pure ranking metrics, curves, review budgets and bootstrap intervals |
 | `runtime` | The device and determinism, the one bounded worker pool, and `emit`, the one structured output line |
 | `data` | The read ports, the seed reservoirs, observed labels, the hub registry, the manifest and dataset id, preparation, and the context source with its cache tiers |
@@ -280,14 +280,14 @@ at import. There is no configuration file, no `--config` and no option: another 
 
 | Thing | Rule | Examples |
 |---|---|---|
-| Packages, modules | Lowercase role nouns, never `utils`, `common`, `helpers`, `live`, `temporal`, `v5` or `legacy`; no two modules with the same name | `training/trainer.py`, `data/contexts.py` |
+| Packages, modules | Lowercase role nouns, never a grab-bag name such as `utils`, `common` or `helpers`, nor a word of the old layout (`FORBIDDEN` in `tests/test_naming.py`); no two modules with the same name | `training/trainer.py`, `data/contexts.py` |
 | Classes | CapWords, a role suffix, no project prefix | `Trainer`, `Predictor`, `SavedModel`, `ContextSource` |
 | Ports and adapters | See [Ports and adapters](#ports-and-adapters) | `ScopeReader`, `TigerGraphScopeReader`, `FakeTigerGraph` |
 | Functions | Verbs for use cases and factories; `*_curve` returns arrays, `bootstrap_*` intervals, `plot_*` draws | `prepare_dataset`, `train_run`, `capture_curve`, `plot_capture` |
 | Constants | UPPER_CASE, defined once | `BUILT_IN_GROUPS`, `GRAPH_NAME` |
 | Settings | Section-qualified snake_case, units as suffixes | `scope.id`, `loss.positive_weight`, `transport.max_outage_s` |
 | Variants | "Variant", never "arm": `baseline`, `no_<mechanism>`, `drop_<group>` or a control's own name | `no_attention`, `drop_pair_history`, `prior_weight` |
-| Concepts | One name each: a **dataset** is what preparation stages (never "cohort"); the **source id** is the identity of the data loaded into the graph; the **audit** is the ground-truth report, and `evaluate` the command that writes it; a context source parameter is always `contexts` | |
+| Concepts | One name each: a **dataset** is what preparation stages; the **source id** is the identity of the data loaded into the graph; the **audit** is the ground-truth report, and `evaluate` the command that writes it; a context source parameter is always `contexts` | |
 | Runs and figures | `results/<variant>/seed-<n>/`; `plots/<topic>_<figure>.png` | `audit_capture.png` |
 | GSQL | A file is named after the responsibility its queries share; a query verb first, with no prefix | `hub_accounts.gsql` defines `list_hub_accounts` |
 | Tests | `tests/<package>/test_<module>.py`; markers `graph`, `graph_write`, `cuda` | `tests/sampling/test_cugraph_sampler.py` |
@@ -295,11 +295,14 @@ at import. There is no configuration file, no `--config` and no option: another 
 
 `tests/test_naming.py` checks file and folder names (the docs' included), the
 identifiers the code defines, the command line, the run paths and the GSQL query names;
-it does not check prose. The values TigerGraph and saved files hold keep their names,
-each allowed there with its reason: the `Temporal_Training_Scope` vertex type, the salts
-of the seeded draws (`temporal_live_step`, `marginal_cohort`). The schema's jobs keep their installed names
-(`load_temporal_accounts` among them). The old query names are not allowed anywhere but
-`contract.server.RETIRED_QUERIES`, which `mule install` drops.
+it does not check prose. No name holds a word of its `FORBIDDEN` list except the values
+the graph and the seeded draws hold, which keep their names; its `ALLOWED` lists each with
+its reason: the `Temporal_Training_Scope` vertex type and the salts of the seeded draws
+(`temporal_live_step`, `marginal_cohort`). The scope's edge types and the built-in scope id
+are persisted too, and hold no such word. The names the queries had before they were
+renamed are allowed only in `contract.server.RETIRED_QUERIES`, which `mule install` drops.
+Names another library defines are that library's: the code calls pylibcugraph's sampler
+by its name, and the tests' imitation of pylibcugraph gives its names as keywords.
 
 ## Decisions and their reasons
 
@@ -311,9 +314,10 @@ The owner's decisions that shape the code, each with its reason.
   `results/baseline/seed-42`.
 - **One model** (the layered layout the owner approved on 2026-09-27). `TGAT` is the
   model; `SummaryMLP` exists only for the controls. The variant axis, the `single`
-  architecture, the legacy feature groups, the `recent` and `stratified` samplers, SQLite
-  storage, the `shared_history` protocol and the label file were deleted: the built-in
-  run used none of them, and each was a second path to keep correct.
+  architecture, the feature groups only earlier models read, the `recent` and
+  `stratified` samplers, SQLite storage, the `shared_history` protocol and the label file
+  were deleted: the built-in run used none of them, and each was a second path to keep
+  correct.
 - **Training keeps only the built-in run's feature groups** (decided on 2026-09-28). The
   training query computes nothing no model reads (it shrank from 1,833 to 1,282 lines, and
   a message from 34 fields to 27); the other ten groups moved to the analytics query,
@@ -338,10 +342,10 @@ The owner's decisions that shape the code, each with its reason.
   `scope.create`, `scope.reveal_per_split` and `scope.reveal_salt` act once on the graph
   (whether a missing scope is created, and the one-time reveal), so changing them later
   names no other dataset.
-- **Names for the data and the outputs.** "Dataset" replaces "cohort"; "source id" names
-  the data loaded into the graph; `data/<dataset id>/` holds prepared datasets and
-  `results/` everything the commands write; "variant" replaces "arm"; the "audit" is the
-  ground-truth report.
+- **Names for the data and the outputs.** "Dataset" names what preparation stages;
+  "source id" names the data loaded into the graph; `data/<dataset id>/` holds prepared
+  datasets and `results/` everything the commands write; "variant" replaces "arm"; the
+  "audit" is the ground-truth report.
 - **Control experiments are a script with names only.** `python scripts/run_experiments.py
   [SUITE or VARIANT ...]` with no flags: suite `controls` by default, the seeds fixed in
   code, variants declared in `experiments/variants.py`, complete runs kept, mismatched runs
@@ -366,7 +370,7 @@ Other choices and their reasons:
 - **The context cache lives with the dataset.** Its entries are the rows of one frozen
   source, so they are named by the dataset, the source and the query's contract, opened
   only after the frozen-source check, and shared by every run and audit of the dataset.
-- **No experiment or analysis writes to `/tmp`.** Their results live under `results/`,
+- **No experiment or analysis writes to `/tmp`.** Their results go under `results/`,
   so the runs, the comparison and the study can be redrawn and audited later.
 - **`mule`, not `mule-pattern-learner`**, as a short command in the manner of Ludwig's
   `ludwig train`, paired with `__main__.py` as the PyPA guide pairs a console script;

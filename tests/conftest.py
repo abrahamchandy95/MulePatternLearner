@@ -1,6 +1,6 @@
 """Fixtures several test modules share, and the option that lets tests write to the graph.
 
-Shared fakes and builders live in the package, in mule_pattern_learner.testing. Tests
+Shared fakes and builders are in the package, in mule_pattern_learner.testing. Tests
 marked graph, graph_write or cuda are deselected unless -m names them (pyproject.toml);
 tests marked graph_write also need --allow-graph-writes, because they write to the
 TigerGraph named in .env.

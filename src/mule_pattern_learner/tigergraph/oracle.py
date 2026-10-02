@@ -3,7 +3,7 @@
 TigerGraphTruthReader reads each account's ground truth for the audits.
 TigerGraphRevealInputReader reads what the one-time reveal decides from (the true mules,
 their draw keys and their fraud-labelled inflows), so diagnostics can replay the reveal
-offline; both read the oracle, so they live here, out of training's reach (the import
+offline; both read the oracle, so they are here, out of training's reach (the import
 contract "Training never reads ground truth").
 """
 

@@ -23,7 +23,7 @@ The literals hold on macOS arm64 and on Linux x86_64:
   from the next one, far above that rounding, so the APs and the selected epoch do not
   flip between hosts.
 
-`mule check` prints the same digests and first loss for the live parity check
+`mule check` prints the same digests and first loss for the parity check on the graph
 (pipeline.check.first_step); a test pins it to these literals.
 
 The golden run itself has no context cache. Another test trains it twice more with the

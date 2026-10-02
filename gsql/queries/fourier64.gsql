@@ -1,6 +1,6 @@
 USE GRAPH Mule_Pattern_Learner
 
-/* Fixed, non-learned temporal features. Units: milliseconds in, seconds inside.
+/* Fixed, non-learned time features. Units: milliseconds in, seconds inside.
    u = log(1 + dt_seconds) / log(1 + 400 days in seconds), without clipping.
    f_i = 0.125 * 16^(i/31) cycles per unit u, i=0..31.
    Output order: sin(f_0*2*pi*u), cos(f_0*2*pi*u), ..., sin_31, cos_31.

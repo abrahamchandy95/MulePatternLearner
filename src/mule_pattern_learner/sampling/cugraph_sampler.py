@@ -1,4 +1,4 @@
-"""pylibcugraph's heterogeneous temporal sampler on one CUDA GPU, and its probe.
+"""pylibcugraph's heterogeneous time-bounded sampler on one CUDA GPU, and its probe.
 
 Time keys make cuGraph's single strict comparison match the visibility contract:
 payments use `2*event_seq`, associations (emitted at the context cutoff) use
@@ -117,7 +117,9 @@ def sampled_rows(result: dict[str, Any], arrays: GraphArrays, device: torch.devi
         raise RuntimeError("cuGraph sampled beyond the seed contexts or candidate rows")
     seed_time = torch.from_numpy(arrays.seed_time).to(device)
     if not bool((time < seed_time[major]).all()):
-        raise RuntimeError("cuGraph returned an edge at or after its seed time (temporal leakage)")
+        raise RuntimeError(
+            "cuGraph returned an edge at or after its seed time (leakage from the future)"
+        )
     source = torch.from_numpy(arrays.src).to(device).long()
     checks = {"minors": minor == edge_id + num, "majors": major == source[edge_id]}
     if result.get("edge_type") is not None:
@@ -275,9 +277,9 @@ class CuGraphSampler:
     """Uniform per-(context, relation) subset with pylibcugraph on one CUDA GPU.
 
     Supports the 26.08 `heterogeneous_uniform_temporal_neighbor_sample` and the
-    26.10 `neighbor_sample(starting_vertex_end_times=...)`. The 26.10 legacy
-    function treats seed times as a lower bound for decreasing walks, so it is never
-    used there. One ResourceHandle is kept per thread.
+    26.10 `neighbor_sample(starting_vertex_end_times=...)`. The 26.10 release's
+    heterogeneous function treats seed times as a lower bound for decreasing walks, so
+    it is never used there. One ResourceHandle is kept per thread.
 
     Draws come from cuGraph's RNG seeded by `random_state`: equally distributed as
     the torch sampler's, but not the same subset for the same seed.

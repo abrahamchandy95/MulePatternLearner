@@ -114,7 +114,7 @@ Each message has 27 fields:
 
 Association messages carry the tenure's target with the parent's cutoff clocks and no
 payment time. Every message carries its channel and stratum, though no model reads them
-(the live data's channels map one to one onto rails).
+(the loaded data's channels map one to one onto rails).
 
 ## The analytics groups
 

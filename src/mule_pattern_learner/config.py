@@ -240,7 +240,7 @@ class ModelConfig:
     # slots; the MLP can test a combined condition on each slot before pooling, so the sum
     # counts the slots that meet it (Xu, Hu, Leskovec and Jegelka, "How Powerful are Graph
     # Neural Networks?", ICLR 2019). Most roots fill all 16 slots, so this is mostly the
-    # share of such slots. Provisional: not yet measured in a run on the live graph. The
+    # share of such slots. Provisional: not yet measured in a run on the reference graph. The
     # summary architecture has no slots and ignores it.
     slot_sum: bool = True
 
@@ -324,7 +324,7 @@ class TrainingConfig:
 class TransportConfig:
     """Context requests and their retry budgets. Changing them never changes results."""
 
-    # Measured on the live graph: 8 contexts per request, 16 in parallel built a 64-root
+    # Measured on the reference graph: 8 contexts per request, 16 in parallel built a 64-root
     # batch in about 11 s, against about 20 s for 16 x 8 and 22 s for 4 x 16.
     request_batch_size: int = 8
     query_concurrency: int = 16

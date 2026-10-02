@@ -136,7 +136,7 @@ directory.
 
 - **Checks before anything runs:** the dataset's manifest and file hashes, its query
   hashes and dataset settings against the configuration, the installed query texts and
-  endpoints, the live vertex counts and the scope with its unowned rule (the frozen-source
+  endpoints, the graph's vertex counts and the scope with its unowned rule (the frozen-source
   check), and that the context source requests every input the model reads, with the
   model's pools, at both hops.
 - **The schedule** is drawn up front for each epoch from the saved generator: the date,

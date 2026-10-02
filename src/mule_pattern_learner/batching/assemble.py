@@ -139,7 +139,7 @@ def build_batch(
     stats: dict[str, Any] | None = None,
     sampler_backend: str | None = None,
 ) -> dict[str, torch.Tensor]:
-    """Two-hop temporal batch; `mode="train"` resamples with `step_seed`.
+    """Two-hop batch, each root at its cutoff; `mode="train"` resamples with `step_seed`.
 
     Hub status of a child and of an outermost peer is looked up at the earliest
     cutoff among the roots that reach it, so it only uses history visible before

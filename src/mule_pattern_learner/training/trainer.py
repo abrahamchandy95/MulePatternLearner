@@ -136,7 +136,7 @@ def train(
     """Train, select on observed validation labels, save the model, then score test.
 
     Every file of the run goes into the directory ``run`` names. Without ``contexts``,
-    ``open_contexts`` opens the dataset's live source once the settings and the
+    ``open_contexts`` opens the dataset's context source once the settings and the
     prepared dataset passed their checks (the pipeline passes
     pipeline.connect.open_context_source). ``contexts`` and ``hubs`` replace the
     dataset's source and hub registry (tests, offline replays). With ``resume`` a
