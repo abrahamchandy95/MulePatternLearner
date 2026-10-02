@@ -28,8 +28,8 @@ def test_the_architecture_chooses_the_model() -> None:
     )
     summary = build_model(TABULAR.model, TABULAR.feature_plan(), fanout)
     assert isinstance(summary, SummaryMLP)
-    # A projection of every root column, then the head: the parameters of the summary
-    # model the code before the layered restructure built, in the same order.
+    # A projection of every root column, then the head, created in this order, which
+    # fixes the initial weights a seed gives.
     width = len(TABULAR.feature_plan().node_names)
     assert [(name, tuple(p.shape)) for name, p in summary.named_parameters()] == [
         ("node.0.weight", (64, width)),

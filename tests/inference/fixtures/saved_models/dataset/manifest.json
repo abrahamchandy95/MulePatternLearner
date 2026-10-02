@@ -1,45 +1,43 @@
 {
   "source": {
-    "dataset_id": "load_fixture",
-    "prepared_id": null,
+    "source_id": "load_fixture",
     "source_counts": {
       "Account": 200
     },
     "query_hashes": {
-      "gsql/features/temporal_fourier64.gsql": "b06e32c417b13c627706d0d9e8a0e8141f2ad83c0d0036ac8bc1af1b77bb6f7f",
-      "gsql/temporal/training_context.gsql": "16647ae2e7f8728cc92fbe678b8e3be78158a3f8fe17f261e4e0a8a4d9f994a8",
-      "gsql/temporal/training_population.gsql": "cb194eff758c0d387f91df320d782f75ce2edcff551c184d37425d60daf23c6e",
-      "gsql/temporal/training_scope.gsql": "ec2ca9a59e7ed197a9f567f1818d6ad139d280721cde21598c65f662354ef72f",
-      "gsql/temporal/training_cutoffs.gsql": "9c23cfe9dfddf591d3011a4692f44b7ac5541ca3c8db637c610328aecdb2e538",
-      "gsql/temporal/hub_registry.gsql": "fdbd7d156e6586d8ab35ac83686063a81d65fe34df03176f00bb6e97a98e6a30"
+      "queries/fourier64.gsql": "9c2fbbdc30e92b0e5522bd49032743e7ab5c197f40457b0638891a0edf759d67",
+      "queries/training_context.gsql": "21f15c377763febab0e169563284d98eab9958492bf7f68053efb4cb7552f6d2",
+      "queries/training_scope.gsql": "9e2c59543bd8c0264839eae38228bf7dcc6c4affc263b53dd3e79042c293e21d",
+      "queries/split_cutoffs.gsql": "1dbfbf0d8b718cbb96294c668085c5d61fa2cb09731f94bd21f49ea96f40ca49",
+      "queries/hub_accounts.gsql": "9dd85dab7d064afc5f4299b33f1dd2cca485b980f292a3e260911acd0d9be8ba"
     },
-    "preparation_sha256": "4568ec79224edd619bfe99f40b8e79d2c23d7e51b44cd9024d08ae6869bcae93",
-    "preparation": {
-      "dataset_id": "load_fixture",
-      "prepared_id": null,
-      "dates": {
-        "train": [
-          "2024-07-01"
-        ],
-        "validation": [
-          "2024-10-01"
-        ],
-        "test": [
-          "2025-01-01"
-        ]
+    "dataset_id": "49213c46c111ae5da4aa0e5d681bb45ed2d930427a5106bacc34dabff7e57e2e",
+    "settings": {
+      "source_id": "load_fixture",
+      "scope": {
+        "id": "strict_mule_v2",
+        "unowned": "linked"
       },
-      "seed_limits": {
-        "train": 40,
-        "validation": 16,
-        "test": 16
+      "dataset": {
+        "dates": {
+          "train": [
+            "2024-07-01"
+          ],
+          "validation": [
+            "2024-10-01"
+          ],
+          "test": [
+            "2025-01-01"
+          ]
+        },
+        "seed_limits": {
+          "train": 40,
+          "validation": 16,
+          "test": 16
+        },
+        "seed": 42,
+        "split_seed": 42
       },
-      "evaluation_protocol": "strict_inductive",
-      "scope_id": "strict_mule_v2",
-      "split_seed": 42,
-      "cohort_seed": 42,
-      "label_policy": "graph_observed",
-      "observed_labels": null,
-      "context_storage": "stream",
       "sampler_pools": {
         "roots": {
           "per_relation": 8,
@@ -55,118 +53,12 @@
           "k_assoc": 0,
           "max_history": 2048
         }
-      },
-      "extraction_groups": [
-        "entity_meta",
-        "flow_timing",
-        "message_core",
-        "pair_history",
-        "time_encoding"
-      ],
-      "scope_unowned": "linked",
-      "sqlite_selection": null
+      }
     },
-    "context_storage": "stream",
-    "evaluation_protocol": "strict_inductive",
     "scope_id": "strict_mule_v2"
   },
-  "config": {
-    "dataset_id": "load_fixture",
-    "evaluation_protocol": "strict_inductive",
-    "scope_id": "strict_mule_v2",
-    "scope_unowned": "linked",
-    "create_scope": true,
-    "label_policy": "graph_observed",
-    "reveal_per_split": 20,
-    "context_storage": "stream",
-    "prepare_batch_size": 16,
-    "dates": {
-      "train": [
-        "2024-07-01"
-      ],
-      "validation": [
-        "2024-10-01"
-      ],
-      "test": [
-        "2025-01-01"
-      ]
-    },
-    "seed_limits": {
-      "train": 40,
-      "validation": 16,
-      "test": 16
-    },
-    "seed": 42,
-    "split_seed": 42,
-    "evaluation_unlabeled_limit": 2000,
-    "feature_groups": [
-      "entity_meta",
-      "hub_indicator",
-      "message_core",
-      "time_encoding",
-      "pair_history",
-      "flow_timing",
-      "pool_activity",
-      "pool_internal_inflows"
-    ],
-    "variant": "temporal",
-    "architecture": "split",
-    "slot_sum": true,
-    "fanouts": [
-      16,
-      4
-    ],
-    "sampler": {
-      "recent": 8,
-      "older": 4,
-      "distinct": 4,
-      "associations": 2,
-      "max_history": 2048,
-      "policy": "resample",
-      "children": {
-        "recent": 4,
-        "older": 2,
-        "distinct": 2,
-        "associations": 0,
-        "max_history": 2048
-      },
-      "relation_fanouts": [
-        8,
-        4
-      ],
-      "association_fanout": 1,
-      "association_slots": 2,
-      "backend": "auto",
-      "evaluation_seed": 0
-    },
-    "hidden": 8,
-    "heads": 2,
-    "dropout": 0.0,
-    "epochs": 1,
-    "steps_per_epoch": 2,
-    "patience": 6,
-    "max_rejected_root_fraction": 0.0,
-    "batch_size": 8,
-    "learning_rate": 0.001,
-    "weight_decay": 0.0001,
-    "weight_average_decay": 0.99,
-    "class_prior": 0.001,
-    "positive_weight": "balanced",
-    "device": "cpu",
-    "threads": 1,
-    "deterministic": true,
-    "request_batch_size": 8,
-    "query_concurrency": 16,
-    "context_lru_capacity": 256,
-    "encoding_check_every": 64,
-    "max_query_attempts": 6,
-    "max_outage_s": 900,
-    "prefetch_batches": 2,
-    "checkpoint_every_steps": 0,
-    "log_every_steps": 10
-  },
   "status": "ready",
-  "created_at_utc": "2026-09-27T10:09:48.813431+00:00",
+  "created_at_utc": "2026-10-02T23:29:43.360177+00:00",
   "population_by_split": {
     "train": 120,
     "validation": 40,
@@ -174,7 +66,7 @@
   },
   "population_accounts": 89,
   "accounts_sha256": "43439691189614341eedade34dc93c46ad1557fb485bae11a792bb13feb41325",
-  "cohort": "bounded_internal_deposit_seeds",
+  "account_selection": "bounded_internal_deposit_seeds",
   "observed_labels_sha256": "e6880ee67069ad88c5f499a614da2ade09b773aee95373b71f032d1f5fa68be7",
   "known_mules": {
     "train": 18,
@@ -205,6 +97,5 @@
       "2": 0,
       "3": 0
     }
-  },
-  "cached_contexts": 0
+  }
 }

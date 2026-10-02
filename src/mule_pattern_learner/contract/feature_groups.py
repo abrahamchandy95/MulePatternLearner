@@ -142,9 +142,6 @@ BUILT_IN_GROUPS = (*CORE_GROUPS, *POOL_GROUPS)
 # The model architectures: "tgat" is the graph model (model.tgat.TGAT), "summary" the
 # controls without attention (model.summary_mlp.SummaryMLP).
 ARCHITECTURES = ("tgat", "summary")
-# Each architecture as the input fingerprint records it. Saved models hold the
-# fingerprint, so the graph model keeps the name it had before the layered restructure.
-RECORDED_ARCHITECTURES = {"tgat": "split", "summary": "summary"}
 
 
 @dataclass(frozen=True)
@@ -189,16 +186,12 @@ class FeaturePlan:
     def edge_names(self) -> tuple[str, ...]:
         return self.names("message")
 
-    def fingerprint(self, contract: str | None = None) -> str:
-        """The model inputs: contract, groups, architecture and any pool definitions.
-
-        ``contract`` is the contract fingerprint the inputs are read under, this code's
-        (contract_fingerprint) unless a saved model names the one it was trained under.
-        """
+    def fingerprint(self) -> str:
+        """The model inputs: contract, groups, architecture and any pool definitions."""
         value: dict[str, Any] = {
-            "contract": contract_fingerprint() if contract is None else contract,
+            "contract": contract_fingerprint(),
             "groups": sorted(self.groups),
-            "architecture": RECORDED_ARCHITECTURES[self.architecture],
+            "architecture": self.architecture,
         }
         # The contract leaves the pool groups out, so a plan with one covers them here.
         if set(POOL_GROUPS) & set(self.groups):
