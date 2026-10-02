@@ -2,9 +2,10 @@
 
 Why could the second reference run not detect mules, and what would? This note records
 the study that answered it, between runs 2 and 3 of the [reference runs](reference-run.md).
-Its scripts and notes were kept on the branch `archive/diagnostic-study` and its data
-files outside the repository; everything worth keeping from them is here, in
-[the mule profile](mule-profile.md) and in [the nnPU positive weight](nnpu-positive-weight.md).
+Its scripts, notes and data files stay on the owner's machine, outside the repository,
+under `results/archive/diagnostic-study-2026-09/`; everything worth keeping from them is
+here, in [the mule profile](mule-profile.md) and in
+[the nnPU positive weight](nnpu-positive-weight.md).
 The analyses that should run again whenever the dataset, the features or the model change
 became `mule diagnose` (see [Where the study went](#where-the-study-went)).
 
@@ -249,7 +250,7 @@ These answered a question once and are not rerun:
 | `profile/p1_groups.py` to `p11_misc.py`, `load_messages.py`, `mule_profile.md` | [the mule profile](mule-profile.md) |
 | `nnpu_sim/sim.py`, `grid.py`, `traj.py` | `diagnostics/nnpu_simulation.py`, `mule diagnose nnpu-simulation`, and [the nnPU positive weight](nnpu-positive-weight.md); the live test is the `prior_weight` variant |
 | `mpl_arms/tabular.toml`, `no_internal.toml`, `seed7.toml` | the variants `no_attention` and `drop_pool_internal_inflows`, and the fixed seeds 42, 43 and 44 |
-| `scripts/temporal/simulate_label_reveal.py` | `diagnostics/reveal_spread.py`, `mule diagnose reveal-spread` |
+| `simulate_label_reveal.py`, the repository's script until commit 050ba17 | `diagnostics/reveal_spread.py`, `mule diagnose reveal-spread` |
 
 ### Not carried over
 
@@ -268,7 +269,8 @@ These answered a question once and are not rerun:
 - **The data files** (the feature tables, the raw context rows, the logs and the CSVs):
   they stay on the owner's machine under `results/archive/diagnostic-study-2026-09/`,
   which is not tracked.
-- **`mpl_arms/fake/`**, a test fixture that was never archived.
+- **`mpl_arms/fake/`**, the output of a smoke run on the fake graph, kept with the data
+  files.
 
 ## The figures
 
