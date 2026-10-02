@@ -192,10 +192,10 @@ fixture vertices and removes them again:
 .venv/bin/python -m pytest -m graph_write --allow-graph-writes
 ```
 
-`scripts/render_queries.py` regenerates the context query,
-`scripts/run_experiments.py` runs the control experiments, and
-`scripts/simulate_label_reveal.py` shows how the label reveal varies with its salt; each
-prints its purpose with `--help` without connecting. The one-time schema installer
+`scripts/render_queries.py` regenerates the context queries and
+`scripts/run_experiments.py` runs the control experiments; each prints its purpose with
+`--help` without connecting (how the label reveal varies with its salt is
+`mule diagnose reveal-spread`). The one-time schema installer
 scripts, already run against the live graph, are kept in git history.
 
 ## License

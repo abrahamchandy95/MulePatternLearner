@@ -79,15 +79,17 @@ every mule once per round. The job
 itself, with the configured salt 42, found 27, 11 and 23 mules (train, validation,
 test) discovered before the cutoffs and revealed 20, 11 and 20.
 
-`scripts/simulate_label_reveal.py` reproduces the method with the job's own
-hash. It reads the job's inputs once (read-only, the same query as the check below),
-then runs `plan` from
-[`label_reveal.py`](../src/mule_pattern_learner/reference/label_reveal.py), the
-Python mirror of `reveal_mule_labels`, for many salts and prints the median and 5th to 95th percentile of the mules
-discovered before each cutoff and of those revealed:
+`mule diagnose reveal-spread` reproduces the method with the job's own hash. It reads
+the job's inputs once (read-only, the same query as the check below), then runs `plan`
+from [`label_reveal.py`](../src/mule_pattern_learner/reference/label_reveal.py), the
+Python mirror of `reveal_mule_labels`, for the salts 0 to 999, and writes the mules,
+those discovered before each cutoff and those revealed, per salt and split, to
+`reveal_spread.csv` of the dataset's study in `results/diagnostics/<dataset id>/`. Its
+`report.md` prints the median and 5th to 95th percentile of each beside the configured
+salt's outcome, and `reveal_spread.png` draws them:
 
 ```bash
-python scripts/simulate_label_reveal.py --runs 1000
+mule diagnose reveal-spread
 ```
 
 `tests/integration/test_label_reveal.py` (marker `graph`, read-only) checks the
