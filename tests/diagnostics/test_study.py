@@ -247,3 +247,20 @@ def test_the_analyses_are_named_as_the_command_line_names_them() -> None:
         analyses("graph")
     tables = {name.replace("-", "_") for name in ANALYSES if name != "features"}
     assert tables == set(DIAGNOSTIC_TABLES)
+
+
+def test_an_analysis_that_fails_leaves_the_outcomes_of_those_before_it(
+    studied: tuple[RunConfig, FakeTigerGraph, DatasetPaths, RunPaths, list[TransportConfig]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, _, dataset, run, _ = studied
+
+    def outage(*args: Any) -> pd.DataFrame:
+        raise RuntimeError("TigerGraph is unavailable")
+
+    monkeypatch.setattr(diagnostics_study, "reveal_spread", outage)
+    with pytest.raises(RuntimeError, match="unavailable"):
+        study_of(("univariate", "reveal-spread"), config, dataset, run)
+    paths = DiagnosticsPaths.of(dataset.root.name, run.root.parent.parent)
+    assert set(read_json(paths.study)["analyses"]) == {"features", "univariate"}
+    assert paths.table("univariate").exists() and not paths.report.exists()
