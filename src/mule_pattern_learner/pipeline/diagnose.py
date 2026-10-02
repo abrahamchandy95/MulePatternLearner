@@ -22,7 +22,7 @@ from ..tigergraph.installer import install
 from ..tigergraph.oracle import TigerGraphRevealInputReader
 from ..tigergraph.provenance import verify_frozen_source
 from ..tigergraph.reveal import reveal_parameters
-from ..tigergraph.scope import TigerGraphScope
+from ..tigergraph.scope import TigerGraphScopeReader
 from .connect import Session, context_source
 from .evaluate import SharedTruth
 
@@ -60,8 +60,8 @@ class TigerGraphStudyReader:
         self.executor()
         return self._truth
 
-    def scope(self) -> TigerGraphScope:
-        return TigerGraphScope(self.executor())
+    def scope(self) -> TigerGraphScopeReader:
+        return TigerGraphScopeReader(self.executor())
 
     def contexts(self) -> ContextSource:
         executor = self.executor()

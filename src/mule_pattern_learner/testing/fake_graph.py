@@ -64,16 +64,16 @@ from mule_pattern_learner.testing.builders import (
     synthetic_row,
 )
 from mule_pattern_learner.testing.fake_connection import FakeClient
-from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffs
+from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffReader
 from mule_pattern_learner.tigergraph.gsql_text import (
     definitions,
     parameter_names,
     repository_queries,
 )
-from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
-from mule_pattern_learner.tigergraph.labels import TigerGraphObservedLabels
+from mule_pattern_learner.tigergraph.hubs import TigerGraphHubReader
+from mule_pattern_learner.tigergraph.labels import TigerGraphObservedLabelReader
 from mule_pattern_learner.tigergraph.oracle import REVEAL_INPUTS_QUERY
-from mule_pattern_learner.tigergraph.scope import TigerGraphScope
+from mule_pattern_learner.tigergraph.scope import TigerGraphScopeReader
 
 
 def signature(path: str, name: str) -> frozenset[str]:
@@ -442,10 +442,10 @@ def prepared_graph(
         UNIT_SOURCE,
         dataset,
         {"Account": PREPARED_ACCOUNTS},
-        TigerGraphObservedLabels(),
-        scope=TigerGraphScope(graph),
-        cutoffs=TigerGraphCutoffs(graph),
-        hub_reader=TigerGraphHubs(graph),
+        TigerGraphObservedLabelReader(),
+        scope=TigerGraphScopeReader(graph),
+        cutoffs=TigerGraphCutoffReader(graph),
+        hub_reader=TigerGraphHubReader(graph),
     )
     return graph, dataset
 

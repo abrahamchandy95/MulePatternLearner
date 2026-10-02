@@ -17,10 +17,10 @@ from mule_pattern_learner.testing.builders import (
     unit_config,
 )
 from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
-from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffs
-from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
-from mule_pattern_learner.tigergraph.labels import TigerGraphObservedLabels
-from mule_pattern_learner.tigergraph.scope import TigerGraphScope
+from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffReader
+from mule_pattern_learner.tigergraph.hubs import TigerGraphHubReader
+from mule_pattern_learner.tigergraph.labels import TigerGraphObservedLabelReader
+from mule_pattern_learner.tigergraph.scope import TigerGraphScopeReader
 
 
 def test_the_dataset_id_covers_only_the_dataset_settings() -> None:
@@ -72,10 +72,10 @@ def test_a_dataset_records_its_query_files_by_path_and_passes_its_own_check(
         UNIT_SOURCE,
         dataset,
         {"Account": len(population)},
-        TigerGraphObservedLabels(),
-        scope=TigerGraphScope(executor),
-        cutoffs=TigerGraphCutoffs(executor),
-        hub_reader=TigerGraphHubs(executor),
+        TigerGraphObservedLabelReader(),
+        scope=TigerGraphScopeReader(executor),
+        cutoffs=TigerGraphCutoffReader(executor),
+        hub_reader=TigerGraphHubReader(executor),
     )
     recorded = manifest["source"]["query_hashes"]
     assert set(recorded) == set(QUERY_FILES) == set(data_manifest.query_hashes())
@@ -94,10 +94,10 @@ def test_a_manifest_names_its_dataset_and_the_frozen_source_it_was_prepared_from
         UNIT_SOURCE,
         DatasetPaths(tmp_path / "dataset"),
         {"Account": len(population)},
-        TigerGraphObservedLabels(),
-        scope=TigerGraphScope(executor),
-        cutoffs=TigerGraphCutoffs(executor),
-        hub_reader=TigerGraphHubs(executor),
+        TigerGraphObservedLabelReader(),
+        scope=TigerGraphScopeReader(executor),
+        cutoffs=TigerGraphCutoffReader(executor),
+        hub_reader=TigerGraphHubReader(executor),
     )
     # The dataset id of its recorded settings is the one its directory is named by.
     assert data_manifest.recorded_dataset_id(manifest) == data_manifest.dataset_id(

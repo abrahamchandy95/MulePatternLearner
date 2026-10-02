@@ -7,7 +7,7 @@ from typing import Any
 from mule_pattern_learner.contract.server import POPULATION_QUERY
 from mule_pattern_learner.testing.builders import unit_config
 from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
-from mule_pattern_learner.tigergraph.scope import TigerGraphScope
+from mule_pattern_learner.tigergraph.scope import TigerGraphScopeReader
 
 
 def population_row(account: str, positive: bool, known: int) -> dict[str, Any]:
@@ -26,7 +26,7 @@ def test_the_population_is_read_with_the_labels_revealed_in_the_graph() -> None:
 
     graph = FakeTigerGraph(population=[population_row("A1", True, 5)])
     config = unit_config()
-    frame, _ = select_accounts(TigerGraphScope(graph), config.scope.id, config.dataset)
+    frame, _ = select_accounts(TigerGraphScopeReader(graph), config.scope.id, config.dataset)
     seen = [params["include_observed"] for _, params in graph.calls]
     assert graph.names() == [POPULATION_QUERY] and seen == [True]
     assert frame.in_marginal.tolist() == [True]

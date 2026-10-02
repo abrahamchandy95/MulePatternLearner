@@ -1,10 +1,10 @@
 """Oracle truth read from the graph, for evaluation and diagnostics; training never imports it.
 
-TigerGraphTruth reads each account's ground truth for the audits. TigerGraphRevealInputReader
-reads what the one-time reveal decides from (the true mules, their draw keys and their
-fraud-labelled inflows), so diagnostics can replay the reveal offline; both read the
-oracle, so they live here, out of training's reach (the import contract "Training never
-reads ground truth").
+TigerGraphTruthReader reads each account's ground truth for the audits.
+TigerGraphRevealInputReader reads what the one-time reveal decides from (the true mules,
+their draw keys and their fraud-labelled inflows), so diagnostics can replay the reveal
+offline; both read the oracle, so they live here, out of training's reach (the import
+contract "Training never reads ground truth").
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ INTERPRET QUERY (STRING scope_id) FOR GRAPH {GRAPH_NAME} {{
 
 
 @dataclass
-class TigerGraphTruth:
+class TigerGraphTruthReader:
     """Oracle truth paged from the graph's label contract, for evaluation only.
 
     contract.server.TRUTH_QUERY is the oracle endpoint; training never calls it. An

@@ -19,7 +19,7 @@ from mule_pattern_learner.artifacts import (
 from mule_pattern_learner.cli import build_parser
 from mule_pattern_learner.config import DEFAULT_CONFIG, TransportConfig
 from mule_pattern_learner.data.manifest import dataset_id
-from mule_pattern_learner.evaluation.truth import ParquetTruth
+from mule_pattern_learner.evaluation.truth import ParquetTruthReader
 from mule_pattern_learner.inference.saved_model import SavedModel
 from mule_pattern_learner.paths import BASELINE_VARIANT, RESULTS_DIR, DatasetPaths, RunPaths
 from mule_pattern_learner.pipeline import connect as pipeline_connect
@@ -201,7 +201,7 @@ def test_train_then_audit_write_exactly_the_files_of_the_run_and_dataset_tables(
     truth["label_source"] = "phantomledger_role"
     truth_path = tmp_path / "truth.parquet"
     truth.to_parquet(truth_path, index=False)
-    audits = evaluate_run(output, truth=ParquetTruth(truth_path), data=data)
+    audits = evaluate_run(output, truth=ParquetTruthReader(truth_path), data=data)
     assert [audits[split]["rejected_accounts"] for split in ("validation", "test")] == [0, 0]
     audited = {
         f"audit/{split}.{kind}" for split in ("validation", "test") for kind in ("json", "parquet")

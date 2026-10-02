@@ -24,14 +24,14 @@ from mule_pattern_learner.contract.server import (
 )
 from mule_pattern_learner.data.splits import resolve_cutoff
 from mule_pattern_learner.tigergraph.context_query import validate_context
-from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffs
+from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffReader
 from mule_pattern_learner.tigergraph.executor import TigerGraphExecutor, checked_rows
 from mule_pattern_learner.tigergraph.installer import (
     ANALYTICS_QUERY_FILES,
     query_problems,
     verify_sources,
 )
-from mule_pattern_learner.tigergraph.scope import TigerGraphScope
+from mule_pattern_learner.tigergraph.scope import TigerGraphScopeReader
 
 pytestmark = pytest.mark.graph
 
@@ -64,8 +64,10 @@ def sampled(graph: TigerGraphExecutor) -> tuple[ContextKey, dict[str, Any]]:
     numpy's fourier64.
     """
     (date,) = DEFAULT_CONFIG.dataset.dates.test
-    cutoff_seq, cutoff_ms = resolve_cutoff(TigerGraphCutoffs(graph), date)
-    pages = TigerGraphScope(graph).population_pages(DEFAULT_CONFIG.scope.id, include_observed=False)
+    cutoff_seq, cutoff_ms = resolve_cutoff(TigerGraphCutoffReader(graph), date)
+    pages = TigerGraphScopeReader(graph).population_pages(
+        DEFAULT_CONFIG.scope.id, include_observed=False
+    )
     accounts = [row["account_id"] for row in next(iter(pages))[:SEARCHED]]
     for account in accounts:
         key = ContextKey("Account", account, cutoff_seq, cutoff_ms)

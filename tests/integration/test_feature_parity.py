@@ -41,11 +41,11 @@ from mule_pattern_learner.reference.gsql_features import (
     visible_history,
 )
 from mule_pattern_learner.tigergraph.context_query import validate_context
-from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffs
+from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffReader
 from mule_pattern_learner.tigergraph.executor import TigerGraphExecutor, checked_rows
 from mule_pattern_learner.tigergraph.installer import query_problems
 from mule_pattern_learner.tigergraph.render import as_interpreted
-from mule_pattern_learner.tigergraph.scope import TigerGraphScope
+from mule_pattern_learner.tigergraph.scope import TigerGraphScopeReader
 
 pytestmark = pytest.mark.graph
 
@@ -112,7 +112,9 @@ def audit_history(graph: TigerGraphExecutor, key: ContextKey) -> list[dict[str, 
 @pytest.fixture(scope="module")
 def population(graph: TigerGraphExecutor) -> list[dict[str, Any]]:
     """The first scope accounts, read without labels."""
-    pages = TigerGraphScope(graph).population_pages(DEFAULT_CONFIG.scope.id, include_observed=False)
+    pages = TigerGraphScopeReader(graph).population_pages(
+        DEFAULT_CONFIG.scope.id, include_observed=False
+    )
     return next(iter(pages))[:ACCOUNTS]
 
 
@@ -120,7 +122,7 @@ def population(graph: TigerGraphExecutor) -> list[dict[str, Any]]:
 def keys(graph: TigerGraphExecutor, population: list[dict[str, Any]]) -> list[ContextKey]:
     """The first scope accounts at the test cutoff, unscoped."""
     (date,) = DEFAULT_CONFIG.dataset.dates.test
-    seq, ms = resolve_cutoff(TigerGraphCutoffs(graph), date)
+    seq, ms = resolve_cutoff(TigerGraphCutoffReader(graph), date)
     return [ContextKey("Account", row["account_id"], seq, ms) for row in population]
 
 

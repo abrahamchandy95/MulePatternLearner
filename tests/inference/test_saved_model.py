@@ -46,10 +46,10 @@ from mule_pattern_learner.paths import DATA_DIR, DatasetPaths, RunPaths
 from mule_pattern_learner.testing.builders import neighbourhood, scope_population
 from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
-from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffs
-from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
-from mule_pattern_learner.tigergraph.labels import TigerGraphObservedLabels
-from mule_pattern_learner.tigergraph.scope import TigerGraphScope
+from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffReader
+from mule_pattern_learner.tigergraph.hubs import TigerGraphHubReader
+from mule_pattern_learner.tigergraph.labels import TigerGraphObservedLabelReader
+from mule_pattern_learner.tigergraph.scope import TigerGraphScopeReader
 from mule_pattern_learner.training.trainer import train
 
 FIXTURES = Path(__file__).parent / "fixtures" / "saved_models"
@@ -231,10 +231,10 @@ def test_the_same_settings_prepare_the_dataset_of_the_old_code(tmp_path: Path) -
         SOURCE,
         dataset,
         {"Account": 200},
-        TigerGraphObservedLabels(),
-        scope=TigerGraphScope(executor),
-        cutoffs=TigerGraphCutoffs(executor),
-        hub_reader=TigerGraphHubs(executor),
+        TigerGraphObservedLabelReader(),
+        scope=TigerGraphScopeReader(executor),
+        cutoffs=TigerGraphCutoffReader(executor),
+        hub_reader=TigerGraphHubReader(executor),
     )
     fixture = DatasetPaths(FIXTURES / "dataset")
     for have, want in (

@@ -26,10 +26,10 @@ from mule_pattern_learner.testing.builders import (
     unit_config,
 )
 from mule_pattern_learner.testing.fake_graph import FakeSource, FakeTigerGraph
-from mule_pattern_learner.tigergraph.scope import TigerGraphScope
+from mule_pattern_learner.tigergraph.scope import TigerGraphScopeReader
 
 
-def split_scope(accounts: pd.DataFrame, split: str) -> TigerGraphScope:
+def split_scope(accounts: pd.DataFrame, split: str) -> TigerGraphScopeReader:
     """A scope whose population is these accounts, all in the split's partition."""
     rows = [
         {
@@ -41,7 +41,7 @@ def split_scope(accounts: pd.DataFrame, split: str) -> TigerGraphScope:
         }
         for account in accounts.account_id
     ]
-    return TigerGraphScope(FakeTigerGraph(population=rows))
+    return TigerGraphScopeReader(FakeTigerGraph(population=rows))
 
 
 def truth_of(accounts: pd.DataFrame) -> pd.DataFrame:
@@ -163,7 +163,7 @@ def test_the_population_is_the_split_before_its_cutoff_with_what_the_graph_revea
         member("D", 3, cutoff, 0),  # first seen at the cutoff: not in the population
         member("E", 2, 1, 5),  # a validation account
     ]
-    scope = TigerGraphScope(FakeTigerGraph(population=rows))
+    scope = TigerGraphScopeReader(FakeTigerGraph(population=rows))
     population = audit_population(scope, "unit_scope", "test", "2025-01-01")
     assert population.to_dict("list") == {
         "account_id": ["A", "B", "C"],

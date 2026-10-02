@@ -31,10 +31,10 @@ from mule_pattern_learner.testing.builders import (
 from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
 from mule_pattern_learner.tigergraph import gsql_text
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
-from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffs
-from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
-from mule_pattern_learner.tigergraph.labels import TigerGraphObservedLabels
-from mule_pattern_learner.tigergraph.scope import TigerGraphScope
+from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffReader
+from mule_pattern_learner.tigergraph.hubs import TigerGraphHubReader
+from mule_pattern_learner.tigergraph.labels import TigerGraphObservedLabelReader
+from mule_pattern_learner.tigergraph.scope import TigerGraphScopeReader
 
 CONFIG = unit_config(training={"batch_size": 32}, sampler={"fanouts": [8, 2]})
 
@@ -48,10 +48,10 @@ def prepared(data: Path, config: RunConfig) -> tuple[DatasetPaths, FakeTigerGrap
         UNIT_SOURCE,
         dataset,
         {"Account": 1000},
-        TigerGraphObservedLabels(),
-        scope=TigerGraphScope(fake),
-        cutoffs=TigerGraphCutoffs(fake),
-        hub_reader=TigerGraphHubs(fake),
+        TigerGraphObservedLabelReader(),
+        scope=TigerGraphScopeReader(fake),
+        cutoffs=TigerGraphCutoffReader(fake),
+        hub_reader=TigerGraphHubReader(fake),
     )
     return dataset, fake
 

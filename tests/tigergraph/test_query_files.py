@@ -28,7 +28,7 @@ from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
 from mule_pattern_learner.tigergraph import gsql_text
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
 from mule_pattern_learner.tigergraph.gsql_text import definitions, parameter_names
-from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
+from mule_pattern_learner.tigergraph.hubs import TigerGraphHubReader
 from mule_pattern_learner.tigergraph.render import render_analytics_query
 
 GSQL = GSQL_DIR / "queries"
@@ -90,7 +90,7 @@ def test_sent_parameters_match_the_repository_query_signatures() -> None:
         store.close()
         assert len(server.calls) == 2 and all(set(call) == context for _, call in server.calls)
     hubs = FakeTigerGraph(answers={HUB_QUERY: lambda params: hub_rows([1000, 2000])})
-    TigerGraphHubs(hubs).hub_registry([1000, 2000], threshold=1024)
+    TigerGraphHubReader(hubs).hub_registry([1000, 2000], threshold=1024)
     assert set(hubs.calls[0][1]) == signature("queries/hub_accounts.gsql", HUB_QUERY)
     creation = signature("queries/training_scope.gsql", CREATE_SCOPE_QUERY)
     assert {"scope_id", "source_id", "split_seed", "unowned_policy"} <= creation

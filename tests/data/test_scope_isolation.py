@@ -44,11 +44,11 @@ from mule_pattern_learner.testing.builders import (
 )
 from mule_pattern_learner.testing.fake_graph import FakeTigerGraph, page
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher, validate_context
-from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffs
-from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
-from mule_pattern_learner.tigergraph.labels import TigerGraphObservedLabels
-from mule_pattern_learner.tigergraph.oracle import TigerGraphTruth
-from mule_pattern_learner.tigergraph.scope import TigerGraphScope
+from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffReader
+from mule_pattern_learner.tigergraph.hubs import TigerGraphHubReader
+from mule_pattern_learner.tigergraph.labels import TigerGraphObservedLabelReader
+from mule_pattern_learner.tigergraph.oracle import TigerGraphTruthReader
+from mule_pattern_learner.tigergraph.scope import TigerGraphScopeReader
 from mule_pattern_learner.training.schedule import pu_batches
 
 
@@ -149,8 +149,8 @@ def test_new_account_scoring_needs_neither_training_dataset_nor_labels(tmp_path:
         output,
         rejected_output=tmp_path / "new_rejected.txt",
         contexts=context_source(executor, config),
-        cutoffs=TigerGraphCutoffs(executor),
-        hub_reader=TigerGraphHubs(executor),
+        cutoffs=TigerGraphCutoffReader(executor),
+        hub_reader=TigerGraphHubReader(executor),
     )
     frame = pd.read_parquet(output)
     assert result["accounts"] == len(frame) == 13
@@ -190,7 +190,7 @@ def test_bounded_seed_reservoir_does_not_enrich_the_nnpu_marginal() -> None:
         seed_limits=SeedLimits(10, 10, 10),
         seed=42,
     )
-    selected, counts = select_accounts(TigerGraphScope(graph), "strict", dataset)
+    selected, counts = select_accounts(TigerGraphScopeReader(graph), "strict", dataset)
     # Two pages of 10,000 accounts, with the labels revealed in the graph.
     assert [(name, p["after_id"], p["include_observed"]) for name, p in graph.calls] == [
         (POPULATION_QUERY, "", True),
@@ -222,7 +222,7 @@ def test_the_graph_truth_pages_the_label_contract() -> None:
         for i in range(10050)
     ]
     graph = FakeTigerGraph(truth=rows)
-    truth = TigerGraphTruth(graph).read()
+    truth = TigerGraphTruthReader(graph).read()
     assert graph.calls == [
         (TRUTH_QUERY, {"after_id": "", "batch_size": 10000}),
         (TRUTH_QUERY, {"after_id": "A09999", "batch_size": 10000}),
@@ -238,7 +238,9 @@ def test_the_graph_truth_pages_the_label_contract() -> None:
     def wrapped(params: dict[str, Any]) -> list[dict[str, Any]]:
         return [{"status": "ok"}, {"accounts": [{"attributes": r} for r in page(rows, params)]}]
 
-    assert TigerGraphTruth(FakeTigerGraph(answers={TRUTH_QUERY: wrapped})).read().equals(truth)
+    assert (
+        TigerGraphTruthReader(FakeTigerGraph(answers={TRUTH_QUERY: wrapped})).read().equals(truth)
+    )
 
     unordered = [
         {"account_id": a, "is_mule": 0, "mule_label_known": True, "mule_ring_id": -1} for a in "BA"
@@ -247,10 +249,10 @@ def test_the_graph_truth_pages_the_label_contract() -> None:
         answers={TRUTH_QUERY: lambda p: [{"status": "ok", "accounts": unordered}]}
     )
     with pytest.raises(ValueError, match="not strictly increasing"):
-        TigerGraphTruth(graph).read()
+        TigerGraphTruthReader(graph).read()
     silent = FakeTigerGraph(answers={TRUTH_QUERY: lambda p: [{"status": "ok"}]})
     with pytest.raises(ValueError, match="accounts missing from response"):
-        TigerGraphTruth(silent).read()
+        TigerGraphTruthReader(silent).read()
 
 
 def test_strict_preparation_and_nnpu_use_the_correct_phase_end_to_end(tmp_path: Path) -> None:
@@ -279,10 +281,10 @@ def test_strict_preparation_and_nnpu_use_the_correct_phase_end_to_end(tmp_path: 
         UNIT_SOURCE,
         dataset,
         {"Account": len(rows)},
-        TigerGraphObservedLabels(),
-        scope=TigerGraphScope(executor),
-        cutoffs=TigerGraphCutoffs(executor),
-        hub_reader=TigerGraphHubs(executor),
+        TigerGraphObservedLabelReader(),
+        scope=TigerGraphScopeReader(executor),
+        cutoffs=TigerGraphCutoffReader(executor),
+        hub_reader=TigerGraphHubReader(executor),
     )
     assert manifest["status"] == "ready" and not executor.requested
     source = ContextSource(

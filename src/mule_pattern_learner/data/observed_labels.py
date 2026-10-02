@@ -1,7 +1,8 @@
 """Observed labels: the revealed positives and their discovery times, never truth.
 
-Every run reads the labels revealed in the graph (tigergraph.labels.TigerGraphObservedLabels,
-the ports.ObservedLabelReader that prepare() is given).
+Every run reads the labels revealed in the graph
+(tigergraph.labels.TigerGraphObservedLabelReader, the ports.ObservedLabelReader that
+prepare() is given).
 """
 
 from __future__ import annotations

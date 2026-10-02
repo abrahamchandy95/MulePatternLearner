@@ -15,8 +15,8 @@ from mule_pattern_learner.inference import score_accounts
 from mule_pattern_learner.inference.rejections import rejection_summary
 from mule_pattern_learner.testing.builders import HUB, RUNTIME_CHANGES, saved_model, unit_config
 from mule_pattern_learner.testing.fake_graph import FakeSource, FakeTigerGraph
-from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffs
-from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
+from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffReader
+from mule_pattern_learner.tigergraph.hubs import TigerGraphHubReader
 
 
 def scoring_graph() -> FakeTigerGraph:
@@ -40,8 +40,8 @@ def test_score_new_writes_only_ok_rows_and_lists_rejected_ids(tmp_path: Path) ->
         "2025-01-01",
         output,
         rejected_output=rejected_file,
-        cutoffs=TigerGraphCutoffs(executor),
-        hub_reader=TigerGraphHubs(executor),
+        cutoffs=TigerGraphCutoffReader(executor),
+        hub_reader=TigerGraphHubReader(executor),
         contexts=source,
     )
     frame = pd.read_parquet(output)
@@ -70,8 +70,8 @@ def test_score_new_keeps_float64_resolution_near_one(tmp_path: Path) -> None:
         "2025-01-01",
         output,
         rejected_output=tmp_path / "scores_rejected.txt",
-        cutoffs=TigerGraphCutoffs(scoring_graph()),
-        hub_reader=TigerGraphHubs(scoring_graph()),
+        cutoffs=TigerGraphCutoffReader(scoring_graph()),
+        hub_reader=TigerGraphHubReader(scoring_graph()),
         contexts=FakeSource(config),
     )
     assert pq.read_schema(output).field("score").type == pa.float64()
@@ -92,8 +92,8 @@ def test_score_new_reports_root_and_child_rejections_separately(tmp_path: Path) 
         "2025-01-01",
         tmp_path / "scores.parquet",
         rejected_output=tmp_path / "scores_rejected.txt",
-        cutoffs=TigerGraphCutoffs(scoring_graph()),
-        hub_reader=TigerGraphHubs(scoring_graph()),
+        cutoffs=TigerGraphCutoffReader(scoring_graph()),
+        hub_reader=TigerGraphHubReader(scoring_graph()),
         contexts=source,
     )
     assert result["accounts"] == 12 and result["rejected"] == 1
