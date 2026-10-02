@@ -17,44 +17,10 @@ from ..config import ScopeConfig, SplitDates
 from ..contract.clock import timestamp
 from ..contract.discovery import REVEAL_DEFAULTS
 from ..contract.graph_schema import SPLIT_PHASE
-from ..contract.server import GRAPH_NAME, REVEAL_QUERY
+from ..contract.server import REVEAL_QUERY
 from ..runtime.progress import emit
-from .executor import ConnectionExecutor, QueryExecutor, merged_rows
+from .executor import QueryExecutor, merged_rows
 from .labels import validate_supervision
-
-# Read-only interpreted query: every input of the reveal, with the job's traversals, for
-# its Python mirror (reference.label_reveal.plan). The first result holds the mules
-# (split, draw key, first observation and the "event_seq:label_available_ts_ms"
-# fraud-labelled Zelle inflows), the next two the Zelle and payment events between two
-# mules.
-REVEAL_INPUTS_QUERY = f"""
-INTERPRET QUERY (STRING scope_id) FOR GRAPH {GRAPH_NAME} {{
-  MaxAccum<INT> @part;
-  MinAccum<INT> @key;
-  OrAccum @mule;
-  ListAccum<STRING> @inflows;
-  SetAccum<STRING> @ends;
-  Scopes = {{Temporal_Training_Scope.*}};
-  Ready = SELECT r FROM Scopes:r WHERE r.scope_id == scope_id;
-  M = {{Account.*}};
-  M = SELECT a FROM M:a WHERE a.is_mule == 1 AND NOT a.is_external POST-ACCUM a.@mule += TRUE;
-  S = SELECT a FROM Ready:r -(Training_Scope_Has_Entity>:e)- Account:a WHERE a.@mule ACCUM a.@part += e.partition;
-  K1 = SELECT t FROM M:a -(Account_Initiated_Transaction>:e)- Payment_Transaction:t ACCUM a.@key += t.event_seq;
-  K2 = SELECT z FROM M:a -(Account_Sent_Zelle_Transfer>:e)- Zelle_Transfer:z ACCUM a.@key += z.event_seq;
-  F = SELECT z FROM M:a -(Account_Received_Zelle_Transfer>:e)- Zelle_Transfer:z
-      WHERE z.fraud_label == 1 AND z.label_known
-      ACCUM a.@inflows += (to_string(z.event_seq) + ":" + to_string(z.label_available_ts_ms));
-  LZ = SELECT z FROM M:a -((Account_Sent_Zelle_Transfer>|Account_Received_Zelle_Transfer>):e)- Zelle_Transfer:z
-       ACCUM z.@ends += a.id;
-  LP = SELECT t FROM M:a -((Account_Initiated_Transaction>|Account_Received_Transaction>):e)- Payment_Transaction:t
-       ACCUM t.@ends += a.id;
-  LZ = SELECT z FROM LZ:z WHERE z.@ends.size() > 1;
-  LP = SELECT t FROM LP:t WHERE t.@ends.size() > 1;
-  PRINT M[M.id, M.first_seen_ts_ms, M.@part, M.@key, M.@inflows];
-  PRINT LZ[LZ.event_seq, LZ.event_ts_ms, LZ.@ends] AS zelle_links;
-  PRINT LP[LP.event_seq, LP.event_ts_ms, LP.@ends] AS payment_links;
-}}
-"""
 
 
 def reveal_parameters(scope: ScopeConfig, dates: SplitDates, *, apply: bool) -> dict[str, Any]:
@@ -123,23 +89,3 @@ def ensure_revealed_labels(
     }
     emit({"event": "reveal", **summary})
     return summary
-
-
-class TigerGraphRevealInputReader:
-    """The reveal's inputs in a scope, read through the executor with REVEAL_INPUTS_QUERY.
-
-    Read-only: the interpreted query writes nothing, and the job itself never runs.
-    diagnostics.reveal_spread replays the job's mirror on these rows over many salts.
-    """
-
-    def __init__(self, executor: ConnectionExecutor) -> None:
-        self.executor = executor
-
-    def read(self, scope_id: str) -> list[dict[str, Any]]:
-        rows = self.executor.call(
-            lambda conn: conn.runInterpretedQuery(REVEAL_INPUTS_QUERY, {"scope_id": scope_id}),
-            what="reveal inputs",
-        )
-        if not isinstance(rows, list) or not any("M" in row for row in rows):
-            raise ValueError("The reveal's inputs query returned no mules result")
-        return rows

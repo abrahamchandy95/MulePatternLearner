@@ -72,7 +72,7 @@ from mule_pattern_learner.tigergraph.gsql_text import (
 )
 from mule_pattern_learner.tigergraph.hubs import TigerGraphHubs
 from mule_pattern_learner.tigergraph.labels import TigerGraphObservedLabels
-from mule_pattern_learner.tigergraph.reveal import REVEAL_INPUTS_QUERY
+from mule_pattern_learner.tigergraph.oracle import REVEAL_INPUTS_QUERY
 from mule_pattern_learner.tigergraph.scope import TigerGraphScope
 
 
