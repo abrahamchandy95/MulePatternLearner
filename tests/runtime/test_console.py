@@ -116,10 +116,8 @@ def records(run: Path) -> list[tuple[dict[str, Any], str | None]]:
             "Dropped 2 retired queries: old_a, old_b",
         ),
         ({"event": "drop_retired", "dropped": []}, None),
-        (
-            {"event": "scope", "scope": "strict_mule_v2", "unowned_members": {"gl": 9}},
-            "Scope strict_mule_v2 is in place",
-        ),
+        # A scope found in place, or created, and the hub registry show nothing.
+        ({"event": "scope", "scope": "strict_mule_v2", "unowned_members": {"gl": 9}}, None),
         (
             {"event": "scope", "scope": "strict_mule_v2", "creating": True},
             "Creating scope strict_mule_v2 on TigerGraph...",
@@ -135,10 +133,7 @@ def records(run: Path) -> list[tuple[dict[str, Any], str | None]]:
             },
             "Known mules already revealed on TigerGraph: 51",
         ),
-        (
-            {"event": "hubs", "hub_counts": {"101": {"1": 3, "2": 1}, "102": {"1": 2, "2": 0}}},
-            "Hub registry: 6 hub rows over 2 cutoffs",
-        ),
+        ({"event": "hubs", "hub_counts": {"101": {"1": 3, "2": 1}, "102": {"1": 2, "2": 0}}}, None),
         (
             {
                 "event": "dataset",

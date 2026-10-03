@@ -244,11 +244,10 @@ def _drop_retired(record: Mapping[str, Any]) -> str | None:
 
 
 def _scope(record: Mapping[str, Any]) -> str | None:
+    # A scope found in place, or the end of its creation, adds nothing to read.
     if record.get("creating"):
         return f"Creating scope {record['scope']} on TigerGraph..."
-    if record.get("created"):
-        return None
-    return f"Scope {record['scope']} is in place"
+    return None
 
 
 def _reveal(record: Mapping[str, Any]) -> str:
@@ -264,12 +263,6 @@ def _reveal(record: Mapping[str, Any]) -> str:
     if short:
         line += f"; fewer than the budget were discovered by the cutoff of {', '.join(short)}"
     return line
-
-
-def _hubs(record: Mapping[str, Any]) -> str:
-    counts = record["hub_counts"]
-    hubs = sum(int(n) for phases in counts.values() for n in phases.values())
-    return f"Hub registry: {plural(hubs, 'hub row')} over {plural(len(counts), 'cutoff')}"
 
 
 def _dataset(record: Mapping[str, Any]) -> str:
@@ -454,7 +447,7 @@ LINES: dict[str, Line] = {
     "drop_retired": _drop_retired,
     "scope": _scope,
     "reveal": _reveal,
-    "hubs": _hubs,
+    "hubs": _nothing,
     "dataset": _dataset,
     "already_complete": _already_complete,
     "already_audited": _already_audited,
