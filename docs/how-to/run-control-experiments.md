@@ -44,11 +44,12 @@ finishes ("baseline seed 43 trained: best epoch 5, validation proxy AP 0.566, 58
 TigerGraph outage (the retry budget ran out while the graph was unavailable) is a
 `suite_stopped` event and stops the training and audits, since every later run would fail
 the same way. The suite's own events are recorded in
-`results/experiments/<suite>/events.jsonl`, each run's in its own. The script ends with
-how the suite did, the runs' errors, the top ten variants ranked by their validation
-audit AP as `report.md` ranks them (with the delta from the baseline and the test AP) and
-where the report is, and exits 1 unless every run is trained and audited without an
-error. A run whose figures failed after its numbers were saved stays complete in the
+`results/experiments/<suite>/events.jsonl`, with the install and connecting that come
+before preparation; preparation's are in the dataset's, and each run's in its own. The
+script ends with how the suite did, the runs' errors, the top ten variants ranked by
+their validation audit AP as `report.md` ranks them (with the delta from the baseline
+and the test AP) and where the report is, and exits 1 unless every run is trained and
+audited without an error. A run whose figures failed after its numbers were saved stays complete in the
 tables, with its error beside it; `mule report results/<variant>/seed-<n>` redraws them.
 Run the script again to finish: complete runs are kept.
 
