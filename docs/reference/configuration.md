@@ -135,7 +135,7 @@ A group's dependencies must come with it (`pool_activity` reads `pair_history` a
 |---|---|---|
 | `training.seed` | `42` | Seed of the epoch schedules, the model's initial weights and every step's draws |
 | `training.epochs` | `30` | Most epochs a run trains |
-| `training.steps_per_epoch` | `100` | Steps per epoch; `null` trains on every marginal account of an epoch |
+| `training.steps_per_epoch` | `100` | Steps per epoch of each train cutoff (the built-in run has one); `null` trains on every marginal account of an epoch |
 | `training.batch_size` | `64` | Roots per step (1 to 128): a quarter observed positives, the rest from the marginal |
 | `training.patience` | `6` | Epochs without a better validation AP before training stops; 0 never stops early |
 | `training.learning_rate` | `0.001` | AdamW learning rate |

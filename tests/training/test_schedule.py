@@ -11,6 +11,7 @@ from mule_pattern_learner.training.schedule import (
     epoch_schedule,
     evaluation_indices,
     pu_batches,
+    schedule_steps,
     step_seed,
 )
 
@@ -57,6 +58,25 @@ def test_epoch_schedule_equals_lazy_pu_batches_and_leaves_the_same_generator_sta
         assert (step.step, step.date, step.seed) == (index, date, step_seed(5, 2, index))
         assert np.array_equal(step.indices, np.r_[positives, marginal])
     assert lazy_rng.bit_generator.state == eager_rng.bit_generator.state
+
+
+def test_the_steps_of_an_epoch_are_counted_without_drawing_its_schedule() -> None:
+    observed = np.zeros(100, dtype=bool)
+    observed[:9] = True
+    samples = [
+        PUSample("a", np.arange(10, 60), observed, np.arange(0, 5)),
+        PUSample("b", np.arange(60, 100), observed, np.arange(5, 9)),
+    ]
+    rng = np.random.default_rng(11)
+    for batch_size in (2, 8, 16, 64):
+        for limit in (None, 1, 3, 100):
+            state = rng.bit_generator.state
+            counted = schedule_steps(samples, batch_size, limit)
+            assert rng.bit_generator.state == state
+            drawn = epoch_schedule(samples, rng, batch_size, epoch=0, seed=5, max_steps=limit)
+            assert counted == len(drawn), (batch_size, limit)
+    # The limit is each cutoff's, so two cutoffs of 3 steps make an epoch of 6.
+    assert schedule_steps(samples, 8, 3) == 6
 
 
 def test_nnpu_draws_only_known_positives_and_covers_the_label_blind_marginal() -> None:

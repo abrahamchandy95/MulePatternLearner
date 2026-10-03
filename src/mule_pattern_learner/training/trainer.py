@@ -89,6 +89,7 @@ from .schedule import (
     TrainingStep,
     epoch_schedule,
     evaluation_indices,
+    schedule_steps,
 )
 from .summary import host_settings, prediction_frame, provenance, run_summary
 
@@ -433,6 +434,12 @@ class _TrainingRun:
                     "stopped": self.stopped,
                     "epochs": self.training_config.epochs,
                     "steps_per_epoch": self.training_config.steps_per_epoch,
+                    # The steps each epoch's schedule takes, which the plan's line gives.
+                    "steps": schedule_steps(
+                        self.training,
+                        self.training_config.batch_size,
+                        self.training_config.steps_per_epoch,
+                    ),
                     "patience": self.training_config.patience,
                     "prefetch_batches": self.prefetch,
                     "max_rejected_root_fraction": self.limit,
