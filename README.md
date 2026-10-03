@@ -108,7 +108,8 @@ analysis.
 ## Starting again on the CUDA host
 
 This code reads no dataset or model that earlier code wrote, so a host that trained with
-it starts from scratch, with its `data/` and `results/` empty or moved aside:
+it starts from scratch, with its `data/` and `results/` empty or moved aside, but for
+`results/archive/`, which holds the archived diagnostic study and is never read:
 
 1. Pull `main` (`git switch main && git pull`) and reinstall with the CUDA extra
    ([Setup](#setup)).
@@ -128,6 +129,15 @@ it starts from scratch, with its `data/` and `results/` empty or moved aside:
 7. `mule diagnose`. Its first run installs the analytics queries, an install of the
    order of 50 minutes within the same 90-minute wait; if that runs out, run `mule
    diagnose` again once the compilation has finished.
+
+The earlier code is commit 08b487e, which `main`'s history keeps. It calls the old query
+names, so it runs only until step 4. The owner retrains from scratch, so this procedure
+compares nothing with it; a comparison of the two on the graph would have to run before
+step 4, while both sets of queries are installed. Its outputs lie in folders this code
+never writes (`models/`, `artifacts/`, `outputs/`, `runs/`, `logs/`, `docs/experiments/`
+and `*.sqlite` files), which `.gitignore` still hides so that nothing of them is
+committed: move what you keep out of the repository, or under `results/archive/`, then
+drop their lines from `.gitignore`.
 
 [Train and evaluate](docs/how-to/train-and-evaluate.md#on-the-cuda-host) walks through
 each step.
