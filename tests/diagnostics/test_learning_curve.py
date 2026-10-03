@@ -1,4 +1,4 @@
-"""The label-count curve, on a synthetic feature table."""
+"""The learning curve, on a synthetic feature table."""
 
 from __future__ import annotations
 

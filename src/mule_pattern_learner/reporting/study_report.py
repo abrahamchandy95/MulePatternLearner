@@ -33,7 +33,7 @@ from .diagnostics import (
     plot_ap_concentration,
     plot_baselines,
     plot_drift,
-    plot_label_curve,
+    plot_learning_curve,
     plot_nnpu_simulation,
     plot_proxy_validity,
     plot_reveal_spread,
@@ -58,7 +58,7 @@ from .style import PANEL, estimate, number
 # The figures of a diagnostic study, and what its report.md calls them.
 DIAGNOSTICS_FIGURES = {
     "baselines": "Each baseline's audit AP beside the run's",
-    "label_curve": "Audit AP against the oracle-labelled train mules a learner was fitted on",
+    "learning_curve": "Audit AP against the oracle-labelled train mules a learner was fitted on",
     "univariate_auc": "Each feature's ROC AUC alone",
     "drift": "The non-mules' feature drift from the train cutoff",
     "ap_concentration": "How few mules make the audit AP",
@@ -70,7 +70,7 @@ DIAGNOSTICS_FIGURES = {
 # The figures each analysis' table draws.
 ANALYSIS_FIGURES = {
     "baselines": ("baselines",),
-    "learning_curve": ("label_curve",),
+    "learning_curve": ("learning_curve",),
     "univariate": ("univariate_auc",),
     "drift": ("drift",),
     "subgroups": ("ap_concentration", "ring_coverage"),
@@ -138,11 +138,11 @@ def study_drawings(files: StudyFiles) -> dict[str, tuple[Drawing, tuple[float, f
         )
     if "learning_curve" in tables:
         table = tables["learning_curve"]
-        drawings["label_curve"] = (
+        drawings["learning_curve"] = (
             paired(
                 (
-                    partial(plot_label_curve, table=table, split="validation"),
-                    partial(plot_label_curve, table=table, split="test"),
+                    partial(plot_learning_curve, table=table, split="validation"),
+                    partial(plot_learning_curve, table=table, split="test"),
                 ),
                 stacked=True,
             ),
@@ -277,7 +277,7 @@ def baselines_section(home: Reported, frame: pd.DataFrame) -> list[str]:
 
 
 def curve_section(home: Reported, frame: pd.DataFrame) -> list[str]:
-    """report.md's lines on the label-count curve: the mean AP and ROC AUC of each count."""
+    """report.md's lines on the learning curve: the mean AP and ROC AUC of each count."""
     rows = []
     learners = [m for m in ("lr", "hgb", "model") if (frame.model == m).any()]
     for model in learners:
@@ -293,7 +293,7 @@ def curve_section(home: Reported, frame: pd.DataFrame) -> list[str]:
     header = ["Learner", "Labels", "Train mules", "Draws", "Validation AP", "Validation ROC AUC"]
     header += ["Test AP", "Test ROC AUC"]
     return [
-        "## Label-count curve",
+        "## Learning curve",
         "",
         "A learner fitted at the train cutoff on k train mules with oracle labels, drawn at "
         "random, against every sampled train non-mule (the mean of the draws), beside the "
@@ -301,7 +301,7 @@ def curve_section(home: Reported, frame: pd.DataFrame) -> list[str]:
         "",
         *table(header, rows),
         "",
-        *figure_links(home, {"label_curve": DIAGNOSTICS_FIGURES["label_curve"]}),
+        *figure_links(home, {"learning_curve": DIAGNOSTICS_FIGURES["learning_curve"]}),
     ]
 
 

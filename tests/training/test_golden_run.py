@@ -99,7 +99,7 @@ def golden_config() -> RunConfig:
 
 
 def golden_executor() -> FakeTigerGraph:
-    """The fake graph: v5 neighbourhoods, one hub and one child over its history capacity."""
+    """The fake graph: fixed neighbourhoods, one hub and one child over its history capacity."""
     return FakeTigerGraph(
         factory=neighbourhood,
         hubs=[("N3", cutoff) for cutoff in CUTOFF_SEQS],

@@ -247,11 +247,11 @@ def plot_baselines(
     return ax
 
 
-# The metrics a label-count curve can draw, and how its labels name them.
+# The metrics a learning curve can draw, and how its labels name them.
 CURVE_NAMES = {"average_precision": ("average precision", "AP"), "roc_auc": ("ROC AUC", "ROC AUC")}
 
 
-def plot_label_curve(
+def plot_learning_curve(
     ax: Axes, table: pd.DataFrame, *, split: str = "test", metric: str = "average_precision"
 ) -> Axes:
     """An audit metric against the number of oracle-labelled train mules a learner had.
@@ -309,7 +309,7 @@ def plot_label_curve(
     ax.set_xlabel("Train mules with oracle labels (log scale)")
     ax.set_ylabel(f"{split.capitalize()} audit {name}")
     legend_below(ax, handles, labels)
-    ax.set_title(f"Label-count curve, {split} audit, {PURPOSES[split]}")
+    ax.set_title(f"Learning curve, {split} audit, {PURPOSES[split]}")
     return ax
 
 
