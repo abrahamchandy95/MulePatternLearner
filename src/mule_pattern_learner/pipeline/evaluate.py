@@ -58,7 +58,7 @@ def evaluate_run(
     Truth is read once for both splits: the graph's oracle truth unless ``truth``
     supplies another reader (the tests' ParquetTruthReader, or a suite's SharedTruth).
     With a ``session`` the audits run on its connection, which a suite of runs shares.
-    The lines the audits print are appended to the run's events.jsonl. Once a split is
+    The audits' events are recorded in the run's events.jsonl. Once a split is
     audited here, the audit figures and report.md are drawn again
     (reporting.run_report.write_audit_report).
     """

@@ -9,8 +9,8 @@ run_suite does, in order:
    which connects only once something needs the graph;
 4. plans each run (plan_run): a complete run of the same settings and dataset is kept,
    an interrupted one resumes, and one whose settings or dataset differ is moved to
-   results/archive/ (never deleted) and trained again; the plan is printed with an
-   upper bound on the training time (time_bound);
+   results/archive/ (never deleted) and trained again; the plan is a `suite` event with
+   an upper bound on the training time (time_bound);
 5. trains the runs, seeds outer and variants inner, into results/<variant>/seed-<n>/;
 6. audits validation and test for every complete run that lacks them, reading truth once
    (pipeline.evaluate.SharedTruth);
@@ -26,6 +26,10 @@ is complete only when every run is trained and audited and none recorded an erro
 run whose step failed after its numbers were saved (a training figure, say) is complete
 in the tables, with its error beside it, and the suite then fails, as `mule train` fails
 when a figure does; the next suite keeps the run, and `mule report` redraws its figures.
+
+The suite's own events (the plan, each run's step that finished or failed, the archives,
+an outage) and those of the dataset's preparation are recorded in the suite's
+events.jsonl; each run's go to the run's.
 """
 
 from __future__ import annotations
@@ -40,8 +44,9 @@ from typing import Any
 
 import numpy as np
 
-from ..artifacts import read_history, read_run_config, read_run_provenance
+from ..artifacts import read_history, read_json, read_run_config, read_run_provenance
 from ..config import DEFAULT_CONFIG, RunConfig
+from ..contract.graph_schema import HELD_OUT_SPLITS
 from ..data.manifest import dataset_id
 from ..model.build import build_model
 from ..paths import DATA_DIR, RESULTS_DIR, RunPaths, SuitePaths, archived_run
@@ -50,7 +55,7 @@ from ..pipeline.evaluate import SharedTruth, evaluate_run
 from ..pipeline.prepare import prepare_dataset
 from ..pipeline.train import train_run
 from ..reporting.suite_report import write_suite_report
-from ..runtime.progress import emit
+from ..runtime.progress import emit, recording
 from ..tigergraph.executor import TigerGraphUnavailableError, error_summary
 from ..training.checkpoint import changed_settings, run_started
 from ..training.trainer import check_limits
@@ -219,10 +224,39 @@ def is_outage(error: BaseException) -> bool:
     return False
 
 
+def finished(run: PlannedRun, step: str) -> dict[str, Any]:
+    """The `run_finished` event of a run's step (train or audit), with the numbers it saved.
+
+    A trained run gives its best epoch, validation proxy AP and seconds (metrics.json),
+    an audited one the AP of each audited split; a number the run has no file for is None.
+    """
+    record: dict[str, Any] = {
+        "event": "run_finished",
+        "variant": run.variant.name,
+        "seed": run.seed,
+        "step": step,
+    }
+    if step == "train":
+        metrics = read_json(run.paths.metrics) if run.paths.metrics.exists() else {}
+        proxy = metrics.get("observed_label_proxy", {}).get("validation", {})
+        record |= {
+            "best_epoch": metrics.get("best_epoch"),
+            "validation_proxy_ap": proxy.get("average_precision"),
+            "seconds": metrics.get("elapsed_seconds"),
+        }
+    else:
+        for split in HELD_OUT_SPLITS:
+            report = run.paths.audit_report(split)
+            metrics = read_json(report)["metrics"] if report.exists() else {}
+            record[f"{split}_ap"] = metrics.get("average_precision")
+    return record
+
+
 def attempt(run: PlannedRun, step: str, work: Callable[[], object]) -> str | None:
     """Do one step of a run (train or audit); the summary of an outage that stopped it.
 
-    Any other error is the run's own: it is recorded against the run, and the suite goes on.
+    A step that finished is a `run_finished` event. Any other error is the run's own: it
+    is recorded against the run, and the suite goes on.
     """
     try:
         work()
@@ -234,6 +268,8 @@ def attempt(run: PlannedRun, step: str, work: Callable[[], object]) -> str | Non
             return summary
         run.errors.append(f"{step}: {summary}")
         emit({"event": "run_failed", **where})
+    else:
+        emit(finished(run, step))
     return None
 
 
@@ -255,6 +291,22 @@ def run_suite(
     suite_name, variants = select(names)
     check_variants(variants, base, seeds)
     suite = SuitePaths.of(suite_name, results)
+    suite.root.mkdir(parents=True, exist_ok=True)
+    with recording(suite.events):
+        return _run(suite, variants, base=base, seeds=seeds, results=results, data=data)
+
+
+def _run(
+    suite: SuitePaths,
+    variants: Sequence[Variant],
+    *,
+    base: RunConfig,
+    seeds: Sequence[int],
+    results: Path,
+    data: Path,
+) -> dict[str, Any]:
+    """run_suite's steps once the suite is chosen and checked, its events recorded."""
+    suite_name = suite.root.name
     session = Session(base.transport)
     dataset = prepare_dataset(base, data, session=session)
     runs = [

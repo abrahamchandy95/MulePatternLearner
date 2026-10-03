@@ -147,16 +147,22 @@ def test_train_then_audit_write_exactly_the_files_of_the_run_and_dataset_tables(
     result = train_run(output, config=config, data=data)
     assert result["status"] == "complete"
     # The dataset is data/<dataset id>/, and nothing else is written there: its tables,
-    # and its context cache with one entry for every distinct context the run requested.
+    # the events of its preparation, and its context cache with one entry for every
+    # distinct context the run requested.
     identity = dataset_id(FAKE_SOURCE, config)
     prepared = {
         f"{identity}/manifest.json",
         f"{identity}/accounts.parquet",
         f"{identity}/observed_labels.parquet",
         f"{identity}/hubs.parquet",
+        f"{identity}/events.jsonl",
     }
     tables, cached = dataset_files(data)
     assert result["dataset_id"] == identity and tables == prepared
+    # The preparation's events are the dataset's: the scope it found, the hubs, the dataset.
+    recorded = read_events(DatasetPaths.of(identity, data).events)
+    assert [event["event"] for event in recorded] == ["scope", "hubs", "dataset"]
+    assert recorded[-1]["status"] == "prepared" and recorded[-1]["known_mules"]["train"] > 0
     assert {name.split("/")[0] for name in cached} == {identity}
     assert len(cached) == result["contexts"]["distinct"] > 0
     trained = {

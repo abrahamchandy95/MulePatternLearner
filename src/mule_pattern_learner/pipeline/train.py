@@ -9,6 +9,7 @@ from ..config import DEFAULT_CONFIG, RunConfig
 from ..data.contexts import ContextOpener, ContextSource
 from ..paths import BASELINE_VARIANT, DATA_DIR, DatasetPaths, RunPaths
 from ..reporting.run_report import write_training_report
+from ..runtime.progress import emit
 from ..training.checkpoint import check_resumable, completed_run, run_started
 from ..training.trainer import train
 from .connect import Session, open_context_source
@@ -34,7 +35,7 @@ def train_run(
     (RunPaths.of(variant, seed)). The dataset is config's in data
     (pipeline.prepare.prepare_dataset). With ``resume`` (what the command
     passes) an interrupted run continues from its resume.pt, and a complete run of the
-    same settings is reported from its metrics.json. Both are checked before anything
+    same settings is reported from its metrics.json, with an `already_complete` event. Both are checked before anything
     connects or is written: a run of other settings, complete or not, is an error that
     names them. A run trained here then gets its training figures and report.md
     (reporting.run_report.write_training_report); a complete run reported is left as it was.
@@ -53,6 +54,7 @@ def train_run(
     if resume:
         recorded = completed_run(config, output)
         if recorded is not None:
+            emit({"event": "already_complete", "run": str(output.root)})
             return recorded
         check_resumable(config, output)
     dataset = prepare_dataset(config, data, session=session)

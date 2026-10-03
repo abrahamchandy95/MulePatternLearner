@@ -288,6 +288,7 @@ class _TrainingRun:
         self.average = WeightAverage(self.model, decay) if decay > 0 else None
         self.rng = np.random.default_rng(config.training.seed)
         self.epoch, self.step, self.stopped = 0, 0, False
+        self.epoch_started = time.perf_counter()
         self.best_ap, self.best_epoch = -1.0, 0
         self.best_state = self._state_copy()
         self.best_scores: np.ndarray | None = None
@@ -428,6 +429,10 @@ class _TrainingRun:
                     "run": str(self.run.root),
                     "epoch": self.epoch,
                     "step": self.step,
+                    "stopped": self.stopped,
+                    "epochs": self.training_config.epochs,
+                    "steps_per_epoch": self.training_config.steps_per_epoch,
+                    "patience": self.training_config.patience,
                     "prefetch_batches": self.prefetch,
                     "max_rejected_root_fraction": self.limit,
                 }
@@ -456,7 +461,7 @@ class _TrainingRun:
             )
 
     def emit_event(self, record: dict[str, Any]) -> dict[str, Any]:
-        """Print record with the run's totals, recording it in events.jsonl; return it."""
+        """Emit record with the run's totals, into the run's events.jsonl; return it."""
         record = self.progress.record(record)
         emit(record)
         return record
@@ -464,6 +469,7 @@ class _TrainingRun:
     def run_epoch(self) -> None:
         """Train the current epoch's remaining steps, then select on validation."""
         epoch = self.epoch
+        self.epoch_started = time.perf_counter()
         self.epoch_rng_state = self.rng.bit_generator.state
         schedule = epoch_schedule(
             self.training,
@@ -549,7 +555,7 @@ class _TrainingRun:
                             },
                         }
                     )
-                    # Every interval is a row of history.csv; logged ones are printed too.
+                    # Every interval is a row of history.csv; a logged one is an event too.
                     append_history(self.run.history, {k: record[k] for k in HISTORY_COLUMNS})
                     if logged:
                         emit(record)
@@ -590,7 +596,11 @@ class _TrainingRun:
         self.save_last()
         # After the resume state, so epochs.csv never holds an epoch that resume.pt lacks.
         rows = self.record_epochs()
-        self.emit_event({"event": "epoch", **rows[-1]})
+        # Beside the epochs.csv row: the best epoch so far, and the seconds this segment
+        # spent on the epoch, its validation included.
+        seconds = round(time.perf_counter() - self.epoch_started, 3)
+        record = {**rows[-1], "best_epoch": self.best_epoch, "epoch_seconds": seconds}
+        self.emit_event({"event": "epoch", **record})
 
     def record_epochs(self) -> list[dict[str, Any]]:
         """Replace epochs.csv with the epochs so far, the selected one marked; return them."""

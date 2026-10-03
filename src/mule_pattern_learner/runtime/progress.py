@@ -1,10 +1,12 @@
-"""emit(): the one structured line a command prints for each event.
+"""emit(): the one structured record of each event, and its short line on the console.
 
-Every line is one JSON object on stdout whose "event" key names what happened; warnings
-are events too (warn), and so are the executor's retries. While a run records its
-events (``recording`` with the run's events.jsonl), each line is appended to that file
-as well, so the file keeps what the commands printed for the run. Lines printed before
-a run directory exists, such as those of preparation, go to stdout only.
+Every record is one JSON object whose "event" key names what happened; warnings are
+events too (warn), and so are the executor's retries. While a command records its events
+(``recording`` with the events.jsonl of a run, a prepared dataset, a suite or a study),
+each record is appended to that file in full. What stdout shows is the event's short line
+for a person (runtime.console), or nothing: running totals, batch counts and the
+progress of scoring are in the files only. A record emitted while nothing records, such
+as a connection's retries before preparation, is shown on the console only.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ import threading
 from typing import Any
 
 from ..artifacts import append_event, event_line
+from .console import show_event
 
 _LOCK = threading.Lock()
 # The events.jsonl files being recorded, the innermost last.
@@ -24,7 +27,7 @@ _RECORDING: list[Path] = []
 
 @contextlib.contextmanager
 def recording(events: Path) -> Generator[None]:
-    """Append every line emitted during the block to events, a run's events.jsonl."""
+    """Append the record of every event emitted during the block to events, an events.jsonl."""
     with _LOCK:
         _RECORDING.append(events)
     try:
@@ -35,17 +38,18 @@ def recording(events: Path) -> Generator[None]:
 
 
 def emit(record: Mapping[str, Any]) -> None:
-    """Print record as one JSON line, and append it to the recorded run's events.jsonl.
+    """Append record to the recorded events.jsonl as one JSON line, and show its console line.
 
-    A record without an "event" key is refused, so every line says what it records.
+    A record without an "event" key is refused, so every line says what it records, and
+    so is one JSON cannot hold (NaN or infinity), before anything is written or shown.
     """
     if not isinstance(record.get("event"), str):
         raise ValueError(f"An event record needs an event name: {dict(record)}")
     line = event_line(record)
     with _LOCK:
-        print(line, flush=True)
         if _RECORDING:
             append_event(_RECORDING[-1], line)
+        show_event(record)
 
 
 def warn(warning: str, message: str) -> None:

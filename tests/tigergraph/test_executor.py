@@ -7,13 +7,16 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import json
+from pathlib import Path
 from typing import Any
 
 import pytest
 from pyTigerGraph.common.exception import TigerGraphException
 import requests
 
+from mule_pattern_learner.artifacts import read_events
 from mule_pattern_learner.contract.server import CONTEXT_QUERY, CREATE_SCOPE_QUERY, CUTOFF_QUERY
+from mule_pattern_learner.runtime.progress import recording
 from mule_pattern_learner.testing.fake_connection import FakeClock, FakeConn, executor
 from mule_pattern_learner.tigergraph.executor import (
     AVAILABILITY,
@@ -24,6 +27,7 @@ from mule_pattern_learner.tigergraph.executor import (
     TigerGraphUnavailableError,
     TransientQueryError,
     failure_class,
+    short_reason,
 )
 
 
@@ -107,6 +111,76 @@ def test_availability_failures_are_retried_with_capped_exponential_backoff() -> 
 def test_failure_classes(error: BaseException, kind: str | None) -> None:
     assert failure_class(error) == kind
     assert (failure_class(error) is not None) is (kind is not None)
+
+
+# The page a TigerGraph Cloud workspace answers while it starts, as pyTigerGraph raises it.
+STARTING = TigerGraphException(
+    "Cannot parse json: <html> <head><title>Starting workspace</title></head> <body>"
+    + "<div class='spinner'></div>" * 50
+    + "</body></html>"
+)
+
+
+@pytest.mark.parametrize(
+    "error, reason",
+    [
+        (STARTING, "starting workspace"),
+        (
+            http_error(502, b"<html><head><title>502 Bad Gateway</title></head><p>nginx</p>"),
+            "bad gateway, HTTP 502",
+        ),
+        (http_error(504), "HTTP 504"),
+        (
+            http_error(503, {"error": True, "message": "not ready", "code": "REST-0005"}),
+            "not ready, HTTP 503",
+        ),
+        (json.JSONDecodeError("x", "<html><body>resuming</body></html>", 0), "an HTML page"),
+        (
+            requests.ConnectionError(
+                "HTTPSConnectionPool(host='tg.example', port=443): Max retries exceeded with "
+                "url: /restpp/query/x (Caused by NewConnectionError('<urllib3.connection."
+                "HTTPSConnection object at 0x10>: Failed to establish a new connection: "
+                "[Errno 61] Connection refused'))"
+            ),
+            "connection refused",
+        ),
+        (
+            requests.ReadTimeout(
+                "HTTPSConnectionPool(host='tg.example', port=443): Read timed out. (read "
+                "timeout=330)"
+            ),
+            "read timed out",
+        ),
+        (TigerGraphException("Query timeout exceeded", "REST-3002"), "Query timeout exceeded"),
+        (
+            TigerGraphException("The graph engine is not ready yet, come back in a few minutes"),
+            "The graph engine is not ready yet, come...",
+        ),
+    ],
+)
+def test_a_failure_is_named_in_a_few_words_never_by_its_page(
+    error: BaseException, reason: str
+) -> None:
+    assert short_reason(error) == reason
+
+
+def test_retries_and_the_outage_that_ends_them_name_the_reason_without_the_page(
+    tmp_path: Path,
+) -> None:
+    events = tmp_path / "events.jsonl"
+    with recording(events):
+        tg = executor(FakeConn([STARTING] * 100), max_attempts=3, max_outage_s=120)
+        with pytest.raises(TigerGraphUnavailableError) as raised:
+            tg.run("q", {})
+    message = str(raised.value)
+    assert "<" not in message and len(message) < 200
+    assert message.endswith("TigerGraphException: starting workspace")
+    retries = read_events(events)
+    assert {(e["event"], e["failure"], e["reason"]) for e in retries} == {
+        ("retry", AVAILABILITY, "starting workspace")
+    }
+    # The record keeps the error's start too, for whoever reads the file.
+    assert retries[0]["error"].startswith("TigerGraphException: Cannot parse json: <html>")
 
 
 def test_suspected_deterministic_failures_are_retried_once() -> None:

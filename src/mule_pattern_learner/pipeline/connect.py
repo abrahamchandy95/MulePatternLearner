@@ -43,11 +43,14 @@ class Session:
     called and returns that executor after, so a suite of runs that prepares, trains and
     audits through one session connects at most once, and not at all when none of its
     use cases needs the graph. Each use case still checks the frozen source on it.
+    ``announced`` holds the ids of the datasets a `dataset` event has named on the
+    session, so a suite names its dataset once rather than once a run.
     """
 
     def __init__(self, transport: TransportConfig) -> None:
         self.transport = transport
         self._executor: ConnectionExecutor | None = None
+        self.announced: set[str] = set()
 
     @property
     def connected(self) -> bool:

@@ -85,7 +85,10 @@ def test_first_run_reveals_once_and_reports_the_shortfall(
     # Validation had only 14 mules a bank would have found by 1 October: never padded.
     assert summary["shortfall_discovered_by_cutoff"] == {"validation": 14}
     assert summary["contract"]["revealed_positives"] == 54
-    assert "revealed now" in capsys.readouterr().out
+    assert capsys.readouterr().out == (
+        "Revealed 54 known mules: 20 / 14 / 20 in train / validation / test; fewer than the "
+        "budget were discovered by the cutoff of validation\n"
+    )
 
 
 def test_existing_labels_are_kept_and_contract_violations_fail() -> None:

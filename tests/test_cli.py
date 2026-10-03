@@ -207,5 +207,5 @@ def test_train_prepares_then_trains_or_resumes_the_baseline_run(
     # A complete run prints its recorded result, and nothing is prepared, trained or drawn.
     recorded[0] = {"status": "complete", "best_epoch": 3}
     cli.main()
-    assert json.loads(capsys.readouterr().out) == recorded[0]
+    assert json.loads(capsys.readouterr().out.splitlines()[-1]) == recorded[0]
     assert len(checked) == len(prepared) == len(trained) == len(reported) == 1

@@ -240,9 +240,11 @@ def test_a_corrupted_or_foreign_entry_is_refused_and_requested_again(
     # The five refused contexts were requested again, once each, and nothing else was.
     assert sorted(again.requested, key=str) == sorted(KEYS[:5], key=str)
     assert contexts.disk is not None and contexts.disk.refused == 5
-    printed = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
-    assert [line["warning"] for line in printed] == ["context_cache_refused"] * 5
-    assert "cannot be read" in printed[0]["message"]
+    # One warning each, which the console shows.
+    printed = capsys.readouterr().out.splitlines()
+    assert len(printed) == 5
+    assert all(line.startswith("Warning: Refused the cached context ") for line in printed)
+    assert "cannot be read" in printed[0]
     # Their requests replaced them, so the next source reads every context from disk.
     last = graph()
     assert read_all(source(last, cache)) == expected and last.names() == []
@@ -319,8 +321,8 @@ def test_an_entry_that_cannot_be_evicted_is_warned_about_once_and_left(
     put(KEYS[4], 5)
     assert stuck.exists() and tier.evicted == 3
     assert [key for key in KEYS[1:5] if entry(tier, key).exists()] == [KEYS[4]]
-    printed = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
-    assert [line["warning"] for line in printed] == ["context_cache_eviction_failed"]
+    (printed,) = capsys.readouterr().out.splitlines()
+    assert printed.startswith("Warning: Cannot remove the cached context ")
 
 
 def test_a_cache_that_cannot_be_written_is_warned_about_once_and_left_alone(
@@ -333,7 +335,7 @@ def test_a_cache_that_cannot_be_written_is_warned_about_once_and_left_alone(
     rows = read_all(contexts)
     assert rows[0][0] is not None and rows[0][4] is None
     assert executor.names().count(CONTEXT_QUERY) == len(executor.calls) > 1
-    printed = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
-    assert [line["warning"] for line in printed] == ["context_cache_unwritable"]
+    (printed,) = capsys.readouterr().out.splitlines()
+    assert printed.startswith("Warning: Cannot write the context cache in ")
     assert contexts.disk is not None and not contexts.disk.writable
     assert contexts.disk.refused == 0

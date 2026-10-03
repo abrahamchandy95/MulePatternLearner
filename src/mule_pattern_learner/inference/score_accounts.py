@@ -135,16 +135,7 @@ def score_new_accounts(
         failed = False
     finally:
         close_source(contexts, failed=failed)
-    emit(
-        {
-            "event": "score",
-            "date": date,
-            "accounts": count,
-            "rejected": rejected,
-            "output": str(output),
-        }
-    )
-    return {
+    result = {
         "accounts": count,
         **rejection_summary(contexts, rejected, predictor.totals),
         "rejected_examples": examples,
@@ -154,3 +145,6 @@ def score_new_accounts(
         "database_calls": contexts.database_calls,
         "scope": "available_history_at_prediction",
     }
+    # The whole result, so the run's events.jsonl keeps every scoring's rejections.
+    emit({"event": "score", "date": date, **result})
+    return result
