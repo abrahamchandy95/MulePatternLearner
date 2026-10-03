@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from importlib.metadata import distribution
 import io
+import json
 import os
 from pathlib import Path
 import re
@@ -34,8 +35,12 @@ from mule_pattern_learner.pipeline import connect as pipeline_connect
 from mule_pattern_learner.pipeline import prepare as pipeline_prepare
 from mule_pattern_learner.pipeline import train as pipeline_train
 from mule_pattern_learner.pipeline.connect import open_context_source
-from mule_pattern_learner.runtime.progress import emit
-from mule_pattern_learner.testing.builders import neighbourhood, scope_population
+from mule_pattern_learner.runtime.progress import emit, recording
+from mule_pattern_learner.testing.builders import (
+    neighbourhood,
+    recorded_events,
+    scope_population,
+)
 from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
 from mule_pattern_learner.tigergraph.executor import (
     TigerGraphUnavailableError,
@@ -418,8 +423,61 @@ def test_retries_that_run_out_end_the_command_with_one_clear_line_on_stderr(
     )
     # The progress line ends first, so the message starts a line of its own.
     assert screen.getvalue() == "\repoch 1  step 3/9  loss 0.500  2.0 s/step\n"
-    # No run recorded the step here, so the command's own events.jsonl did.
-    assert [e["event"] for e in read_events(command_events(command_records))] == ["train"]
+    # No run recorded the step here, so the command's own events.jsonl did, and then
+    # the error that stopped the command, which stderr shows.
+    recorded = read_events(command_events(command_records))
+    assert [e["event"] for e in recorded] == ["train", "command_stopped"]
+    assert recorded[-1]["command"] == "train"
+    assert recorded[-1]["error"] == f"TigerGraphUnavailableError: {error}"
+
+
+def test_the_error_that_stops_a_command_is_recorded_where_its_records_were_going(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, command_records: Path
+) -> None:
+    run = RunPaths(tmp_path / "run")
+    run.root.mkdir()
+    stop = TransientQueryError(
+        "fetch_training_context (512 keys) failed after 2 attempts (suspected deterministic "
+        "failure, retried once): TigerGraphException: out of memory"
+    )
+    bug = ValueError("a bug's message, longer than an error's summary keeps: " + "x" * 300)
+    raising: list[Exception] = [stop]
+
+    def evaluate(audited: RunPaths) -> dict[str, Any]:
+        # The run's events.jsonl is recording when the error is raised.
+        with recording(audited.events):
+            raise raising[0]
+
+    monkeypatch.setattr(cli, "evaluate_run", evaluate)
+    monkeypatch.setattr(sys, "argv", ["mule", "evaluate", str(run.root)])
+    with pytest.raises(SystemExit) as stopped:
+        cli.main()
+    assert str(stopped.value.code).startswith("mule evaluate stopped: a TigerGraph request")
+    # A bug is raised as it was, so Python shows its traceback.
+    raising[0] = bug
+    with pytest.raises(ValueError) as raised:
+        cli.main()
+    assert raised.value is bug
+    # Both are in the run's events.jsonl, after the time and the command, beside what led
+    # to them; results/events.jsonl has nothing, since the run was recording.
+    assert recorded_events(run.events) == [
+        {
+            "command": "evaluate",
+            "event": "command_stopped",
+            "error": f"TransientQueryError: {stop}",
+        },
+        {
+            "command": "evaluate",
+            "event": "command_failed",
+            "error": f"ValueError: {str(bug)[:200]}",
+            "type": "ValueError",
+            "message": str(bug),
+        },
+    ]
+    assert not command_events(command_records).exists()
+    # A type outside the builtins is named with its module, as a traceback names it.
+    undecodable = json.JSONDecodeError("Expecting value", "<html>", 0)
+    assert cli.error_record(undecodable)["type"] == "json.decoder.JSONDecodeError"
 
 
 STEP_TIME = {"seconds_per_step": 2.0}

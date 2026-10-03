@@ -293,13 +293,33 @@ scope schema change, each `CREATE` and `DROP`), an install request left unanswer
 the error that ended it (`install_unanswered`), the wait for compilation and its end
 (`install_wait`, `installed`), the retries of connecting with their whole error
 (`retry`), a dataset found ready (`dataset`), a complete run reported
-(`already_complete`), and everything `mule install` and `mule check` emit. So whatever the
+(`already_complete`), everything `mule install` and `mule check` emit, and the error that
+stopped a command when no run, dataset or study was recording
+([The error that stops a command](#the-error-that-stops-a-command)). So whatever the
 console shows in a few words, or not at all, before preparation records in the dataset's
 `events.jsonl` and training in the run's, is kept here. The time and the command tell one
 command's records from another's: the install of `mule install` from the one `mule
 train` began with, or the retries of connecting in one session from those of the next.
 The file only grows; nothing reads it. The experiments script records the same events
 in its suite's `events.jsonl`, without the command.
+
+## The error that stops a command
+
+A command that stops on an error records it before it exits, in the `events.jsonl` that
+was recording when the error was raised: the run's, the dataset's or the study's, or
+`results/events.jsonl` when none of them was, as for a single-attempt write such as the
+scope schema change, a `CREATE QUERY` or a `DROP`. So the cause is in a file beside the
+records that led to it, and not only on stderr. Its record names the command (`command`)
+and gives the error's type and message on one line (`error`):
+
+- **`command_stopped`**: TigerGraph's failures outlasted the retries, and stderr has the
+  one line that says so; `error` keeps the whole of that line's error.
+- **`command_failed`**: any other error, a bug, which Python shows with its traceback;
+  `error` is cut to about 200 characters, and the record adds the error's `type`, named
+  as the traceback names it, and its whole `message`.
+
+The experiments script records its own the same way, as `run_experiments.py`, in the
+dataset's or the suite's `events.jsonl`. An interruption (Ctrl-C) records nothing.
 
 ## events.jsonl and the console
 

@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from mule_pattern_learner.artifacts import read_events
-from mule_pattern_learner.runtime.progress import emit, recording, warn
+from mule_pattern_learner.runtime.progress import emit, raised_in, recording, warn
 from mule_pattern_learner.testing.builders import recorded_events
 
 
@@ -81,3 +81,20 @@ def test_each_record_is_led_by_its_time_and_the_command_a_block_names(tmp_path: 
         time = datetime.fromisoformat(record["time"])
         assert time.utcoffset() == timedelta(0) and time.microsecond == 0
         assert before <= time <= after
+
+
+def test_an_error_names_the_innermost_file_that_was_recording_when_it_was_raised(
+    tmp_path: Path,
+) -> None:
+    commands, run = tmp_path / "events.jsonl", tmp_path / "run.jsonl"
+    with pytest.raises(ValueError, match="inside") as inner:
+        with recording(commands), recording(run):
+            raise ValueError("inside the run's block")
+    assert raised_in(inner.value) == run
+    with pytest.raises(KeyError) as outer:
+        with recording(commands):
+            raise KeyError("outside it")
+    assert raised_in(outer.value) == commands
+    # An error no block saw names no file, and the blocks record nothing of their own.
+    assert raised_in(ValueError("never recorded")) is None
+    assert not commands.exists() and not run.exists()

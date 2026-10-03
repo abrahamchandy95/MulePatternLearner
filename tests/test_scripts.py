@@ -18,9 +18,12 @@ from typing import Any
 
 import pytest
 
+from mule_pattern_learner.artifacts import read_events
 from mule_pattern_learner.experiments import runner
 from mule_pattern_learner.experiments.variants import SUITES, VARIANTS
 from mule_pattern_learner.paths import REPOSITORY_ROOT
+from mule_pattern_learner.runtime.progress import recording
+from mule_pattern_learner.tigergraph.executor import TigerGraphUnavailableError
 
 SCRIPTS = REPOSITORY_ROOT / "scripts"
 # Every script; each must parse --help before connecting.
@@ -148,3 +151,29 @@ def test_the_experiments_script_lists_the_variants_and_runs_the_names_given(
         script.main()
     assert refused.value.code == 2 and len(ran) == 2
     assert "Unknown suites or variants ['no_graph']" in capsys.readouterr().err
+
+
+def test_the_experiments_script_records_the_outage_that_stops_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    script = load("run_experiments")
+    prepared = tmp_path / "events.jsonl"
+    outage = TigerGraphUnavailableError(
+        "connect failed after 31 attempts (TigerGraph unavailable for 1800s (max_outage_s "
+        "= 1800)): TigerGraphException: starting workspace"
+    )
+
+    def run_suite(names: list[str]) -> dict[str, Any]:
+        # The dataset's preparation is recording when the outage stops the suite.
+        with recording(prepared):
+            raise outage
+
+    monkeypatch.setattr(runner, "run_suite", run_suite)
+    monkeypatch.setattr(sys, "argv", ["run_experiments"])
+    with pytest.raises(SystemExit) as stopped:
+        script.main()
+    assert str(stopped.value.code).startswith("run_experiments.py stopped: TigerGraph stayed")
+    # Its record is beside the preparation's, naming the script.
+    (record,) = read_events(prepared)
+    assert (record["command"], record["event"]) == ("run_experiments.py", "command_stopped")
+    assert record["error"] == f"TigerGraphUnavailableError: {outage}"
