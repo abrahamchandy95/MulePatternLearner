@@ -206,7 +206,9 @@ def test_an_entry_is_named_by_everything_its_row_depends_on(
     read_all(source(graph(), cache))
     other = graph()
     read_all(source(other, cache, plan=WITHOUT_FLOWS))
-    assert other.requested == [*KEYS, *KEYS[:3]]
+    # A fetch sends its requests at once, so they arrive in any order; the hops do not.
+    assert sorted(other.requested[: len(KEYS)], key=str) == sorted(KEYS, key=str)
+    assert sorted(other.requested[len(KEYS) :], key=str) == sorted(KEYS[:3], key=str)
     with pytest.raises(ValueError, match="at least one entry"):
         cache_in(tmp_path, capacity=0)
     # The feature contract names every entry.
