@@ -48,7 +48,7 @@ def test_summary_models_fetch_only_the_roots_and_have_no_graph_parameters() -> N
     summary = FeaturePlan(BUILT_IN_GROUPS, "summary")
     executor = FakeTigerGraph({root: context(root, [message(80, 800, root)])})
     source = ContextSource(TigerGraphContextFetcher(executor), plan=summary, sampler=SamplerPlan())
-    batch = build_batch(source, [root], plan=summary, fanouts=(8, 4), sampler=SamplerPlan())
+    batch = build_batch(source, [root], plan=summary, sampler=SamplerPlan(fanouts=(8, 4)))
     assert executor.requested == [root]
     assert set(batch) == {"x", "root_positions"}
     model = SummaryMLP(16, 0, plan=summary)

@@ -167,7 +167,6 @@ class Predictor:
         return build_root_batch(
             self.contexts,
             keys,
-            fanouts=self.fanouts,
             device=self.batch_device,
             plan=self.plan,
             sampler=self.sampler,

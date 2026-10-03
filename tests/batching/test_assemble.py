@@ -52,17 +52,17 @@ class Hubs:
 
 
 def test_fourier_columns_come_from_scalar_deltas_on_every_device() -> None:
-    sampler = POOLED
+    sampler = replace(POOLED, fanouts=(8, 4))
     plan = FeaturePlan(CORE_GROUPS, "tgat")
     store = FakeStore(sampler, encodings=True)
-    cpu = build_batch(store, roots(4), fanouts=(8, 4), plan=plan, sampler=sampler)
+    cpu = build_batch(store, roots(4), plan=plan, sampler=sampler)
     start = plan.edge_names.index("age_fourier_0")
     for prefix in ("first_", "second_"):
         edge, mask = cpu[prefix + "edge"], cpu[prefix + "mask"]
         assert torch.all(edge[~mask] == 0)
         assert torch.count_nonzero(edge[mask][:, start : start + 128]) > 0
     if MPS:
-        mps = build_batch(store, roots(4), fanouts=(8, 4), plan=plan, sampler=sampler, device="mps")
+        mps = build_batch(store, roots(4), plan=plan, sampler=sampler, device="mps")
         for name, value in cpu.items():
             atol = 1e-5 if name.endswith("edge") else 0
             torch.testing.assert_close(mps[name].cpu(), value, atol=atol, rtol=0)
@@ -77,9 +77,8 @@ def test_resampled_batches_respect_caps_hops_and_time_in_both_modes() -> None:
         batch = build_batch(
             store,
             keys,
-            fanouts=(8, 4),
             plan=plan,
-            sampler=RESAMPLE,
+            sampler=replace(RESAMPLE, fanouts=(8, 4)),
             mode=mode,
             step_seed=7,
             stats=stats,
@@ -115,7 +114,7 @@ def _first_children(
 
 
 def test_hub_children_become_local_stubs_and_mark_outer_peers() -> None:
-    sampler = POOLED
+    sampler = replace(POOLED, fanouts=(8, 4))
     plan = FeaturePlan(CORE_GROUPS, "tgat")
     store = FakeStore(sampler)
     keys = roots(6)
@@ -124,9 +123,7 @@ def test_hub_children_become_local_stubs_and_mark_outer_peers() -> None:
     hub = sorted(hub_ids)[0]
     hubs = Hubs({hub})
     stats: dict[str, Any] = {}
-    batch = build_batch(
-        store, keys, fanouts=(8, 4), plan=plan, sampler=sampler, hubs=hubs, stats=stats
-    )
+    batch = build_batch(store, keys, plan=plan, sampler=sampler, hubs=hubs, stats=stats)
     fetched = {k for hop, ks in store.calls if hop == 2 for k in ks}
     stubbed = {k for k in children if k.node_type == "Account" and k.node_id == hub}
     assert stubbed and not stubbed & fetched and stats["stub_children"] == len(stubbed)
@@ -167,7 +164,7 @@ def test_hub_children_become_local_stubs_and_mark_outer_peers() -> None:
     rows = [store.row(k, 2 if k not in keys else 1) for k in outer]
     peers = [m for msgs in slots(outer, rows, sampler, 4, hop=2) for m in msgs]
     assert int(flagged.sum()) == sum(m["node_id"] == hub for m in peers) > 0
-    reference = build_batch(store, keys, fanouts=(8, 4), plan=plan, sampler=sampler)
+    reference = build_batch(store, keys, plan=plan, sampler=sampler)
     assert torch.equal(reference["first_mask"], batch["first_mask"])
     assert int(reference["x"][:, column].sum()) == 0
 
@@ -178,19 +175,19 @@ def test_hub_children_become_local_stubs_and_mark_outer_peers() -> None:
     ids=["train", "validation", "test", "unscoped", "unscoped-phase-ignored"],
 )
 def test_hub_lookups_use_the_batch_visibility_phase(scope: str, phase: int, expected: int) -> None:
-    sampler = POOLED
+    sampler = replace(POOLED, fanouts=(8, 4))
     plan = FeaturePlan(CORE_GROUPS, "tgat")
     store = FakeStore(sampler)
     keys = roots(4, scope=scope, phase=phase)
     hubs = Hubs()
-    build_batch(store, keys, fanouts=(8, 4), plan=plan, sampler=sampler, hubs=hubs)
+    build_batch(store, keys, plan=plan, sampler=sampler, hubs=hubs)
     # Children (stub decision) and outer peers (history_withheld) are both looked up.
     assert len(hubs.calls) > len(_first_children(store, keys, sampler))
     assert {p for *_, p in hubs.calls} == {expected}
 
 
 def test_rejected_children_are_masked_and_rejected_roots_raise() -> None:
-    sampler = POOLED
+    sampler = replace(POOLED, fanouts=(8, 4))
     plan = FeaturePlan(CORE_GROUPS, "tgat")
     keys = roots(6)
     clean = FakeStore(sampler)
@@ -199,8 +196,8 @@ def test_rejected_children_are_masked_and_rejected_roots_raise() -> None:
     bad = set(sorted(bad)[:3])
     store = FakeStore(sampler, reject=bad)
     stats: dict[str, Any] = {}
-    batch = build_batch(store, keys, fanouts=(8, 4), plan=plan, sampler=sampler, stats=stats)
-    good = build_batch(clean, keys, fanouts=(8, 4), plan=plan, sampler=sampler)
+    batch = build_batch(store, keys, plan=plan, sampler=sampler, stats=stats)
+    good = build_batch(clean, keys, plan=plan, sampler=sampler)
     assert stats["rejected_children"] == len(bad)
     assert stats["contexts"] == good["x"].shape[0] - len(bad) == batch["x"].shape[0]
     first = slots(keys, [clean.row(k) for k in keys], sampler, 8)
@@ -215,30 +212,35 @@ def test_rejected_children_are_masked_and_rejected_roots_raise() -> None:
     assert torch.equal(batch["first_edge"][kept], good["first_edge"][kept])
     with pytest.raises(ValueError, match="rejected 1 of 6 root.*history_capacity_exceeded"):
         build_batch(
-            FakeStore(sampler, reject={keys[2]}), keys, plan=plan, sampler=sampler, fanouts=(8, 4)
+            FakeStore(sampler, reject={keys[2]}),
+            keys,
+            plan=plan,
+            sampler=sampler,
         )
 
 
 def test_tigergraph_cannot_supply_client_features() -> None:
-    sampler = POOLED
+    sampler = replace(POOLED, fanouts=(8, 4))
     plan = FeaturePlan(CORE_GROUPS, "tgat")
     keys = roots(3)
     store = FakeStore(sampler)
     store.row(keys[1])["features"]["history_withheld"] = 1.0
     with pytest.raises(ValueError, match="client-only"):
-        build_batch(store, keys, plan=plan, sampler=sampler, fanouts=(8, 4))
+        build_batch(store, keys, plan=plan, sampler=sampler)
     store = FakeStore(sampler)
     child = sorted(_first_children(store, keys, sampler, fanout=8))[0]
     store.row(child, 2)["features"]["history_withheld"] = 0.0
     with pytest.raises(ValueError, match="client-only"):
-        build_batch(store, keys, plan=plan, sampler=sampler, fanouts=(8, 4))
+        build_batch(store, keys, plan=plan, sampler=sampler)
 
 
 def test_summary_models_fetch_only_roots() -> None:
     plan = FeaturePlan(("entity_meta",), "summary")
     store = FakeStore(RESAMPLE)
     stats: dict[str, Any] = {}
-    batch = build_batch(store, roots(3), plan=plan, sampler=RESAMPLE, stats=stats, fanouts=(8, 4))
+    batch = build_batch(
+        store, roots(3), plan=plan, sampler=replace(RESAMPLE, fanouts=(8, 4)), stats=stats
+    )
     assert set(batch) == {"root_positions", "x"} and len(store.calls) == 1
     assert stats["contexts"] == 3
 
@@ -250,7 +252,7 @@ def test_recursive_context_keeps_same_neighbor_at_two_different_event_times() ->
     store = ContextSource(
         TigerGraphContextFetcher(source), plan=FeaturePlan(), sampler=SamplerPlan()
     )
-    batch = build_batch(store, [root], fanouts=(2, 2), plan=FeaturePlan(), sampler=SamplerPlan())
+    batch = build_batch(store, [root], plan=FeaturePlan(), sampler=SamplerPlan(fanouts=(2, 2)))
     assert child_key(messages[0]) in source.requested
     assert child_key(messages[1]) in source.requested
     assert len(set(batch["neighbor_positions"][0].tolist())) == 2
@@ -295,9 +297,8 @@ def test_one_hub_or_rejected_child_no_longer_aborts_the_batch() -> None:
         batch = build_batch(
             source,
             [root],
-            fanouts=(8, 2),
             plan=CORE_PLAN,
-            sampler=SMALL_SAMPLER,
+            sampler=replace(SMALL_SAMPLER, fanouts=(8, 2)),
             hubs=hub_registry("hub", scope_id="strict", phase=1),
             stats=stats,
         )
@@ -327,15 +328,16 @@ def test_rejected_roots_raise_in_batches_and_are_dropped_by_root_batches() -> No
         request_batch_size=64,
     ) as source:
         with pytest.raises(ValueError, match="rejected 1 of 64 root contexts"):
-            build_batch(source, roots, plan=CORE_PLAN, sampler=SMALL_SAMPLER, fanouts=(8, 4))
+            build_batch(
+                source, roots, plan=CORE_PLAN, sampler=replace(SMALL_SAMPLER, fanouts=(8, 4))
+            )
         assert executor.names().count(CONTEXT_QUERY) == 1  # one 64-key request
         prepared = build_root_batch(
             source,
             roots,
-            fanouts=(8, 4),
             device="cpu",
             plan=CORE_PLAN,
-            sampler=SMALL_SAMPLER,
+            sampler=replace(SMALL_SAMPLER, fanouts=(8, 4)),
             hubs=HubRegistry.empty(),
             mode="eval",
         )
@@ -363,7 +365,12 @@ def test_eval_batches_draw_root_hops_independently(monkeypatch: pytest.MonkeyPat
     plan = FeaturePlan(CORE_GROUPS, "tgat")
     for mode in ("eval", "train"):
         build_batch(
-            store, keys, fanouts=(16, 4), plan=plan, sampler=POOLED_RESAMPLE, mode=mode, step_seed=5
+            store,
+            keys,
+            plan=plan,
+            sampler=replace(POOLED_RESAMPLE, fanouts=(16, 4)),
+            mode=mode,
+            step_seed=5,
         )
         prefixes = 0
         for root in range(len(keys)):  # roots come first in the hop-2 context order
@@ -380,7 +387,7 @@ def test_scope_follows_recursive_events_and_cache_never_crosses_scope() -> None:
     backend = ContextSource(
         TigerGraphContextFetcher(source), plan=FeaturePlan(), sampler=SamplerPlan()
     )
-    build_batch(backend, [a], fanouts=(2, 2), plan=FeaturePlan(), sampler=SamplerPlan())
+    build_batch(backend, [a], plan=FeaturePlan(), sampler=SamplerPlan(fanouts=(2, 2)))
     assert child_key(msg, a) in source.requested
     assert all(key.scope_id == "strict" and key.visibility_phase == 1 for key in source.requested)
     previous = backend.database_calls

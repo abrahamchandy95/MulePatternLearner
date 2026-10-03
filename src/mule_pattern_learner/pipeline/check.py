@@ -127,7 +127,6 @@ def first_step(config: RunConfig, dataset: DatasetPaths, contexts: ContextReader
         prepared = build_root_batch(
             contexts,
             keys,
-            fanouts=sampler.fanouts,
             device=batch_device(device),
             plan=plan,
             sampler=sampler,

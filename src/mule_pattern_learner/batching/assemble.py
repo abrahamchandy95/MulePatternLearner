@@ -128,7 +128,6 @@ def build_batch(
     contexts: ContextReader,
     roots: list[ContextKey],
     *,
-    fanouts: tuple[int, int],
     plan: FeaturePlan,
     sampler: SamplerPlan,
     device: str | torch.device = "cpu",
@@ -141,6 +140,9 @@ def build_batch(
 ) -> dict[str, torch.Tensor]:
     """Two-hop batch, each root at its cutoff; `mode="train"` resamples with `step_seed`.
 
+    Each context has the sampler's `fanouts` neighbour slots per hop, so a batch and the
+    model built for the same sampler always agree.
+
     Hub status of a child and of an outermost peer is looked up at the earliest
     cutoff among the roots that reach it, so it only uses history visible before
     every such prediction time, and in the batch's visibility phase (3 when the
@@ -150,6 +152,7 @@ def build_batch(
     once on the main thread and passes it here, so every batch of a run samples with
     the same backend; None resolves per call (cached probe).
     """
+    fanouts = sampler.fanouts
     if not roots or len(fanouts) != 2 or not all(FANOUT.holds(fanout) for fanout in fanouts):
         raise ValueError(
             f"Nonempty roots and two fanouts in [{FANOUT.low},{FANOUT.high}] are required"
@@ -356,7 +359,6 @@ def build_root_batch(
     contexts: ContextReader,
     keys: list[ContextKey],
     *,
-    fanouts: tuple[int, int],
     device: str | torch.device,
     plan: FeaturePlan,
     sampler: SamplerPlan,
@@ -382,7 +384,6 @@ def build_root_batch(
     batch = build_batch(
         pinned,
         kept,
-        fanouts=fanouts,
         device=device,
         plan=plan,
         sampler=sampler,

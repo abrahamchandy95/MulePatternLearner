@@ -313,7 +313,6 @@ class _TrainingRun:
         return build_root_batch(
             self.contexts,
             keys,
-            fanouts=self.sampler.fanouts,
             device=self.batch_device,
             plan=self.plan,
             sampler=self.sampler,

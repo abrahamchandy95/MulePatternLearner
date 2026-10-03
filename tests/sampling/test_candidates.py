@@ -33,6 +33,8 @@ from mule_pattern_learner.testing.builders import (
 from mule_pattern_learner.testing.fake_graph import FakeStore
 
 MPS = torch.backends.mps.is_available()
+# The resampled pools, drawn into 8 and 4 neighbour slots per context.
+NARROW = replace(RESAMPLE, fanouts=(8, 4))
 
 
 def test_resample_caps_reserve_and_backfill_follow_the_stratified_merge() -> None:
@@ -141,17 +143,18 @@ def test_eval_is_deterministic_and_device_independent() -> None:
         select_resampled(table, hop=1, sampler=other, fanout=8, mode="eval"), expected
     )
     plan = FeaturePlan(CORE_GROUPS, "tgat")
-    one = build_batch(
-        store, keys, plan=plan, sampler=RESAMPLE, mode="eval", step_seed=1, fanouts=(8, 4)
-    )
-    two = build_batch(
-        store, keys, plan=plan, sampler=RESAMPLE, mode="eval", step_seed=2, fanouts=(8, 4)
-    )
+    one = build_batch(store, keys, plan=plan, sampler=NARROW, mode="eval", step_seed=1)
+    two = build_batch(store, keys, plan=plan, sampler=NARROW, mode="eval", step_seed=2)
     for name in one:
         assert torch.equal(one[name], two[name])
     if MPS:
         three = build_batch(
-            store, keys, plan=plan, sampler=RESAMPLE, mode="eval", device="mps", fanouts=(8, 4)
+            store,
+            keys,
+            plan=plan,
+            sampler=NARROW,
+            mode="eval",
+            device="mps",
         )
         for name in one:
             if name.endswith("edge"):
@@ -226,13 +229,28 @@ def test_train_mode_varies_with_step_seed_and_ignores_wire_order() -> None:
         assert np.array_equal(mps, draws[3])
     plan = FeaturePlan(CORE_GROUPS, "tgat")
     a = build_batch(
-        store, keys, plan=plan, sampler=RESAMPLE, mode="train", step_seed=10, fanouts=(8, 4)
+        store,
+        keys,
+        plan=plan,
+        sampler=NARROW,
+        mode="train",
+        step_seed=10,
     )
     b = build_batch(
-        store, keys, plan=plan, sampler=RESAMPLE, mode="train", step_seed=10, fanouts=(8, 4)
+        store,
+        keys,
+        plan=plan,
+        sampler=NARROW,
+        mode="train",
+        step_seed=10,
     )
     c = build_batch(
-        store, keys, plan=plan, sampler=RESAMPLE, mode="train", step_seed=11, fanouts=(8, 4)
+        store,
+        keys,
+        plan=plan,
+        sampler=NARROW,
+        mode="train",
+        step_seed=11,
     )
     assert all(torch.equal(a[n], b[n]) for n in a)
     assert not all(a[n].shape == c[n].shape and torch.equal(a[n], c[n]) for n in a)

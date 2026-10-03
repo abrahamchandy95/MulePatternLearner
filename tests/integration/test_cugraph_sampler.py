@@ -99,10 +99,9 @@ def test_real_batches_per_backend_and_a_deterministic_cuda_step(engine: CuGraphS
         prepared = build_root_batch(
             contexts,
             keys,
-            fanouts=sampler.fanouts,
             device="cuda",
             plan=plan,
-            sampler=replace(sampler, backend=backend),
+            sampler=replace(replace(sampler, backend=backend), fanouts=sampler.fanouts),
             hubs=hubs,
             mode=mode,
             step_seed=7,

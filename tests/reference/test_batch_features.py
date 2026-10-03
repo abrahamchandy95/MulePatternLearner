@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 import torch
@@ -99,12 +101,10 @@ def reference_batch(
 def test_vectorised_assembly_matches_the_scalar_features_bit_for_bit(
     mode: str, plan: FeaturePlan
 ) -> None:
-    sampler = POOLED
+    sampler = replace(POOLED, fanouts=(8, 4))
     store = FakeStore(sampler)
     keys = roots(12) + roots(2)  # duplicate roots, as PU batches draw with replacement
-    batch = build_batch(
-        store, keys, fanouts=(8, 4), plan=plan, sampler=sampler, mode=mode, step_seed=5
-    )
+    batch = build_batch(store, keys, plan=plan, sampler=sampler, mode=mode, step_seed=5)
     expected = reference_batch(store, keys, (8, 4), plan, sampler, mode=mode, step_seed=5)
     assert set(batch) == set(expected)
     for name, value in expected.items():
