@@ -266,8 +266,20 @@ class FakeTigerGraph:
             ]
         raise AssertionError(f"Unexpected query {name}")
 
-    def call(self, operation: Callable[[Any], Any], *, what: str, **_: Any) -> Any:
-        """A connection operation, run once (the real executor would retry it)."""
+    def call(
+        self,
+        operation: Callable[[Any], Any],
+        *,
+        what: str,
+        attempts: int | None = None,
+        **_: Any,
+    ) -> Any:
+        """A connection operation, run once (the real executor would retry it).
+
+        The install request writes, so it must run with one attempt, as GSQL writes must.
+        """
+        if what == "installQueries":
+            assert attempts == 1, f"{what} writes, so it must run once"
         return operation(self.client.conn)
 
     def gsql(self, text: str, *, what: str = "gsql", attempts: int | None = None) -> str:

@@ -248,6 +248,13 @@ def test_install_writes_run_once_through_the_executor() -> None:
     with pytest.raises(TransientQueryError, match=r"CREATE QUERY .* 1 attempt"):
         installer.install(tg)
     assert len(writes) == 1 and tg.sleeps == [] and not server.installs
+    # The fake graph holds the install request to one attempt, as it does a GSQL write.
+
+    def request(conn: Any) -> Any:
+        return conn.installQueries([CUTOFF_QUERY])
+
+    with pytest.raises(AssertionError, match="installQueries writes"):
+        FakeTigerGraph().call(request, what="installQueries")
 
 
 def installed_repository() -> dict[str, str]:
