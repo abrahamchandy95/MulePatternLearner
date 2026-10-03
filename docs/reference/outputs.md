@@ -218,7 +218,7 @@ backend differ from the suite's usual value).
 | `comparison_delta.png` | Validation audit AP minus the baseline's: the paired interval, per-seed deltas, zero line; filled when consistent |
 | `comparison_budget.png` | Validation audit recall at 1%, 5% and 10% per variant |
 | `comparison_capture.png` | Seed-mean validation capture curves, one panel per variant with the baseline in each |
-| `comparison_validation.png` | Seed-mean proxy AP per epoch, one panel per variant with the baseline in each |
+| `comparison_validation.png` | Seed-mean proxy AP per epoch, up to the last epoch every seed trained, one panel per variant with the baseline in each |
 | `comparison_proxy_vs_audit.png` | Selected proxy AP against validation audit AP per run, with Spearman's rank correlation |
 
 ## A diagnostic study: `results/diagnostics/<dataset id>/`

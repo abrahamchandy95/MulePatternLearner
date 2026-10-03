@@ -8,6 +8,7 @@ import struct
 import subprocess
 import sys
 
+import pandas as pd
 import pytest
 
 from mule_pattern_learner.paths import REPOSITORY_ROOT, RunPaths
@@ -15,6 +16,7 @@ from mule_pattern_learner.reporting import report
 from mule_pattern_learner.reporting.report import (
     AUDIT_FIGURES,
     TRAINING_FIGURES,
+    mean_epochs,
     report_run,
     write_audit_report,
     write_training_report,
@@ -157,3 +159,14 @@ def test_drawing_never_imports_pyplot(tmp_path: Path) -> None:
         cwd=REPOSITORY_ROOT,
     )
     assert result.stdout.strip() == "[]"
+
+
+def test_a_seed_mean_curve_ends_at_the_last_epoch_every_seed_trained() -> None:
+    def epochs(count: int, ap: float) -> pd.DataFrame:
+        return pd.DataFrame({"epoch": range(1, count + 1), "validation_ap": [ap] * count})
+
+    # Early stopping ended seed 43 after three epochs: the mean of seed 42 alone after it
+    # would read as a mean over both.
+    curve = mean_epochs("variant", {42: epochs(5, 0.2), 43: epochs(3, 0.4)})
+    assert curve.x.tolist() == [1, 2, 3] and curve.y == pytest.approx([0.3, 0.3, 0.3])
+    assert curve.seeds == 2

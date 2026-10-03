@@ -70,7 +70,8 @@ def plot_precision_recall(ax: Axes, splits: Mapping[str, SplitScores], *, title:
 
     Each step is the precision at a block of tied scores that holds positives, over the
     recall that block adds, so the area under a split's steps is its AP; each split's
-    dashed line is its prevalence, the precision of a random ranking. A split without
+    dashed line is its prevalence, the precision of a random ranking. The axis starts a
+    little below zero, so that line shows even at a prevalence of 0.001. A split without
     positives has no curve.
     """
     for split, scores in splits.items():
@@ -94,7 +95,7 @@ def plot_precision_recall(ax: Axes, splits: Mapping[str, SplitScores], *, title:
             label=f"{split} chance: prevalence {number(scores.prevalence)}",
         )
     ax.set_xlim(0, 1)
-    ax.set_ylim(0, 1.02)
+    ax.set_ylim(-0.03, 1.02)
     ax.set_xlabel("Recall")
     ax.set_ylabel("Precision")
     ax.legend(loc="upper right", title=_interval_title(splits, "average_precision"))
@@ -262,6 +263,12 @@ def plot_capture(ax: Axes, splits: Mapping[str, SplitScores], *, title: str) -> 
     that would leave the axes, cover a marker or another label, or sit nearer another
     marker than its own tries the other sides of its marker, and moves up or down clear
     if none suits.
+
+    Each curve is the interpolation the recorded budgets use, linear between block ends
+    (a budget inside a block of tied scores takes the same share of each of its
+    accounts), drawn from the left edge, so every marker lies on its curve. The labels
+    are placed against the figure's layout, which plot_capture draws for that: it must
+    draw the last panel of its figure.
     """
     drawn = {split: scores for split, scores in splits.items() if scores.y.any()}
     start = min([1e-4, *(scores.prevalence / 2 for scores in drawn.values())])
@@ -271,9 +278,11 @@ def plot_capture(ax: Axes, splits: Mapping[str, SplitScores], *, title: str) -> 
     for split, scores in drawn.items():
         colour = SPLIT_COLOURS[split]
         reviewed, found = capture_curve(scores.y, scores.score, scores.weight)
-        # Linear between block ends: a budget inside a block of tied scores takes the same
-        # share of each of its accounts.
-        ax.plot(reviewed[1:] / reviewed[-1], found[1:] / found[-1], color=colour, label=split)
+        share, recall = reviewed / reviewed[-1], found / found[-1]
+        # Linear between block ends, which the log axis bends: sampled on the grid and at
+        # every block end.
+        x = np.union1d(grid, share[share >= start])
+        ax.plot(x, np.interp(x, share, recall), color=colour, label=split)
         # A perfect ranking finds every mule once the split's prevalence is reviewed.
         perfect = np.minimum(grid / scores.prevalence, 1.0)
         ax.plot(

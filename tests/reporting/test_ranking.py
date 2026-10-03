@@ -75,6 +75,8 @@ def test_the_area_under_the_drawn_precision_steps_is_the_recorded_ap() -> None:
     assert xs(curve) == pytest.approx([0, 0.2, 1])
     assert ys(curve) == pytest.approx([1, 1, 5 / 7])
     assert ys(chance) == pytest.approx([5 / 15, 5 / 15])
+    # The axis starts below zero, so a chance line of a rare class shows above it.
+    assert ax.get_ylim()[0] < 0
     legend = ax.get_legend()
     assert legend is not None
     assert legend.get_title().get_text() == "ring-clustered 90% intervals"
@@ -127,6 +129,21 @@ def test_the_capture_figure_marks_the_recorded_budgets_on_its_curve() -> None:
         "random ranking",
         "review budget: recall / precision",
     ]
+
+
+def test_a_budget_inside_the_first_block_lies_on_the_curve() -> None:
+    # Three mules and seven non-mules tie at the top score, a block of 1.8% of the
+    # weighted accounts, so the 1% budget ends inside it.
+    y = np.r_[np.ones(3), np.zeros(7), np.ones(2), np.zeros(388)].astype(np.int64)
+    score = np.r_[np.ones(10), np.linspace(0.9, 0.0, 390)]
+    weight = np.where(y == 1, 1.0, 12.0)
+    ax = axes()
+    plot_capture(ax, {"test": split_scores(y, score, weight)}, title="t")
+    curve = ax.get_lines()[0]
+    budgets = capture_at_budgets(y, score, weight)
+    assert np.interp(0.01, xs(curve), ys(curve)) == pytest.approx(budgets["recall_at_1pct"])
+    # The curve starts at the left edge, inside that block.
+    assert xs(curve)[0] == pytest.approx(ax.get_xlim()[0])
 
 
 def test_the_capture_labels_move_clear_of_each_other() -> None:

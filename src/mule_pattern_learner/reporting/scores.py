@@ -15,7 +15,7 @@ from numpy.typing import NDArray
 
 from ..metrics import precision_recall_curve
 from .ranking import SplitScores, share_label, top_share_axis
-from .style import HIDDEN, INK, MULE, NON_MULE, REVEALED, SURFACE, measure, number
+from .style import HIDDEN, INK, MULE, NON_MULE, REVEALED, SURFACE, legend_below, measure, number
 
 # The smallest score and distance from 1 that log10_odds tells apart: a float64 score
 # rounds to 1 above a logit of about 37, which would otherwise have infinite odds.
@@ -26,6 +26,13 @@ def log10_odds(score: NDArray[np.float64] | float) -> NDArray[np.float64]:
     """log10(score / (1 - score)), within plus or minus 16."""
     p = np.asarray(score, dtype=np.float64)
     return np.log10(np.maximum(p, SMALLEST)) - np.log10(np.maximum(1 - p, SMALLEST))
+
+
+def threshold_label(threshold: float) -> str:
+    """The selected threshold in the axis' units, log10 odds, and as the score it is."""
+    return (
+        f"selected threshold: log10 odds {float(log10_odds(threshold)):.2f} (score {threshold:.6g})"
+    )
 
 
 def _threshold_line(ax: Axes, threshold: float, label: str) -> None:
@@ -47,14 +54,15 @@ def plot_threshold_metrics(ax: Axes, scores: SplitScores, threshold: float) -> A
     ):
         ax.plot(x, values[::-1], drawstyle="steps-pre", label=label, **measure(index))
     chosen = (
-        f"selected threshold {threshold:.6g}: precision "
-        f"{number(scores.metrics.get('precision'))}, recall {number(scores.metrics.get('recall'))}"
+        f"{threshold_label(threshold)},\nprecision {number(scores.metrics.get('precision'))}, "
+        f"recall {number(scores.metrics.get('recall'))}"
     )
     _threshold_line(ax, threshold, chosen)
     ax.set_ylim(0, 1.02)
     ax.set_xlabel("Threshold, log10 odds of the score (0 is a score of 0.5)")
     ax.set_ylabel("Weighted estimate")
-    ax.legend(loc="center left")
+    # Under the axes: the threshold's label is long, and the curves cross the middle.
+    legend_below(ax, *ax.get_legend_handles_labels(), ncols=2)
     ax.set_title("Test audit: precision, recall and F1 at each threshold")
     return ax
 
@@ -85,11 +93,12 @@ def plot_score_distribution(ax: Axes, scores: SplitScores, threshold: float) -> 
             linewidth=1.6,
             label=f"{label}: {sampled:,} sampled{stands_for}",
         )
-    _threshold_line(ax, threshold, f"selected threshold {threshold:.6g}")
+    _threshold_line(ax, threshold, threshold_label(threshold))
     ax.set_ylim(bottom=0)
     ax.set_xlabel("log10 odds of the score (0 is a score of 0.5)")
     ax.set_ylabel("Weighted density")
-    ax.legend(loc="upper center")
+    # Under the axes: the densities and the threshold leave no corner free.
+    legend_below(ax, *ax.get_legend_handles_labels(), ncols=1)
     ax.set_title("Test audit: score densities of mules and non-mules")
     return ax
 
