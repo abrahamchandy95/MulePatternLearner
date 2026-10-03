@@ -30,11 +30,11 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 import pandas as pd
-from sklearn.metrics import average_precision_score, roc_auc_score
 import torch
 from torch import nn
 
 from ..artifacts import DIAGNOSTIC_TABLES
+from ..metrics import average_precision, roc_auc
 from ..model.loss import NonNegativePULoss
 
 COLUMNS = DIAGNOSTIC_TABLES["nnpu_simulation"]
@@ -68,6 +68,13 @@ class Problem:
     epochs: int = 30
     patience: int = 6
     hidden: int = 64
+
+
+def measured(value: float | None) -> float:
+    """A metric of a simulated split, which holds both classes by construction."""
+    if value is None:
+        raise ValueError("A simulated split holds no positive or no negative")
+    return value
 
 
 def draw(
@@ -133,7 +140,7 @@ def simulate(weight: float, seed: int, problem: Problem = Problem()) -> dict[str
             nn.utils.clip_grad_norm_(model.parameters(), 5.0)
             optimizer.step()
         model.eval()
-        found = float(average_precision_score(validation_y, scores(model, validation)))
+        found = measured(average_precision(validation_y, scores(model, validation)))
         if best is None or found > best[0]:
             best = (found, epoch, scores(model, test), scores(model, labelled))
         stopped = epoch
@@ -144,8 +151,8 @@ def simulate(weight: float, seed: int, problem: Problem = Problem()) -> dict[str
     top = np.argsort(-test_scores, kind="stable")[: max(int(0.01 * len(test_y)), 1)]
     return {
         "validation_average_precision": validation_ap,
-        "test_average_precision": float(average_precision_score(test_y, test_scores)),
-        "test_roc_auc": float(roc_auc_score(test_y, test_scores)),
+        "test_average_precision": measured(average_precision(test_y, test_scores)),
+        "test_roc_auc": measured(roc_auc(test_y, test_scores)),
         "test_precision_at_1pct": float(test_y[top].mean()),
         "labelled_positive_mean_score": float(labelled_scores.mean()),
         "test_negative_mean_score": float(test_scores[test_y == 0].mean()),

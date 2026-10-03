@@ -44,9 +44,10 @@ from ..metrics import (
     bootstrap_intervals,
     budget_name,
     ranking_metrics,
+    roc_auc,
 )
 from .feature_table import FAMILIES, family_of, usable
-from .univariate import varying, weighted_auc
+from .univariate import varying
 
 COLUMNS = DIAGNOSTIC_TABLES["baselines"]
 # The learners: an L2 logistic regression on signed log1p, standardised inputs, and a
@@ -256,7 +257,7 @@ def single_features(frame: pd.DataFrame, count: int) -> list[tuple[str, float]]:
     y, weight = train.is_mule.to_numpy(), train.weight.to_numpy()
     found: list[tuple[float, str, float]] = []
     for name in model_columns(frame, FAMILIES):
-        auc = weighted_auc(y, train[name].to_numpy(np.float64), weight)
+        auc = roc_auc(y, train[name].to_numpy(np.float64), weight)
         if auc is not None:
             found.append((abs(auc - 0.5), name, 1.0 if auc >= 0.5 else -1.0))
     found.sort(key=lambda item: -item[0])

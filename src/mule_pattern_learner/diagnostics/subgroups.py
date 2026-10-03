@@ -27,8 +27,7 @@ import numpy as np
 import pandas as pd
 
 from ..artifacts import DIAGNOSTIC_TABLES
-from ..metrics import REVIEW_BUDGETS, average_precision, budget_name
-from .univariate import weighted_auc
+from ..metrics import REVIEW_BUDGETS, average_precision, budget_name, roc_auc
 
 COLUMNS = DIAGNOSTIC_TABLES["subgroups"]
 
@@ -91,7 +90,7 @@ def split_rows(split: str, frame: pd.DataFrame) -> list[tuple[Any, ...]]:
         mules = (y == 1) & chosen
         keep = (y == 0) | mules
         add(subset, "mules", int(mules.sum()))
-        add(subset, "roc_auc", weighted_auc(y[keep], score[keep], weight[keep]))
+        add(subset, "roc_auc", roc_auc(y[keep], score[keep], weight[keep]))
         for fraction in REVIEW_BUDGETS:
             add(subset, f"in_top_{budget_name(fraction)}", int((mules & (share <= fraction)).sum()))
         if mules.any():

@@ -26,10 +26,10 @@ from sklearn.model_selection import StratifiedKFold
 
 from ..artifacts import DIAGNOSTIC_TABLES
 from ..contract.graph_schema import HELD_OUT_SPLITS
-from ..metrics import ranking_metrics, weighted_quantiles
+from ..metrics import ranking_metrics, roc_auc, weighted_quantiles
 from .baselines import KINDS, fit_scores, model_columns
 from .feature_table import FAMILIES, FEATURE_SPLITS, family_of, usable
-from .univariate import varying, weighted_auc
+from .univariate import varying
 
 COLUMNS = DIAGNOSTIC_TABLES["drift"]
 QUANTILES = (0.1, 0.5, 0.9)
@@ -66,7 +66,7 @@ def feature_shift(frame: pd.DataFrame) -> list[tuple[Any, ...]]:
             spread = np.sqrt((var + train_var) / 2)
             smd = (mean - train_mean) / spread if spread > 0 else 0.0
             labels = np.concatenate([np.zeros(len(train_x)), np.ones(len(x))])
-            auc = weighted_auc(labels, np.concatenate([train_x, x]), np.concatenate([train_w, w]))
+            auc = roc_auc(labels, np.concatenate([train_x, x]), np.concatenate([train_w, w]))
             above = float(np.average(x > high, weights=w))
             for metric, value in (("smd", smd), ("shift_auc", auc), ("above_train_q90", above)):
                 if value is not None:
