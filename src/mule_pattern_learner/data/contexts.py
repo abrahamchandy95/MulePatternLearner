@@ -177,7 +177,10 @@ class ContextSource:
     that asks for a claimed key awaits the claim rather than reading or requesting the
     key again, so each context is requested once while its entry lasts, however the LRU
     churns. The first request and every `encoding_check_every`-th request ask
-    TigerGraph for Fourier vectors and verify them. This adapter bounds client memory,
+    TigerGraph for Fourier vectors and verify them, counted over every fetch the source
+    serves (both audits of an evaluation share one source). A row read from disk is not
+    checked again: it was validated when its request wrote it, so a source that reads
+    every context from disk verifies no encoding. This adapter bounds client memory,
     not TigerGraph scan work. Train against a frozen source for reproducibility: the
     disk tier's entries are the frozen source's rows.
     """

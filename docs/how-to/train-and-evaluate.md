@@ -163,8 +163,14 @@ so leave `data/` and `results/` empty or move them aside.
     ([Run the control experiments](run-control-experiments.md)).
 11. **`mule diagnose`.** Its first run installs the analytics queries, then
     `python -m pytest -m graph` checks them ([Run the diagnostics](run-diagnostics.md)).
-12. **The cache cap.** Set `contract.bounds.CONTEXT_CACHE_ENTRIES` from the baseline
-    run's `contexts.distinct` ([Outputs](../reference/outputs.md)).
+12. **The cache cap.** Set `contract.bounds.CONTEXT_CACHE_ENTRIES` to about five times
+    the baseline run's `contexts.distinct` (in its `metrics.json`). The runs of a dataset
+    share entries when they request the same server-side groups, so the cache holds the
+    baseline's contexts once, once more for each variant that drops a server-side group
+    (`drop_entity_meta`, `drop_time_encoding`, `drop_pair_history`, `drop_flow_timing`),
+    and the audits' samples beside them. At roughly 7 kB an entry, check that the disk
+    has room, and watch the first run that fills the cache: each eviction scans the
+    directory while the requests wait ([Outputs](../reference/outputs.md#a-prepared-dataset-datadataset-id)).
 
 If cuGraph fails its probe, training warns (`cugraph_probe`) and samples with the torch
 sampler, which draws from the same distribution.
