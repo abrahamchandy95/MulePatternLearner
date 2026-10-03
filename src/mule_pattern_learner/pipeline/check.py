@@ -1,19 +1,19 @@
 """Read-only readiness of the graph and the built-in run, which `mule check` prints.
 
 check connects with the run's transport section (the connection refuses a graph other
-than contract.server.GRAPH_NAME) and reports whether the scope vertex type exists, which training
-queries are installed with the repository text, which retired queries `mule install`
-would drop and, on a CUDA host, what the cuGraph probe found. When all of them are ready and the run's dataset is prepared in data/, it
-builds the first training batch the way train() builds it and runs one optimizer step
-(first_step). Its source has no disk tier: the batch's contexts are requested from
-TigerGraph, not read from the dataset's context cache, so the installed context query
-and its first Fourier spot check run, and the REST calls and seconds are the graph's.
-The report has the digest of every batch tensor
-(batching.assemble.tensor_digests, the definition the golden-run test pins) and the
-step's loss and objective, the first values train() logs. Two code versions built the
-same batch and step when both print the same digests and loss on one machine and
-device. Nothing is written to the graph and no dataset is prepared: `mule train` does
-that.
+than contract.server.GRAPH_NAME) and reports whether the scope vertex type exists,
+which training queries are installed with the repository text, which retired queries
+`mule install` would drop and, on a CUDA host, what the cuGraph probe found. When all of
+them are ready and the run's dataset is prepared in data/, it builds the first training
+batch the way train() builds it and runs one optimizer step (first_step). Its source
+has no disk tier: the batch's contexts are requested from TigerGraph, not read from the
+dataset's context cache, so the installed context query and its first Fourier spot
+check run, and the REST calls and seconds are the graph's. The report has the digest of
+every batch tensor (batching.assemble.tensor_digests, the definition the golden-run
+test pins) and the step's loss and objective, the first values train() logs. Two code
+versions built the same batch and step when both print the same digests and loss on one
+machine and device. Nothing is written to the graph and no dataset is prepared: `mule
+train` does that.
 """
 
 from __future__ import annotations

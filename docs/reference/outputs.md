@@ -84,8 +84,9 @@ removing `contexts/` by hand only costs the requests again.
 | `plots/<topic>_<figure>.png` | train, evaluate, report | The figures, PNG at 150 dpi |
 | `report.md` | train, evaluate, report | The run's tables, with links to its figures |
 
-Scores in every output are float64 probabilities computed from the model's logit: in
+Scores in every output are the sigmoid of the model's logit, computed in float64: in
 float32 every logit above about 17 scored exactly 1, so the highest-scored accounts tied.
+They rank accounts; under the balanced nnPU weight they are not calibrated probabilities.
 
 ### history.csv
 
@@ -210,7 +211,11 @@ budget (`validation_recall_at_1pct`, `validation_precision_at_1pct` and so on fo
 `10pct` and the test split); `best_epoch`, `parameter_count` and `training_hours`;
 `unpaired_accounts` (validation accounts left out of the pairing because some audit
 rejected them); and `differs` (the runs whose commit, dirty state, device or sampler
-backend differ from the suite's usual value).
+backend differ from the suite's usual value). The seed-mean AP is the mean of each run's
+own audit, while its interval and the delta come from the accounts every audit scored, so
+when `unpaired_accounts` is above 0 the mean can fall outside its interval. The built-in
+rejection limit of 0 fails any audit that rejects an account, so it is 0 for the built-in
+variants.
 
 | Figure | What it shows |
 |---|---|

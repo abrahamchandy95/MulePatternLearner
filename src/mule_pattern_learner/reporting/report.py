@@ -18,7 +18,7 @@ from .suite_report import write_suite_report
 
 
 def report_directory(directory: Path) -> dict[str, Any]:
-    """`mule report`: redraw a suite's or a study's report if directory holds one, else the run's."""
+    """`mule report`: redraw the suite's or study's report directory holds, else its run's."""
     suite = SuitePaths(directory)
     if suite.summary.exists():
         return write_suite_report(suite)

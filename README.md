@@ -20,10 +20,12 @@ the data loaded ([Set up a graph](docs/how-to/set-up-a-graph.md)).
 
 ## Setup
 
-Python 3.12 or newer, installed in editable mode, since the commands read `gsql/` from
-the repository:
+Python 3.12 or newer, in a virtual environment `.venv` (the development commands below
+use it), installed in editable mode, since the commands read `gsql/` from the repository:
 
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 

@@ -9,7 +9,9 @@ queries that write run with one attempt. `call` and `gsql` run on its connection
 (FakeConnection), which answers SHOW QUERY with the installed text, lists the installed
 endpoints, creates, installs and drops queries and reports the schema, the vertex counts
 and the scope headers; every GSQL statement that writes must run with one attempt too.
-It is the one fake executor. FakeStore and FakeSource stand in for context sources, for
+It is the one fake executor; a few tests script a connection of their own behind the
+real executor (testing.fake_connection) for a query it does not answer. FakeStore and
+FakeSource stand in for context sources, for
 the tests that need no graph behind them.
 """
 
@@ -502,7 +504,8 @@ def retired_query(name: str, calls: str | None = None) -> str:
     """
     callee = calls or RETIRED_CALLS.get(name)
     body = f"{callee}(0); PRINT 1;" if callee else "PRINT 1;"
-    return f"CREATE QUERY {name}(INT unused = 0) FOR GRAPH {GRAPH_NAME} SYNTAX V2 {{ {body} }}"
+    header = f"CREATE QUERY {name}(INT unused = 0) FOR GRAPH {GRAPH_NAME} SYNTAX V2"
+    return f"{header} {{ {body} }}"
 
 
 class FakeConnection:
@@ -510,8 +513,9 @@ class FakeConnection:
 
     GSQL runs SHOW QUERY, CREATE OR REPLACE QUERY (which disables the endpoint until the
     query is installed again), DROP QUERY (refused, as TigerGraph refuses it, while another
-    query calls the query) and the scope schema change; any other GSQL fails. installQueries installs at once. The one interpreted query it runs is the
-    reveal's inputs query, which prints the graph's `reveal` rows.
+    query calls the query) and the scope schema change; any other GSQL fails.
+    installQueries installs at once. The one interpreted query it runs is the reveal's
+    inputs query, which prints the graph's `reveal` rows.
     """
 
     def __init__(self, graph: FakeTigerGraph, queries: dict[str, str]) -> None:

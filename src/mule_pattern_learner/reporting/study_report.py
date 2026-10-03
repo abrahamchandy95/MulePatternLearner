@@ -318,11 +318,12 @@ def univariate_section(home: Reported, frame: pd.DataFrame) -> list[str]:
         cells.append(number(_value(ap, feature=name, split="validation")))
         rows.append(cells)
     header = ["Feature", "Train ROC AUC", "Validation ROC AUC", "Test ROC AUC", "Validation AP"]
+    shown = "The feature" if len(rows) == 1 else f"The {len(rows)} features"
     return [
         "## Each feature alone",
         "",
-        f"The {REPORTED_ROWS} features whose validation ROC AUC is farthest from 0.5. The AP "
-        "ranks by the value in the direction the train split gives it.",
+        f"{shown} whose validation ROC AUC is farthest from 0.5. The AP ranks by the value "
+        "in the direction the train split gives it.",
         "",
         *table(header, rows),
         "",

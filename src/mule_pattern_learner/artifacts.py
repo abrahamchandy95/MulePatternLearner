@@ -2,8 +2,9 @@
 
 paths.DatasetPaths, paths.RunPaths, paths.SuitePaths and paths.DiagnosticsPaths say
 where each file lives; this module says what the tables and JSON files of runs, suites
-and diagnostic studies hold, and holds the one atomic write and the one file digest. model.pt and resume.pt are torch payloads, which
-inference.saved_model.SavedModel and training.checkpoint.ResumeState define.
+and diagnostic studies hold, and holds the one atomic write and the one file digest.
+model.pt and resume.pt are torch payloads, which inference.saved_model.SavedModel and
+training.checkpoint.ResumeState define.
 """
 
 from __future__ import annotations

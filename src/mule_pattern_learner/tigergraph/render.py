@@ -1019,7 +1019,8 @@ def render_analytics_query(contract: str = ANALYTICS_CONTRACT) -> str:
 def derived_contract(prefix: str, text: str) -> str:
     """prefix and the first 12 hex digits of the sha256 of text, normalised.
 
-    gsql_text.normalized drops comments and whitespace. text is a query rendered with
+    gsql_text.normalized drops comments and whitespace and lower-cases the text outside
+    string literals. text is a query rendered with
     an empty contract literal, so the value covers the whole query but itself.
     """
     return prefix + hashlib.sha256(normalized(text).encode()).hexdigest()[:12]

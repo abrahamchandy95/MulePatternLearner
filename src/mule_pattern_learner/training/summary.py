@@ -1,4 +1,4 @@
-"""What a run records: its provenance, the predictions and the metrics (model.pt is SavedModel's)."""
+"""What a run records: its provenance, predictions and metrics (model.pt is SavedModel's)."""
 
 from __future__ import annotations
 

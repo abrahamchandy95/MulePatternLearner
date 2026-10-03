@@ -110,7 +110,8 @@ def test_the_contract_is_derived_from_the_rendered_query(
     rendered = render_context_query() if name == "CONTEXT_QUERY" else render_analytics_query()
     assert rendered.count(f'"{recorded}" AS contract_version') == 1
 
-    # Comments and whitespace do not count; any other change names a new contract.
+    # Comments, whitespace and the case outside string literals do not count; any other
+    # change names a new contract.
     def commented(*args: Any) -> str:
         return "/* a comment */ " + header(*args)
 
