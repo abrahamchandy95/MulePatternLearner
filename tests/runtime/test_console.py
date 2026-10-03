@@ -153,6 +153,26 @@ def records(run: Path) -> list[tuple[dict[str, Any], str | None]]:
             "results/baseline/seed-42 is complete; its metrics.json is summarised below",
         ),
         (
+            {
+                "event": "already_audited",
+                "run": str(run),
+                "reports": [
+                    str(run / "audit" / f"{split}.json") for split in ("validation", "test")
+                ],
+            },
+            "results/baseline/seed-42 is already audited on validation and test; its "
+            "audit/validation.json and audit/test.json are summarised below",
+        ),
+        (
+            {
+                "event": "already_audited",
+                "run": str(run),
+                "reports": [str(run / "audit" / "validation.json")],
+            },
+            "results/baseline/seed-42 is already audited on validation; its "
+            "audit/validation.json is summarised below",
+        ),
+        (
             {"event": "start", **host, "known_mules": KNOWN, "run": str(run), **plan}
             | {"epoch": 0, "step": 0, "database_calls": 0, "elapsed_seconds": 0.1},
             "Training on cuda (cuGraph sampler) into results/baseline/seed-42: 100 steps per "

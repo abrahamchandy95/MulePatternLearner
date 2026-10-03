@@ -117,8 +117,9 @@ precision at 1, 5 and 10%, each with its 90% interval. Read `report.md`, or
   `audit_revealed_hidden.png`: a model that finds only mules like the ones it was shown is
   not yet a detector.
 
-A split already audited is never rewritten. To audit again, move its `audit/<split>.*`
-files aside.
+A split already audited is never rewritten: the command says it read its
+`audit/<split>.json` and summarises it with the others. To audit again, move its
+`audit/<split>.*` files aside.
 
 ## Redraw the figures
 

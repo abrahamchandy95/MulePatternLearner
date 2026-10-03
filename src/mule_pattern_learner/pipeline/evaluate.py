@@ -14,7 +14,7 @@ from ..evaluation.audit import AUDIT_SPLITS, audit, audit_inputs
 from ..evaluation.truth import TruthReader
 from ..paths import DATA_DIR, RunPaths
 from ..reporting.run_report import write_audit_report
-from ..runtime.progress import recording
+from ..runtime.progress import emit, recording
 from ..tigergraph.oracle import TigerGraphTruthReader
 from ..tigergraph.provenance import verify_frozen_source
 from ..tigergraph.scope import TigerGraphScopeReader
@@ -49,7 +49,8 @@ def evaluate_run(
     """The audits of a run's frozen model on validation and test, by split.
 
     Decisions use the validation audit; the test audit is for reporting. A split the
-    run has already audited is reported from its audit/<split>.json and left as it was.
+    run has already audited is reported from its audit/<split>.json and left as it was,
+    and an `already_audited` event names the reports read.
     The others are audited on one connection, opened once the model and its dataset
     (the model's own in data) passed their checks. The connection has the model's retry
     budgets, and its source must still be the frozen one the dataset was prepared from;
@@ -66,6 +67,9 @@ def evaluate_run(
     reports = {
         split: read_json(run.audit_report(split)) for split in AUDIT_SPLITS if inputs.audited(split)
     }
+    if reports:
+        audited = [str(run.audit_report(split)) for split in reports]
+        emit({"event": "already_audited", "run": str(run.root), "reports": audited})
     pending = [split for split in AUDIT_SPLITS if split not in reports]
     if pending:
         with recording(run.events):

@@ -283,6 +283,14 @@ def _already_complete(record: Mapping[str, Any]) -> str:
     return f"{shown_path(record['run'])} is complete; its metrics.json is summarised below"
 
 
+def _already_audited(record: Mapping[str, Any]) -> str:
+    run, reports = Path(record["run"]), [Path(report) for report in record["reports"]]
+    splits = " and ".join(report.stem for report in reports)
+    files = " and ".join(report.relative_to(run).as_posix() for report in reports)
+    summarised = "is summarised" if len(reports) == 1 else "are summarised"
+    return f"{shown_path(run)} is already audited on {splits}; its {files} {summarised} below"
+
+
 def _sampler(backend: Any) -> str:
     return "cuGraph" if backend == "cugraph" else str(backend)
 
@@ -449,6 +457,7 @@ LINES: dict[str, Line] = {
     "hubs": _hubs,
     "dataset": _dataset,
     "already_complete": _already_complete,
+    "already_audited": _already_audited,
     "start": _start,
     "resume": _start,
     "train": _train,
