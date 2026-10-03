@@ -6,13 +6,15 @@ run's directory, results/baseline/seed-42. Each command shows its progress and t
 short summary; the full records are in the files it writes (events.jsonl, history.csv,
 epochs.csv, metrics.json, audit/), and what it did before a run, a dataset or a study
 recorded its events is in results/events.jsonl. It exits 1 when the graph is not ready
-(check), the study is incomplete (diagnose) or TigerGraph's failures outlast the retries.
+(check), the study is incomplete (diagnose) or TigerGraph's failures outlast the retries;
+the error that stops a command is recorded beside its other records.
 """
 
 from __future__ import annotations
 
 import argparse
 from collections.abc import Mapping
+import contextlib
 from pathlib import Path
 from typing import Any
 
@@ -39,8 +41,8 @@ from .runtime.console import (
     table,
 )
 from .runtime.device import reserve_deterministic_cublas
-from .runtime.progress import recording
-from .tigergraph.executor import TigerGraphUnavailableError, TransientQueryError
+from .runtime.progress import emit, raised_in, recording
+from .tigergraph.executor import TigerGraphUnavailableError, TransientQueryError, error_summary
 
 
 def run_directory(value: str) -> RunPaths:
@@ -370,6 +372,38 @@ def stopped(command: str, error: TransientQueryError) -> str:
     return f"{command} stopped: a TigerGraph request kept failing. {sentence(str(error))}"
 
 
+def error_record(error: Exception) -> dict[str, Any]:
+    """The record of the error that stops a command: `command_stopped` or `command_failed`.
+
+    TigerGraph's failures that outlast the retries stop it (`command_stopped`), as its
+    stderr line says; any other error is a bug (`command_failed`), shown with its
+    traceback, whose record also keeps its type, named as the traceback names it, and
+    its whole message. Both give the error's summary (error_summary).
+    """
+    summary = {"error": error_summary(error)}
+    if isinstance(error, TransientQueryError):
+        return {"event": "command_stopped", **summary}
+    kind = type(error)
+    named = "" if kind.__module__ == "builtins" else f"{kind.__module__}."
+    failed = {"type": named + kind.__qualname__, "message": str(error)}
+    return {"event": "command_failed", **summary, **failed}
+
+
+def record_error(command: str, error: Exception, events: Path | None) -> None:
+    """Record the error that stops ``command`` beside the records that came before it.
+
+    The record goes to the events.jsonl that was recording when the error was raised
+    (raised_in): the run's, the dataset's or the study's, or results/events.jsonl when
+    none of them was; else to ``events``, if it names one. It names the command after
+    its time. A record that cannot be written gives way to the error itself.
+    """
+    where = raised_in(error) or events
+    if where is None:
+        return
+    with contextlib.suppress(OSError), recording(where, command=command):
+        emit(error_record(error))
+
+
 def main() -> None:
     # Before any CUDA work: deterministic cuBLAS GEMMs need a fixed workspace.
     reserve_deterministic_cublas()
@@ -385,9 +419,16 @@ def main() -> None:
     except TransientQueryError as error:
         # The retries were shown as they happened; the failure that ended them goes to
         # stderr, without the traceback of a bug, and the command exits 1. A line
-        # rewritten in place ends first, so the failure starts a line of its own.
+        # rewritten in place ends first, so the failure starts a line of its own. Its
+        # record keeps it beside the retries, since stderr may be only on a screen.
         end_progress()
+        record_error(args.command, error, events)
         raise SystemExit(stopped(f"mule {args.command}", error)) from None
+    except Exception as error:
+        # A bug keeps its traceback; its record keeps its type and message.
+        end_progress()
+        record_error(args.command, error, events)
+        raise
     except BaseException:
         end_progress()
         raise

@@ -31,7 +31,7 @@ def main() -> int:
     from mule_pattern_learner.runtime.device import reserve_deterministic_cublas
 
     reserve_deterministic_cublas()
-    from mule_pattern_learner.cli import stopped
+    from mule_pattern_learner.cli import record_error, stopped
     from mule_pattern_learner.experiments.runner import run_suite, suite_summary
     from mule_pattern_learner.runtime.console import end_progress, show
     from mule_pattern_learner.tigergraph.executor import TransientQueryError
@@ -39,9 +39,15 @@ def main() -> int:
     try:
         result = run_suite(args.names)
     except TransientQueryError as error:
-        # An outage while preparing the dataset stops the suite before any run.
+        # An outage while preparing the dataset stops the suite before any run; its
+        # record goes to the dataset's or the suite's events.jsonl, as a command's does.
         end_progress()
+        record_error("run_experiments.py", error, None)
         raise SystemExit(stopped("run_experiments.py", error)) from None
+    except Exception as error:
+        end_progress()
+        record_error("run_experiments.py", error, None)
+        raise
     except BaseException:
         end_progress()
         raise

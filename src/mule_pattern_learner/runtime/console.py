@@ -469,6 +469,9 @@ LINES: dict[str, Line] = {
     "run_finished": _run_finished,
     "run_failed": _run_failed,
     "suite_stopped": _suite_stopped,
+    # What stops a command is on stderr: its one line, or a bug's traceback.
+    "command_stopped": _nothing,
+    "command_failed": _nothing,
 }
 
 

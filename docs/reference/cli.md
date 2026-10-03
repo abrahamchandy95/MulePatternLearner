@@ -34,7 +34,11 @@ A command exits 1 when the graph is not ready (`mule check`), the study is incom
 on stderr, after the retries' lines, naming the operation, the attempts and why they
 ended, then the error that ended them in about 200 characters of TigerGraph's own words
 (an HTML page by its title), so a cause such as "out of memory" is not cut. Any other
-error is raised with its traceback.
+error is raised with its traceback. Either way the error is also recorded, with the
+command, in the `events.jsonl` that was recording when it was raised (the run's, the
+dataset's, the study's or `results/events.jsonl`), so a session in tmux or under `nohup`
+keeps its cause
+([The error that stops a command](outputs.md#the-error-that-stops-a-command)).
 
 `RUN` defaults to the built-in run's directory, `results/baseline/seed-42`.
 [Outputs](outputs.md) lists every file the commands write.

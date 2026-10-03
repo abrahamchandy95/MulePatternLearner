@@ -29,6 +29,9 @@ _LOCK = threading.Lock()
 # The events.jsonl files being recorded, the innermost last, each with the command its
 # records name (None when they name none).
 _RECORDING: list[tuple[Path, str | None]] = []
+# The attribute by which an error that left a recording block names the events.jsonl
+# that was recording when it was raised (raised_in).
+_RAISED_IN = "_mule_raised_in"
 
 
 @contextlib.contextmanager
@@ -37,16 +40,32 @@ def recording(events: Path, command: str | None = None) -> Generator[None]:
 
     Each record starts with the UTC time it was emitted ("time", ISO 8601 to the second)
     and, when the block is given a command, the command that emitted it ("command"), as
-    the command line gives it for results/events.jsonl.
+    the command line gives it for results/events.jsonl. An error that leaves the block
+    goes on as it is, naming events unless a block inside it named its own (raised_in).
     """
     entry = (events, command)
     with _LOCK:
         _RECORDING.append(entry)
     try:
         yield
+    except Exception as error:
+        if raised_in(error) is None:
+            with contextlib.suppress(AttributeError):
+                setattr(error, _RAISED_IN, events)
+        raise
     finally:
         with _LOCK:
             _RECORDING.remove(entry)
+
+
+def raised_in(error: BaseException) -> Path | None:
+    """The innermost events.jsonl that was recording when error was raised, if any was.
+
+    So the command line records the error that stops a command beside the records before
+    it: in the run's, the dataset's or the study's events.jsonl, not only on stderr.
+    """
+    where = getattr(error, _RAISED_IN, None)
+    return where if isinstance(where, Path) else None
 
 
 def _stamped(record: Mapping[str, Any], command: str | None) -> dict[str, Any]:
