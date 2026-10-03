@@ -106,7 +106,7 @@ def test_each_group_has_consistent_transport_batch_and_model_width(group: str) -
     executor = FakeTigerGraph({root: context(root, [msg])})
     source = ContextSource(TigerGraphContextFetcher(executor), plan=plan, sampler=SamplerPlan())
     try:
-        batch = build_batch(source, [root], fanouts=(2, 2), plan=plan, sampler=SamplerPlan())
+        batch = build_batch(source, [root], plan=plan, sampler=SamplerPlan(fanouts=(2, 2)))
         assert batch["x"].shape[1] == len(plan.node_names)
         assert batch["first_edge"].shape[-1] == len(plan.edge_names)
         model = TGAT(16, 4, 0, plan=plan, slot_sum=False, first_fanout=8)

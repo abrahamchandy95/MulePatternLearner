@@ -785,7 +785,6 @@ def test_training_end_to_end_with_candidate_pool_neighbour_messages(tmp_path: Pa
         batch = build_batch(
             source,
             keys,
-            fanouts=sampler.fanouts,
             plan=plan,
             sampler=sampler,
             hubs=hubs,

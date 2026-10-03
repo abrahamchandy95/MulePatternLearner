@@ -253,9 +253,7 @@ def test_held_out_and_future_data_never_change_training_inputs(
         device = choose_device()
         model = build_model(config.model, plan, sampler.fanouts[0]).to(device)
         optimizer = torch.optim.AdamW(model.parameters(), lr=0.001)
-        batch = build_batch(
-            source, keys[:1], fanouts=sampler.fanouts, device=device, plan=plan, sampler=sampler
-        )
+        batch = build_batch(source, keys[:1], device=device, plan=plan, sampler=sampler)
         loss = torch.nn.functional.binary_cross_entropy_with_logits(
             model(batch), torch.ones(1, device=device)
         )

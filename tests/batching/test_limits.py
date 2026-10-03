@@ -21,7 +21,7 @@ def test_batch_limits_bound_candidate_pools_before_fetching() -> None:
     wide = SamplerPlan(roots=PoolPlan(32, 16, 16, 8), relation_fanouts=(8, 4))
     store = FakeStore(wide)
     with pytest.raises(BatchCapacityError, match="Candidate pools"):
-        build_batch(store, roots(120), fanouts=(16, 4), sampler=wide, plan=FeaturePlan())
+        build_batch(store, roots(120), sampler=replace(wide, fanouts=(16, 4)), plan=FeaturePlan())
     assert not store.calls
     BatchLimits().validate(120, (16, 4), FeaturePlan(), SamplerPlan())
     BatchLimits().validate(120, (16, 4), FeaturePlan(), replace(wide, children=PoolPlan()))
@@ -46,7 +46,7 @@ def test_budget_rejects_before_database_calls_and_tensor_allocation() -> None:
     )
     roots = [ContextKey("Account", str(i), 100, 1000) for i in range(129)]
     with pytest.raises(BatchCapacityError):
-        build_batch(source, roots, fanouts=(8, 4), plan=FeaturePlan(), sampler=SamplerPlan())
+        build_batch(source, roots, plan=FeaturePlan(), sampler=SamplerPlan(fanouts=(8, 4)))
     with pytest.raises(BatchCapacityError):
-        build_batch(source, roots[:64], fanouts=(64, 64), plan=FeaturePlan(), sampler=SamplerPlan())
+        build_batch(source, roots[:64], plan=FeaturePlan(), sampler=SamplerPlan(fanouts=(64, 64)))
     assert executor.requested == []

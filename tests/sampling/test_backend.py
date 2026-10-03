@@ -78,7 +78,8 @@ def test_build_batch_uses_the_run_backend_without_resolving(
     plan = FeaturePlan(CORE_GROUPS, "tgat")
     store = FakeStore(RESAMPLE)
     keys = roots(4)
-    options: dict[str, Any] = {"plan": plan, "sampler": RESAMPLE, "fanouts": (8, 4), "step_seed": 3}
+    sampler = replace(RESAMPLE, fanouts=(8, 4))
+    options: dict[str, Any] = {"plan": plan, "sampler": sampler, "step_seed": 3}
     for mode, given, used in (
         ("train", "torch", "torch"),
         ("eval", "torch", "torch"),
@@ -91,7 +92,7 @@ def test_build_batch_uses_the_run_backend_without_resolving(
         build_batch(store, keys, mode="train", sampler_backend="cugraph", **options)
     with pytest.raises(ValueError, match="does not fit"):
         build_batch(store, keys, mode="train", sampler_backend="numpy", **options)
-    pinned: dict[str, Any] = options | {"sampler": replace(RESAMPLE, backend="torch")}
+    pinned: dict[str, Any] = options | {"sampler": replace(sampler, backend="torch")}
     with pytest.raises(ValueError, match="does not fit"):
         build_batch(store, keys, mode="eval", sampler_backend="cugraph", **pinned)
     # The resolved backend gives the same batch as resolving per call.

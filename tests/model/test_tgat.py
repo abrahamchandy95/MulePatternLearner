@@ -49,7 +49,7 @@ def test_isolated_entities_score_under_both_architectures() -> None:
     store = ContextSource(
         TigerGraphContextFetcher(FakeTigerGraph({})), plan=FeaturePlan(), sampler=SamplerPlan()
     )
-    batch = build_batch(store, [key], fanouts=(8, 4), plan=FeaturePlan(), sampler=SamplerPlan())
+    batch = build_batch(store, [key], plan=FeaturePlan(), sampler=SamplerPlan(fanouts=(8, 4)))
     assert not batch["first_mask"].any()
     tgat = TGAT(16, 4, 0, plan=FeaturePlan(), slot_sum=False, first_fanout=8)
     summary = SummaryMLP(16, 0, plan=FeaturePlan(architecture="summary"))
@@ -146,9 +146,7 @@ def test_built_in_batches_fit_the_slot_sum_and_train_it() -> None:
     with ContextSource(
         TigerGraphContextFetcher(executor), plan=extraction_plan(PLAN), sampler=SAMPLER
     ) as source:
-        batch = build_batch(
-            source, [ROOT], fanouts=(FANOUT, 4), plan=PLAN, sampler=SAMPLER, mode="train"
-        )
+        batch = build_batch(source, [ROOT], plan=PLAN, sampler=SAMPLER, mode="train")
     model = built(CONFIG)
     assert batch["first_mask"].shape == (1, model.first_fanout)
     assert 0 < int(batch["first_mask"].sum()) < FANOUT
@@ -295,7 +293,7 @@ def test_zero_node_features_have_no_unused_projection() -> None:
     source = ContextSource(
         TigerGraphContextFetcher(FakeTigerGraph({})), plan=zero, sampler=SamplerPlan()
     )
-    batch = build_batch(source, [root], plan=zero, fanouts=(8, 4), sampler=SamplerPlan())
+    batch = build_batch(source, [root], plan=zero, sampler=SamplerPlan(fanouts=(8, 4)))
     assert batch["x"].shape[-1] == batch["second_x"].shape[-1] == 0
     model = TGAT(16, 4, 0, plan=zero, slot_sum=False, first_fanout=8)
     assert model.node is None and model.base is None

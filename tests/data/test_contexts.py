@@ -143,10 +143,9 @@ def test_sources_count_requested_distinct_and_cached_contexts() -> None:
         prepared = build_root_batch(
             source,
             roots,
-            fanouts=(8, 4),
             device="cpu",
             plan=CORE_PLAN,
-            sampler=SMALL_SAMPLER,
+            sampler=replace(SMALL_SAMPLER, fanouts=(8, 4)),
             hubs=HubRegistry.empty(),
             mode="eval",
         )
@@ -411,9 +410,8 @@ def test_hops_use_their_own_pools_and_only_spot_checks_carry_encodings() -> None
         batch = build_batch(
             source,
             [root],
-            fanouts=(8, 2),
             plan=CORE_PLAN,
-            sampler=SMALL_SAMPLER,
+            sampler=replace(SMALL_SAMPLER, fanouts=(8, 2)),
             mode="train",
         )
         assert source.diagnostics["encoding_checks"] == 1
