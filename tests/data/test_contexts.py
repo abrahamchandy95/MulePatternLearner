@@ -444,3 +444,19 @@ def test_same_context_in_two_scopes_or_hops_is_never_shared() -> None:
     with pytest.raises(ValueError, match="Unknown node feature"):
         validate_context(key, bad, CORE_PLAN, SMALL_SAMPLER)
     assert np.isfinite(node_features(context(key), CORE_PLAN)).all()
+
+
+def test_stream_retention_is_bounded_across_many_disjoint_batches() -> None:
+    backend = ContextSource(
+        TigerGraphContextFetcher(FakeTigerGraph({})),
+        capacity=8,
+        request_batch_size=16,
+        plan=FeaturePlan(),
+        sampler=SamplerPlan(),
+    )
+    for start in range(0, 512, 16):
+        backend.fetch([ContextKey("Account", str(i), 100, 1000) for i in range(start, start + 16)])
+        assert len(backend.memory.rows) <= 8
+    assert backend.database_calls == 32
+    backend.close()
+    assert not backend.memory.rows

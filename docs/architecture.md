@@ -300,7 +300,7 @@ at import. There is no configuration file, no `--config` and no option: another 
 | Concepts | One name each: a **dataset** is what preparation stages; the **source id** is the identity of the data loaded into the graph; the **audit** is the ground-truth report, and `evaluate` the command that writes it; a context source parameter is always `contexts` | |
 | Runs and figures | `results/<variant>/seed-<n>/`; `plots/<topic>_<figure>.png` | `audit_capture.png` |
 | GSQL | A file is named after the responsibility its queries share; a query verb first, with no prefix | `hub_accounts.gsql` defines `list_hub_accounts` |
-| Tests | `tests/<package>/test_<module>.py`; markers `graph`, `graph_write`, `cuda` | `tests/sampling/test_cugraph_sampler.py` |
+| Tests | `tests/<package>/test_<module>.py`; the checks against the graph or a GPU in `tests/integration/`, and the checks that span the repository (names, import contracts, links, scripts) at the top of `tests/`; markers `graph`, `graph_write`, `cuda` | `tests/sampling/test_cugraph_sampler.py` |
 | Docs | Kebab-case in the Diataxis folders | `docs/how-to/run-control-experiments.md` |
 
 `tests/test_naming.py` checks file and folder names (the docs' included), the
