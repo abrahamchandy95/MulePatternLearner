@@ -55,8 +55,8 @@ def proxy_metrics(
         "n": len(y),
         "positives": int(y.sum()),
         "prevalence": float(y.mean()),
-        "average_precision": float(average_precision_score(y, score)) if y.sum() else None,
-        "roc_auc": float(roc_auc_score(y, score)) if len(np.unique(y)) == 2 else None,
+        "average_precision": average_precision(y, score),
+        "roc_auc": roc_auc(y, score),
         "threshold": threshold,
         **threshold_metrics(y, score, unit, threshold),
         **capture_at_budgets(y, score, unit),
@@ -174,9 +174,20 @@ def capture_at_budgets(
     return result
 
 
-def average_precision(y: NDArray[Any], score: NDArray[Any], weight: NDArray[Any]) -> float | None:
-    """Weighted average precision (sklearn's, with sample weights); None without positives."""
+def average_precision(
+    y: NDArray[Any], score: NDArray[Any], weight: NDArray[Any] | None = None
+) -> float | None:
+    """Average precision (sklearn's, with sample weights if given); None without positives."""
     return float(average_precision_score(y, score, sample_weight=weight)) if y.any() else None
+
+
+def roc_auc(
+    y: NDArray[Any], score: NDArray[Any], weight: NDArray[Any] | None = None
+) -> float | None:
+    """ROC AUC (sklearn's, with sample weights if given); None without both classes."""
+    if len(np.unique(y)) != 2:
+        return None
+    return float(roc_auc_score(y, score, sample_weight=weight))
 
 
 def ranking_metrics(
@@ -188,9 +199,7 @@ def ranking_metrics(
     """
     return {
         "average_precision": average_precision(y, score, weight),
-        "roc_auc": float(roc_auc_score(y, score, sample_weight=weight))
-        if len(np.unique(y)) == 2
-        else None,
+        "roc_auc": roc_auc(y, score, weight),
         **capture_at_budgets(y, score, weight),
     }
 

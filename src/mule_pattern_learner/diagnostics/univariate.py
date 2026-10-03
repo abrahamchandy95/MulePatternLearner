@@ -11,10 +11,9 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-from sklearn.metrics import roc_auc_score
 
 from ..artifacts import DIAGNOSTIC_TABLES
-from ..metrics import average_precision
+from ..metrics import average_precision, roc_auc
 from .feature_table import FEATURE_SPLITS, family_of, feature_columns, usable
 
 COLUMNS = DIAGNOSTIC_TABLES["univariate"]
@@ -25,13 +24,6 @@ def varying(frame: pd.DataFrame, split: str = "train") -> list[str]:
     rows = usable(frame)
     rows = rows[rows.split == split]
     return [name for name in feature_columns(rows) if rows[name].nunique(dropna=True) > 1]
-
-
-def weighted_auc(y: np.ndarray, score: np.ndarray, weight: np.ndarray) -> float | None:
-    """The weighted ROC AUC, None unless both classes are present."""
-    if len(np.unique(y)) != 2:
-        return None
-    return float(roc_auc_score(y, score, sample_weight=weight))
 
 
 def univariate(frame: pd.DataFrame) -> pd.DataFrame:
@@ -47,15 +39,13 @@ def univariate(frame: pd.DataFrame) -> pd.DataFrame:
     for name in varying(frame):
         family = family_of(name)
         train = by_split["train"]
-        auc = weighted_auc(
-            train.is_mule.to_numpy(), train[name].to_numpy(), train.weight.to_numpy()
-        )
+        auc = roc_auc(train.is_mule.to_numpy(), train[name].to_numpy(), train.weight.to_numpy())
         direction = 1.0 if auc is None or auc >= 0.5 else -1.0
         for split, part in by_split.items():
             y, weight = part.is_mule.to_numpy(np.int64), part.weight.to_numpy(np.float64)
             value = part[name].to_numpy(np.float64)
             found = {
-                "roc_auc": weighted_auc(y, value, weight),
+                "roc_auc": roc_auc(y, value, weight),
                 "average_precision": average_precision(y, direction * value, weight),
             }
             records += [
