@@ -18,8 +18,21 @@ from ..contract.graph_schema import SPLITS
 from ..paths import DatasetPaths
 
 LABEL_COLUMNS = ("account_id", "known_positive", "known_from_ms")
-# Ground-truth fields that must never reach training metadata or observed labels.
-ORACLE_COLUMNS = frozenset({"is_mule", "true_label", "is_mule_masked", "ring_id"})
+# Ground-truth fields that must never reach training metadata or observed labels: the
+# truth table's (contract.graph_schema.TRUTH_COLUMNS) and the label attributes of the
+# graph's Account that only the reveal, the label-contract check and the oracle read.
+ORACLE_COLUMNS = frozenset(
+    {
+        "is_mule",
+        "true_label",
+        "is_mule_masked",
+        "ring_id",
+        "label_source",
+        "mule_ring_id",
+        "mule_label_known",
+        "mule_label_source",
+    }
+)
 
 
 def read_bounded_parquet(path: Path, message: str, limit: int = DATASET_ROWS) -> pd.DataFrame:
