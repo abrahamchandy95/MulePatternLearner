@@ -1,19 +1,21 @@
-"""The graph reads of a diagnostic study, which `mule diagnose` hands to diagnostics.study.
+"""`mule diagnose`: the diagnostic study of the built-in run's dataset, and its graph reads.
 
-Only the pipeline builds adapters, so the study reads the graph through
-TigerGraphStudyReader, which builds them on one connection. It is the only reader that
-installs the analytics queries (installer.install with analytics=True, when their text
-differs); `mule install` and `mule train` never do.
+Only the pipeline builds adapters, so diagnose_built_in composes the study: it prepares
+the dataset and hands diagnostics.study.diagnose a TigerGraphStudyReader, which builds
+the adapters on one connection. It is the only reader that installs the analytics
+queries (installer.install with analytics=True, when their text differs); `mule install`
+and `mule train` never do.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from ..config import RunConfig
+from ..config import DEFAULT_CONFIG, RunConfig
 from ..data.context_cache import ContextCache
 from ..data.contexts import ContextSource
 from ..data.manifest import read_manifest
+from ..diagnostics.study import analyses, diagnose
 from ..evaluation.truth import TruthReader
 from ..paths import DatasetPaths
 from ..tigergraph.analytics_query import TigerGraphAnalyticsFetcher
@@ -25,6 +27,25 @@ from ..tigergraph.reveal import reveal_parameters
 from ..tigergraph.scope import TigerGraphScopeReader
 from .connect import Session, context_source
 from .evaluate import SharedTruth
+from .prepare import prepare_dataset
+from .train import BASELINE_RUN
+
+
+def diagnose_built_in(analysis: str | None = None) -> dict[str, Any]:
+    """`mule diagnose [ANALYSIS]`: the study of the built-in run's dataset and run.
+
+    The dataset is prepared as `mule train` prepares it, so a ready one needs no
+    connection, and the study's graph reads share that session's one connection.
+    """
+    session = Session(DEFAULT_CONFIG.transport)
+    dataset = prepare_dataset(DEFAULT_CONFIG, session=session)
+    return diagnose(
+        analyses(analysis),
+        config=DEFAULT_CONFIG,
+        dataset=dataset,
+        run=BASELINE_RUN,
+        graph=TigerGraphStudyReader(DEFAULT_CONFIG, dataset, session),
+    )
 
 
 class TigerGraphStudyReader:

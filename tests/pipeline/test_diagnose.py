@@ -8,13 +8,15 @@ from typing import Any
 
 import pytest
 
-from mule_pattern_learner.config import TransportConfig
+from mule_pattern_learner.config import DEFAULT_CONFIG, RunConfig, TransportConfig
 from mule_pattern_learner.contract.server import ANALYTICS_CONTEXT_QUERY, TRUTH_QUERY
-from mule_pattern_learner.paths import REPOSITORY_ROOT
+from mule_pattern_learner.diagnostics.study import ANALYSES
+from mule_pattern_learner.paths import REPOSITORY_ROOT, DatasetPaths
 from mule_pattern_learner.pipeline import connect as pipeline_connect
 from mule_pattern_learner.pipeline import diagnose as pipeline_diagnose
 from mule_pattern_learner.pipeline.connect import Session
 from mule_pattern_learner.pipeline.diagnose import TigerGraphStudyReader
+from mule_pattern_learner.pipeline.train import BASELINE_RUN
 from mule_pattern_learner.testing.builders import reveal_inputs, unit_config
 from mule_pattern_learner.testing.fake_graph import FakeTigerGraph, prepared_graph
 
@@ -79,3 +81,32 @@ def test_only_the_diagnose_reader_installs_the_analytics_queries() -> None:
         if any(installs(node) for node in ast.walk(ast.parse(path.read_text())))
     ]
     assert callers == ["pipeline/diagnose.py"]
+
+
+def test_diagnose_studies_the_built_in_run_on_its_dataset_with_one_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dataset = DatasetPaths.of("id", tmp_path / "data")
+    prepared: list[object] = []
+    studied: list[dict[str, Any]] = []
+
+    def prepare(c: RunConfig, *, session: object) -> DatasetPaths:
+        assert c is DEFAULT_CONFIG
+        prepared.append(session)
+        return dataset
+
+    def diagnose(names: tuple[str, ...], **kwargs: Any) -> dict[str, Any]:
+        studied.append({"names": names, **kwargs})
+        return {"status": "complete"}
+
+    monkeypatch.setattr(pipeline_diagnose, "prepare_dataset", prepare)
+    monkeypatch.setattr(pipeline_diagnose, "diagnose", diagnose)
+    assert pipeline_diagnose.diagnose_built_in("drift") == {"status": "complete"}
+    (study,) = studied
+    assert study["names"] == ("drift",) and study["run"] == BASELINE_RUN
+    assert study["config"] is DEFAULT_CONFIG and study["dataset"] == dataset
+    # The study's graph reads use the session the dataset was prepared on.
+    (session,) = prepared
+    assert study["graph"].session is session and study["graph"].dataset == dataset
+    pipeline_diagnose.diagnose_built_in(None)
+    assert studied[-1]["names"] == ANALYSES

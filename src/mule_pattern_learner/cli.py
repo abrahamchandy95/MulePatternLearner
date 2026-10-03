@@ -13,14 +13,12 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .config import DEFAULT_CONFIG
-from .diagnostics.study import ANALYSES, INCOMPLETE, analyses, diagnose
+from .diagnostics.study import ANALYSES, INCOMPLETE
 from .paths import REPOSITORY_ROOT, RunPaths
 from .pipeline.check import check
-from .pipeline.connect import Session
-from .pipeline.diagnose import TigerGraphStudyReader
+from .pipeline.diagnose import diagnose_built_in
 from .pipeline.evaluate import evaluate_run
-from .pipeline.prepare import install_queries, prepare_dataset
+from .pipeline.prepare import install_queries
 from .pipeline.score import score_accounts
 from .pipeline.train import BASELINE_RUN, train_run
 from .reporting.report import report_directory
@@ -101,23 +99,6 @@ def build_parser() -> argparse.ArgumentParser:
         "batch's tensor digests and the first training loss",
     )
     return parser
-
-
-def diagnose_built_in(analysis: str | None) -> dict[str, Any]:
-    """`mule diagnose [ANALYSIS]`: the study of the built-in run's dataset and run.
-
-    The dataset is prepared as `mule train` prepares it, so a ready one needs no
-    connection, and the study's graph reads share that session's one connection.
-    """
-    session = Session(DEFAULT_CONFIG.transport)
-    dataset = prepare_dataset(DEFAULT_CONFIG, session=session)
-    return diagnose(
-        analyses(analysis),
-        config=DEFAULT_CONFIG,
-        dataset=dataset,
-        run=BASELINE_RUN,
-        graph=TigerGraphStudyReader(DEFAULT_CONFIG, dataset, session),
-    )
 
 
 def run_command(args: argparse.Namespace) -> dict[str, Any]:
