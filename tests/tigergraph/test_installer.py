@@ -13,7 +13,6 @@ from typing import Any
 import pytest
 import requests
 
-from mule_pattern_learner.artifacts import read_events
 from mule_pattern_learner.contract.server import (
     ANALYTICS_QUERY_FILES,
     CONTEXT_QUERY,
@@ -29,6 +28,7 @@ from mule_pattern_learner.contract.server import (
 )
 from mule_pattern_learner.paths import GSQL_DIR
 from mule_pattern_learner.runtime.progress import recording
+from mule_pattern_learner.testing.builders import recorded_events
 from mule_pattern_learner.testing.fake_connection import executor
 from mule_pattern_learner.testing.fake_graph import RETIRED_CALLS, FakeTigerGraph, retired_query
 from mule_pattern_learner.tigergraph import gsql_text, installer
@@ -191,7 +191,7 @@ def test_install_polls_endpoints_when_the_install_request_times_out(
     assert logs["installed"] == [CUTOFF_QUERY] and logs["install"] is None
     assert tg.sleeps == [30, 30] and all(server.enabled.values())
     # Its events say what it went through; the last names what it installed, and when.
-    recorded = read_events(events)
+    recorded = recorded_events(events)
     assert [event["event"] for event in recorded] == [
         "install",
         "gsql",

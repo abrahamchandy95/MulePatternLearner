@@ -658,6 +658,8 @@ def test_mule_train_shows_progress_and_a_summary_and_keeps_every_record_in_the_f
     assert [e["event"] for e in read_events(prepared.events)] == ["scope", "hubs", "dataset"]
     (install,) = read_events(command_events(tmp_path / "plain" / "results"))
     assert install["event"] == "install" and install["stale"] == [] and install["up_to_date"]
+    # It names the command that wrote it, after the time.
+    assert list(install)[:3] == ["time", "command", "event"] and install["command"] == "train"
     # On a terminal the same lines remain, and each step was shown in place before them.
     terminal = Terminal()
     monkeypatch.setattr(sys, "stdout", terminal)

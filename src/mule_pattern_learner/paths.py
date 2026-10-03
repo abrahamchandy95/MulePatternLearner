@@ -265,7 +265,8 @@ def command_events(results: Path = RESULTS_DIR) -> Path:
 
     Every `mule` command appends to it what happens before a run's, a dataset's or a
     study's events.jsonl is recording: the install, the retries of connecting, a dataset
-    found ready, and all that `mule install` and `mule check` emit.
+    found ready, and all that `mule install` and `mule check` emit. Each record names the
+    command after the time it was recorded.
     """
     return results / "events.jsonl"
 

@@ -8,12 +8,17 @@ from typing import Any
 
 import pytest
 
-from mule_pattern_learner.artifacts import pending_path, read_events
+from mule_pattern_learner.artifacts import pending_path
 from mule_pattern_learner.inference.saved_model import SavedModel
 from mule_pattern_learner.paths import RunPaths
 from mule_pattern_learner.pipeline import score as pipeline_score
 from mule_pattern_learner.runtime.progress import emit
-from mule_pattern_learner.testing.builders import RUNTIME_CHANGES, saved_model, unit_config
+from mule_pattern_learner.testing.builders import (
+    RUNTIME_CHANGES,
+    recorded_events,
+    saved_model,
+    unit_config,
+)
 
 
 def test_scoring_checks_inputs_and_outputs_then_verifies_the_installed_queries(
@@ -62,7 +67,7 @@ def test_scoring_checks_inputs_and_outputs_then_verifies_the_installed_queries(
     assert steps == ["connect", "verify", "score"]
     assert scored == [("2025-01-01", ["A1", "A2"], output, rejected)]
     # The lines scoring prints go to the run's events.jsonl.
-    assert read_events(run.events) == [{"event": "score", "date": "2025-01-01"}]
+    assert recorded_events(run.events) == [{"event": "score", "date": "2025-01-01"}]
     # The cutoff clock, the hub registry and the contexts are read on that connection.
     contexts = result.pop("contexts")
     contexts.close()

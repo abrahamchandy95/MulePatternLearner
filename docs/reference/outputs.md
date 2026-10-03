@@ -286,30 +286,36 @@ the accelerator's peak memory. Nothing else reads it.
 ## A command's own records: `results/events.jsonl`
 
 Every `mule` command appends to it the records of the events it emits while no run,
-dataset or study is recording its own, one JSON object each: the queries an install
-found stale and up to date (`install`), the output TigerGraph gave each GSQL write
-(`gsql`: the scope schema change, each `CREATE` and `DROP`), an install request left
-unanswered with the error that ended it (`install_unanswered`), the wait for compilation
-and its end (`install_wait`, `installed`), the retries of connecting with their whole
-error (`retry`), a dataset found ready (`dataset`), a complete run reported
+dataset or study is recording its own, one JSON object each, which names the command
+(`command`, such as `"train"`) after the time (`time`): the queries an install found
+stale and up to date (`install`), the output TigerGraph gave each GSQL write (`gsql`: the
+scope schema change, each `CREATE` and `DROP`), an install request left unanswered with
+the error that ended it (`install_unanswered`), the wait for compilation and its end
+(`install_wait`, `installed`), the retries of connecting with their whole error
+(`retry`), a dataset found ready (`dataset`), a complete run reported
 (`already_complete`), and everything `mule install` and `mule check` emit. So whatever the
 console shows in a few words, or not at all, before preparation records in the dataset's
-`events.jsonl` and training in the run's, is kept here. The file only grows; nothing
-reads it. The experiments script records the same events in its suite's `events.jsonl`.
+`events.jsonl` and training in the run's, is kept here. The time and the command tell one
+command's records from another's: the install of `mule install` from the one `mule
+train` began with, or the retries of connecting in one session from those of the next.
+The file only grows; nothing reads it. The experiments script records the same events
+in its suite's `events.jsonl`, without the command.
 
 ## events.jsonl and the console
 
-Every event is one JSON object with an `event` name: preparation's stages, installs,
-retries (with a short `reason` beside the error), the start or resume of a run (with its
-device, threads, determinism and plan), training intervals, the scoring of each chunk of
-validation and test, epochs, completion, the audits, scoring, the analyses, a suite's
-plan and runs, the sampler backend and warnings (such as `cugraph_probe`,
-`context_cache_refused` and `host_settings`). The whole record goes to the `events.jsonl`
-of what the command is working on: the run's for training, the audits and scoring, the
-dataset's for its preparation, the suite's for the experiments script's own events, the
-study's for `mule diagnose`. An event a command emits outside them, such as an install or
-a retry before preparation, the `dataset` event of a dataset found ready, or anything
-`mule install` and `mule check` emit, goes to `results/events.jsonl`
+Every event is one JSON object with an `event` name, led in the file by the UTC time it
+was recorded (`time`, ISO 8601 to the second, such as `"2026-10-03T13:16:17+00:00"`):
+preparation's stages, installs, retries (with a short `reason` beside the error), the
+start or resume of a run (with its device, threads, determinism and plan), training
+intervals, the scoring of each chunk of validation and test, epochs, completion, the
+audits, scoring, the analyses, a suite's plan and runs, the sampler backend and warnings
+(such as `cugraph_probe`, `context_cache_refused` and `host_settings`). The whole record
+goes to the `events.jsonl` of what the command is working on: the run's for training,
+the audits and scoring, the dataset's for its preparation, the suite's for the
+experiments script's own events, the study's for `mule diagnose`. An event a command
+emits outside them, such as an install or a retry before preparation, the `dataset`
+event of a dataset found ready, or anything `mule install` and `mule check` emit, goes to
+`results/events.jsonl`
 ([A command's own records](#a-commands-own-records-resultseventsjsonl)).
 
 The console shows a short line for the events a person follows and nothing for the
