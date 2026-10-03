@@ -153,10 +153,16 @@ STARTING = TigerGraphException(
             ),
             "read timed out",
         ),
-        (TigerGraphException("Query timeout exceeded", "REST-3002"), "Query timeout exceeded"),
+        # Capitalised words are lowercased, so the reason reads inside a line; an acronym
+        # or a name keeps its capitals.
+        (TigerGraphException("Query timeout exceeded", "REST-3002"), "query timeout exceeded"),
         (
             TigerGraphException("The graph engine is not ready yet, come back in a few minutes"),
-            "The graph engine is not ready yet, come...",
+            "the graph engine is not ready yet, come...",
+        ),
+        (
+            TigerGraphException("GSQL Server is restarting on TigerGraph"),
+            "GSQL server is restarting on TigerGraph",
         ),
     ],
 )
@@ -252,7 +258,7 @@ def test_retries_that_run_out_keep_the_cause_tigergraph_gave(tmp_path: Path) -> 
             tg.run(CONTEXT_QUERY, {"node_ids": ["a"] * 512})
     # The retry's line names the reason in a few words; the error keeps TigerGraph's.
     (retry,) = read_events(events)
-    assert retry["reason"] == "Runtime Error: the query fetch_training_context ran out of..."
+    assert retry["reason"] == "runtime error: the query fetch_training_context ran out of..."
     assert str(raised.value) == (
         "fetch_training_context (512 keys) failed after 2 attempt(s) (suspected "
         "deterministic failure, retried once): TigerGraphException: Runtime Error: the query "

@@ -61,7 +61,7 @@ stopping. The console shows the dataset, the plan and a line per epoch:
 
 ```
 Dataset 1a2b3c4d5e6f: 20 / 11 / 20 known mules in train / validation / test
-Training on cuda (cuGraph sampler) into results/baseline/seed-42: 100 steps per epoch, at most 30 epochs, early stop after 6 without gain
+Training on cuda (cuGraph sampler) into results/baseline/seed-42: 100 steps per epoch, at most 30 epochs, early stop after 6 epochs without gain
 epoch  1  loss 0.490  validation AP 0.452  ROC AUC 0.955  4.6 min  best so far
 epoch  2  loss 0.212  validation AP 0.431  ROC AUC 0.951  3.1 min
 ```

@@ -33,6 +33,7 @@ from .runtime.console import (
     estimate,
     number,
     plural,
+    sentence,
     show,
     shown_path,
     table,
@@ -363,10 +364,10 @@ def stopped(command: str, error: TransientQueryError) -> str:
     """What a command says on stderr when TigerGraph's failures outlast its retries."""
     if isinstance(error, TigerGraphUnavailableError):
         return (
-            f"{command} stopped: TigerGraph stayed unavailable. {error}. Run it again once "
-            "TigerGraph answers; an interrupted run resumes where it stopped."
+            f"{command} stopped: TigerGraph stayed unavailable. {sentence(str(error))} Run it "
+            "again once TigerGraph answers; an interrupted run resumes where it stopped."
         )
-    return f"{command} stopped: a TigerGraph request kept failing. {error}."
+    return f"{command} stopped: a TigerGraph request kept failing. {sentence(str(error))}"
 
 
 def main() -> None:

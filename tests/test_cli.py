@@ -37,7 +37,10 @@ from mule_pattern_learner.pipeline.connect import open_context_source
 from mule_pattern_learner.runtime.progress import emit
 from mule_pattern_learner.testing.builders import neighbourhood, scope_population
 from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
-from mule_pattern_learner.tigergraph.executor import TigerGraphUnavailableError
+from mule_pattern_learner.tigergraph.executor import (
+    TigerGraphUnavailableError,
+    TransientQueryError,
+)
 
 COMMANDS = ("install", "train", "evaluate", "score", "report", "diagnose", "check")
 
@@ -422,6 +425,21 @@ def test_retries_that_run_out_end_the_command_with_one_clear_line_on_stderr(
 STEP_TIME = {"seconds_per_step": 2.0}
 
 
+def test_the_line_of_a_stopped_command_ends_in_one_full_stop() -> None:
+    # TigerGraph's words may end in a full stop of their own, or be cut with an ellipsis.
+    ended = TransientQueryError("q failed after 2 attempt(s): TigerGraphException: Halted.")
+    assert cli.stopped("mule train", ended) == (
+        "mule train stopped: a TigerGraph request kept failing. q failed after 2 attempt(s): "
+        "TigerGraphException: Halted."
+    )
+    cut = TigerGraphUnavailableError("connect failed after 3 attempt(s): ReadTimeout: word wo...")
+    assert cli.stopped("mule check", cut) == (
+        "mule check stopped: TigerGraph stayed unavailable. connect failed after 3 "
+        "attempt(s): ReadTimeout: word wo... Run it again once TigerGraph answers; an "
+        "interrupted run resumes where it stopped."
+    )
+
+
 class Terminal(io.StringIO):
     """A stdout that says it is a terminal."""
 
@@ -579,7 +597,7 @@ Scope strict_mule_v2 is in place
 Hub registry: 9 hub rows over 3 cutoffs
 Dataset DATASET: 18 / 5 / 6 known mules in train / validation / test
 Training on cpu (torch sampler) into results/baseline/seed-42: 3 steps per epoch, at most 2 \
-epochs, early stop after 6 without gain
+epochs, early stop after 6 epochs without gain
 epoch  1  loss #.###  validation AP #.###  ROC AUC #.### # s  best so far
 epoch  2  loss #.###  validation AP #.###  ROC AUC #.### # s  best so far
 Trained in # s; model.pt holds the weights of the best epoch, 2.

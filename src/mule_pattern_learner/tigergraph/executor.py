@@ -218,13 +218,22 @@ def _with_status(reason: str, status: Any, error: BaseException) -> str:
     return reason if status is None else f"{reason}, HTTP {status}"
 
 
+def _lowercased(text: str) -> str:
+    """Text with its capitalised words in lowercase; GSQL, REST-3002 or TigerGraph stay."""
+    return " ".join(
+        word.lower() if word[1:] == word[1:].lower() else word for word in text.split(" ")
+    )
+
+
 def short_reason(error: BaseException, words: int = 8) -> str:
-    """Why a request failed, in a few words for a person: never an HTML page or a URL.
+    """Why a request failed, in a few lowercase words for a person: never a page or a URL.
 
     An HTML page gives its title or first heading, as a TigerGraph Cloud workspace that
     is starting answers ("starting workspace"); a JSON body its message; a connection
-    error what failed; anything else its first ``words`` words. A known HTTP status is
-    added, from the response or from a page heading such as "502 Bad Gateway".
+    error what failed; anything else its first ``words`` words. Capitalised words are
+    lowercased, so the reason reads inside a line; acronyms and names keep their
+    capitals. A known HTTP status is added, from the response or from a page heading
+    such as "502 Bad Gateway".
     """
     text, status = _failure_text(error)
     page = _page_reason(text)
@@ -238,7 +247,7 @@ def short_reason(error: BaseException, words: int = 8) -> str:
             reason = failure.group(0).lower()
         else:
             kept = text.split()[:words]
-            reason = " ".join(kept) + ("..." if len(text.split()) > words else "")
+            reason = _lowercased(" ".join(kept)) + ("..." if len(text.split()) > words else "")
     return _with_status(reason, status, error)
 
 

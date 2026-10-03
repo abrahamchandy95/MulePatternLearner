@@ -221,13 +221,19 @@ def test_a_current_feature_table_is_kept_without_connecting(
 
 def test_the_run_analyses_are_skipped_when_the_run_cannot_be_compared(
     studied: tuple[RunConfig, FakeTigerGraph, DatasetPaths, RunPaths, list[TransportConfig]],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config, _, dataset, run, _ = studied
     for split in ("validation", "test"):
         run.audit_report(split).unlink()
+    # A reason names the run's directory as the console shows a path: from the working
+    # directory when it lies under it.
+    home = run.root.parents[2]
+    monkeypatch.chdir(home)
     result = study_of(("subgroups", "proxy-validity"), config, dataset, run)
     assert result["status"] == INCOMPLETE
-    assert result["skipped"] == {"subgroups": f"{run.root} has no audit; run `mule evaluate`"}
+    named = run.root.relative_to(home).as_posix()
+    assert result["skipped"] == {"subgroups": f"{named} has no audit; run `mule evaluate`"}
     assert result["analyses"]["proxy-validity"]["status"] == WRITTEN
     # A run of another dataset is not compared at all.
     write_run_config(run.config, config, {"dataset_id": "other"})

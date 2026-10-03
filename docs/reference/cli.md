@@ -83,8 +83,8 @@ Trains the built-in run into `results/baseline/seed-42/`.
 
 Run it in `tmux` or with `nohup`. It shows the dataset, the plan ("Training on cuda
 (cuGraph sampler) into results/baseline/seed-42: 100 steps per epoch, at most 30 epochs,
-early stop after 6 without gain"), each epoch's loss, validation proxy AP and ROC AUC,
-time and whether it is the best so far, and the early stop. Its summary gives the time
+early stop after 6 epochs without gain"), each epoch's loss, validation proxy AP and ROC
+AUC, time and whether it is the best so far, and the early stop. Its summary gives the time
 taken, the best epoch, the validation and test proxy AP, ROC AUC and recall at the top 1%
 with their known mules, and the run directory; a complete run says so and gives the same
 summary from its `metrics.json`. The proxy numbers count unlabelled accounts as
