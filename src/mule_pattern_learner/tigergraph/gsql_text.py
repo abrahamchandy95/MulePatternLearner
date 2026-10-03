@@ -11,6 +11,11 @@ COMMENTS = re.compile(r"/\*.*?\*/|//[^\n]*|#[^\n]*", re.S)
 
 
 def normalized(source: str) -> str:
+    """The text compared and hashed: no comments or whitespace, lower case outside strings.
+
+    So two texts that differ only in comments, whitespace or the case of their keywords
+    and names are the same query, and derive the same contract (tigergraph.render).
+    """
     source = COMMENTS.sub("", source)
     tokens = re.findall(r'"(?:\\.|[^"\\])*"|[^\s"]+', source)
     return "".join(token if token.startswith('"') else token.lower() for token in tokens)

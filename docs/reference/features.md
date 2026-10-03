@@ -47,9 +47,11 @@ What the message groups mean:
 
 ### Transforms
 
-Counts, amounts, durations and the flow amount ratio get `log1p`. Flags, the entity-type
-indicators and the Fourier coordinates pass through as they are (`identity` in the
-registry). Missing amounts stay apart from real zeros (`amount_present`).
+Counts, amounts, durations and the flow amount ratio get `log1p`. Flags and the
+entity-type indicators that a group lists under `identity` in the registry pass through
+as they are, and so do `gap_present` and every Fourier coordinate
+(`batching.features.IDENTITY` and its `_fourier_` rule). Missing amounts stay apart from
+real zeros (`amount_present`).
 
 ### The pool groups
 

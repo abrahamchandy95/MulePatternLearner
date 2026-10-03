@@ -240,8 +240,9 @@ is no bound on server memory or latency, and the client cannot promise that Tige
 other processes never run out of memory. Scale far beyond this graph has not been
 demonstrated: it needs indexed cutoff watermarks, time-organised adjacency, scalable
 partition and seed selection, and maintained pair predecessor state, with late events and
-backfills handled explicitly. Levers before that: raise `transport.query_concurrency` on a
-larger instance, shrink the child pool, process a call's requests together, or
+backfills handled explicitly. Levers before that: on a larger instance, raise the bound
+on `transport.query_concurrency` (`contract.bounds.QUERY_CONCURRENCY`, which the default
+of 16 already reaches) and then the setting, shrink the child pool, process a call's requests together, or
 materialise the event-intrinsic pair features, which do not depend on scope or cutoff.
 
 ## Transport alternatives

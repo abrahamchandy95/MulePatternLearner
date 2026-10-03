@@ -164,7 +164,10 @@ satisfies, and a fake `Fake<Technology>` after what it stands in for.
 the GSQL does, and its connection answers `SHOW QUERY`, the endpoint listing, the schema,
 vertex counts, scope headers, and creates, installs and drops queries. The executor
 protocols belong to `tigergraph` itself, since only adapters run queries; `FakeTigerGraph`
-behind the real adapters is what the tests use.
+behind the real adapters is what the tests use. A few tests of `tigergraph` script a
+pyTigerGraph connection of their own behind the real executor
+(`testing.fake_connection`) for what the fake graph does not answer: the installer's
+compilation, the label reveal and the label-contract check.
 
 **The study is composed by the pipeline.** `diagnostics` sits below `pipeline` and may
 import neither it nor `tigergraph` (the contract "Use cases reach TigerGraph only through
@@ -366,8 +369,9 @@ The owner's decisions that shape the code, each with its reason.
   moved to `results/archive/` and never deleted, the tables and figures always written.
   Nothing is read from or written to `/tmp`, so every suite can be repeated from the
   commit.
-- **Only what this code writes is read.** The owner retrains from scratch with this
-  code, so `SavedModel` reads only a payload of its own `FORMAT` and contract, a dataset
+- **Only what this code writes is read** (decided on 2026-10-03, replacing the decision
+  of 2026-09-28 to keep converting the earlier saved settings until the new baseline run
+  was audited). The owner retrains from scratch with this code, so `SavedModel` reads only a payload of its own `FORMAT` and contract, a dataset
   is used only when the settings and query texts it records are this code's, and nothing
   converts the settings, contracts or datasets of earlier code: each conversion was a
   second path to keep correct. The saved-model test's fixtures are models this code saved.
