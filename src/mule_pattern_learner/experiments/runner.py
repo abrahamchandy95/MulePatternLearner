@@ -165,17 +165,19 @@ def archive(run: RunPaths, results: Path, moment: datetime) -> RunPaths:
 def latest_graph_history(results: Path) -> Path | None:
     """The history.csv most recently written by a graph model's run under results.
 
-    A run whose config.json this code cannot read (one trained before the typed
-    configuration) is passed over.
+    A run whose config.json or history.csv this code cannot read is passed over, and so
+    is a history with no timed interval: a run restarted without resume state rewrites
+    its history.csv as a bare header until it logs again.
     """
     found = []
     for history in results.glob("*/seed-*/history.csv"):
         run = RunPaths(history.parent)
         try:
             architecture = read_run_config(run.config).model.architecture
+            seconds = read_history(history).seconds_per_step.to_numpy(dtype=np.float64)
         except (KeyError, OSError, ValueError):
             continue
-        if architecture == "tgat":
+        if architecture == "tgat" and np.isfinite(seconds).any():
             found.append((history.stat().st_mtime, history))
     return max(found)[1] if found else None
 
@@ -184,15 +186,16 @@ def time_bound(runs: Sequence[PlannedRun], results: Path) -> dict[str, Any]:
     """An upper bound on the hours the runs still to train take, and where it comes from.
 
     Every run is taken to train all its epochs (early stopping ends most sooner) at the
-    median seconds per step of the latest graph run's history.csv; the summary models
-    take far less. None without such a history, or when an epoch has no fixed steps.
+    median seconds per step of the latest graph run's history.csv (latest_graph_history)
+    that timed a step; the summary models take far less. None without such a history, or
+    when an epoch has no fixed steps.
     """
     pending = [run for run in runs if run.action != KEEP]
     history = latest_graph_history(results)
     steps = [run.config.training.steps_per_epoch for run in pending]
     if history is None or any(step is None for step in steps):
         return {"bound_hours": None, "timed_from": None if history is None else str(history)}
-    seconds = float(np.median(read_history(history).seconds_per_step))
+    seconds = float(np.nanmedian(read_history(history).seconds_per_step))
     total = sum(
         run.config.training.epochs * (run.config.training.steps_per_epoch or 0) for run in pending
     )

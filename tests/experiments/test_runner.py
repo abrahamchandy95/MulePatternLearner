@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from dataclasses import replace
 import json
+import os
 from pathlib import Path
+import shutil
 from typing import Any
 
 import pytest
 
 from mule_pattern_learner.artifacts import (
+    keep_history,
     read_comparison,
     read_run_provenance,
     read_summary,
@@ -249,6 +252,26 @@ def test_the_time_bound_comes_from_the_latest_graph_run(tmp_path: Path) -> None:
     assert bound["timed_from"] == str(history)
     # Three runs to train, one epoch of three steps each, at about 3 s per step.
     assert bound["bound_hours"] == pytest.approx(3 * 3 * 3.0 / 3600, abs=0.01)
+
+
+def test_a_history_that_timed_no_step_times_nothing(tmp_path: Path) -> None:
+    runs = [PlannedRun(BASELINE, 42, BASE, RunPaths.of("baseline", 42, tmp_path), TRAIN)]
+    older = write_run_files(RunPaths.of("baseline", 7, tmp_path))
+    # A run restarted without resume state rewrites its history.csv as a bare header,
+    # and an outage may stop the suite before it logs again: the newest history then
+    # timed nothing, and the older one bounds the time.
+    newer = write_run_files(RunPaths.of("baseline", 8, tmp_path))
+    keep_history(newer.history, 0, 0)
+    assert newer.history.read_text().count("\n") == 1
+    os.utime(older.history, (1, 1))
+    bound = time_bound(runs, tmp_path)
+    assert bound["timed_from"] == str(older.history)
+    assert bound["bound_hours"] == pytest.approx(3 * 3.0 / 3600, abs=0.01)
+    # With that history alone, nothing bounds the time, and the suite's line is valid JSON.
+    shutil.rmtree(older.root)
+    bound = time_bound(runs, tmp_path)
+    assert bound == {"bound_hours": None, "timed_from": None}
+    assert json.loads(json.dumps(bound, allow_nan=False)) == bound
 
 
 def test_an_outage_is_found_through_the_errors_it_caused() -> None:
