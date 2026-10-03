@@ -190,7 +190,7 @@ import-linter enforces the layers in the gate (`lint-imports`, configured in
 |---|---|
 | Layers run one way | The stack above: one way down, independent siblings |
 | Use cases reach TigerGraph only through ports | Training, evaluation, data, batching, inference, sampling, model, reporting and diagnostics never import `tigergraph` or pyTigerGraph, so every use case runs on a fake |
-| Training never reads ground truth | Training's packages and the pipeline's preparing, training, checking and scoring modules never import `evaluation`, `diagnostics` or `tigergraph.oracle` |
+| Training never reads ground truth | Training's packages, `config`, the training context fetcher (`tigergraph.context_query`) and the pipeline's preparing, training, checking and scoring modules never import `evaluation`, `diagnostics` or `tigergraph.oracle` |
 | Training never reads the analytics features | The same modules never import `contract.analytics_features` |
 | Only reporting draws | No other package imports matplotlib; the pipeline, the command line, the experiments and the diagnostics reach it only by calling `reporting` |
 | Reporting reads files, not models or the graph | `reporting` imports neither torch nor `model`, `inference` or `training` |

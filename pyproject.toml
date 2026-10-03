@@ -147,6 +147,9 @@ source_modules = [
     "mule_pattern_learner.inference",
     "mule_pattern_learner.sampling",
     "mule_pattern_learner.model",
+    "mule_pattern_learner.config",
+    # The adapter every training batch's contexts come through.
+    "mule_pattern_learner.tigergraph.context_query",
     # The use cases of the pipeline that prepare, train, check and score.
     "mule_pattern_learner.pipeline.connect",
     "mule_pattern_learner.pipeline.prepare",
@@ -170,6 +173,9 @@ source_modules = [
     "mule_pattern_learner.inference",
     "mule_pattern_learner.sampling",
     "mule_pattern_learner.model",
+    "mule_pattern_learner.config",
+    # The adapter every training batch's contexts come through.
+    "mule_pattern_learner.tigergraph.context_query",
     # The use cases of the pipeline that prepare, train, check and score.
     "mule_pattern_learner.pipeline.connect",
     "mule_pattern_learner.pipeline.prepare",
