@@ -29,6 +29,7 @@ from mule_pattern_learner.testing.builders import (
     UNIT_SOURCE,
     ground_truth_rows,
     prepared_dataset,
+    recorded_events,
     saved_model,
     scope_population,
     unit_config,
@@ -106,7 +107,7 @@ def test_evaluate_run_connects_after_its_checks_and_reads_truth_once_on_that_con
     with pytest.raises(RuntimeError, match="closed"):
         contexts.fetch([ContextKey("Account", "A000", 1, 1)])
     # The lines the audits print go to the run's events.jsonl.
-    assert read_events(run.events) == [
+    assert recorded_events(run.events) == [
         {"event": "audit", "split": "validation"},
         {"event": "audit", "split": "test"},
     ]
@@ -200,7 +201,7 @@ def test_evaluate_run_audits_validation_and_test_on_the_fake_graph(
         assert pipeline_evaluate.evaluate_run(runs[0], data=data) == reports[0]
     assert {path: path.stat().st_mtime_ns for path in drawn} == written
     # It says that it read the reports, which the command's summary then shows.
-    assert read_events(noted) == [
+    assert recorded_events(noted) == [
         {
             "event": "already_audited",
             "run": str(runs[0].root),

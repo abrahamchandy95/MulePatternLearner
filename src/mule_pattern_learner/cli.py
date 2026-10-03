@@ -375,11 +375,12 @@ def main() -> None:
     reserve_deterministic_cublas()
     args = build_parser().parse_args()
     # What the command emits before a run, a dataset or a study records its events, and
-    # what it emits outside them, is kept there: an install, connecting, a dataset found.
+    # what it emits outside them, is kept there, each record naming the command: an
+    # install, connecting, a dataset found.
     events = command_events(RESULTS_DIR)
     events.parent.mkdir(parents=True, exist_ok=True)
     try:
-        with recording(events):
+        with recording(events, command=args.command):
             result = run_command(args)
     except TransientQueryError as error:
         # The retries were shown as they happened; the failure that ended them goes to

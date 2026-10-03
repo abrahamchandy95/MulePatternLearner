@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
 from mule_pattern_learner.artifacts import read_events
 from mule_pattern_learner.runtime.progress import emit, recording, warn
+from mule_pattern_learner.testing.builders import recorded_events
 
 
 def test_records_are_kept_whole_while_a_file_records_and_stdout_shows_their_lines(
@@ -31,8 +33,8 @@ def test_records_are_kept_whole_while_a_file_records_and_stdout_shows_their_line
         emit(audited)
     emit({"event": "after"})
     # The innermost file gets each record, whole; nothing records outside a block.
-    assert read_events(run) == [scored, audited]
-    assert read_events(other) == [{"event": "an_event_without_a_line", "detail": [1, 2]}]
+    assert recorded_events(run) == [scored, audited]
+    assert recorded_events(other) == [{"event": "an_event_without_a_line", "detail": [1, 2]}]
     # Stdout has a line for the events a person follows, and none for the others.
     assert capsys.readouterr().out == (
         "Warning: nothing records this one\n"
@@ -56,6 +58,26 @@ def test_a_line_that_is_not_json_or_names_no_event_is_refused(
 def test_warnings_are_events(tmp_path: Path) -> None:
     with recording(tmp_path / "events.jsonl"):
         warn("hub_stubs", "hub children become stubs")
-    assert read_events(tmp_path / "events.jsonl") == [
+    assert recorded_events(tmp_path / "events.jsonl") == [
         {"event": "warning", "warning": "hub_stubs", "message": "hub children become stubs"}
     ]
+
+
+def test_each_record_is_led_by_its_time_and_the_command_a_block_names(tmp_path: Path) -> None:
+    commands, run = tmp_path / "events.jsonl", tmp_path / "run.jsonl"
+    before = datetime.now(timezone.utc).replace(microsecond=0)
+    with recording(commands, command="train"):
+        emit({"event": "install", "stale": []})
+        with recording(run):
+            emit({"event": "epoch", "epoch": 1})
+    after = datetime.now(timezone.utc)
+    (install,), (epoch,) = read_events(commands), read_events(run)
+    # The time comes first, in ISO 8601 UTC to the second; then the command, only in the
+    # block that names one, as the command line's results/events.jsonl does.
+    assert list(install) == ["time", "command", "event", "stale"]
+    assert install["command"] == "train"
+    assert list(epoch) == ["time", "event", "epoch"]
+    for record in (install, epoch):
+        time = datetime.fromisoformat(record["time"])
+        assert time.utcoffset() == timedelta(0) and time.microsecond == 0
+        assert before <= time <= after

@@ -4,6 +4,7 @@ Nothing here opens a connection. There is one configuration builder (unit_config
 datasets are prepared from one source id (UNIT_SOURCE), one payment message (message),
 one association (association) and one context row (context); the other builders are
 those with particular values (a deterministic neighbourhood, random synthetic pools).
+recorded_events reads an events.jsonl as the tests compare its records.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from mule_pattern_learner.artifacts import (
     FEATURE_TABLE_COLUMNS,
     append_history,
     file_digest,
+    read_events,
     write_audit_scores,
     write_diagnostic_table,
     write_epochs,
@@ -1339,3 +1341,8 @@ def write_study_files(study: DiagnosticsPaths, seed: int = 0) -> DiagnosticsPath
     }
     write_json(study.study, record)
     return study
+
+
+def recorded_events(path: Path) -> list[dict[str, Any]]:
+    """The records of an events.jsonl without the time each was recorded, to compare whole."""
+    return [{k: v for k, v in record.items() if k != "time"} for record in read_events(path)]
