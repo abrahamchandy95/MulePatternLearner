@@ -241,7 +241,7 @@ has acted on them yet:
 - **Edge inputs on different scales.** Fourier coordinates between -1 and 1, 0 or 1
   flags and log-seconds up to about 17 reach the first linear layer unstandardised.
 - **A positive scored confidently low learns little.** The gradient of the sigmoid
-  surrogate for a positive, σ(f)(1 − σ(f)), is near zero when the model scores it far
+  surrogate for a positive, σ(f)(1 - σ(f)), is near zero when the model scores it far
   below zero, and each batch's 16 positives are drawn with replacement from 20 revealed
   train mules, the loud ones: the hard mules are left behind while the easy ones are
   memorised.
