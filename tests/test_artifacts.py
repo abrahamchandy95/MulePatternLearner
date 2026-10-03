@@ -98,6 +98,12 @@ def test_history_rows_append_and_a_resume_drops_the_later_ones(tmp_path: Path) -
     assert read_history(path)[["epoch", "step"]].to_numpy().tolist() == [[1, 2], [1, 4], [2, 2]]
     keep_history(path, 0, 0)
     assert read_history(path).empty
+    # A history of other columns is refused, not emptied.
+    other = tmp_path / "other.csv"
+    other.write_text("epoch,step,loss\n1,2,0.5\n")
+    with pytest.raises(ValueError, match="columns"):
+        keep_history(other, 0, 0)
+    assert other.read_text() == "epoch,step,loss\n1,2,0.5\n"
 
 
 def test_epochs_are_rewritten_whole_and_read_with_their_types(tmp_path: Path) -> None:
