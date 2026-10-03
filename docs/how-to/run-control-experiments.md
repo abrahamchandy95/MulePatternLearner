@@ -39,8 +39,10 @@ script, in order:
 A run's own error is a `run_failed` event and the suite goes on; a TigerGraph outage (the
 retry budget ran out while the graph was unavailable) is a `suite_stopped` event and
 stops the training and audits, since every later run would fail the same way. The script
-prints one JSON result and exits 1 unless every run is trained and audited. Run it again
-to finish: complete runs are kept.
+prints one JSON result and exits 1 unless every run is trained and audited without an
+error. A run whose figures failed after its numbers were saved stays complete in the
+tables, with its error beside it; `mule report results/<variant>/seed-<n>` redraws them.
+Run the script again to finish: complete runs are kept.
 
 A suite of chosen variants is named by their names joined with hyphens, as in
 `results/experiments/no_attention-prior_weight/`.
