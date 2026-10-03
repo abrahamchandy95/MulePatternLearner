@@ -241,7 +241,7 @@ Every table is in long format, its key columns then `metric` and `value`:
 | `univariate.csv` | `feature`, `family`, `split`, `metric`, `value` | `univariate_auc.png` |
 | `drift.csv` | `feature`, `family`, `model`, `setup`, `split`, `metric`, `value` | `drift.png` |
 | `baselines.csv` | `baseline`, `features`, `model`, `split`, `metric`, `value`, `low`, `high` | `baselines.png` |
-| `learning_curve.csv` | `model`, `labels`, `mules`, `repeat`, `split`, `metric`, `value` | `label_curve.png` |
+| `learning_curve.csv` | `model`, `labels`, `mules`, `repeat`, `split`, `metric`, `value` | `learning_curve.png` |
 | `subgroups.csv` | `split`, `subset`, `rank`, `metric`, `value` | `ap_concentration.png`, `ring_coverage.png` |
 | `proxy_validity.csv` | `split`, `subset`, `metric`, `value` | `proxy_validity.png` |
 | `reveal_spread.csv` | `salt`, `split`, `metric`, `value` | `reveal_spread.png` |

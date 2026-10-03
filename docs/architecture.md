@@ -293,14 +293,14 @@ at import. There is no configuration file, no `--config` and no option: another 
 | Thing | Rule | Examples |
 |---|---|---|
 | Packages, modules | Lowercase role nouns, never a grab-bag name such as `utils`, `common` or `helpers`, nor a word of the old layout (`FORBIDDEN` in `tests/test_naming.py`); no two modules with the same name | `training/trainer.py`, `data/contexts.py` |
-| Classes | CapWords, a role suffix, no project prefix | `Trainer`, `Predictor`, `SavedModel`, `ContextSource` |
+| Classes | CapWords, a role suffix, no project prefix | `Predictor`, `SavedModel`, `ContextSource`, `DiskTier` |
 | Ports and adapters | See [Ports and adapters](#ports-and-adapters) | `ScopeReader`, `TigerGraphScopeReader`, `FakeTigerGraph` |
 | Functions | Verbs for use cases and factories; `*_curve` returns arrays, `bootstrap_*` intervals, `plot_*` draws | `prepare_dataset`, `train_run`, `capture_curve`, `plot_capture` |
 | Constants | UPPER_CASE, defined once | `BUILT_IN_GROUPS`, `GRAPH_NAME` |
 | Settings | Section-qualified snake_case, units as suffixes | `scope.id`, `loss.positive_weight`, `transport.max_outage_s` |
 | Variants | "Variant", never "arm": `baseline`, `no_<mechanism>`, `drop_<group>` or a control's own name | `no_attention`, `drop_pair_history`, `prior_weight` |
 | Concepts | One name each: a **dataset** is what preparation stages; the **source id** is the identity of the data loaded into the graph; the **audit** is the ground-truth report, and `evaluate` the command that writes it; a context source parameter is always `contexts` | |
-| Runs and figures | `results/<variant>/seed-<n>/`; `plots/<topic>_<figure>.png` | `audit_capture.png` |
+| Runs and figures | `results/<variant>/seed-<n>/`; a run's and a suite's figures `plots/<topic>_<figure>.png`, a study's named for what they show, after the analysis that draws them where it draws one | `audit_capture.png`, `learning_curve.png`, `ring_coverage.png` |
 | GSQL | A file is named after the responsibility its queries share; a query verb first, with no prefix | `hub_accounts.gsql` defines `list_hub_accounts` |
 | Tests | `tests/<package>/test_<module>.py`; the checks against the graph or a GPU in `tests/integration/`, and the checks that span the repository (names, import contracts, links, scripts) at the top of `tests/`; markers `graph`, `graph_write`, `cuda` | `tests/sampling/test_cugraph_sampler.py` |
 | Docs | Kebab-case in the Diataxis folders | `docs/how-to/run-control-experiments.md` |

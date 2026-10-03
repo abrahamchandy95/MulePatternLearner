@@ -117,12 +117,12 @@ def test_the_baselines_mark_chance_at_the_prevalence_and_the_run_in_ink(
         assert legend is not None and name in [text.get_text() for text in legend.get_texts()]
 
 
-def test_the_label_curve_marks_the_run_at_the_revealed_count(
+def test_the_learning_curve_marks_the_run_at_the_revealed_count(
     tables: dict[str, pd.DataFrame],
 ) -> None:
     table = tables["learning_curve"]
     for split in ("validation", "test"):
-        ax = drawn(lambda ax, split=split: figures.plot_label_curve(ax, table, split=split))
+        ax = drawn(lambda ax, split=split: figures.plot_learning_curve(ax, table, split=split))
         assert ax.get_xscale() == "log"
         run = table[(table.model == "model") & (table.split == split)]
         run = run[run.metric == "average_precision"].iloc[0]
@@ -130,7 +130,7 @@ def test_the_label_curve_marks_the_run_at_the_revealed_count(
         assert {ys(line)[0] for line in ink} >= {run.value}
         assert {xs(line)[0] for line in ink} >= {run.mules}
     # The ROC AUC version marks chance, and the run's audit AUC.
-    ax = drawn(lambda ax: figures.plot_label_curve(ax, table, metric="roc_auc"))
+    ax = drawn(lambda ax: figures.plot_learning_curve(ax, table, metric="roc_auc"))
     assert ax.get_ylabel() == "Test audit ROC AUC"
     assert [ys(line) for line in ax.get_lines() if line.get_color() == MUTED] == [[0.5, 0.5]]
     run = table[(table.model == "model") & (table.split == "test") & (table.metric == "roc_auc")]
@@ -205,7 +205,7 @@ def test_every_study_figure_renders_to_a_png_under_its_fixed_name(
     study, result = reported
     assert list(DIAGNOSTICS_FIGURES) == [
         "baselines",
-        "label_curve",
+        "learning_curve",
         "univariate_auc",
         "drift",
         "ap_concentration",
@@ -225,7 +225,7 @@ def test_every_study_figure_renders_to_a_png_under_its_fixed_name(
         assert width >= 7 * DPI and height >= 4 * DPI, name
     # The paired figures are two panels wide or tall.
     width, _ = struct.unpack(">II", study.figure("baselines").read_bytes()[16:24])
-    _, height = struct.unpack(">II", study.figure("label_curve").read_bytes()[16:24])
+    _, height = struct.unpack(">II", study.figure("learning_curve").read_bytes()[16:24])
     assert width >= 12 * DPI and height >= 10 * DPI
 
 
@@ -241,7 +241,7 @@ def test_the_study_report_has_each_analysis_with_its_figures(
     assert headings == [
         "Feature table",
         "Baselines",
-        "Label-count curve",
+        "Learning curve",
         "Each feature alone",
         "Drift",
         "Revealed and hidden mules, AP concentration and rings",

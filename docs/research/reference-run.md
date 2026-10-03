@@ -74,7 +74,7 @@ for analysis only.
   with seed 42, so these numbers are not paired with the runs' audits.
 - Logistic regression on the 165 account-level features of the baselines (not the pool
   features), trained on k random training mules (revealed or hidden) against 3,000 training
-  non-mules, gives this label-count curve on the same test sample (the mean of 5 draws, and a
+  non-mules, gives this learning curve on the same test sample (the mean of 5 draws, and a
   single run at k = 160):
 
   | k | 10 | 20 | 40 | 80 | 160 |
@@ -91,6 +91,6 @@ validation audit; the test audit is for reporting.
 
 | Note | What it holds |
 |---|---|
-| [The diagnostic study](diagnostic-study.md) | the constant root input, the baselines on the root features and the pool counts, the label-count curve, the cutoff shift, and where each script of the study went |
+| [The diagnostic study](diagnostic-study.md) | the constant root input, the baselines on the root features and the pool counts, the learning curve, the cutoff shift, and where each script of the study went |
 | [The mule profile](mule-profile.md) | what separates mules from other accounts; revealed against hidden mules; the detection ceiling |
 | [The nnPU positive weight](nnpu-positive-weight.md) | the collapse of run 1 and the simulation of the positive weight |

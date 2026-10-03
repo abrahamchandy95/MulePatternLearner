@@ -126,7 +126,7 @@ Which counts carry it:
 
 ### More labels help, but labels were not what held the model back
 
-![The label-count curve](figures/study_label_curve.png)
+![The learning curve](figures/study_learning_curve.png)
 
 Logistic regression and gradient boosting on all 165 features, trained on k train mules
 drawn at random (revealed or hidden) against 3,000 train non-mules, five draws each and one
@@ -238,7 +238,7 @@ These answered a question once and are not rerun:
 | `bl_lib.py` (metrics and weighting) | `metrics.py`; `split_rank_transform` in `diagnostics/drift.py` |
 | `bl_univariate.py` | `diagnostics/univariate.py`, `mule diagnose univariate`; it reproduces the study's 166 ROC AUCs to 1e-16 |
 | `bl_models.py`, PU baselines (A) | `diagnostics/baselines.py`, `mule diagnose baselines`, the question of the retired `no_graph` control; on the study's table its A2 setup gives the recorded AP 0.0357 (LR) and 0.0570 (HGB) |
-| `bl_models.py`, the label-count curve (B) | `diagnostics/learning_curve.py`, `mule diagnose learning-curve` |
+| `bl_models.py`, the learning curve (B) | `diagnostics/learning_curve.py`, `mule diagnose learning-curve` |
 | `bl_models.py`, cutoff shift (D), and `bl_shift.py` | `diagnostics/drift.py`, `mule diagnose drift` |
 | `bl_subgroup.py`, `mpl_arms/audit_summary.py` (revealed and hidden) | `diagnostics/subgroups.py`, `mule diagnose subgroups`, which adds the AP concentration and the rings |
 | `mpl_arms/audit_summary.py` (intervals) | `evaluation/audit.py`: ring-clustered intervals and tie-aware budgets |
@@ -282,5 +282,5 @@ study's archived files, which stay outside the repository:
 | `study_univariate_auc.png` | `plot_univariate` | `bl_univariate.csv` (raw ROC AUC per split; identical columns merged, the split-constant ages left out) |
 | `study_pool_univariate_auc.png` | `plot_univariate` | `pool_activity_check_univariate.csv` (the reference definitions under `reference`) |
 | `study_baselines.png` | `plot_baselines` | `bl_results.csv` (A2 and the untrained features) and `pool_activity_check_models.csv` (A2); run 2's audit AP; chance at the test prevalence |
-| `study_label_curve.png` | `plot_label_curve`, ROC AUC | `bl_results.csv` (B, and A3 for the revealed mules); run 2's audit ROC AUC |
+| `study_learning_curve.png` | `plot_learning_curve`, ROC AUC | `bl_results.csv` (B, and A3 for the revealed mules); run 2's audit ROC AUC |
 | `study_drift.png` | `plot_drift` | the study's `features.parquet`, through `diagnostics.drift.feature_shift`, for the 24 features of `bl_shift.csv` |

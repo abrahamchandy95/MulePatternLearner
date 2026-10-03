@@ -97,7 +97,7 @@ mule diagnose baselines      # one of them
 
 `mule diagnose` studies the built-in run's dataset against the ground truth, for analysis
 only: the features one at a time, their drift between cutoffs, baselines on the account's
-own activity, a label-count curve, which mules the run finds, how valid its proxy metrics
+own activity, a learning curve, which mules the run finds, how valid its proxy metrics
 are, the label reveal over salts and the nnPU positive weight on a synthetic problem. It
 writes to `results/diagnostics/<dataset id>/` and is the only command that installs the
 analytics queries. [Run the diagnostics](docs/how-to/run-diagnostics.md) describes each
