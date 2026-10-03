@@ -1,4 +1,4 @@
-"""Read-only readiness of the graph and the built-in run, which `mule check` prints.
+"""Read-only readiness of the graph and the built-in run, which `mule check` reports.
 
 check connects with the run's transport section (the connection refuses a graph other
 than contract.server.GRAPH_NAME) and reports whether the scope vertex type exists,
@@ -10,10 +10,11 @@ has no disk tier: the batch's contexts are requested from TigerGraph, not read f
 dataset's context cache, so the installed context query and its first Fourier spot
 check run, and the REST calls and seconds are the graph's. The report has the digest of
 every batch tensor (batching.assemble.tensor_digests, the definition the golden-run
-test pins) and the step's loss and objective, the first values train() logs. Two code
-versions built the same batch and step when both print the same digests and loss on one
-machine and device. Nothing is written to the graph and no dataset is prepared: `mule
-train` does that.
+test pins), one digest of them all, and the step's loss and objective, the first values
+train() logs. Two code versions built the same batch and step when both report the same
+digests and loss on one machine and device. The report is written to results/check.json
+(paths.check_report), and `mule check` shows its checklist. Nothing is written to the
+graph and no dataset is prepared: `mule train` does that.
 """
 
 from __future__ import annotations
@@ -27,8 +28,10 @@ from typing import Any
 import numpy as np
 import torch
 
+from ..artifacts import write_json
 from ..batching.assemble import RootBatch, batch_device, build_root_batch, tensor_digests, to_device
 from ..config import DEFAULT_CONFIG, RunConfig
+from ..contract.fingerprints import fingerprint
 from ..contract.server import TRAINING_QUERY_FILES
 from ..data.contexts import ContextReader, ContextSource, close_source
 from ..data.hub_registry import load_hub_registry
@@ -37,7 +40,7 @@ from ..data.observed_labels import load_observed_labels
 from ..data.splits import sample_keys
 from ..model.build import build_model
 from ..model.loss import NonNegativePULoss
-from ..paths import DATA_DIR, DatasetPaths
+from ..paths import DATA_DIR, RESULTS_DIR, DatasetPaths, check_report
 from ..runtime.device import choose_device, torch_runtime
 from ..sampling.cugraph_sampler import cugraph_usable
 from ..tigergraph.context_query import TigerGraphContextFetcher
@@ -158,7 +161,9 @@ def first_step(config: RunConfig, dataset: DatasetPaths, contexts: ContextReader
         batch = prepared.batch
         report["status"] = "passed"
         report["tensor_bytes"] = sum(t.numel() * t.element_size() for t in batch.values())
-        report["tensor_digests"] = tensor_digests(batch)
+        report["tensor_digests"] = digests = tensor_digests(batch)
+        # One digest of the tensors' bytes, to compare two batches at a glance.
+        report["batch_digest"] = fingerprint({name: d["sha256"] for name, d in digests.items()})
         report |= train_step(config, device, batch, prepared, step)
     if device.type == "mps":
         report["mps_driver_allocated_bytes"] = torch.mps.driver_allocated_memory()
@@ -197,11 +202,14 @@ def train_step(
     }
 
 
-def check(config: RunConfig = DEFAULT_CONFIG, data: Path = DATA_DIR) -> dict[str, Any]:
+def check(
+    config: RunConfig = DEFAULT_CONFIG, data: Path = DATA_DIR, results: Path = RESULTS_DIR
+) -> dict[str, Any]:
     """The readiness report of the built-in run; status "ready" once every check passed.
 
     The first step runs only on a graph that is ready, with the run's one dataset in
-    data; otherwise the report names what is missing.
+    data; otherwise the report names what is missing. The report replaces
+    results/check.json (paths.check_report) before it is returned.
     """
     executor = connect(config.transport)
     report: dict[str, Any] = {**graph_readiness(executor), "cugraph": cugraph_readiness()}
@@ -237,4 +245,7 @@ def check(config: RunConfig = DEFAULT_CONFIG, data: Path = DATA_DIR) -> dict[str
     report["problems"] = problems
     report["status"] = "not_ready" if problems else "ready"
     report["graph_writes"] = 0
+    saved = check_report(results)
+    saved.parent.mkdir(parents=True, exist_ok=True)
+    write_json(saved, report)
     return report

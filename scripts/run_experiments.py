@@ -5,12 +5,13 @@ variants (the controls suite when none is named), the baseline always among them
 the seeds 42, 43 and 44. Every variant is validated offline and the run matrix printed
 with a time bound before training. Complete runs are kept, runs whose settings differ
 move to results/archive/ and train again, and the comparison tables, figures and
-report.md are always rewritten under results/experiments/<suite>/. It prints one JSON
-result and exits 1 unless every run is trained and audited.
+report.md are always rewritten under results/experiments/<suite>/. It shows the run
+matrix, a line for each run as it finishes and then the top of the comparison; the
+full records are in the suite's and the runs' files. It exits 1 unless every run is
+trained and audited.
 """
 
 import argparse
-import json
 import sys
 
 from mule_pattern_learner.experiments.variants import describe, select
@@ -30,10 +31,19 @@ def main() -> int:
     from mule_pattern_learner.runtime.device import reserve_deterministic_cublas
 
     reserve_deterministic_cublas()
-    from mule_pattern_learner.experiments.runner import run_suite
+    from mule_pattern_learner.cli import stopped
+    from mule_pattern_learner.experiments.runner import run_suite, suite_summary
+    from mule_pattern_learner.runtime.console import end_progress, show
+    from mule_pattern_learner.tigergraph.executor import TransientQueryError
 
-    result = run_suite(args.names)
-    print(json.dumps(result, allow_nan=False))
+    try:
+        result = run_suite(args.names)
+    except TransientQueryError as error:
+        # An outage while preparing the dataset stops the suite before any run.
+        raise SystemExit(stopped("run_experiments.py", error)) from None
+    finally:
+        end_progress()
+    show(suite_summary(result))
     return 0 if result["status"] == "complete" else 1
 
 

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import ast
 import importlib.util
-import json
 import os
 from pathlib import Path
 import subprocess
@@ -105,7 +104,7 @@ def test_scripts_import_and_print_help_without_connecting(
 
 
 def test_the_experiments_script_lists_the_variants_and_runs_the_names_given(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     script = load("run_experiments")
     monkeypatch.setattr(sys, "argv", ["run_experiments", "--help"])
@@ -119,14 +118,30 @@ def test_the_experiments_script_lists_the_variants_and_runs_the_names_given(
 
     def run_suite(names: list[str]) -> dict[str, Any]:
         ran.append(tuple(names))
-        return {"status": "complete" if names else "failed"}
+        status = "complete" if names else "failed"
+        run = {"variant": "baseline", "seed": 42, "action": "train", "status": status}
+        return {
+            "suite": "-".join(names) or "controls",
+            "directory": str(tmp_path / "suite"),
+            "status": status,
+            "stopped_by": None,
+            "runs": [run | {"error": None if names else "train: ValueError: broken"}],
+        }
 
     monkeypatch.setattr(runner, "run_suite", run_suite)
+    monkeypatch.chdir(tmp_path)
+    summaries: list[str] = []
     for argv, status in ((["no_attention", "controls"], 0), ([], 1)):
         monkeypatch.setattr(sys, "argv", ["run_experiments", *argv])
         assert script.main() == status
-        assert json.loads(capsys.readouterr().out)["status"] in ("complete", "failed")
+        summaries.append(capsys.readouterr().out)
     assert ran == [("no_attention", "controls"), ()]
+    # The suite's summary, not its result as a record; this suite has no comparison yet.
+    assert summaries[1] == (
+        "Suite controls failed: 1 run, 1 failed\n"
+        "  baseline seed 42: train: ValueError: broken\n"
+        "Report: suite/report.md, beside summary.csv, comparison.csv, events.jsonl and plots/\n"
+    )
     # An unknown name is refused before anything runs.
     monkeypatch.setattr(sys, "argv", ["run_experiments", "no_graph"])
     with pytest.raises(SystemExit) as refused:

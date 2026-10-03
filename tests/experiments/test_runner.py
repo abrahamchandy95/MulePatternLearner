@@ -31,6 +31,7 @@ from mule_pattern_learner.experiments.runner import (
     is_outage,
     plan_run,
     run_suite,
+    suite_summary,
     time_bound,
 )
 from mule_pattern_learner.experiments.tables import COMPLETE, FAILED, STOPPED, audited
@@ -164,6 +165,18 @@ def test_a_suite_trains_audits_and_compares_then_keeps_or_archives_what_it_has(
     assert not comparison.validation_ap_delta.iloc[1:].isna().any()
     assert sorted(p.stem for p in compared.plots.iterdir()) == sorted(SUITE_FIGURES)
     assert compared.report.read_text().startswith(f"# Suite {DROP.name}\n")
+    # The script's summary: how the suite ended, the variants ranked as report.md ranks
+    # them, and where the report is.
+    shown = suite_summary(result).splitlines()
+    assert shown[:2] == [
+        f"Suite {DROP.name} complete: 4 runs, 4 complete",
+        "Variants ranked by their validation audit AP, with 90% intervals:",
+    ]
+    assert shown[2].split()[:3] == ["variant", "seeds", "validation"]
+    ranked = comparison.sort_values("validation_ap", ascending=False).variant.tolist()
+    assert [line.split()[0] for line in shown[3:5]] == ranked
+    assert all("42 43" in line and "[" in line for line in shown[3:5])
+    assert shown[5].startswith(f"Report: {compared.report}, beside summary.csv")
     # A second suite keeps every complete run and connects nowhere; the tables are
     # written again from the same files.
     kept = {run.root: files(run.root) for run in runs}
@@ -208,6 +221,14 @@ def test_a_variant_that_fails_on_its_own_fails_alone(
     assert result["status"] == FAILED
     comparison = read_comparison(SuitePaths.of(DROP.name, results).comparison)
     assert comparison.seeds.tolist() == ["42", ""]
+    # The suite records the failure, and its summary names it.
+    (failed,) = events(results, "run_failed")
+    assert (failed["variant"], failed["step"]) == (DROP.name, "train")
+    shown = suite_summary(result).splitlines()
+    assert shown[:2] == [
+        f"Suite {DROP.name} failed: 2 runs, 1 complete, 1 failed",
+        f"  {DROP.name} seed 42: train: ValueError: this variant's own failure",
+    ]
 
 
 def test_a_run_whose_figures_fail_is_complete_and_the_suite_fails(
@@ -253,6 +274,13 @@ def test_an_outage_stops_the_suite_and_the_tables_say_so(
     assert graph.names().count(TRUTH_QUERY) == 0
     summary = read_summary(SuitePaths.of(DROP.name, results).summary)
     assert set(summary.status) == {STOPPED}
+    (stopped,) = events(results, "suite_stopped")
+    assert (stopped["variant"], stopped["seed"], stopped["step"]) == (DROP.name, 42, "train")
+    assert suite_summary(result).splitlines()[:2] == [
+        f"Suite {DROP.name} stopped: 4 runs, 4 stopped",
+        "  stopped because TigerGraph stayed unavailable: TigerGraphUnavailableError: "
+        "fetch_training_context failed: unavailable",
+    ]
     # Once TigerGraph is back, the interrupted run resumes.
     dataset = result["dataset_id"]
     assert plan_run(DROP, 42, BASE, results, dataset).action == RESUME

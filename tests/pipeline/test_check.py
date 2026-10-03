@@ -8,8 +8,10 @@ from typing import Any
 
 import pytest
 
+from mule_pattern_learner.artifacts import read_json
 from mule_pattern_learner.config import RunConfig
 from mule_pattern_learner.contract.feature_groups import extraction_plan
+from mule_pattern_learner.contract.fingerprints import fingerprint
 from mule_pattern_learner.contract.server import (
     CONTEXT_QUERY,
     CUTOFF_QUERY,
@@ -20,7 +22,7 @@ from mule_pattern_learner.contract.server import (
 from mule_pattern_learner.data.contexts import ContextSource
 from mule_pattern_learner.data.manifest import dataset_id
 from mule_pattern_learner.data.preparation import prepare
-from mule_pattern_learner.paths import DatasetPaths
+from mule_pattern_learner.paths import DatasetPaths, check_report
 from mule_pattern_learner.pipeline import check as pipeline_check
 from mule_pattern_learner.testing.builders import (
     UNIT_SOURCE,
@@ -77,8 +79,11 @@ def test_a_ready_graph_gets_one_batch_and_one_training_step(
         )
 
     monkeypatch.setattr(pipeline_check, "open_context_source", open_source)
-    report = pipeline_check.check(CONFIG, data)
+    results = tmp_path / "results"
+    report = pipeline_check.check(CONFIG, data, results)
     assert report["status"] == "ready" and report["problems"] == [] and opened == [dataset]
+    # The whole report is the one results/check.json holds.
+    assert read_json(check_report(results)) == report
     assert report["graph"] == GRAPH_NAME and report["scope_schema"] == "present"
     queries = gsql_text.repository_queries(TRAINING_QUERY_FILES)
     assert report["queries"] == {"up_to_date": list(queries), "stale": {}, "retired": []}
@@ -93,6 +98,9 @@ def test_a_ready_graph_gets_one_batch_and_one_training_step(
     # Digests of every batch tensor (test_golden_run pins their values).
     digests = step["tensor_digests"]
     assert digests["root_positions"]["shape"] == [32] and len(digests["x"]["sha256"]) == 64
+    # And one digest of their bytes.
+    shas = {name: digest["sha256"] for name, digest in digests.items()}
+    assert step["batch_digest"] == fingerprint(shas)
 
 
 def test_a_graph_that_is_not_ready_is_reported_without_a_batch(
@@ -111,8 +119,9 @@ def test_a_graph_that_is_not_ready_is_reported_without_a_batch(
         pytest.fail("opened a source")
 
     monkeypatch.setattr(pipeline_check, "open_context_source", refuse)
-    report = pipeline_check.check(CONFIG, tmp_path / "data")
+    report = pipeline_check.check(CONFIG, tmp_path / "data", tmp_path / "results")
     assert report["status"] == "not_ready" and "first_step" not in report
+    assert read_json(check_report(tmp_path / "results")) == report
     assert report["scope_schema"] == "missing" and report["dataset"] is None
     assert report["queries"]["stale"] == {CUTOFF_QUERY: ["differs from repository source"]}
     # A retired query still installed is reported, and dropping it is left to mule install.
