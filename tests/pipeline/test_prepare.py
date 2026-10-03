@@ -11,6 +11,7 @@ from unittest.mock import patch
 import pytest
 
 from mule_pattern_learner.config import RunConfig, ScopeConfig, SplitDates, TransportConfig
+from mule_pattern_learner.contract.server import RETIRED_QUERIES, TRAINING_QUERY_FILES
 from mule_pattern_learner.data import manifest as data_manifest
 from mule_pattern_learner.data.manifest import dataset_id, dataset_settings, query_hashes
 from mule_pattern_learner.paths import DatasetPaths
@@ -20,6 +21,9 @@ from mule_pattern_learner.testing.builders import (
     UNIT_SOURCE,
     unit_config,
 )
+from mule_pattern_learner.testing.fake_graph import FakeTigerGraph, retired_query
+from mule_pattern_learner.tigergraph.gsql_text import repository_queries
+from mule_pattern_learner.tigergraph.installer import retired_installed
 
 # The source id an earlier preparation recorded, which the graph no longer derives.
 PREPARED_SOURCE = "unit_snapshot"
@@ -80,6 +84,40 @@ def test_prepare_dataset_checks_query_hashes_before_reusing_a_ready_dataset(
         pipeline_prepare.prepare_dataset(config, data)
     with pytest.raises(ValueError, match="different GSQL sources"):
         data_manifest.load_prepared(dataset)
+
+
+def test_mule_install_drops_the_retired_queries_once_every_query_is_installed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A graph as the code before the rename left it: every old name installed, none of the
+    # new ones, and a query of someone else's.
+    old = {name: retired_query(name) for name in RETIRED_QUERIES}
+    graphs = [FakeTigerGraph(queries={**old, "match_parties": retired_query("match_parties")})]
+
+    def connect(transport: TransportConfig) -> FakeTigerGraph:
+        return graphs[-1]
+
+    monkeypatch.setattr(pipeline_prepare, "connect", connect)
+    result = pipeline_prepare.install_queries(unit_config())
+    names = list(repository_queries(TRAINING_QUERY_FILES))
+    assert result["installed"] == result["verified"] == names
+    assert result["dropped"] == list(RETIRED_QUERIES)
+    assert result["not_defined"] == ["match_parties"]
+    # Nothing is dropped before every renamed query is installed.
+    writes = graphs[-1].writes
+    first = next(i for i, write in enumerate(writes) if "DROP QUERY" in write)
+    assert writes[first - 1] == "INSTALL QUERY " + ", ".join(names)
+    # An install that fails drops nothing.
+    graphs.append(FakeTigerGraph(queries=old))
+    real = graphs[-1].client.conn.gsql
+
+    def failing(text: str) -> str:
+        return "Semantic Check Error" if "CREATE" in text else real(text)
+
+    monkeypatch.setattr(graphs[-1].client.conn, "gsql", failing)
+    with pytest.raises(RuntimeError, match="Semantic Check"):
+        pipeline_prepare.install_queries(unit_config())
+    assert retired_installed(graphs[-1]) == list(RETIRED_QUERIES)
 
 
 def record_graph_steps(monkeypatch: pytest.MonkeyPatch, steps: list[str]) -> None:

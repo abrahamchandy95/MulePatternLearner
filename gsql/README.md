@@ -24,9 +24,9 @@ graph.
 | | `payment_pair_gaps.gsql` | `encode_payment_pair_gaps` | the same |
 
 - **Installation** creates and installs only the queries whose text differs (comments and
-  whitespace aside), with the queries that call them, then drops the retired query names
-  still installed. Installing everything takes about 50 minutes, most of it the context
-  query ([Queries](../docs/reference/queries.md#installation)).
+  whitespace aside), with the queries that call them; `mule install` then drops the
+  retired query names still installed. Installing everything takes about 50 minutes,
+  most of it the context query ([Queries](../docs/reference/queries.md#installation)).
 - **Generated files.** The two context queries are rendered by `tigergraph.render` from
   the Python feature contracts; `python scripts/render_queries.py --check` and the tests
   fail when a file and its renderer drift apart, and a changed text needs a new contract

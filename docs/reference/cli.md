@@ -16,15 +16,15 @@ workspace (`CUBLAS_WORKSPACE_CONFIG=:4096:8`, unless it is already set).
 
 | Stage | Run by | TigerGraph work | Writes to TigerGraph |
 |---|---|---|---|
-| Install the queries | `mule install`, and `mule train` when a text differs | Creates and compiles the stale training queries and their callers, then drops the retired names still installed | The query catalog, and the scope vertex type if it is missing |
+| Install the queries | `mule install`, and every preparation that connects | Creates and compiles the stale training queries and their callers; `mule install` alone then drops the retired names still installed | The query catalog, and the scope vertex type if it is missing |
 | Create the scope | the first preparation, when `scope.id` does not exist | Partitions every Account and Party into train, validation and test | One scope vertex and one membership edge per Account and Party |
 | Reveal the known mules | the first preparation, on a graph without known labels | Simulates each mule's discovery and reveals up to 20 per split | The label fields of every internal Account |
-| Prepare the dataset | `mule train` (and `mule diagnose`) when no ready dataset exists | Pages the population, resolves the cutoffs, builds the hub registry | No |
+| Prepare the dataset | `mule train`, `mule diagnose` and the experiments script when no ready dataset exists | Installs the stale queries (above), then pages the population, resolves the cutoffs, builds the hub registry | Only the install |
 | Train | `mule train` | Two rounds of context requests per step, less what the context cache holds | No |
 | Check readiness | `mule check` | Reads the schema and the query catalog, then the contexts of one batch | No |
 | Audit | `mule evaluate` | Reads the ground truth, pages the validation and test populations, and requests the audit samples' contexts | No |
 | Score | `mule score` | Resolves the cutoff, builds an unscoped hub registry and requests the accounts' contexts | No |
-| Diagnose | `mule diagnose` | Installs the analytics queries where their text differs, then reads the truth, the populations, both context queries for every split's audit sample, and the reveal's inputs | The analytics queries in the catalog (and the install's drop of the retired names) |
+| Diagnose | `mule diagnose` | Installs the analytics queries where their text differs, then reads the truth, the populations, both context queries for every split's audit sample, and the reveal's inputs | The analytics queries in the catalog |
 
 | Command | What it does | Writes to TigerGraph |
 |---|---|---|
@@ -46,8 +46,8 @@ Trains the built-in run into `results/baseline/seed-42/`.
    names the settings that differ; move it aside to train these.
 2. **It prepares the dataset** of the built-in settings in `data/<dataset id>/`, unless a
    ready one exists: then nothing connects, but the dataset's recorded query hashes must
-   match the repository's. Otherwise it installs the stale queries (and drops the retired
-   ones, as `mule install` does), creates the scope if it is missing, reveals the known
+   match the repository's. Otherwise it installs the stale queries (the retired ones stay
+   for `mule install` to drop), creates the scope if it is missing, reveals the known
    mules if the graph has none, then pages the population, resolves the cutoffs and
    builds the hub registry. A preparation that stopped is resumed.
 3. **It trains**, or continues an interrupted run from its `resume.pt`. The run checks the
@@ -132,8 +132,8 @@ named:
 
 It prepares the dataset as `mule train` does, then writes the feature table, one long
 table per analysis, `study.json`, `events.jsonl`, the figures and `report.md`. It is the
-only command that installs the analytics queries, where their text differs (that install
-also drops the retired queries still installed). An analysis whose inputs are missing (no
+only command that installs the analytics queries, where their text differs. An analysis
+whose inputs are missing (no
 built-in run on this dataset, or no audit) is skipped with its reason; the result's
 status is then `incomplete` and the command exits 1. [Run the diagnostics](../how-to/run-diagnostics.md)
 describes each analysis.
@@ -143,10 +143,12 @@ describes each analysis.
 Adds the `Temporal_Training_Scope` vertex type if it is missing, installs the training
 queries (`gsql/queries/` and `gsql/evaluation/`) whose text differs, then drops the
 installed queries named on `contract.server.RETIRED_QUERIES`, callers first, and lists the
-installed queries that no repository file defines without touching them. `mule train`
-does the same before it prepares a dataset. [Queries](queries.md#installation) describes
-staleness, the 45-minute wait and the retired names. The result lists the queries
-`installed`, `up_to_date`, `dropped` and `not_defined`.
+installed queries that no repository file defines without touching them. Every
+preparation that connects installs the same way but drops nothing: code from before the
+rename calls the retired names, so run `mule install` once no job of that code runs
+anywhere. [Queries](queries.md#installation) describes staleness, the 45-minute wait and
+the retired names. The result lists the queries `installed`, `up_to_date`, `dropped` and
+`not_defined`.
 
 ## The scripts
 

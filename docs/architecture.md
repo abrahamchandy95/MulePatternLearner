@@ -49,9 +49,11 @@ flowchart LR
   DG --> DIAG
 ```
 
-1. **Install.** `mule install`, or `mule train` when a text differs, installs the queries
-   of `gsql/queries/` and `gsql/evaluation/`, adds the scope vertex type if it is missing,
-   and drops the retired query names ([Queries](reference/queries.md#installation)).
+1. **Install.** `mule install` installs the queries of `gsql/queries/` and
+   `gsql/evaluation/` whose text differs, adds the scope vertex type if it is missing, and
+   then drops the retired query names. A preparation that connects (`mule train`, `mule
+   diagnose` or the experiments script, when no ready dataset exists) installs the same
+   way and drops nothing ([Queries](reference/queries.md#installation)).
 2. **Scope and reveal.** On a fresh graph the first preparation creates the frozen
    experiment scope (ownership groups partitioned into train, validation and test) and
    reveals the mules a bank would have discovered, into the graph's label contract
@@ -329,11 +331,13 @@ The owner's decisions that shape the code, each with its reason.
 - **Queries are named after their responsibility** (verb first, no prefix, since the graph
   is dedicated), and only queries the project uses remain: pipeline queries in
   `gsql/queries/`, the oracle in `gsql/evaluation/`, analysis in `gsql/analytics/`.
-- **`mule install` drops the retired names.** Once every query is installed, it drops the
-  installed queries on the fixed list `contract.server.RETIRED_QUERIES`, callers first, and
-  never any other: a fixed list cannot drop someone else's query. It needs no option, and
-  it waits until no job of the code before the rename runs anywhere, since that code calls
-  the old names.
+- **Only `mule install` drops the retired names.** Once every query is installed, it drops
+  the installed queries on the fixed list `contract.server.RETIRED_QUERIES`, callers first,
+  and never any other: a fixed list cannot drop someone else's query. It needs no option.
+  Code from before the rename calls the old names, and nothing can tell whether such a
+  job still runs on another machine, so the drop is a step of its own: the owner runs
+  `mule install` once no job of that code runs anywhere, and the installs of the other
+  commands leave the old names in place.
 - **Decisions use the validation audit; the test audit is for reporting.** Choosing on
   test would make the reported number optimistic, and the pool groups were already
   designed after reading test-split mules.

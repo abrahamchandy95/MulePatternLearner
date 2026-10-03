@@ -113,13 +113,16 @@ it starts from scratch, with its `data/` and `results/` empty or moved aside:
 2. `mule check`. Until the first `mule train` it ends `not_ready`: the renamed queries are
    not installed yet, the old names are listed under `queries.retired`, and there is no
    dataset.
-3. `mule train`. Its first run installs the renamed queries (about 50 minutes; run it
-   again if the 45-minute wait runs out) and then drops the retired ones, prepares the
-   dataset (about 6 minutes) and trains the built-in run (about an hour).
-4. `mule evaluate`, then `mule report`.
-5. `python scripts/run_experiments.py`, then `python scripts/run_experiments.py
+3. `mule train`. Its first run installs the renamed queries beside the old names (about
+   50 minutes; run it again if the 45-minute wait runs out), prepares the dataset (about
+   6 minutes) and trains the built-in run (about an hour).
+4. Stop every job of the earlier code, on every machine, since it calls the old names.
+   Then `mule install`: it finds the renamed queries in place and drops the old names,
+   and `mule check` lists no `queries.retired` from then on.
+5. `mule evaluate`, then `mule report`.
+6. `python scripts/run_experiments.py`, then `python scripts/run_experiments.py
    feature_drops`.
-6. `mule diagnose`. Its first run installs the analytics queries, an install of the
+7. `mule diagnose`. Its first run installs the analytics queries, an install of the
    order of 50 minutes.
 
 [Train and evaluate](docs/how-to/train-and-evaluate.md#on-the-cuda-host) walks through

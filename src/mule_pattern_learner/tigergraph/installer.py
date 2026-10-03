@@ -152,10 +152,12 @@ def drop_retired(executor: ConnectionExecutor) -> list[str]:
     """Drop every installed query of RETIRED_QUERIES, callers first; the names dropped.
 
     The names are the ones the queries were installed under before they were renamed
-    (the owner's decision in docs/architecture.md). A name that is not installed is
-    skipped, and no other query is ever touched. TigerGraph refuses to drop a query
-    another installed query calls, so each drop is checked against the endpoint
-    listing, and one that leaves its query installed raises with TigerGraph's answer.
+    (the owner's decision in docs/architecture.md), which code from before the rename
+    still calls, so only `mule install` drops them, after its install has passed. A name
+    that is not installed is skipped, and no other query is ever touched. TigerGraph
+    refuses to drop a query another installed query calls, so each drop is checked
+    against the endpoint listing, and one that leaves its query installed raises with
+    TigerGraph's answer.
     """
     names = retired_installed(executor)
     for name in names:
@@ -187,7 +189,7 @@ def install(
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
 ) -> dict[str, Any]:
-    """Create and install only the stale queries, then drop the retired ones.
+    """Create and install only the stale queries; the retired ones stay (drop_retired).
 
     A query is stale when SHOW QUERY differs from the repository, its endpoint is
     missing or disabled, or its endpoint parameters differ (see query_problems);
@@ -202,9 +204,7 @@ def install(
     connection, gateway error), the endpoint listing is polled every `poll_s`
     seconds until every installed query is enabled or the deadline passes. A
     requestId, when a server returns one, is polled with getQueryInstallationStatus.
-    Success is decided by verify_sources, not by a status message. Only once it has
-    passed, so every renamed query is installed, are the retired queries dropped
-    (drop_retired); the result lists them under "dropped".
+    Success is decided by verify_sources, not by a status message.
     """
     logs: dict[str, Any] = {}
     if not has_scope_vertex(executor):
@@ -222,7 +222,6 @@ def install(
     emit({"event": "install", "stale": names, "up_to_date": logs["up_to_date"]})
     if not names:
         logs["verified"] = verify_sources(executor, files)
-        logs["dropped"] = drop_retired(executor)
         return logs
     for relative in files:
         chosen = [queries[name][1] for name in names if queries[name][0] == relative]
@@ -283,7 +282,6 @@ def install(
         _await_enabled(executor, names, started, deadline_s, poll_s, sleep, clock)
     logs["install"] = status
     logs["verified"] = verify_sources(executor, files)
-    logs["dropped"] = drop_retired(executor)
     return logs
 
 

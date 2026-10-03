@@ -149,17 +149,20 @@ so leave `data/` and `results/` empty or move them aside.
 6. **`mule check`.** Until the first `mule train` on a graph whose queries carry their
    old names, it ends `not_ready`: the renamed queries are stale, the old names are listed
    under `queries.retired`, and there is no dataset.
-7. **`mule train`.** Its first run installs the renamed queries (about 50 minutes; run it
-   again if the 45-minute wait runs out) and then drops the retired ones, prepares the
-   dataset (about 6 minutes) and trains the built-in run (about an hour). `mule check`
-   now ends `ready`.
-8. **`mule evaluate`, then `mule report`.**
-9. **The control experiments:** `python scripts/run_experiments.py`, then
-   `python scripts/run_experiments.py feature_drops`
-   ([Run the control experiments](run-control-experiments.md)).
-10. **`mule diagnose`.** Its first run installs the analytics queries, then
+7. **`mule train`.** Its first run installs the renamed queries beside the old names
+   (about 50 minutes; run it again if the 45-minute wait runs out), prepares the dataset
+   (about 6 minutes) and trains the built-in run (about an hour). `mule check` now ends
+   `ready`, still listing the old names under `queries.retired`.
+8. **Drop the old names.** Stop every job of the earlier code, on every machine: it calls
+   the old names. Then run `mule install`, which finds the renamed queries in place and
+   drops the old names, callers first ([Queries](../reference/queries.md#the-retired-names)).
+9. **`mule evaluate`, then `mule report`.**
+10. **The control experiments:** `python scripts/run_experiments.py`, then
+    `python scripts/run_experiments.py feature_drops`
+    ([Run the control experiments](run-control-experiments.md)).
+11. **`mule diagnose`.** Its first run installs the analytics queries, then
     `python -m pytest -m graph` checks them ([Run the diagnostics](run-diagnostics.md)).
-11. **The cache cap.** Set `contract.bounds.CONTEXT_CACHE_ENTRIES` from the baseline
+12. **The cache cap.** Set `contract.bounds.CONTEXT_CACHE_ENTRIES` from the baseline
     run's `contexts.distinct` ([Outputs](../reference/outputs.md)).
 
 If cuGraph fails its probe, training warns (`cugraph_probe`) and samples with the torch

@@ -20,7 +20,7 @@ from ..data.preparation import prepare
 from ..paths import DATA_DIR, DatasetPaths, datasets
 from ..tigergraph.cutoffs import TigerGraphCutoffReader
 from ..tigergraph.hubs import TigerGraphHubReader
-from ..tigergraph.installer import install, undefined_queries
+from ..tigergraph.installer import drop_retired, install, undefined_queries
 from ..tigergraph.labels import TigerGraphObservedLabelReader
 from ..tigergraph.provenance import resolve_source_id, source_counts
 from ..tigergraph.reveal import ensure_revealed_labels
@@ -31,13 +31,16 @@ from .connect import Session, connect
 def install_queries(config: RunConfig = DEFAULT_CONFIG) -> dict[str, Any]:
     """What `mule install` does, on a connection with config's retry budgets.
 
-    It adds the scope vertex type if it is missing, installs the training queries whose
-    text differs and then drops the retired queries still installed (installer.install),
-    and lists the installed queries that no repository file defines, which it leaves in
-    place.
+    It adds the scope vertex type if it is missing and installs the training queries
+    whose text differs (installer.install). Once that has passed, so every renamed query
+    is installed, it drops the retired queries still installed (installer.drop_retired):
+    it is the only command that drops them, because code from before the rename calls
+    them. Last it lists the installed queries that no repository file defines, which it
+    leaves in place.
     """
     executor = connect(config.transport)
     result = install(executor)
+    result["dropped"] = drop_retired(executor)
     result["not_defined"] = undefined_queries(executor)
     return result
 

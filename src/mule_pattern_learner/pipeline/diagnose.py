@@ -35,8 +35,8 @@ class TigerGraphStudyReader:
     connection. The oracle reads the truth once (pipeline.evaluate.SharedTruth). The
     context source is the configuration's, with the dataset's disk tier, which the
     training runs and audits of the dataset share. The analytics fetcher comes after the
-    analytics queries are installed where their text differs (with the install's usual
-    drop of the retired queries). The reveal's parameters need no graph.
+    analytics queries are installed where their text differs. The reveal's parameters
+    need no graph.
     """
 
     def __init__(self, config: RunConfig, dataset: DatasetPaths, session: Session) -> None:
