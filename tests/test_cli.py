@@ -593,8 +593,6 @@ def screen(raw: str) -> str:
 
 # `mule train` of the fakes' small run, written to a file or a pipe: no step lines.
 TRAINED_ON_FAKES = """\
-Scope strict_mule_v2 is in place
-Hub registry: 9 hub rows over 3 cutoffs
 Dataset DATASET: 18 / 5 / 6 known mules in train / validation / test
 Training on cpu (torch sampler) into results/baseline/seed-42: 3 steps per epoch, at most 2 \
 epochs, early stop after 6 epochs without gain
