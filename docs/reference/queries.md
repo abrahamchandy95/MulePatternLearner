@@ -293,10 +293,13 @@ describes what a pair is.
   minutes, most of it the context query, before the training query shrank; the analytics
   query is the size the context query was.
 - If the 90 minutes pass, the command fails, and the server may still be compiling. Wait
-  until it has finished (`mule check` no longer lists the training queries under
-  `queries.stale`; the GSQL shell's `ls` shows every query's state), then run the same
-  command again: it installs only what is still stale, and creates nothing the last run
-  created.
+  until it has finished (`mule check` no longer lists stale training queries; the GSQL
+  shell's `ls` shows every query's state), then run the same command again: it installs
+  only what is still stale, and creates nothing the last run created.
+- The console says when an install starts ("Installing 12 queries on TigerGraph"), shows
+  the wait for compilation in place on a terminal, and says when it is done ("Installed 12
+  queries in 48.0 min"); the `install`, `install_unanswered`, `install_wait` and
+  `installed` events hold the query names.
 - Every write (the schema change, `CREATE`, the install, `DROP`) runs once: a failed one
   is reported, never repeated.
 
@@ -313,9 +316,9 @@ each installed query named on `contract.server.RETIRED_QUERIES`: the names the q
 after their responsibility, and two retired queries, the public Fourier wrapper and the
 population query of the removed `shared_history` protocol. It drops callers before the
 queries they call, skips the names that are not installed, checks each drop against the
-endpoint listing and lists what it dropped under `dropped`. It never touches any other
-query: installed queries that no repository file defines are only listed
-(`not_defined`). Code from before the rename calls the old names, so run `mule install`
+endpoint listing and says what it dropped. It never touches any other query: installed
+queries that no repository file defines are only listed, as left in place. Code from before the rename calls the old names, so run `mule install`
 only when no such job runs anywhere; until then the installs of `mule train`, `mule
 diagnose` and the experiments script put the renamed queries beside the old names.
-`mule check` lists the retired queries still installed under `queries.retired`.
+`mule check` lists the retired queries still installed (`queries.retired` in
+`results/check.json`).

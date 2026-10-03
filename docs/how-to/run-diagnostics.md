@@ -53,7 +53,10 @@ The analyses of the feature table build it first when it is missing or stale. "T
 the built-in run, and only if its `config.json` names this dataset. An analysis whose
 inputs are missing (no such run, another dataset, no audit, no `metrics.json`) is skipped
 with its reason, the study's status is `incomplete`, and the command exits 1; the
-baselines and the curve then go without the run's rows.
+baselines and the curve then go without the run's rows. The console shows a line per
+analysis as it ends (written, kept or skipped, its rows and seconds, or the reason it was
+skipped) and then whether the study is complete and where it is; the analyses' records
+are in the study's `events.jsonl`.
 
 What some of them mean:
 

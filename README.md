@@ -63,14 +63,16 @@ predictions and metrics, its history, the training figures in `plots/` and `repo
 On a fresh graph its first run installs the queries, creates the frozen experiment scope
 and reveals the mules a bank would have discovered; every run then prepares its dataset
 in `data/<dataset id>/`, whose context cache spares later runs and audits the same
-requests. Run it again to resume an interrupted run; on a complete run it prints the
+requests. Run it again to resume an interrupted run; on a complete run it summarises the
 run's `metrics.json` and changes nothing.
 
 `mule evaluate` audits the model against the ground truth on validation (for decisions)
 and test (for reporting), weighting a sample of every mule and 2,000 non-mules to the
 whole split, with 90% intervals. `mule score ACCOUNTS [DATE]` scores the accounts listed
 in a file, and `mule install` installs the queries ahead of time. `python -m
-mule_pattern_learner` runs the same commands; each prints one JSON result.
+mule_pattern_learner` runs the same commands. The console shows each command's progress
+and then a short summary; the full records are in the files it writes (`events.jsonl`,
+`history.csv`, `epochs.csv`, `metrics.json` and `audit/`).
 [Train and evaluate](docs/how-to/train-and-evaluate.md) walks through it, the CUDA host
 included, and [Command line](docs/reference/cli.md) lists every command.
 
@@ -113,16 +115,16 @@ it starts from scratch, with its `data/` and `results/` empty or moved aside, bu
 
 1. Pull `main` (`git switch main && git pull`) and reinstall with the CUDA extra
    ([Setup](#setup)).
-2. `mule check`. Until the first `mule train` it ends `not_ready`: the renamed queries are
-   not installed yet, the old names are listed under `queries.retired`, and there is no
-   dataset.
+2. `mule check`. Until the first `mule train` it ends "Not ready": the renamed queries are
+   not installed yet, the old names are listed as retired queries still installed, and
+   there is no dataset.
 3. `mule train`. Its first run installs the renamed queries beside the old names (about
    50 minutes, within a 90-minute wait), prepares the dataset (about 6 minutes) and
    trains the built-in run (about an hour). If the wait runs out, wait until `mule check`
-   no longer lists the queries under `queries.stale`, then run `mule train` again.
+   no longer lists stale training queries, then run `mule train` again.
 4. Stop every job of the earlier code, on every machine, since it calls the old names.
    Then `mule install`: it finds the renamed queries in place and drops the old names,
-   and `mule check` lists no `queries.retired` from then on.
+   and `mule check` lists no retired queries from then on.
 5. `mule evaluate`, then `mule report`.
 6. `python scripts/run_experiments.py`, then `python scripts/run_experiments.py
    feature_drops`.

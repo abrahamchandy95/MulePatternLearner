@@ -23,8 +23,10 @@ script, in order:
    on the CPU, one dataset for all and a distinct fingerprint for each. A failure names
    the variant, before anything connects.
 2. **Prepares the dataset** once, as `mule train` does, on the suite's one connection.
-3. **Plans every run** and prints the plan as a `suite` event with `time_bound`: an upper
-   bound from the median seconds per step of the latest graph run's `history.csv`. A
+3. **Plans every run** and shows the plan as a matrix of variants and seeds, each run's
+   action (`keep`, `train`, `resume` or `archive`) in its cell, with an upper bound on the
+   hours from the median seconds per step of the latest graph run's `history.csv` (the
+   `suite` event's `bound_hours` and `timed_from`). A
    complete run of the same settings and dataset is kept, an interrupted one resumes, and
    one whose settings differ, whose `config.json` cannot be read or that was trained on
    another dataset is moved whole to `results/archive/<variant>/seed-<n>/<UTC time>/` and
@@ -36,10 +38,16 @@ script, in order:
 6. **Compares** the runs and writes `summary.csv`, `comparison.csv`, six figures and
    `report.md` under `results/experiments/<suite>/`, always, even after a failure.
 
-A run's own error is a `run_failed` event and the suite goes on; a TigerGraph outage (the
-retry budget ran out while the graph was unavailable) is a `suite_stopped` event and
-stops the training and audits, since every later run would fail the same way. The script
-prints one JSON result and exits 1 unless every run is trained and audited without an
+Each run shows its own lines as it trains and audits, then one line as each of its steps
+finishes ("baseline seed 43 trained: best epoch 5, validation proxy AP 0.566, 58 min", a
+`run_finished` event). A run's own error is a `run_failed` event and the suite goes on; a
+TigerGraph outage (the retry budget ran out while the graph was unavailable) is a
+`suite_stopped` event and stops the training and audits, since every later run would fail
+the same way. The suite's own events are recorded in
+`results/experiments/<suite>/events.jsonl`, each run's in its own. The script ends with
+how the suite did, the runs' errors, the top ten variants ranked by their validation
+audit AP as `report.md` ranks them (with the delta from the baseline and the test AP) and
+where the report is, and exits 1 unless every run is trained and audited without an
 error. A run whose figures failed after its numbers were saved stays complete in the
 tables, with its error beside it; `mule report results/<variant>/seed-<n>` redraws them.
 Run the script again to finish: complete runs are kept.
@@ -88,7 +96,7 @@ That is roughly a day back to back, less as the context cache fills: seeds, and 
 that request the same groups, share its entries, and drops of the client-computed groups
 (the hub indicator and both pool groups) request the same contexts as the baseline. Run
 variants one after another rather than as parallel processes, which may request the same
-contexts twice. The printed bound is an upper bound: summary runs are faster and early
+contexts twice. The plan's bound is an upper bound: summary runs are faster and early
 stopping ends most runs sooner. The paired intervals take about 15 seconds for the
 controls suite and 30 for `all`.
 
