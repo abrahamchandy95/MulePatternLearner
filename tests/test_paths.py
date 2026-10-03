@@ -109,6 +109,10 @@ def test_a_run_directory_names_every_file_of_the_run_directory_table(tmp_path: P
         "report.md",
     ]
     assert paths.archive_dir(tmp_path) == tmp_path / "archive"
+    # Beside them: the full report of `mule check`, and what a command recorded outside
+    # a run, a dataset and a study.
+    assert paths.check_report(tmp_path) == tmp_path / "check.json"
+    assert paths.command_events() == paths.RESULTS_DIR / "events.jsonl"
     moved = paths.archived_run(paths.RunPaths.of("no_attention", 43, tmp_path), "t", tmp_path)
     assert moved.root == tmp_path / "archive" / "no_attention" / "seed-43" / "t"
     assert paths.SuitePaths.of("controls").results == paths.RESULTS_DIR

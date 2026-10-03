@@ -194,14 +194,18 @@ def test_install_polls_endpoints_when_the_install_request_times_out(
     recorded = read_events(events)
     assert [event["event"] for event in recorded] == [
         "install",
+        "gsql",
         "install_unanswered",
         "install_wait",
         "install_wait",
         "installed",
     ]
     assert recorded[-1] == {"event": "installed", "installed": [CUTOFF_QUERY], "seconds": 60}
+    # What TigerGraph answered the CREATE is kept, as every GSQL write's answer is.
+    assert recorded[1]["operation"] == "CREATE QUERY queries/split_cutoffs.gsql"
+    assert recorded[1]["output"] == logs["queries/split_cutoffs.gsql"]
     # The request has one attempt, so no retry recorded its error: its record does.
-    assert recorded[1]["detail"] == (
+    assert recorded[2]["detail"] == (
         "ServerTimeoutError: installQueries failed after 1 attempt(s) (1 attempt(s) "
         "allowed): ReadTimeout: no reply while the server compiles"
     )

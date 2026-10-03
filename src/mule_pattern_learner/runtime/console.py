@@ -406,6 +406,7 @@ LINES: dict[str, Line] = {
     "retry": _retry,
     "context_split": _context_split,
     "install": _install,
+    "gsql": _nothing,
     "install_unanswered": _install_unanswered,
     "install_wait": _install_wait,
     "installed": _installed,

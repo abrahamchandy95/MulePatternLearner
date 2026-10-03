@@ -23,7 +23,13 @@ from mule_pattern_learner.artifacts import (
     read_json,
 )
 from mule_pattern_learner.config import DEFAULT_CONFIG, RunConfig, TransportConfig
-from mule_pattern_learner.paths import DATA_DIR, REPOSITORY_ROOT, DatasetPaths, RunPaths
+from mule_pattern_learner.paths import (
+    DATA_DIR,
+    REPOSITORY_ROOT,
+    DatasetPaths,
+    RunPaths,
+    command_events,
+)
 from mule_pattern_learner.pipeline import connect as pipeline_connect
 from mule_pattern_learner.pipeline import prepare as pipeline_prepare
 from mule_pattern_learner.pipeline import train as pipeline_train
@@ -34,6 +40,18 @@ from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
 from mule_pattern_learner.tigergraph.executor import TigerGraphUnavailableError
 
 COMMANDS = ("install", "train", "evaluate", "score", "report", "diagnose", "check")
+
+
+@pytest.fixture(autouse=True)
+def command_records(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """The results directory of the commands these tests run: tmp_path's, never results/.
+
+    A command records there, in events.jsonl, what it emits before a run, a dataset or a
+    study records its events.
+    """
+    results = tmp_path / "command_results"
+    monkeypatch.setattr(cli, "RESULTS_DIR", results)
+    return results
 
 
 def test_python_m_runs_the_command_line() -> None:
@@ -372,7 +390,7 @@ def test_a_graph_not_ready_or_a_study_incomplete_fails_after_its_summary(
 
 
 def test_retries_that_run_out_end_the_command_with_one_clear_line_on_stderr(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, command_records: Path
 ) -> None:
     screen = Terminal()
     monkeypatch.setattr(sys, "stdout", screen)
@@ -397,6 +415,8 @@ def test_retries_that_run_out_end_the_command_with_one_clear_line_on_stderr(
     )
     # The progress line ends first, so the message starts a line of its own.
     assert screen.getvalue() == "\repoch 1  step 3/9  loss 0.500  2.0 s/step\n"
+    # No run recorded the step here, so the command's own events.jsonl did.
+    assert [e["event"] for e in read_events(command_events(command_records))] == ["train"]
 
 
 STEP_TIME = {"seconds_per_step": 2.0}
@@ -514,8 +534,10 @@ def train_on_fakes(home: Path, monkeypatch: pytest.MonkeyPatch) -> RunPaths:
     def train(resume: bool) -> dict[str, Any]:
         return pipeline_train.train_run(run, config=config, data=home / "data", resume=resume)
 
-    # The command's run and repository are home's, so nothing outside tmp_path is touched.
+    # The command's run, results and repository are home's, so nothing outside tmp_path is
+    # touched.
     monkeypatch.setattr(cli, "REPOSITORY_ROOT", home)
+    monkeypatch.setattr(cli, "RESULTS_DIR", home / "results")
     monkeypatch.setattr(cli, "BASELINE_RUN", run)
     monkeypatch.setattr(cli, "train_run", train)
     home.mkdir()
@@ -614,6 +636,12 @@ def test_mule_train_shows_progress_and_a_summary_and_keeps_every_record_in_the_f
     for record in recorded:
         assert RECORDED_FIELDS[record["event"]] <= set(record), record["event"]
     assert len(read_history(run.history)) == 6 and len(read_epochs(run.epochs)) == 2
+    # The dataset's preparation recorded its own events; what came before it, the
+    # install that found every query up to date, is in results/events.jsonl.
+    prepared = DatasetPaths.of(read_json(run.metrics)["dataset_id"], tmp_path / "plain" / "data")
+    assert [e["event"] for e in read_events(prepared.events)] == ["scope", "hubs", "dataset"]
+    (install,) = read_events(command_events(tmp_path / "plain" / "results"))
+    assert install["event"] == "install" and install["stale"] == [] and install["up_to_date"]
     # On a terminal the same lines remain, and each step was shown in place before them.
     terminal = Terminal()
     monkeypatch.setattr(sys, "stdout", terminal)

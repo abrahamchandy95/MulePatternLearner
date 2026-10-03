@@ -3,10 +3,11 @@
 Prepared datasets go in data/<dataset id>/ (DATA_DIR), and everything the commands
 write lives under results/ (RESULTS_DIR): one training run in
 results/<variant>/seed-<n>/, a control-experiment suite in results/experiments/<suite>/,
-the diagnostics of a dataset in results/diagnostics/<dataset id>/, and runs moved aside
-because their settings changed in results/archive/. DatasetPaths, RunPaths, SuitePaths and
-DiagnosticsPaths name each file; nothing else joins a file name onto one of these
-directories.
+the diagnostics of a dataset in results/diagnostics/<dataset id>/, runs moved aside
+because their settings changed in results/archive/, and the records of what a command
+did before any of them recorded it in results/events.jsonl. DatasetPaths, RunPaths,
+SuitePaths and DiagnosticsPaths name each file; nothing else joins a file name onto one
+of these directories.
 """
 
 from __future__ import annotations
@@ -257,6 +258,16 @@ class DiagnosticsPaths:
     def report(self) -> Path:
         """The study's tables, with links to its figures."""
         return self.root / "report.md"
+
+
+def command_events(results: Path = RESULTS_DIR) -> Path:
+    """The records of the events a command emitted while no run, dataset or study recorded.
+
+    Every `mule` command appends to it what happens before a run's, a dataset's or a
+    study's events.jsonl is recording: the install, the retries of connecting, a dataset
+    found ready, and all that `mule install` and `mule check` emit.
+    """
+    return results / "events.jsonl"
 
 
 def check_report(results: Path = RESULTS_DIR) -> Path:

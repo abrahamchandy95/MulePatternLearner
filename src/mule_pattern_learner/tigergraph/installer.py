@@ -2,6 +2,7 @@
 
 Every write (the scope schema change, CREATE, the install request and each DROP) runs
 through the executor with one attempt, so it is never repeated behind the caller's back.
+The output of each GSQL write is recorded in a `gsql` event.
 """
 
 from __future__ import annotations
@@ -37,6 +38,13 @@ INSTALL_DEADLINE_S = 90 * 60.0
 # The problems of query_problems that only a new CREATE resolves.
 MISSING = "is missing on the server"
 DIFFERS = "differs from repository source"
+
+
+def _write(executor: ConnectionExecutor, text: str, what: str) -> str:
+    """Run a GSQL write once and record what TigerGraph answered, in a `gsql` event."""
+    output = executor.gsql(text, what=what, attempts=1)
+    emit({"event": "gsql", "operation": what, "output": output})
+    return output
 
 
 def _show_query(executor: ConnectionExecutor, name: str) -> str:
@@ -167,8 +175,8 @@ def drop_retired(executor: ConnectionExecutor) -> list[str]:
     """
     names = retired_installed(executor)
     for name in names:
-        output = executor.gsql(
-            f"USE GRAPH {GRAPH_NAME}\nDROP QUERY {name}", what="DROP QUERY " + name, attempts=1
+        output = _write(
+            executor, f"USE GRAPH {GRAPH_NAME}\nDROP QUERY {name}", "DROP QUERY " + name
         )
         if name in installed_endpoints(executor):
             raise RuntimeError(f"DROP QUERY {name} left it installed: {output}")
@@ -219,7 +227,7 @@ def install(
     logs: dict[str, Any] = {}
     if not has_scope_vertex(executor):
         migration = GSQL_DIR / "schema/scope_vertex.gsql"
-        result = executor.gsql(migration.read_text(), what="scope schema change", attempts=1)
+        result = _write(executor, migration.read_text(), "scope schema change")
         if "Local schema change succeeded" not in result:
             raise RuntimeError(result)
         logs["scope_schema"] = result
@@ -242,10 +250,10 @@ def install(
         ]
         if not chosen:
             continue
-        output = executor.gsql(
+        output = _write(
+            executor,
             f"USE GRAPH {GRAPH_NAME}\n" + "\n\n".join(chosen) + "\n",
-            what="CREATE QUERY " + relative,
-            attempts=1,
+            "CREATE QUERY " + relative,
         )
         if not _created(output):
             raise RuntimeError(output)
