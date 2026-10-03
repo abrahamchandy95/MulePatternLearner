@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from dataclasses import replace
 from typing import Any
 
 import pandas as pd
@@ -32,7 +33,7 @@ from mule_pattern_learner.testing.builders import (
     synthetic_row,
 )
 from mule_pattern_learner.testing.fake_graph import FakeStore, FakeTigerGraph
-from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
+from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher, validate_context
 
 MPS = torch.backends.mps.is_available()
 
@@ -370,3 +371,22 @@ def test_eval_batches_draw_root_hops_independently(monkeypatch: pytest.MonkeyPat
             picked = [m["event_id"] for m in draws[2][root]]
             prefixes += picked == payments[: len(picked)]
         assert prefixes <= len(keys) // 4, (mode, prefixes)
+
+
+def test_scope_follows_recursive_events_and_cache_never_crosses_scope() -> None:
+    a = ContextKey("Account", "a", 100, 1000, "strict", 1)
+    msg = message(90, 900, a)
+    source = FakeTigerGraph({a: context(a, [msg])})
+    backend = ContextSource(
+        TigerGraphContextFetcher(source), plan=FeaturePlan(), sampler=SamplerPlan()
+    )
+    build_batch(backend, [a], fanouts=(2, 2), plan=FeaturePlan(), sampler=SamplerPlan())
+    assert child_key(msg, a) in source.requested
+    assert all(key.scope_id == "strict" and key.visibility_phase == 1 for key in source.requested)
+    previous = backend.database_calls
+    backend.fetch([replace(a, visibility_phase=3)])
+    assert backend.database_calls > previous
+    with pytest.raises(ValueError, match="differs"):
+        validate_context(
+            a, context(replace(a, visibility_phase=3)), plan=FeaturePlan(), sampler=SamplerPlan()
+        )
