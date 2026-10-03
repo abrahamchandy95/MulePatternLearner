@@ -20,11 +20,11 @@ import itertools
 import json
 import os
 from pathlib import Path
-import secrets
 import threading
 from typing import Any, Protocol
 import zlib
 
+from ..artifacts import PENDING_SUFFIX, atomic_write
 from ..contract.bounds import CONTEXT_CACHE_ENTRIES
 from ..contract.feature_groups import FeaturePlan
 from ..contract.fingerprints import fingerprint
@@ -35,9 +35,8 @@ from ..paths import DatasetPaths
 from ..runtime.progress import warn
 from .manifest import recorded_dataset_id, source_fingerprint
 
-# The file name endings of a disk tier's entries, and of an entry being written.
+# The file name ending of a disk tier's entries; one being written ends in PENDING_SUFFIX.
 ENTRY_SUFFIX = ".json.gz"
-PENDING_SUFFIX = ".pending"
 # A disk tier over its capacity removes its least recently used entries until this share
 # of the capacity remains, so that it does not scan its directory on every write.
 EVICTED_DOWN_TO = 0.9
@@ -149,23 +148,6 @@ def entry_row(data: bytes, name: str, key: ContextKey) -> dict[str, Any]:
     return row
 
 
-def _write(path: Path, entry: bytes) -> None:
-    """Write an entry through a pending file of its own, then replace the entry with it.
-
-    Every write has its own pending name, so two processes writing one entry never
-    write into the same file: the entry is one of their complete files. The pending
-    file never outlives the write, unless its thread dies at interpreter exit.
-    """
-    pending = path.with_name(f"{path.name}.{secrets.token_hex(8)}{PENDING_SUFFIX}")
-    try:
-        with pending.open("xb") as stream:
-            stream.write(entry)
-        os.replace(pending, path)
-    finally:
-        with contextlib.suppress(OSError):
-            pending.unlink(missing_ok=True)
-
-
 class DiskTier:
     """The disk tier of a ContextSource: TigerGraph's rows, compressed, one file per context.
 
@@ -175,7 +157,8 @@ class DiskTier:
     the ContextFetcher returned it (its request position and any Fourier vectors of a
     spot check included) beside its own name, as gzip-compressed JSON in
     <directory>/<first two hex digits>/<name>.json.gz, written atomically through a
-    pending file of its own (_write). get refuses an entry that entry_row refuses, with
+    pending file of its own (artifacts.atomic_write, unique), so two writers of one entry
+    never share a file. get refuses an entry that entry_row refuses, with
     a warning: the source requests that context again and put replaces the entry.
     Beyond the cache's capacity, the least recently used entries go (a hit refreshes an
     entry's time) with any pending file as old, until EVICTED_DOWN_TO of the capacity
@@ -241,7 +224,8 @@ class DiskTier:
             try:
                 path.parent.mkdir(parents=True, exist_ok=True)
                 new = not path.exists()
-                _write(path, gzip.compress(entry.encode(), mtime=0))
+                with atomic_write(path, unique=True) as pending:
+                    pending.write_bytes(gzip.compress(entry.encode(), mtime=0))
             except FileNotFoundError:
                 continue  # another process evicted the pending file, or removed the cache
             except OSError as error:

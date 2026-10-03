@@ -63,6 +63,13 @@ def test_atomic_writes_replace_the_file_only_after_the_block_succeeds(tmp_path: 
     with atomic_write(tmp_path / "absent.txt"):
         pass
     assert path.read_text() == "new" and not (tmp_path / "absent.txt").exists()
+    # Writers of one path at once each write a unique pending file of their own.
+    with atomic_write(path, unique=True) as first, atomic_write(path, unique=True) as second:
+        assert first != second and first.parent == tmp_path
+        assert first.name.startswith("manifest.json.") and first.suffix == ".pending"
+        first.write_text("first")
+        second.write_text("second")
+    assert path.read_text() == "first" and list(tmp_path.glob("*.pending")) == []
 
 
 def test_file_digests_are_the_sha256_of_the_bytes(tmp_path: Path) -> None:
