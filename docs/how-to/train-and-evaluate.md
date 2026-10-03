@@ -150,8 +150,9 @@ so leave `data/` and `results/` empty or move them aside.
    old names, it ends `not_ready`: the renamed queries are stale, the old names are listed
    under `queries.retired`, and there is no dataset.
 7. **`mule train`.** Its first run installs the renamed queries beside the old names
-   (about 50 minutes; run it again if the 45-minute wait runs out), prepares the dataset
-   (about 6 minutes) and trains the built-in run (about an hour). `mule check` now ends
+   (about 50 minutes, within a 90-minute wait), prepares the dataset (about 6 minutes)
+   and trains the built-in run (about an hour). If the wait runs out, wait until `mule
+   check` no longer lists the queries under `queries.stale`, then run `mule train` again. `mule check` now ends
    `ready`, still listing the old names under `queries.retired`.
 8. **Drop the old names.** Stop every job of the earlier code, on every machine: it calls
    the old names. Then run `mule install`, which finds the renamed queries in place and
@@ -226,7 +227,7 @@ This code reads only the datasets and models it writes:
 | Message | Meaning and fix |
 |---|---|
 | `Installed query differs from repository source or is not installed` | Run `mule install`; it recompiles only the stale queries |
-| `Queries [...] are still not installed after ...s` | The 45-minute wait for compilation ran out; run `mule install` again later, which installs only what is still stale |
+| `Queries [...] are still not installed after ...s` | The 90-minute wait for compilation ran out, and the server may still be compiling. Once it has finished (`mule check` no longer lists the training queries under `queries.stale`; the GSQL shell's `ls` shows the analytics queries), run the same command again (`mule install`, `mule train`, `mule diagnose` or the experiments script): it installs only what is still stale |
 | `Prepared dataset ... was built from different GSQL sources` | The query files changed after preparation; install them, then move the dataset aside so it is prepared again |
 | `Graph counts changed; freeze the source and prepare a new dataset` | The graph was modified after preparation; freeze it and prepare a new dataset |
 | `Scope ... was created with scope.unowned = ...` | The scope was created with another rule; use the stored rule or a new `scope.id` |

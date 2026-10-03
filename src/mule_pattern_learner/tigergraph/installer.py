@@ -30,7 +30,12 @@ from .executor import (
 from .gsql_text import calls, definitions, normalized, parameter_names, repository_queries
 
 BUILTIN_ENDPOINT_PARAMETERS = frozenset({"query", "read_committed"})
-INSTALL_DEADLINE_S = 45 * 60.0
+# How long an install waits for compilation: well over the about 50 minutes that
+# compiling every query of the context query's size took on the reference graph.
+INSTALL_DEADLINE_S = 90 * 60.0
+# The problems of query_problems that only a new CREATE resolves.
+MISSING = "is missing on the server"
+DIFFERS = "differs from repository source"
 
 
 def _show_query(executor: ConnectionExecutor, name: str) -> str:
@@ -75,11 +80,11 @@ def query_problems(
     for name, (_, source) in repository_queries(files).items():
         actual = definitions(_show_query(executor, name)).get(name)
         if actual is None:
-            problems[name] = ["is missing on the server"]
+            problems[name] = [MISSING]
             continue
         issues = []
         if normalized(actual) != normalized(source):
-            issues.append("differs from repository source")
+            issues.append(DIFFERS)
         endpoint = endpoints.get(name)
         if endpoint is None or endpoint.get("enabled") is not True:
             issues.append("is not installed (REST endpoint disabled)")
@@ -194,9 +199,12 @@ def install(
     A query is stale when SHOW QUERY differs from the repository, its endpoint is
     missing or disabled, or its endpoint parameters differ (see query_problems);
     ``analytics`` also installs the analytics queries. Queries that call a stale query
-    (the context query calls the Fourier query) are installed
-    with it. Only stale definitions are re-created, because CREATE OR REPLACE
-    disables an installed endpoint until the query is installed again.
+    (the context query calls the Fourier query) are installed with it. Only the
+    definitions whose text is missing or differs, and the queries that call them, are
+    created again, because CREATE OR REPLACE disables an installed endpoint until the
+    query is installed again. A query whose text is current but whose endpoint is not (a
+    compilation that has not finished or failed) is only installed, so a run after a
+    timeout sends no CREATE for what the last one created.
 
     TigerGraph 4.2.5 answers GET /gsql/v1/queries/install only when compilation
     finishes and returns no requestId, so that request gets a read timeout of
@@ -215,8 +223,11 @@ def install(
         logs["scope_schema"] = result
     files = (*TRAINING_QUERY_FILES, *(ANALYTICS_QUERY_FILES if analytics else ()))
     queries = repository_queries(files)
-    stale = _with_callers(set(query_problems(executor, files)), queries)
+    problems = query_problems(executor, files)
+    stale = _with_callers(set(problems), queries)
     names = [name for name in queries if name in stale]
+    texts = {name for name, issues in problems.items() if {MISSING, DIFFERS} & set(issues)}
+    created = _with_callers(texts, queries)
     logs["installed"] = names
     logs["up_to_date"] = [name for name in queries if name not in stale]
     emit({"event": "install", "stale": names, "up_to_date": logs["up_to_date"]})
@@ -224,7 +235,9 @@ def install(
         logs["verified"] = verify_sources(executor, files)
         return logs
     for relative in files:
-        chosen = [queries[name][1] for name in names if queries[name][0] == relative]
+        chosen = [
+            queries[name][1] for name in names if name in created and queries[name][0] == relative
+        ]
         if not chosen:
             continue
         output = executor.gsql(
@@ -304,8 +317,8 @@ def _await_enabled(
         if elapsed > deadline_s:
             raise TimeoutError(
                 f"Queries {pending} are still not installed after {elapsed:.0f}s. The server "
-                "may still be compiling: re-run `mule install` later, which installs "
-                "only what is still stale."
+                "may still be compiling: once it has finished, run the same command again, "
+                "which installs only what is still stale."
             )
         emit({"event": "install_wait", "awaiting": pending, "elapsed_s": round(elapsed)})
         sleep(poll_s)

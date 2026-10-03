@@ -146,7 +146,7 @@ installed queries named on `contract.server.RETIRED_QUERIES`, callers first, and
 installed queries that no repository file defines without touching them. Every
 preparation that connects installs the same way but drops nothing: code from before the
 rename calls the retired names, so run `mule install` once no job of that code runs
-anywhere. [Queries](queries.md#installation) describes staleness, the 45-minute wait and
+anywhere. [Queries](queries.md#installation) describes staleness, the 90-minute wait and
 the retired names. The result lists the queries `installed`, `up_to_date`, `dropped` and
 `not_defined`.
 
