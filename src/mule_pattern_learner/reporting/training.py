@@ -1,7 +1,7 @@
 """The training figures, drawn from a run's history.csv, epochs.csv and metrics.json.
 
 Each plot function draws on the Axes it is given and returns it; none reads or saves a
-file (reporting.report does). ``history`` and ``epochs`` are the frames
+file (reporting.run_report does). ``history`` and ``epochs`` are the frames
 artifacts.read_history and read_epochs return, and ``metrics`` is metrics.json. The x
 axis of the history figures is the training position in epochs: the interval that
 ended at step 50 of epoch 2's 100 sits at 1.5, so the whole numbers are the epoch

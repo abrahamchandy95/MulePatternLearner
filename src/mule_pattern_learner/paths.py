@@ -142,7 +142,7 @@ class RunPaths:
         return self.root / "plots"
 
     def figure(self, name: str) -> Path:
-        """One of the run's figures, a PNG named <topic>_<figure> (reporting.report)."""
+        """One of the run's figures, a PNG named <topic>_<figure> (reporting.run_report)."""
         return self.plots / f"{name}.png"
 
     @property
@@ -191,7 +191,7 @@ class SuitePaths:
         return self.root / "plots"
 
     def figure(self, name: str) -> Path:
-        """One of the suite's figures, a PNG named <topic>_<figure> (reporting.report)."""
+        """One of the suite's figures, a PNG named <topic>_<figure> (reporting.suite_report)."""
         return self.plots / f"{name}.png"
 
     @property
@@ -240,7 +240,7 @@ class DiagnosticsPaths:
         return self.root / "plots"
 
     def figure(self, name: str) -> Path:
-        """One of the study's figures, a PNG named after its analysis (reporting.report)."""
+        """One of the study's figures, a PNG named for what it shows (reporting.study_report)."""
         return self.plots / f"{name}.png"
 
     @property

@@ -47,7 +47,7 @@ from mule_pattern_learner.pipeline import connect as pipeline_connect
 from mule_pattern_learner.pipeline import evaluate as pipeline_evaluate
 from mule_pattern_learner.pipeline.connect import Session
 from mule_pattern_learner.pipeline.diagnose import TigerGraphStudyReader
-from mule_pattern_learner.reporting.report import ANALYSIS_FIGURES
+from mule_pattern_learner.reporting.study_report import ANALYSIS_FIGURES
 from mule_pattern_learner.testing.builders import (
     UNIT_SOURCE,
     reveal_inputs,

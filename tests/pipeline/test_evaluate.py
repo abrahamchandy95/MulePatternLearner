@@ -22,7 +22,7 @@ from mule_pattern_learner.evaluation.truth import ParquetTruthReader
 from mule_pattern_learner.paths import DatasetPaths, RunPaths
 from mule_pattern_learner.pipeline import connect as pipeline_connect
 from mule_pattern_learner.pipeline import evaluate as pipeline_evaluate
-from mule_pattern_learner.reporting.report import AUDIT_FIGURES
+from mule_pattern_learner.reporting.run_report import AUDIT_FIGURES
 from mule_pattern_learner.runtime.progress import emit
 from mule_pattern_learner.testing.builders import (
     RUNTIME_CHANGES,

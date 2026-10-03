@@ -13,8 +13,9 @@ from mule_pattern_learner.experiments.tables import write_tables
 from mule_pattern_learner.experiments.variants import BASELINE, VARIANTS
 from mule_pattern_learner.paths import RunPaths, SuitePaths
 from mule_pattern_learner.reporting.comparison import rank_correlation
-from mule_pattern_learner.reporting.report import SUITE_FIGURES, report_directory
+from mule_pattern_learner.reporting.report import report_directory
 from mule_pattern_learner.reporting.style import DPI
+from mule_pattern_learner.reporting.suite_report import SUITE_FIGURES
 from mule_pattern_learner.testing.builders import write_run_files, write_suite_runs
 
 PNG = b"\x89PNG\r\n\x1a\n"

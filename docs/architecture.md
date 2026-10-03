@@ -272,8 +272,10 @@ at import. There is no configuration file, no `--config` and no option: another 
 
 - Every figure function has the shape `plot_<thing>(ax, data) -> Axes`: it takes
   computed inputs, never reads a file and never saves.
-- `reporting.report` alone reads files and saves figures, built as
-  `matplotlib.figure.Figure` objects and saved through the Agg canvas, so pyplot is never
+- The reports alone read files: `reporting.run_report` a run's, `reporting.suite_report` a
+  suite's and `reporting.study_report` a diagnostic study's, and `reporting.report`
+  redraws whichever a directory holds. `reporting.document` saves every figure, built as a
+  `matplotlib.figure.Figure` and saved through the Agg canvas, so pyplot is never
   imported.
 - Curves come from `metrics` (weighted precision-recall, ROC and capture curves), never
   from sklearn's display classes, which import pyplot.

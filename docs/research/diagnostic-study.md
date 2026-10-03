@@ -242,7 +242,7 @@ These answered a question once and are not rerun:
 | `bl_models.py`, cutoff shift (D), and `bl_shift.py` | `diagnostics/drift.py`, `mule diagnose drift` |
 | `bl_subgroup.py`, `mpl_arms/audit_summary.py` (revealed and hidden) | `diagnostics/subgroups.py`, `mule diagnose subgroups`, which adds the AP concentration and the rings |
 | `mpl_arms/audit_summary.py` (intervals) | `evaluation/audit.py`: ring-clustered intervals and tie-aware budgets |
-| `bl_report.py`, `bl_template.md`, `bl_tables.md`, `baselines.md` | `reporting.report.write_diagnostics_report`, and this note |
+| `bl_report.py`, `bl_template.md`, `bl_tables.md`, `baselines.md` | `reporting.study_report.write_diagnostics_report`, and this note |
 | `pool_activity_check*.py`, `pool_activity_offline.py`, `pool_activity_passthrough.py`, `pool_activity_check.md` | this note; the `univariate` and `baselines` analyses and the `drop_pool_*` variants rerun what matters |
 | `binormal_ap.py` | this note ([What AP to expect from an ROC AUC](#what-ap-to-expect-from-an-roc-auc)) |
 | `shift_review.md` | this note and the shift analysis |

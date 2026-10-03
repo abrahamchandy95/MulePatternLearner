@@ -1,7 +1,7 @@
 """The ranking figures of the proxy predictions and the audits: precision-recall, ROC, capture.
 
 Each plot function draws on the Axes it is given and returns it; none reads or saves a
-file (reporting.report does). The curves come from metrics.py, one point per block of
+file (reporting.run_report does). The curves come from metrics.py, one point per block of
 tied scores, so they agree with the recorded AP, ROC AUC and review budgets, which the
 labels print from the report itself.
 """

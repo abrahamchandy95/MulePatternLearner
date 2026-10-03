@@ -8,7 +8,7 @@ from typing import Any
 from ..config import DEFAULT_CONFIG, RunConfig
 from ..data.contexts import ContextOpener, ContextSource
 from ..paths import BASELINE_VARIANT, DATA_DIR, DatasetPaths, RunPaths
-from ..reporting.report import write_training_report
+from ..reporting.run_report import write_training_report
 from ..training.checkpoint import check_resumable, completed_run, run_started
 from ..training.trainer import train
 from .connect import Session, open_context_source
@@ -37,7 +37,7 @@ def train_run(
     same settings is reported from its metrics.json. Both are checked before anything
     connects or is written: a run of other settings, complete or not, is an error that
     names them. A run trained here then gets its training figures and report.md
-    (reporting.report.write_training_report); a complete run reported is left as it was.
+    (reporting.run_report.write_training_report); a complete run reported is left as it was.
     With a ``session`` the dataset is prepared and the contexts are requested on its
     connection, which a suite of runs shares.
     """

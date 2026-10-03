@@ -8,15 +8,13 @@ import struct
 import subprocess
 import sys
 
-import pandas as pd
 import pytest
 
 from mule_pattern_learner.paths import REPOSITORY_ROOT, RunPaths
-from mule_pattern_learner.reporting import report
-from mule_pattern_learner.reporting.report import (
+from mule_pattern_learner.reporting import run_report
+from mule_pattern_learner.reporting.run_report import (
     AUDIT_FIGURES,
     TRAINING_FIGURES,
-    mean_epochs,
     report_run,
     write_audit_report,
     write_training_report,
@@ -114,7 +112,7 @@ def test_a_failing_figure_leaves_the_others_and_report_md_then_raises(
     def broken(*args: object) -> None:
         raise ValueError("no ink")
 
-    monkeypatch.setattr(report, "plot_corrections", broken)
+    monkeypatch.setattr(run_report, "plot_corrections", broken)
     with pytest.raises(RuntimeError, match=r"training_corrections: ValueError\('no ink'\)"):
         write_training_report(run)
     drawn = {path.stem for path in run.plots.iterdir()}
@@ -125,7 +123,7 @@ def test_a_failing_figure_leaves_the_others_and_report_md_then_raises(
     monkeypatch.undo()
     write_training_report(run)
     assert "plots/training_corrections.png" in run.report.read_text()
-    monkeypatch.setattr(report, "plot_corrections", broken)
+    monkeypatch.setattr(run_report, "plot_corrections", broken)
     with pytest.raises(RuntimeError, match="training_corrections"):
         write_training_report(run)
     assert not run.figure("training_corrections").exists()
@@ -146,9 +144,9 @@ def test_drawing_never_imports_pyplot(tmp_path: Path) -> None:
         "import sys\n"
         "from pathlib import Path\n"
         "from mule_pattern_learner.paths import RunPaths\n"
-        "from mule_pattern_learner.reporting.report import report_run\n"
+        "from mule_pattern_learner.reporting.report import report_directory\n"
         "from mule_pattern_learner.testing.builders import write_run_files\n"
-        f"report_run(write_run_files(RunPaths(Path({str(tmp_path)!r}))))\n"
+        f"report_directory(write_run_files(RunPaths(Path({str(tmp_path)!r}))).root)\n"
         "print(sorted(m for m in sys.modules if m.startswith(('matplotlib.pyplot', 'pylab'))))\n"
     )
     result = subprocess.run(
@@ -159,14 +157,3 @@ def test_drawing_never_imports_pyplot(tmp_path: Path) -> None:
         cwd=REPOSITORY_ROOT,
     )
     assert result.stdout.strip() == "[]"
-
-
-def test_a_seed_mean_curve_ends_at_the_last_epoch_every_seed_trained() -> None:
-    def epochs(count: int, ap: float) -> pd.DataFrame:
-        return pd.DataFrame({"epoch": range(1, count + 1), "validation_ap": [ap] * count})
-
-    # Early stopping ended seed 43 after three epochs: the mean of seed 42 alone after it
-    # would read as a mean over both.
-    curve = mean_epochs("variant", {42: epochs(5, 0.2), 43: epochs(3, 0.4)})
-    assert curve.x.tolist() == [1, 2, 3] and curve.y == pytest.approx([0.3, 0.3, 0.3])
-    assert curve.seeds == 2

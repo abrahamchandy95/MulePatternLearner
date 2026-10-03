@@ -16,10 +16,10 @@ import pytest
 
 from mule_pattern_learner.paths import DiagnosticsPaths
 from mule_pattern_learner.reporting import diagnostics as figures
-from mule_pattern_learner.reporting.report import (
+from mule_pattern_learner.reporting.report import report_directory
+from mule_pattern_learner.reporting.study_report import (
     ANALYSIS_FIGURES,
     DIAGNOSTICS_FIGURES,
-    report_directory,
     write_diagnostics_report,
 )
 from mule_pattern_learner.reporting.style import BASELINE, DPI, MUTED

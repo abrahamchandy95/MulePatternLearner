@@ -2,7 +2,7 @@
 
 Each plot function draws on the Axes it is given, from a table in the long format of
 artifacts.DIAGNOSTIC_TABLES, and returns it; none reads or saves a file
-(reporting.report does, write_diagnostics_report). The held-out splits keep their
+(reporting.study_report.write_diagnostics_report does). The held-out splits keep their
 colours (validation for decisions, test for reporting); train, which only fixes
 directions and fits, is grey. The learners take MEASURES in order, and the run the study
 compares with, the built-in run, is ink.

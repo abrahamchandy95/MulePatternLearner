@@ -15,7 +15,7 @@ run_suite does, in order:
 6. audits validation and test for every complete run that lacks them, reading truth once
    (pipeline.evaluate.SharedTruth);
 7. writes summary.csv and comparison.csv (experiments.tables) and the figures and
-   report.md (reporting.report.write_suite_report) under results/experiments/<suite>/.
+   report.md (reporting.suite_report.write_suite_report) under results/experiments/<suite>/.
 
 An error of one run's own is recorded against it and the suite goes on. An outage
 (tigergraph.executor.TigerGraphUnavailableError) stops the training and the audits,
@@ -49,7 +49,7 @@ from ..pipeline.connect import Session
 from ..pipeline.evaluate import SharedTruth, evaluate_run
 from ..pipeline.prepare import prepare_dataset
 from ..pipeline.train import train_run
-from ..reporting.report import write_suite_report
+from ..reporting.suite_report import write_suite_report
 from ..runtime.progress import emit
 from ..tigergraph.executor import TigerGraphUnavailableError, error_summary
 from ..training.checkpoint import changed_settings, run_started
