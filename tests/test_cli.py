@@ -655,3 +655,12 @@ def test_mule_train_shows_progress_and_a_summary_and_keeps_every_record_in_the_f
         for epoch in (1, 2)
         for step in (1, 2, 3)
     ]
+    # Then, in place too, the scoring of validation after each epoch and of test at the
+    # end, which the next line clears; a log has none of it.
+    scoring = [part.rstrip() for part in raw.split("\r") if part.startswith("scoring")]
+    assert scoring == [
+        *["scoring validation 16/24", "scoring validation 24/24"] * 2,
+        "scoring test 16/25",
+        "scoring test 25/25",
+    ]
+    assert "scoring" not in plain

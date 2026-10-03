@@ -66,8 +66,9 @@ epoch  1  loss 0.490  validation AP 0.452  ROC AUC 0.955  4.6 min  best so far
 epoch  2  loss 0.212  validation AP 0.431  ROC AUC 0.951  3.1 min
 ```
 
-On a terminal the current step is shown in place below them; a log of `nohup mule train`
-has no step lines. When the run ends, a summary gives the time taken, the best epoch, the
+On a terminal the current step is shown in place below them, then the scoring of
+validation ("scoring validation 640/2,011") until the epoch's line replaces it; a log of
+`nohup mule train` has neither. When the run ends, a summary gives the time taken, the best epoch, the
 validation and test proxy AP, ROC AUC and recall at the top 1% with their known mules, and
 the run directory. The full records are in the run's files: every event in
 `events.jsonl`, every log interval in `history.csv`, every epoch in `epochs.csv` and the

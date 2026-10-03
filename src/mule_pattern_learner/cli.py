@@ -382,11 +382,14 @@ def main() -> None:
             result = run_command(args)
     except TransientQueryError as error:
         # The retries were shown as they happened; the failure that ended them goes to
-        # stderr, without the traceback of a bug, and the command exits 1.
-        raise SystemExit(stopped(f"mule {args.command}", error)) from None
-    finally:
-        # A line rewritten in place ends before anything else is written.
+        # stderr, without the traceback of a bug, and the command exits 1. A line
+        # rewritten in place ends first, so the failure starts a line of its own.
         end_progress()
+        raise SystemExit(stopped(f"mule {args.command}", error)) from None
+    except BaseException:
+        end_progress()
+        raise
+    # The summary replaces a line rewritten in place, such as the scoring of test.
     show(summary(args, result))
     if result.get("status") in ("not_ready", INCOMPLETE):
         raise SystemExit(1)

@@ -35,6 +35,8 @@ def test_scoring_checks_inputs_and_outputs_then_verifies_the_installed_queries(
     def score(saved: SavedModel, ids: Any, date: str, path: Path, **options: Any) -> dict[str, Any]:
         steps.append("score")
         scored.append((date, list(ids), path, options.pop("rejected_output")))
+        # The ids are counted first, for the progress a terminal shows.
+        assert options.pop("total") == 2
         emit({"event": "score", "date": date})
         return options
 

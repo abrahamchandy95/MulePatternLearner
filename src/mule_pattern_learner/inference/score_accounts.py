@@ -77,6 +77,7 @@ def score_new_accounts(
     cutoffs: CutoffReader,
     hub_reader: HubReader,
     hubs: HubRegistry | None = None,
+    total: int | None = None,
 ) -> dict[str, Any]:
     """Score arbitrary existing-in-TigerGraph account IDs without a training manifest.
 
@@ -89,7 +90,8 @@ def score_new_accounts(
     The date's cutoff comes from ``cutoffs``, the unscoped hub registry from
     ``hub_reader`` (``hubs`` replaces it) and the contexts from ``contexts``, which
     scoring closes; the pipeline opens them on a connection whose installed queries it
-    has verified.
+    has verified. A terminal shows how many accounts are scored so far, of ``total``
+    when the caller counted them.
     """
     count = rejected = supplied = 0
     examples: list[str] = []
@@ -114,7 +116,7 @@ def score_new_accounts(
                     [ContextKey("Account", value, seq, ms) for value in ids]
                     for ids in id_batches(account_ids, predictor.batch_size)
                 )
-                for frame, bad in predictor.stream(batches):
+                for frame, bad in predictor.stream(batches, shown="accounts", total=total):
                     supplied += len(frame) + len(bad)
                     for key in bad:
                         rejected_stream.write(key.node_id + "\n")

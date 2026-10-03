@@ -314,6 +314,7 @@ a retry before preparation, the `dataset` event of a dataset found ready, or any
 
 The console shows a short line for the events a person follows and nothing for the
 others (`runtime.console.LINES` decides, by event name): the running totals, batch counts
-and the scoring of each chunk stay in the file. The training steps and the wait for an
-install to compile are rewritten in place on a terminal and not shown when stdout is a
-file or a pipe; `history.csv` has every training interval either way.
+and the scoring of each chunk stay in the file. The training steps, the wait for an
+install to compile and how far scoring has come (validation and test in training, an
+audit's sample, `mule score`) are rewritten in place on a terminal and not shown when
+stdout is a file or a pipe; `history.csv` has every training interval either way.

@@ -68,6 +68,7 @@ from ..metrics import proxy_metrics, select_threshold
 from ..model.build import build_model
 from ..model.loss import NonNegativePULoss
 from ..paths import DatasetPaths, RunPaths
+from ..runtime.console import show_scoring
 from ..runtime.device import choose_device, torch_runtime
 from ..runtime.progress import emit, recording
 from ..runtime.workers import BatchPrefetcher
@@ -639,6 +640,7 @@ class _TrainingRun:
                 if item.logits is not None:
                     logits.append(item.logits)
                 done += min(size, len(sample.indices) - start)
+                show_scoring(split, done, total)
                 if number % self.runtime.log_every_steps == 0 or number == len(chunks):
                     self.emit_event(
                         {"event": "score", "split": split, "accounts": done, "total": total}

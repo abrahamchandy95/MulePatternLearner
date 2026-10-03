@@ -181,21 +181,27 @@ def audit_constants(seed: int) -> dict[str, Any]:
 def score_sample(
     run: AuditedRun, sample: pd.DataFrame, date: str, contexts: ContextReader
 ) -> tuple[dict[str, float], list[str], dict[str, Any]]:
-    """Score an audit sample with the run's model at its split's cutoff.
+    """Score an audit sample of one split with the run's model at its split's cutoff.
 
     The keys are the prepared dataset's: its cutoff clock, scope and the split's phase,
     and the hub registry is the dataset's, so scoring matches training. Returns the
     scores of the accepted accounts by account id, the ids TigerGraph rejected and the
     rejection summary (inference.rejections.rejection_summary) of this sample alone,
-    whatever ``contexts`` served before. The caller closes ``contexts``.
+    whatever ``contexts`` served before. A terminal shows how far it has come. The
+    caller closes ``contexts``.
     """
     predictor = Predictor(run.model, contexts, hubs=run.hubs)
     before = SourceRejections.of(contexts)
     size = predictor.batch_size
+    splits = ", ".join(sorted({str(split) for split in sample.split}))
     with predictor.runtime():
         frames, rejected = predictor.score_keys(
-            sample_keys(sample.iloc[start : start + size], date, run.manifest)
-            for start in range(0, len(sample), size)
+            (
+                sample_keys(sample.iloc[start : start + size], date, run.manifest)
+                for start in range(0, len(sample), size)
+            ),
+            shown=f"the {splits} audit sample",
+            total=len(sample),
         )
     scores: dict[str, float] = {}
     for frame in frames:

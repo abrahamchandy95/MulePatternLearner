@@ -40,9 +40,12 @@ def main() -> int:
         result = run_suite(args.names)
     except TransientQueryError as error:
         # An outage while preparing the dataset stops the suite before any run.
-        raise SystemExit(stopped("run_experiments.py", error)) from None
-    finally:
         end_progress()
+        raise SystemExit(stopped("run_experiments.py", error)) from None
+    except BaseException:
+        end_progress()
+        raise
+    # The summary replaces a line rewritten in place, such as the scoring of an audit.
     show(suite_summary(result))
     return 0 if result["status"] == "complete" else 1
 
