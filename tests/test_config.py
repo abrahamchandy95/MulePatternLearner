@@ -101,6 +101,20 @@ def test_tables_map_to_configurations_and_back() -> None:
         RunConfig.from_dict({"scope": "strict_mule_v2"})
 
 
+def test_the_built_in_run_keeps_its_settings() -> None:
+    # Every setting that can change results is in the fingerprint, so no default changes
+    # without this literal; the configuration reference is edited with the code, so it
+    # cannot pin them. The settings the golden run overrides are spelled out.
+    assert DEFAULT_CONFIG.fingerprint() == (
+        "39ea88acbe405b5200c6eee0f7145564b17148cbe7cc6fcfcc0cde0bd561e521"
+    )
+    training = DEFAULT_CONFIG.training
+    assert (training.epochs, training.steps_per_epoch, training.patience) == (30, 100, 6)
+    assert training.batch_size == 64 and DEFAULT_CONFIG.model.dropout == 0.15
+    limits = DEFAULT_CONFIG.dataset.seed_limits
+    assert (limits.train, limits.validation, limits.test) == (20_000, 2_000, 2_000)
+
+
 def test_the_fingerprint_covers_what_can_change_results() -> None:
     base = DEFAULT_CONFIG.fingerprint()
     changes: list[dict[str, Any]] = [
