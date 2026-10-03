@@ -66,6 +66,7 @@ from mule_pattern_learner.testing.builders import (
 from mule_pattern_learner.testing.fake_connection import FakeClient
 from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffReader
 from mule_pattern_learner.tigergraph.gsql_text import (
+    calls,
     definitions,
     parameter_names,
     repository_queries,
@@ -473,8 +474,8 @@ class FakeConnection:
     """The pyTigerGraph connection of a FakeTigerGraph: schema, counts and queries.
 
     GSQL runs SHOW QUERY, CREATE OR REPLACE QUERY (which disables the endpoint until the
-    query is installed again), DROP QUERY and the scope schema change; any other GSQL
-    fails. installQueries installs at once. The one interpreted query it runs is the
+    query is installed again), DROP QUERY (refused, as TigerGraph refuses it, while another
+    query calls the query) and the scope schema change; any other GSQL fails. installQueries installs at once. The one interpreted query it runs is the
     reveal's inputs query, which prints the graph's `reveal` rows.
     """
 
@@ -533,6 +534,11 @@ class FakeConnection:
         self.graph.writes.append(text)
         if "DROP QUERY" in text:
             name = text.rsplit(" ", 1)[1]
+            callers = [
+                other for other, body in self.shown.items() if other != name and calls(body, name)
+            ]
+            if callers:
+                return f"Query {name} cannot be dropped: {', '.join(callers)} call it."
             self.shown.pop(name)
             self.enabled.pop(name)
             return f"Successfully dropped queries on the graph '{GRAPH_NAME}': [{name}]."

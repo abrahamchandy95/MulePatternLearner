@@ -27,7 +27,7 @@ from .executor import (
     TransientQueryError,
     failure_class,
 )
-from .gsql_text import definitions, normalized, parameter_names, repository_queries
+from .gsql_text import calls, definitions, normalized, parameter_names, repository_queries
 
 BUILTIN_ENDPOINT_PARAMETERS = frozenset({"query", "read_committed"})
 INSTALL_DEADLINE_S = 45 * 60.0
@@ -123,18 +123,12 @@ def _installation_state(status: Any) -> str:
 
 def _with_callers(stale: set[str], queries: dict[str, tuple[str, str]]) -> set[str]:
     """Add every repository query that calls a stale query (subqueries are linked in)."""
-    bodies = {
-        name: re.sub(r"/\*.*?\*/|//[^\n]*|#[^\n]*", "", text, flags=re.S)
-        for name, (_, text) in queries.items()
-    }
     result = set(stale)
     changed = True
     while changed:
         changed = False
-        for name, body in bodies.items():
-            if name not in result and any(
-                re.search(rf"\b{re.escape(callee)}\s*\(", body) for callee in result
-            ):
+        for name, (_, text) in queries.items():
+            if name not in result and any(calls(text, callee) for callee in result):
                 result.add(name)
                 changed = True
     return result

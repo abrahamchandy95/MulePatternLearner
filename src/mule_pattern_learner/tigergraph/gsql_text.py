@@ -6,9 +6,12 @@ import re
 
 from ..paths import GSQL_DIR
 
+# GSQL comments, which neither the compared text nor a query's calls include.
+COMMENTS = re.compile(r"/\*.*?\*/|//[^\n]*|#[^\n]*", re.S)
+
 
 def normalized(source: str) -> str:
-    source = re.sub(r"/\*.*?\*/|//[^\n]*|#[^\n]*", "", source, flags=re.S)
+    source = COMMENTS.sub("", source)
     tokens = re.findall(r'"(?:\\.|[^"\\])*"|[^\s"]+', source)
     return "".join(token if token.startswith('"') else token.lower() for token in tokens)
 
@@ -20,6 +23,11 @@ def definitions(source: str) -> dict[str, str]:
         end = starts[index + 1].start() if index + 1 < len(starts) else len(source)
         result[match[1]] = source[match.start() : end].split("USE GRAPH")[0].strip()
     return result
+
+
+def calls(definition: str, name: str) -> bool:
+    """Whether a query definition calls the query `name` (its comments aside)."""
+    return re.search(rf"\b{re.escape(name)}\s*\(", COMMENTS.sub("", definition)) is not None
 
 
 def parameter_names(definition: str) -> set[str]:

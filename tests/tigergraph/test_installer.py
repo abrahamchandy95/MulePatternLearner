@@ -244,9 +244,23 @@ def test_install_writes_run_once_through_the_executor() -> None:
     assert len(writes) == 1 and tg.sleeps == [] and not server.installs
 
 
-def old_query(name: str) -> str:
-    """An installed query of the code before the rename, under its old name."""
-    return f"CREATE QUERY {name}(INT unused = 0) FOR GRAPH {GRAPH_NAME} SYNTAX V2 {{ PRINT 1; }}"
+# The calls between the retired queries, as the GSQL before the rename made them (commit
+# 08b487e): the Fourier wrapper, both pair encoders and the context query called the
+# Fourier values, and the reveal called its uniforms.
+OLD_CALLS = {
+    "temporal_training_context": "temporal_fourier64_values",
+    "temporal_fourier64": "temporal_fourier64_values",
+    "zelle_pair_time64": "temporal_fourier64_values",
+    "payment_pair_time64": "temporal_fourier64_values",
+    "temporal_reveal_mule_labels": "temporal_reveal_uniforms",
+}
+
+
+def old_query(name: str, calls: str | None = None) -> str:
+    """An installed query of the code before the rename, under its old name, with its call."""
+    callee = calls or OLD_CALLS.get(name)
+    body = f"{callee}(0); PRINT 1;" if callee else "PRINT 1;"
+    return f"CREATE QUERY {name}(INT unused = 0) FOR GRAPH {GRAPH_NAME} SYNTAX V2 {{ {body} }}"
 
 
 def installed_repository() -> dict[str, str]:
@@ -304,16 +318,28 @@ def test_nothing_is_dropped_when_the_install_fails_or_a_drop_is_refused(
     with pytest.raises(RuntimeError, match="Semantic Check"):
         installer.install(graph)
     assert drops(graph) == [] and installer.retired_installed(graph) == list(RETIRED_QUERIES)
-    # A drop TigerGraph refuses (another installed query calls it) stops the drops.
+    # A drop TigerGraph refuses (a query that is not retired calls it) stops the drops.
     graph = FakeTigerGraph(
-        queries={**installed_repository(), "temporal_fourier64_values": old_query("x")}
+        queries={
+            **installed_repository(),
+            "temporal_fourier64_values": old_query("temporal_fourier64_values"),
+            "match_parties": old_query("match_parties", calls="temporal_fourier64_values"),
+        }
     )
+    with pytest.raises(RuntimeError, match="left it installed.*match_parties call it"):
+        installer.drop_retired(graph)
 
-    def refusing(text: str) -> str:
-        return "Query temporal_fourier64_values cannot be dropped: other queries call it"
 
-    monkeypatch.setattr(graph.client.conn, "gsql", refusing)
-    with pytest.raises(RuntimeError, match="left it installed.*cannot be dropped"):
+def test_the_retired_queries_are_listed_before_the_queries_they_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for caller, callee in OLD_CALLS.items():
+        assert RETIRED_QUERIES.index(caller) < RETIRED_QUERIES.index(callee)
+    # TigerGraph refuses to drop a query another installed query calls, and so does the
+    # fake graph: the list in another order would stop at its first callee.
+    graph = FakeTigerGraph(queries={name: old_query(name) for name in RETIRED_QUERIES})
+    monkeypatch.setattr(installer, "RETIRED_QUERIES", tuple(reversed(RETIRED_QUERIES)))
+    with pytest.raises(RuntimeError, match="DROP QUERY temporal_reveal_uniforms left it"):
         installer.drop_retired(graph)
 
 
