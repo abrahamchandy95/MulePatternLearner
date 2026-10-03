@@ -5,8 +5,11 @@ events too (warn), and so are the executor's retries. While a command records it
 (``recording`` with the events.jsonl of a run, a prepared dataset, a suite or a study),
 each record is appended to that file in full. What stdout shows is the event's short line
 for a person (runtime.console), or nothing: running totals, batch counts and the
-progress of scoring are in the files only. A record emitted while nothing records, such
-as a connection's retries before preparation, is shown on the console only.
+progress of scoring are in the files only. The command line records each command in
+results/events.jsonl (paths.command_events), so a record emitted before a run, a dataset
+or a study records, such as a connection's retries before preparation, is kept there;
+only one emitted while nothing records at all, as when Python calls a use case, is shown
+on the console alone.
 """
 
 from __future__ import annotations

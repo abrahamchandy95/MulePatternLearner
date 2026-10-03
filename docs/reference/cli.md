@@ -21,10 +21,12 @@ The console shows what a person follows, and the files hold the rest:
   command below. No command prints JSON.
 - **The full records** stay in the files: every event's record, whole, in the
   `events.jsonl` of the run, dataset, suite or study it belongs to, with the running
-  totals, batch counts and scoring progress the console leaves out (an install, or a
-  retry, before any of them is known has its line only); `history.csv`, `epochs.csv` and
-  `metrics.json` for training; `audit/<split>.json` for the audits; `results/check.json`
-  for `mule check`; the suite's and the study's directories ([Outputs](outputs.md)).
+  totals, batch counts and scoring progress the console leaves out, and what a command
+  does before any of them records (an install, connecting, a dataset found ready, all of
+  `mule install` and `mule check`) in `results/events.jsonl`; `history.csv`, `epochs.csv`
+  and `metrics.json` for training; `audit/<split>.json` for the audits;
+  `results/check.json` for `mule check`; the suite's and the study's directories
+  ([Outputs](outputs.md)).
 
 A command exits 1 when the graph is not ready (`mule check`), the study is incomplete
 (`mule diagnose`), or TigerGraph's failures outlast the retries: that failure is one line

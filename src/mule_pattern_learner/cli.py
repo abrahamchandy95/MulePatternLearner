@@ -4,8 +4,9 @@ The commands need nothing but the TigerGraph connection in .env and take no opti
 the settings are built in (config.DEFAULT_CONFIG), and RUN defaults to the built-in
 run's directory, results/baseline/seed-42. Each command shows its progress and then a
 short summary; the full records are in the files it writes (events.jsonl, history.csv,
-epochs.csv, metrics.json, audit/). It exits 1 when the graph is not ready (check), the
-study is incomplete (diagnose) or TigerGraph's failures outlast the retries.
+epochs.csv, metrics.json, audit/), and what it did before a run, a dataset or a study
+recorded its events is in results/events.jsonl. It exits 1 when the graph is not ready
+(check), the study is incomplete (diagnose) or TigerGraph's failures outlast the retries.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from typing import Any
 
 from .diagnostics.study import ANALYSES, INCOMPLETE
 from .metrics import REVIEW_BUDGETS, budget_name
-from .paths import REPOSITORY_ROOT, RunPaths, check_report
+from .paths import REPOSITORY_ROOT, RESULTS_DIR, RunPaths, check_report, command_events
 from .pipeline.check import check
 from .pipeline.diagnose import diagnose_built_in
 from .pipeline.evaluate import evaluate_run
@@ -37,6 +38,7 @@ from .runtime.console import (
     table,
 )
 from .runtime.device import reserve_deterministic_cublas
+from .runtime.progress import recording
 from .tigergraph.executor import TigerGraphUnavailableError, TransientQueryError
 
 
@@ -371,8 +373,13 @@ def main() -> None:
     # Before any CUDA work: deterministic cuBLAS GEMMs need a fixed workspace.
     reserve_deterministic_cublas()
     args = build_parser().parse_args()
+    # What the command emits before a run, a dataset or a study records its events, and
+    # what it emits outside them, is kept there: an install, connecting, a dataset found.
+    events = command_events(RESULTS_DIR)
+    events.parent.mkdir(parents=True, exist_ok=True)
     try:
-        result = run_command(args)
+        with recording(events):
+            result = run_command(args)
     except TransientQueryError as error:
         # The retries were shown as they happened; the failure that ended them goes to
         # stderr, without the traceback of a bug, and the command exits 1.
