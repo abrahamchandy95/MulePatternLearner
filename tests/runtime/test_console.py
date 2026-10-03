@@ -35,7 +35,7 @@ STALE = [f"query_{n}" for n in range(12)]
 
 def records(run: Path) -> list[tuple[dict[str, Any], str | None]]:
     """(record, its console text) pairs; ``run`` is a run directory under the cwd."""
-    plan = {"epochs": 30, "steps_per_epoch": 100, "patience": 6, "stopped": False}
+    plan = {"epochs": 30, "steps_per_epoch": 100, "steps": 100, "patience": 6, "stopped": False}
     host = {"device": "cuda", "threads": 4, "deterministic": True, "sampler_backend": "cugraph"}
     epoch = {"loss": 0.0991, "steps": 100, "weights": "averaged", "validation_roc_auc": 0.9592}
     return [
@@ -178,6 +178,13 @@ def records(run: Path) -> list[tuple[dict[str, Any], str | None]]:
             | {"sampler_backend": "torch", "device": "cpu", "patience": 0},
             "Resuming results/baseline/seed-42 at epoch 3, step 40, on cpu (torch sampler): "
             "100 steps per epoch, at most 30 epochs, no early stop",
+        ),
+        # The steps the schedule takes: three train cutoffs of up to 100 steps each.
+        (
+            {"event": "start", **host, "known_mules": KNOWN, "run": str(run), **plan}
+            | {"steps": 300, "epoch": 0, "step": 0},
+            "Training on cuda (cuGraph sampler) into results/baseline/seed-42: 300 steps per "
+            "epoch, at most 30 epochs, early stop after 6 epochs without gain",
         ),
         (
             {

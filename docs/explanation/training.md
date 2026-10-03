@@ -140,8 +140,9 @@ directory.
   check), and that the context source requests every input the model reads, with the
   model's pools, at both hops.
 - **The schedule** is drawn up front for each epoch from the saved generator: the date,
-  the roots and the step seed. An epoch has `training.steps_per_epoch` steps, 100 in the
-  built-in run.
+  the roots and the step seed. An epoch has up to `training.steps_per_epoch` steps for
+  each train cutoff, 100 in the built-in run, which has one; the line that starts
+  training gives the steps the schedule takes.
 - **Prefetch:** `runtime.prefetch_batches` worker threads build the next batches while
   the current step trains, sharing one bounded pool of REST requests; results are used in
   order, so a run is reproducible.

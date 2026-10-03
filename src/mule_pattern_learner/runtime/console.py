@@ -289,14 +289,15 @@ def _sampler(backend: Any) -> str:
 
 
 def _plan(record: Mapping[str, Any]) -> str:
-    steps = record.get("steps_per_epoch")
+    # The steps each epoch's schedule takes: training.steps_per_epoch (the record's
+    # steps_per_epoch) limits those of each train cutoff, so an epoch may take more.
     patience = int(record["patience"])
     stop = (
         f"early stop after {plural(patience, 'epoch')} without gain"
         if patience
         else "no early stop"
     )
-    per_epoch = f"{count(steps)} steps per epoch" if steps else "every marginal account per epoch"
+    per_epoch = f"{plural(int(record['steps']), 'step')} per epoch"
     return f"{per_epoch}, at most {plural(int(record['epochs']), 'epoch')}, {stop}"
 
 

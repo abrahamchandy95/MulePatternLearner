@@ -11,6 +11,12 @@ from ..contract.fingerprints import hash64
 from ..contract.salts import STEP_SALT
 
 
+def batch_shares(batch_size: int) -> tuple[int, int]:
+    """The oversampled positives and the marginal accounts of one batch of batch_size roots."""
+    positives = max(1, batch_size // 4)
+    return positives, batch_size - positives
+
+
 def pu_batches(
     indices: np.ndarray,
     observed: np.ndarray,
@@ -34,8 +40,7 @@ def pu_batches(
         raise ValueError("Positive pool contains an unobserved label")
     if not len(positives) or not len(indices):
         raise ValueError("nnPU requires observed positives and a training marginal")
-    positive_count = max(1, batch_size // 4)
-    marginal_count = batch_size - positive_count
+    positive_count, marginal_count = batch_shares(batch_size)
     marginal = rng.permutation(indices)
     for step, start in enumerate(range(0, len(marginal), marginal_count)):
         if max_steps is not None and step >= max_steps:
@@ -110,6 +115,23 @@ class TrainingStep:
     def indices(self) -> np.ndarray:
         """Row indices of the batch; the first len(positives) rows are labeled positive."""
         return np.r_[self.positives, self.marginal]
+
+
+def schedule_steps(
+    samples: Iterable[PUSample], batch_size: int, max_steps: int | None = None
+) -> int:
+    """The steps of every epoch's schedule (epoch_schedule), counted without drawing it.
+
+    Each train cutoff takes one step for each batch of its marginal, up to ``max_steps``
+    (training.steps_per_epoch), so an epoch of several cutoffs has more steps than that.
+    No generator is used, so counting changes no draw.
+    """
+    _, marginal = batch_shares(batch_size)
+    steps = 0
+    for sample in samples:
+        batches = -(-len(sample.marginal) // marginal)
+        steps += batches if max_steps is None else min(batches, max_steps)
+    return steps
 
 
 def epoch_schedule(
