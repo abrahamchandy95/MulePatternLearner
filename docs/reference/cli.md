@@ -98,7 +98,9 @@ test (for reporting), into the run's `audit/`, then redraws the audit figures an
 the split's cutoff, and weights them to the whole split ([Training](../explanation/training.md#the-ground-truth-audit)).
 
 A split the run already has an audit for is reported from its `audit/<split>.json` and
-never rewritten; when both are recorded nothing connects. Otherwise the model, its
+never rewritten, and the command says so ("results/baseline/seed-42 is already audited
+on validation and test; its audit/validation.json and audit/test.json are summarised
+below"); when both are recorded nothing connects. Otherwise the model, its
 dataset (the one `model.pt` names, in `data/`) and the hub registry are checked first,
 then one connection, with the model's retry budgets, checks the frozen source, reads the
 truth once for both splits and audits the missing ones. The summary is a table with a

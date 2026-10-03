@@ -23,7 +23,7 @@ from mule_pattern_learner.paths import DatasetPaths, RunPaths
 from mule_pattern_learner.pipeline import connect as pipeline_connect
 from mule_pattern_learner.pipeline import evaluate as pipeline_evaluate
 from mule_pattern_learner.reporting.run_report import AUDIT_FIGURES
-from mule_pattern_learner.runtime.progress import emit
+from mule_pattern_learner.runtime.progress import emit, recording
 from mule_pattern_learner.testing.builders import (
     RUNTIME_CHANGES,
     UNIT_SOURCE,
@@ -195,12 +195,24 @@ def test_evaluate_run_audits_validation_and_test_on_the_fake_graph(
     assert len(drawn) == 1 + len(AUDIT_FIGURES)
     written = {path: path.stat().st_mtime_ns for path in drawn}
     monkeypatch.setattr(pipeline_evaluate, "connect", connecting(None))
-    assert pipeline_evaluate.evaluate_run(runs[0], data=data) == reports[0]
+    noted = tmp_path / "events.jsonl"
+    with recording(noted):
+        assert pipeline_evaluate.evaluate_run(runs[0], data=data) == reports[0]
     assert {path: path.stat().st_mtime_ns for path in drawn} == written
-    # An interrupted evaluation audits only the split it lacks.
+    # It says that it read the reports, which the command's summary then shows.
+    assert read_events(noted) == [
+        {
+            "event": "already_audited",
+            "run": str(runs[0].root),
+            "reports": [str(runs[0].audit_report(split)) for split in ("validation", "test")],
+        }
+    ]
+    # An interrupted evaluation audits only the split it lacks, and says which it read.
     runs[0].audit_report("test").unlink()
     monkeypatch.setattr(pipeline_evaluate, "connect", connecting(graph))
-    assert pipeline_evaluate.evaluate_run(runs[0], data=data) == reports[0]
+    with recording(noted):
+        assert pipeline_evaluate.evaluate_run(runs[0], data=data) == reports[0]
+    assert read_events(noted)[-1]["reports"] == [str(runs[0].audit_report("validation"))]
     audited = [event["split"] for event in read_events(runs[0].events) if event["event"] == "audit"]
     assert audited == ["validation", "test", "test"]
     # A truth reader other than the graph's (a parquet file of the same columns).
