@@ -5,7 +5,7 @@
       "Account": 200
     },
     "query_hashes": {
-      "queries/fourier64.gsql": "9c2fbbdc30e92b0e5522bd49032743e7ab5c197f40457b0638891a0edf759d67",
+      "queries/fourier64.gsql": "8d92ea7534bd67819022e8224a5f5389aebd3efdbcd7dd9825afc892e854c287",
       "queries/training_context.gsql": "21f15c377763febab0e169563284d98eab9958492bf7f68053efb4cb7552f6d2",
       "queries/training_scope.gsql": "9e2c59543bd8c0264839eae38228bf7dcc6c4affc263b53dd3e79042c293e21d",
       "queries/split_cutoffs.gsql": "1dbfbf0d8b718cbb96294c668085c5d61fa2cb09731f94bd21f49ea96f40ca49",
@@ -58,7 +58,7 @@
     "scope_id": "strict_mule_v2"
   },
   "status": "ready",
-  "created_at_utc": "2026-10-02T23:29:43.360177+00:00",
+  "created_at_utc": "2026-10-03T00:03:19.785996+00:00",
   "population_by_split": {
     "train": 120,
     "validation": 40,
