@@ -73,7 +73,12 @@ def records(run: Path) -> list[tuple[dict[str, Any], str | None]]:
         ),
         (
             {"event": "install", "stale": STALE, "up_to_date": []},
-            "Installing 12 queries on TigerGraph (about 50 minutes the first time)...",
+            "Installing all 12 queries on TigerGraph (about 50 minutes)...",
+        ),
+        # Only an install of every query gives the time a fresh graph's install took.
+        (
+            {"event": "install", "stale": STALE[:3], "up_to_date": STALE[3:]},
+            "Installing 3 queries on TigerGraph...",
         ),
         ({"event": "install", "stale": [], "up_to_date": STALE}, None),
         (

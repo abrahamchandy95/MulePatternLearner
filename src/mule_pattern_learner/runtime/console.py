@@ -197,7 +197,11 @@ def _install(record: Mapping[str, Any]) -> str | None:
     if not stale:
         return None
     queries = plural(len(stale), "query", "queries")
-    return f"Installing {queries} on TigerGraph (about 50 minutes the first time)..."
+    if record["up_to_date"]:
+        return f"Installing {queries} on TigerGraph..."
+    # Every query, as on a fresh graph: compiling them all took about 50 minutes on the
+    # reference graph, most of it the context query (tigergraph.installer).
+    return f"Installing all {queries} on TigerGraph (about 50 minutes)..."
 
 
 def _install_unanswered(record: Mapping[str, Any]) -> str:
