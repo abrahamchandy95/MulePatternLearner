@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import secrets
 from typing import Any
 
 import pandas as pd
@@ -92,21 +93,31 @@ def file_digest(path: Path) -> str:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def pending_path(path: Path) -> Path:
-    """Where ``atomic_write`` writes ``path`` before replacing it."""
-    return path.with_name(path.name + ".pending")
+# The file name ending of a file atomic_write has not yet put in place.
+PENDING_SUFFIX = ".pending"
+
+
+def pending_path(path: Path, *, unique: bool = False) -> Path:
+    """Where ``atomic_write`` writes ``path`` before replacing it.
+
+    A ``unique`` pending path holds a random part of its own, so writers of one path at
+    the same time (the context cache's request workers and processes) never write into
+    the same file: the path ends as one of their complete files.
+    """
+    own = f".{secrets.token_hex(8)}" if unique else ""
+    return path.with_name(f"{path.name}{own}{PENDING_SUFFIX}")
 
 
 @contextlib.contextmanager
-def atomic_write(path: Path) -> Generator[Path]:
+def atomic_write(path: Path, *, unique: bool = False) -> Generator[Path]:
     """Yield a pending path beside ``path`` for the block to write; it then replaces ``path``.
 
-    The pending file (``pending_path``) replaces ``path`` only when the block ends
-    without an error, so a crash never leaves a truncated file. A block that writes
-    nothing, or removes what it wrote, leaves ``path`` as it was. The pending file
-    never outlives the block.
+    The pending file (``pending_path``, unique or not) replaces ``path`` only when the
+    block ends without an error, so a crash never leaves a truncated file. A block that
+    writes nothing, or removes what it wrote, leaves ``path`` as it was. The pending file
+    never outlives the block, unless its thread dies at interpreter exit.
     """
-    pending = pending_path(path)
+    pending = pending_path(path, unique=unique)
     try:
         yield pending
         if pending.exists():
