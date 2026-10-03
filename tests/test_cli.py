@@ -357,7 +357,7 @@ The full report, with every tensor's digest, is in results/check.json
 NOT_READY_SUMMARY = """\
 Readiness of graph Mule_Pattern_Learner, which mule check only reads:
   [ ] scope vertex type missing
-  [ ] 1 of 3 training queries are stale: q3 (differs from repository source)
+  [ ] 1 of 3 training queries is stale: q3 (differs from repository source)
   [-] no CUDA device: training samples with the torch sampler
   [ ] no prepared dataset of the built-in run; `mule train` prepares one
   [ ] first training batch: built once everything above is ready
@@ -403,7 +403,7 @@ def test_retries_that_run_out_end_the_command_with_one_clear_line_on_stderr(
     screen = Terminal()
     monkeypatch.setattr(sys, "stdout", screen)
     error = TigerGraphUnavailableError(
-        "connect failed after 31 attempt(s) (TigerGraph unavailable for 1800s (max_outage_s "
+        "connect failed after 31 attempts (TigerGraph unavailable for 1800s (max_outage_s "
         "= 1800)): TigerGraphException: starting workspace"
     )
 
@@ -480,20 +480,32 @@ def test_the_error_that_stops_a_command_is_recorded_where_its_records_were_going
     assert cli.error_record(undecodable)["type"] == "json.decoder.JSONDecodeError"
 
 
+def test_a_count_of_one_reads_in_the_singular_in_the_checklist() -> None:
+    saved = Path("results/check.json")
+    one = {"up_to_date": [], "stale": {"q1": ["not installed"]}, "retired": []}
+    stale = cli.check_summary(NOT_READY | {"queries": one}, saved)
+    assert "  [ ] 1 of 1 training query is stale: q1 (not installed)\n" in stale
+    step = CHECKED["first_step"] | {"roots": 1, "accepted_roots": 1, "context_requests": 1}
+    queries = {"up_to_date": ["q1"], "stale": {}, "retired": []}
+    ready = cli.check_summary(CHECKED | {"queries": queries, "first_step": step}, saved)
+    assert "  [x] 1 training query installed with the repository's text\n" in ready
+    assert "first training batch on cuda: 1 of 1 root, 1 context request, 2 s;" in ready
+
+
 STEP_TIME = {"seconds_per_step": 2.0}
 
 
 def test_the_line_of_a_stopped_command_ends_in_one_full_stop() -> None:
     # TigerGraph's words may end in a full stop of their own, or be cut with an ellipsis.
-    ended = TransientQueryError("q failed after 2 attempt(s): TigerGraphException: Halted.")
+    ended = TransientQueryError("q failed after 2 attempts: TigerGraphException: Halted.")
     assert cli.stopped("mule train", ended) == (
-        "mule train stopped: a TigerGraph request kept failing. q failed after 2 attempt(s): "
+        "mule train stopped: a TigerGraph request kept failing. q failed after 2 attempts: "
         "TigerGraphException: Halted."
     )
-    cut = TigerGraphUnavailableError("connect failed after 3 attempt(s): ReadTimeout: word wo...")
+    cut = TigerGraphUnavailableError("connect failed after 3 attempts: ReadTimeout: word wo...")
     assert cli.stopped("mule check", cut) == (
         "mule check stopped: TigerGraph stayed unavailable. connect failed after 3 "
-        "attempt(s): ReadTimeout: word wo... Run it again once TigerGraph answers; an "
+        "attempts: ReadTimeout: word wo... Run it again once TigerGraph answers; an "
         "interrupted run resumes where it stopped."
     )
 

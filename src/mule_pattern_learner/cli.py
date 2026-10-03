@@ -268,11 +268,13 @@ def check_summary(report: Mapping[str, Any], saved: Path) -> str:
 
     item(report["scope_schema"] == "present", f"scope vertex type {report['scope_schema']}")
     stale = queries["stale"]
+    training = plural(total, "training query", "training queries")
     if stale:
         named = "; ".join(f"{name} ({', '.join(issues)})" for name, issues in stale.items())
-        item(False, f"{len(stale)} of {total} training queries are stale: {named}")
+        are = "is" if len(stale) == 1 else "are"
+        item(False, f"{len(stale)} of {training} {are} stale: {named}")
     else:
-        item(True, f"{total} training queries installed with the repository's text")
+        item(True, f"{training} installed with the repository's text")
     if queries["retired"]:
         retired = ", ".join(queries["retired"])
         item(None, f"retired queries still installed, which `mule install` drops: {retired}")
@@ -319,7 +321,8 @@ def _first_step(step: Mapping[str, Any] | None) -> tuple[bool, str]:
         return False, f"first training batch on {step['device']}: TigerGraph rejected every root"
     return True, (
         f"first training batch on {step['device']}: {count(step['accepted_roots'])} of "
-        f"{count(step['roots'])} roots, {count(step['context_requests'])} context requests, "
+        f"{plural(int(step['roots']), 'root')}, "
+        f"{plural(int(step['context_requests']), 'context request')}, "
         f"{duration(float(step['batch_seconds']))}; one step: loss {step['loss']:.6f}, "
         f"objective {step['objective']:.6f}\n      batch digest {step['batch_digest'][:12]}"
     )

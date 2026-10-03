@@ -141,7 +141,7 @@ def test_the_audit_fails_on_censored_rejections(
     members = accounts[accounts.split == "test"]
     # Index 0 is a test positive (always fatal); index 1 a negative (fatal at limit 0).
     source = FakeSource(config, reject=frozenset({members.account_id.iloc[rejected_index]}))
-    match = "1 test positives" if rejected_index == 0 else "0 test positives"
+    match = r"\(1 test positive;" if rejected_index == 0 else r"\(0 test positives;"
     inputs = audit_inputs(run, dataset=dataset, hubs=hub_registry())
     with pytest.raises(ValueError, match=match):
         audit(

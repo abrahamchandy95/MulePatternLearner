@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, Protocol, TypeVar
 from ..config import DEFAULT_CONFIG
 from ..contract.bounds import OUTAGE_SECONDS, QUERY_ATTEMPTS
 from ..contract.server import GRAPH_NAME
-from ..runtime.console import brief
+from ..runtime.console import brief, plural
 from ..runtime.progress import emit
 
 if TYPE_CHECKING:
@@ -417,7 +417,8 @@ class TigerGraphExecutor:
                 if kind == SERVER_TIMEOUT:
                     timeouts += 1
                     exhausted = timeouts > timeout_retries
-                    reason = f"server timeout, {timeout_retries} retry(ies) allowed"
+                    allowed = plural(timeout_retries, "retry", "retries")
+                    reason = f"server timeout, {allowed} allowed"
                 elif kind == DETERMINISTIC:
                     deterministic += 1
                     exhausted = deterministic > 1
@@ -430,7 +431,7 @@ class TigerGraphExecutor:
                         f"(max_outage_s = {self.max_outage_s:.0f})"
                     )
                 if attempts is not None and total >= attempts:
-                    exhausted, reason = True, f"{attempts} attempt(s) allowed"
+                    exhausted, reason = True, f"{plural(attempts, 'attempt')} allowed"
                 elif attempts is None and counted >= self.max_attempts:
                     exhausted, reason = True, f"max_query_attempts = {self.max_attempts}"
                 if exhausted:
@@ -439,7 +440,7 @@ class TigerGraphExecutor:
                         AVAILABILITY: TigerGraphUnavailableError,
                     }.get(kind, TransientQueryError)
                     raise failure(
-                        f"{label} failed after {total} attempt(s) ({reason}): "
+                        f"{label} failed after {plural(total, 'attempt')} ({reason}): "
                         f"{failure_summary(error)}"
                     ) from error
                 if kind == AVAILABILITY:
@@ -514,7 +515,7 @@ class TigerGraphExecutor:
         # Parameter sizes name the request in retry events (context requests: key count).
         sizes = {key: len(value) for key, value in params.items() if isinstance(value, list)}
         detail = (
-            f"{sizes['node_ids']} keys"
+            plural(sizes["node_ids"], "key")
             if "node_ids" in sizes
             else ", ".join(f"{key}={size}" for key, size in sizes.items())
         )

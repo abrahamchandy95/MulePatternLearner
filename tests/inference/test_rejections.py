@@ -44,7 +44,7 @@ def test_a_split_fails_on_a_rejected_positive_the_limit_or_lost_classes() -> Non
     with pytest.raises(ValueError, match=r"test: .*1 of 6 roots \(above .*=0.0\); statuses"):
         check_split_rejections("test", LABELS, one_unlabeled, 0.0, STATUSES)
     positive = np.array([False, True, True, True, True, True])
-    with pytest.raises(ValueError, match="1 observed positives among them"):
+    with pytest.raises(ValueError, match="1 observed positive among them"):
         check_split_rejections("test", LABELS, positive, 1.0, STATUSES)
     # Validation keeps both observed classes after its rejections.
     negatives = np.array([True, False, False, False, True, False])
@@ -68,7 +68,7 @@ def test_training_rejections_count_the_epoch_against_the_limit_and_resume() -> N
     resumed.start_epoch()
     resumed.count(1, np.zeros(4, dtype=np.int64), step, 8, lambda: STATUSES)
     assert resumed.totals()["rejected"] == 2 and resumed.epoch["rejected"] == 1
-    with pytest.raises(ValueError, match="1 observed positives"):
+    with pytest.raises(ValueError, match=r"\(1 observed positive;"):
         resumed.count(1, np.array([0, 1, 0, 0]), step, 100, lambda: STATUSES)
 
 

@@ -200,7 +200,7 @@ def _retry(record: Mapping[str, Any]) -> str:
 
 def _context_split(record: Mapping[str, Any]) -> str:
     return (
-        f"TigerGraph timed out on a request of {count(record['keys'])} keys at hop "
+        f"TigerGraph timed out on a request of {plural(int(record['keys']), 'key')} at hop "
         f"{record['hop']}; requesting its halves on their own"
     )
 
@@ -256,8 +256,8 @@ def _reveal(record: Mapping[str, Any]) -> str:
     revealed = record.get("revealed") or {}
     counts = {split: int(revealed.get(str(phase), 0)) for split, phase in SPLIT_PHASE.items()}
     line = (
-        f"Revealed {count(sum(counts.values()))} known mules: {by_split(counts)} in train / "
-        "validation / test"
+        f"Revealed {plural(sum(counts.values()), 'known mule')}: {by_split(counts)} in train "
+        "/ validation / test"
     )
     short = record.get("shortfall_discovered_by_cutoff")
     if short:
@@ -357,16 +357,17 @@ def _warning(record: Mapping[str, Any]) -> str:
 
 
 def _audit(record: Mapping[str, Any]) -> str:
+    accounts = plural(int(record["accounts"]), "account")
     return (
-        f"Audited {record['split']} at {record['date']}: {count(record['accounts'])} accounts "
-        f"scored, {count(record['rejected_accounts'])} rejected"
+        f"Audited {record['split']} at {record['date']}: {accounts} scored, "
+        f"{count(record['rejected_accounts'])} rejected"
     )
 
 
 def _feature_table(record: Mapping[str, Any]) -> str:
     return (
         f"Feature table, {record['split']} at {record['date']}: "
-        f"{count(record['accounts'])} accounts, {count(record['mules'])} mules, "
+        f"{plural(int(record['accounts']), 'account')}, {plural(int(record['mules']), 'mule')}, "
         f"{count(record['rejected'])} rejected"
     )
 
@@ -375,7 +376,10 @@ def _diagnose(record: Mapping[str, Any]) -> str:
     head = f"{record['analysis']:<16} {record['status']:<8}"
     if record["status"] == "skipped":
         return f"{head} {record['reason']}"
-    return f"{head} {count(record['rows']):>9} rows  {duration(float(record['seconds']))}"
+    rows = int(record["rows"])
+    # The noun keeps the width of "rows", so the times stay in one column.
+    noun = "row" if rows == 1 else "rows"
+    return f"{head} {count(rows):>9} {noun:<4}  {duration(float(record['seconds']))}"
 
 
 def _suite(record: Mapping[str, Any]) -> str:

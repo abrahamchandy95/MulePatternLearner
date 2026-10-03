@@ -260,7 +260,7 @@ def test_retries_that_run_out_keep_the_cause_tigergraph_gave(tmp_path: Path) -> 
     (retry,) = read_events(events)
     assert retry["reason"] == "runtime error: the query fetch_training_context ran out of..."
     assert str(raised.value) == (
-        "fetch_training_context (512 keys) failed after 2 attempt(s) (suspected "
+        "fetch_training_context (512 keys) failed after 2 attempts (suspected "
         "deterministic failure, retried once): TigerGraphException: Runtime Error: the query "
         "fetch_training_context ran out of memory on partition 3"
     )
@@ -269,7 +269,7 @@ def test_retries_that_run_out_keep_the_cause_tigergraph_gave(tmp_path: Path) -> 
     with pytest.raises(TigerGraphUnavailableError) as raised:
         executor(conn).gsql("CREATE QUERY q() {}", what="CREATE QUERY q", attempts=1)
     assert str(raised.value) == (
-        "CREATE QUERY q failed after 1 attempt(s) (1 attempt(s) allowed): ConnectionError: "
+        "CREATE QUERY q failed after 1 attempt (1 attempt allowed): ConnectionError: "
         "connection refused"
     )
     # A summary of that error, as a suite records the run it failed, keeps it whole.
@@ -416,3 +416,15 @@ def test_executor_connects_only_with_the_settings_it_is_given() -> None:
     # The pipeline reads .env (pipeline.connect.connect); the executor never does.
     with pytest.raises(ValueError, match="connected client or its settings"):
         TigerGraphExecutor()
+
+
+def test_a_count_of_one_in_a_failure_reads_in_the_singular() -> None:
+    timeout = TigerGraphException("Query timeout exceeded", "REST-3002")
+    with pytest.raises(ServerTimeoutError) as raised:
+        executor(FakeConn([timeout] * 2)).run(CONTEXT_QUERY, {"node_ids": ["a"]})
+    assert str(raised.value).startswith(
+        "fetch_training_context (1 key) failed after 2 attempts (server timeout, 1 retry allowed): "
+    )
+    with pytest.raises(ServerTimeoutError) as raised:
+        executor(FakeConn([timeout])).run("q", {}, timeout_retries=0)
+    assert str(raised.value).startswith("q failed after 1 attempt (server timeout, 0 retries")

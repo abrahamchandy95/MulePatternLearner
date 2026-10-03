@@ -35,6 +35,7 @@ import pandas as pd
 from ..artifacts import atomic_write, file_digest
 from ..contract.graph_schema import HUB_COLUMNS, HUB_REASONS, context_scope
 from ..paths import DatasetPaths
+from ..runtime.console import plural
 from ..runtime.progress import warn
 
 if TYPE_CHECKING:
@@ -202,7 +203,7 @@ def warn_hub_stubs(hubs: HubRegistry, plan: FeaturePlan) -> None:
     if len(hubs) and "hub_indicator" not in plan.groups:
         warn(
             "hub_stubs",
-            f"The hub registry lists {len(hubs)} hub rows but the feature plan has no "
+            f"The hub registry lists {plural(len(hubs), 'hub row')} but the feature plan has no "
             "hub_indicator group: hub children are replaced by stubs without history, which "
             "this model cannot tell apart from dormant accounts. Add hub_indicator to "
             "features to give stubs their history_withheld flag.",
