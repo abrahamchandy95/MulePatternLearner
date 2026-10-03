@@ -28,7 +28,7 @@ from mule_pattern_learner.pipeline import prepare as pipeline_prepare
 from mule_pattern_learner.pipeline.connect import open_context_source
 from mule_pattern_learner.pipeline.evaluate import evaluate_run
 from mule_pattern_learner.pipeline.train import BASELINE_RUN, train_run
-from mule_pattern_learner.reporting.report import AUDIT_FIGURES, TRAINING_FIGURES
+from mule_pattern_learner.reporting.run_report import AUDIT_FIGURES, TRAINING_FIGURES
 from mule_pattern_learner.testing.builders import neighbourhood, scope_population
 from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
 

@@ -1,7 +1,7 @@
 """The figures of a control-experiment suite: its variants against the baseline.
 
 Each plot function draws on the Axes it is given and returns it; none reads or saves a
-file (reporting.report does, from the suite's summary.csv and comparison.csv and its
+file (reporting.suite_report does, from the suite's summary.csv and comparison.csv and its
 runs' files). A variant's numbers are VariantSeeds: one value per seed, the seed mean
 and, where the suite has one, the interval of the paired bootstrap. The rows come in
 the order they are to be drawn, top to bottom, and the baseline is always ink. The

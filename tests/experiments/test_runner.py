@@ -39,7 +39,8 @@ from mule_pattern_learner.pipeline import connect as pipeline_connect
 from mule_pattern_learner.pipeline import evaluate as pipeline_evaluate
 from mule_pattern_learner.pipeline import prepare as pipeline_prepare
 from mule_pattern_learner.pipeline import train as pipeline_train
-from mule_pattern_learner.reporting.report import AUDIT_FIGURES, SUITE_FIGURES, TRAINING_FIGURES
+from mule_pattern_learner.reporting.run_report import AUDIT_FIGURES, TRAINING_FIGURES
+from mule_pattern_learner.reporting.suite_report import SUITE_FIGURES
 from mule_pattern_learner.testing.builders import (
     ground_truth_rows,
     neighbourhood,

@@ -1,7 +1,7 @@
 """The score figures of an audit: the threshold, the score densities, revealed and hidden mules.
 
 Each plot function draws on the Axes it is given and returns it; none reads or saves a
-file (reporting.report does). Scores sit near 0 and 1, so the threshold and density
+file (reporting.run_report does). Scores sit near 0 and 1, so the threshold and density
 figures put them on a log10-odds axis, where 0 is a score of 0.5 and 5 a score of
 0.99999.
 """

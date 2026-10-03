@@ -3,7 +3,7 @@
 The study of a dataset lives in results/diagnostics/<dataset id>/ (paths.DiagnosticsPaths):
 the feature table (features.parquet), one long table per analysis (<analysis>.csv),
 study.json, which records what each analysis last did, its events.jsonl, and the
-figures and report.md that reporting.report.write_diagnostics_report draws from them.
+figures and report.md that reporting.study_report.write_diagnostics_report draws from them.
 
 The analyses, in the order `mule diagnose` runs them all:
 - features: the feature table (diagnostics.feature_table), read from the graph. A table
@@ -52,7 +52,7 @@ from ..data.manifest import read_manifest
 from ..data.ports import ScopeReader
 from ..evaluation.truth import TruthReader
 from ..paths import RESULTS_DIR, DatasetPaths, DiagnosticsPaths, RunPaths
-from ..reporting.report import write_diagnostics_report
+from ..reporting.study_report import write_diagnostics_report
 from ..runtime.progress import emit, recording
 from .baselines import baselines
 from .drift import drift

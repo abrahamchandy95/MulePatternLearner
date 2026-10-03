@@ -13,7 +13,7 @@ from ..data.contexts import close_source
 from ..evaluation.audit import AUDIT_SPLITS, audit, audit_inputs
 from ..evaluation.truth import TruthReader
 from ..paths import DATA_DIR, RunPaths
-from ..reporting.report import write_audit_report
+from ..reporting.run_report import write_audit_report
 from ..runtime.progress import recording
 from ..tigergraph.oracle import TigerGraphTruthReader
 from ..tigergraph.provenance import verify_frozen_source
@@ -60,7 +60,7 @@ def evaluate_run(
     With a ``session`` the audits run on its connection, which a suite of runs shares.
     The lines the audits print are appended to the run's events.jsonl. Once a split is
     audited here, the audit figures and report.md are drawn again
-    (reporting.report.write_audit_report).
+    (reporting.run_report.write_audit_report).
     """
     inputs = audit_inputs(run, data=data)
     reports = {

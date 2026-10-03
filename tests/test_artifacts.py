@@ -35,12 +35,9 @@ from mule_pattern_learner.artifacts import (
 )
 from mule_pattern_learner.config import DEFAULT_CONFIG
 from mule_pattern_learner.paths import REPOSITORY_ROOT, DiagnosticsPaths, RunPaths
-from mule_pattern_learner.reporting.report import (
-    AUDIT_FIGURES,
-    DIAGNOSTICS_FIGURES,
-    SUITE_FIGURES,
-    TRAINING_FIGURES,
-)
+from mule_pattern_learner.reporting.run_report import AUDIT_FIGURES, TRAINING_FIGURES
+from mule_pattern_learner.reporting.study_report import DIAGNOSTICS_FIGURES
+from mule_pattern_learner.reporting.suite_report import SUITE_FIGURES
 
 
 def test_atomic_writes_replace_the_file_only_after_the_block_succeeds(tmp_path: Path) -> None:
