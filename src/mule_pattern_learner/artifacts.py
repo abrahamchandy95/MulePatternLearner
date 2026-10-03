@@ -177,12 +177,18 @@ def keep_history(path: Path, epoch: int, step: int) -> None:
 
     ``epoch`` counts the finished epochs and ``step`` the steps done of the next one, as
     the resume state records them; a resumed run logs the later intervals again. A row
-    cut short by a crash is dropped too.
+    cut short by a crash is dropped too. A history of other columns is refused rather than
+    emptied, since none of its rows would have every column.
     """
     if not path.exists():
         return
     with path.open(newline="") as stream:
-        rows = list(csv.DictReader(stream))
+        reader = csv.DictReader(stream)
+        rows = list(reader)
+    if reader.fieldnames is not None and tuple(reader.fieldnames) != HISTORY_COLUMNS:
+        raise ValueError(
+            f"{path} has the columns {list(reader.fieldnames)}, not {list(HISTORY_COLUMNS)}"
+        )
     kept = [
         row
         for row in rows
