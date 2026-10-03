@@ -64,11 +64,6 @@ class ContextTimeoutError(RuntimeError):
         self.key, self.hop = key, hop
 
 
-def response_bound(sampler: SamplerPlan, hop: int) -> int:
-    """Largest message count a context may contain at this hop."""
-    return sampler.response_bound(hop)
-
-
 def numeric_fields(groups: Iterable[str]) -> tuple[tuple[str, str], ...]:
     """The message fields of these groups that must be finite and nonnegative, by group."""
     chosen = set(groups)
@@ -139,7 +134,7 @@ def check_context(
     if row.get("basis_id") != BASIS_ID:
         raise ValueError("Fourier basis mismatch")
     messages: list[dict[str, Any]] = row["messages"]
-    if len(messages) > response_bound(sampler, hop):
+    if len(messages) > sampler.response_bound(hop):
         raise ValueError("Query response exceeds the neighborhood bound")
     features: dict[str, Any] = row["features"]
     if set(features) - node_features:
