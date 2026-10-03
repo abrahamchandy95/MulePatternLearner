@@ -24,7 +24,10 @@ their text differs.
 
 **The first run** installs the three analytics queries. `fetch_analytics_context` is the
 old all-groups context query under a new name, so expect a long install, of the order of
-the 50 minutes a full install takes. It then reads the feature table, about 6,200
+the 50 minutes a full install takes; the command waits up to 90 minutes for it. If that
+wait runs out, the server may still be compiling: once the GSQL shell's `ls` shows the
+analytics queries installed, run `mule diagnose` again, and it installs only what is still
+stale. It then reads the feature table, about 6,200
 accounts through both context queries. The training query's rows go through the
 dataset's context cache; the analytics query's rows are not cached, so a rebuilt table
 requests them all again. After that first run, `python -m pytest -m graph` also checks

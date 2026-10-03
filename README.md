@@ -114,8 +114,9 @@ it starts from scratch, with its `data/` and `results/` empty or moved aside:
    not installed yet, the old names are listed under `queries.retired`, and there is no
    dataset.
 3. `mule train`. Its first run installs the renamed queries beside the old names (about
-   50 minutes; run it again if the 45-minute wait runs out), prepares the dataset (about
-   6 minutes) and trains the built-in run (about an hour).
+   50 minutes, within a 90-minute wait), prepares the dataset (about 6 minutes) and
+   trains the built-in run (about an hour). If the wait runs out, wait until `mule check`
+   no longer lists the queries under `queries.stale`, then run `mule train` again.
 4. Stop every job of the earlier code, on every machine, since it calls the old names.
    Then `mule install`: it finds the renamed queries in place and drops the old names,
    and `mule check` lists no `queries.retired` from then on.
@@ -123,7 +124,8 @@ it starts from scratch, with its `data/` and `results/` empty or moved aside:
 6. `python scripts/run_experiments.py`, then `python scripts/run_experiments.py
    feature_drops`.
 7. `mule diagnose`. Its first run installs the analytics queries, an install of the
-   order of 50 minutes.
+   order of 50 minutes within the same 90-minute wait; if that runs out, run `mule
+   diagnose` again once the compilation has finished.
 
 [Train and evaluate](docs/how-to/train-and-evaluate.md#on-the-cuda-host) walks through
 each step.

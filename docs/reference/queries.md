@@ -266,25 +266,32 @@ describes what a pair is.
 
 ## Installation
 
-`mule install`, and `mule train` before it prepares, installs only what is stale:
+`mule install`, and every preparation that connects, installs only what is stale:
 
 - A query is stale when its `SHOW QUERY` text differs from the repository's (comments and
   whitespace aside), its REST endpoint is missing or disabled, or the endpoint's
   parameters differ.
 - A query that calls a stale query is installed with it, so a change to
-  `encode_fourier64` also reinstalls the context query. Only stale definitions are
-  created again, because `CREATE OR REPLACE` disables an installed endpoint until it is
-  installed again.
+  `encode_fourier64` also reinstalls the context query. Only the definitions whose text
+  is missing or differs, and the queries that call them, are created again, because
+  `CREATE OR REPLACE` disables an installed endpoint until it is installed again. A query
+  whose text is current but whose endpoint is not (a compilation that has not finished,
+  or failed) is only installed.
 - When the graph has no `Temporal_Training_Scope` vertex type,
   `gsql/schema/scope_vertex.gsql` is applied first, since a schema change invalidates
   installed queries.
 - On TigerGraph 4.2.5 the install request answers only when compilation finishes, so it
-  runs with a 45-minute read timeout; when the client gives up first, the endpoint
-  listing is polled every 30 seconds until every query is enabled. If the 45 minutes
-  pass, the command fails and asks to be run again; the next run installs only what is
-  still stale. Success is decided by checking every endpoint against the repository
-  text and parameters, not by a status message. Installing every query takes about 50
-  minutes, most of it the context query.
+  runs with a 90-minute read timeout (`tigergraph.installer.INSTALL_DEADLINE_S`); when
+  the client gives up first, the endpoint listing is polled every 30 seconds until every
+  query is enabled. Success is decided by checking every endpoint against the repository
+  text and parameters, not by a status message. Installing every query took about 50
+  minutes, most of it the context query, before the training query shrank; the analytics
+  query is the size the context query was.
+- If the 90 minutes pass, the command fails, and the server may still be compiling. Wait
+  until it has finished (`mule check` no longer lists the training queries under
+  `queries.stale`; the GSQL shell's `ls` shows every query's state), then run the same
+  command again: it installs only what is still stale, and creates nothing the last run
+  created.
 - Every write (the schema change, `CREATE`, the install, `DROP`) runs once: a failed one
   is reported, never repeated.
 

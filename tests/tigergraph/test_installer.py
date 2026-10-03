@@ -163,10 +163,12 @@ def test_install_creates_and_installs_only_stale_queries(monkeypatch: pytest.Mon
     assert len(server.created) == 1 and CUTOFF_QUERY not in server.created[0]
     assert server.created[0].startswith(f"USE GRAPH {GRAPH_NAME}\n")
     assert logs["verified"] == names
-    # A disabled endpoint is stale even when the text matches.
+    # A disabled endpoint is stale even when the text matches; it is installed, and its
+    # text, which is current, is not created again.
     server = InstallServer()
     server.enabled[CUTOFF_QUERY] = False
     assert installer.install(executor(server))["installed"] == [CUTOFF_QUERY]
+    assert server.installs == [([CUTOFF_QUERY], False)] and not server.created
     # Callers are found in the repository queries too.
     queries = gsql_text.repository_queries(QUERY_FILES)
     assert CONTEXT_QUERY in installer._with_callers({FOURIER_QUERY}, queries)
@@ -185,12 +187,16 @@ def test_install_polls_endpoints_when_the_install_request_times_out(
     assert tg.sleeps == [30, 30] and all(server.enabled.values())
     # The install request waited up to the deadline for its answer.
     assert tg.client.timeouts == [installer.INSTALL_DEADLINE_S]
-    # Still compiling at the deadline: an actionable timeout, and a later run installs
-    # only what is still stale.
+    # Still compiling at the deadline: an actionable timeout, for whichever command
+    # installed. A later run installs only what is still stale, without creating again
+    # the text the first run created.
     server = InstallServer(stale=(CUTOFF_QUERY,), mode="timeout", ready_after=99)
     tg = executor(server)
-    with pytest.raises(TimeoutError, match="still not installed.*re-run `mule install`"):
+    with pytest.raises(TimeoutError, match="still not installed.*run the same command again"):
         installer.install(tg, sleep=tg.clock.sleep, clock=tg.clock.time, poll_s=30, deadline_s=100)
+    server.mode = "sync"
+    assert installer.install(executor(server))["installed"] == [CUTOFF_QUERY]
+    assert len(server.created) == 1 and len(server.installs) == 2
     # Other failures of the install request propagate.
     server = InstallServer(stale=(CUTOFF_QUERY,))
     server.installQueries = lambda names, wait: (_ for _ in ()).throw(KeyError("bad"))
