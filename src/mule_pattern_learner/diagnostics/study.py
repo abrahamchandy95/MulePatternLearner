@@ -55,6 +55,7 @@ from ..data.ports import ScopeReader
 from ..evaluation.truth import TruthReader
 from ..paths import RESULTS_DIR, DatasetPaths, DiagnosticsPaths, RunPaths
 from ..reporting.study_report import write_diagnostics_report
+from ..runtime.console import shown_path
 from ..runtime.progress import emit, recording
 from .baselines import baselines
 from .drift import drift
@@ -144,10 +145,11 @@ class Study:
     def unusable_run(self) -> str | None:
         """Why the run cannot be compared with this dataset, or None when it can."""
         if not self.run.config.exists():
-            return f"{self.run.root} holds no run"
+            return f"{shown_path(self.run.root)} holds no run"
         trained = read_run_provenance(self.run.config).get("dataset_id")
         if trained != self.dataset.root.name:
-            return f"{self.run.root} was trained on another dataset ({str(trained)[:12]})"
+            run = shown_path(self.run.root)
+            return f"{run} was trained on another dataset ({str(trained)[:12]})"
         return None
 
     def audits(self) -> dict[str, dict[str, Any]]:
@@ -212,7 +214,7 @@ class Study:
                     raise Skipped(reason)
                 audited = [s for s in HELD_OUT_SPLITS if self.run.audit_report(s).exists()]
                 if not audited:
-                    raise Skipped(f"{self.run.root} has no audit; run `mule evaluate`")
+                    raise Skipped(f"{shown_path(self.run.root)} has no audit; run `mule evaluate`")
                 return subgroups(
                     {split: read_audit_scores(self.run.audit_scores(split)) for split in audited}
                 )
@@ -221,7 +223,9 @@ class Study:
                 if reason is not None:
                     raise Skipped(reason)
                 if not self.run.metrics.exists():
-                    raise Skipped(f"{self.run.root} is not complete: it has no metrics.json")
+                    raise Skipped(
+                        f"{shown_path(self.run.root)} is not complete: it has no metrics.json"
+                    )
                 return proxy_validity(self.run, self.graph.oracle().read())
             case "reveal-spread":
                 graph = self.graph

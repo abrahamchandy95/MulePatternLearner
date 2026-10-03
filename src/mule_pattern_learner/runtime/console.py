@@ -129,6 +129,12 @@ def shown_path(path: str | Path) -> str:
         return str(path)
 
 
+def sentence(text: str) -> str:
+    """Text ending in one full stop: its own trailing dots give way, but an ellipsis stays."""
+    text = text.rstrip()
+    return text if text.endswith("...") else text.rstrip(".") + "."
+
+
 def brief(text: str, length: int = 100) -> str:
     """Text on one line, cut to about ``length`` characters."""
     flat = " ".join(str(text).split())
@@ -172,6 +178,13 @@ def _nothing(record: Mapping[str, Any]) -> None:
     return None
 
 
+def _operation(operation: str) -> str:
+    """An operation as a line names it: "fetch_training_context (512 keys)" is
+    "fetch_training_context, 512 keys", so the reason is the line's only parenthesis."""
+    name, _, detail = operation.partition(" (")
+    return f"{name}, {detail.removesuffix(')')}" if detail else name
+
+
 def _retry(record: Mapping[str, Any]) -> str:
     reason = record.get("reason") or "no answer"
     attempt, wait = record["attempt"], duration(record["retry_in_s"])
@@ -179,9 +192,9 @@ def _retry(record: Mapping[str, Any]) -> str:
         case "availability":
             what = "TigerGraph is not answering yet"
         case "server_timeout":
-            what = f"TigerGraph timed out on {record['operation']}"
+            what = f"TigerGraph timed out on {_operation(record['operation'])}"
         case _:
-            what = f"TigerGraph failed {record['operation']}"
+            what = f"TigerGraph failed {_operation(record['operation'])}"
     return f"{what} ({reason}): attempt {attempt}, retrying in {wait}"
 
 
@@ -277,7 +290,11 @@ def _sampler(backend: Any) -> str:
 def _plan(record: Mapping[str, Any]) -> str:
     steps = record.get("steps_per_epoch")
     patience = int(record["patience"])
-    stop = f"early stop after {patience} without gain" if patience else "no early stop"
+    stop = (
+        f"early stop after {plural(patience, 'epoch')} without gain"
+        if patience
+        else "no early stop"
+    )
     per_epoch = f"{count(steps)} steps per epoch" if steps else "every marginal account per epoch"
     return f"{per_epoch}, at most {plural(int(record['epochs']), 'epoch')}, {stop}"
 

@@ -61,10 +61,23 @@ def records(run: Path) -> list[tuple[dict[str, Any], str | None]]:
                 "attempt": 1,
                 "retry_in_s": 3.2,
                 "error": "TigerGraphException: Query timeout exceeded",
-                "reason": "Query timeout exceeded",
+                "reason": "query timeout exceeded",
             },
-            "TigerGraph timed out on fetch_training_context (64 keys) (Query timeout "
+            "TigerGraph timed out on fetch_training_context, 64 keys (query timeout "
             "exceeded): attempt 1, retrying in 3 s",
+        ),
+        (
+            {
+                "event": "retry",
+                "failure": "deterministic",
+                "operation": "CREATE QUERY queries/training_context.gsql",
+                "attempt": 1,
+                "retry_in_s": 4.4,
+                "error": "TigerGraphException: Runtime Error: out of memory",
+                "reason": "runtime error: out of memory",
+            },
+            "TigerGraph failed CREATE QUERY queries/training_context.gsql (runtime error: out "
+            "of memory): attempt 1, retrying in 4 s",
         ),
         (
             {"event": "context_split", "keys": 64, "hop": 1, "error": "ServerTimeoutError: x"},
@@ -143,7 +156,7 @@ def records(run: Path) -> list[tuple[dict[str, Any], str | None]]:
             {"event": "start", **host, "known_mules": KNOWN, "run": str(run), **plan}
             | {"epoch": 0, "step": 0, "database_calls": 0, "elapsed_seconds": 0.1},
             "Training on cuda (cuGraph sampler) into results/baseline/seed-42: 100 steps per "
-            "epoch, at most 30 epochs, early stop after 6 without gain",
+            "epoch, at most 30 epochs, early stop after 6 epochs without gain",
         ),
         (
             {"event": "resume", **host, "run": str(run), **plan, "epoch": 2, "step": 40}
