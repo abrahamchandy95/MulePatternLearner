@@ -23,6 +23,7 @@ import pandas as pd
 import torch
 
 from mule_pattern_learner.artifacts import (
+    AUDIT_COLUMNS,
     FEATURE_TABLE_COLUMNS,
     append_history,
     file_digest,
@@ -1247,12 +1248,33 @@ def proxy_predictions(
     return frame, truth
 
 
+def study_audits(frame: pd.DataFrame, rng: np.random.Generator) -> dict[str, pd.DataFrame]:
+    """A synthetic run's scored audit samples on a feature table's held-out accounts.
+
+    A study compares its baselines with the run on one population, so the run scores the
+    feature table's accepted validation and test accounts (near_extremes with FOUND), its
+    revealed mules above its hidden ones; the rest of each sample is the table's.
+    """
+    samples = {}
+    for split in REPORTED_SPLITS:
+        rows = frame[(frame.split == split) & ~frame.rejected.astype(bool)]
+        mules = rows.is_mule.to_numpy() == 1
+        score = near_extremes(rng, mules, FOUND)
+        ranked = np.argsort(~rows.revealed.to_numpy()[mules], kind="stable")
+        loudest = np.empty(int(mules.sum()))
+        loudest[ranked] = np.sort(score[mules])[::-1]
+        score[mules] = loudest
+        sample = rows.assign(score=score)[list(AUDIT_COLUMNS)]
+        samples[split] = sample.reset_index(drop=True)
+    return samples
+
+
 def diagnostic_tables(seed: int = 0) -> dict[str, pd.DataFrame]:
     """Every analysis' table of a synthetic diagnostic study (artifacts.DIAGNOSTIC_TABLES).
 
     The feature table's analyses run on feature_frame, with the audit reports of a
-    synthetic run beside them; the subgroups on that run's audit samples (audit_frame);
-    the proxy validity on proxy_predictions; the reveal spread over 50 salts of
+    synthetic run on its accounts beside them (study_audits, with bootstrap intervals);
+    the subgroups on that run's audit samples; the proxy validity on proxy_predictions; the reveal spread over 50 salts of
     reveal_population; the nnPU simulation on a small, short problem. The baselines'
     intervals take 40 replicates and the curve two draws, and the tables of a seed are
     computed once per process (each call gets copies), to keep the tests fast.
@@ -1264,18 +1286,17 @@ def diagnostic_tables(seed: int = 0) -> dict[str, pd.DataFrame]:
 def _diagnostic_tables(seed: int) -> dict[str, pd.DataFrame]:
     rng = np.random.default_rng(seed)
     frame = feature_frame(seed)
-    samples = {split: audit_frame(rng, split) for split in REPORTED_SPLITS}
-    audits = {
-        split: {
-            "metrics": ranking_metrics(
-                sample.is_mule.to_numpy(),
-                sample.score.to_numpy(),
-                1 / sample.inclusion_probability.to_numpy(),
+    samples = study_audits(frame, rng)
+    audits = {}
+    for split, sample in samples.items():
+        y, score = sample.is_mule.to_numpy(), sample.score.to_numpy()
+        weight = 1 / sample.inclusion_probability.to_numpy()
+        audits[split] = {
+            "metrics": ranking_metrics(y, score, weight),
+            "intervals": bootstrap_intervals(
+                y, score, weight, sample.ring_id.to_numpy(), replicates=40
             ),
-            "intervals": {"average_precision": [0.05, 0.4], "roc_auc": [0.85, 0.95]},
         }
-        for split, sample in samples.items()
-    }
     predicted = {split: proxy_predictions(rng, split) for split in REPORTED_SPLITS}
     truth = pd.concat([found for _, found in predicted.values()], ignore_index=True)
     params = reveal_parameters(DEFAULT_CONFIG.scope, DEFAULT_CONFIG.dataset.dates, apply=False)
