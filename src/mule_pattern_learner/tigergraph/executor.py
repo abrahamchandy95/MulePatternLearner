@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Protocol, TypeVar
 from ..config import DEFAULT_CONFIG
 from ..contract.bounds import OUTAGE_SECONDS, QUERY_ATTEMPTS
 from ..contract.server import GRAPH_NAME
+from ..runtime.console import brief
 from ..runtime.progress import emit
 
 if TYPE_CHECKING:
@@ -140,9 +141,15 @@ def failure_class(error: BaseException) -> str | None:
 
 
 def error_summary(error: BaseException) -> str:
-    """The error's type and the first 200 characters of its message, on one line."""
-    message = str(getattr(error, "message", None) or error)
-    return f"{type(error).__name__}: {' '.join(message.split())[:200]}"
+    """The error's type and the first 200 characters of its message, on one line.
+
+    A TransientQueryError keeps its whole message: the one the executor raises when its
+    retries run out names the operation, its attempts and why they ended, then the
+    error that ended them (failure_summary), itself cut to about 200 characters.
+    """
+    message = " ".join(str(getattr(error, "message", None) or error).split())
+    kept = message if isinstance(error, TransientQueryError) else message[:200]
+    return f"{type(error).__name__}: {kept}"
 
 
 _PAGE_HEADING = re.compile(r"<(title|h1)[^>]*>(.*?)</\1>", re.IGNORECASE | re.DOTALL)
@@ -156,6 +163,61 @@ _CONNECTION_FAILURE = re.compile(
 )
 
 
+def _failure_text(error: BaseException) -> tuple[str, Any]:
+    """What a failed request said, and the HTTP status of its response if it had one.
+
+    The text is the document JSON could not parse, else the response's body, else the
+    error's message.
+    """
+    response = getattr(error, "response", None)
+    if isinstance(error, json.JSONDecodeError):
+        text = error.doc
+    elif response is not None and getattr(response, "content", None):
+        text = bytes(response.content[:4096]).decode("utf-8", "replace")
+    else:
+        text = str(getattr(error, "message", None) or error)
+    return text, getattr(response, "status_code", None)
+
+
+def _page_reason(text: str) -> tuple[str, int | None] | None:
+    """What an HTML page says, and the status its heading gives; None for other text.
+
+    A page gives its title or first heading, lowercased ("502 Bad Gateway" gives "bad
+    gateway" and 502), or "an HTML page" when it has neither.
+    """
+    heading = _PAGE_HEADING.search(text)
+    if heading is not None:
+        reason = " ".join(heading.group(2).split())
+        coded = _STATUS_HEADING.fullmatch(reason)
+        if coded is not None:
+            return coded.group(2).lower(), int(coded.group(1))
+        return reason.lower(), None
+    if looks_like_html(text) or "<html" in text.lower():
+        return "an HTML page", None
+    return None
+
+
+def _message(text: str) -> str:
+    """A JSON body's message, or the text, on one line without the URL requests adds."""
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        parsed = None
+    if isinstance(parsed, dict) and parsed.get("message"):
+        text = str(parsed["message"])
+    # requests words an HTTPError "502 Server Error: Bad Gateway for url: ...".
+    text = re.sub(r"\s+for url:.*", "", " ".join(text.split()))
+    return re.sub(r"^\d{3} (?:Client|Server) Error: ", "", text)
+
+
+def _with_status(reason: str, status: Any, error: BaseException) -> str:
+    """A reason with the HTTP status beside it, or the status alone when it says nothing more."""
+    if status is not None and reason in ("", str(status)):
+        return f"HTTP {status}"
+    reason = reason or type(error).__name__
+    return reason if status is None else f"{reason}, HTTP {status}"
+
+
 def short_reason(error: BaseException, words: int = 8) -> str:
     """Why a request failed, in a few words for a person: never an HTML page or a URL.
 
@@ -164,44 +226,39 @@ def short_reason(error: BaseException, words: int = 8) -> str:
     error what failed; anything else its first ``words`` words. A known HTTP status is
     added, from the response or from a page heading such as "502 Bad Gateway".
     """
-    response = getattr(error, "response", None)
-    status = getattr(response, "status_code", None)
-    if isinstance(error, json.JSONDecodeError):
-        text = error.doc
-    elif response is not None and getattr(response, "content", None):
-        text = bytes(response.content[:4096]).decode("utf-8", "replace")
+    text, status = _failure_text(error)
+    page = _page_reason(text)
+    if page is not None:
+        reason, coded = page
+        status = status or coded
     else:
-        text = str(getattr(error, "message", None) or error)
-    heading = _PAGE_HEADING.search(text)
-    if heading is not None:
-        reason = " ".join(heading.group(2).split())
-        coded = _STATUS_HEADING.fullmatch(reason)
-        if coded is not None:
-            status = status or int(coded.group(1))
-            reason = coded.group(2)
-        reason = reason.lower()
-    elif looks_like_html(text) or "<html" in text.lower():
-        reason = "an HTML page"
-    else:
-        try:
-            parsed = json.loads(text)
-        except ValueError:
-            parsed = None
-        if isinstance(parsed, dict) and parsed.get("message"):
-            text = str(parsed["message"])
+        text = _message(text)
         failure = _CONNECTION_FAILURE.search(text)
         if failure is not None:
             reason = failure.group(0).lower()
         else:
-            # requests words an HTTPError "502 Server Error: Bad Gateway for url: ...".
-            text = re.sub(r"\s+for url:.*", "", " ".join(text.split()))
-            text = re.sub(r"^\d{3} (?:Client|Server) Error: ", "", text)
             kept = text.split()[:words]
             reason = " ".join(kept) + ("..." if len(text.split()) > words else "")
-    if status is not None and reason in ("", str(status)):
-        return f"HTTP {status}"
-    reason = reason or type(error).__name__
-    return reason if status is None else f"{reason}, HTTP {status}"
+    return _with_status(reason, status, error)
+
+
+def failure_summary(error: BaseException) -> str:
+    """The error's type and why it failed, in about 200 characters on one line.
+
+    It ends the error the executor raises once its retries run out, so the stderr line
+    of the command it stops and the record of a suite's run it fails keep the cause
+    TigerGraph gave, such as "out of memory": a JSON body's message, the response's body
+    or the error's message, cut to about 200 characters, with the HTTP status. An HTML
+    page is its short reason (its title or heading) and a connection error what failed
+    (short_reason), never the page's markup or urllib3's text around the failure.
+    """
+    from requests import RequestException
+
+    text, status = _failure_text(error)
+    transport = isinstance(error, RequestException) and status is None
+    if _page_reason(text) is not None or (transport and _CONNECTION_FAILURE.search(text)):
+        return f"{type(error).__name__}: {short_reason(error)}"
+    return f"{type(error).__name__}: {_with_status(brief(_message(text), 200), status, error)}"
 
 
 class QueryExecutor(Protocol):
@@ -374,7 +431,7 @@ class TigerGraphExecutor:
                     }.get(kind, TransientQueryError)
                     raise failure(
                         f"{label} failed after {total} attempt(s) ({reason}): "
-                        f"{type(error).__name__}: {short_reason(error)}"
+                        f"{failure_summary(error)}"
                     ) from error
                 if kind == AVAILABILITY:
                     outages += 1

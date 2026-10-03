@@ -28,8 +28,10 @@ The console shows what a person follows, and the files hold the rest:
 
 A command exits 1 when the graph is not ready (`mule check`), the study is incomplete
 (`mule diagnose`), or TigerGraph's failures outlast the retries: that failure is one line
-on stderr, naming the operation, the attempts and the reason, after the retries' lines.
-Any other error is raised with its traceback.
+on stderr, after the retries' lines, naming the operation, the attempts and why they
+ended, then the error that ended them in about 200 characters of TigerGraph's own words
+(an HTML page by its title), so a cause such as "out of memory" is not cut. Any other
+error is raised with its traceback.
 
 `RUN` defaults to the built-in run's directory, `results/baseline/seed-42`.
 [Outputs](outputs.md) lists every file the commands write.

@@ -266,4 +266,4 @@ This code reads only the datasets and models it writes:
 | `Training queries require Mule_Pattern_Learner` | `GRAPHNAME` in `.env` names another graph |
 | A `cugraph_probe` warning | pylibcugraph or the GPU failed the probe; training continues with the torch sampler; run `mule check` and the `cuda` tests |
 | `TigerGraph is not answering yet (...): attempt 2, retrying in 6 s` | TigerGraph was briefly unavailable or resuming (a TigerGraph Cloud workspace says `starting workspace`); each operation waits up to `transport.max_outage_s` |
-| `mule train stopped: TigerGraph stayed unavailable.` on stderr | The retries ran out; the line names the operation, the attempts and the reason. Run the same command again once TigerGraph answers: an interrupted run resumes |
+| `mule train stopped: TigerGraph stayed unavailable.` on stderr | The retries ran out; the line names the operation, the attempts and why they ended, then the error that ended them as TigerGraph gave it. Run the same command again once TigerGraph answers: an interrupted run resumes |

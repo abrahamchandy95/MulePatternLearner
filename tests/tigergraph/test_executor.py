@@ -26,7 +26,9 @@ from mule_pattern_learner.tigergraph.executor import (
     TigerGraphExecutor,
     TigerGraphUnavailableError,
     TransientQueryError,
+    error_summary,
     failure_class,
+    failure_summary,
     short_reason,
 )
 
@@ -181,6 +183,93 @@ def test_retries_and_the_outage_that_ends_them_name_the_reason_without_the_page(
     }
     # The record keeps the error's start too, for whoever reads the file.
     assert retries[0]["error"].startswith("TigerGraphException: Cannot parse json: <html>")
+
+
+# TigerGraph's own words for a failure, longer than a retry's line keeps.
+OUT_OF_MEMORY = TigerGraphException(
+    "Runtime Error: the query fetch_training_context ran out of memory on partition 3"
+)
+URLLIB3_REFUSED = (
+    "HTTPSConnectionPool(host='tg.example', port=443): Max retries exceeded with url: "
+    "/restpp/query/x (Caused by NewConnectionError('<urllib3.connection.HTTPSConnection "
+    "object at 0x10>: Failed to establish a new connection: [Errno 61] Connection refused'))"
+)
+
+
+@pytest.mark.parametrize(
+    "error, summary",
+    [
+        (
+            OUT_OF_MEMORY,
+            "TigerGraphException: Runtime Error: the query fetch_training_context ran out of "
+            "memory on partition 3",
+        ),
+        (STARTING, "TigerGraphException: starting workspace"),
+        (
+            http_error(502, b"<html><head><title>502 Bad Gateway</title></head><p>nginx</p>"),
+            "HTTPError: bad gateway, HTTP 502",
+        ),
+        (
+            http_error(503, {"error": True, "message": "not ready", "code": "REST-0005"}),
+            "HTTPError: not ready, HTTP 503",
+        ),
+        (
+            http_error(504, b"upstream request timeout"),
+            "HTTPError: upstream request timeout, HTTP 504",
+        ),
+        (requests.ConnectionError(URLLIB3_REFUSED), "ConnectionError: connection refused"),
+        (
+            requests.ReadTimeout(
+                "HTTPSConnectionPool(host='tg.example', port=443): Read timed out. (read "
+                "timeout=330)"
+            ),
+            "ReadTimeout: read timed out",
+        ),
+        # A message of TigerGraph's own is kept, even where it says what timed out.
+        (
+            TigerGraphException("The query timed out after 300 s on partition 3", "REST-3002"),
+            "TigerGraphException: The query timed out after 300 s on partition 3",
+        ),
+        # About 200 characters of a longer message are kept.
+        (
+            TigerGraphException("word " * 60),
+            "TigerGraphException: " + ("word " * 39) + "wo...",
+        ),
+    ],
+)
+def test_the_error_that_ends_the_retries_keeps_its_cause_but_never_a_page(
+    error: BaseException, summary: str
+) -> None:
+    assert failure_summary(error) == summary
+    assert "<" not in summary and len(summary) < 230
+
+
+def test_retries_that_run_out_keep_the_cause_tigergraph_gave(tmp_path: Path) -> None:
+    events = tmp_path / "events.jsonl"
+    with recording(events):
+        tg = executor(FakeConn([OUT_OF_MEMORY] * 2))
+        with pytest.raises(TransientQueryError) as raised:
+            tg.run(CONTEXT_QUERY, {"node_ids": ["a"] * 512})
+    # The retry's line names the reason in a few words; the error keeps TigerGraph's.
+    (retry,) = read_events(events)
+    assert retry["reason"] == "Runtime Error: the query fetch_training_context ran out of..."
+    assert str(raised.value) == (
+        "fetch_training_context (512 keys) failed after 2 attempt(s) (suspected "
+        "deterministic failure, retried once): TigerGraphException: Runtime Error: the query "
+        "fetch_training_context ran out of memory on partition 3"
+    )
+    # A write has one attempt, so no retry records its error: the error itself names it.
+    conn = FakeConn([requests.ConnectionError(URLLIB3_REFUSED)])
+    with pytest.raises(TigerGraphUnavailableError) as raised:
+        executor(conn).gsql("CREATE QUERY q() {}", what="CREATE QUERY q", attempts=1)
+    assert str(raised.value) == (
+        "CREATE QUERY q failed after 1 attempt(s) (1 attempt(s) allowed): ConnectionError: "
+        "connection refused"
+    )
+    # A summary of that error, as a suite records the run it failed, keeps it whole.
+    whole = f"TigerGraphUnavailableError: {raised.value}"
+    assert error_summary(raised.value) == whole
+    assert error_summary(ValueError("x" * 300)) == f"ValueError: {'x' * 200}"
 
 
 def test_suspected_deterministic_failures_are_retried_once() -> None:

@@ -25,6 +25,7 @@ from .executor import (
     SERVER_TIMEOUT,
     ConnectionExecutor,
     TransientQueryError,
+    error_summary,
     failure_class,
 )
 from .gsql_text import calls, definitions, normalized, parameter_names, repository_queries
@@ -261,10 +262,12 @@ def install(
     except Exception as error:
         if not _unanswered(error):
             raise
+        # The request had one attempt, so no retry recorded its error: this record does.
         emit(
             {
                 "event": "install_unanswered",
                 "error": type(error).__name__,
+                "detail": error_summary(error),
                 "note": "polling the endpoint listing",
             }
         )

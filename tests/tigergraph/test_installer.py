@@ -200,6 +200,11 @@ def test_install_polls_endpoints_when_the_install_request_times_out(
         "installed",
     ]
     assert recorded[-1] == {"event": "installed", "installed": [CUTOFF_QUERY], "seconds": 60}
+    # The request has one attempt, so no retry recorded its error: its record does.
+    assert recorded[1]["detail"] == (
+        "ServerTimeoutError: installQueries failed after 1 attempt(s) (1 attempt(s) "
+        "allowed): ReadTimeout: no reply while the server compiles"
+    )
     # The install request waited up to the deadline for its answer.
     assert tg.client.timeouts == [installer.INSTALL_DEADLINE_S]
     # Still compiling at the deadline: an actionable timeout, for whichever command
