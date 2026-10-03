@@ -301,9 +301,9 @@ def records(run: Path) -> list[tuple[dict[str, Any], str | None]]:
         ),
         (
             {"event": "suite_stopped", "variant": "no_attention", "seed": 43, "step": "audit"}
-            | {"error": "TigerGraphUnavailableError: connect failed after 31 attempt(s)"},
+            | {"error": "TigerGraphUnavailableError: connect failed after 31 attempts"},
             "TigerGraph stayed unavailable, so the suite stops at no_attention seed 43 (audit): "
-            "TigerGraphUnavailableError: connect failed after 31 attempt(s)",
+            "TigerGraphUnavailableError: connect failed after 31 attempts",
         ),
     ]
 
@@ -392,3 +392,64 @@ def test_a_file_or_pipe_gets_no_progress_lines(capsys: pytest.CaptureFixture[str
     console.end_progress()
     show("a line")
     assert capsys.readouterr().out == "a line\n"
+
+
+def test_a_count_of_one_reads_in_the_singular(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    run = tmp_path / "results" / "baseline" / "seed-42"
+    plan = {"device": "cpu", "sampler_backend": "torch", "run": str(run), "epochs": 1}
+    epoch = {"event": "epoch", "epoch": 2, "loss": 0.1, "validation_ap": 0.5}
+    singular = [
+        (
+            {"event": "retry", "failure": "server_timeout", "attempt": 1, "retry_in_s": 3.2}
+            | {"operation": "fetch_training_context (1 key)", "reason": "query timeout exceeded"},
+            "TigerGraph timed out on fetch_training_context, 1 key (query timeout exceeded): "
+            "attempt 1, retrying in 3 s",
+        ),
+        (
+            {"event": "install", "stale": ["q1"], "up_to_date": ["q2"]},
+            "Installing 1 query on TigerGraph...",
+        ),
+        (
+            {"event": "install_wait", "awaiting": ["q1"], "elapsed_s": 30},
+            "Waiting for 1 query to compile: 30 s so far",
+        ),
+        ({"event": "installed", "installed": ["q1"], "seconds": 30}, "Installed 1 query in 30 s"),
+        ({"event": "drop_retired", "dropped": ["old_a"]}, "Dropped 1 retired query: old_a"),
+        (
+            {"event": "reveal", "labels": "revealed", "revealed": {"2": 1}},
+            "Revealed 1 known mule: 0 / 1 / 0 in train / validation / test",
+        ),
+        (
+            {"event": "start", **plan, "steps": 1, "patience": 1, "epoch": 0, "step": 0},
+            "Training on cpu (torch sampler) into results/baseline/seed-42: 1 step per epoch, "
+            "at most 1 epoch, early stop after 1 epoch without gain",
+        ),
+        (
+            epoch
+            | {"validation_roc_auc": 0.9, "epoch_seconds": 41.0}
+            | {"stopped": True, "best_epoch": 1},
+            "epoch  2  loss 0.100  validation AP 0.500  ROC AUC 0.900     41 s\n"
+            "early stop: no gain for 1 epoch",
+        ),
+        (
+            {"event": "audit", "split": "test", "date": "2025-01-01", "accounts": 1}
+            | {"rejected_accounts": 0},
+            "Audited test at 2025-01-01: 1 account scored, 0 rejected",
+        ),
+        (
+            {"event": "feature_table", "split": "test", "date": "2025-01-01", "accounts": 1}
+            | {"mules": 1, "rejected": 0},
+            "Feature table, test at 2025-01-01: 1 account, 1 mule, 0 rejected",
+        ),
+        # The noun keeps the width of "rows", so the times stay in one column.
+        (
+            {"event": "diagnose", "analysis": "features", "status": "written", "rows": 1}
+            | {"seconds": 41.2},
+            "features         written          1 row   41 s",
+        ),
+    ]
+    for record, text in singular:
+        assert event_text(record) == text, record

@@ -76,7 +76,7 @@ def test_accepted_scores_leave_rejected_roots_empty_and_refuse_non_finite_ones()
     )
     assert mask.tolist() == [True, False, True] and math.isnan(scores[1])
     assert scores[0] == 0.5 and scores[2] == pytest.approx(1 / (1 + math.exp(-2)))
-    with pytest.raises(ValueError, match="for 1 accepted validation roots"):
+    with pytest.raises(ValueError, match="for 1 accepted validation root$"):
         accepted_scores([torch.tensor([float("nan"), 0.0])], [np.ones(2, bool)], "validation")
     empty, none = accepted_scores([], [], "test")
     assert len(empty) == len(none) == 0

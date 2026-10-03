@@ -10,6 +10,7 @@ from typing import Any
 import numpy as np
 
 from ..data.contexts import ContextReader
+from ..runtime.console import plural
 
 # The counts of a set's rejected roots (rejection_counts), in the order runs report them.
 REJECTION_KEYS = ("requested", "rejected", "positive", "unlabeled")
@@ -51,7 +52,7 @@ def check_split_rejections(
     problem = None
     if exceeds_rejection_limit(rejected, positives, len(labels), limit):
         problem = (
-            f"{positives} observed positives among them"
+            f"{plural(positives, 'observed positive')} among them"
             if positives
             else f"above max_rejected_root_fraction={limit}"
         )
@@ -59,7 +60,8 @@ def check_split_rejections(
         problem = "validation no longer has both observed classes"
     if problem is not None:
         raise ValueError(
-            f"{split}: TigerGraph rejected {rejected} of {len(labels)} roots ({problem}); "
+            f"{split}: TigerGraph rejected {rejected} of {plural(len(labels), 'root')} "
+            f"({problem}); "
             f"statuses {dict(statuses)}"
         )
 
@@ -100,8 +102,9 @@ class TrainingRejections:
         rejected, positives = self.epoch["rejected"], self.epoch["positive"]
         if exceeds_rejection_limit(rejected, positives, requested, self.limit):
             raise ValueError(
-                f"Epoch {epoch + 1}: TigerGraph rejected {rejected} of {requested} training "
-                f"roots so far ({positives} observed positives; max_rejected_root_fraction="
+                f"Epoch {epoch + 1}: TigerGraph rejected {rejected} of "
+                f"{plural(requested, 'training root')} so far "
+                f"({plural(positives, 'observed positive')}; max_rejected_root_fraction="
                 f"{self.limit}); statuses {dict(statuses())}"
             )
 

@@ -240,7 +240,7 @@ def test_a_run_failed_by_retries_that_ran_out_records_their_cause(tmp_path: Path
     # The error as the executor raises it: the operation, the attempts and why they
     # ended, then TigerGraph's own words, past the 200 characters of another error.
     error = TransientQueryError(
-        "fetch_training_context (512 keys) failed after 2 attempt(s) (suspected "
+        "fetch_training_context (512 keys) failed after 2 attempts (suspected "
         "deterministic failure, retried once): TigerGraphException: Runtime Error: the query "
         "fetch_training_context ran out of memory on partition 3"
     )

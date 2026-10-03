@@ -426,10 +426,10 @@ def test_rejected_roots_fail_closed_by_default(
         training={"proxy_unlabeled_limit": 100},
         runtime={"max_rejected_root_fraction": 1.0},
     )
-    with pytest.raises(ValueError, match="1 observed positives"):
+    with pytest.raises(ValueError, match="1 observed positive among them"):
         fit(tmp_path, "pos", loose, contexts=FakeSource(loose, reject=frozenset({"A010"})))
     # A training positive (A015) fails the training epoch before validation.
-    with pytest.raises(ValueError, match=r"Epoch 1: .*training roots .*observed positives"):
+    with pytest.raises(ValueError, match=r"Epoch 1: .*training roots .*observed positive"):
         fit(tmp_path, "train", loose, contexts=FakeSource(loose, reject=frozenset({"A015"})))
     # Validation must keep both observed classes after its rejections.
     validation_positives = frozenset({"A010", "A025", "A040", "A055", "A070"})

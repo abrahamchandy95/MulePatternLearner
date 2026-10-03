@@ -45,6 +45,7 @@ from ..metrics import (
     weighted_metrics,
 )
 from ..paths import DATA_DIR, DatasetPaths, RunPaths
+from ..runtime.console import plural
 from ..runtime.progress import emit
 from .sample import AUDIT_NEGATIVES, audit_sample
 from .truth import checked_truth
@@ -272,8 +273,10 @@ def audit(
     if exceeds_rejection_limit(len(unscored), rejected_positives, len(selected), limit):
         examples = unscored.account_id.astype(str).head(20).tolist()
         raise ValueError(
-            f"TigerGraph rejected {len(unscored)} of {len(selected)} {split} audit accounts "
-            f"({rejected_positives} {split} positives; max_rejected_root_fraction={limit}); "
+            f"TigerGraph rejected {len(unscored)} of "
+            f"{plural(len(selected), f'{split} audit account')} "
+            f"({plural(rejected_positives, f'{split} positive')}; "
+            f"max_rejected_root_fraction={limit}); "
             f"statuses {summary['rejection_events_by_status']}; "
             f"first {examples}. Weighted metrics over the remaining accounts would describe "
             "a censored population, so no report was written"

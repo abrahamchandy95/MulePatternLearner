@@ -29,7 +29,7 @@ from ..contract.graph_schema import ContextKey
 from ..data.contexts import ContextReader, check_coverage
 from ..data.hub_registry import HubRegistry, warn_hub_stubs
 from ..model.build import Model, build_model, probabilities_from_logits
-from ..runtime.console import show_scoring
+from ..runtime.console import plural, show_scoring
 from ..runtime.device import choose_device, torch_runtime
 from ..runtime.workers import BatchPrefetcher
 from .saved_model import SavedModel
@@ -100,10 +100,8 @@ def accepted_scores(
         # One device-to-host copy per call.
         probabilities = probabilities_from_logits(torch.cat(logits))
         if not np.isfinite(probabilities).all():
-            raise ValueError(
-                f"Non-finite model probability for {int((~np.isfinite(probabilities)).sum())}"
-                f" accepted {label} roots"
-            )
+            roots = plural(int((~np.isfinite(probabilities)).sum()), f"accepted {label} root")
+            raise ValueError(f"Non-finite model probability for {roots}")
         scores[mask] = probabilities
     return scores, mask
 
