@@ -2,8 +2,9 @@
 
 Read-only. The accounts are the first of the built-in scope's population, chosen
 without labels, scored at the test cutoff. `mule check` covers the rest of the
-training path on the graph: one batch and one training step. The pair counts are analytics, so they
-are checked on the analytics context query, when it is installed.
+training path on the graph: one batch and one training step. The pair counts and the
+rolling windows are analytics, so they are checked on the analytics context query, when it
+is installed.
 """
 
 from __future__ import annotations
@@ -119,15 +120,42 @@ def test_the_seed_event_is_excluded_until_the_next_cutoff(
     assert any(m["event_id"] == event["event_id"] for m in after["messages"])
 
 
-def test_pair_gaps_and_counts_match_the_analytics_queries(
-    graph: TigerGraphExecutor, sampled: tuple[ContextKey, dict[str, Any]]
-) -> None:
+def skip_without_the_analytics_queries(graph: TigerGraphExecutor) -> None:
     problems = query_problems(graph, ANALYTICS_QUERY_FILES)
     if problems:
         pytest.skip(
             f"the analytics queries are not installed as the repository defines them "
             f"({problems}); install(executor, analytics=True) installs them"
         )
+
+
+def test_the_seed_event_enters_the_analytics_windows_at_the_next_cutoff(
+    graph: TigerGraphExecutor, sampled: tuple[ContextKey, dict[str, Any]]
+) -> None:
+    skip_without_the_analytics_queries(graph)
+    key, row = sampled
+    event = next(m for m in row["messages"] if m["relation"] in ("zelle_out", "payment_out"))
+    seq, event_ms = event["event_seq"], event["event_ts_ms"]
+    boundary = [
+        ContextKey("Account", key.node_id, seq, event_ms),
+        ContextKey("Account", key.node_id, seq + 1, event_ms),
+    ]
+    rows = checked_rows(graph.run(ANALYTICS_CONTEXT_QUERY, request(boundary, 1)))
+    before, after = sorted(rows, key=lambda value: value["request_index"])
+    # The last hour's outgoing payments gain the event, and its amount, one cutoff later.
+    counts = (before["features"].get("1h_out_count", 0), after["features"].get("1h_out_count", 0))
+    assert counts[1] - counts[0] == 1
+    amounts = (
+        before["features"].get("1h_out_amount", 0),
+        after["features"].get("1h_out_amount", 0),
+    )
+    assert abs(amounts[1] - amounts[0] - event["amount"]) < 1e-4
+
+
+def test_pair_gaps_and_counts_match_the_analytics_queries(
+    graph: TigerGraphExecutor, sampled: tuple[ContextKey, dict[str, Any]]
+) -> None:
+    skip_without_the_analytics_queries(graph)
     key, row = sampled
     # The same request of the analytics query samples the same messages, with their pair
     # window counts.

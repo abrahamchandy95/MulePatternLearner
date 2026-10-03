@@ -177,7 +177,8 @@ def test_account_features_match_the_reference(
     population: list[dict[str, Any]],
     text: str,
 ) -> None:
-    problems = query_problems(graph, (ANALYTICS_CONTEXT_FILE,))
+    # The repository text runs under INTERPRET whether or not the query is installed.
+    problems = query_problems(graph, (ANALYTICS_CONTEXT_FILE,)) if text == "installed" else {}
     if problems:
         pytest.skip(
             f"the analytics context query is not installed as the repository defines it "
