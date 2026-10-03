@@ -24,7 +24,7 @@ ANALYTICS_CONTRACT = "analytics_e00dc31245d4"
 # the graph's schema, so it keeps the name it was created with.
 SCOPE_VERTEX = "Temporal_Training_Scope"
 
-# The installed queries, by what they do (the owner decision on query names).
+# The installed queries, named by what they do (docs/architecture.md, Naming).
 CONTEXT_QUERY = "fetch_training_context"
 # The Fourier encoding the context query calls for every message age and gap.
 FOURIER_QUERY = "encode_fourier64"
@@ -47,8 +47,8 @@ ANALYTICS_CONTEXT_QUERY = "fetch_analytics_context"
 ZELLE_PAIR_QUERY = "encode_zelle_pair_gaps"
 PAYMENT_PAIR_QUERY = "encode_payment_pair_gaps"
 
-# The names the queries were installed under before the server step renamed them, and
-# the two it retired: the public Fourier wrapper, which only a deleted verification
+# The names the queries were installed under before they were named after what they do,
+# and the two queries retired then: the public Fourier wrapper, which only a deleted verification
 # script called, and the population query of the removed shared_history protocol.
 # `mule install` drops those still installed in this order, callers before the queries
 # they call, and no other query (tigergraph.installer.drop_retired).

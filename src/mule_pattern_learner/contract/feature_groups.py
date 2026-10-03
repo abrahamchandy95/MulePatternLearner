@@ -1,7 +1,7 @@
 """The feature groups the context query and the batches share, and the feature plan.
 
-FEATURE_GROUPS holds the groups of the built-in run and no others (the owner decision
-on feature groups), in the order that fixes column order. The pool groups and the hub
+FEATURE_GROUPS holds the groups of the built-in run and no others (the owner's decision
+in docs/architecture.md), in the order that fixes column order. The pool groups and the hub
 indicator are computed by the client; the others come from TigerGraph. The groups
 training does not read are analytics (contract.analytics_features).
 """

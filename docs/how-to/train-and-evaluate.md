@@ -114,10 +114,16 @@ named, and the others are still drawn.
 
 ## On the CUDA host
 
+A host that trained with earlier code starts from scratch: this code reads none of its
+datasets or models ([Datasets and models of earlier code](#datasets-and-models-of-earlier-code)),
+so leave `data/` and `results/` empty or move them aside.
+
 1. **Environment.** Linux x86_64 with an NVIDIA driver for CUDA 12 (525.60 or newer) or
    CUDA 13 (580.65 or newer), and Python 3.12 to 3.14.
-2. **torch and cuGraph.** For CUDA 12, the cu129 torch wheel, then the `cuda12` extra,
-   whose cuGraph wheels are on pypi.nvidia.com:
+2. **The code.** Pull `main` (`git switch main && git pull`), or clone the repository.
+3. **torch and cuGraph.** Install them again after the pull, so the `mule` command and
+   the extras match the code. For CUDA 12, the cu129 torch wheel, then the `cuda12`
+   extra, whose cuGraph wheels are on pypi.nvidia.com:
 
    ```bash
    pip install torch==2.13.0 --index-url https://download.pytorch.org/whl/cu129
@@ -131,16 +137,30 @@ named, and the others are still drawn.
    pip install -e '.[dev,cuda13]'
    ```
 
-3. **`.env`.** Copy it; nothing else is copied. The settings are built in, the known mules
+4. **`.env`.** Copy it; nothing else is copied. The settings are built in, the known mules
    are in TigerGraph, and the run prepares its own dataset.
-4. **Check cuGraph** on the GPU. The tests skip when cuGraph cannot run on the host; the
+5. **Check cuGraph** on the GPU. The tests skip when cuGraph cannot run on the host; the
    last one also needs the prepared dataset:
 
    ```bash
    python -m pytest -m cuda tests/integration/test_cugraph_sampler.py
    ```
 
-5. **Check, train, audit:** `mule check`, `mule train`, `mule evaluate`.
+6. **`mule check`.** Until the first `mule train` on a graph whose queries carry their
+   old names, it ends `not_ready`: the renamed queries are stale, the old names are listed
+   under `queries.retired`, and there is no dataset.
+7. **`mule train`.** Its first run installs the renamed queries (about 50 minutes; run it
+   again if the 45-minute wait runs out) and then drops the retired ones, prepares the
+   dataset (about 6 minutes) and trains the built-in run (about an hour). `mule check`
+   now ends `ready`.
+8. **`mule evaluate`, then `mule report`.**
+9. **The control experiments:** `python scripts/run_experiments.py`, then
+   `python scripts/run_experiments.py feature_drops`
+   ([Run the control experiments](run-control-experiments.md)).
+10. **`mule diagnose`.** Its first run installs the analytics queries, then
+    `python -m pytest -m graph` checks them ([Run the diagnostics](run-diagnostics.md)).
+11. **The cache cap.** Set `contract.bounds.CONTEXT_CACHE_ENTRIES` from the baseline
+    run's `contexts.distinct` ([Outputs](../reference/outputs.md)).
 
 If cuGraph fails its probe, training warns (`cugraph_probe`) and samples with the torch
 sampler, which draws from the same distribution.

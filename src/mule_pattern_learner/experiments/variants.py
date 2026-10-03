@@ -7,8 +7,8 @@ variant sets a seed, and none touches dataset.seed, dataset.split_seed or
 scope.reveal_salt. Every variant therefore trains on the base run's dataset, and seed 42
 of the baseline is the run `mule train` makes.
 
-Training reads only the built-in run's feature groups (the owner decision on feature
-groups), so a variant drops groups or changes the model, the loss or the training, and
+Training reads only the built-in run's feature groups (the owner's decision in
+docs/architecture.md), so a variant drops groups or changes the model, the loss or the training, and
 never adds a group: a group comes back into training only by moving it into the training
 query on purpose. The account-activity table the retired no_graph control asked about is
 a question for the diagnostics baselines, over the analytics features.

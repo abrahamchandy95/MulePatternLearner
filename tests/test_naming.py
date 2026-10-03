@@ -8,10 +8,10 @@ messages and the guides' text) is not.
 A name is split into words at underscores, hyphens, dots and case changes, and no
 word may be one of FORBIDDEN. The values the graph and the seeded draws hold keep their
 names; ALLOWED lists them, each with the reason it stays. The names the queries were
-installed under before the server step renamed them are contract.server.RETIRED_QUERIES,
-which `mule install` drops, so they are allowed from there. Names another library
-defines are that library's: the code only reads them (pylibcugraph's sampler), and the
-tests' imitation of pylibcugraph gives them as keyword arguments.
+installed under before they were renamed are contract.server.RETIRED_QUERIES, which
+`mule install` drops, so they are allowed from there. Names another library defines
+are that library's: the code only reads them (pylibcugraph's sampler), and the tests'
+imitation of pylibcugraph gives them as keyword arguments.
 """
 
 from __future__ import annotations

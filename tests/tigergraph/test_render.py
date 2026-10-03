@@ -123,7 +123,7 @@ def test_the_contract_is_derived_from_the_rendered_query(
 def test_the_training_query_computes_only_the_groups_training_reads(
     text: str, analytics: str
 ) -> None:
-    # The owner decision on feature groups: the training query has a flag for each group
+    # The owner's decision (docs/architecture.md): the training query has a flag for each group
     # TigerGraph computes of the built-in run, and nothing of the analytics groups.
     flags = re.findall(r"BOOL (include_\w+) =", signature(text))
     assert flags == list(FeaturePlan().query_flags()) == [f"include_{g}" for g in TRAINING_GROUPS]

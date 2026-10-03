@@ -245,7 +245,7 @@ def test_install_writes_run_once_through_the_executor() -> None:
 
 
 def old_query(name: str) -> str:
-    """An installed query of the code before the server step, under its old name."""
+    """An installed query of the code before the rename, under its old name."""
     return f"CREATE QUERY {name}(INT unused = 0) FOR GRAPH {GRAPH_NAME} SYNTAX V2 {{ PRINT 1; }}"
 
 
@@ -261,7 +261,7 @@ def drops(graph: FakeTigerGraph) -> list[str]:
 
 
 def test_install_drops_the_retired_queries_callers_first_and_nothing_else() -> None:
-    # A graph as the code before the server step left it: every old name installed,
+    # A graph as the code before the rename left it: every old name installed,
     # none of the new ones, and a query that is neither the repository's nor retired.
     old = {name: old_query(name) for name in RETIRED_QUERIES}
     graph = FakeTigerGraph(queries={**old, "match_parties": old_query("match_parties")})
