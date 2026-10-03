@@ -20,8 +20,7 @@ The study goes to `results/diagnostics/<dataset id>/`, beside the run. `mule dia
 prepares the dataset as `mule train` does (a ready one needs no connection), then reads
 the graph on one connection, after checking that it is still the dataset's frozen source.
 It is the only command that installs the analytics queries (`gsql/analytics/`), where
-their text differs; that install also drops the retired queries still installed, as every
-install does.
+their text differs.
 
 **The first run** installs the three analytics queries. `fetch_analytics_context` is the
 old all-groups context query under a new name, so expect a long install, of the order of

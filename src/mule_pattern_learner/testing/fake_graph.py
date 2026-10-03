@@ -470,6 +470,29 @@ def repository(queries: Mapping[str, str] | None) -> dict[str, str]:
     return dict(queries)
 
 
+# The calls between the retired queries, as the GSQL before the rename made them (commit
+# 08b487e): the Fourier wrapper, both pair encoders and the context query called the
+# Fourier values, and the reveal called its uniforms.
+RETIRED_CALLS = {
+    "temporal_training_context": "temporal_fourier64_values",
+    "temporal_fourier64": "temporal_fourier64_values",
+    "zelle_pair_time64": "temporal_fourier64_values",
+    "payment_pair_time64": "temporal_fourier64_values",
+    "temporal_reveal_mule_labels": "temporal_reveal_uniforms",
+}
+
+
+def retired_query(name: str, calls: str | None = None) -> str:
+    """A query as the code before the rename installed it: `name`, calling what it called.
+
+    It calls `calls` instead when given, which makes a query of someone else's that calls
+    a retired one.
+    """
+    callee = calls or RETIRED_CALLS.get(name)
+    body = f"{callee}(0); PRINT 1;" if callee else "PRINT 1;"
+    return f"CREATE QUERY {name}(INT unused = 0) FOR GRAPH {GRAPH_NAME} SYNTAX V2 {{ {body} }}"
+
+
 class FakeConnection:
     """The pyTigerGraph connection of a FakeTigerGraph: schema, counts and queries.
 
