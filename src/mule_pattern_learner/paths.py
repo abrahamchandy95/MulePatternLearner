@@ -57,6 +57,11 @@ class DatasetPaths:
         """The dataset's context cache on disk (data.context_cache.ContextCache)."""
         return self.root / "contexts"
 
+    @property
+    def events(self) -> Path:
+        """The records of the events its preparation emitted, one JSON object each."""
+        return self.root / "events.jsonl"
+
 
 def datasets(data: Path = DATA_DIR) -> list[DatasetPaths]:
     """Every dataset directory under data that holds a manifest, by name."""
@@ -104,7 +109,7 @@ class RunPaths:
 
     @property
     def events(self) -> Path:
-        """The structured lines the commands printed for this run, one JSON object each."""
+        """The records of the events the commands emitted for this run, one JSON object each."""
         return self.root / "events.jsonl"
 
     @property
@@ -186,6 +191,11 @@ class SuitePaths:
         return self.root / "comparison.csv"
 
     @property
+    def events(self) -> Path:
+        """The records of the events the suite emitted, outside its runs', one JSON object each."""
+        return self.root / "events.jsonl"
+
+    @property
     def plots(self) -> Path:
         """The directory of the suite's figures."""
         return self.root / "plots"
@@ -231,7 +241,7 @@ class DiagnosticsPaths:
 
     @property
     def events(self) -> Path:
-        """The structured lines `mule diagnose` printed for this study, one JSON object each."""
+        """The records of the events `mule diagnose` emitted for the study, one JSON object each."""
         return self.root / "events.jsonl"
 
     @property

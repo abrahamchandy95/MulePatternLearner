@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import replace
-import json
+from pathlib import Path
 import re
 from typing import Any
 
 import pytest
 import torch
 
+from mule_pattern_learner.artifacts import read_events
 from mule_pattern_learner.batching.assemble import build_batch
 from mule_pattern_learner.contract.feature_groups import CORE_GROUPS, FeaturePlan
+from mule_pattern_learner.runtime.progress import recording
 from mule_pattern_learner.sampling import backend, cugraph_sampler
 from mule_pattern_learner.sampling.backend import resolve_backend
 from mule_pattern_learner.sampling.cugraph_sampler import CuGraphProbe
@@ -32,28 +34,27 @@ def _fake_probes(monkeypatch: pytest.MonkeyPatch, probe: CuGraphProbe) -> list[i
     return calls
 
 
-def warnings_emitted(capsys: pytest.CaptureFixture[str]) -> list[dict[str, Any]]:
-    """The warning events printed since the last call."""
-    printed = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
-    return [record for record in printed if record["event"] == "warning"]
-
-
 def test_auto_backend_falls_back_to_torch_when_the_probe_fails(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     broken = CuGraphProbe(False, True, "RuntimeError: CUDA error: no kernel image")
     calls = _fake_probes(monkeypatch, broken)
-    assert resolve_backend(RESAMPLE, "cuda:1") == "torch"
-    (warning,) = warnings_emitted(capsys)
-    assert warning["warning"] == "cugraph_probe"
+    events = tmp_path / "events.jsonl"
+    with recording(events):
+        assert resolve_backend(RESAMPLE, "cuda:1") == "torch"
+    (warning,) = read_events(events)
+    assert (warning["event"], warning["warning"]) == ("warning", "cugraph_probe")
     assert re.search("no kernel image.*torch sampler", warning["message"])
+    # The console shows the message.
+    assert capsys.readouterr().out == f"Warning: {warning['message']}\n"
     with pytest.raises(RuntimeError, match="cannot run on cuda:1: RuntimeError: CUDA error"):
         resolve_backend(replace(RESAMPLE, backend="cugraph"), "cuda:1")
     assert calls == [1]  # probed once per process and device, then cached
     # cuGraph not installed at all: torch without a warning.
     _fake_probes(monkeypatch, CuGraphProbe(False, False, "ModuleNotFoundError: cupy"))
-    assert resolve_backend(RESAMPLE, "cuda:0") == "torch"
-    assert warnings_emitted(capsys) == []
+    with recording(events):
+        assert resolve_backend(RESAMPLE, "cuda:0") == "torch"
+    assert len(read_events(events)) == 1 and capsys.readouterr().out == ""
     calls = _fake_probes(monkeypatch, CuGraphProbe(True, True, "ok"))
     assert resolve_backend(RESAMPLE, "cuda:0") == "cugraph"
     assert resolve_backend(replace(RESAMPLE, backend="cugraph"), "cuda:0") == "cugraph"

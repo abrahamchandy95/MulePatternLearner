@@ -22,8 +22,8 @@ def score_accounts(run: RunPaths, accounts: Path, date: str | None = None) -> di
 
     The date defaults to the model's test cutoff, its last test date. The scores go to
     the run's scores/<file stem>_<date>.parquet and the ids TigerGraph rejects to
-    scores/<file stem>_<date>_rejected.txt, and the lines scoring prints are appended to
-    the run's events.jsonl. Existing outputs are refused before connecting; the
+    scores/<file stem>_<date>_rejected.txt, and the events of scoring are recorded in the
+    run's events.jsonl. Existing outputs are refused before connecting; the
     connection has the model's retry budgets, and its installed queries must be the
     repository's before any account is scored. The graph need not be the frozen source
     of a dataset, so the source has no disk tier.

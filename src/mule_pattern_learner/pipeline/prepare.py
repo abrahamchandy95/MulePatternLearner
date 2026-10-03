@@ -18,6 +18,7 @@ from ..config import DEFAULT_CONFIG, RunConfig
 from ..data.manifest import check_query_hashes, dataset_id, read_manifest, write_manifest
 from ..data.preparation import prepare
 from ..paths import DATA_DIR, DatasetPaths, datasets
+from ..runtime.progress import emit, recording
 from ..tigergraph.cutoffs import TigerGraphCutoffReader
 from ..tigergraph.hubs import TigerGraphHubReader
 from ..tigergraph.installer import drop_retired, install, undefined_queries
@@ -70,7 +71,9 @@ def prepare_dataset(
     first, on the session's connection if there is one: stale queries are installed,
     the scope is created if missing, and known mules are revealed if the graph has none.
     A dataset being prepared keeps its source id; with none, or several (the graph was
-    reloaded), the source id is read from the graph.
+    reloaded), the source id is read from the graph. The events of the scope, the reveal
+    and the preparation are recorded in the dataset's events.jsonl, and a `dataset` event
+    names the dataset ready for use, prepared or reused, with its known mules.
     """
     found = find_datasets(config, data)
     source_id: str | None = None
@@ -80,6 +83,7 @@ def prepare_dataset(
         check_query_hashes(manifest, dataset)
         if manifest["status"] == "ready":
             # The trainer re-verifies artifacts before use. No database connection is needed.
+            announce(dataset, manifest, "reused", session)
             return dataset
         source_id = manifest["source"]["source_id"]
     executor = session.executor() if session is not None else connect(config.transport)
@@ -89,22 +93,48 @@ def prepare_dataset(
         source_id = resolve_source_id(executor, config.scope.id, counts)
     dataset = DatasetPaths.of(dataset_id(source_id, config), data)
     split_seed = config.dataset.split_seed
-    ensure_scope(executor, config.scope, source_id=source_id, split_seed=split_seed)
-    # The reveal draws its splits from the scope partitions.
-    ensure_revealed_labels(executor, config.scope, config.dataset.dates)
-    counts = source_counts(executor)
-    result = prepare(
-        config,
-        source_id,
-        dataset,
-        counts,
-        TigerGraphObservedLabelReader(),
-        scope=TigerGraphScopeReader(executor),
-        cutoffs=TigerGraphCutoffReader(executor),
-        hub_reader=TigerGraphHubReader(executor),
-    )
-    if source_counts(executor) != counts:
-        result["status"] = "source_changed"
-        write_manifest(dataset, result)
-        raise ValueError("Graph counts changed; freeze ingestion and prepare a fresh dataset")
+    dataset.root.mkdir(parents=True, exist_ok=True)
+    with recording(dataset.events):
+        ensure_scope(executor, config.scope, source_id=source_id, split_seed=split_seed)
+        # The reveal draws its splits from the scope partitions.
+        ensure_revealed_labels(executor, config.scope, config.dataset.dates)
+        counts = source_counts(executor)
+        result = prepare(
+            config,
+            source_id,
+            dataset,
+            counts,
+            TigerGraphObservedLabelReader(),
+            scope=TigerGraphScopeReader(executor),
+            cutoffs=TigerGraphCutoffReader(executor),
+            hub_reader=TigerGraphHubReader(executor),
+        )
+        if source_counts(executor) != counts:
+            result["status"] = "source_changed"
+            write_manifest(dataset, result)
+            raise ValueError("Graph counts changed; freeze ingestion and prepare a fresh dataset")
+        announce(dataset, result, "prepared", session)
     return dataset
+
+
+def announce(
+    dataset: DatasetPaths, manifest: dict[str, Any], how: str, session: Session | None
+) -> None:
+    """Emit the `dataset` event of a ready dataset: its id, how it came and its known mules.
+
+    ``how`` is "prepared" for a dataset prepared now and "reused" for one found ready. A
+    session names each of its datasets once (Session.announced).
+    """
+    identity = dataset.root.name
+    if session is not None:
+        if identity in session.announced:
+            return
+        session.announced.add(identity)
+    emit(
+        {
+            "event": "dataset",
+            "dataset_id": identity,
+            "status": how,
+            "known_mules": manifest.get("known_mules"),
+        }
+    )

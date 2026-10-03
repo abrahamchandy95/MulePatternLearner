@@ -14,6 +14,7 @@ import pytest
 from mule_pattern_learner.artifacts import (
     keep_history,
     read_comparison,
+    read_events,
     read_run_provenance,
     read_summary,
     write_run_config,
@@ -107,10 +108,10 @@ def suite(results: Path, data: Path, names: tuple[str, ...] = (DROP.name,)) -> d
     return run_suite(names, base=BASE, seeds=SEEDS, results=results, data=data)
 
 
-def events(capsys: pytest.CaptureFixture[str], name: str) -> list[dict[str, Any]]:
-    """The lines the suite printed of one event."""
-    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line]
-    return [line for line in lines if line.get("event") == name]
+def events(results: Path, name: str) -> list[dict[str, Any]]:
+    """The records of one event the suite recorded in its events.jsonl."""
+    recorded = read_events(SuitePaths.of(DROP.name, results).events)
+    return [record for record in recorded if record["event"] == name]
 
 
 def files(root: Path) -> dict[str, int]:
@@ -129,10 +130,20 @@ def test_a_suite_trains_audits_and_compares_then_keeps_or_archives_what_it_has(
     assert {(r["action"], r["status"]) for r in result["runs"]} == {(TRAIN, COMPLETE)}
     assert result["status"] == COMPLETE and connections == [BASE.transport]
     assert graph.names().count(TRUTH_QUERY) == 1
-    (planned,) = events(capsys, "suite")
+    (planned,) = events(results, "suite")
     assert planned["runs"] == {
         v: {str(s): TRAIN for s in SEEDS} for v in (BASELINE.name, DROP.name)
     }
+    # Each run's training and audit finished, in order, with the numbers they saved.
+    finished = [(e["variant"], e["seed"], e["step"]) for e in events(results, "run_finished")]
+    assert finished == [(v, s, "train") for v, s in order] + [(v, s, "audit") for v, s in order]
+    assert all(e["validation_ap"] is not None for e in events(results, "run_finished")[4:])
+    # The console has the plan and a line for each of them, and no record.
+    shown = capsys.readouterr().out.splitlines()
+    dataset = result["dataset_id"][:12]
+    assert f"Suite {DROP.name} on dataset {dataset}: 4 runs, 4 to train" in shown
+    assert sum(" trained: best epoch " in line for line in shown) == 4
+    assert not any(line.startswith("{") for line in shown)
     # The run files, with their figures and audits.
     runs = [RunPaths.of(variant, seed, results) for variant, seed in order]
     drawn = {f"plots/{name}.png" for name in (*TRAINING_FIGURES, *AUDIT_FIGURES)}
@@ -166,11 +177,10 @@ def test_a_suite_trains_audits_and_compares_then_keeps_or_archives_what_it_has(
     moved = RunPaths.of(DROP.name, 43, results)
     other = DROP.config(BASE, 43).with_changes({"training": {"patience": 1}})
     write_run_config(moved.config, other, read_run_provenance(moved.config))
-    capsys.readouterr()
     redone = suite(results, data)
     assert [r["action"] for r in redone["runs"]] == [KEEP, KEEP, KEEP, ARCHIVE]
     assert redone["status"] == COMPLETE and audited(moved)
-    (archived,) = events(capsys, "run_archived")
+    (archived,) = events(results, "run_archived")
     assert archived["differs"] == ["training.patience"]
     kept_aside = RunPaths(Path(archived["archive"]))
     assert kept_aside.root.parent == results / "archive" / DROP.name / "seed-43"

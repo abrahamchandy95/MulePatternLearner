@@ -145,6 +145,65 @@ def error_summary(error: BaseException) -> str:
     return f"{type(error).__name__}: {' '.join(message.split())[:200]}"
 
 
+_PAGE_HEADING = re.compile(r"<(title|h1)[^>]*>(.*?)</\1>", re.IGNORECASE | re.DOTALL)
+_STATUS_HEADING = re.compile(r"(\d{3})\s+(.+)")
+# What a connection error says in the middle of the urllib3 text around it.
+_CONNECTION_FAILURE = re.compile(
+    r"connection (?:refused|reset|aborted)|remote end closed connection"
+    r"|name or service not known|nodename nor servname provided"
+    r"|temporary failure in name resolution|read timed out|timed out",
+    re.IGNORECASE,
+)
+
+
+def short_reason(error: BaseException, words: int = 8) -> str:
+    """Why a request failed, in a few words for a person: never an HTML page or a URL.
+
+    An HTML page gives its title or first heading, as a TigerGraph Cloud workspace that
+    is starting answers ("starting workspace"); a JSON body its message; a connection
+    error what failed; anything else its first ``words`` words. A known HTTP status is
+    added, from the response or from a page heading such as "502 Bad Gateway".
+    """
+    response = getattr(error, "response", None)
+    status = getattr(response, "status_code", None)
+    if isinstance(error, json.JSONDecodeError):
+        text = error.doc
+    elif response is not None and getattr(response, "content", None):
+        text = bytes(response.content[:4096]).decode("utf-8", "replace")
+    else:
+        text = str(getattr(error, "message", None) or error)
+    heading = _PAGE_HEADING.search(text)
+    if heading is not None:
+        reason = " ".join(heading.group(2).split())
+        coded = _STATUS_HEADING.fullmatch(reason)
+        if coded is not None:
+            status = status or int(coded.group(1))
+            reason = coded.group(2)
+        reason = reason.lower()
+    elif looks_like_html(text) or "<html" in text.lower():
+        reason = "an HTML page"
+    else:
+        try:
+            parsed = json.loads(text)
+        except ValueError:
+            parsed = None
+        if isinstance(parsed, dict) and parsed.get("message"):
+            text = str(parsed["message"])
+        failure = _CONNECTION_FAILURE.search(text)
+        if failure is not None:
+            reason = failure.group(0).lower()
+        else:
+            # requests words an HTTPError "502 Server Error: Bad Gateway for url: ...".
+            text = re.sub(r"\s+for url:.*", "", " ".join(text.split()))
+            text = re.sub(r"^\d{3} (?:Client|Server) Error: ", "", text)
+            kept = text.split()[:words]
+            reason = " ".join(kept) + ("..." if len(text.split()) > words else "")
+    if status is not None and reason in ("", str(status)):
+        return f"HTTP {status}"
+    reason = reason or type(error).__name__
+    return reason if status is None else f"{reason}, HTTP {status}"
+
+
 class QueryExecutor(Protocol):
     """Installed-query access with the keywords of TigerGraphExecutor.run.
 
@@ -314,7 +373,8 @@ class TigerGraphExecutor:
                         AVAILABILITY: TigerGraphUnavailableError,
                     }.get(kind, TransientQueryError)
                     raise failure(
-                        f"{label} failed after {total} attempt(s) ({reason}): {error_summary(error)}"
+                        f"{label} failed after {total} attempt(s) ({reason}): "
+                        f"{type(error).__name__}: {short_reason(error)}"
                     ) from error
                 if kind == AVAILABILITY:
                     outages += 1
@@ -333,6 +393,7 @@ class TigerGraphExecutor:
                         "attempt": total,
                         "retry_in_s": round(pause, 1),
                         "error": error_summary(error),
+                        "reason": short_reason(error),
                     }
                 )
                 self._sleep(pause)

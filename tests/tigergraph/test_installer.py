@@ -6,12 +6,14 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 import requests
 
+from mule_pattern_learner.artifacts import read_events
 from mule_pattern_learner.contract.server import (
     ANALYTICS_QUERY_FILES,
     CONTEXT_QUERY,
@@ -26,6 +28,7 @@ from mule_pattern_learner.contract.server import (
     TRAINING_QUERY_FILES,
 )
 from mule_pattern_learner.paths import GSQL_DIR
+from mule_pattern_learner.runtime.progress import recording
 from mule_pattern_learner.testing.fake_connection import executor
 from mule_pattern_learner.testing.fake_graph import RETIRED_CALLS, FakeTigerGraph, retired_query
 from mule_pattern_learner.tigergraph import gsql_text, installer
@@ -176,15 +179,27 @@ def test_install_creates_and_installs_only_stale_queries(monkeypatch: pytest.Mon
 
 
 def test_install_polls_endpoints_when_the_install_request_times_out(
-    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(installer, "TRAINING_QUERY_FILES", INSTALL_FILES)
     # Listing 1 finds the stale query; listings 2 and 3 still see it compiling.
     server = InstallServer(stale=(CUTOFF_QUERY,), mode="timeout", ready_after=3)
     tg = executor(server)
-    logs = installer.install(tg, sleep=tg.clock.sleep, clock=tg.clock.time, poll_s=30)
+    events = tmp_path / "events.jsonl"
+    with recording(events):
+        logs = installer.install(tg, sleep=tg.clock.sleep, clock=tg.clock.time, poll_s=30)
     assert logs["installed"] == [CUTOFF_QUERY] and logs["install"] is None
     assert tg.sleeps == [30, 30] and all(server.enabled.values())
+    # Its events say what it went through; the last names what it installed, and when.
+    recorded = read_events(events)
+    assert [event["event"] for event in recorded] == [
+        "install",
+        "install_unanswered",
+        "install_wait",
+        "install_wait",
+        "installed",
+    ]
+    assert recorded[-1] == {"event": "installed", "installed": [CUTOFF_QUERY], "seconds": 60}
     # The install request waited up to the deadline for its answer.
     assert tg.client.timeouts == [installer.INSTALL_DEADLINE_S]
     # Still compiling at the deadline: an actionable timeout, for whichever command

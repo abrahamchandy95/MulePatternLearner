@@ -212,7 +212,8 @@ def install(
     connection, gateway error), the endpoint listing is polled every `poll_s`
     seconds until every installed query is enabled or the deadline passes. A
     requestId, when a server returns one, is polled with getQueryInstallationStatus.
-    Success is decided by verify_sources, not by a status message.
+    Success is decided by verify_sources, not by a status message; an `installed` event
+    then names the queries installed and the seconds it took.
     """
     logs: dict[str, Any] = {}
     if not has_scope_vertex(executor):
@@ -295,6 +296,7 @@ def install(
         _await_enabled(executor, names, started, deadline_s, poll_s, sleep, clock)
     logs["install"] = status
     logs["verified"] = verify_sources(executor, files)
+    emit({"event": "installed", "installed": names, "seconds": round(clock() - started)})
     return logs
 
 
