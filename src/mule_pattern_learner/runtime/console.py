@@ -4,11 +4,12 @@ emit (runtime.progress) appends every event's full record to the recorded events
 and prints the line event_text gives it, chosen by the event's name (LINES): a line for
 what a person follows (retries, installs, preparation, the start of training, each
 epoch, audits, analyses, warnings) and nothing for the rest (running totals, batch
-counts, the progress of scoring), whose records are in the files. The progress of
-training steps and of a query install (PROGRESS) is rewritten in place on a terminal,
-and not printed at all when stdout is a file or a pipe, so a log holds no step lines.
-Other text for the console goes through show, which first clears a line being rewritten
-in place.
+counts, the records of scoring), whose records are in the files. The progress of
+training steps and of a query install (PROGRESS), and how far scoring has come
+(show_scoring: validation and test in training, an audit's sample, `mule score`), is
+rewritten in place on a terminal, and not printed at all when stdout is a file or a
+pipe, so a log holds no progress lines. Other text for the console goes through show,
+which first clears a line being rewritten in place.
 """
 
 from __future__ import annotations
@@ -65,6 +66,17 @@ def show_progress(text: str) -> None:
         stream.write("\r" + text.ljust(_SCREEN.progress))
         stream.flush()
         _SCREEN.progress = len(text)
+
+
+def show_scoring(what: str, done: int, total: int | None = None) -> None:
+    """Rewrite how far scoring has come in place on a terminal: scoring validation 640/2,011.
+
+    ``what`` names what is scored and ``done`` how many of its ``total`` accounts (the
+    count alone without one). Nothing is printed to a file or a pipe, and nothing is
+    recorded: the records of scoring are in the files.
+    """
+    of = "" if total is None else f"/{total:,}"
+    show_progress(f"scoring {what} {done:,}{of}")
 
 
 def end_progress() -> None:

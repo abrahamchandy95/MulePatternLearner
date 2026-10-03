@@ -16,6 +16,7 @@ from mule_pattern_learner.contract.clock import timestamp
 from mule_pattern_learner.contract.graph_schema import SPLIT_PHASE, ContextKey
 from mule_pattern_learner.evaluation.audit import audit, audit_inputs, audit_population
 from mule_pattern_learner.paths import RunPaths
+from mule_pattern_learner.runtime import console
 from mule_pattern_learner.testing.builders import (
     CUTOFFS,
     DATES,
@@ -60,7 +61,10 @@ def truth_of(accounts: pd.DataFrame) -> pd.DataFrame:
 
 @pytest.mark.parametrize("split", ["validation", "test"])
 def test_the_audit_scores_a_split_through_the_dataset_clock_and_hubs(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, split: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    split: str,
 ) -> None:
     config = unit_config(RUNTIME_CHANGES, runtime={"max_rejected_root_fraction": 0.1})
     dataset, _, accounts = prepared_dataset(tmp_path / "dataset", config, monkeypatch)
@@ -78,7 +82,13 @@ def test_the_audit_scores_a_split_through_the_dataset_clock_and_hubs(
     monkeypatch.setattr(assemble, "build_batch", record)
     inputs = audit_inputs(run, dataset=dataset, hubs=hub_registry())
     truth = truth_of(members)
+    # On a terminal the audit shows in place how much of its sample it has scored.
+    monkeypatch.setattr(console, "is_terminal", lambda: True)
     result = audit(inputs, split, truth=truth, scope=split_scope(members, split), contexts=source)
+    # The audit's line clears it.
+    shown = [part.rstrip() for part in capsys.readouterr().out.split("\r")]
+    assert shown[-3] == f"scoring the {split} audit sample {len(members)}/{len(members)}"
+    assert shown[-1].startswith(f"Audited {split} at ")
     # The split's cutoff clock and phase.
     (date,) = DATES[split]
     assert set(seen) == {(CUTOFFS[date], SPLIT_PHASE[split])}

@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 import torch
 
 from mule_pattern_learner.config import DEFAULT_CONFIG
@@ -20,6 +21,7 @@ from mule_pattern_learner.inference.rejections import rejection_summary
 from mule_pattern_learner.inference.saved_model import SavedModel
 from mule_pattern_learner.model.build import build_model
 from mule_pattern_learner.pipeline.connect import context_source
+from mule_pattern_learner.runtime import console
 from mule_pattern_learner.testing.builders import HUB, RUNTIME_CHANGES, saved_model, unit_config
 from mule_pattern_learner.testing.fake_graph import FakeSource, FakeTigerGraph
 from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffReader
@@ -31,7 +33,9 @@ def scoring_graph() -> FakeTigerGraph:
     return FakeTigerGraph(last_visible=lambda index, ms: 29_999, hubs=[(HUB, 30_000)])
 
 
-def test_score_new_writes_only_ok_rows_and_lists_rejected_ids(tmp_path: Path) -> None:
+def test_score_new_writes_only_ok_rows_and_lists_rejected_ids(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     config = unit_config(RUNTIME_CHANGES)
     model = saved_model(tmp_path / "model.pt", config)
     executor = scoring_graph()
@@ -41,6 +45,8 @@ def test_score_new_writes_only_ok_rows_and_lists_rejected_ids(tmp_path: Path) ->
     rejected_ids = ["ghost_1", "ghost_2"]
     output = tmp_path / "scores.parquet"
     rejected_file = tmp_path / "scores_rejected.txt"
+    # On a terminal scoring shows in place how many of the ids it has scored.
+    monkeypatch.setattr(console, "is_terminal", lambda: True)
     result = score_accounts.score_new_accounts(
         model,
         iter(ids),
@@ -50,7 +56,11 @@ def test_score_new_writes_only_ok_rows_and_lists_rejected_ids(tmp_path: Path) ->
         cutoffs=TigerGraphCutoffReader(executor),
         hub_reader=TigerGraphHubReader(executor),
         contexts=source,
+        total=len(ids),
     )
+    console.end_progress()
+    shown = capsys.readouterr().out
+    assert shown.rstrip().rsplit("\r", 1)[-1].rstrip() == f"scoring accounts 16/{len(ids)}"
     frame = pd.read_parquet(output)
     assert frame.account_id.tolist() == [v for v in ids if v not in rejected_ids]
     assert frame.score.between(0, 1).all() and (frame.date == "2025-01-01").all()

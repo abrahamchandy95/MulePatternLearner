@@ -12,7 +12,13 @@ import pytest
 
 from mule_pattern_learner.paths import REPOSITORY_ROOT
 from mule_pattern_learner.runtime import console
-from mule_pattern_learner.runtime.console import LINES, event_text, show, show_event
+from mule_pattern_learner.runtime.console import (
+    LINES,
+    event_text,
+    show,
+    show_event,
+    show_scoring,
+)
 
 
 class Terminal(io.StringIO):
@@ -324,10 +330,25 @@ def test_progress_is_rewritten_in_place_on_a_terminal(monkeypatch: pytest.Monkey
     )
 
 
+def test_scoring_is_rewritten_in_place_and_cleared_by_the_next_line(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    screen = Terminal()
+    monkeypatch.setattr(sys, "stdout", screen)
+    show_scoring("validation", 640, 2011)
+    show_scoring("accounts", 1280)
+    show("epoch  1  done")
+    first, second = "scoring validation 640/2,011", "scoring accounts 1,280"
+    assert screen.getvalue() == (
+        f"\r{first}\r{second.ljust(len(first))}\r{' ' * len(second)}\repoch  1  done\n"
+    )
+
+
 def test_a_file_or_pipe_gets_no_progress_lines(capsys: pytest.CaptureFixture[str]) -> None:
     step = {"event": "train", "epoch": 1, "step": 10, "steps": 100}
     show_event(step | {"loss": 0.5, "seconds_per_step": 2.0})
     show_event({"event": "install_wait", "installing": 12, "elapsed_s": 30})
+    show_scoring("validation", 640, 2011)
     console.end_progress()
     show("a line")
     assert capsys.readouterr().out == "a line\n"

@@ -14,9 +14,10 @@ The console shows what a person follows, and the files hold the rest:
   6 s"), an install starting and ending, what preparation found ("Dataset 1a2b3c4d5e6f: 20
   / 11 / 20 known mules in train / validation / test"), the start of training, one line
   per epoch, each audit and analysis, and warnings. On a terminal the training steps are
-  rewritten in place on one line ("epoch 3  step 60/100  loss 0.136  1.9 s/step"); when
-  stdout is a file or a pipe they are left out, so the log of `nohup mule train` has no
-  step lines.
+  rewritten in place on one line ("epoch 3  step 60/100  loss 0.136  1.9 s/step"), and so
+  is the scoring of validation and test, of an audit's sample and of `mule score`
+  ("scoring validation 640/2,011"), until the next line replaces it; when stdout is a
+  file or a pipe they are left out, so the log of `nohup mule train` has no step lines.
 - **A summary** when the command is done: a few lines of its result, described with each
   command below. No command prints JSON.
 - **The full records** stay in the files: every event's record, whole, in the

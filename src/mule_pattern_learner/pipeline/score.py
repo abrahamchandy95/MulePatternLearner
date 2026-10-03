@@ -26,7 +26,8 @@ def score_accounts(run: RunPaths, accounts: Path, date: str | None = None) -> di
     run's events.jsonl. Existing outputs are refused before connecting; the
     connection has the model's retry budgets, and its installed queries must be the
     repository's before any account is scored. The graph need not be the frozen source
-    of a dataset, so the source has no disk tier.
+    of a dataset, so the source has no disk tier. The ids are counted first, so a
+    terminal shows how many of them are scored so far.
     """
     if not accounts.is_file():
         raise FileNotFoundError(f"No account file {accounts}")
@@ -52,4 +53,5 @@ def score_accounts(run: RunPaths, accounts: Path, date: str | None = None) -> di
             contexts=context_source(executor, saved.config),
             cutoffs=TigerGraphCutoffReader(executor),
             hub_reader=TigerGraphHubReader(executor),
+            total=sum(1 for _ in read_account_ids(accounts)),
         )

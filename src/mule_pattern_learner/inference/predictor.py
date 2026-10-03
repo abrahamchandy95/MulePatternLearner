@@ -29,6 +29,7 @@ from ..contract.graph_schema import ContextKey
 from ..data.contexts import ContextReader, check_coverage
 from ..data.hub_registry import HubRegistry, warn_hub_stubs
 from ..model.build import Model, build_model, probabilities_from_logits
+from ..runtime.console import show_scoring
 from ..runtime.device import choose_device, torch_runtime
 from ..runtime.workers import BatchPrefetcher
 from .saved_model import SavedModel
@@ -196,11 +197,17 @@ class Predictor:
         )
 
     def stream(
-        self, batches: Iterable[list[ContextKey]]
+        self,
+        batches: Iterable[list[ContextKey]],
+        *,
+        shown: str | None = None,
+        total: int | None = None,
     ) -> Iterator[tuple[pd.DataFrame, list[ContextKey]]]:
         """Score key batches in order, prefetching the next ones on worker threads.
 
-        Integer batch statistics are summed into ``self.totals``.
+        Integer batch statistics are summed into ``self.totals``. With ``shown``, a
+        terminal shows in place how many of the ``total`` roots are scored so far
+        ("scoring <shown> 640/2,011", runtime.console.show_scoring).
         """
         scored = score_batches(
             self.model,
@@ -210,18 +217,29 @@ class Predictor:
             prefetch=self.prefetch,
             embeddings=True,
         )
+        done = 0
         with contextlib.closing(scored):
             for item in scored:
                 self.totals.update(batch_counts(item.prepared.stats))
+                if shown is not None:
+                    done += len(item.prepared.requested)
+                    show_scoring(shown, done, total)
                 yield self.frame(item), item.prepared.rejected
 
     def score_keys(
-        self, batches: Iterable[list[ContextKey]]
+        self,
+        batches: Iterable[list[ContextKey]],
+        *,
+        shown: str | None = None,
+        total: int | None = None,
     ) -> tuple[list[pd.DataFrame], list[str]]:
-        """Frames of the accepted roots and the node IDs of the rejected ones, in order."""
+        """Frames of the accepted roots and the node IDs of the rejected ones, in order.
+
+        ``shown`` and ``total`` give the progress a terminal shows, as in stream.
+        """
         frames: list[pd.DataFrame] = []
         rejected: list[str] = []
-        for frame, bad in self.stream(batches):
+        for frame, bad in self.stream(batches, shown=shown, total=total):
             frames.append(frame)
             rejected.extend(key.node_id for key in bad)
         return frames, rejected
