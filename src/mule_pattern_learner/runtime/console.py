@@ -13,7 +13,7 @@ in place.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 import sys
 import threading
@@ -126,6 +126,29 @@ def brief(text: str, length: int = 100) -> str:
 def by_split(counts: Mapping[str, Any]) -> str:
     """Counts of train, validation and test: 20 / 11 / 20."""
     return " / ".join(count(counts.get(split, 0)) for split in SPLITS)
+
+
+def estimate(value: Any, interval: Sequence[Any] | None) -> str:
+    """A metric with its interval, if it has one: 0.312 [0.251, 0.371]."""
+    if not interval:
+        return number(value)
+    low, high = interval
+    return f"{number(value)} [{number(low)}, {number(high)}]"
+
+
+def table(rows: Sequence[Sequence[str]], indent: int = 2) -> list[str]:
+    """Rows as aligned lines: the first column to the left, the others to the right."""
+    widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]))]
+    return [
+        (
+            " " * indent
+            + "  ".join(
+                cell.ljust(width) if i == 0 else cell.rjust(width)
+                for i, (cell, width) in enumerate(zip(row, widths, strict=True))
+            )
+        ).rstrip()
+        for row in rows
+    ]
 
 
 # The line of each event, by its name.

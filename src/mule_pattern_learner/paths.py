@@ -259,6 +259,11 @@ class DiagnosticsPaths:
         return self.root / "report.md"
 
 
+def check_report(results: Path = RESULTS_DIR) -> Path:
+    """The full report of the last `mule check`, which its console summary points to."""
+    return results / "check.json"
+
+
 def archive_dir(results: Path = RESULTS_DIR) -> Path:
     """Where results whose settings changed are moved; nothing there is deleted."""
     return results / "archive"

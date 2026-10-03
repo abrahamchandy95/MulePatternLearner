@@ -29,22 +29,32 @@ when a figure does; the next suite keeps the run, and `mule report` redraws its 
 
 The suite's own events (the plan, each run's step that finished or failed, the archives,
 an outage) and those of the dataset's preparation are recorded in the suite's
-events.jsonl; each run's go to the run's.
+events.jsonl; each run's go to the run's. suite_summary is what the experiments script
+shows at the end: how the suite ended, its runs' errors, the top of its comparison
+(ranked by validation audit AP, as report.md ranks it) and where its report is.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections import Counter
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from functools import partial
+import math
 from pathlib import Path
 import shutil
 from typing import Any
 
 import numpy as np
 
-from ..artifacts import read_history, read_json, read_run_config, read_run_provenance
+from ..artifacts import (
+    read_comparison,
+    read_history,
+    read_json,
+    read_run_config,
+    read_run_provenance,
+)
 from ..config import DEFAULT_CONFIG, RunConfig
 from ..contract.graph_schema import HELD_OUT_SPLITS
 from ..data.manifest import dataset_id
@@ -55,6 +65,7 @@ from ..pipeline.evaluate import SharedTruth, evaluate_run
 from ..pipeline.prepare import prepare_dataset
 from ..pipeline.train import train_run
 from ..reporting.suite_report import write_suite_report
+from ..runtime.console import brief, estimate, number, plural, shown_path, table
 from ..runtime.progress import emit, recording
 from ..tigergraph.executor import TigerGraphUnavailableError, error_summary
 from ..training.checkpoint import changed_settings, run_started
@@ -376,3 +387,58 @@ def _run(
         **tables,
         **report,
     }
+
+
+# The variants a suite's summary lists; report.md ranks them all.
+TOP = 10
+
+
+def _missing(value: Any) -> bool:
+    return value is None or (isinstance(value, float) and math.isnan(value))
+
+
+def _estimate(row: Mapping[str, Any], name: str) -> str:
+    """A comparison column with its interval columns, as the summary shows it."""
+    value, low, high = row[name], row[f"{name}_low"], row[f"{name}_high"]
+    if _missing(value):
+        return ""
+    return estimate(value, None if _missing(low) or _missing(high) else [low, high])
+
+
+def suite_summary(result: Mapping[str, Any], top: int = TOP) -> str:
+    """A suite's status and runs, its best variants on validation, and its report."""
+    runs = result["runs"]
+    statuses = Counter(run["status"] for run in runs)
+    counted = ", ".join(f"{n} {status}" for status, n in statuses.items())
+    lines = [f"Suite {result['suite']} {result['status']}: {plural(len(runs), 'run')}, {counted}"]
+    if result.get("stopped_by"):
+        lines.append(
+            f"  stopped because TigerGraph stayed unavailable: {brief(result['stopped_by'])}"
+        )
+    for run in runs:
+        if run["error"]:
+            lines.append(f"  {run['variant']} seed {run['seed']}: {brief(run['error'])}")
+    suite = SuitePaths(Path(result["directory"]))
+    if suite.comparison.exists():
+        comparison = read_comparison(suite.comparison)
+        ranked = comparison.sort_values("validation_ap", ascending=False, na_position="last")
+        rows = [["variant", "seeds", "validation AP", "delta from the baseline", "test AP"]]
+        for row in ranked.head(top).to_dict(orient="records"):
+            row = {str(key): value for key, value in row.items()}
+            rows.append(
+                [
+                    str(row["variant"]),
+                    str(row["seeds"]) or "none",
+                    _estimate(row, "validation_ap"),
+                    _estimate(row, "validation_ap_delta"),
+                    number(row["test_ap"]),
+                ]
+            )
+        lines += ["Variants ranked by their validation audit AP, with 90% intervals:", *table(rows)]
+        if len(ranked) > top:
+            lines.append(f"  and {len(ranked) - top} more, in report.md")
+    lines.append(
+        f"Report: {shown_path(suite.report)}, beside summary.csv, comparison.csv, "
+        "events.jsonl and plots/"
+    )
+    return "\n".join(lines)
