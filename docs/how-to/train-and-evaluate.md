@@ -116,7 +116,10 @@ named, and the others are still drawn.
 
 A host that trained with earlier code starts from scratch: this code reads none of its
 datasets or models ([Datasets and models of earlier code](#datasets-and-models-of-earlier-code)),
-so leave `data/` and `results/` empty or move them aside.
+so leave `data/` and `results/` empty or move them aside, but for `results/archive/`, which
+holds the archived diagnostic study and is never read. The README's
+[Starting again on the CUDA host](../../README.md#starting-again-on-the-cuda-host) says
+what to do with the earlier code's own folders.
 
 1. **Environment.** Linux x86_64 with an NVIDIA driver for CUDA 12 (525.60 or newer) or
    CUDA 13 (580.65 or newer), and Python 3.12 to 3.14.

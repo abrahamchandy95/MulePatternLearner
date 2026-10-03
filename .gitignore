@@ -142,12 +142,15 @@ desktop.ini
 *.JSON
 *.JSONL
 *.JSON5
+# What this code writes: prepared datasets, and every output.
 /data/
+/results/
+# What the earlier code wrote, which only the owners' machines hold; the README says how
+# to move it out (Starting again on the CUDA host).
 /models/
 /artifacts/
 /outputs/
 /runs/
-/results/
 /logs/
 /docs/experiments/
 *.sqlite
