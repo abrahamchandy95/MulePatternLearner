@@ -22,7 +22,10 @@ An error of one run's own is recorded against it and the suite goes on. An outag
 since every later run would fail the same way; the tables and the report are still
 written from the runs there are. An error while preparing the dataset, an outage
 included, stops the suite before any run, as it would `mule train`. The result's status
-is complete only when every run is trained and audited.
+is complete only when every run is trained and audited and none recorded an error. A
+run whose step failed after its numbers were saved (a training figure, say) is complete
+in the tables, with its error beside it, and the suite then fails, as `mule train` fails
+when a figure does; the next suite keeps the run, and `mule report` redraws its figures.
 """
 
 from __future__ import annotations
@@ -75,7 +78,11 @@ class PlannedRun:
     errors: list[str] = field(default_factory=list[str])
 
     def outcome(self, stopped: bool) -> SuiteRun:
-        """The run's record for the tables: complete, failed on its own, or stopped."""
+        """The run's record for the tables: complete, failed on its own, or stopped.
+
+        A run is complete once it is audited, even when a step of its own failed after its
+        numbers were saved; its error is kept beside it.
+        """
         if audited(self.paths):
             status = COMPLETE
         elif self.errors:
@@ -296,7 +303,8 @@ def run_suite(
     if stopped is not None:
         status = STOPPED
     else:
-        status = COMPLETE if all(o.status == COMPLETE for o in outcomes) else FAILED
+        clean = all(o.status == COMPLETE and o.error is None for o in outcomes)
+        status = COMPLETE if clean else FAILED
     return {
         "suite": suite_name,
         "directory": str(suite.root),

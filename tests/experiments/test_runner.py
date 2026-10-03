@@ -38,6 +38,7 @@ from mule_pattern_learner.paths import RunPaths, SuitePaths
 from mule_pattern_learner.pipeline import connect as pipeline_connect
 from mule_pattern_learner.pipeline import evaluate as pipeline_evaluate
 from mule_pattern_learner.pipeline import prepare as pipeline_prepare
+from mule_pattern_learner.pipeline import train as pipeline_train
 from mule_pattern_learner.reporting.report import AUDIT_FIGURES, SUITE_FIGURES, TRAINING_FIGURES
 from mule_pattern_learner.testing.builders import (
     ground_truth_rows,
@@ -196,6 +197,31 @@ def test_a_variant_that_fails_on_its_own_fails_alone(
     assert result["status"] == FAILED
     comparison = read_comparison(SuitePaths.of(DROP.name, results).comparison)
     assert comparison.seeds.tolist() == ["42", ""]
+
+
+def test_a_run_whose_figures_fail_is_complete_and_the_suite_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    suite_graph(monkeypatch)
+    real = pipeline_train.write_training_report
+
+    def drawing(run: RunPaths) -> None:
+        real(run)
+        if run.root.parent.name == DROP.name:
+            raise RuntimeError("a figure failed")
+
+    monkeypatch.setattr(pipeline_train, "write_training_report", drawing)
+    results = tmp_path / "results"
+    result = run_suite(
+        (DROP.name,), base=BASE, seeds=(42,), results=results, data=tmp_path / "data"
+    )
+    outcomes = {r["variant"]: (r["status"], r["error"]) for r in result["runs"]}
+    # Its numbers are intact, so it is audited and compared, with its error beside it.
+    assert outcomes[BASELINE.name] == (COMPLETE, None)
+    assert outcomes[DROP.name] == (COMPLETE, "train: RuntimeError: a figure failed")
+    assert result["status"] == FAILED
+    comparison = read_comparison(SuitePaths.of(DROP.name, results).comparison)
+    assert comparison.seeds.tolist() == ["42", "42"]
 
 
 def test_an_outage_stops_the_suite_and_the_tables_say_so(
