@@ -108,8 +108,9 @@ type = "layers"
 containers = ["mule_pattern_learner"]
 layers = [
     "cli",
-    "experiments | diagnostics",
+    "experiments",
     "pipeline",
+    "diagnostics",
     "training | evaluation | reporting | tigergraph",
     "inference",
     "batching",
@@ -273,7 +274,7 @@ source_modules = [
     "mule_pattern_learner.reporting",
 ]
 forbidden_modules = ["mule_pattern_learner.reference"]
-# cli reaches reference only through diagnostics
+# cli and pipeline.diagnose reach reference only through diagnostics
 allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]

@@ -81,8 +81,9 @@ layers below it, and modules separated by `|` are independent of each other:
 
 ```
 cli                                              entry point
-experiments | diagnostics                        research use cases
+experiments                                      the control experiments
 pipeline                                         composition root: the only place adapters are built
+diagnostics                                      the diagnostic study, on its own ports
 training | evaluation | reporting | tigergraph   use cases, figures, the TigerGraph adapter
 inference                                        the saved model, the one scoring loop
 batching                                         contexts to the model's inputs
@@ -109,9 +110,9 @@ contract                                         definitions shared with GSQL
 | `evaluation` | The truth port, the audit sample and the ground-truth audit |
 | `reporting` | Every figure and `report.md`, from saved files only; the only package that imports matplotlib |
 | `tigergraph` | The only code that speaks REST or GSQL: the connection, the retrying executor, the installer, the query renderer and one adapter per port |
-| `pipeline` | The use cases the commands run (prepare, train, evaluate, score, check, the study's graph reads), and the only place adapters are built |
+| `pipeline` | The use cases the commands run (prepare, train, evaluate, score, check, and the study with its graph reads), and the only place adapters are built |
 | `experiments` | The variants, the suite runner and the comparison tables |
-| `diagnostics` | The diagnostic study's feature table and analyses |
+| `diagnostics` | The diagnostic study's feature table and analyses, on ports that `pipeline.diagnose` fills |
 | `cli` | `mule`: parses the command, calls the use case, prints one JSON result |
 | `reference` | CPU mirrors of the GSQL features, the label reveal and the batch features, used by the tests and by `diagnostics` |
 | `testing` | The fakes and builders the tests share |
@@ -125,7 +126,11 @@ The rules behind the layers:
 - **The pipeline is the composition root.** Only `pipeline` builds adapters, with the
   configuration's retry budgets; `pipeline.connect` builds every connection and every
   context source. The command line and the experiment runner both call
-  `pipeline.train.train_run` and `pipeline.evaluate.evaluate_run`.
+  `pipeline.train.train_run` and `pipeline.evaluate.evaluate_run`, and neither builds an
+  adapter: the command line parses, calls a use case and prints, and the runner opens a
+  `pipeline.connect.Session` and a `pipeline.evaluate.SharedTruth` on it, which build
+  their adapters inside `pipeline`. From `tigergraph` the runner imports only the outage
+  error that stops a suite (`TigerGraphUnavailableError`) and the summary of an error.
 - **Graph writes** (the install, the scope's creation, the reveal) happen only in
   `pipeline.prepare`, `pipeline.diagnose` and `tigergraph`; `data.preparation` gets read
   ports only.
@@ -161,16 +166,16 @@ vertex counts, scope headers, and creates, installs and drops queries. The execu
 protocols belong to `tigergraph` itself, since only adapters run queries; `FakeTigerGraph`
 behind the real adapters is what the tests use.
 
-**The study is composed by the command line.** `diagnostics` may not import `pipeline`
-(the contract "Use cases reach TigerGraph only through ports" checks indirect imports), so
-`cli.diagnose_built_in` prepares the dataset with `pipeline.prepare.prepare_dataset` on a
-`pipeline.connect.Session` and hands `diagnostics.study.diagnose` a
-`pipeline.diagnose.TigerGraphStudyReader` on the same session. The study reads the graph
-only through that port: `oracle()` (a `TruthReader`, read once), `scope()`, `contexts()`
-(with the dataset's disk tier), `analytics()`, `reveal_inputs()` and
-`reveal_parameters()`. The reader checks the frozen source on its first read, and
-installs the analytics queries before it hands out the analytics fetcher, so `mule
-diagnose` is the only command that installs them.
+**The study is composed by the pipeline.** `diagnostics` sits below `pipeline` and may
+import neither it nor `tigergraph` (the contract "Use cases reach TigerGraph only through
+ports" checks indirect imports), so `pipeline.diagnose.diagnose_built_in` prepares the
+dataset with `pipeline.prepare.prepare_dataset` on a `pipeline.connect.Session` and hands
+`diagnostics.study.diagnose` a `pipeline.diagnose.TigerGraphStudyReader` on the same
+session. The study reads the graph only through that port: `oracle()` (a `TruthReader`,
+read once), `scope()`, `contexts()` (with the dataset's disk tier), `analytics()`,
+`reveal_inputs()` and `reveal_parameters()`. The reader checks the frozen source on its
+first read, and installs the analytics queries before it hands out the analytics
+fetcher, so `mule diagnose` is the only command that installs them.
 
 **A suite shares one connection.** `pipeline.connect.Session` opens a single connection
 the first time a use case needs the graph; `prepare_dataset`, `train_run` and
@@ -190,7 +195,7 @@ import-linter enforces the layers in the gate (`lint-imports`, configured in
 | Only reporting draws | No other package imports matplotlib; the pipeline, the command line, the experiments and the diagnostics reach it only by calling `reporting` |
 | Reporting reads files, not models or the graph | `reporting` imports neither torch nor `model`, `inference` or `training` |
 | Fakes stay out of the package | No package imports `testing` |
-| Only diagnostics uses the verification mirrors | No package but `diagnostics` imports `reference`; the command line reaches it only through `diagnostics` |
+| Only diagnostics uses the verification mirrors | No package but `diagnostics` imports `reference`; the command line and `pipeline.diagnose` reach it only through `diagnostics` |
 | The model knows nothing about storage | `model` imports neither pandas, pyarrow, requests nor `data` |
 
 import-linter checks only the source modules a contract names, so

@@ -146,35 +146,6 @@ def test_each_command_runs_its_use_case_and_prints_one_json_result(
         assert json.loads(capsys.readouterr().out) == {"status": status}
 
 
-def test_diagnose_studies_the_built_in_run_on_its_dataset_with_one_session(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    dataset = DatasetPaths.of("id", tmp_path / "data")
-    prepared: list[object] = []
-    studied: list[dict[str, Any]] = []
-
-    def prepare(c: RunConfig, *, session: object) -> DatasetPaths:
-        assert c is DEFAULT_CONFIG
-        prepared.append(session)
-        return dataset
-
-    def diagnose(names: tuple[str, ...], **kwargs: Any) -> dict[str, Any]:
-        studied.append({"names": names, **kwargs})
-        return {"status": "complete"}
-
-    monkeypatch.setattr(cli, "prepare_dataset", prepare)
-    monkeypatch.setattr(cli, "diagnose", diagnose)
-    assert cli.diagnose_built_in("drift") == {"status": "complete"}
-    (study,) = studied
-    assert study["names"] == ("drift",) and study["run"] == pipeline_train.BASELINE_RUN
-    assert study["config"] is DEFAULT_CONFIG and study["dataset"] == dataset
-    # The study's graph reads use the session the dataset was prepared on.
-    (session,) = prepared
-    assert study["graph"].session is session and study["graph"].dataset == dataset
-    cli.diagnose_built_in(None)
-    assert studied[-1]["names"] == cli.ANALYSES
-
-
 def test_train_prepares_then_trains_or_resumes_the_baseline_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
