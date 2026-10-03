@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import matplotlib
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.figure import Figure
+
 from mule_pattern_learner.reporting import style
 
 
@@ -26,3 +30,19 @@ def test_numbers_print_as_counts_shares_and_intervals() -> None:
     ]
     assert style.estimate(0.134, [0.081, 0.212]) == "0.134 (0.081 to 0.212)"
     assert style.estimate(0.134, None) == "0.134"
+
+
+def test_a_legend_below_clears_tick_labels_of_several_lines() -> None:
+    with matplotlib.rc_context(style.RC):
+        figure = Figure(figsize=style.PANEL, layout="constrained")
+        FigureCanvasAgg(figure)
+        ax = figure.add_subplot()
+        ax.bar([0, 1], [1, 2], label="bars")
+        ax.set_xticks([0, 1], ["two\nlines", "and\nmore"])
+        ax.set_xlabel("x")
+        style.legend_below(ax, *ax.get_legend_handles_labels())
+        figure.draw_without_rendering()
+        legend = ax.get_legend()
+        assert legend is not None
+        # Display coordinates grow upward: the legend's top is below the x label's bottom.
+        assert legend.get_window_extent().y1 < ax.xaxis.label.get_window_extent().y0

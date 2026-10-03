@@ -20,13 +20,25 @@ import numpy as np
 import pandas as pd
 
 from ..metrics import REVIEW_BUDGETS, budget_name
-from .comparison import PURPOSES, legend_below
+from .comparison import PURPOSES
 from .ranking import share_label
-from .style import BASELINE, MEASURES, MUTED, SPLIT_COLOURS, SURFACE, measure, number
+from .style import (
+    BASELINE,
+    MEASURES,
+    MUTED,
+    SPLIT_COLOURS,
+    SURFACE,
+    legend_below,
+    measure,
+    number,
+)
 
 # The splits of the tables, in drawing order, and their colours; train is grey.
 SPLITS = ("train", "validation", "test")
 COLOURS = {"train": MUTED, **SPLIT_COLOURS}
+# How far each split's dot sits from its row's middle (rows are 1 apart), so equal values
+# of two splits stay apart.
+ROW_OFFSETS = {"train": 0.0, "validation": 0.14, "test": -0.14}
 # The learners of the baselines, drift and learning curve, and how the figures name them.
 LEARNERS = {"lr": "logistic regression", "hgb": "gradient-boosted trees"}
 # The rows a figure of one row per feature or baseline shows at most.
@@ -94,7 +106,8 @@ def plot_univariate(ax: Axes, table: pd.DataFrame, *, count: int = FEATURE_ROWS)
     """Each feature alone: its weighted ROC AUC per split, the strongest on validation first.
 
     A feature left of 0.5 is lower for mules. Train is hollow and grey: it fixed each
-    feature's direction for the AP in the table.
+    feature's direction for the AP in the table. Within a row validation sits above and
+    test below (ROW_OFFSETS), so equal values stay visible.
     """
     names = strongest_features(table, count)
     auc = table[table.metric == "roc_auc"].pivot_table(
@@ -104,7 +117,7 @@ def plot_univariate(ax: Axes, table: pd.DataFrame, *, count: int = FEATURE_ROWS)
     for split in SPLITS:
         if split in auc.columns:
             values = auc.reindex(names)[split].to_numpy(np.float64)
-            ax.plot(values, y, **_dot(COLOURS[split], hollow=split == "train"))
+            ax.plot(values, y + ROW_OFFSETS[split], **_dot(COLOURS[split], hollow=split == "train"))
     ax.axvline(0.5, color=MUTED, linestyle="--", linewidth=1.0)
     ax.set_xlim(0, 1)
     ax.set_xlabel("Weighted ROC AUC of the raw value (below 0.5: lower for mules)")
@@ -137,7 +150,7 @@ def plot_drift(ax: Axes, table: pd.DataFrame, *, count: int = SHIFT_ROWS) -> Axe
     for split in ("validation", "test"):
         if split in smd.columns:
             values = smd.reindex(names)[split].to_numpy(np.float64)
-            ax.plot(values, y, **_dot(COLOURS[split]))
+            ax.plot(values, y + ROW_OFFSETS[split], **_dot(COLOURS[split]))
             drawn += values[np.isfinite(values)].tolist()
     ax.axvline(0.0, color=BASELINE, linewidth=1.0, zorder=1)
     for edge in (-SMALL_SMD, SMALL_SMD):

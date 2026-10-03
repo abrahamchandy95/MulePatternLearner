@@ -20,7 +20,17 @@ import numpy as np
 from numpy.typing import NDArray
 import pandas as pd
 
-from .style import AXIS, INK, MEASURES, MUTED, SECONDARY_INK, SURFACE, measure, number
+from .style import (
+    AXIS,
+    INK,
+    MEASURES,
+    MUTED,
+    SECONDARY_INK,
+    SURFACE,
+    legend_below,
+    measure,
+    number,
+)
 
 
 def training_position(history: pd.DataFrame) -> NDArray[np.float64]:
@@ -149,7 +159,8 @@ def plot_validation_ranking(ax: Axes, epochs: pd.DataFrame, prevalence: float | 
     ax.set_ylim(0, 1.02)
     ax.set_xlabel("Epoch")
     ax.set_ylabel("Proxy metric on observed labels")
-    ax.legend(loc="center right")
+    # Under the axes: the curves cross every part of them.
+    legend_below(ax, *ax.get_legend_handles_labels())
     weights = " and ".join(sorted(set(epochs.weights.astype(str))))
     ax.set_title(f"Proxy validation ranking per epoch ({weights} weights)")
     return ax

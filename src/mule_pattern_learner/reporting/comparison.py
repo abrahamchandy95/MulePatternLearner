@@ -14,26 +14,21 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
-from matplotlib.artist import Artist
 from matplotlib.axes import Axes
 from matplotlib.lines import Line2D
 from matplotlib.ticker import MaxNLocator, PercentFormatter
-from matplotlib.transforms import offset_copy
 import numpy as np
 from numpy.typing import NDArray
 
 from ..metrics import INTERVAL, REVIEW_BUDGETS, capture_curve
 from ..paths import BASELINE_VARIANT
 from .ranking import SplitScores, share_label, top_share_axis
-from .style import BASELINE, MEASURES, MUTED, SPLIT_COLOURS, SURFACE, number
+from .style import BASELINE, MEASURES, MUTED, SPLIT_COLOURS, SURFACE, legend_below, number
 
 # What each audit is for, as the figures' titles say it.
 PURPOSES = {"validation": "for decisions", "test": "for reporting, not selection"}
 # The markers of the review budgets, one per budget beside its colour.
 BUDGET_MARKERS = ("o", "s", "D")
-# How far below the axes a legend under them starts, clear of the tick labels and the x
-# label (points).
-LEGEND_DROP = 34.0
 
 
 @dataclass(frozen=True)
@@ -103,21 +98,6 @@ def _estimate(ax: Axes, y: float, row: VariantSeeds, colour: str, *, filled: boo
             linestyle="none",
             zorder=3,
         )
-
-
-def legend_below(ax: Axes, handles: Sequence[Artist], labels: Sequence[str]) -> None:
-    """A legend of two columns under the axes, a fixed distance below their x label."""
-    figure = ax.get_figure(root=True)
-    assert figure is not None
-    below = offset_copy(ax.transAxes, fig=figure, y=-LEGEND_DROP, units="points")
-    ax.legend(
-        handles,
-        labels,
-        loc="upper center",
-        bbox_to_anchor=(0.5, 0.0),
-        bbox_transform=below,
-        ncols=2,
-    )
 
 
 def _dot_legend(split: str, *, interval: str) -> tuple[list[Line2D], list[str]]:

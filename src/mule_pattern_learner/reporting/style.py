@@ -14,8 +14,12 @@ median) takes that one's colour, dashed or dotted and thin.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
+from matplotlib.artist import Artist
+from matplotlib.axes import Axes
+from matplotlib.transforms import offset_copy
 from matplotlib.typing import RcKeyType
 
 # PNG resolution of every figure.
@@ -72,6 +76,34 @@ RC: dict[RcKeyType, Any] = {
     "lines.linewidth": 1.8,
     "lines.markersize": 5,
 }
+
+
+# How far below the axes a legend under them starts, clear of one line of tick labels and
+# the x label (points); each further line of the tick labels adds a line's height.
+LEGEND_DROP = 34.0
+LINE_SPACING = 1.2
+
+
+def legend_below(
+    ax: Axes, handles: Sequence[Artist], labels: Sequence[str], *, ncols: int = 2
+) -> None:
+    """A legend under the axes, clear of their tick labels and x label, off the data."""
+    figure = ax.get_figure(root=True)
+    assert figure is not None
+    ticks = ax.get_xticklabels()
+    lines = max((tick.get_text().count("\n") + 1 for tick in ticks), default=1)
+    size = max((tick.get_fontproperties().get_size_in_points() for tick in ticks), default=0.0)
+    height = size * LINE_SPACING
+    drop = LEGEND_DROP + (lines - 1) * height
+    below = offset_copy(ax.transAxes, fig=figure, y=-drop, units="points")
+    ax.legend(
+        handles,
+        labels,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.0),
+        bbox_transform=below,
+        ncols=ncols,
+    )
 
 
 def measure(index: int) -> dict[str, Any]:

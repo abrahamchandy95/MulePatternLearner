@@ -79,8 +79,9 @@ def test_the_threshold_figure_steps_with_the_blocks_and_marks_the_threshold() ->
     assert xs(threshold) == [0, 0]
     legend = ax.get_legend()
     assert legend is not None
+    # The threshold in the axis' units, log10 odds, and as the score it is.
     assert legend.get_texts()[3].get_text() == (
-        "selected threshold 0.5: precision 0.714, recall 1.000"
+        "selected threshold: log10 odds 0.00 (score 0.5),\nprecision 0.714, recall 1.000"
     )
 
 
@@ -106,7 +107,7 @@ def test_the_densities_are_weighted_and_normalised_per_class() -> None:
     assert texts == [
         "non-mules: 2 sampled, standing for 10",
         "mules: 2 sampled, standing for 5",
-        "selected threshold 0.5",
+        "selected threshold: log10 odds 0.00 (score 0.5)",
     ]
 
 

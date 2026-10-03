@@ -725,8 +725,15 @@ def suite_drawings(files: SuiteFiles) -> dict[str, tuple[Drawing, tuple[float, f
 
 
 def mean_epochs(name: str, epochs: Mapping[int, pd.DataFrame]) -> MeanCurve:
-    """A variant's proxy validation AP per epoch, averaged over the seeds that trained it."""
-    joined = pd.concat([frame[["epoch", "validation_ap"]] for frame in epochs.values()])
+    """A variant's proxy validation AP per epoch, averaged over its seeds.
+
+    The curve ends at the last epoch every seed trained: early stopping ends seeds at
+    different epochs, and a mean over the seeds that went on would read as the same one.
+    """
+    reached = min(int(frame.epoch.max()) for frame in epochs.values())
+    joined = pd.concat(
+        [frame.loc[frame.epoch <= reached, ["epoch", "validation_ap"]] for frame in epochs.values()]
+    )
     mean = joined.groupby("epoch").validation_ap.mean()
     return MeanCurve(name, mean.index.to_numpy(np.float64), mean.to_numpy(np.float64), len(epochs))
 
