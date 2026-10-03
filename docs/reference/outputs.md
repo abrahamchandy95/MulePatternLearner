@@ -55,12 +55,17 @@ variant requesting the same groups, the audits) requests none of the contexts an
 one read. Only a connection that passed the frozen-source check opens it: training, the
 audits and the diagnostics; `mule score` and `mule check` request from TigerGraph. An
 entry that cannot be read, or that names another context, is refused with a
-`context_cache_refused` warning and requested again. Beyond 1,500,000 entries
-(`contract.bounds.CONTEXT_CACHE_ENTRIES`, roughly 10 GB, an estimate until a baseline run
-measures its distinct contexts) the least recently used entries are removed until 90%
-remain. A directory that cannot be written gives one `context_cache_unwritable` warning
-and is then only read. Nothing deletes the cache; removing `contexts/` by hand only costs
-the requests again.
+`context_cache_refused` warning and requested again. An entry that reads is trusted as
+validated when its request wrote it: a run that reads every context from the cache
+requests none, so it makes no Fourier spot check (`mule check` always requests). Beyond
+1,500,000 entries (`contract.bounds.CONTEXT_CACHE_ENTRIES`, roughly 10 GB, an estimate
+until a baseline run measures its distinct contexts) the least recently used entries are
+removed until 90% remain. Each source counts the directory on its first write and then
+adds its own writes, so two processes writing one dataset's cache at the same time can
+fill it past the cap until one of them evicts; and an eviction scans the directory while
+that source's request workers wait. A directory that cannot be written gives one
+`context_cache_unwritable` warning and is then only read. Nothing deletes the cache;
+removing `contexts/` by hand only costs the requests again.
 
 ## A run: `results/<variant>/seed-<n>/`
 
