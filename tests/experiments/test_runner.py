@@ -27,6 +27,7 @@ from mule_pattern_learner.experiments.runner import (
     RESUME,
     TRAIN,
     PlannedRun,
+    attempt,
     check_variants,
     is_outage,
     plan_run,
@@ -43,6 +44,7 @@ from mule_pattern_learner.pipeline import prepare as pipeline_prepare
 from mule_pattern_learner.pipeline import train as pipeline_train
 from mule_pattern_learner.reporting.run_report import AUDIT_FIGURES, TRAINING_FIGURES
 from mule_pattern_learner.reporting.suite_report import SUITE_FIGURES
+from mule_pattern_learner.runtime.progress import recording
 from mule_pattern_learner.testing.builders import (
     ground_truth_rows,
     neighbourhood,
@@ -50,7 +52,10 @@ from mule_pattern_learner.testing.builders import (
     write_run_files,
 )
 from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
-from mule_pattern_learner.tigergraph.executor import TigerGraphUnavailableError
+from mule_pattern_learner.tigergraph.executor import (
+    TigerGraphUnavailableError,
+    TransientQueryError,
+)
 
 # The built-in run, one small epoch of it: the suite's base run.
 BASE = DEFAULT_CONFIG.with_changes(
@@ -229,6 +234,28 @@ def test_a_variant_that_fails_on_its_own_fails_alone(
         f"Suite {DROP.name} failed: 2 runs, 1 complete, 1 failed",
         f"  {DROP.name} seed 42: train: ValueError: this variant's own failure",
     ]
+
+
+def test_a_run_failed_by_retries_that_ran_out_records_their_cause(tmp_path: Path) -> None:
+    # The error as the executor raises it: the operation, the attempts and why they
+    # ended, then TigerGraph's own words, past the 200 characters of another error.
+    error = TransientQueryError(
+        "fetch_training_context (512 keys) failed after 2 attempt(s) (suspected "
+        "deterministic failure, retried once): TigerGraphException: Runtime Error: the query "
+        "fetch_training_context ran out of memory on partition 3"
+    )
+
+    def work() -> None:
+        raise error
+
+    run = PlannedRun(DROP, 42, BASE, RunPaths.of(DROP.name, 42, tmp_path), TRAIN)
+    events = tmp_path / "events.jsonl"
+    with recording(events):
+        assert attempt(run, "train", work) is None
+    (failed,) = read_events(events)
+    assert failed["event"] == "run_failed"
+    assert failed["error"] == f"TransientQueryError: {error}"
+    assert run.errors == [f"train: TransientQueryError: {error}"]
 
 
 def test_a_run_whose_figures_fail_is_complete_and_the_suite_fails(
