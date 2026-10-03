@@ -7,6 +7,8 @@ the commands write lives under `results/`. `paths.DatasetPaths`, `paths.RunPaths
 what the tables and JSON files hold. A file a command replaces is written to a pending
 file first and then renamed (`artifacts.atomic_write`), so a crash never leaves a
 truncated table, model or manifest; `history.csv` and `events.jsonl` are appended to.
+The console shows each command's progress and a short summary
+([Command line](cli.md)); the records in full are in these files.
 
 ```
 data/
@@ -15,13 +17,15 @@ data/
     ├── accounts.parquet
     ├── observed_labels.parquet
     ├── hubs.parquet
+    ├── events.jsonl              the events of its preparation
     └── contexts/                 the context cache
 results/
 ├── baseline/seed-42/             the built-in run, which `mule train` writes
 ├── <variant>/seed-<n>/           one run of a control experiment
 ├── experiments/<suite>/          a suite's comparison
 ├── diagnostics/<dataset id>/     the diagnostic study of a dataset
-└── archive/                      runs moved aside because their settings changed
+├── archive/                      runs moved aside because their settings changed
+└── check.json                    the full report of the last `mule check`
 ```
 
 ## A prepared dataset: `data/<dataset id>/`
@@ -38,6 +42,7 @@ each recorded in the manifest when it is done, so an interrupted preparation res
 | `accounts.parquet` | The seed reservoirs and the observed positives: `account_id`, `first_seen_seq`, `first_seen_ts_ms`, `group_id`, `observed_positive`, `known_from_ms`, `split` and `in_marginal` (whether the account is in its split's label-blind reservoir; positives kept outside it are not) |
 | `observed_labels.parquet` | `account_id`, `known_positive`, `known_from_ms`: the revealed positives and their discovery times ([Labels](labels.md#what-training-reads)) |
 | `hubs.parquet` | The hub registry: `account_id`, `cutoff_seq`, `visibility_phase`, `max_visible`, `max_degree`, `reason` |
+| `events.jsonl` | The events of each preparation that connected: the scope found or created, the label reveal, the hub registry's counts and the `dataset` event of the ready dataset, one JSON object each |
 | `contexts/` | The disk tier of the context cache: one gzip-compressed JSON file per context, `<first two hex digits>/<name>.json.gz`, holding the row TigerGraph returned |
 
 At the built-in settings a dataset holds at most 24,000 reservoir accounts plus the
@@ -76,7 +81,7 @@ removing `contexts/` by hand only costs the requests again.
 | `resume.pt` | train | What an interrupted run continues from (`ResumeState.FORMAT` 1): the model, optimizer, weight average, random generators, schedule position, the selection so far, the epochs so far, the sampler backend, the dataset id and its manifest's sha256, and the totals of every segment |
 | `history.csv` | train | One row per log interval (`runtime.log_every_steps`) |
 | `epochs.csv` | train | One row per epoch |
-| `events.jsonl` | every command that works on the run | The structured lines the commands printed, one JSON object each |
+| `events.jsonl` | train, evaluate, score | The full record of every event of the commands that worked on the run, one JSON object each ([events.jsonl and the console](#eventsjsonl-and-the-console)) |
 | `predictions/validation.parquet`, `predictions/test.parquet` | train | The proxy scores: `account_id`, `group_id`, `date`, `observed_label`, `score` |
 | `metrics.json` | train | The record of a complete run |
 | `audit/<split>.json`, `audit/<split>.parquet`, `audit/<split>_rejected.txt` | evaluate | The ground-truth audit of `validation` and `test` |
@@ -190,6 +195,7 @@ with hyphens.
 |---|---|
 | `summary.csv` | One row per run, split and metric: `variant`, `seed`, `split`, `metric`, `value`, `status` (`complete`, `failed` or `stopped`) and `commit` |
 | `comparison.csv` | One row per variant, compared with the baseline |
+| `events.jsonl` | The suite's own events: the plan (`suite`), each run's step that finished (`run_finished`) or failed (`run_failed`), the runs moved aside (`run_archived`), an outage (`suite_stopped`), and preparation's when the dataset was ready; each run's go to the run's |
 | `plots/comparison_*.png` | Six figures |
 | `report.md` | The variants ranked by the validation audit, with the tables and figures |
 
@@ -233,7 +239,7 @@ variants.
 | `features.parquet` | The feature table: one row per sampled account of each split, with `account_id`, `split`, `date`, `is_mule`, `revealed`, `ring_id`, `label_source`, `inclusion_probability`, `weight` (1 / `inclusion_probability`), `rejected`, `context_contract` and `analytics_contract`, then one column per feature named `<family>__<name>` |
 | `<analysis>.csv` | One long table per analysis (the analysis named with underscores, as in `learning_curve.csv`) |
 | `study.json` | The dataset, the run compared, the reveal's salt and budget, and each analysis' last outcome (`written`, `kept` or `skipped` with its reason) |
-| `events.jsonl` | The structured lines `mule diagnose` printed |
+| `events.jsonl` | The full record of every event of `mule diagnose`: each analysis' outcome (`diagnose`), the feature table's splits (`feature_table`), retries and warnings |
 | `plots/<figure>.png` | The study's figures |
 | `report.md` | The study's tables, with links to its figures |
 
@@ -262,11 +268,36 @@ The experiments script moves a run whose settings differ from its variant's, who
 `results/archive/<variant>/seed-<n>/<UTC time>/` before training it again, with a
 `run_archived` event naming what differed. Nothing there is deleted.
 
-## events.jsonl and the printed lines
+## The report of `mule check`: `results/check.json`
 
-Every line a command prints before its result is one JSON object with an `event` name:
-the start or resume of a run (with its device, threads and determinism), training
-intervals, epochs, evaluations, completion, the sampler backend, preparation stages,
-installs, retries and warnings (such as `cugraph_probe`, `context_cache_refused` and
-`host_settings`). The lines of the commands that work on a run, and of `mule diagnose`,
-are appended to that run's or that study's `events.jsonl`.
+Each `mule check` replaces it with the report its checklist summarises: `graph`,
+`scope_schema` (`present` or `missing`), `queries` (`up_to_date`, `stale` with each query's
+issues, and `retired`), `cugraph` (the probe's `status`, device and reason), `dataset`,
+`problems`, `status` (`ready` or `not_ready`), `peak_process_rss_bytes` and
+`graph_writes` (always 0). Once the graph is ready it adds `source_open_seconds` and
+`first_step`: the step's device, determinism and seed, the roots and accepted roots, the
+batch's statistics, the rejections, context requests, REST calls and retries, the
+seconds, the input and sampler fingerprints, the `tensor_bytes`, `tensor_digests` (each
+tensor's dtype, shape and sha256, and summaries of the floating ones), their one
+`batch_digest`, the `loss`, `objective` and `train_step_seconds`, the parameter count and
+the accelerator's peak memory. Nothing else reads it.
+
+## events.jsonl and the console
+
+Every event is one JSON object with an `event` name: preparation's stages, installs,
+retries (with a short `reason` beside the error), the start or resume of a run (with its
+device, threads, determinism and plan), training intervals, the scoring of each chunk of
+validation and test, epochs, completion, the audits, scoring, the analyses, a suite's
+plan and runs, the sampler backend and warnings (such as `cugraph_probe`,
+`context_cache_refused` and `host_settings`). The whole record goes to the `events.jsonl`
+of what the command is working on: the run's for training, the audits and scoring, the
+dataset's for its preparation, the suite's for the experiments script's own events, the
+study's for `mule diagnose`. An event emitted outside them, such as an install or a
+retry before preparation, the `dataset` event of a dataset found ready, or anything `mule
+install` and `mule check` emit, has its console line only.
+
+The console shows a short line for the events a person follows and nothing for the
+others (`runtime.console.LINES` decides, by event name): the running totals, batch counts
+and the scoring of each chunk stay in the file. The training steps and the wait for an
+install to compile are rewritten in place on a terminal and not shown when stdout is a
+file or a pipe; `history.csv` has every training interval either way.

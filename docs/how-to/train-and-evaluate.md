@@ -34,11 +34,12 @@ SECRET=your_restpp_secret
 mule check
 ```
 
-It reports the graph, the scope vertex type, the installed queries and, on a CUDA host,
-the cuGraph probe. Until the built-in run's dataset is prepared, it ends `not_ready` and
-says so; that is expected on a new machine. Once a dataset exists it also builds the
-first training batch and runs one optimizer step, which shows that the graph, the queries
-and the device work before an hour of training.
+It shows a checklist of the graph: the scope vertex type, the installed queries and, on a
+CUDA host, the cuGraph probe. Until the built-in run's dataset is prepared, it ends "Not
+ready" and says to run `mule train`; that is expected on a new machine. Once a dataset
+exists it also builds the first training batch and runs one optimizer step, which shows
+that the graph, the queries and the device work before an hour of training. The full
+report is in `results/check.json`.
 
 To prepare the dataset without training (it installs, creates the scope and reveals on a
 fresh graph, as `mule train` would, and only reads on a graph where they are in place;
@@ -54,14 +55,28 @@ python -c "from mule_pattern_learner.config import DEFAULT_CONFIG; from mule_pat
 mule train
 ```
 
-Run it in `tmux` or with `nohup`; progress goes to stdout and to
-`results/baseline/seed-42/events.jsonl`. It uses CUDA when available, then Apple MPS,
-then the CPU. On the CUDA host a step takes about 3 seconds and a run about an hour with
-early stopping.
+Run it in `tmux` or with `nohup`. It uses CUDA when available, then Apple MPS, then the
+CPU. On the CUDA host a step takes about 3 seconds and a run about an hour with early
+stopping. The console shows the dataset, the plan and a line per epoch:
+
+```
+Dataset 1a2b3c4d5e6f: 20 / 11 / 20 known mules in train / validation / test
+Training on cuda (cuGraph sampler) into results/baseline/seed-42: 100 steps per epoch, at most 30 epochs, early stop after 6 without gain
+epoch  1  loss 0.490  validation AP 0.452  ROC AUC 0.955  4.6 min  best so far
+epoch  2  loss 0.212  validation AP 0.431  ROC AUC 0.951  3.1 min
+```
+
+On a terminal the current step is shown in place below them; a log of `nohup mule train`
+has no step lines. When the run ends, a summary gives the time taken, the best epoch, the
+validation and test proxy AP, ROC AUC and recall at the top 1% with their known mules, and
+the run directory. The full records are in the run's files: every event in
+`events.jsonl`, every log interval in `history.csv`, every epoch in `epochs.csv` and the
+result in `metrics.json`.
 
 - **Interrupted?** Run the same command again: it continues from `resume.pt` and
   reproduces the uninterrupted run exactly on the same device.
-- **Complete?** The command prints the run's `metrics.json` and changes nothing.
+- **Complete?** The command says so, summarises the run's `metrics.json` and changes
+  nothing.
 - **Settings changed?** If the code's built-in settings now differ from the run's in a
   setting that changes results, the command fails and names the settings. Move
   `results/baseline/seed-42/` aside to train the new settings.
@@ -86,7 +101,9 @@ redraws the audit figures and `report.md`. `mule evaluate results/<variant>/seed
 audits another run. Each audit scores every mule of its split and 2,000 uniform
 non-mules, weighted to the whole split, with 90% intervals.
 
-Read `report.md`, or `audit/validation.json` and `audit/test.json`:
+It ends with a table of both splits: the mules sampled, AP, ROC AUC and recall and
+precision at 1, 5 and 10%, each with its 90% interval. Read `report.md`, or
+`audit/validation.json` and `audit/test.json`, for the rest:
 
 - **Decide on validation.** `purpose` says it: `decisions` for validation, `reporting` for
   test. Comparing settings or picking a threshold on the test audit makes the test
@@ -150,13 +167,13 @@ what to do with the earlier code's own folders.
    ```
 
 6. **`mule check`.** Until the first `mule train` on a graph whose queries carry their
-   old names, it ends `not_ready`: the renamed queries are stale, the old names are listed
-   under `queries.retired`, and there is no dataset.
+   old names, it ends "Not ready": the renamed queries are stale, the old names are listed
+   as retired queries still installed, and there is no dataset.
 7. **`mule train`.** Its first run installs the renamed queries beside the old names
    (about 50 minutes, within a 90-minute wait), prepares the dataset (about 6 minutes)
    and trains the built-in run (about an hour). If the wait runs out, wait until `mule
-   check` no longer lists the queries under `queries.stale`, then run `mule train` again. `mule check` now ends
-   `ready`, still listing the old names under `queries.retired`.
+   check` no longer lists stale training queries, then run `mule train` again. `mule
+   check` now ends "Ready to train.", still listing the old names as retired queries.
 8. **Drop the old names.** Stop every job of the earlier code, on every machine: it calls
    the old names. Then run `mule install`, which finds the renamed queries in place and
    drops the old names, callers first ([Queries](../reference/queries.md#the-retired-names)).
@@ -236,7 +253,7 @@ This code reads only the datasets and models it writes:
 | Message | Meaning and fix |
 |---|---|
 | `Installed query differs from repository source or is not installed` | Run `mule install`; it recompiles only the stale queries |
-| `Queries [...] are still not installed after ...s` | The 90-minute wait for compilation ran out, and the server may still be compiling. Once it has finished (`mule check` no longer lists the training queries under `queries.stale`; the GSQL shell's `ls` shows the analytics queries), run the same command again (`mule install`, `mule train`, `mule diagnose` or the experiments script): it installs only what is still stale |
+| `Queries [...] are still not installed after ...s` | The 90-minute wait for compilation ran out, and the server may still be compiling. Once it has finished (`mule check` no longer lists stale training queries; the GSQL shell's `ls` shows the analytics queries), run the same command again (`mule install`, `mule train`, `mule diagnose` or the experiments script): it installs only what is still stale |
 | `Prepared dataset ... was built from different GSQL sources` | The query files changed after preparation; install them, then move the dataset aside so it is prepared again |
 | `Graph counts changed; freeze the source and prepare a new dataset` | The graph was modified after preparation; freeze it and prepare a new dataset |
 | `Scope ... was created with scope.unowned = ...` | The scope was created with another rule; use the stored rule or a new `scope.id` |
@@ -248,4 +265,5 @@ This code reads only the datasets and models it writes:
 | `The model's input groups or pool definitions differ from its configuration` | The model read a pool group whose definition has changed since; score with a model trained under the current one |
 | `Training queries require Mule_Pattern_Learner` | `GRAPHNAME` in `.env` names another graph |
 | A `cugraph_probe` warning | pylibcugraph or the GPU failed the probe; training continues with the torch sampler; run `mule check` and the `cuda` tests |
-| Retry events in the log | TigerGraph was briefly unavailable or resuming; each operation waits up to `transport.max_outage_s` |
+| `TigerGraph is not answering yet (...): attempt 2, retrying in 6 s` | TigerGraph was briefly unavailable or resuming (a TigerGraph Cloud workspace says `starting workspace`); each operation waits up to `transport.max_outage_s` |
+| `mule train stopped: TigerGraph stayed unavailable.` on stderr | The retries ran out; the line names the operation, the attempts and the reason. Run the same command again once TigerGraph answers: an interrupted run resumes |

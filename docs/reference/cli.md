@@ -3,11 +3,33 @@
 One console script, `mule`, with seven commands; `python -m mule_pattern_learner` runs the
 same ones, for a machine where another tool also installs a `mule`. The commands take no
 option besides `--help`: every setting is built in (`config.DEFAULT_CONFIG`, see
-[Configuration](configuration.md)) and `.env` holds only the TigerGraph connection. Each
-command prints one JSON result on its last line, after the structured event lines it
-printed while it ran, and the commands that work on a run append those event lines to the
-run's `events.jsonl`. Before any CUDA work every command reserves cuBLAS's deterministic
-workspace (`CUBLAS_WORKSPACE_CONFIG=:4096:8`, unless it is already set).
+[Configuration](configuration.md)) and `.env` holds only the TigerGraph connection.
+Before any CUDA work every command reserves cuBLAS's deterministic workspace
+(`CUBLAS_WORKSPACE_CONFIG=:4096:8`, unless it is already set).
+
+The console shows what a person follows, and the files hold the rest:
+
+- **Progress**, one short line per event worth reading: TigerGraph not answering yet
+  ("TigerGraph is not answering yet (starting workspace, HTTP 502): attempt 2, retrying in
+  6 s"), an install starting and ending, what preparation found ("Dataset 1a2b3c4d5e6f: 20
+  / 11 / 20 known mules in train / validation / test"), the start of training, one line
+  per epoch, each audit and analysis, and warnings. On a terminal the training steps are
+  rewritten in place on one line ("epoch 3  step 60/100  loss 0.136  1.9 s/step"); when
+  stdout is a file or a pipe they are left out, so the log of `nohup mule train` has no
+  step lines.
+- **A summary** when the command is done: a few lines of its result, described with each
+  command below. No command prints JSON.
+- **The full records** stay in the files: every event's record, whole, in the
+  `events.jsonl` of the run, dataset, suite or study it belongs to, with the running
+  totals, batch counts and scoring progress the console leaves out (an install, or a
+  retry, before any of them is known has its line only); `history.csv`, `epochs.csv` and
+  `metrics.json` for training; `audit/<split>.json` for the audits; `results/check.json`
+  for `mule check`; the suite's and the study's directories ([Outputs](outputs.md)).
+
+A command exits 1 when the graph is not ready (`mule check`), the study is incomplete
+(`mule diagnose`), or TigerGraph's failures outlast the retries: that failure is one line
+on stderr, naming the operation, the attempts and the reason, after the retries' lines.
+Any other error is raised with its traceback.
 
 `RUN` defaults to the built-in run's directory, `results/baseline/seed-42`.
 [Outputs](outputs.md) lists every file the commands write.
@@ -54,8 +76,14 @@ Trains the built-in run into `results/baseline/seed-42/`.
    graph against the dataset's frozen source first.
 4. **It draws the training figures** and `report.md` once every run file is saved.
 
-The result is the run's `metrics.json` record. Run it in `tmux` or with `nohup`;
-progress goes to stdout and `events.jsonl`.
+Run it in `tmux` or with `nohup`. It shows the dataset, the plan ("Training on cuda
+(cuGraph sampler) into results/baseline/seed-42: 100 steps per epoch, at most 30 epochs,
+early stop after 6 without gain"), each epoch's loss, validation proxy AP and ROC AUC,
+time and whether it is the best so far, and the early stop. Its summary gives the time
+taken, the best epoch, the validation and test proxy AP, ROC AUC and recall at the top 1%
+with their known mules, and the run directory; a complete run says so and gives the same
+summary from its `metrics.json`. The proxy numbers count unlabelled accounts as
+negatives: `mule evaluate` gives the ground-truth audit.
 
 ## mule evaluate [RUN]
 
@@ -68,9 +96,11 @@ A split the run already has an audit for is reported from its `audit/<split>.jso
 never rewritten; when both are recorded nothing connects. Otherwise the model, its
 dataset (the one `model.pt` names, in `data/`) and the hub registry are checked first,
 then one connection, with the model's retry budgets, checks the frozen source, reads the
-truth once for both splits and audits the missing ones. The result holds the reports by
-split. An audit fails before writing anything when a mule is rejected, or when the
-rejected share exceeds the model's `runtime.max_rejected_root_fraction`.
+truth once for both splits and audits the missing ones. The summary is a table with a
+column per split, saying which is for decisions: the mules in the sample, then AP, ROC
+AUC and recall and precision at 1%, 5% and 10%, each with its 90% interval. An audit
+fails before writing anything when a mule is rejected, or when the rejected share exceeds
+the model's `runtime.max_rejected_root_fraction`.
 
 ## mule report [RUN]
 
@@ -85,7 +115,8 @@ Redraws, from the saved files and without connecting, the figures in `plots/` an
   figures of the tables it has, and the study's report.
 
 A figure that fails to draw loses its older PNG, the other figures and `report.md` are
-still written, and the command then fails naming every failed figure.
+still written, and the command then fails naming every failed figure. Otherwise it says
+how many figures it drew, and where.
 
 ## mule score ACCOUNTS [DATE]
 
@@ -99,27 +130,33 @@ Scoring reads the graph as an operational scorer would: the history visible befo
 date, without the experiment scope, and a hub registry computed for that cutoff (a date
 before the graph's first visible event is refused). It needs neither the training dataset
 nor any label, and the installed queries must be the repository's. The graph need not be
-the dataset's frozen source, so scoring has no context cache. The result reports root
-and child rejections apart. [Score new accounts](../how-to/score-new-accounts.md) has an
-example.
+the dataset's frozen source, so scoring has no context cache. Its summary says how many
+accounts it scored and where, how many TigerGraph rejected by status, and how many child
+contexts it left out; the run's `events.jsonl` keeps the whole result, root and child
+rejections apart. [Score new accounts](../how-to/score-new-accounts.md) has an example.
 
 ## mule check
 
-Read-only readiness of the graph and the built-in run. It reports the graph name, whether
-the scope vertex type exists, which training queries are installed with the repository's
-text (`queries.up_to_date` and `queries.stale`), which retired queries are still installed
-(`queries.retired`), and on a CUDA host what the cuGraph probe found. When everything is
-ready and the built-in run's dataset is prepared in `data/`, it builds the first training
-batch as training builds it and runs one optimizer step on the configured device. The
-batch's contexts are requested from TigerGraph, not read from the context cache, so the
-installed context query and its first Fourier spot check run.
+Read-only readiness of the graph and the built-in run, shown as a checklist (`[x]` ready,
+`[ ]` not ready, `[-]` for information): whether the scope vertex type exists, whether the
+training queries are installed with the repository's text (naming the stale ones), which
+retired queries are still installed, on a CUDA host what the cuGraph probe found, and
+whether the built-in run's dataset is prepared in `data/`. When everything is ready it
+builds the first training batch as training builds it and runs one optimizer step on the
+configured device. The batch's contexts are requested from TigerGraph, not read from the
+context cache, so the installed context query and its first Fourier spot check run.
 
-`first_step` holds the REST calls, retries and seconds, the stub and rejected counts, the
-sampler backend, a digest of every batch tensor (`tensor_digests`), and the step's `loss`
-and `objective`. Two code versions that print the same digests and loss on one machine and
-device built the same first batch and step. The status is `ready`, or `not_ready` with
-the `problems` found, and the command then exits 1. It never writes to the graph and
-never prepares a dataset.
+The checklist's last item gives the batch's roots, context requests and seconds, the
+step's `loss` and `objective` to six decimals, and one digest of the batch's tensors. Two
+code versions that show the same digest and loss on one machine and device built the
+same first batch and step. It ends "Ready to train.", or "Not ready" with the commands to
+run (`mule install`, then `mule train`), and the command then exits 1. The full report
+goes to `results/check.json`, replaced each time: `queries` (`up_to_date`, `stale` and
+`retired`), `cugraph`, `dataset`, `first_step` (the REST calls, retries and seconds, the
+stub and rejected counts, the sampler backend, the digest of every batch tensor in
+`tensor_digests` and their one `batch_digest`, `loss` and `objective`), `problems` and
+`status` (`ready` or `not_ready`). It never writes to the graph and never prepares a
+dataset.
 
 ## mule diagnose [ANALYSIS]
 
@@ -132,10 +169,11 @@ named:
 
 It prepares the dataset as `mule train` does, then writes the feature table, one long
 table per analysis, `study.json`, `events.jsonl`, the figures and `report.md`. It is the
-only command that installs the analytics queries, where their text differs. An analysis
-whose inputs are missing (no
-built-in run on this dataset, or no audit) is skipped with its reason; the result's
-status is then `incomplete` and the command exits 1. [Run the diagnostics](../how-to/run-diagnostics.md)
+only command that installs the analytics queries, where their text differs. It shows a
+line per analysis as it ends (written, kept or skipped, with its rows and seconds). An
+analysis whose inputs are missing (no built-in run on this dataset, or no audit) is
+skipped with its reason; the study is then incomplete, the summary names what was
+skipped and the command exits 1. [Run the diagnostics](../how-to/run-diagnostics.md)
 describes each analysis.
 
 ## mule install
@@ -147,14 +185,15 @@ installed queries that no repository file defines without touching them. Every
 preparation that connects installs the same way but drops nothing: code from before the
 rename calls the retired names, so run `mule install` once no job of that code runs
 anywhere. [Queries](queries.md#installation) describes staleness, the 90-minute wait and
-the retired names. The result lists the queries `installed`, `up_to_date`, `dropped` and
-`not_defined`.
+the retired names. It says what it installs and drops as it goes, and its summary how many
+training queries are installed with the repository's text and which installed queries no
+repository file defines.
 
 ## The scripts
 
 | Script | What it does |
 |---|---|
-| `python scripts/run_experiments.py [SUITE or VARIANT ...]` | Trains, audits and compares the control experiments: the `controls` suite by default, or the suites and variants named. `--help` lists them with their questions and changes, without connecting. It exits 1 unless every run is trained and audited ([Run the control experiments](../how-to/run-control-experiments.md)) |
+| `python scripts/run_experiments.py [SUITE or VARIANT ...]` | Trains, audits and compares the control experiments: the `controls` suite by default, or the suites and variants named. `--help` lists them with their questions and changes, without connecting. It shows the run matrix, a line for each run as it finishes and the top of the comparison, and exits 1 unless every run is trained and audited ([Run the control experiments](../how-to/run-control-experiments.md)) |
 | `python scripts/render_queries.py` | Regenerates `gsql/queries/training_context.gsql` and `gsql/analytics/analytics_context.gsql` from `tigergraph.render`, and names the contract to set when a text changed; `--check` only compares the rendered texts with the files and exits 1 when one differs |
 
 ## Tests that need the graph or a GPU

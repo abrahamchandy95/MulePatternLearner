@@ -100,7 +100,7 @@ contract                                         definitions shared with GSQL
 | `contract` | What the GSQL and the client share, with no I/O and no torch: query names, `CONTEXT_CONTRACT` and the retired names (`server`), the graph's types, relations and splits (`graph_schema`), the training feature groups (`feature_groups`) and the analytics ones (`analytics_features`), the sampler plan, every numeric bound (`bounds`), the time basis, fingerprints, clocks, the reveal's draws and the frozen salts |
 | `config`, `paths` | The run's settings as frozen dataclasses, `DEFAULT_CONFIG` the built-in run; where datasets and results go and the name of every file |
 | `artifacts`, `metrics` | The column schemas and reading and writing of every file, with the one atomic write and file digest; pure ranking metrics, curves, review budgets and bootstrap intervals |
-| `runtime` | The device and determinism, the one bounded worker pool, and `emit`, the one structured output line |
+| `runtime` | The device and determinism, the one bounded worker pool, `emit`, the one structured record of each event, and the console's short line for it (`console`) |
 | `data` | The read ports, the seed reservoirs, observed labels, the hub registry, the manifest and dataset id, preparation, and the context source with its cache tiers |
 | `sampling` | Candidate tables and the torch and cuGraph subset samplers |
 | `model` | The torch modules (`TGAT`, `SummaryMLP`), the nnPU loss and the model builder; it imports only `contract` and `config` |
@@ -113,7 +113,7 @@ contract                                         definitions shared with GSQL
 | `pipeline` | The use cases the commands run (prepare, train, evaluate, score, check, and the study with its graph reads), and the only place adapters are built |
 | `experiments` | The variants, the suite runner and the comparison tables |
 | `diagnostics` | The diagnostic study's feature table and analyses, on ports that `pipeline.diagnose` fills |
-| `cli` | `mule`: parses the command, calls the use case, prints one JSON result |
+| `cli` | `mule`: parses the command, calls the use case, shows a short summary of its result |
 | `reference` | CPU mirrors of the GSQL features, the label reveal and the batch features, used by the tests and by `diagnostics` |
 | `testing` | The fakes and builders the tests share |
 

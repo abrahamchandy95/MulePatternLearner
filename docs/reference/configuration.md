@@ -169,10 +169,10 @@ The host. Only the first three can change floating-point results.
 |---|---|---|
 | `runtime.device` | `"auto"` | CUDA when available, then Apple MPS, then CPU; or `"cpu"`, `"mps"` or `"cuda"` |
 | `runtime.threads` | `4` | CPU threads torch uses |
-| `runtime.deterministic` | `true` | Deterministic algorithms, warning on CUDA-only gaps; `"strict"` fails on them; `false` turns them off |
+| `runtime.deterministic` | `true` | Deterministic algorithms, warning on CUDA-only gaps; `"strict"` fails on them; `false` turns them off. On CUDA either deterministic mode runs attention on the math kernel, whose backward pass is deterministic |
 | `runtime.prefetch_batches` | `2` | Batches built ahead of the one in use (0 to 8) |
 | `runtime.checkpoint_every_steps` | `0` | Also save `resume.pt` every n steps; 0 saves it once per epoch |
-| `runtime.log_every_steps` | `10` | Steps per row of `history.csv` |
+| `runtime.log_every_steps` | `10` | Steps per row of `history.csv`, and per progress line on a terminal |
 | `runtime.max_rejected_root_fraction` | `0.0` | Largest share of an epoch's or a split's roots TigerGraph may reject; it decides only whether a run may go on, never its numbers |
 
 ## Constants that are not settings

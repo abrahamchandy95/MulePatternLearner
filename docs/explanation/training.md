@@ -149,7 +149,10 @@ directory.
   CUDA-only gaps; `"strict"` fails on them), and every step reseeds torch from a stable
   hash of the seed, the epoch and the step, so dropout and sampler draws never depend on
   history. The command line reserves cuBLAS's deterministic workspace before any CUDA
-  work.
+  work. On CUDA, attention runs on the math kernel of scaled dot-product attention: the
+  fused memory-efficient kernel torch would pick has a backward pass that is not
+  deterministic. Each root attends with one query over its sampled slots, so the math
+  kernel's extra cost should be small; CPU and MPS keep their kernels.
 - **Validation** after each epoch scores the revealed validation positives (11 on the
   reference graph) and a fixed sample of 2,000 unlabelled validation accounts, at the
   validation cutoff in phase 2. The epoch with the best validation average precision is

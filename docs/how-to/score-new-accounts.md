@@ -16,8 +16,9 @@ mule score new_accounts.txt 2025-02-01
 The scores go to `results/baseline/seed-42/scores/new_accounts_2025-02-01.parquet`, and
 the ids TigerGraph rejected, if any, to `scores/new_accounts_2025-02-01_rejected.txt`
 beside them. The command refuses to overwrite either file, so move them aside to score
-the same file and date again. The lines it prints are appended to the run's
-`events.jsonl`, and its result reports `rejected` (roots not scored),
+the same file and date again. It ends with how many accounts it scored and where, how many
+TigerGraph rejected by status, and how many child contexts it left out. Its `score`
+event in the run's `events.jsonl` has the whole result: `rejected` (roots not scored),
 `rejected_roots_by_status`, `rejected_children` (child contexts masked out),
 `rejected_children_by_status`, `stub_children` and `rejection_events_by_status`.
 

@@ -56,8 +56,8 @@ It adds the `Temporal_Training_Scope` vertex type (`gsql/schema/scope_vertex.gsq
 creates and installs the training queries of `gsql/queries/` and `gsql/evaluation/`.
 Compiling them takes about 50 minutes, most of it the context query. The command waits
 up to 90 minutes for the compilation; if that runs out, wait until `mule check` no longer
-lists the queries under `queries.stale`, then run it again, and it installs only what is
-still stale. `mule train` installs whatever is stale too, so this step only does
+lists stale training queries, then run it again, and it installs only what is still
+stale. `mule train` installs whatever is stale too, so this step only does
 it ahead of time. The analytics queries of `gsql/analytics/` wait for `mule diagnose`.
 
 ## 5. Check the labels
@@ -81,7 +81,7 @@ mule train
 ```
 
 `mule check` confirms the graph, the scope vertex type and the installed queries, and
-reports `not_ready` until a dataset exists. The first `mule train` then, in order:
+ends "Not ready" until a dataset exists. The first `mule train` then, in order:
 
 1. creates the frozen scope `strict_mule_v2`, partitioning every Account and Party by
    ownership group into train, validation and test (the `linked` rule for accounts no
