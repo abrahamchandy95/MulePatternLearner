@@ -28,8 +28,10 @@ in the tables, with its error beside it, and the suite then fails, as `mule trai
 when a figure does; the next suite keeps the run, and `mule report` redraws its figures.
 
 The suite's own events (the plan, each run's step that finished or failed, the archives,
-an outage) and those of the dataset's preparation are recorded in the suite's
-events.jsonl; each run's go to the run's. suite_summary is what the experiments script
+an outage) are recorded in the suite's events.jsonl, and so is what happens before the
+dataset's preparation records its own (the install, connecting) or the `dataset` event
+of a dataset found ready. Preparation records its events in the dataset's events.jsonl,
+and each run in the run's. suite_summary is what the experiments script
 shows at the end: how the suite ended, its runs' errors, the top of its comparison
 (ranked by validation audit AP, as report.md ranks it) and where its report is.
 """
