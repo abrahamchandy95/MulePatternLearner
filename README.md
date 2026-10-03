@@ -103,6 +103,28 @@ writes to `results/diagnostics/<dataset id>/` and is the only command that insta
 analytics queries. [Run the diagnostics](docs/how-to/run-diagnostics.md) describes each
 analysis.
 
+## Starting again on the CUDA host
+
+This code reads no dataset or model that earlier code wrote, so a host that trained with
+it starts from scratch, with its `data/` and `results/` empty or moved aside:
+
+1. Pull `main` (`git switch main && git pull`) and reinstall with the CUDA extra
+   ([Setup](#setup)).
+2. `mule check`. Until the first `mule train` it ends `not_ready`: the renamed queries are
+   not installed yet, the old names are listed under `queries.retired`, and there is no
+   dataset.
+3. `mule train`. Its first run installs the renamed queries (about 50 minutes; run it
+   again if the 45-minute wait runs out) and then drops the retired ones, prepares the
+   dataset (about 6 minutes) and trains the built-in run (about an hour).
+4. `mule evaluate`, then `mule report`.
+5. `python scripts/run_experiments.py`, then `python scripts/run_experiments.py
+   feature_drops`.
+6. `mule diagnose`. Its first run installs the analytics queries, an install of the
+   order of 50 minutes.
+
+[Train and evaluate](docs/how-to/train-and-evaluate.md#on-the-cuda-host) walks through
+each step.
+
 ## Documentation
 
 - [Architecture](docs/architecture.md): the layers, ports and import contracts, the data

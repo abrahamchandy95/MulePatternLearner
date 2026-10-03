@@ -1,6 +1,6 @@
 """The diagnostic feature table on the fake graph, against the batching code and the mirror.
 
-The gate of the diagnostics step: for the same keys, the training families equal what
+The feature table's own check: for the same keys, the training families equal what
 batching.features computes from the training query's rows, and the account family what
 reference.gsql_features.account_features computes from each account's payment history,
 which the fake graph's analytics query serves.

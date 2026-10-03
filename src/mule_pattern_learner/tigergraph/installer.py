@@ -157,9 +157,9 @@ def retired_installed(executor: ConnectionExecutor) -> list[str]:
 def drop_retired(executor: ConnectionExecutor) -> list[str]:
     """Drop every installed query of RETIRED_QUERIES, callers first; the names dropped.
 
-    The names are the ones the queries were installed under before the server step
-    renamed them (the owner decision on retired queries). A name that is not installed
-    is skipped, and no other query is ever touched. TigerGraph refuses to drop a query
+    The names are the ones the queries were installed under before they were renamed
+    (the owner's decision in docs/architecture.md). A name that is not installed is
+    skipped, and no other query is ever touched. TigerGraph refuses to drop a query
     another installed query calls, so each drop is checked against the endpoint
     listing, and one that leaves its query installed raises with TigerGraph's answer.
     """

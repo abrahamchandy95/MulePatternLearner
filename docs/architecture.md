@@ -254,7 +254,10 @@ at import. There is no configuration file, no `--config` and no option: another 
   are two plain tables, the feature groups and the variants.
 - GSQL stays at the repository root, found through `paths.GSQL_DIR`: the package is used
   as an editable install, `data/` and `results/` tie it to the root anyway, and reviewers
-  read GSQL as files.
+  read GSQL as files. `mule install` applies the one schema change it owns (the scope
+  vertex type) before it installs any query, since a schema change invalidates installed
+  queries; a folder of numbered migrations comes back only if a second schema change
+  appears.
 
 [Configuration](reference/configuration.md) lists every setting.
 
@@ -357,6 +360,10 @@ The owner's decisions that shape the code, each with its reason.
   is used only when the settings and query texts it records are this code's, and nothing
   converts the settings, contracts or datasets of earlier code: each conversion was a
   second path to keep correct. The saved-model test's fixtures are models this code saved.
+- **One branch, `main`, the same on both remotes** (decided on 2026-09-27 and 2026-09-28).
+  The layered code replaces the old `main` by a fast-forward, so the history before it
+  stays in `main`; `origin` and `learner` hold the same `main`, and nothing is pushed and
+  no branch is deleted without the owner's confirmation.
 
 Other choices and their reasons:
 
@@ -372,6 +379,10 @@ Other choices and their reasons:
   only after the frozen-source check, and shared by every run and audit of the dataset.
 - **No experiment or analysis writes to `/tmp`.** Their results go under `results/`,
   so the runs, the comparison and the study can be redrawn and audited later.
+- **An analysis that should run again becomes code; a one-off answer becomes a note.** An
+  analysis to repeat whenever the dataset, the features or the model change is a `mule
+  diagnose` analysis; one that answered a single question, or tested a path that is gone
+  or became a variant, is recorded in `docs/research/`.
 - **`mule`, not `mule-pattern-learner`**, as a short command in the manner of Ludwig's
   `ludwig train`, paired with `__main__.py` as the PyPA guide pairs a console script;
   `python -m mule_pattern_learner` covers a machine where another tool (a MuleSoft runtime,

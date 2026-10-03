@@ -34,7 +34,7 @@ SERVER_FLAGS = (
 
 
 def test_training_keeps_only_the_built_in_groups() -> None:
-    # The owner decision on feature groups: the registry is the built-in run's, and the
+    # The owner's decision (docs/architecture.md): the registry is the built-in run's, and the
     # groups training does not read are analytics.
     assert set(FEATURE_GROUPS) == set(BUILT_IN_GROUPS)
     assert not set(ANALYTICS_GROUPS) & set(FEATURE_GROUPS)

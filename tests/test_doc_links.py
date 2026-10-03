@@ -31,8 +31,8 @@ from mule_pattern_learner.paths import REPOSITORY_ROOT
 
 PACKAGE = "mule_pattern_learner"
 # Records of their time keep the paths and names of the code they describe: the research
-# notes, and the design record until the cleanup step deletes it.
-RECORDS = (REPOSITORY_ROOT / "docs/research", REPOSITORY_ROOT / "docs/restructure-plan.md")
+# notes.
+RECORDS = (REPOSITORY_ROOT / "docs/research",)
 FENCE = re.compile(r"^(```|~~~).*?^\1[ \t]*$", re.S | re.M)
 LINK = re.compile(r"!?\[[^\]]*\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
 HEADING = re.compile(r"^#{1,6}[ \t]+(.+?)[ \t]*#*[ \t]*$", re.M)

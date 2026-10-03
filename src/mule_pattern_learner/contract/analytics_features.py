@@ -1,7 +1,7 @@
 """The feature groups the analytics context query computes and training never reads.
 
-Training keeps only the groups of the built-in run (the owner decision on feature
-groups). These are the others: account aggregates over the whole visible history
+Training keeps only the groups of the built-in run (the owner's decision in
+docs/architecture.md). These are the others: account aggregates over the whole visible history
 (age, windows, ratios, recency, association counts, decayed sums, identity order) and
 the pair window counts and device and IP ages of sampled messages. They are not in
 contract.feature_groups.FEATURE_GROUPS, so no FeaturePlan can name them, and no
