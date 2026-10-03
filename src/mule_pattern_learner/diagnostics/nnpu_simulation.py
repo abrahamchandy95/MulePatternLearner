@@ -9,16 +9,16 @@ graph and no ground truth read.
 
 The problem (Problem): positives are normal vectors shifted by `shift` along a few of
 the features; 20 labelled positives; a label-blind marginal in which positives are at
-the true prevalence; a validation proxy of 11 labelled positives against a sample of
-the marginal; and a truth test at the class prior. A small MLP trains on batches of 16
-positives drawn with replacement and 48 marginal accounts, as the trainer's batches
-are, and the epoch with the best validation proxy AP is kept, with early stopping as
-the trainer's. For each positive weight and seed the table records the kept epoch's
-test AP, ROC AUC and precision in the top 1%, the mean scores of the labelled positives
-and of the test negatives, and whether the run collapsed: the mean score of its labelled
-positives is below COLLAPSE, so it scores even the positives it trains on near zero, the
-constant scorer that costs the textbook objective only the prior. Its counterpart on the
-graph is the prior_weight control variant.
+the true prevalence, drawn like the labelled ones; a validation proxy of 11 labelled
+positives against 2,000 negatives; and a truth test at the class prior. A small MLP
+trains on batches of 16 positives drawn with replacement and 48 marginal accounts, as
+the trainer's batches are, and the epoch with the best validation proxy AP is kept,
+with early stopping as the trainer's. For each positive weight and seed the table
+records the kept epoch's test AP, ROC AUC and precision in the top 1%, the mean scores
+of the labelled positives and of the test negatives, and whether the run collapsed: the
+mean score of its labelled positives is below COLLAPSE, so it scores even the positives
+it trains on near zero, the constant scorer that costs the textbook objective only the
+prior. Its counterpart on the graph is the prior_weight control variant.
 """
 
 from __future__ import annotations
@@ -59,7 +59,7 @@ class Problem:
     marginal: int = 20_000
     true_prevalence: float = 0.00073
     validation_positives: int = 11
-    validation_marginal: int = 2_000
+    validation_negatives: int = 2_000
     test_positives: int = 300
     test_negatives: int = 300_000
     batch_positives: int = 16
@@ -101,7 +101,7 @@ def simulate(weight: float, seed: int, problem: Problem = Problem()) -> dict[str
     hidden_x, negative_x = draw(rng, problem, hidden, problem.marginal - hidden)
     marginal = np.concatenate([hidden_x, negative_x])
     validation_p, validation_u = draw(
-        rng, problem, problem.validation_positives, problem.validation_marginal
+        rng, problem, problem.validation_positives, problem.validation_negatives
     )
     validation = np.concatenate([validation_p, validation_u])
     validation_y = np.r_[np.ones(len(validation_p)), np.zeros(len(validation_u))]
