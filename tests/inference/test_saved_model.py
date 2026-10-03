@@ -8,7 +8,8 @@ give the same scores, so a change to what model.pt holds or to how a model is bu
 it shows here. Floating point rounding differs between machines, hence the tolerance.
 
 A change that refuses the fixtures or changes their scores on purpose (a new
-SavedModel.FORMAT, other model inputs or modules) writes them again with
+SavedModel.FORMAT, other model inputs or modules, or another text of a query file the
+dataset records the hash of) writes them again with
 `python tests/inference/test_saved_model.py`, which prints the new literals, and says so.
 """
 
@@ -34,7 +35,7 @@ from mule_pattern_learner.contract.feature_groups import (
 from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.data.contexts import ContextSource, build_context_source
 from mule_pattern_learner.data.hub_registry import load_hub_registry
-from mule_pattern_learner.data.manifest import dataset_id, read_manifest
+from mule_pattern_learner.data.manifest import dataset_id, load_prepared, read_manifest
 from mule_pattern_learner.data.preparation import prepare
 from mule_pattern_learner.data.splits import eligible_mask, sample_keys
 from mule_pattern_learner.experiments.variants import VARIANTS
@@ -249,6 +250,8 @@ def test_a_model_that_names_a_group_training_does_not_read_is_refused() -> None:
 def test_the_fixture_dataset_scores_as_it_did(tmp_path: Path) -> None:
     dataset = DatasetPaths(tmp_path / "prepared")
     shutil.copytree(FIXTURES / "dataset", dataset.root)
+    # The fixture passes the gate every run's dataset passes, its query hashes included.
+    load_prepared(dataset)
     saved = SavedModel.load(FIXTURES / "baseline.pt")
     saved.check_dataset(dataset)
     assert saved.dataset_id == read_manifest(dataset)["source"]["dataset_id"]
