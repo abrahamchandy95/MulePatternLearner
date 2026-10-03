@@ -4,10 +4,11 @@ The oracle curve: a learner trained at the train cutoff on k train mules drawn a
 (revealed or hidden, labelled from the ground truth) against every sampled train
 non-mule, for k from 10 up to every train mule, REPEATS draws each (one when k takes
 them all), scored on the validation and test audit samples. Beside it, the same learner
-on the revealed train mules alone, the labels training has, and a run's audits at the
-revealed count, when the run is audited. A curve still rising at every train mule says
-that more labels would help; revealed mules that train better than random draws of the
-same count are the easy ones.
+on the revealed train mules alone against the same non-mules (the study's A3 setup: the
+mules training knows, but clean negatives, where training's unlabelled accounts hold
+hidden mules), and a run's audits at the revealed count, when the run is audited. A
+curve still rising at every train mule says that more labels would help; revealed mules
+that train better than random draws of the same count are the easy ones.
 """
 
 from __future__ import annotations

@@ -369,7 +369,7 @@ def neighbourhood(key: ContextKey) -> dict[str, Any]:
 
 
 def reveal_inputs() -> list[dict[str, Any]]:
-    """What the reveal's INPUTS_QUERY prints for five mules and one Zelle link.
+    """What tigergraph.oracle.REVEAL_INPUTS_QUERY prints for five mules and one Zelle link.
 
     A (train) and D (test) received five fraud-labelled inflows about eight years
     before their split's cutoff; B (train) exchanged money with A before A could be

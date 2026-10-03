@@ -32,6 +32,8 @@ accounts through both context queries. The training query's rows go through the
 dataset's context cache; the analytics query's rows are not cached, so a rebuilt table
 requests them all again. After that first run, `python -m pytest -m graph` also checks
 the analytics query against its Python mirror (`tests/integration/test_feature_parity.py`).
+Run it before reading the `account` family's results: offline, the fake graph serves the
+mirror itself, so only this check compares the mirror with the GSQL.
 
 ## The analyses
 

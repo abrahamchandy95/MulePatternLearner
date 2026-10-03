@@ -21,7 +21,9 @@ The run compared with is the one the caller names (the built-in run for the comm
 line), and only if it was trained on this dataset. An analysis whose inputs are missing
 (no such run, no audit) is skipped with its reason, and the study's status is then
 incomplete. The graph is read only through a StudyReader, which pipeline.diagnose
-builds, and ground truth only through its TruthReader, for analysis.
+builds, and ground truth, for analysis, only through two of its reads: the TruthReader
+(oracle()) and the reveal's inputs (reveal_inputs(), which name the mules for
+reveal-spread).
 """
 
 from __future__ import annotations

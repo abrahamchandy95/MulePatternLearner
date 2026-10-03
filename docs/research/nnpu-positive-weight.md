@@ -30,8 +30,8 @@ graph and no ground truth:
 - 16 features, the positives shifted by 2 along 4 of them;
 - 20 labelled positives, and a label-blind marginal of 20,000 accounts in which positives
   sit at the true prevalence, 0.00073;
-- a validation proxy of 11 labelled positives against 2,000 marginal accounts, and a test
-  set of 300 positives and 300,000 negatives (the class prior, 0.001);
+- a validation proxy of 11 labelled positives against 2,000 negatives, and a test set of
+  300 positives and 300,000 negatives (the class prior, 0.001);
 - a small MLP trained on batches of 16 positives drawn with replacement and 48 marginal
   accounts, as the trainer's batches are, for up to 30 epochs of 100 steps, keeping the
   epoch with the best validation proxy AP and stopping after 6 without improvement;
@@ -55,15 +55,18 @@ defaults for this note:
 | 0.999 (balanced) | 0 of 5 | 0.865 (0.820 to 0.882) | 0.0288 | 0.956 | 2.0 |
 
 With the prior as its weight, every seed collapses within an epoch or two and ranks worse
-than chance, and its non-negative correction never fires. From a weight of 0.5 up, every seed learns, and the balanced
-weight ranks best on average, at a test AP of about 30 times the prevalence. So the weight
+than chance, and its non-negative correction never fires. From a weight of 0.5 up, every
+seed learns, and the balanced weight ranks best on average, at a test AP of about 30
+times the prevalence. So the weight
 alone reproduces the collapse on a problem of the dataset's proportions, and the balanced
 weight is the one to keep.
 
 ## Testing it again
 
 The simulation is a model of the problem, not the problem: its positives are one shifted
-Gaussian, and its marginal holds no hidden mule that resembles the revealed ones. Its test
+Gaussian, and its labelled positives are a uniform draw of them, so the hidden positives
+in its marginal are like the labelled ones. The graph reveals the loud mules instead, and
+its hidden mules are quieter than the revealed. Its test
 on the graph is the `prior_weight` control variant (`loss.positive_weight = "prior"`), which
 the control experiments train over the seeds 42, 43 and 44 and compare with the baseline on
 the validation audit (`python scripts/run_experiments.py`).

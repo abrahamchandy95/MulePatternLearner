@@ -213,6 +213,39 @@ were float32 probabilities, and any logit above about 16.6 became exactly 1.0.
 - The control experiments test what the study suggested on validation: `no_pool_counts`,
   `drop_pool_internal_inflows`, `no_slot_sum` and `no_attention`.
 
+## What the static review left open
+
+The study began with a static review of the code at commit 5770926 (`shift_review.md` in
+the archive). It found no bug, and ranked the problems of the inputs and of the training
+setup. The constant root input and the missing counts led to the pool groups and the slot
+sum, float32 ties to float64 scores, and the noisy audit AP to ring-clustered intervals;
+[the mule profile](mule-profile.md) measures the visibility-phase shift, and `mule
+diagnose drift` the cutoff shift. These findings still hold for this code, and nothing
+has acted on them yet:
+
+- **One neighbourhood draw per scored account.** Evaluation draws each account's
+  candidates with hash keys from `sampler.evaluation_seed`, so its score rests on one
+  subset of its pool, while training saw many draws. Averaging the logits over a few
+  evaluation seeds would cost scoring time only; the contexts would not change.
+- **Every hub stub looks the same.** A hub child becomes a local stub with only
+  `is_external`, `is_deposit` and `history_withheld`, so every stub embeds to one vector
+  and only its edge differs. In run 2's test audit, stubs filled about 6.4 of a root's 16
+  hop-1 slots (12,974 stub children for 2,040 roots).
+- **Association slots carry no event.** An association message has every event field at
+  zero, and the children's pool takes no associations, so a Party, Token or Device child,
+  which makes no payment, brings no hop-2 message: the slot says only that the relation
+  exists.
+- **Inputs that repeat others.** `amount_present` repeats `is_event`, since every amount
+  in the reference graph is present; `pair_first_present` repeats `gap_present` for
+  Account contexts; and `flow_observation_seconds` repeats the event's age.
+- **Edge inputs on different scales.** Fourier coordinates between -1 and 1, 0 or 1
+  flags and log-seconds up to about 17 reach the first linear layer unstandardised.
+- **A positive scored confidently low learns little.** The gradient of the sigmoid
+  surrogate for a positive, σ(f)(1 − σ(f)), is near zero when the model scores it far
+  below zero, and each batch's 16 positives are drawn with replacement from 20 revealed
+  train mules, the loud ones: the hard mules are left behind while the easy ones are
+  memorised.
+
 ## One-off answers
 
 These answered a question once and are not rerun:
@@ -245,7 +278,7 @@ These answered a question once and are not rerun:
 | `bl_report.py`, `bl_template.md`, `bl_tables.md`, `baselines.md` | `reporting.study_report.write_diagnostics_report`, and this note |
 | `pool_activity_check*.py`, `pool_activity_offline.py`, `pool_activity_passthrough.py`, `pool_activity_check.md` | this note; the `univariate` and `baselines` analyses and the `drop_pool_*` variants rerun what matters |
 | `binormal_ap.py` | this note ([What AP to expect from an ROC AUC](#what-ap-to-expect-from-an-roc-auc)) |
-| `shift_review.md` | this note and the shift analysis |
+| `shift_review.md` | this note ([What the static review left open](#what-the-static-review-left-open)) and the shift analysis |
 | `extract_notes.md` | this note ([The question and the data](#the-question-and-the-data)) |
 | `profile/p1_groups.py` to `p11_misc.py`, `load_messages.py`, `mule_profile.md` | [the mule profile](mule-profile.md) |
 | `nnpu_sim/sim.py`, `grid.py`, `traj.py` | `diagnostics/nnpu_simulation.py`, `mule diagnose nnpu-simulation`, and [the nnPU positive weight](nnpu-positive-weight.md); its test on the graph is the `prior_weight` variant |
