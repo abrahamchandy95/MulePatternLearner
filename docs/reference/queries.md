@@ -296,10 +296,12 @@ describes what a pair is.
   until it has finished (`mule check` no longer lists stale training queries; the GSQL
   shell's `ls` shows every query's state), then run the same command again: it installs
   only what is still stale, and creates nothing the last run created.
-- The console says when an install starts ("Installing 12 queries on TigerGraph"), shows
-  the wait for compilation in place on a terminal, and says when it is done ("Installed 12
-  queries in 48.0 min"); the `install`, `install_unanswered`, `install_wait` and
-  `installed` events hold the query names.
+- The console says when an install starts ("Installing 3 queries on TigerGraph...", and
+  "Installing all 12 queries on TigerGraph (about 50 minutes)..." when every query is
+  stale, as on a fresh graph), shows the wait for compilation in place on a terminal, and
+  says when it is done and how long it took ("Installed 12 queries in 48.0 min"); the
+  `install`, `install_unanswered`, `install_wait` and `installed` events hold the query
+  names.
 - Every write (the schema change, `CREATE`, the install, `DROP`) runs once: a failed one
   is reported, never repeated.
 
