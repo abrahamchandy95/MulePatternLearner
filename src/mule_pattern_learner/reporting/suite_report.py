@@ -476,7 +476,7 @@ def suite_text(suite: SuitePaths, files: SuiteFiles) -> str:
         "the spread between them. The audit-only interval beside it resamples the accounts "
         "alone, for these seeds. The seeds that agree are those whose own delta has the "
         "sign of the mean. A delta is consistent when its interval over both sources "
-        f"excludes zero. The suite makes {compared} comparison"
+        f"excludes zero and every seed agrees. The suite makes {compared} comparison"
         f"{'' if compared == 1 else 's'} with the baseline, so at {INTERVAL:.0%} about "
         f"{compared * (1 - INTERVAL):.1f} would exclude zero by chance even if no variant "
         "differed from it: a single consistent delta is a lead to repeat, not a finding.",

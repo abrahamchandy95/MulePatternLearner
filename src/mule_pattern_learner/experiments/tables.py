@@ -18,10 +18,10 @@ from those replicates: the audit sample's uncertainty for these seeds. The varia
 difference from the baseline's (over the seeds both completed, paired by seed) gets two:
 the audit-only interval, from the same replicates, and the two-source interval, which
 on each replicate also resamples the seeds (metrics.two_source_replicates), so it covers
-the spread between seeds as well. Decisions use the two-source interval: a delta is
-consistent when it excludes zero, and comparison.csv counts the seeds whose own delta
-has the mean's sign. Accounts some run's audit rejected are left out of the pairing,
-and comparison.csv counts them.
+the spread between seeds as well. comparison.csv counts the seeds whose own delta has
+the mean's sign, and a delta is consistent when its two-source interval excludes zero
+and every seed compared agrees on that sign. Accounts some run's audit rejected are
+left out of the pairing, and comparison.csv counts them.
 
 A variant's seed ensemble combines its complete seeds (two or more) into one ranking of
 those shared accounts, their scores averaged on the log-odds scale
@@ -314,11 +314,11 @@ class Delta:
 
     @property
     def consistent(self) -> bool:
-        """Whether the two-source interval excludes zero."""
+        """Whether the two-source interval excludes zero and every seed has the mean's sign."""
         if self.interval is None:
             return False
         low, high = self.interval
-        return low > 0 or high < 0
+        return (low > 0 or high < 0) and self.agreeing == len(self.seeds)
 
     @property
     def agreeing(self) -> int:

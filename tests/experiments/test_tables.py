@@ -143,15 +143,17 @@ def test_the_two_source_replicates_of_a_small_case_worked_by_hand() -> None:
     assert not (accounts == first).all()
 
 
-def test_a_delta_is_consistent_when_its_two_source_interval_excludes_zero() -> None:
+def test_a_delta_is_consistent_when_its_interval_excludes_zero_and_every_seed_agrees() -> None:
     seeds = {1: -0.1, 2: -0.3}
     assert Delta(-0.2, [-0.3, -0.1], [-0.25, -0.15], seeds).consistent
     assert Delta(0.2, [0.1, 0.3], [0.15, 0.25], {1: 0.1, 2: 0.3}).consistent
     # The audit-only interval does not decide: the two-source one must exclude zero.
     assert not Delta(-0.2, [-0.3, 0.05], [-0.25, -0.15], seeds).consistent
-    # A seed of the other sign is counted, not disqualifying.
+    # A seed of the other sign is counted, and the delta is not consistent.
     mixed = Delta(-0.2, [-0.3, -0.1], [-0.25, -0.15], {1: 0.1, 2: -0.5, 3: -0.2})
-    assert mixed.consistent and mixed.agreeing == 2
+    assert not mixed.consistent and mixed.agreeing == 2
+    # Nor is one whose seed has no difference at all.
+    assert not Delta(-0.2, [-0.3, -0.1], [-0.25, -0.15], {1: 0.0, 2: -0.4}).consistent
     assert not Delta(-0.2, None, None, {1: -0.1}).consistent
 
 

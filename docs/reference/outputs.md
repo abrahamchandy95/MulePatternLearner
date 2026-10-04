@@ -227,10 +227,10 @@ accounts and rings once and the seeds, paired by seed) and its interval over the
 sample alone (`validation_ap_delta_audit_low`, `validation_ap_delta_audit_high`), the
 seeds both completed (`validation_ap_delta_seeds`) and those whose own delta has the
 mean's sign (`validation_ap_delta_agreeing`), and `consistent` (the two-source interval
-excludes zero); the
-seed means of `validation_roc_auc`, `test_roc_auc` and recall and precision at each
-budget (`validation_recall_at_1pct`, `validation_precision_at_1pct` and so on for `5pct`,
-`10pct` and the test split); `best_epoch`, `parameter_count` and `training_hours`;
+excludes zero and every seed compared agrees on the sign); the seed means of
+`validation_roc_auc`, `test_roc_auc` and recall and precision at each budget
+(`validation_recall_at_1pct`, `validation_precision_at_1pct` and so on for `5pct`, `10pct`
+and the test split); `best_epoch`, `parameter_count` and `training_hours`;
 `unpaired_accounts` (validation accounts left out of the pairing because some audit
 rejected them); and `differs` (the runs whose commit, dirty state, device or sampler
 backend differ from the suite's usual value). The seed-mean AP is the mean of each run's

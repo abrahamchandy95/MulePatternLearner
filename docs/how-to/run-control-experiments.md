@@ -162,10 +162,11 @@ validation audit AP and marks the test audit "for reporting, not selection".
   with the per-seed deltas).
 - **The seeds that agree** (`validation_ap_delta_agreeing` of `validation_ap_delta_seeds`,
   "8 of 10" in report.md) are those whose own delta has the sign of the mean.
-- **`consistent`** is true when the two-source interval excludes zero. report.md states
-  how many comparisons the suite makes and how many would exclude zero by chance: the
-  `all` suite compares 17 variants with the baseline, so at 90% about 1.7 would even if
-  no variant differed. Treat a single consistent delta as a lead to repeat.
+- **`consistent`** is true when the two-source interval excludes zero and every seed
+  compared agrees on the sign. report.md states how many comparisons the suite makes
+  and how many would exclude zero by chance: the `all` suite compares 17 variants with
+  the baseline, so at 90% about 1.7 would even if no variant differed. Treat a single
+  consistent delta as a lead to repeat.
 - **Seed ensembles** combine each variant's seeds (two or more) into one model: their
   scores of the accounts every audit scored, averaged on the log-odds scale, audited on
   validation and test as a run is, with the AP's interval over the same replicates. On
