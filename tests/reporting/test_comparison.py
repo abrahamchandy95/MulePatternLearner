@@ -89,7 +89,7 @@ def test_the_suite_report_ranks_by_validation_and_keeps_test_for_reporting(
     assert "In real use only the proxy exists" in reliability
     for label, n in (("runs", 6), ("variants, by their seed means", 3)):
         assert re.search(rf"^\| {label} \| -?\d\.\d\d \| {n} \|$", reliability, re.M), label
-    assert "| runs selected on validation_ap |" in reliability
+    assert "| runs selected on the proxy AP |" in reliability
     assert "| 1 | **baseline** | 42 43 |" in ensembles
     links = re.findall(r"!\[[^\]]+\]\(([^)]+)\)", text)
     assert links == [f"plots/{name}.png" for name in SUITE_FIGURES]

@@ -375,6 +375,15 @@ def proxy_points(summary: pd.DataFrame) -> pd.DataFrame:
     return wide.reindex(columns=[*wanted, HIDDEN_METRIC]).dropna(subset=wanted).reset_index()
 
 
+# How the proxy reliability names the runs of each selection rule (training.selection).
+RULE_RUNS = {
+    "validation_ap": "runs selected on the proxy AP",
+    "validation_roc_auc": "runs selected on the proxy ROC AUC",
+    "validation_pu_risk": "runs selected on the proxy nnPU risk",
+    "none": "runs keeping the last epoch",
+}
+
+
 def proxy_reliability(
     points: pd.DataFrame, rules: Mapping[tuple[str, int], str]
 ) -> list[Correlation]:
@@ -403,7 +412,7 @@ def proxy_reliability(
     )
     for rule in SELECTION_RULES:
         if (chosen == rule).any():
-            found.append(over(f"runs selected on {rule}", chosen == rule, audit))
+            found.append(over(RULE_RUNS[rule], chosen == rule, audit))
     means = points.groupby("variant", sort=False)[[PROXY_METRIC, "average_precision"]].mean()
     variants = means[PROXY_METRIC].to_numpy(np.float64)
     found.append(

@@ -266,8 +266,8 @@ def test_a_selection_variant_trains_audits_and_compares_on_the_fakes(
     # for a correlation.
     text = compared.report.read_text()
     assert re.search(r"^\| runs \| (n/a|-?\d\.\d\d) \| 4 \|$", text, re.M)
-    for rule in ("validation_ap", "validation_pu_risk"):
-        assert f"| runs selected on {rule} | n/a | 2 |" in text
+    for rule in ("AP", "nnPU risk"):
+        assert f"| runs selected on the proxy {rule} | n/a | 2 |" in text
 
 
 def test_a_variant_that_fails_on_its_own_fails_alone(

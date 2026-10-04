@@ -7,7 +7,9 @@ import pandas as pd
 import pytest
 
 from mule_pattern_learner.artifacts import HIDDEN_METRIC, PROXY_METRIC
+from mule_pattern_learner.config import SELECTION_RULES
 from mule_pattern_learner.reporting.suite_report import (
+    RULE_RUNS,
     mean_epochs,
     proxy_points,
     proxy_reliability,
@@ -44,8 +46,8 @@ def test_the_proxy_reliability_of_a_small_case_worked_by_hand() -> None:
     # hidden mules five runs have a value, two of them swapped: 1 - 12 / 120.
     assert [(c.label, c.n) for c in found] == [
         ("runs", 6),
-        ("runs selected on validation_ap", 4),
-        ("runs selected on none", 2),
+        ("runs selected on the proxy AP", 4),
+        ("runs keeping the last epoch", 2),
         ("variants, by their seed means", 3),
         ("runs, audit on the hidden mules", 5),
     ]
@@ -53,7 +55,9 @@ def test_the_proxy_reliability_of_a_small_case_worked_by_hand() -> None:
     values = [c.value for c in found if c.value is not None]
     assert values == pytest.approx([1 - 12 / 210, 0.8, 1.0, 0.9])
     assert found[0].text() == "runs: Spearman 0.94 (n = 6)"
-    assert found[2].text() == "runs selected on none: Spearman n/a (n = 2)"
+    assert found[2].text() == "runs keeping the last epoch: Spearman n/a (n = 2)"
+    # Every rule's runs are named in words.
+    assert list(RULE_RUNS) == list(SELECTION_RULES)
 
 
 def test_proxy_points_take_the_complete_runs_and_leave_the_ensembles_out() -> None:
