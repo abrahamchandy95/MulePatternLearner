@@ -127,8 +127,10 @@ header name.
 - A synthetic mule's effectiveness is its first simulated mule activity; a known
   synthetic non-mule may use the account's creation for both clocks.
 
-After loading, check the contract (every violation count must be zero) and read a page
-of the oracle export; a page's last `account_id` is the next page's `after_id`:
+After loading, check the contract and read a page of the oracle export; a page's last
+`account_id` is the next page's `after_id`. Before the first reveal, a PhantomLedger load
+shows one `invalid_unknown` per mule (its labels arrive unknown); every other count, and
+every count after the reveal, must be zero:
 
 ```gsql
 RUN QUERY validate_label_contract()

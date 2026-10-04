@@ -65,10 +65,11 @@ analytics queries of `gsql/analytics/` wait for `mule diagnose`.
 
 ## 5. Check the labels
 
-Run `validate_label_contract` (every violation count must be zero) and read a page of
-`read_ground_truth`, as [Loading accounts](../reference/labels.md#loading-accounts) shows.
-A PhantomLedger load masks every mule, so `revealed_positives` is 0 until the first
-preparation reveals them.
+Run `validate_label_contract` and read a page of `read_ground_truth`, as
+[Loading accounts](../reference/labels.md#loading-accounts) shows. A PhantomLedger load
+marks every label unknown and masked, so until the first `mule train` reveals the known
+mules, `invalid_unknown` counts every mule and `revealed_positives` is 0. Every other
+count must be zero; after the reveal, all of them are.
 
 ## 6. Prepare and train
 
