@@ -1,17 +1,16 @@
 # Run the control experiments
 
-Measure what each part of the built-in run contributes: train variants of it over the
-ten seeds 42 to 51, audit every run, and compare each variant with the baseline on the
-same accounts. The script takes suite or variant names only. [The control
-experiments](../research/control-experiments.md) reads the `controls` suite's first three
-seeds: what they established, what is noise so far, and the method problems that led to
-the ten seeds, the `methods` suite, the seed ensembles, the intervals over both seeds and
-accounts, and the proxy's reliability.
+Measure what each part of the built-in run contributes: train variants over the ten seeds
+42 to 51, audit every run, and compare each variant with the baseline on the same
+accounts. [The control experiments](../research/control-experiments.md) reads the
+`controls` suite's first three seeds: what they established, what is noise so far, and the
+method problems that led to the ten seeds, the `methods` suite, the seed ensembles,
+intervals over both seeds and accounts, and the proxy's reliability.
 
 ## Run a suite
 
-On the machine that trains (the CUDA host), after `mule train` and `mule evaluate` have
-made the baseline's seed 42:
+On the CUDA host, after `mule train` and `mule evaluate` made the baseline's seed 42. The
+script takes suite or variant names only:
 
 ```bash
 python scripts/run_experiments.py                            # the controls suite
@@ -20,69 +19,54 @@ python scripts/run_experiments.py no_attention prior_weight  # chosen variants
 python scripts/run_experiments.py --help                     # suites, variants, questions, changes
 ```
 
-The baseline is always included, and its seed 42 is the run `mule train` makes. The
-script, in order:
+The baseline is always included; its seed 42 is the `mule train` run. Chosen variants make
+a suite named by their names joined with hyphens. The script:
 
-1. **Validates every variant offline**: each seed's configuration, feature plan and model
-   on the CPU, one dataset for all and a distinct fingerprint for each. A failure names
-   the variant, before anything connects.
-2. **Prepares the dataset** once, as `mule train` does, on the suite's one connection.
-3. **Plans every run** and shows the plan as a matrix of variants and seeds, each run's
-   action (`keep`, `train`, `resume` or `archive`) in its cell, with the hours the runs
-   to train should take (see [Cost](#cost)): a range estimated from the hours the suite's
-   finished runs took (the `suite` event's `estimate_hours` and `estimated_from`) and an
-   upper bound from the median seconds per step of the latest graph run's `history.csv`
-   (`bound_hours` and `timed_from`). A
-   complete run of the same settings and dataset is kept, an interrupted one resumes, and
-   one whose settings differ, whose `config.json` cannot be read or that was trained on
-   another dataset is moved whole to `results/archive/<variant>/seed-<n>/<UTC time>/` and
-   trained again. Nothing is deleted.
-4. **Trains**, seeds outer and variants inner, each run into `results/<variant>/seed-<n>/`
-   with its own figures.
-5. **Audits** validation and test for every complete run that lacks them, reading the
-   ground truth once for the whole suite.
-6. **Compares** the runs and writes `summary.csv`, `comparison.csv`, seven figures and
-   `report.md` under `results/experiments/<suite>/`, always, even after a failure.
+1. **validates every variant offline** before connecting (each seed's configuration,
+   feature plan and model on the CPU, one shared dataset, a distinct fingerprint each); a
+   failure names the variant;
+2. **prepares the dataset** once, as `mule train` does, on the suite's one connection;
+3. **plans every run**, shown as a matrix of variants and seeds with each run's action
+   (`keep`, `train`, `resume` or `archive`) and the hours to train ([Cost](#cost)). A
+   complete run of the same settings and dataset is kept and an interrupted one resumes;
+   any other is archived and trained again ([The
+   archive](../reference/outputs.md#the-archive-resultsarchive)). Nothing is deleted;
+4. **trains**, seeds outer and variants inner, each into `results/<variant>/seed-<n>/`
+   with its figures;
+5. **audits** validation and test of every complete run lacking them, reading the ground
+   truth once per suite;
+6. **compares** into `results/experiments/<suite>/`, even after a failure
+   ([Outputs](../reference/outputs.md#a-suite-resultsexperimentssuite)).
 
-Each run shows its own lines as it trains and audits, then one line as each of its steps
-finishes ("baseline seed 43 trained: best epoch 5, validation proxy AP 0.566, 58 min", a
-`run_finished` event). A run's own error is a `run_failed` event and the suite goes on; a
-TigerGraph outage (the retry budget ran out while the graph was unavailable) is a
-`suite_stopped` event and stops the training and audits, since every later run would fail
-the same way. The suite's own events are recorded in
-`results/experiments/<suite>/events.jsonl`, with the install and connecting that come
-before preparation; preparation's are in the dataset's, and each run's in its own. The
-script ends with how the suite did, the runs' errors, the top ten variants ranked by
-the validation audit AP of their hidden mules as `report.md` ranks them (with the delta
-from the baseline, the test AP of the hidden mules and the validation AP of every mule)
-and where the report is, and exits 1 unless every run is trained and
-audited without an error. A run whose figures failed after its numbers were saved stays complete in the
-tables, with its error beside it; `mule report results/<variant>/seed-<n>` redraws them.
-Run the script again to finish: complete runs of the same settings are kept. So are the
-runs of a suite trained with fewer seeds than `experiments.variants.SEEDS` holds now:
-running it again trains the new seeds. A run of another scope id differs in its
-settings, though, so since the built-in scope became `strict_mule_v3` every run of
-`strict_mule_v2` is moved to the archive and trained again, the controls suite's first
-three seeds included: the next `controls` suite trains all 90 runs ([Cost](#cost)).
+Each run prints its own lines, then one per finished step ("baseline seed 43 trained: best
+epoch 5, validation proxy AP 0.566, 58 min", `run_finished`). A run's error is
+`run_failed` and the suite goes on; a TigerGraph outage (retries ran out) is
+`suite_stopped` and ends training and audits, since every later run would fail too. The
+script ends with the outcome, the runs' errors, the top ten variants as `report.md` ranks
+them (with the delta, the hidden mules' test AP and every mule's validation AP) and the
+report's path, and exits 1 unless every run trained and audited without error. A run whose
+figures failed after its numbers were saved stays in the tables with its error;
+`mule report results/<variant>/seed-<n>` redraws them.
 
-A suite of chosen variants is named by their names joined with hyphens, as in
-`results/experiments/no_attention-prior_weight/`.
+Run the script again to finish: complete runs of the same settings are kept, so a suite
+trained with fewer seeds than `experiments.variants.SEEDS` holds trains only the new ones.
+A run of another scope id differs in its settings, though ([Cost](#cost)).
 
-The data are synthetic, so the suites study the method: the loss, how a run chooses its
-weights, how it is evaluated and whether seeds are worth combining, not which inputs to
-delete. Run `controls` first: it settles the positive weight (`prior_weight`) and the
-model's mechanisms, and every run of every suite holds the source, the revealed labels
-and the cutoffs fixed. Then run `methods`, which asks how to choose a model when a handful
-of mules are known and how much an only roughly known mule rate matters; the baseline's
-runs are shared. `feature_drops` says what each input group carries for this generator's
-mules, which is a fact about the generator rather than advice on what to drop.
+The data are synthetic, so the suites study the method (the loss, how a run chooses its
+weights, how it is evaluated, whether seeds are worth combining), not which inputs to
+delete; every run holds the source, revealed labels and cutoffs fixed. Run `controls`
+first: it settles the positive weight (`prior_weight`) and the model's mechanisms. Then
+`methods`: how to choose a model when a handful of mules are known, and how much a roughly
+known mule rate matters; it shares the baseline's runs. `feature_drops` says what each
+input group carries for this generator's mules, a fact about the generator, not advice on
+what to drop.
 
 ## The suites and variants
 
-Variants are declared in `src/mule_pattern_learner/experiments/variants.py`. A variant is
-a question and a change to the built-in run; it never sets a seed, and none touches
-`dataset.seed`, `dataset.split_seed` or `scope.reveal_salt`, so every variant trains on
-the baseline's dataset.
+Variants are declared in `src/mule_pattern_learner/experiments/variants.py`, each a
+question (in full under `--help`) and a change to the built-in run. None sets a seed or
+touches `dataset.seed`, `dataset.split_seed` or `scope.reveal_salt`, so all share the
+baseline's dataset.
 
 | Suite | Variants |
 |---|---|
@@ -96,143 +80,107 @@ the baseline's dataset.
 | `no_attention` | Does attention over sampled neighbours add anything beyond the root's own inputs, pool counts included? | `model.architecture = "summary"`, no slot sum |
 | `no_slot_sum` | Does the per-slot MLP sum help beyond attention? | `model.slot_sum = false` |
 | `no_pool_counts` | How much of the ranking comes from the candidate-pool counts? | without both pool groups |
-| `linear` | A bank that must explain every score could rank accounts with one linear layer of each account's own inputs, trained with the same nnPU loss and model selection: does it find the hidden mules as well as the graph model does? | `model.architecture = "linear"`, no slot sum |
-| `wide_and_deep` | On the reference graph a logistic regression of the account's own inputs, fitted on the same revealed mules, ranked validation's mules better than the graph model: if a bank adds such a linear score to the graph model's, inside one model trained as the graph model is, does it find more hidden mules than either alone? | `model.architecture = "wide_and_deep"` |
+| `linear` | Can one linear layer of the account's own inputs, which a bank could explain score by score, find hidden mules as well as the graph model, with the same loss and selection? | `model.architecture = "linear"`, no slot sum |
+| `wide_and_deep` | A logistic regression of the account's own inputs, fitted on the same revealed mules, ranked the reference graph's validation mules better than the graph model: does such a linear score added inside the graph model find more hidden mules than either alone? | `model.architecture = "wide_and_deep"` |
 | `prior_weight` | Does the balanced positive weight beat textbook nnPU across seeds? | `loss.positive_weight = "prior"` |
 | `no_weight_average` | Does selecting on the moving average of the weights help? | `training.weight_average_decay = 0.0` |
-| `drop_<group>` | What does the model lose without the group? | without the group, and the groups that read it (`drop_pair_history` also drops both pool groups, `drop_flow_timing` also `pool_activity`) |
-| `select_on_roc_auc` | When only a handful of mules are known, does choosing the epoch by their ROC AUC, which counts where every known mule ranks, pick better models than their AP, which hangs on the top few? | `training.selection = "validation_roc_auc"` |
-| `select_on_pu_risk` | Can the training objective itself, the nnPU risk on the validation sample, choose the epoch as well as a ranking metric of a handful of known mules? | `training.selection = "validation_pu_risk"` |
-| `fixed_10_epochs` | If a handful of known mules is too few to choose an epoch on, is it better not to choose: train ten epochs and keep the last weights, averaged? | `training.selection = "none"`, `training.epochs = 10` |
-| `prior_tenth` | A bank knows its mule rate only roughly: how much does the ranking change if the assumed rate is a tenth of the built-in prior? | `loss.class_prior = 0.0001` |
-| `prior_tenfold` | The same, if the assumed rate is ten times the built-in prior? | `loss.class_prior = 0.01` |
+| `drop_<group>` | What does the model lose without the group? | without the group and the groups that read it (`drop_pair_history` also drops both pool groups, `drop_flow_timing` also `pool_activity`) |
+| `select_on_roc_auc` | With a handful of known mules, is their ROC AUC (every rank counts) a better epoch choice than their AP (the top few decide)? | `training.selection = "validation_roc_auc"` |
+| `select_on_pu_risk` | Can the training objective, the nnPU risk on the validation sample, choose the epoch as well as a ranking metric? | `training.selection = "validation_pu_risk"` |
+| `fixed_10_epochs` | If a handful of mules is too few to choose an epoch on, is it better not to choose: ten epochs, last weights averaged? | `training.selection = "none"`, `training.epochs = 10` |
+| `prior_tenth` | A bank knows its mule rate only roughly: how much does the ranking change at a tenth of the built-in prior? | `loss.class_prior = 0.0001` |
+| `prior_tenfold` | The same at ten times the prior | `loss.class_prior = 0.01` |
 
-Under the balanced positive weight the prior acts mainly through the negative-risk
-correction, and through how often the non-negative clamp fires (`corrected_steps` in each
-run's `history.csv`), so `prior_tenth` and `prior_tenfold` are expected to differ little
-from the baseline. A near-null result is itself a finding: the balanced weight makes the
-ranking robust to a mule rate known only to a factor of ten. The three selection variants
-change only which epoch is kept and when training stops. On the same host settings they
-follow the baseline's schedule, so the epochs both train request the contexts the
-baseline cached and cost little. The epochs past the baseline's early stop are new:
-`select_on_roc_auc` and `select_on_pu_risk` may stop later than it, and
-`fixed_10_epochs` always trains ten, more whenever the baseline stopped sooner.
-
-Variants only drop groups or change the model, the loss or the training: training reads
-only the built-in run's groups, so no variant adds one. How well a table of the account's
-own activity ranks mules, with no neighbour input, is a question for the diagnostics
-baselines ([Run the diagnostics](run-diagnostics.md)).
+- **The priors** act mainly through the negative-risk correction and how often the
+  non-negative clamp fires (`corrected_steps` in `history.csv`) under the balanced weight,
+  so `prior_tenth` and `prior_tenfold` should differ little from the baseline. A near-null
+  result is a finding: the ranking is robust to a mule rate known only to a factor of ten.
+- **The selection variants** change only which epoch is kept and when training stops. On
+  the same host settings they follow the baseline's schedule and reuse its cached
+  contexts, costing little. Epochs past its early stop are new: `select_on_roc_auc` and
+  `select_on_pu_risk` may stop later, and `fixed_10_epochs` always trains ten, more
+  whenever the baseline stopped sooner.
+- **No variant adds a group**: variants only drop groups or change the model, loss or
+  training, since training reads only the built-in groups. How well a table of the
+  account's own activity ranks mules, with no neighbour input, is for the diagnostics
+  baselines ([Run the diagnostics](run-diagnostics.md)).
 
 ## Cost
 
-The `controls` suite is 90 runs (70 graph runs and the 20 cheap `no_attention` and
-`linear` runs, which fetch no children). A graph run takes about 3 seconds per step on
-the CUDA host while it requests its contexts from TigerGraph, about an hour with early
-stopping; once the context cache holds them it is far faster. Over the controls suite's
-first three seeds each variant's runs took from 0.00 to 0.25 hours on average. A suite
-trained with fewer seeds keeps its complete runs, but a run of another scope differs in
-its settings: since the built-in scope became `strict_mule_v3`, of other split shares,
-every run of `strict_mule_v2` is moved to the archive and trained again, so the next
+The `controls` suite is 90 runs: 70 graph runs and 20 cheap `no_attention` and `linear`
+runs, which fetch no children. A graph run takes about 3 seconds a step on the CUDA host
+while it requests contexts from TigerGraph, about an hour with early stopping, and far
+less once the context cache holds them. Over the first three seeds each variant's runs
+averaged 0.00 to 0.25 hours. Since the built-in scope became `strict_mule_v3`, of other
+split shares, every `strict_mule_v2` run is archived and trained again: the next
 `controls` suite trains all 90.
 
 The plan gives two numbers for the runs it trains:
 
-- **The estimate** is a range from the hours the suite's finished runs took (each run's
-  `metrics.json`). The suite trains the seeds in turn and the baseline first within
-  each, so a new seed's baseline is a cold first run that fills the context cache for
-  its seed, and the variants after it read much of it. Each run to train is taken to
-  last from the fewest to the most hours a finished run of its variant took. A new
-  variant, with no finished run of its own, is costed from the baseline's finished runs,
-  and the plan line names it ("linear and wide_and_deep, which have none, costed from
-  the baseline's"; the `suite` event's `costed_from_baseline`): those are cold first
-  runs, so its estimate is high, the more so for a variant that fetches no children.
-  When the baseline has no finished run either, a new variant takes the range of every
-  finished run. A run that resumes is counted as a whole run, so the estimate is high
-  for it. A suite with no finished run has no estimate.
-- **The bound** takes every run to train all its epochs at the median seconds per step
-  of the latest graph run's `history.csv`. Summary runs are faster, and early stopping
-  and the cache end most runs far sooner, so it is an upper bound.
+- **The estimate** (`estimate_hours`, `estimated_from` in the `suite` event): each run
+  takes from the fewest to the most hours a finished run of its variant took (their
+  `metrics.json`). Seeds train in turn, baseline first, so a new seed's baseline is a cold
+  run that fills the cache for the variants after it. A variant with no finished run is
+  costed from the baseline's, named in the plan ("linear and wide_and_deep, which have
+  none, costed from the baseline's"; `costed_from_baseline`): high, since those are cold
+  runs, more so for a variant that fetches no children. With no baseline run either it
+  takes the range of every finished run. A resuming run counts whole (high). No finished
+  run, no estimate.
+- **The bound** (`bound_hours`, `timed_from`): every run trains all its epochs at the
+  median seconds per step of the latest graph run's `history.csv`: an upper bound, since
+  summary runs are faster and early stopping and the cache end most runs far sooner.
 
-Seeds, and variants that request the same groups, share the cache's entries, and drops
-of the client-computed groups (the hub indicator and both pool groups) request the same
-contexts as the baseline. Run variants one after another rather than as parallel
-processes, which may request the same contexts twice. The paired intervals take about 15
-seconds for the controls suite of three seeds and grow with the runs.
+Seeds, and variants requesting the same groups, share cache entries; dropping a
+client-computed group (the hub indicator, either pool group) requests the baseline's
+contexts. Run variants one after another: parallel processes may request the same contexts
+twice. The paired intervals take about 15 seconds for three seeds of `controls` and grow
+with the runs.
 
 ## Read the comparison
 
-Open `results/experiments/<suite>/report.md`. It ranks the variants by the seed-mean
-validation audit AP of their hidden mules and marks the test audit "for reporting, not
-selection". The hidden mules are those the graph had not revealed by the split's cutoff,
-ranked against the non-mules with the revealed mules removed, as an investigator would
-remove the cases already known: the model exists to find them. Every number of them
-comes first, in the columns and metrics named with `hidden` (`validation_hidden_ap`,
-`hidden_average_precision`), and the same of every mule follows; the ranking, the delta,
-its consistency, the seed ensembles' ranking and the figures are of the hidden mules,
-but for `comparison_ap_every_mule.png`.
+Open `results/experiments/<suite>/report.md`; `mule report results/experiments/<suite>`
+redraws it offline, and [Outputs](../reference/outputs.md#a-suite-resultsexperimentssuite)
+defines every column and figure. It ranks variants by the seed-mean validation AP of their
+hidden mules ([the audit](train-and-evaluate.md#audit)) and marks the test audit "for
+reporting, not selection". Every comparison is of the hidden mules except the every-mule
+columns and `comparison_ap_every_mule.png`.
 
-- **The paired delta** (`validation_hidden_ap_delta`) is the variant's seed-mean
-  validation AP of the hidden mules minus the baseline's, over the seeds both completed,
-  each seed paired with the baseline's run of the same seed. Every audit of a dataset
-  scores the same accounts, so each bootstrap replicate resamples those accounts and
-  their rings once and applies the resample to every run. Its interval
-  (`validation_hidden_ap_delta_low` and `_high`) covers both sources of uncertainty: each
-  replicate also resamples the seeds, so it widens with the spread between them. The
-  audit-only interval beside it (`validation_hidden_ap_delta_audit_low` and `_high`)
-  resamples the accounts alone, for these seeds. `validation_ap_delta` is the same of
-  every mule, beside it. Over the controls suite's first three seeds the spread between
-  seeds was as large as the differences between variants, which only the two-source
-  interval shows (`comparison_delta.png` draws both, with the per-seed deltas). Its seed
-  half is a percentile bootstrap over the seeds, which is too narrow with few of them:
-  resampling n seeds understates their variance by about (n - 1) / n and draws few
-  distinct sets (three seeds give ten), so the interval is reliable only with many seeds,
-  such as the ten every suite now trains.
-- **`consistent`** is true when the hidden mules' two-source interval excludes zero on
-  the side of the mean. The interval resamples the seeds, so it already widens when
-  they disagree. report.md states how many comparisons the suite makes and how many
-  would exclude zero by chance: the `all` suite compares 19 variants with the baseline,
-  so at 90% about 1.9 would even if no variant differed. Treat a single consistent delta
-  as a lead to repeat.
-- **The seeds that agree** (`validation_hidden_ap_delta_agreeing` of
-  `validation_hidden_ap_delta_seeds`, "8 of 10" in report.md) are those whose own delta
-  has the sign of the mean; an exactly zero delta, or mean, agrees with neither sign.
-  They are shown beside the delta and do not decide whether it is consistent.
-- **Seed ensembles** combine each variant's seeds (two or more) into one model: their
-  scores of the accounts every audit scored, averaged on the log-odds scale, audited on
-  validation and test with a run's ranking metrics, of the hidden mules and of every
-  mule, and ranked by their validation AP of the hidden mules. Like the seed means, an ensemble has
-  an interval for its AP alone, over the same replicates; a run's audit report has one
-  for every ranking metric. On the log-odds scale a seed that is confident about an
-  account weighs more than a hesitant one, where averaging ranks would give every seed
-  the same say. report.md
-  ranks them in a section of their own beside the mean of each variant's seeds, and
-  `comparison_ap.png` draws each as a hollow diamond below its variant's mean. An
-  ensemble above the mean of its seeds gains from their disagreement: a method question
-  for a ranking that varies from seed to seed.
+- **The paired delta** (`validation_hidden_ap_delta`) pairs each seed with the baseline's.
+  Its interval covers both the audit sample and the seeds; the audit-only interval covers
+  the sample alone. Over the first three seeds the seed spread was as large as the
+  differences between variants, which only the two-source interval shows
+  (`comparison_delta.png` draws both). Its seed half is a percentile bootstrap, too narrow
+  with few seeds: resampling n seeds understates their variance by about (n - 1) / n and
+  draws few distinct sets (three seeds give ten), so it is reliable only with many seeds,
+  like the ten every suite now trains.
+- **`consistent`** means the two-source interval excludes zero on the mean's side.
+  report.md gives the number of comparisons and how many would be consistent by chance:
+  the `all` suite compares 19 variants, so at 90% about 1.9 would with no real difference.
+  Treat a single consistent delta as a lead to repeat. The seeds that agree ("8 of 10")
+  are shown beside it and do not decide it.
+- **Seed ensembles** average a variant's seeds on the log-odds scale, where a confident
+  seed weighs more than a hesitant one (averaging ranks would give each the same say).
+  report.md ranks them in their own section beside the seed means; `comparison_ap.png`
+  draws each as a hollow diamond. An ensemble above its seeds' mean gains from their
+  disagreement: a method question for a ranking that varies by seed.
 - **The proxy's reliability** says how far a bank, which has only the proxy, could trust
-  it to choose among these models: Spearman's rank correlation of each run's selected
-  validation proxy AP with its validation audit AP of the hidden mules, which the proxy
-  never sees, with n beside it, over all runs, within each selection rule (selecting on a
-  criterion biases the selected proxy AP), over the variants' rankings by their seed
-  means, and last against the audit AP of every mule, the revealed ones included. `comparison_proxy_vs_audit.png` draws the runs and
-  gives the same numbers.
-- **`unpaired_accounts`** counts validation accounts some run's audit rejected; they are
-  left out of the pairing.
-- **`differs`** lists runs whose commit, dirty state, device or sampler backend differ
-  from the suite's usual value; their differences are not the variant's alone.
-- **The pool groups' test numbers are optimistic**: the groups were designed after
-  reading test-split mules, which the report repeats.
+  it to choose among these models: the rank correlation of each run's selected proxy AP
+  with its hidden audit AP, which the proxy never sees. Selecting on a criterion biases
+  the selected proxy AP, hence the correlation within each selection rule.
+  `comparison_proxy_vs_audit.png` draws the runs.
+- **`differs`** names runs whose commit, dirty state, device or sampler backend differ:
+  their difference is not the variant's alone. **`unpaired_accounts`** counts validation
+  accounts some audit rejected, left out of the pairing.
+- **The pool groups' test numbers are optimistic**: the groups were designed after reading
+  test-split mules, as the report repeats.
 
 The reference graph holds 233 mules across its three splits, 33 in validation and 40 in
-test, so an audit has few mules and its intervals are wide. [Outputs](../reference/outputs.md#a-suite-resultsexperimentssuite)
-lists every column and figure, and `mule report results/experiments/<suite>` redraws them
-offline.
+test, so audits have few mules and wide intervals.
 
 ## Declare a new variant
 
 Add a `Variant(name, question, change)` to `experiments/variants.py`, where `change` maps
 a `RunConfig` to another with `dataclasses.replace` or `RunConfig.with_changes`, and add
-it to a suite. The tests build every variant's configuration, plan and model offline,
-check that it shares the baseline's dataset and has a fingerprint of its own, and the
-script lists it under `--help`. A variant that changed a dataset setting would need a
-dataset of its own, and the suite refuses it.
+it to a suite. The tests build every variant's configuration, plan and model offline and
+check it shares the baseline's dataset with a fingerprint of its own; `--help` lists it. A
+variant changing a dataset setting would need its own dataset, so the suite refuses it.

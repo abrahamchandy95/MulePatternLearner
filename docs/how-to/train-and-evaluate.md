@@ -1,32 +1,16 @@
 # Train and evaluate the built-in run
 
-From a machine with the code to an audited model. You need a TigerGraph graph that holds
-the loaded data ([Set up a graph](set-up-a-graph.md)) and its connection details. Every
-setting is built in ([Configuration](../reference/configuration.md)); the commands take no
-options.
+From a machine with the code to an audited model, on a graph with the data loaded ([Set up
+a graph](set-up-a-graph.md)). Every setting is built in
+([Configuration](../reference/configuration.md)); the commands take no options and are
+described in [Command line](../reference/cli.md).
 
 ## Install
 
-Python 3.12 or newer, in an editable install, since the commands read `gsql/` from the
-repository:
-
-```bash
-pip install -e ".[dev]"
-```
-
-torch and matplotlib are core dependencies. On a CUDA host, install the CUDA torch wheel
-first and then the cuGraph extra that matches its CUDA major version
-([On the CUDA host](#on-the-cuda-host)).
-
-Copy `.env.example` to `.env` and fill in the connection; environment variables override
-it. `GRAPHNAME` must be `Mule_Pattern_Learner`, and the connection refuses any other
-graph.
-
-```
-HOST=https://your-tg-host
-GRAPHNAME=Mule_Pattern_Learner
-SECRET=your_restpp_secret
-```
+Install as [Setup](../../README.md#setup) says (torch and matplotlib are core
+dependencies; for a CUDA host see [On the CUDA host](#on-the-cuda-host)). In `.env`,
+`SECRET` is the REST++ secret and `GRAPHNAME` must be `Mule_Pattern_Learner`: the
+connection refuses any other graph.
 
 ## Check the graph
 
@@ -34,16 +18,11 @@ SECRET=your_restpp_secret
 mule check
 ```
 
-It shows a checklist of the graph: the scope vertex type, the installed queries and, on a
-CUDA host, the cuGraph probe. Until the built-in run's dataset is prepared, it ends "Not
-ready" and says to run `mule train`; that is expected on a new machine. Once a dataset
-exists it also builds the first training batch and runs one optimizer step, which shows
-that the graph, the queries and the device work before an hour of training. The full
-report is in `results/check.json`.
-
-To prepare the dataset without training (it installs, creates the scope and reveals on a
-fresh graph, as `mule train` would, and only reads on a graph where they are in place;
-about 6 minutes on the reference graph):
+On a new machine it ends "Not ready" and says to run `mule train`, which is expected. Once
+a dataset exists it also runs one training step, proving the graph, queries and device
+before an hour of training ([mule check](../reference/cli.md#mule-check)). To prepare the
+dataset without training (it installs, creates the scope and reveals on a fresh graph, and
+only reads where they are in place; about 6 minutes on the reference graph):
 
 ```bash
 python -c "from mule_pattern_learner.config import DEFAULT_CONFIG; from mule_pattern_learner.pipeline.prepare import prepare_dataset; print(prepare_dataset(DEFAULT_CONFIG).root)"
@@ -55,46 +34,30 @@ python -c "from mule_pattern_learner.config import DEFAULT_CONFIG; from mule_pat
 mule train
 ```
 
-Run it in `tmux` or with `nohup`. It uses CUDA when available, then Apple MPS, then the
-CPU. On the CUDA host a step takes about 3 seconds and a run about an hour with early
-stopping. The console shows the dataset, the plan and a line per epoch:
+Run it in `tmux` or with `nohup`. It uses CUDA, then Apple MPS, then the CPU; on the CUDA
+host a step takes about 3 seconds and a run about an hour with early stopping. The console
+([mule train](../reference/cli.md#mule-train)) shows the dataset, the plan and an epoch
+per line:
 
 ```
-Dataset 1a2b3c4d5e6f: 20 / 11 / 20 known mules in train / validation / test
-Training on cuda (cuGraph sampler) into results/baseline/seed-42: 100 steps per epoch, at most 30 epochs, early stop after 6 epochs without gain
 epoch  1  loss 0.490  validation AP 0.452  ROC AUC 0.955  4.6 min  best so far
 epoch  2  loss 0.212  validation AP 0.431  ROC AUC 0.951  3.1 min
 ```
 
-"best so far" marks the epoch the run keeps so far. Under another `training.selection`
-the mark names the rule's criterion ("best ROC AUC so far", or "lowest risk so far" with
-the nnPU risk on the line), and under `"none"`, which keeps the last epoch, no line is
-marked.
+"best so far" marks the epoch kept so far; other `training.selection` rules name their
+criterion ("best ROC AUC so far", or "lowest risk so far" with the nnPU risk on the line),
+and `"none"` (keep the last epoch) marks none.
 
-On a terminal the current step is shown in place below them, then the scoring of
-validation ("scoring validation 640/2,011") until the epoch's line replaces it; a log of
-`nohup mule train` has neither. When the run ends, a summary gives the time taken, the best epoch, the
-validation and test proxy AP, ROC AUC and recall at the top 1% with their known mules, and
-the run directory. The full records are in the run's files: every event in
-`events.jsonl`, every log interval in `history.csv`, every epoch in `epochs.csv` and the
-result in `metrics.json`.
+- **Interrupted:** run it again; it resumes from `resume.pt` and reproduces the
+  uninterrupted run exactly on the same device.
+- **Complete:** it summarises `metrics.json` and changes nothing.
+- **Settings changed:** if a built-in setting that changes results differs from the run's,
+  it fails naming them; move `results/baseline/seed-42/` aside to train anew.
+- **Memorised positives:** watch `history.csv`
+  ([Training](../explanation/training.md#the-loss)).
 
-- **Interrupted?** Run the same command again: it continues from `resume.pt` and
-  reproduces the uninterrupted run exactly on the same device.
-- **Complete?** The command says so, summarises the run's `metrics.json` and changes
-  nothing.
-- **Settings changed?** If the code's built-in settings now differ from the run's in a
-  setting that changes results, the command fails and names the settings. Move
-  `results/baseline/seed-42/` aside to train the new settings.
-
-While it trains, watch `history.csv`: `objective` is the unclamped nnPU risk and
-`corrected_steps` counts the steps whose non-negative correction fired. A loss far below
-the first epoch's, rising corrections and a validation AP that peaks early point to
-memorised positives ([Training](../explanation/training.md#the-loss)).
-
-When it finishes, the run directory holds the model, its proxy predictions and metrics,
-the training figures in `plots/` and `report.md` ([Outputs](../reference/outputs.md#a-run-resultsvariantseed-n)).
-The proxy metrics count unlabelled accounts as negatives; judge the model by its audit.
+The run's files are in [Outputs](../reference/outputs.md#a-run-resultsvariantseed-n).
+Proxy metrics count unlabelled accounts as negatives: judge the model by its audit.
 
 ## Audit
 
@@ -102,120 +65,83 @@ The proxy metrics count unlabelled accounts as negatives; judge the model by its
 mule evaluate
 ```
 
-It audits the model against the ground truth on validation and test, into `audit/`, and
-redraws the audit figures and `report.md`. `mule evaluate results/<variant>/seed-<n>`
-audits another run. Each audit scores every mule of its split and 2,000 uniform
-non-mules, weighted to the whole split, with 90% intervals.
+It audits validation and test against the ground truth into `audit/` and redraws the audit
+figures and `report.md` ([mule evaluate](../reference/cli.md#mule-evaluate-run), [the
+ground-truth audit](../explanation/training.md#the-ground-truth-audit));
+`mule evaluate results/<variant>/seed-<n>` audits another run. To read it (`report.md`,
+`audit/validation.json`, `audit/test.json`):
 
-It ends with a table of both splits: the hidden and revealed mules, then AP, ROC AUC and
-recall and precision at 1, 5 and 10% of the hidden mules and then of every mule, each
-with its 90% interval. Read `report.md`, or `audit/validation.json` and `audit/test.json`,
-for the rest:
-
-- **Judge by the hidden mules.** The model exists to find the mules nobody knows on the
-  scoring date. The hidden mules are those the graph had not revealed by the split's
-  cutoff; their metrics (`hidden_metrics`) rank them against the non-mules with the
-  revealed mules removed, as an investigator would remove the cases already known. The
-  metrics of every mule (`metrics`) follow: the model was trained on mules like the
-  revealed ones, so those mix finding new mules with ranking the known ones again.
-- **Decide on validation's hidden mules.** `purpose` says which split: `decisions` for
-  validation, `reporting` for test. Comparing settings or picking a threshold on the test
-  audit makes the test number optimistic.
-- **Read the ranking.** Average precision against `weighted_prevalence`, ROC AUC, and
-  recall and precision at reviewing the top 1, 5 and 10% of accounts, each with its
-  interval. The F1 threshold was chosen on about a dozen validation mules and means
-  little.
-- **Compare revealed and hidden mules.** `revealed_positives` and `hidden_positives`, and
-  `audit_revealed_hidden.png`: a model that finds only mules like the ones it was shown is
+- **Judge by the hidden mules** (`hidden_metrics`). `metrics` (every mule) follows;
+  training saw mules like the revealed ones, so it mixes finding new mules with ranking
+  known ones again.
+- **Decide on validation** (`purpose` `decisions`); test is for `reporting`. Comparing
+  settings or picking a threshold on test makes it optimistic.
+- **Read the ranking:** AP against `weighted_prevalence`, ROC AUC, recall and precision at
+  the top 1, 5 and 10%. The F1 threshold was chosen on about a dozen validation mules and
+  means little.
+- **Compare revealed and hidden mules** (`revealed_positives`, `hidden_positives`,
+  `audit_revealed_hidden.png`): a model that finds only mules like those it was shown is
   not yet a detector.
 
-A split already audited is never rewritten: the command says it read its
-`audit/<split>.json` and summarises it with the others. To audit again, move its
-`audit/<split>.*` files aside.
+An audited split is never rewritten; to audit it again, move its `audit/<split>.*` aside.
 
 ## Redraw the figures
 
-```bash
-mule report
-```
-
-It redraws the figures and `report.md` from the saved files, offline;
-`mule report results/<variant>/seed-<n>` redraws another run. A figure that fails is
-named, and the others are still drawn.
+`mule report` redraws the figures and `report.md` offline
+(`mule report results/<variant>/seed-<n>` for another run); a failing figure is named and
+the rest are drawn ([mule report](../reference/cli.md#mule-report-run)).
 
 ## On the CUDA host
 
-A host that trained with earlier code starts from scratch: this code reads none of its
-datasets or models ([Datasets and models of earlier code](#datasets-and-models-of-earlier-code)),
-so leave `data/` and `results/` empty or move them aside, but for `results/archive/`, which
-holds the archived diagnostic study and is never read. The README's
-[Starting again on the CUDA host](../../README.md#starting-again-on-the-cuda-host) says
-what to do with the earlier code's own folders.
+A host that trained with earlier code starts from scratch ([Datasets and models of earlier
+code](#datasets-and-models-of-earlier-code)): leave `data/` and `results/` empty or moved
+aside, except `results/archive/` (the archived diagnostic study, never read). The earlier
+code's own folders are covered in [Starting again on the CUDA
+host](../../README.md#starting-again-on-the-cuda-host).
 
-1. **Environment.** Linux x86_64 with an NVIDIA driver for CUDA 12 (525.60 or newer) or
-   CUDA 13 (580.65 or newer), and Python 3.12 to 3.14.
-2. **The code.** Pull `main` (`git switch main && git pull`), or clone the repository.
-3. **torch and cuGraph.** Install them again after the pull, so the `mule` command and
-   the extras match the code. For CUDA 12, the cu129 torch wheel, then the `cuda12`
-   extra, whose cuGraph wheels are on pypi.nvidia.com:
-
-   ```bash
-   pip install torch==2.13.0 --index-url https://download.pytorch.org/whl/cu129
-   pip install -e '.[dev,cuda12]' --extra-index-url=https://pypi.nvidia.com
-   ```
-
-   For CUDA 13, the cu130 wheel and the `cuda13` extra, which is on pypi.org:
-
-   ```bash
-   pip install torch==2.13.0 --index-url https://download.pytorch.org/whl/cu130
-   pip install -e '.[dev,cuda13]'
-   ```
-
-4. **`.env`.** Copy it; nothing else is copied. The settings are built in, the known mules
-   are in TigerGraph, and the run prepares its own dataset.
-5. **Check cuGraph** on the GPU. The tests skip when cuGraph cannot run on the host; the
-   last one also needs the prepared dataset:
-
-   ```bash
-   python -m pytest -m cuda tests/integration/test_cugraph_sampler.py
-   ```
-
-6. **`mule check`.** Until the first `mule train` on a graph whose queries carry their
-   old names, it ends "Not ready": the renamed queries are stale, the old names are listed
-   as retired queries still installed, and there is no dataset.
-7. **`mule train`.** Its first run installs the renamed queries beside the old names
-   (about 50 minutes, within a 90-minute wait), prepares the dataset (about 6 minutes)
-   and trains the built-in run (about an hour). If the wait runs out, wait until `mule
-   check` no longer lists stale training queries, then run `mule train` again. `mule
-   check` now ends "Ready to train.", still listing the old names as retired queries.
-8. **Drop the old names.** Stop every job of the earlier code, on every machine: it calls
-   the old names. Then run `mule install`, which finds the renamed queries in place and
-   drops the old names, callers first ([Queries](../reference/queries.md#the-retired-names)).
+1. **Environment:** Linux x86_64, Python 3.12 to 3.14, an NVIDIA driver for CUDA 12
+   (525.60 or newer) or CUDA 13 (580.65 or newer).
+2. **Code:** `git switch main && git pull`, or clone.
+3. **torch and cuGraph:** reinstall after the pull, as [Setup](../../README.md#setup)
+   says, so `mule` and the extras match the code: CUDA 12 takes the cu129 torch wheel and
+   the `cuda12` extra (from pypi.nvidia.com), CUDA 13 the cu130 wheel and `cuda13` (from
+   pypi.org).
+4. **`.env`:** copy it, nothing else. Settings are built in, known mules are in TigerGraph
+   and the run prepares its own dataset.
+5. **cuGraph on the GPU:**
+   `python -m pytest -m cuda tests/integration/test_cugraph_sampler.py` (skips where
+   cuGraph cannot run; the last test needs the prepared dataset).
+6. **`mule check`** ends "Not ready" until the first `mule train` on a graph with the old
+   query names: renamed queries stale, old names listed as retired, no dataset.
+7. **`mule train`:** the first run installs the renamed queries beside the old names
+   (about 50 minutes, within a 90-minute wait), prepares the dataset (about 6 minutes) and
+   trains (about an hour). If the wait runs out, rerun once `mule check` lists no stale
+   training queries. `mule check` then ends "Ready to train.", old names still listed as
+   retired.
+8. **Drop the old names:** stop every job of the earlier code on every machine (it calls
+   them), then `mule install` drops them, callers first
+   ([Queries](../reference/queries.md#the-retired-names)).
 9. **`mule evaluate`, then `mule report`.**
-10. **The control experiments:** `python scripts/run_experiments.py`, then
-    `python scripts/run_experiments.py methods`
-    ([Run the control experiments](run-control-experiments.md)).
-11. **`mule diagnose`.** Its first run installs the analytics queries, then
+10. **Control experiments:** `python scripts/run_experiments.py`, then
+    `python scripts/run_experiments.py methods` ([Run the control
+    experiments](run-control-experiments.md)).
+11. **`mule diagnose`:** its first run installs the analytics queries; then
     `python -m pytest -m graph` checks them ([Run the diagnostics](run-diagnostics.md)).
-12. **The cache cap.** Set `contract.bounds.CONTEXT_CACHE_ENTRIES` to about five times
-    the baseline run's `contexts.distinct` (in its `metrics.json`). The runs of a dataset
-    share entries when they request the same server-side groups, so the cache holds the
-    baseline's contexts once, once more for each variant that drops a server-side group
-    (`drop_entity_meta`, `drop_time_encoding`, `drop_pair_history`, `drop_flow_timing`),
-    and the audits' samples beside them. At roughly 7 kB an entry, check that the disk
-    has room, and watch the first run that fills the cache: each eviction scans the
-    directory while the requests wait ([Outputs](../reference/outputs.md#a-prepared-dataset-datadataset-id)).
-
-If cuGraph fails its probe, training warns (`cugraph_probe`) and samples with the torch
-sampler, which draws from the same distribution.
+12. **Cache cap:** set `contract.bounds.CONTEXT_CACHE_ENTRIES` to about five times the
+    baseline's `contexts.distinct` (in its `metrics.json`). The cache holds the baseline's
+    contexts once, once more per variant dropping a server-side group (`drop_entity_meta`,
+    `drop_time_encoding`, `drop_pair_history`, `drop_flow_timing`), since runs share
+    entries only for the same server-side groups, plus the audit samples. At about 7 kB an
+    entry, check the disk, and watch the first run that fills it: each eviction scans the
+    directory while requests wait
+    ([Outputs](../reference/outputs.md#a-prepared-dataset-datadataset-id)).
 
 ## When TigerGraph rejects roots
 
-The built-in run allows no rejected root (`runtime.max_rejected_root_fraction = 0.0`), so a
-root TigerGraph rejects (for example `history_capacity_exceeded`) stops the run with the
-statuses that caused it. The limit decides only whether a run may go on, never its
-numbers, so the interrupted run may resume with a higher one, from Python, since the
-commands take no options:
+The built-in run allows none (`runtime.max_rejected_root_fraction = 0.0`), so a rejected
+root (such as `history_capacity_exceeded`) stops the run with its statuses ([Rejected
+roots](../explanation/training.md#rejected-roots)). The limit never changes the numbers,
+so resume with a higher one from Python:
 
 ```python
 from mule_pattern_learner.config import DEFAULT_CONFIG
@@ -225,15 +151,15 @@ config = DEFAULT_CONFIG.with_changes({"runtime": {"max_rejected_root_fraction": 
 train_run(config=config, resume=True)
 ```
 
-The test split is scored after `model.pt` is saved, so a test-split failure leaves
-`model.pt` without `metrics.json`, and the same resume finishes it. An observed positive
-that is rejected always fails. `mule evaluate` uses the model's own limit.
+A test-split failure leaves `model.pt` without `metrics.json` (test is scored after the
+save); the same resume finishes it.
 
 ## Train another configuration
 
-`mule train` trains only the built-in run. Another configuration trains from Python into a
-directory of its own, on the dataset of its dataset settings (shared with the built-in
-run when they are the same):
+`mule train` trains only the built-in run. Another configuration trains from Python into
+its own directory, on the dataset of its dataset settings (shared when they match the
+built-in run's). For comparisons over seeds with paired intervals, declare a variant
+instead ([Run the control experiments](run-control-experiments.md)).
 
 ```python
 from mule_pattern_learner.config import DEFAULT_CONFIG
@@ -246,41 +172,36 @@ train_run(run, config=DEFAULT_CONFIG.with_changes({"training": {"epochs": 3}}), 
 evaluate_run(run)
 ```
 
-For comparisons over seeds with paired intervals, declare a variant and use the
-experiments script instead ([Run the control experiments](run-control-experiments.md)).
-
 ## Datasets and models of earlier code
 
-This code reads only the datasets and models it writes:
+This code reads only what it writes:
 
-- **A dataset** is found by the dataset id of its settings in `data/<dataset id>/`, so a
-  dataset kept anywhere else, or one that records no dataset settings, is never read, and
-  `mule train` prepares a new one (about 6 minutes). A dataset prepared from other query
-  texts is refused ("was built from different GSQL sources"): run `mule install`, move the
-  directory aside (its `contexts/` goes with it; nothing deletes it), and run `mule train`
-  to prepare it again. So is a dataset whose scope settings record no split shares
-  ("records no scope shares"), prepared by earlier code from a scope split 70, 15 and 15%:
-  move it aside, and `mule train` prepares a new one.
-- **A model** must record `SavedModel.FORMAT` and this code's contract fingerprint, so a
-  `model.pt` of earlier code is refused. Train it again with this code.
+- **A dataset** is found by its settings' id in `data/<dataset id>/`. One kept elsewhere
+  or recording no dataset settings is ignored, and `mule train` prepares a new one (about
+  6 minutes). One from other query texts ("was built from different GSQL sources"), or
+  from earlier code's 70, 15 and 15% scope split ("records no scope shares"), is refused:
+  run `mule install` (for the first), move the directory aside (with its `contexts/`;
+  nothing deletes it) and run `mule train`.
+- **A model** must record `SavedModel.FORMAT` and this code's contract fingerprint; an
+  earlier `model.pt` is refused, so train again.
 
 ## When something is refused
 
-| Message | Meaning and fix |
+| Message | Fix |
 |---|---|
-| `Installed query differs from repository source or is not installed` | Run `mule install`; it recompiles only the stale queries |
-| `Queries [...] are still not installed after ...s` | The 90-minute wait for compilation ran out, and the server may still be compiling. Once it has finished (`mule check` no longer lists stale training queries; the GSQL shell's `ls` shows the analytics queries), run the same command again (`mule install`, `mule train`, `mule diagnose` or the experiments script): it installs only what is still stale |
-| `The graph's scope types differ from gsql/schema/scope_vertex.gsql: ...` | The graph's `Temporal_Training_Scope` predates the file, such as one without the split shares. Run `mule install`, which replaces it while the graph holds no scope vertex; while it holds one, clear the graph's data and load it again first ([Reuse a graph](set-up-a-graph.md#reuse-a-graph)) |
-| `Prepared dataset ... was built from different GSQL sources` | The query files changed after preparation; install them, then move the dataset aside so it is prepared again |
-| `Graph counts changed; freeze the source and prepare a new dataset` | The graph was modified after preparation; freeze it and prepare a new dataset |
-| `Scope ... was created with scope.unowned = ...` | The scope was created with another rule; use the stored rule or a new `scope.id` |
-| `Account label contract violated after the reveal` | The label attributes are inconsistent; run `validate_label_contract` ([Labels](../reference/labels.md)) |
-| `TigerGraph rejected ... training roots so far` or `validation: TigerGraph rejected ... roots` | Roots failed a per-request check beyond the rejection limit, or an observed positive was rejected; the statuses say why ([When TigerGraph rejects roots](#when-tigergraph-rejects-roots)) |
-| `The run in ... is complete with other settings` | A finished run of other settings is in the directory; move it aside to train these |
-| `Resumed configuration differs from the run` | An interrupted run of other settings is in the directory; move it aside, or resume it with its own settings |
-| `... records no format` or `... is a model of format ...` | The model was saved by other code; train it again with this code |
-| `The model's input groups or pool definitions differ from its configuration` | The model read a pool group whose definition has changed since; score with a model trained under the current one |
+| `Installed query differs from repository source or is not installed` | `mule install`; it recompiles only the stale queries |
+| `Queries [...] are still not installed after ...s` | The 90-minute wait ran out; the server may still be compiling. Once it has finished (`mule check` lists no stale training queries; the GSQL shell's `ls` shows the analytics queries installed), rerun the command (`mule install`, `mule train`, `mule diagnose` or the experiments script); it installs only what is stale |
+| `The graph's scope types differ from gsql/schema/scope_vertex.gsql: ...` | The `Temporal_Training_Scope` type predates the file (for example without split shares). `mule install` replaces it if the graph holds no scope vertex; otherwise clear and reload the data first ([Reuse a graph](set-up-a-graph.md#reuse-a-graph)) |
+| `Prepared dataset ... was built from different GSQL sources` | Query files changed after preparation: install, then move the dataset aside |
+| `Graph counts changed; freeze the source and prepare a new dataset` | The graph changed after preparation: freeze it, prepare a new dataset |
+| `Scope ... was created with scope.unowned = ...` | The scope used another rule: use the stored rule or a new `scope.id` |
+| `Account label contract violated after the reveal` | Run `validate_label_contract` ([Labels](../reference/labels.md)) |
+| `TigerGraph rejected ... training roots so far` or `validation: TigerGraph rejected ... roots` | Rejected roots beyond the limit, or a rejected observed positive; see the statuses ([When TigerGraph rejects roots](#when-tigergraph-rejects-roots)) |
+| `The run in ... is complete with other settings` | Move the finished run aside |
+| `Resumed configuration differs from the run` | Move the interrupted run aside, or resume it with its own settings |
+| `... records no format` or `... is a model of format ...` | Saved by other code: train again |
+| `The model's input groups or pool definitions differ from its configuration` | A pool group's definition changed: score with a model trained under the current one |
 | `Training queries require Mule_Pattern_Learner` | `GRAPHNAME` in `.env` names another graph |
-| A `cugraph_probe` warning | pylibcugraph or the GPU failed the probe; training continues with the torch sampler; run `mule check` and the `cuda` tests |
-| `TigerGraph is not answering yet (...): attempt 2, retrying in 6 s` | TigerGraph was briefly unavailable or resuming (a TigerGraph Cloud workspace says `starting workspace`); each operation waits up to `transport.max_outage_s` |
-| `mule train stopped: TigerGraph stayed unavailable.` on stderr | The retries ran out; the line names the operation, the attempts and why they ended, then the error that ended them as TigerGraph gave it, and a `command_stopped` record keeps it in the run's or the dataset's `events.jsonl` (or `results/events.jsonl`). Run the same command again once TigerGraph answers: an interrupted run resumes |
+| A `cugraph_probe` warning | pylibcugraph or the GPU failed the probe; training uses the torch sampler, which draws from the same distribution. Run `mule check` and the `cuda` tests |
+| `TigerGraph is not answering yet (...): attempt 2, retrying in 6 s` | Briefly unavailable or resuming (TigerGraph Cloud: `starting workspace`); each operation waits up to `transport.max_outage_s` |
+| `mule train stopped: TigerGraph stayed unavailable.` on stderr | Retries ran out; the line names the operation, the attempts and why they ended, and TigerGraph's error, kept as `command_stopped` in the run's or dataset's `events.jsonl` (or `results/events.jsonl`). Rerun once TigerGraph answers: the run resumes |
