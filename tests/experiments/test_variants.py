@@ -16,6 +16,7 @@ from mule_pattern_learner.experiments.variants import (
     CONTROLS,
     DEFAULT_SUITE,
     FEATURE_DROPS,
+    METHODS,
     SEEDS,
     SUITES,
     VARIANTS,
@@ -80,7 +81,7 @@ def test_a_drop_takes_the_groups_that_read_it_along() -> None:
 
 
 def test_the_suites_start_with_the_baseline_and_all_holds_each_variant_once() -> None:
-    assert list(SUITES) == ["controls", "feature_drops", "all"]
+    assert list(SUITES) == ["controls", "feature_drops", "methods", "all"]
     assert all(suite[0] is BASELINE for suite in SUITES.values())
     assert [v.name for v in CONTROLS] == [
         "no_attention",
@@ -90,12 +91,41 @@ def test_the_suites_start_with_the_baseline_and_all_holds_each_variant_once() ->
         "no_weight_average",
         "drop_time_encoding",
     ]
-    assert len(SUITES["all"]) == 13 == len(VARIANTS)
+    assert len(SUITES["all"]) == 18 == len(VARIANTS)
     # No variant reads a group outside training: there are no additions.
     assert all(
         set(v.config(DEFAULT_CONFIG, 42).features) <= set(BUILT_IN_GROUPS)
         for v in VARIANTS.values()
     )
+
+
+def test_the_methods_suite_changes_the_selection_and_the_prior_on_the_baseline_dataset() -> None:
+    assert [v.name for v in SUITES["methods"]] == [
+        "baseline",
+        "select_on_roc_auc",
+        "select_on_pu_risk",
+        "fixed_10_epochs",
+        "prior_tenth",
+        "prior_tenfold",
+    ]
+    assert {v.name: v.changes() for v in METHODS} == {
+        "select_on_roc_auc": {"training.selection": "validation_roc_auc"},
+        "select_on_pu_risk": {"training.selection": "validation_pu_risk"},
+        "fixed_10_epochs": {"training.epochs": 10, "training.selection": "none"},
+        "prior_tenth": {"loss.class_prior": pytest.approx(0.0001)},
+        "prior_tenfold": {"loss.class_prior": pytest.approx(0.01)},
+    }
+    # One dataset for the suite and a run of its own for each variant and seed, as the
+    # suite's offline check requires.
+    for seed in SEEDS:
+        configs = [v.config(DEFAULT_CONFIG, seed) for v in SUITES["methods"]]
+        assert {dataset_id("source", config) for config in configs} == {
+            dataset_id("source", DEFAULT_CONFIG)
+        }
+        assert len({config.fingerprint() for config in configs}) == len(configs)
+    # The questions are asked for real use, and the prior's say what to expect.
+    assert all("a handful" in v.question for v in METHODS[:3])
+    assert all("near-null result is expected" in v.question for v in METHODS[3:])
 
 
 def test_names_select_suites_and_variants_and_always_the_baseline() -> None:

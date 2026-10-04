@@ -181,7 +181,7 @@ what to do with the earlier code's own folders.
    drops the old names, callers first ([Queries](../reference/queries.md#the-retired-names)).
 9. **`mule evaluate`, then `mule report`.**
 10. **The control experiments:** `python scripts/run_experiments.py`, then
-    `python scripts/run_experiments.py feature_drops`
+    `python scripts/run_experiments.py methods`
     ([Run the control experiments](run-control-experiments.md)).
 11. **`mule diagnose`.** Its first run installs the analytics queries, then
     `python -m pytest -m graph` checks them ([Run the diagnostics](run-diagnostics.md)).

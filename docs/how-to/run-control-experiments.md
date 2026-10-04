@@ -11,7 +11,7 @@ made the baseline's seed 42:
 
 ```bash
 python scripts/run_experiments.py                            # the controls suite
-python scripts/run_experiments.py feature_drops              # a suite by name
+python scripts/run_experiments.py methods                    # a suite by name
 python scripts/run_experiments.py no_attention prior_weight  # chosen variants
 python scripts/run_experiments.py --help                     # suites, variants, questions, changes
 ```
@@ -60,10 +60,14 @@ controls suite's first three: running it again trains the new seeds only.
 A suite of chosen variants is named by their names joined with hyphens, as in
 `results/experiments/no_attention-prior_weight/`.
 
-Run `controls` first: it settles the positive weight (`prior_weight`) and the model's
-mechanisms before the feature drops are compared, and every run of both suites holds the
-source, the revealed labels and the cutoffs fixed. Then run `feature_drops`; the
-baseline's runs are shared.
+The data are synthetic, so the suites study the method: the loss, how a run chooses its
+weights, how it is evaluated and whether seeds are worth combining, not which inputs to
+delete. Run `controls` first: it settles the positive weight (`prior_weight`) and the
+model's mechanisms, and every run of every suite holds the source, the revealed labels
+and the cutoffs fixed. Then run `methods`, which asks how to choose a model when a handful
+of mules are known and how much an only roughly known mule rate matters; the baseline's
+runs are shared. `feature_drops` says what each input group carries for this generator's
+mules, which is a fact about the generator rather than advice on what to drop.
 
 ## The suites and variants
 
@@ -76,7 +80,8 @@ the baseline's dataset.
 |---|---|
 | `controls` (the default) | `baseline`, `no_attention`, `no_slot_sum`, `no_pool_counts`, `prior_weight`, `no_weight_average`, `drop_time_encoding` |
 | `feature_drops` | `baseline` and one drop per built-in group but `message_core`: `drop_entity_meta`, `drop_hub_indicator`, `drop_time_encoding`, `drop_pair_history`, `drop_flow_timing`, `drop_pool_activity`, `drop_pool_internal_inflows` |
-| `all` | Every variant of both, each once |
+| `methods` | `baseline`, `select_on_roc_auc`, `select_on_pu_risk`, `fixed_10_epochs`, `prior_tenth`, `prior_tenfold` |
+| `all` | Every variant of the three, each once |
 
 | Variant | Question | Change |
 |---|---|---|
@@ -86,6 +91,20 @@ the baseline's dataset.
 | `prior_weight` | Does the balanced positive weight beat textbook nnPU across seeds? | `loss.positive_weight = "prior"` |
 | `no_weight_average` | Does selecting on the moving average of the weights help? | `training.weight_average_decay = 0.0` |
 | `drop_<group>` | What does the model lose without the group? | without the group, and the groups that read it (`drop_pair_history` also drops both pool groups, `drop_flow_timing` also `pool_activity`) |
+| `select_on_roc_auc` | When only a handful of mules are known, does choosing the epoch by their ROC AUC, which counts where every known mule ranks, pick better models than their AP, which hangs on the top few? | `training.selection = "validation_roc_auc"` |
+| `select_on_pu_risk` | Can the training objective itself, the nnPU risk on the validation sample, choose the epoch as well as a ranking metric of a handful of known mules? | `training.selection = "validation_pu_risk"` |
+| `fixed_10_epochs` | If a handful of known mules is too few to choose an epoch on, is it better not to choose: train ten epochs and keep the last weights, averaged? | `training.selection = "none"`, `training.epochs = 10` |
+| `prior_tenth` | A bank knows its mule rate only roughly: how much does the ranking change if the assumed rate is a tenth of the built-in prior? | `loss.class_prior = 0.0001` |
+| `prior_tenfold` | The same, if the assumed rate is ten times the built-in prior? | `loss.class_prior = 0.01` |
+
+Under the balanced positive weight the prior acts mainly through the negative-risk
+correction, and through how often the non-negative clamp fires (`corrected_steps` in each
+run's `history.csv`), so `prior_tenth` and `prior_tenfold` are expected to differ little
+from the baseline. A near-null result is itself a finding: the balanced weight makes the
+ranking robust to a mule rate known only to a factor of ten. The three selection variants
+change only which epoch is kept and when training stops: on the same host settings they
+train exactly the baseline's epochs, so their contexts are in the cache and their runs
+are cheap.
 
 Variants only drop groups or change the model, the loss or the training: training reads
 only the built-in run's groups, so no variant adds one. How well a table of the account's

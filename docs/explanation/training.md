@@ -163,8 +163,8 @@ directory.
   best proxy average precision, or the best ROC AUC, or the lowest risk, and training stops
   after `training.patience` (6) epochs without a better one; or `"none"`, which trains
   every epoch and keeps the last. With so few revealed mules the AP of an epoch hangs on
-  where the top few rank, so which rule picks better models is a question for the control
-  experiments. The threshold maximises validation F1.
+  where the top few rank, so which rule picks better models is a question the control
+  experiments' `methods` suite asks. The threshold maximises validation F1.
 - **Weight averaging:** validation scores an exponential moving average of the weights,
   and the selected epoch's average is what `model.pt` keeps; training itself follows the
   raw weights. After n steps the decay is `min(0.99, (1 + n) / (10 + n))`, so the average

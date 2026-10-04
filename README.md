@@ -80,7 +80,7 @@ included, and [Command line](docs/reference/cli.md) lists every command.
 
 ```bash
 python scripts/run_experiments.py                            # the controls suite
-python scripts/run_experiments.py feature_drops              # a suite by name
+python scripts/run_experiments.py methods                    # a suite by name
 python scripts/run_experiments.py no_attention prior_weight  # chosen variants
 python scripts/run_experiments.py --help                     # suites, variants, questions
 ```
@@ -128,7 +128,7 @@ it starts from scratch, with its `data/` and `results/` empty or moved aside, bu
    and `mule check` lists no retired queries from then on.
 5. `mule evaluate`, then `mule report`.
 6. `python scripts/run_experiments.py`, then `python scripts/run_experiments.py
-   feature_drops`.
+   methods`.
 7. `mule diagnose`. Its first run installs the analytics queries, an install of the
    order of 50 minutes within the same 90-minute wait; if that runs out, run `mule
    diagnose` again once the compilation has finished.

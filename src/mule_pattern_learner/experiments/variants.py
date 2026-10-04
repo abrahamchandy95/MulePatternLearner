@@ -11,7 +11,9 @@ Training reads only the built-in run's feature groups (the owner's decision in
 docs/architecture.md), so a variant drops groups or changes the model, the loss or the training, and
 never adds a group: a group comes back into training only by moving it into the training
 query on purpose. The account-activity table the retired no_graph control asked about is
-a question for the diagnostics baselines, over the analytics features.
+a question for the diagnostics baselines, over the analytics features. The data are
+synthetic, so the suites study the method (the loss, model selection, the evaluation,
+ensembling); a drop says what this generator's mules carry, not which inputs to delete.
 
 Nothing here loads torch, so scripts/run_experiments.py lists the suites and variants
 under --help without it; experiments.runner.run_suite trains and compares them.
@@ -145,9 +147,54 @@ CONTROLS = (
     ),
     DROPS["time_encoding"],
 )
+# The method: how a run chooses its weights when a handful of mules are known, and how
+# much the mule rate it assumes matters. Under the balanced positive weight the prior
+# acts mainly through the negative-risk correction, and through how often the
+# non-negative clamp fires (history.csv's corrected_steps), so the prior variants are
+# expected to differ little from the baseline; a near-null result is a finding about the
+# balanced weight.
+METHODS = (
+    Variant(
+        "select_on_roc_auc",
+        "When only a handful of mules are known, does choosing the epoch by their ROC AUC, "
+        "which counts where every known mule ranks, pick better models than their AP, which "
+        "hangs on the top few?",
+        lambda c: with_training(c, selection="validation_roc_auc"),
+    ),
+    Variant(
+        "select_on_pu_risk",
+        "Can the training objective itself, the nnPU risk on the validation sample of known "
+        "mules and unlabelled accounts, choose the epoch as well as a ranking metric of a "
+        "handful of known mules?",
+        lambda c: with_training(c, selection="validation_pu_risk"),
+    ),
+    Variant(
+        "fixed_10_epochs",
+        "If a handful of known mules is too few to choose an epoch on, is it better not to "
+        "choose: train ten epochs and keep the last weights, averaged?",
+        lambda c: with_training(c, selection="none", epochs=10),
+    ),
+    Variant(
+        "prior_tenth",
+        "A bank knows its mule rate only roughly: how much does the ranking change if the "
+        "assumed rate is a tenth of the built-in prior? Under the balanced weight the prior "
+        "acts mainly through the negative-risk correction, so a near-null result is "
+        "expected, and is itself a finding about the balanced weight.",
+        lambda c: with_loss(c, class_prior=c.loss.class_prior / 10),
+    ),
+    Variant(
+        "prior_tenfold",
+        "A bank knows its mule rate only roughly: how much does the ranking change if the "
+        "assumed rate is ten times the built-in prior? The non-negative clamp fires more "
+        "often, but under the balanced weight a near-null result is expected, and is itself "
+        "a finding about the balanced weight.",
+        lambda c: with_loss(c, class_prior=c.loss.class_prior * 10),
+    ),
+)
 SUITES: dict[str, tuple[Variant, ...]] = {
     "controls": (BASELINE, *CONTROLS),
     "feature_drops": (BASELINE, *FEATURE_DROPS),
+    "methods": (BASELINE, *METHODS),
 }
 SUITES["all"] = unique_by_name(*SUITES.values())
 VARIANTS = {variant.name: variant for variant in SUITES["all"]}
