@@ -6,6 +6,7 @@ from dataclasses import replace
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 from typing import Any
 
@@ -16,7 +17,10 @@ from mule_pattern_learner.artifacts import (
     SEED_MEAN,
     keep_history,
     read_comparison,
+    read_epochs,
     read_events,
+    read_json,
+    read_run_config,
     read_run_provenance,
     read_summary,
     write_json,
@@ -40,7 +44,14 @@ from mule_pattern_learner.experiments.runner import (
     time_estimate,
 )
 from mule_pattern_learner.experiments.tables import COMPLETE, FAILED, STOPPED, audited
-from mule_pattern_learner.experiments.variants import BASELINE, VARIANTS, Variant, with_model
+from mule_pattern_learner.experiments.variants import (
+    BASELINE,
+    SUITES,
+    VARIANTS,
+    Variant,
+    with_model,
+)
+from mule_pattern_learner.experiments.variants import SEEDS as ALL_SEEDS
 from mule_pattern_learner.paths import RunPaths, SuitePaths
 from mule_pattern_learner.pipeline import connect as pipeline_connect
 from mule_pattern_learner.pipeline import evaluate as pipeline_evaluate
@@ -217,6 +228,42 @@ def test_a_suite_trains_audits_and_compares_then_keeps_or_archives_what_it_has(
     assert plan_run(DROP, 43, BASE, results, "another").differs[-1].startswith("dataset ")
 
 
+def test_a_selection_variant_trains_audits_and_compares_on_the_fakes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Two epochs, so the rule has epochs to choose between.
+    base = BASE.with_changes({"training": {"epochs": 2}})
+    risk = VARIANTS["select_on_pu_risk"]
+    suite_graph(monkeypatch)
+    results = tmp_path / "results"
+    result = run_suite(
+        (risk.name,), base=base, seeds=SEEDS, results=results, data=tmp_path / "data"
+    )
+    assert result["status"] == COMPLETE
+    for seed in SEEDS:
+        run = RunPaths.of(risk.name, seed, results)
+        assert read_run_config(run.config).training.selection == "validation_pu_risk"
+        # The kept epoch is the one of the lowest validation nnPU risk.
+        epochs = read_epochs(run.epochs)
+        lowest = int(epochs.epoch[epochs.validation_pu_risk.idxmin()])
+        assert epochs.selected.tolist() == [epoch == lowest for epoch in epochs.epoch]
+        assert read_json(run.metrics)["best_epoch"] == lowest
+    compared = SuitePaths.of(risk.name, results)
+    comparison = read_comparison(compared.comparison)
+    assert comparison.estimate.tolist() == [SEED_MEAN, SEED_MEAN, ENSEMBLE, ENSEMBLE]
+    # The variant's delta over its two seeds, with both of its intervals.
+    delta = comparison[comparison.estimate == SEED_MEAN].iloc[1]
+    assert delta.validation_ap_delta_seeds == 2
+    assert delta.validation_ap_delta_low <= delta.validation_ap_delta_high
+    assert delta.validation_ap_delta_audit_low <= delta.validation_ap_delta_audit_high
+    # The report's proxy reliability counts the runs of each rule apart; two are too few
+    # for a correlation.
+    text = compared.report.read_text()
+    assert re.search(r"^\| runs \| (n/a|-?\d\.\d\d) \| 4 \|$", text, re.M)
+    for rule in ("validation_ap", "validation_pu_risk"):
+        assert f"| runs selected on {rule} | n/a | 2 |" in text
+
+
 def test_a_variant_that_fails_on_its_own_fails_alone(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -323,6 +370,13 @@ def test_an_outage_stops_the_suite_and_the_tables_say_so(
     dataset = result["dataset_id"]
     assert plan_run(DROP, 42, BASE, results, dataset).action == RESUME
     assert plan_run(BASELINE, 42, BASE, results, dataset).action == KEEP
+
+
+def test_every_suite_passes_the_offline_check_with_the_ten_seeds() -> None:
+    # The built-in run's every variant, the methods suite's included, builds with each of
+    # the seeds, on the baseline's dataset, with a fingerprint of its own.
+    for variants in SUITES.values():
+        check_variants(variants, DEFAULT_CONFIG, ALL_SEEDS)
 
 
 def test_variants_are_refused_offline_with_their_names() -> None:
