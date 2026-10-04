@@ -68,8 +68,8 @@ Gaussian, and its labelled positives are a uniform draw of them, so the hidden p
 in its marginal are like the labelled ones. The graph reveals the loud mules instead, and
 its hidden mules are quieter than the revealed. Its test
 on the graph is the `prior_weight` control variant (`loss.positive_weight = "prior"`), which
-the control experiments train over the seeds 42, 43 and 44 and compare with the baseline on
-the validation audit (`python scripts/run_experiments.py`).
+the control experiments train over the seeds and compare with the baseline on the
+validation audit (`python scripts/run_experiments.py`).
 
 ## Not carried over
 

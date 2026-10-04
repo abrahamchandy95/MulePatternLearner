@@ -86,9 +86,10 @@ python scripts/run_experiments.py --help                     # suites, variants,
 ```
 
 The script trains variants of the built-in run (declared in
-`src/mule_pattern_learner/experiments/variants.py`) over the seeds 42, 43 and 44, audits
+`src/mule_pattern_learner/experiments/variants.py`) over the ten seeds 42 to 51, audits
 them, and compares each with the baseline on the same accounts, with paired intervals, in
-`results/experiments/<suite>/`. Complete runs are kept, and runs whose settings differ are
+`results/experiments/<suite>/`. Complete runs are kept, so a suite trained with fewer seeds
+is topped up with the new ones only, and runs whose settings differ are
 moved to `results/archive/`, never deleted. [Run the control
 experiments](docs/how-to/run-control-experiments.md) has the details.
 

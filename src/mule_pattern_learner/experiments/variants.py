@@ -28,8 +28,9 @@ from ..config import DEFAULT_CONFIG, RunConfig, differing_settings
 from ..contract.feature_groups import BUILT_IN_GROUPS, FEATURE_GROUPS, POOL_GROUPS
 from ..paths import BASELINE_VARIANT
 
-# The seeds every variant trains with; 42 is the built-in run's.
-SEEDS = (42, 43, 44)
+# The seeds every variant trains with, 42 to 51; 42 is the built-in run's. Seed variance
+# was as large as the differences between variants over three seeds, so there are ten.
+SEEDS = tuple(range(42, 52))
 
 
 @dataclass(frozen=True)
@@ -179,12 +180,24 @@ def describe(base: RunConfig = DEFAULT_CONFIG) -> str:
     for name, variants in SUITES.items():
         members = ", ".join(v.name for v in variants)
         lines += wrapped(name, members, width)
-    seeds = ", ".join(map(str, SEEDS))
-    lines += ["", f"variants (each trained with the seeds {seeds}):"]
+    lines += ["", f"variants (each trained with {seeds_text(SEEDS)}):"]
     for variant in VARIANTS.values():
         lines += wrapped(variant.name, variant.question, width)
         lines += wrapped("", f"({variant.change_text(base)})", width)
     return "\n".join(lines)
+
+
+def seeds_text(seeds: Sequence[int]) -> str:
+    """The seeds in words: "the seed 42", "the seeds 42 and 43" or "the 10 seeds 42 to 51".
+
+    A run of three or more consecutive seeds is given by its ends.
+    """
+    ordered = sorted(seeds)
+    if len(ordered) == 1:
+        return f"the seed {ordered[0]}"
+    if len(ordered) > 2 and ordered == list(range(ordered[0], ordered[-1] + 1)):
+        return f"the {len(ordered)} seeds {ordered[0]} to {ordered[-1]}"
+    return "the seeds " + ", ".join(map(str, ordered[:-1])) + f" and {ordered[-1]}"
 
 
 def wrapped(name: str, text: str, width: int) -> list[str]:

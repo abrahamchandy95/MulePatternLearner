@@ -235,4 +235,4 @@ split would show.
 No mule-detection quality is established by one run. The reference run of the built-in
 settings reached a test audit AP of 0.134 and ROC AUC of 0.931 against a prevalence of
 0.00084 ([the reference runs](../research/reference-run.md)); the control experiments
-measure its parts over three seeds.
+measure its parts over ten seeds.

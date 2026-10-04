@@ -1,7 +1,7 @@
 # Run the control experiments
 
 Measure what each part of the built-in run contributes: train variants of it over the
-seeds 42, 43 and 44, audit every run, and compare each variant with the baseline on the
+ten seeds 42 to 51, audit every run, and compare each variant with the baseline on the
 same accounts. The script takes suite or variant names only.
 
 ## Run a suite
@@ -24,9 +24,11 @@ script, in order:
    the variant, before anything connects.
 2. **Prepares the dataset** once, as `mule train` does, on the suite's one connection.
 3. **Plans every run** and shows the plan as a matrix of variants and seeds, each run's
-   action (`keep`, `train`, `resume` or `archive`) in its cell, with an upper bound on the
-   hours from the median seconds per step of the latest graph run's `history.csv` (the
-   `suite` event's `bound_hours` and `timed_from`). A
+   action (`keep`, `train`, `resume` or `archive`) in its cell, with the hours the runs
+   to train should take (see [Cost](#cost)): a range estimated from the hours the suite's
+   finished runs took (the `suite` event's `estimate_hours` and `estimated_from`) and an
+   upper bound from the median seconds per step of the latest graph run's `history.csv`
+   (`bound_hours` and `timed_from`). A
    complete run of the same settings and dataset is kept, an interrupted one resumes, and
    one whose settings differ, whose `config.json` cannot be read or that was trained on
    another dataset is moved whole to `results/archive/<variant>/seed-<n>/<UTC time>/` and
@@ -51,7 +53,9 @@ their validation audit AP as `report.md` ranks them (with the delta from the bas
 and the test AP) and where the report is, and exits 1 unless every run is trained and
 audited without an error. A run whose figures failed after its numbers were saved stays complete in the
 tables, with its error beside it; `mule report results/<variant>/seed-<n>` redraws them.
-Run the script again to finish: complete runs are kept.
+Run the script again to finish: complete runs are kept. So are the runs of a suite
+trained with fewer seeds than `experiments.variants.SEEDS` holds now, such as the
+controls suite's first three: running it again trains the new seeds only.
 
 A suite of chosen variants is named by their names joined with hyphens, as in
 `results/experiments/no_attention-prior_weight/`.
@@ -90,16 +94,32 @@ baselines ([Run the diagnostics](run-diagnostics.md)).
 
 ## Cost
 
-About 3 seconds per step and about an hour per graph run with early stopping on the CUDA
-host. The `controls` suite is 21 runs (18 graph runs and the 3 cheap `no_attention`
-runs, which fetch no children); 20 train, since the baseline's seed 42 is `mule train`'s.
-That is roughly a day back to back, less as the context cache fills: seeds, and variants
-that request the same groups, share its entries, and drops of the client-computed groups
-(the hub indicator and both pool groups) request the same contexts as the baseline. Run
-variants one after another rather than as parallel processes, which may request the same
-contexts twice. The plan's bound is an upper bound: summary runs are faster and early
-stopping ends most runs sooner. The paired intervals take about 15 seconds for the
-controls suite and 30 for `all`.
+The `controls` suite is 70 runs (60 graph runs and the 10 cheap `no_attention` runs,
+which fetch no children). A graph run takes about 3 seconds per step on the CUDA host
+while it requests its contexts from TigerGraph, about an hour with early stopping; once
+the context cache holds them it is far faster. Over the controls suite's first three
+seeds each variant's runs took from 0.00 to 0.25 hours on average. A suite trained with
+fewer seeds keeps its complete runs, so running `controls` again after the seeds became
+ten trains only the seven new ones: 49 runs.
+
+The plan gives two numbers for the runs it trains:
+
+- **The estimate** is a range from the hours the suite's finished runs took (each run's
+  `metrics.json`). The suite trains the seeds in turn and the baseline first within
+  each, so a new seed's baseline is a cold first run that fills the context cache for
+  its seed, and the variants after it read much of it. Each run to train is taken to
+  last from the fewest to the most hours a finished run of its variant took; a variant
+  with no finished run takes the range of the finished runs of the variants other than
+  the baseline. A suite with no finished run has no estimate.
+- **The bound** takes every run to train all its epochs at the median seconds per step
+  of the latest graph run's `history.csv`. Summary runs are faster, and early stopping
+  and the cache end most runs far sooner, so it is an upper bound.
+
+Seeds, and variants that request the same groups, share the cache's entries, and drops
+of the client-computed groups (the hub indicator and both pool groups) request the same
+contexts as the baseline. Run variants one after another rather than as parallel
+processes, which may request the same contexts twice. The paired intervals take about 15
+seconds for the controls suite of three seeds and grow with the runs.
 
 ## Read the comparison
 

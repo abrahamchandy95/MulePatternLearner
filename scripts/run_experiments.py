@@ -2,9 +2,11 @@
 
 python scripts/run_experiments.py [SUITE or VARIANT ...] runs the named suites and
 variants (the controls suite when none is named), the baseline always among them, with
-the seeds 42, 43 and 44. Every variant is validated offline and the run matrix printed
-with a time bound before training. Complete runs are kept, runs whose settings differ
-move to results/archive/ and train again, and the comparison tables, figures and
+the ten seeds 42 to 51. Every variant is validated offline and the run matrix printed
+before training, with a range of hours estimated from the suite's finished runs (a cold
+first run per new seed, cached runs after it) beside an upper bound. Complete runs are
+kept, so a suite trained with fewer seeds trains only the new ones; runs whose settings
+differ move to results/archive/ and train again, and the comparison tables, figures and
 report.md are always rewritten under results/experiments/<suite>/. It shows the run
 matrix, a line for each run as it finishes and then the top of the comparison; the
 full records are in the suite's and the runs' files. It exits 1 unless every run is

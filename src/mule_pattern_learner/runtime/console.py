@@ -387,8 +387,14 @@ def _suite(record: Mapping[str, Any]) -> str:
     seeds = sorted({seed for actions in runs.values() for seed in actions}, key=int)
     total = sum(len(actions) for actions in runs.values())
     pending = sum(action != "keep" for actions in runs.values() for action in actions.values())
-    bound = record.get("bound_hours")
-    timing = f", at most {bound} hours" if bound is not None and pending else ""
+    bound, estimate = record.get("bound_hours"), record.get("estimate_hours")
+    timing = ""
+    if estimate is not None and pending:
+        low, high = estimate
+        finished = plural(int(record["estimated_from"]), "finished run")
+        timing += f", about {low} to {high} hours by the {finished}"
+    if bound is not None and pending:
+        timing += f", at most {bound} hours"
     lines = [
         f"Suite {record['suite']} on dataset {str(record['dataset_id'])[:12]}: "
         f"{plural(total, 'run')}, {pending} to train{timing}"

@@ -17,6 +17,7 @@ from mule_pattern_learner.artifacts import (
     read_events,
     read_run_provenance,
     read_summary,
+    write_json,
     write_run_config,
 )
 from mule_pattern_learner.config import DEFAULT_CONFIG, TransportConfig
@@ -34,6 +35,7 @@ from mule_pattern_learner.experiments.runner import (
     run_suite,
     suite_summary,
     time_bound,
+    time_estimate,
 )
 from mule_pattern_learner.experiments.tables import COMPLETE, FAILED, STOPPED, audited
 from mule_pattern_learner.experiments.variants import BASELINE, VARIANTS, Variant, with_model
@@ -344,6 +346,35 @@ def test_the_time_bound_comes_from_the_latest_graph_run(tmp_path: Path) -> None:
     assert bound["timed_from"] == str(history)
     # Three runs to train, one epoch of three steps each, at about 3 s per step.
     assert bound["bound_hours"] == pytest.approx(3 * 3 * 3.0 / 3600, abs=0.01)
+
+
+def test_the_estimate_takes_a_cold_first_run_per_new_seed_and_cached_runs_after_it(
+    tmp_path: Path,
+) -> None:
+    seeds = (42, 43, 44)
+    runs = [
+        PlannedRun(v, s, v.config(BASE, s), RunPaths.of(v.name, s, tmp_path), TRAIN)
+        for s in seeds
+        for v in (BASELINE, DROP)
+    ]
+    assert time_estimate(runs) == {"estimate_hours": None, "estimated_from": 0}
+    # Seeds 42 and 43 finished: each baseline first, with the cache cold for its seed,
+    # and the variant after it, reading the cache.
+    took = {("baseline", 42): 1.0, ("baseline", 43): 0.5, (DROP.name, 42): 0.1}
+    took[DROP.name, 43] = 0.2
+    for run in runs:
+        hours = took.get((run.variant.name, run.seed))
+        if hours is not None:
+            run.paths.root.mkdir(parents=True)
+            write_json(run.paths.metrics, {"elapsed_seconds": hours * 3600})
+            run.action = KEEP
+    # Seed 44 is new: its baseline takes 0.5 to 1 hour, as a cold first run, and the
+    # variant after it 0.1 to 0.2, as a cached one.
+    assert time_estimate(runs) == {"estimate_hours": [0.6, 1.2], "estimated_from": 4}
+    # A variant with no finished run takes the range of the cached runs.
+    other = VARIANTS["no_slot_sum"]
+    runs.append(PlannedRun(other, 42, other.config(BASE, 42), RunPaths(tmp_path / "o"), TRAIN))
+    assert time_estimate(runs)["estimate_hours"] == [0.7, 1.4]
 
 
 def test_a_history_that_timed_no_step_times_nothing(tmp_path: Path) -> None:

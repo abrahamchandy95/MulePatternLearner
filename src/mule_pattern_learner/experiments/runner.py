@@ -10,7 +10,8 @@ run_suite does, in order:
 4. plans each run (plan_run): a complete run of the same settings and dataset is kept,
    an interrupted one resumes, and one whose settings or dataset differ is moved to
    results/archive/ (never deleted) and trained again; the plan is a `suite` event with
-   an upper bound on the training time (time_bound);
+   an upper bound on the training time (time_bound) and, beside it, a range estimated
+   from the hours the suite's finished runs took (time_estimate);
 5. trains the runs, seeds outer and variants inner, into results/<variant>/seed-<n>/;
 6. audits validation and test for every complete run that lacks them, reading truth once
    (pipeline.evaluate.SharedTruth);
@@ -61,7 +62,7 @@ from ..config import DEFAULT_CONFIG, RunConfig
 from ..contract.graph_schema import HELD_OUT_SPLITS
 from ..data.manifest import dataset_id
 from ..model.build import build_model
-from ..paths import DATA_DIR, RESULTS_DIR, RunPaths, SuitePaths, archived_run
+from ..paths import BASELINE_VARIANT, DATA_DIR, RESULTS_DIR, RunPaths, SuitePaths, archived_run
 from ..pipeline.connect import Session
 from ..pipeline.evaluate import SharedTruth, evaluate_run
 from ..pipeline.prepare import prepare_dataset
@@ -227,6 +228,48 @@ def time_bound(runs: Sequence[PlannedRun], results: Path) -> dict[str, Any]:
     return {"bound_hours": round(total * seconds / 3600, 2), "timed_from": str(history)}
 
 
+def finished_hours(run: PlannedRun) -> float | None:
+    """The hours a run the suite keeps took (metrics.json); None if it is not kept."""
+    if run.action != KEEP:
+        return None
+    try:
+        return float(read_json(run.paths.metrics)["elapsed_seconds"]) / 3600
+    except (KeyError, OSError, TypeError, ValueError):
+        return None
+
+
+def time_estimate(runs: Sequence[PlannedRun]) -> dict[str, Any]:
+    """A range of the hours the runs still to train take, from the suite's finished runs.
+
+    A finished run is one the suite keeps, and its metrics.json records the hours it
+    took. The suite trains the seeds in turn and the baseline first within each, so the
+    baseline's finished runs are the first runs of their seed, which filled the context
+    cache for it (cold), and the other variants' finished runs read much of it (cached).
+    A run still to train is taken to last from the fewest to the most hours a finished
+    run of its variant took: a new seed's baseline as a cold first run, the variants after
+    it as cached runs. A variant without a finished run takes the range of the finished
+    runs of the variants other than the baseline (cached), or of any finished run when
+    only the baseline's are. None without a finished run.
+    """
+    hours: dict[str, list[float]] = {}
+    for run in runs:
+        took = finished_hours(run)
+        if took is not None:
+            hours.setdefault(run.variant.name, []).append(took)
+    if not hours:
+        return {"estimate_hours": None, "estimated_from": 0}
+    cached = [h for name, found in hours.items() if name != BASELINE_VARIANT for h in found]
+    fallback = cached or [h for found in hours.values() for h in found]
+    low = high = 0.0
+    for run in runs:
+        if run.action == KEEP:
+            continue
+        found = hours.get(run.variant.name, fallback)
+        low, high = low + min(found), high + max(found)
+    finished = sum(len(found) for found in hours.values())
+    return {"estimate_hours": [round(low, 2), round(high, 2)], "estimated_from": finished}
+
+
 def is_outage(error: BaseException) -> bool:
     """Whether an error is, or was caused by, TigerGraph staying unavailable."""
     seen: BaseException | None = error
@@ -337,6 +380,7 @@ def _run(
                 for variant in variants
             },
             **time_bound(runs, results),
+            **time_estimate(runs),
         }
     )
     stopped: str | None = None

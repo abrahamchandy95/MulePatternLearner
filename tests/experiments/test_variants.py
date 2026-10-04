@@ -21,6 +21,7 @@ from mule_pattern_learner.experiments.variants import (
     VARIANTS,
     Variant,
     describe,
+    seeds_text,
     select,
 )
 from mule_pattern_learner.model.build import build_model
@@ -106,6 +107,15 @@ def test_names_select_suites_and_variants_and_always_the_baseline() -> None:
     assert [v.name for v in chosen] == [v.name for v in SUITES["feature_drops"]] + ["no_attention"]
     with pytest.raises(ValueError, match=r"Unknown suites or variants \['no_graph'\]"):
         select(["no_graph"])
+
+
+def test_ten_seeds_train_every_variant_and_the_help_names_them() -> None:
+    assert SEEDS == tuple(range(42, 52)) and SEEDS[0] == DEFAULT_CONFIG.training.seed
+    assert seeds_text(SEEDS) == "the 10 seeds 42 to 51"
+    assert seeds_text((42,)) == "the seed 42"
+    assert seeds_text((42, 43)) == "the seeds 42 and 43"
+    assert seeds_text((44, 42, 43, 47)) == "the seeds 42, 43, 44 and 47"
+    assert "variants (each trained with the 10 seeds 42 to 51):" in describe()
 
 
 def test_the_help_lists_every_suite_and_variant_with_its_changes() -> None:

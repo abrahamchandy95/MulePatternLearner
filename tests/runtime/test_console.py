@@ -276,6 +276,22 @@ def records(run: Path) -> list[tuple[dict[str, Any], str | None]]:
         ),
         (
             {
+                "event": "suite",
+                "suite": "controls",
+                "dataset_id": "1a2b3c4d5e6f7a8b9c",
+                "runs": {"baseline": {"42": "keep", "43": "train"}},
+                "bound_hours": 3.0,
+                "timed_from": "results/baseline/seed-42/history.csv",
+                "estimate_hours": [0.3, 1.2],
+                "estimated_from": 1,
+            },
+            "Suite controls on dataset 1a2b3c4d5e6f: 2 runs, 1 to train, about 0.3 to 1.2 "
+            "hours by the 1 finished run, at most 3.0 hours\n"
+            "  variant   seed 42   seed 43\n"
+            "  baseline  keep      train",
+        ),
+        (
+            {
                 "event": "run_archived",
                 "run": str(run.parent.parent / "no_attention" / "seed-43"),
                 "archive": str(run.parent.parent / "archive" / "no_attention" / "seed-43" / "T"),
