@@ -134,15 +134,12 @@ part of the graph's schema; the scope id of the built-in run is `strict_mule_v3`
 `schema.gsql` defines its types in the schema-change job `create_payment_schema` and
 `scope_vertex.gsql` in `add_training_scope`; each runs and drops its job.
 `account_loading.gsql` defines the loading job `load_accounts`, which stays installed
-once created ([Labels](labels.md#loading-accounts)); a graph set up before the job had
-this name keeps it under its first name, and no command runs either. The other vertex and
-edge types are loaded by the data producer.
+once created and which no command runs ([Labels](labels.md#loading-accounts)). The other
+vertex and edge types are loaded by the data producer.
 
 TigerGraph discriminators cannot be changed with `ALTER ... ADD ATTRIBUTE`, so changing
-an association's identity means replacing and reloading it. The populated reference graph
-reached this schema through three one-off migrations (the valid-time upgrade of the
-empty graph, the pair-gap attributes and the Account supervision fields), kept in git
-history. Never run `schema.gsql` on a populated graph.
+an association's identity means replacing and reloading it. Never run `schema.gsql` on a
+populated graph: a new schema means a new graph, loaded again.
 
 ## The reference graph
 

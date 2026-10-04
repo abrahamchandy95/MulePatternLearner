@@ -229,7 +229,8 @@ each held-out split:
   each of its accounts, the expected result of ordering them at random.
 - **The intervals** are 90% bootstrap intervals from 1,000 replicates: mules are
   resampled by ring, since mules of one ring are not independent (a mule without a ring
-  alone; the reference load records none), and non-mules within their class, each keeping
+  alone; the reference load recorded none, and the mule-temporal export records each
+  mule's), and non-mules within their class, each keeping
   its inclusion weight.
 - **The hidden mules lead.** The model exists to find the mules nobody knows on the
   scoring date, so every audit first ranks the hidden mules, those the graph had not

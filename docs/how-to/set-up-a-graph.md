@@ -6,8 +6,8 @@ rest. [Schema](../reference/schema.md) describes the graph and
 [Labels](../reference/labels.md) the account label contract.
 
 Never run these steps on a populated graph: `schema.gsql` is fresh-graph DDL, and a
-schema change can invalidate compiled queries and positional loading jobs. The populated
-reference graph reached this schema through one-off migrations kept in git history.
+schema change can invalidate compiled queries and positional loading jobs. To load the
+data again, recreate the graph and follow every step.
 
 ## 1. Create the graph
 
@@ -25,16 +25,24 @@ their reverse edges, through a schema-change job it drops again.
 ## 2. Load the data
 
 Load the payments, accounts, parties, tokens, devices, IPs, addresses, participation
-edges and association tenures. The data producer owns those loading jobs (for the
-reference graph, an export of the PhantomLedger simulator); this repository defines only
-the Account loader:
+edges and association tenures: the tables of PhantomLedger's mule-temporal export, through
+Kafka or the loading UI of GraphStudio or TigerGraph Cloud. The data producer owns those
+loading jobs; this repository defines only the Account loader, for a file:
 
 ```bash
 gsql gsql/schema/account_loading.gsql
 ```
 
-It creates `load_accounts`, which reads an Account CSV with the fifteen columns
-of the label contract in a fixed order ([Labels](../reference/labels.md#loading-accounts)).
+It creates `load_accounts`, which reads an Account CSV with the fifteen columns of the
+label contract in a fixed order. The export's Account table carries exactly those
+fifteen columns in that order (`contract.graph_schema.ACCOUNT_LOAD_COLUMNS`), so
+`load_accounts` reads it as it is. A Kafka loading job, or a mapping drawn in the UI,
+maps each column to the Account attribute of the same name; [Labels](../reference/labels.md#loading-accounts)
+lists the columns, their positions and attributes, and the order of a positional
+mapping. Map every column, `mule_ring_id` included: unmapped, it leaves every account at
+the default -1, no ring, and the audits then resample every mule alone instead of with
+its ring.
+
 Whatever loads the rest must keep the schema's contract: one chronological sequence
 domain for payments and association changes, positive sequences, edge clocks equal to
 their event's, the canonical role counts per event, and valid-time tenures with explicit

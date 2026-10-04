@@ -111,8 +111,9 @@ new labels.
   declared assumptions; no regulator or paper publishes them.
 - Only Zelle inflows carry a fraud verdict in the graph, so victim reports on other rails
   are not simulated.
-- Ring take-downs by law enforcement are not simulated: the reference load does not
-  populate the ring id (`mule_ring_id` is -1 for every mule).
+- Ring take-downs by law enforcement are not simulated: the reveal reads no ring id. The
+  reference load left `mule_ring_id` at -1 for every mule; PhantomLedger's mule-temporal
+  export records each mule's ring, which the audits resample by.
 - nnPU assumes positives are selected completely at random; this reveal deliberately
   selects them as a bank would, the setting a production model faces. The audit
   (`mule evaluate`) scores every mule of a split, revealed or hidden, and leads with the

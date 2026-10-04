@@ -38,6 +38,5 @@ graph.
   ground truth; no feature, population, cutoff or hub query reads a label attribute
   ([Labels](../docs/reference/labels.md)).
 - **Schema changes** may invalidate compiled queries and positional loading jobs; verify
-  and restore both afterwards. The populated reference graph reached this schema through
-  one-off migrations, kept in git history; only the scope vertex type is still applied,
-  by the installer.
+  and restore both afterwards. `schema.gsql` creates a fresh graph, and the installer
+  applies only the scope vertex type, to a graph that lacks it.

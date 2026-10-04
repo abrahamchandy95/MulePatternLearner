@@ -104,6 +104,39 @@ Account CSV with a header in exactly this column order
 id,account_type,is_external,first_seen_seq,first_seen_ts_ms,is_mule,mule_label_known,is_mule_masked,pu_label,mule_label_effective_seq,mule_label_effective_ts_ms,mule_label_available_seq,mule_label_available_ts_ms,mule_ring_id,mule_label_source
 ```
 
+PhantomLedger's mule-temporal export writes its Account table with these fifteen
+columns in this order, so `load_accounts` reads it as it is. A Kafka loading job, or a
+mapping drawn in the loading UI of GraphStudio or TigerGraph Cloud, maps each column to
+the Account attribute of the same name:
+
+| Position | Column | Account attribute | Type |
+|---|---|---|---|
+| 0 | `id` | `id`, the primary id | STRING |
+| 1 | `account_type` | `account_type` | STRING |
+| 2 | `is_external` | `is_external` | BOOL |
+| 3 | `first_seen_seq` | `first_seen_seq` | UINT |
+| 4 | `first_seen_ts_ms` | `first_seen_ts_ms` | UINT |
+| 5 | `is_mule` | `is_mule` | INT |
+| 6 | `mule_label_known` | `mule_label_known` | BOOL |
+| 7 | `is_mule_masked` | `is_mule_masked` | BOOL |
+| 8 | `pu_label` | `pu_label` | INT |
+| 9 | `mule_label_effective_seq` | `mule_label_effective_seq` | UINT |
+| 10 | `mule_label_effective_ts_ms` | `mule_label_effective_ts_ms` | UINT |
+| 11 | `mule_label_available_seq` | `mule_label_available_seq` | UINT |
+| 12 | `mule_label_available_ts_ms` | `mule_label_available_ts_ms` | UINT |
+| 13 | `mule_ring_id` | `mule_ring_id` | INT |
+| 14 | `mule_label_source` | `mule_label_source` | STRING |
+
+Map every column. An unmapped attribute keeps its schema default: unmapped label
+columns leave every account unknown, with no truth to reveal or audit, and an unmapped
+`mule_ring_id` leaves every account at -1, no ring, which no check refuses. The audits
+then resample every mule alone instead of with its ring, so their intervals treat the
+mules of one ring as independent. A positional mapping, as a loading job's `VALUES` list is, follows
+the schema's attribute order, which declares `is_mule` last, after
+`mule_label_source`: by position the values are `$0`, `$1`, `$2`, `$3`, `$4`, `$6` to
+`$14`, then `$5`. `load_accounts` lists them in that order, taking each column by its
+header name.
+
 Use integer `0` and `1` for `is_mule` and lowercase `true` and `false` for the flags. A
 header-less PSV export with the same fifteen columns, separated by `|`, works the same.
 Keep the header for server-file loading; the REST++ streaming interface
@@ -123,14 +156,6 @@ the oracle export; the last `account_id` of a page is the `after_id` of the next
 RUN QUERY validate_label_contract()
 RUN QUERY read_ground_truth("", 100)
 ```
-
-The populated reference graph reached this contract through two one-off migrations, kept
-in git history. The first added the fields and left the existing accounts unknown and
-masked; the second turned an earlier boolean label into the integer `is_mule`. TigerGraph
-appends a replaced attribute to storage, so `is_mule` is stored last, and the loading
-job maps the unchanged CSV order onto that storage order. The graph also keeps an older
-five-column job, `mt_load_account`, for compatibility; it skips the label fields, which
-only `load_accounts` loads.
 
 ## Zelle transfer labels
 
