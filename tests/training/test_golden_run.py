@@ -32,8 +32,9 @@ wrote, and both give the same literals.
 
 A last test audits the golden run's validation and test splits against the builders'
 ground truth (testing.builders.ground_truth_rows) and pins GOLDEN_AUDIT: each split's
-sample, point estimates and ring-clustered intervals. They depend only on how the scores
-rank, so they hold on both machines as the APs do.
+sample, point estimates and ring-clustered intervals, of the hidden mules, on which
+decisions are taken, and of every mule. They depend only on how the scores rank, so they
+hold on both machines as the APs do.
 """
 
 from __future__ import annotations
@@ -384,12 +385,22 @@ AUDIT_METRICS = (
 )
 
 
+# The numbers of the hidden mules' audit that decisions use, which GOLDEN_AUDIT records
+# beside every mule's: the hidden mules ranked against the non-mules, the revealed ones
+# removed. They have no threshold, so no precision, recall or F1 at it.
+HIDDEN_AUDIT_METRICS = tuple(
+    name for name in AUDIT_METRICS if name not in ("precision", "recall", "f1")
+)
+
+
 def audit_numbers(report: dict[str, Any]) -> dict[str, Any]:
     """What GOLDEN_AUDIT records of a split's audit report."""
     return {
         "metrics": {name: report["metrics"][name] for name in AUDIT_METRICS},
         "intervals": report["intervals"],
         "positives": (report["revealed_positives"], report["hidden_positives"]),
+        "hidden_metrics": {name: report["hidden_metrics"][name] for name in HIDDEN_AUDIT_METRICS},
+        "hidden_intervals": report["hidden_intervals"],
     }
 
 
@@ -400,10 +411,18 @@ def audit_differences(observed: dict[str, dict[str, Any]]) -> list[str]:
         have = observed[split]
         if have["positives"] != want["positives"]:
             problems.append(f"{split}: revealed and hidden positives {have['positives']}")
-        pairs = [(name, have["metrics"][name], value) for name, value in want["metrics"].items()]
-        for name, bounds in want["intervals"].items():
-            got = have["intervals"][name]
-            pairs += [(f"{name} interval", a, b) for a, b in zip(got, bounds, strict=True)]
+        pairs = []
+        for prefix in ("hidden_", ""):
+            metrics, intervals = f"{prefix}metrics", f"{prefix}intervals"
+            pairs += [
+                (f"{prefix}{name}", have[metrics][name], value)
+                for name, value in want[metrics].items()
+            ]
+            for name, bounds in want[intervals].items():
+                got = have[intervals][name]
+                pairs += [
+                    (f"{prefix}{name} interval", a, b) for a, b in zip(got, bounds, strict=True)
+                ]
         for name, got, value in pairs:
             same = got == value if isinstance(value, int) else close(got, value, 1.0)
             if not same:
@@ -554,6 +573,7 @@ GOLDEN_DATASET = {
 }
 # The audits of the golden run (test_the_golden_run_audits_validation_and_test). Each split's
 # population is 40 accounts, all sampled; its intervals are ring-clustered 90% intervals.
+# The hidden mules' numbers rank them against the non-mules, the revealed mules removed.
 GOLDEN_AUDIT: dict[str, dict[str, Any]] = {
     "validation": {
         "metrics": {
@@ -583,6 +603,29 @@ GOLDEN_AUDIT: dict[str, dict[str, Any]] = {
             "recall_at_10pct": [0.0, 0.2727272727272727],
         },
         "positives": (5, 6),
+        "hidden_metrics": {
+            "sample_accounts": 35,
+            "sample_positives": 6,
+            "estimated_population": 35.0,
+            "average_precision": 0.29994427878678354,
+            "roc_auc": 0.5977011494252873,
+            "precision_at_1pct": 0.0,
+            "recall_at_1pct": 0.0,
+            "precision_at_5pct": 0.0,
+            "recall_at_5pct": 0.0,
+            "precision_at_10pct": 0.0,
+            "recall_at_10pct": 0.0,
+        },
+        "hidden_intervals": {
+            "average_precision": [0.1864294733044733, 0.627619578134284],
+            "roc_auc": [0.32183908045977005, 0.8620689655172413],
+            "precision_at_1pct": [0.0, 0.0],
+            "recall_at_1pct": [0.0, 0.0],
+            "precision_at_5pct": [0.0, 0.42857142857142855],
+            "recall_at_5pct": [0.0, 0.125],
+            "precision_at_10pct": [0.0, 0.7142857142857143],
+            "recall_at_10pct": [0.0, 0.4166666666666667],
+        },
     },
     "test": {
         "metrics": {
@@ -612,5 +655,28 @@ GOLDEN_AUDIT: dict[str, dict[str, Any]] = {
             "recall_at_10pct": [0.0, 0.2727272727272727],
         },
         "positives": (6, 6),
+        "hidden_metrics": {
+            "sample_accounts": 34,
+            "sample_positives": 6,
+            "estimated_population": 34.0,
+            "average_precision": 0.23432400932400935,
+            "roc_auc": 0.5297619047619048,
+            "precision_at_1pct": 0.0,
+            "recall_at_1pct": 0.0,
+            "precision_at_5pct": 0.0,
+            "recall_at_5pct": 0.0,
+            "precision_at_10pct": 0.2941176470588235,
+            "recall_at_10pct": 0.16666666666666666,
+        },
+        "hidden_intervals": {
+            "average_precision": [0.16637399365340544, 0.4900642684610074],
+            "roc_auc": [0.3151785714285713, 0.7559523809523809],
+            "precision_at_1pct": [0.0, 1.0],
+            "recall_at_1pct": [0.0, 0.05666666666666667],
+            "precision_at_5pct": [0.0, 0.588235294117647],
+            "recall_at_5pct": [0.0, 0.16666666666666666],
+            "precision_at_10pct": [0.0, 0.588235294117647],
+            "recall_at_10pct": [0.0, 0.3333333333333333],
+        },
     },
 }
