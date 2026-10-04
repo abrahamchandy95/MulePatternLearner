@@ -1,10 +1,11 @@
-"""The nnPU objective a loss section names, and one optimizer step on it."""
+"""The nnPU objective a loss section names, one optimizer step on it, and its risk."""
 
 from __future__ import annotations
 
 import math
 from typing import NamedTuple
 
+import numpy as np
 import torch
 from torch import nn
 
@@ -73,3 +74,26 @@ def nnpu_step(
     nn.utils.clip_grad_norm_(model.parameters(), 5)
     optimizer.step()
     return StepLoss(value.detach(), objective.detach())
+
+
+def pu_risk(labels: np.ndarray, scores: np.ndarray, prior: float, positive_weight: float) -> float:
+    """The non-negative nnPU risk of scored accounts: the run's objective on a proxy sample.
+
+    ``labels`` mark the revealed positives (1) and the unlabeled accounts (0), and
+    ``scores`` are the model's probabilities, the sigmoid of its logits, so the surrogate
+    losses of model.loss.NonNegativePULoss are 1 - score for an account taken as positive
+    and the score for one taken as negative. The risk is
+
+        positive_weight * R_p^+ + max(0, R_u^- - prior * R_p^-)
+
+    with the run's prior and positive weight: the risk the loss estimates, whose negative
+    part nnPU holds at zero (the loss's beta = 0), so a model that scores the unlabeled
+    accounts below the positives' share of them gains nothing for it. Lower is better.
+    Both classes are needed.
+    """
+    positive = labels == 1
+    if positive.all() or not positive.any():
+        raise ValueError("The nnPU risk needs revealed positives and unlabeled accounts")
+    as_positive = float(np.mean(1.0 - scores[positive]))
+    negative = float(np.mean(scores[~positive])) - prior * float(np.mean(scores[positive]))
+    return positive_weight * as_positive + max(0.0, negative)

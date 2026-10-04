@@ -1026,6 +1026,7 @@ def write_run_files(
                 "steps": REPORTED_STEPS,
                 "validation_ap": ap if epoch > 1 else selected_ap * 0.2,
                 "validation_roc_auc": min(0.8 + 0.03 * epoch, 0.96) - rng.uniform(0, 0.02),
+                "validation_pu_risk": 0.3 + 0.6 * np.exp(-epoch / 2) + rng.uniform(0, 0.02),
                 "weights": "averaged",
                 "selected": epoch == REPORTED_SELECTED,
                 "stopped": epoch == REPORTED_EPOCHS,

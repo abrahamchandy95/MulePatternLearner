@@ -12,7 +12,9 @@ import pytest
 
 from mule_pattern_learner.config import (
     BUILT_IN_SAMPLER,
+    BUILT_IN_SELECTION,
     DEFAULT_CONFIG,
+    SELECTION_RULES,
     LossConfig,
     ModelConfig,
     RunConfig,
@@ -23,6 +25,7 @@ from mule_pattern_learner.config import (
     TransportConfig,
     differing_settings,
 )
+from mule_pattern_learner.contract.fingerprints import fingerprint
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
 from mule_pattern_learner.paths import REPOSITORY_ROOT
 
@@ -52,6 +55,7 @@ def test_sections_refuse_values_outside_their_ranges() -> None:
         (lambda: TrainingConfig(epochs=0), "training.epochs"),
         (lambda: TrainingConfig(batch_size=129), "training.batch_size"),
         (lambda: TrainingConfig(weight_average_decay=1.0), "training.weight_average_decay"),
+        (lambda: TrainingConfig(selection="test_ap"), "training.selection"),
         (lambda: replace(DEFAULT_CONFIG, features=("entity_meta", "no_such_group")), "no_such"),
         (lambda: replace(DEFAULT_CONFIG, features=("entity_meta", "entity_meta")), "twice"),
     ]
@@ -139,6 +143,29 @@ def test_the_fingerprint_covers_what_can_change_results() -> None:
     assert differing_settings(other.results_view(), DEFAULT_CONFIG.results_view()) == [
         "dataset.seed"
     ]
+
+
+def test_the_built_in_selection_rule_leaves_every_fingerprint_as_it_was() -> None:
+    base = DEFAULT_CONFIG.fingerprint()
+    assert DEFAULT_CONFIG.training.selection == BUILT_IN_SELECTION == "validation_ap"
+    # A config.json written before the setting existed has no selection: it reads as the
+    # built-in rule, and the fingerprint is the one it recorded, which covered every
+    # setting but transport, runtime and the sampler backend.
+    for changes in ({}, {"training": {"epochs": 3}}, {"loss": {"positive_weight": "prior"}}):
+        config = DEFAULT_CONFIG.with_changes(changes)
+        earlier = config.to_dict()
+        del earlier["training"]["selection"]
+        assert RunConfig.from_dict(earlier) == config
+        del earlier["transport"], earlier["runtime"], earlier["sampler"]["backend"]
+        assert config.fingerprint() == fingerprint(earlier)
+    # Every other rule is a setting that changes results, named as such.
+    for rule in SELECTION_RULES[1:]:
+        chosen = DEFAULT_CONFIG.with_changes({"training": {"selection": rule}})
+        assert chosen.fingerprint() != base
+        assert differing_settings(chosen.results_view(), DEFAULT_CONFIG.results_view()) == [
+            "training.selection"
+        ]
+        assert chosen.to_dict()["training"]["selection"] == rule
 
 
 def settings(value: Any, path: str = "") -> Iterator[tuple[str, Any]]:

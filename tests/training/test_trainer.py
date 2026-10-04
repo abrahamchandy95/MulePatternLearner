@@ -539,6 +539,106 @@ def test_patience_zero_disables_early_stopping(
     assert epochs.selected.tolist() == [True, False, False] and not epochs.stopped.any()
 
 
+# Each epoch's validation proxy AP, ROC AUC and nnPU risk in the selection tests: the AP
+# is best at epoch 1, the ROC AUC at epoch 2 and the risk lowest at epoch 3.
+PROXY_AP = (0.6, 0.5, 0.4, 0.45)
+PROXY_ROC_AUC = (0.7, 0.9, 0.8, 0.85)
+PROXY_RISK = (0.5, 0.4, 0.2, 0.3)
+
+
+@pytest.mark.parametrize(
+    ("rule", "kept", "trained"),
+    [
+        # Patience 2: the AP stops after epoch 3, two epochs past its best.
+        ("validation_ap", 1, 3),
+        ("validation_roc_auc", 2, 4),
+        ("validation_pu_risk", 3, 4),
+        # No early stopping: every epoch trains and the last is kept.
+        ("none", 4, 4),
+    ],
+)
+def test_the_kept_epoch_follows_the_selection_rule(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rule: str, kept: int, trained: int
+) -> None:
+    config = unit_config(
+        RUNTIME_CHANGES,
+        training={
+            "epochs": 4,
+            "patience": 2,
+            "steps_per_epoch": 1,
+            "selection": rule,
+            "weight_average_decay": 0.9,
+        },
+    )
+    prepared_dataset(tmp_path / "dataset", config, monkeypatch)
+    ap, auc, risk = iter(PROXY_AP), iter(PROXY_ROC_AUC), iter(PROXY_RISK)
+    real = trainer.proxy_metrics
+
+    def proxy(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        result = real(*args, **kwargs)
+        if len(args) > 2 and args[2] == 0.5:  # the per-epoch validation proxy
+            result |= {"average_precision": next(ap), "roc_auc": next(auc)}
+        return result
+
+    def pu_risk(*args: Any) -> float:
+        return next(risk)
+
+    monkeypatch.setattr(trainer, "proxy_metrics", proxy)
+    monkeypatch.setattr(trainer, "pu_risk", pu_risk)
+    result = fit(tmp_path, "run", config)
+    run = RunPaths(tmp_path / "run")
+    epochs = read_epochs(run.epochs)
+    assert result["best_epoch"] == kept and epochs.epoch.tolist() == list(range(1, trained + 1))
+    assert epochs.selected.tolist() == [epoch == kept for epoch in range(1, trained + 1)]
+    assert epochs.stopped.tolist()[-1] is (rule == "validation_ap" or rule == "validation_roc_auc")
+    # Every criterion is recorded, whatever the rule.
+    assert epochs.validation_ap.tolist() == list(PROXY_AP[:trained])
+    assert epochs.validation_roc_auc.tolist() == list(PROXY_ROC_AUC[:trained])
+    assert epochs.validation_pu_risk.tolist() == list(PROXY_RISK[:trained])
+    if rule == "none":
+        # The final weights are kept, averaged as configured.
+        state = torch.load(run.resume, weights_only=True)
+        saved = saved_model(run.model)
+        assert all(torch.equal(saved[k], state["weight_average"]["state"][k]) for k in saved)
+
+
+def test_a_run_interrupted_before_the_risk_existed_resumes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = unit_config(RUNTIME_CHANGES)
+    prepared_dataset(tmp_path / "dataset", config, monkeypatch)
+    fit(tmp_path, "straight", config)
+    with pytest.raises(RuntimeError, match="injected"):
+        fit(tmp_path, "resumed", config, contexts=FakeSource(config, fail=after_validation(1)))
+    run = RunPaths(tmp_path / "resumed")
+    # The resume state and epochs.csv as the code before the risk wrote them: the same
+    # payload, its epoch rows without the risk.
+    state = torch.load(run.resume, weights_only=True)
+    fields = set(state)
+    for row in state["epoch_rows"]:
+        del row["validation_pu_risk"]
+    torch.save(state, run.resume)
+    read_epochs(run.epochs).drop(columns="validation_pu_risk").to_csv(run.epochs, index=False)
+    assert read_epochs(run.epochs).validation_pu_risk.isna().all()
+    fit(tmp_path, "resumed", config, resume=True)
+    assert set(torch.load(run.resume, weights_only=True)) == fields
+    straight = read_epochs(RunPaths(tmp_path / "straight").epochs)
+    resumed = read_epochs(run.epochs)
+    # The epoch before the interruption has no risk; the rest of the run is the same.
+    assert pd.isna(resumed.validation_pu_risk.iloc[0])
+    assert (
+        resumed.validation_pu_risk.iloc[1:].tolist()
+        == straight.validation_pu_risk.iloc[1:].tolist()
+    )
+    pd.testing.assert_frame_equal(
+        resumed.drop(columns="validation_pu_risk"), straight.drop(columns="validation_pu_risk")
+    )
+    for name, value in saved_model(run.model).items():
+        torch.testing.assert_close(
+            value, saved_model(RunPaths(tmp_path / "straight").model)[name], rtol=0, atol=0
+        )
+
+
 def test_resume_refuses_a_different_sampler_backend_unless_configured(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

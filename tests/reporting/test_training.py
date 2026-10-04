@@ -114,6 +114,13 @@ def test_the_validation_figure_marks_the_selected_epoch_and_chance() -> None:
         "early stopping after epoch 3",
     ]
     assert ax.get_title() == "Proxy validation ranking per epoch (averaged weights)"
+    # The nnPU risk where epochs.csv has it, the axis tall enough for it.
+    ax = axes()
+    plot_validation_ranking(ax, EPOCHS.assign(validation_pu_risk=[1.4, 0.9, 1.0]), None)
+    legend = ax.get_legend()
+    assert legend is not None
+    assert "nnPU risk (lower is better)" in [text.get_text() for text in legend.get_texts()]
+    assert ax.get_ylim()[1] == pytest.approx(1.4 * 1.02)
 
 
 def test_the_throughput_panels_draw_seconds_and_context_totals() -> None:

@@ -288,17 +288,31 @@ def _sampler(backend: Any) -> str:
     return "cuGraph" if backend == "cugraph" else str(backend)
 
 
+# How the start of training names a selection rule other than the built-in one.
+SELECTING_ON = {
+    "validation_roc_auc": "selecting on the validation proxy ROC AUC",
+    "validation_pu_risk": "selecting on the validation proxy nnPU risk",
+}
+
+
 def _plan(record: Mapping[str, Any]) -> str:
     # The steps each epoch's schedule takes: training.steps_per_epoch (the record's
     # steps_per_epoch) limits those of each train cutoff, so an epoch may take more.
-    patience = int(record["patience"])
-    stop = (
-        f"early stop after {plural(patience, 'epoch')} without gain"
-        if patience
-        else "no early stop"
-    )
+    patience, selection = int(record["patience"]), record.get("selection")
+    if selection == "none":
+        stop = "no early stop, keeping the last epoch"
+    else:
+        stop = (
+            f"early stop after {plural(patience, 'epoch')} without gain"
+            if patience
+            else "no early stop"
+        )
+        if selection in SELECTING_ON:
+            stop += f", {SELECTING_ON[selection]}"
     per_epoch = f"{plural(int(record['steps']), 'step')} per epoch"
-    return f"{per_epoch}, at most {plural(int(record['epochs']), 'epoch')}, {stop}"
+    epochs = int(record["epochs"])
+    most = plural(epochs, "epoch") if selection == "none" else f"at most {plural(epochs, 'epoch')}"
+    return f"{per_epoch}, {most}, {stop}"
 
 
 def _start(record: Mapping[str, Any]) -> str:

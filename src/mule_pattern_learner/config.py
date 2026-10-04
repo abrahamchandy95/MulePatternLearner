@@ -280,17 +280,33 @@ class LossConfig:
             _set(self, "positive_weight", weight)
 
 
+# How a run chooses, among its epochs, the weights it keeps (training.selection): by the
+# epochs.csv column of the validation proxy it names, the highest AP or ROC AUC or the
+# lowest nnPU risk, or "none", which trains every epoch and keeps the last. The first is
+# the built-in rule.
+SELECTION_RULES = ("validation_ap", "validation_roc_auc", "validation_pu_risk", "none")
+BUILT_IN_SELECTION = SELECTION_RULES[0]
+NO_SELECTION = "none"
+
+
 @dataclass(frozen=True)
 class TrainingConfig:
-    """Optimisation, early stopping and the proxy evaluation on observed labels."""
+    """Optimisation, model selection, early stopping and the proxy evaluation."""
 
     seed: int = 42
     epochs: int = 30
     # None trains on every marginal account of an epoch.
     steps_per_epoch: int | None = 100
     batch_size: int = 64
-    # Epochs without a better validation AP before training stops; 0 never stops early.
+    # Epochs without a better value of the selection rule before training stops; 0 never
+    # stops early, and neither does the rule "none".
     patience: int = 6
+    # The selection rule (SELECTION_RULES). With so few revealed validation mules (11 on
+    # the reference graph) their AP hangs on where the top few rank, so which rule picks
+    # the better model is a question of method. Left out of the fingerprint at the
+    # built-in rule, so a run trained before the setting existed keeps its fingerprint
+    # (results_view).
+    selection: str = BUILT_IN_SELECTION
     learning_rate: float = 0.001
     weight_decay: float = 0.0001
     # Validate, select and save an exponential moving average of the weights (decay per
@@ -309,6 +325,7 @@ class TrainingConfig:
             _integer("training.steps_per_epoch", self.steps_per_epoch, 1)
         BATCH_ROOTS.check("training.batch_size", self.batch_size)
         _integer("training.patience", self.patience)
+        _choice("training.selection", self.selection, SELECTION_RULES)
         rate = _number("training.learning_rate", self.learning_rate, 0, open_low=True)
         _set(self, "learning_rate", rate)
         _set(self, "weight_decay", _number("training.weight_decay", self.weight_decay, 0))
@@ -433,12 +450,16 @@ class RunConfig:
 
         Every section but transport and runtime, and the sampler without its backend:
         a run checks the backend it samples with on its own, so a resumed run may name
-        another one explicitly.
+        another one explicitly. training.selection is left out at the built-in rule,
+        which every run trained before the setting existed used: their fingerprints,
+        and the resume states and saved models that record them, stay valid.
         """
         value = self.to_dict()
         for name in RUNTIME_SECTIONS:
             del value[name]
         del value["sampler"]["backend"]
+        if value["training"]["selection"] == BUILT_IN_SELECTION:
+            del value["training"]["selection"]
         return value
 
     def fingerprint(self) -> str:

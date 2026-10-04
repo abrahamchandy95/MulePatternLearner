@@ -156,9 +156,15 @@ directory.
   kernel's extra cost should be small; CPU and MPS keep their kernels.
 - **Validation** after each epoch scores the revealed validation positives (11 on the
   reference graph) and a fixed sample of 2,000 unlabelled validation accounts, at the
-  validation cutoff in phase 2. The epoch with the best validation average precision is
-  kept, and training stops after `training.patience` (6) epochs without a better one. The
-  threshold maximises validation F1.
+  validation cutoff in phase 2, and records three criteria in `epochs.csv`: the proxy
+  average precision, the proxy ROC AUC and the run's nnPU risk on the same sample, with
+  its own prior and positive weight (the non-negative risk the loss estimates, lower being
+  better). `training.selection` chooses the epoch that is kept: by default the one with the
+  best proxy average precision, or the best ROC AUC, or the lowest risk, and training stops
+  after `training.patience` (6) epochs without a better one; or `"none"`, which trains
+  every epoch and keeps the last. With so few revealed mules the AP of an epoch hangs on
+  where the top few rank, so which rule picks better models is a question for the control
+  experiments. The threshold maximises validation F1.
 - **Weight averaging:** validation scores an exponential moving average of the weights,
   and the selected epoch's average is what `model.pt` keeps; training itself follows the
   raw weights. After n steps the decay is `min(0.99, (1 + n) / (10 + n))`, so the average
@@ -187,7 +193,8 @@ run, so any rejected root fails the run):
   requested roots, or when any rejected root is an observed positive;
 - validation (every epoch) and test apply the same rules to the whole split, and
   validation must keep both observed classes;
-- a run in which no epoch produced a finite validation AP refuses to save weights.
+- a run in which no epoch produced a value of its selection rule (a finite validation AP,
+  by default) refuses to save weights.
 
 The limit decides only whether a run may go on, never its numbers, so a resume may raise
 it ([Train and evaluate](../how-to/train-and-evaluate.md#when-tigergraph-rejects-roots)).

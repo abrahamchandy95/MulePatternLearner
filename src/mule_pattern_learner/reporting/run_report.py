@@ -26,6 +26,7 @@ from ..artifacts import (
     read_history,
     read_json,
     read_predictions,
+    read_run_config,
 )
 from ..contract.graph_schema import HELD_OUT_SPLITS
 from ..metrics import REVIEW_BUDGETS, budget_name
@@ -280,6 +281,7 @@ def training_section(run: RunPaths) -> list[str]:
     rejected = metrics["rejected_roots"]
     run_rows = [
         ["Epochs run (selected)", f"{len(epochs)} ({metrics['best_epoch']})"],
+        ["Selection rule", read_run_config(run.config).training.selection],
         ["Parameters", number(metrics["parameter_count"])],
         ["Hours", f"{metrics['elapsed_seconds'] / 3600:.2f}"],
         ["Device, sampler backend", f"{metrics['device']}, {metrics['sampler_backend']}"],

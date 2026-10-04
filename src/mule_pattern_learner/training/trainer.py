@@ -28,6 +28,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
 import contextlib
+import math
 import time
 from typing import Any
 
@@ -37,6 +38,7 @@ import torch
 from torch import nn
 
 from ..artifacts import (
+    EPOCH_COLUMNS,
     HISTORY_COLUMNS,
     append_history,
     keep_history,
@@ -82,7 +84,7 @@ from .checkpoint import (
     run_started,
 )
 from .history import LogInterval, RunTotals, epoch_record, plain
-from .objective import StepLoss, nnpu_objective, nnpu_step
+from .objective import StepLoss, nnpu_objective, nnpu_step, pu_risk
 from .schedule import (
     EvaluationSample,
     PUSample,
@@ -91,10 +93,13 @@ from .schedule import (
     evaluation_indices,
     schedule_steps,
 )
+from .selection import selection_value, stops_early
 from .summary import host_settings, prediction_frame, provenance, run_summary
 
 Batch = dict[str, torch.Tensor]
 BatchRequest = tuple[list[ContextKey], str, int]
+# The epochs.csv column an epoch row of the resume state never holds: record_epochs adds it.
+UNSAVED = ("selected",)
 
 
 def check_limits(config: RunConfig, plan: FeaturePlan) -> None:
@@ -135,7 +140,7 @@ def train(
     hubs: HubRegistry | None = None,
     resume: bool = False,
 ) -> dict[str, Any]:
-    """Train, select on observed validation labels, save the model, then score test.
+    """Train, select by training.selection on observed validation labels, save, score test.
 
     Every file of the run goes into the directory ``run`` names. Without ``contexts``,
     ``open_contexts`` opens the dataset's context source once the settings and the
@@ -291,7 +296,9 @@ class _TrainingRun:
         self.rng = np.random.default_rng(config.training.seed)
         self.epoch, self.step, self.stopped = 0, 0, False
         self.epoch_started = time.perf_counter()
-        self.best_ap, self.best_epoch = -1.0, 0
+        # The selection rule, and the kept epoch's value under it (selection_value).
+        self.selection = config.training.selection
+        self.best_value, self.best_epoch = -math.inf, 0
         self.best_state = self._state_copy()
         self.best_scores: np.ndarray | None = None
         self.best_accepted: np.ndarray | None = None
@@ -353,7 +360,7 @@ class _TrainingRun:
             loss_sum=self.loss_sum.detach().cpu(),
             loss_steps=self.loss_steps,
             best_state=self.best_state,
-            best_ap=self.best_ap,
+            best_ap=self.best_value,
             best_epoch=self.best_epoch,
             best_scores=None if best_scores is None else torch.from_numpy(best_scores),
             best_accepted=None if best_accepted is None else torch.from_numpy(best_accepted),
@@ -395,8 +402,11 @@ class _TrainingRun:
         self.epoch, self.step, self.stopped = state.epoch, state.step, state.stopped
         self.loss_sum = state.loss_sum.to(self.device)
         self.loss_steps = state.loss_steps
-        self.best_state, self.best_ap = state.best_state, state.best_ap
-        self.best_epoch, self.epoch_rows = state.best_epoch, state.epoch_rows
+        self.best_state, self.best_value = state.best_state, state.best_ap
+        # A state saved before validation_pu_risk joined epochs.csv lacks it in its rows.
+        unset = dict.fromkeys(name for name in EPOCH_COLUMNS if name not in UNSAVED)
+        self.best_epoch = state.best_epoch
+        self.epoch_rows = [{**unset, **row} for row in state.epoch_rows]
         scores, accepted = state.best_scores, state.best_accepted
         self.best_scores = None if scores is None else scores.numpy()
         self.best_accepted = None if accepted is None else accepted.numpy()
@@ -441,6 +451,7 @@ class _TrainingRun:
                         self.training_config.steps_per_epoch,
                     ),
                     "patience": self.training_config.patience,
+                    "selection": self.selection,
                     "prefetch_batches": self.prefetch,
                     "max_rejected_root_fraction": self.limit,
                 }
@@ -573,7 +584,7 @@ class _TrainingRun:
                 mark = time.perf_counter()
 
     def _select_epoch(self, epoch: int) -> None:
-        """Score validation, keep the best state, apply patience and checkpoint the epoch."""
+        """Score validation, keep the state the rule prefers, apply patience, checkpoint."""
         with evaluated_weights(self.model, self.average):
             scores, accepted = self.score("validation")
             selected = self._state_copy()
@@ -581,24 +592,25 @@ class _TrainingRun:
         check_split_rejections(
             "validation", labels, accepted, self.limit, self.progress.rejections()
         )
-        metrics = proxy_metrics(labels[accepted].astype(np.int64), scores[accepted], 0.5)
-        ap = metrics["average_precision"]
-        if ap is not None and ap > self.best_ap:
-            self.best_ap, self.best_epoch = ap, epoch + 1
-            self.best_state, self.best_scores = selected, scores
-            self.best_accepted = accepted
-        # patience = 0 disables early stopping.
-        patience = self.training_config.patience
-        self.stopped = patience > 0 and epoch + 1 - self.best_epoch >= patience
-        record = epoch_record(
+        observed, scored = labels[accepted].astype(np.int64), scores[accepted]
+        metrics = proxy_metrics(observed, scored, 0.5)
+        risk = pu_risk(observed, scored, self.prior, self.positive_weight)
+        row = epoch_record(
             epoch + 1,
             self.loss_sum,
             self.loss_steps,
             metrics,
+            risk,
             averaged=self.average is not None,
-            stopped=self.stopped,
         )
-        self.epoch_rows.append(record)
+        value = selection_value(self.selection, row)
+        if value is not None and value > self.best_value:
+            self.best_value, self.best_epoch = value, epoch + 1
+            self.best_state, self.best_scores = selected, scores
+            self.best_accepted = accepted
+        patience = self.training_config.patience
+        self.stopped = stops_early(self.selection, patience, epoch + 1, self.best_epoch)
+        self.epoch_rows.append({**row, "stopped": self.stopped})
         self.epoch, self.step = epoch + 1, 0
         self.epoch_rng_state = self.rng.bit_generator.state
         self.save_last()
@@ -663,7 +675,8 @@ class _TrainingRun:
         """Save the selected model, then score test and write metrics.json."""
         if self.best_epoch == 0 or self.best_scores is None or self.best_accepted is None:
             raise ValueError(
-                "No epoch produced a finite validation AP; refusing to save untrained weights"
+                f"No epoch produced a value of the selection rule {self.selection}; "
+                "refusing to save untrained weights"
             )
         self.model.load_state_dict(self.best_state)
         validation = self.frame("validation", self.best_scores, self.best_accepted)

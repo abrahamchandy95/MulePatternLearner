@@ -85,6 +85,7 @@ def test_report_md_holds_the_tables_and_links_every_figure_relatively(
     assert re.search(r"\| Average precision \| 0\.\d{3} \(0\.\d+ to 0\.\d+\) \|", text)
     assert "| Observed positives / accounts | 11 / 2,011 | 12 / 2,012 |" in text
     assert "| Epochs run (selected) | 11 (5) |" in text
+    assert "| Selection rule | validation_ap |" in text
 
 
 def test_training_and_evaluation_each_draw_their_own_figures(tmp_path: Path) -> None:

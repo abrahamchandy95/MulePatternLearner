@@ -693,7 +693,7 @@ TOTALS = {
 }
 RECORDED_FIELDS = {
     "start": {"event", "device", "threads", "deterministic", "known_mules", "loss", "run"}
-    | {"epoch", "step", "steps", "prefetch_batches", "max_rejected_root_fraction"}
+    | {"epoch", "step", "steps", "selection", "prefetch_batches", "max_rejected_root_fraction"}
     | TOTALS,
     "train": {"event", "epoch", "step", "steps", "date", "loss", "objective", "corrected_steps"}
     | {"seconds_per_step", "batch_wait_seconds", "rejected_roots", "batch"}

@@ -117,15 +117,22 @@ def plot_corrections(ax: Axes, history: pd.DataFrame) -> Axes:
 
 
 def plot_validation_ranking(ax: Axes, epochs: pd.DataFrame, prevalence: float | None) -> Axes:
-    """Proxy AP and ROC AUC of validation per epoch, the selected epoch and chance.
+    """Proxy AP, ROC AUC and nnPU risk of validation per epoch, the selected epoch, chance.
 
     ``prevalence`` is the share of observed positives among validation's scored rows,
-    the AP of a random ranking; None leaves that line out. The title names the weights
-    validation scored (the moving average or the raw weights).
+    the AP of a random ranking; None leaves that line out. The nnPU risk, lower being
+    better, is drawn where epochs.csv has it (an epochs.csv written before it has not).
+    The title names the weights validation scored (the moving average or the raw
+    weights).
     """
     x = epochs.epoch.to_numpy(np.int64)
     ax.plot(x, epochs.validation_ap, marker="o", label="average precision", **measure(0))
     ax.plot(x, epochs.validation_roc_auc, marker="s", label="ROC AUC", **measure(1))
+    risk = epochs.get("validation_pu_risk")
+    top = 1.02
+    if risk is not None and risk.notna().any():
+        ax.plot(x, risk, marker="^", label="nnPU risk (lower is better)", **measure(2))
+        top = max(top, float(risk.max()) * 1.02)
     if prevalence is not None:
         ax.axhline(
             prevalence,
@@ -156,7 +163,7 @@ def plot_validation_ranking(ax: Axes, epochs: pd.DataFrame, prevalence: float | 
         )
     ax.set_xlim(0.5, float(x.max()) + 0.5 if len(x) else 1.5)
     ax.xaxis.set_major_locator(MaxNLocator(integer=True))
-    ax.set_ylim(0, 1.02)
+    ax.set_ylim(0, top)
     ax.set_xlabel("Epoch")
     ax.set_ylabel("Proxy metric on observed labels")
     # Under the axes: the curves cross every part of them.

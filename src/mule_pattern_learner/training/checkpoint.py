@@ -49,13 +49,16 @@ class ResumeState:
     stopped: bool
     loss_sum: torch.Tensor
     loss_steps: int
-    # The selection so far: the best epoch's weights, validation AP, scores and mask.
+    # The selection so far: the kept epoch's weights, its value under the selection rule
+    # (training.selection: higher is better, so the nnPU risk is negated; the field keeps
+    # the name it had when the validation AP was the only rule), scores and mask.
     best_state: dict[str, torch.Tensor]
     best_ap: float
     best_epoch: int
     best_scores: torch.Tensor | None
     best_accepted: torch.Tensor | None
-    # The epochs.csv rows of the finished epochs, without their selected flag.
+    # The epochs.csv rows of the finished epochs, without their selected flag; a state
+    # saved before validation_pu_risk joined epochs.csv has rows without it.
     epoch_rows: list[dict[str, Any]]
     # The sampler backend the run resolved.
     sampler_backend: str

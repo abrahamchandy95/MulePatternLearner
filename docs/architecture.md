@@ -252,8 +252,10 @@ at import. There is no configuration file, no `--config` and no option: another 
 `RunConfig` built in Python, or a declared variant.
 
 - `RunConfig.fingerprint` names the settings that can change results (everything but
-  `transport`, `runtime` and the sampler backend). A run records it, a resume must match
-  it, and a complete run of another fingerprint is never overwritten.
+  `transport`, `runtime` and the sampler backend, and `training.selection` at its
+  built-in rule, which joined the settings after runs had recorded their fingerprints).
+  A run records it, a resume must match it, and a complete run of another fingerprint is
+  never overwritten.
 - The dataset id is the fingerprint of the dataset settings: the source id, `scope.id`,
   `scope.unowned`, the `dataset` section and the sampler's candidate pools.
 - The audit's constants (`AUDIT_NEGATIVES`, `REVIEW_BUDGETS`, `BOOTSTRAP_REPLICATES`,
@@ -375,6 +377,12 @@ The owner's decisions that shape the code, each with its reason.
   is used only when the settings and query texts it records are this code's, and nothing
   converts the settings, contracts or datasets of earlier code: each conversion was a
   second path to keep correct. The saved-model test's fixtures are models this code saved.
+  One narrow exception keeps the runs of the first control experiments complete and
+  resumable (decided on 2026-10-04): an `epochs.csv` written before the validation nnPU
+  risk was recorded is read with exactly its earlier columns, the risk missing, and a
+  resume state saved then continues with that column empty in its earlier epochs. Its
+  payload is the same, since the kept epoch's value under the selection rule is stored
+  in the slot the validation AP had. Any other column set is refused.
 - **One branch, `main`, the same on both remotes** (decided on 2026-09-27 and 2026-09-28).
   The layered code replaces the old `main` by a fast-forward, so the history before it
   stays in `main`; `origin` and `learner` hold the same `main`, and nothing is pushed and

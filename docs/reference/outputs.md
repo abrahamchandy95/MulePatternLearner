@@ -116,10 +116,13 @@ resumed run drops the rows logged after its resume position before it logs them 
 
 ### epochs.csv
 
-`epoch`, `loss`, `steps`, `validation_ap` and `validation_roc_auc` (proxy metrics on
-observed labels, of the weights `weights` names: `averaged` or `raw`), `selected` (the
-epoch whose weights `model.pt` holds) and `stopped` (the epoch after which early stopping
-ended the run).
+`epoch`, `loss`, `steps`, `validation_ap`, `validation_roc_auc` and `validation_pu_risk`
+(the validation proxy on observed labels, of the weights `weights` names: `averaged` or
+`raw`; the risk is the run's own non-negative nnPU risk on the proxy sample, lower being
+better), `selected` (the epoch whose weights `model.pt` holds, chosen by
+`training.selection` among those three or as the last epoch) and `stopped` (the epoch after
+which early stopping ended the run). An `epochs.csv` written before the risk was recorded
+lacks its column and reads with the risk missing.
 
 ### metrics.json
 

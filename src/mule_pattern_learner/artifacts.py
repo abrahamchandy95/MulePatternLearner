@@ -14,6 +14,7 @@ import contextlib
 import csv
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import secrets
@@ -44,20 +45,27 @@ HISTORY_COLUMNS: tuple[str, ...] = (
     "rejected_roots",  # training roots TigerGraph rejected
     "stub_children",
 )
-# epochs.csv: one row per epoch. validation_ap and validation_roc_auc are proxy metrics
-# on observed labels, of the weights named by weights ("averaged" or "raw"); selected
-# marks the epoch whose weights model.pt holds, and stopped the epoch after which early
-# stopping ended the run.
+# epochs.csv: one row per epoch. validation_ap, validation_roc_auc and
+# validation_pu_risk (the run's nnPU risk, lower being better) score the validation proxy
+# on observed labels, with the weights named by weights ("averaged" or "raw"); they are
+# the criteria of the selection rules (training.selection). selected marks the epoch
+# whose weights model.pt holds, and stopped the epoch after which early stopping ended
+# the run.
 EPOCH_COLUMNS: tuple[str, ...] = (
     "epoch",
     "loss",
     "steps",
     "validation_ap",
     "validation_roc_auc",
+    "validation_pu_risk",
     "weights",
     "selected",
     "stopped",
 )
+# The columns of an epochs.csv written before validation_pu_risk joined them, which
+# read_epochs reads with the risk missing: the one earlier layout this code reads, so
+# the runs of the first control experiments stay complete (docs/architecture.md).
+EARLIER_EPOCH_COLUMNS = tuple(name for name in EPOCH_COLUMNS if name != "validation_pu_risk")
 # predictions/<split>.parquet: the scored observed-label rows of a split (float64 scores).
 PREDICTION_COLUMNS = ("account_id", "group_id", "date", "observed_label", "score")
 # audit/<split>.parquet: the scored accounts of a split's audit sample, with their truth,
@@ -240,7 +248,13 @@ def read_history(path: Path) -> pd.DataFrame:
 
 
 def read_epochs(path: Path) -> pd.DataFrame:
-    return _read_csv(path, EPOCH_COLUMNS)
+    """epochs.csv; one written before validation_pu_risk (EARLIER_EPOCH_COLUMNS) has it NaN."""
+    frame = pd.read_csv(path, float_precision="round_trip")
+    if tuple(frame.columns) == EARLIER_EPOCH_COLUMNS:
+        frame.insert(EPOCH_COLUMNS.index("validation_pu_risk"), "validation_pu_risk", math.nan)
+    if tuple(frame.columns) != EPOCH_COLUMNS:
+        raise ValueError(f"{path} has the columns {list(frame.columns)}, not {list(EPOCH_COLUMNS)}")
+    return frame
 
 
 def write_predictions(path: Path, frame: pd.DataFrame) -> None:

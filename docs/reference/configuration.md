@@ -32,7 +32,9 @@ A control experiment declares its change in `experiments/variants.py` instead (s
 - **The fingerprint** (`RunConfig.fingerprint`) covers every setting that can change a
   run's results: every section except `transport` and `runtime`, and the sampler without
   `sampler.backend`. `config.json` records it, a resumed run must match it, and a complete
-  run of another fingerprint is never overwritten.
+  run of another fingerprint is never overwritten. `training.selection` joined the
+  settings later, so it is left out at its built-in value, `"validation_ap"`: a run
+  trained before it existed keeps its fingerprint, and any other rule is part of it.
 - **The dataset settings** name the prepared dataset: the source id (read from the
   graph, never configured), `scope.id`, `scope.unowned`, the whole `dataset` section and
   the sampler's candidate pools (`sampler.roots` and `sampler.children`). Their
@@ -137,7 +139,8 @@ A group's dependencies must come with it (`pool_activity` reads `pair_history` a
 | `training.epochs` | `30` | Most epochs a run trains |
 | `training.steps_per_epoch` | `100` | Steps per epoch of each train cutoff (the built-in run has one); `null` trains on every marginal account of an epoch |
 | `training.batch_size` | `64` | Roots per step (1 to 128): a quarter observed positives, the rest from the marginal |
-| `training.patience` | `6` | Epochs without a better validation AP before training stops; 0 never stops early |
+| `training.patience` | `6` | Epochs without a better value of the selection rule before training stops; 0 never stops early, and neither does the rule `"none"` |
+| `training.selection` | `"validation_ap"` | How the run chooses the epoch whose weights `model.pt` keeps, on the validation proxy: the highest `"validation_ap"` or `"validation_roc_auc"`, the lowest `"validation_pu_risk"` (the run's own nnPU risk on the proxy sample), or `"none"` (train every epoch, keep the last) |
 | `training.learning_rate` | `0.001` | AdamW learning rate |
 | `training.weight_decay` | `0.0001` | AdamW weight decay |
 | `training.weight_average_decay` | `0.99` | Decay per step of the moving average of the weights that validation scores and `model.pt` keeps; 0 validates the raw weights |

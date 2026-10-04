@@ -13,6 +13,7 @@ import pytest
 from mule_pattern_learner.artifacts import (
     AUDIT_COLUMNS,
     DIAGNOSTIC_TABLES,
+    EARLIER_EPOCH_COLUMNS,
     EPOCH_COLUMNS,
     FEATURE_TABLE_COLUMNS,
     HISTORY_COLUMNS,
@@ -118,6 +119,7 @@ def test_epochs_are_rewritten_whole_and_read_with_their_types(tmp_path: Path) ->
         "steps": 4,
         "validation_ap": 0.25,
         "validation_roc_auc": None,
+        "validation_pu_risk": 0.75,
         "weights": "averaged",
         "selected": True,
         "stopped": False,
@@ -127,10 +129,29 @@ def test_epochs_are_rewritten_whole_and_read_with_their_types(tmp_path: Path) ->
     assert tuple(frame.columns) == EPOCH_COLUMNS
     assert frame.selected.tolist() == [True, False] and frame.stopped.tolist() == [False, True]
     assert frame.validation_roc_auc.isna().all() and frame.weights.tolist() == ["averaged"] * 2
+    assert frame.validation_pu_risk.tolist() == [0.75, 0.75]
     write_epochs(path, [row])
     assert len(read_epochs(path)) == 1
     with pytest.raises(ValueError, match="columns"):
         write_epochs(path, [{"epoch": 1}])
+
+
+def test_an_epochs_csv_written_before_the_risk_reads_without_it(tmp_path: Path) -> None:
+    # The layout of the runs of the first control experiments: every column but the risk.
+    path = tmp_path / "epochs.csv"
+    assert EARLIER_EPOCH_COLUMNS == tuple(c for c in EPOCH_COLUMNS if c != "validation_pu_risk")
+    path.write_text(",".join(EARLIER_EPOCH_COLUMNS) + "\n1,0.5,4,0.25,0.9,averaged,True,False\n")
+    frame = read_epochs(path)
+    assert tuple(frame.columns) == EPOCH_COLUMNS
+    assert frame.validation_pu_risk.isna().all() and frame.validation_ap.tolist() == [0.25]
+    # No other layout is read: the earlier columns in another order, or one column fewer.
+    for columns in (
+        ["loss", "epoch", *EARLIER_EPOCH_COLUMNS[2:]],
+        list(EARLIER_EPOCH_COLUMNS[:-1]),
+    ):
+        path.write_text(",".join(columns) + "\n")
+        with pytest.raises(ValueError, match="columns"):
+            read_epochs(path)
 
 
 def test_predictions_keep_their_columns_and_json_refuses_nan(tmp_path: Path) -> None:

@@ -166,14 +166,15 @@ def epoch_record(
     loss_sum: torch.Tensor,
     steps: int,
     validation: dict[str, Any],
+    risk: float,
     *,
     averaged: bool,
-    stopped: bool,
 ) -> dict[str, Any]:
-    """The epochs.csv row of a finished epoch (``epoch`` counts from 1), without selected.
+    """The epochs.csv row of a finished epoch (``epoch`` counts from 1), without selected
+    and stopped, which the selection rule decides.
 
-    ``averaged`` says whether validation scored the weight average, and ``stopped``
-    whether early stopping ends the run after this epoch.
+    ``validation`` holds the proxy metrics of validation and ``risk`` its nnPU risk
+    (objective.pu_risk); ``averaged`` says whether validation scored the weight average.
     """
     return {
         "epoch": epoch,
@@ -181,6 +182,6 @@ def epoch_record(
         "steps": steps,
         "validation_ap": validation["average_precision"],
         "validation_roc_auc": validation["roc_auc"],
+        "validation_pu_risk": risk,
         "weights": "averaged" if averaged else "raw",
-        "stopped": stopped,
     }

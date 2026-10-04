@@ -186,6 +186,20 @@ def records(run: Path) -> list[tuple[dict[str, Any], str | None]]:
             "Training on cuda (cuGraph sampler) into results/baseline/seed-42: 300 steps per "
             "epoch, at most 30 epochs, early stop after 6 epochs without gain",
         ),
+        # A selection rule other than the built-in one is named; "none" keeps the last epoch.
+        (
+            {"event": "start", **host, "known_mules": KNOWN, "run": str(run), **plan}
+            | {"selection": "validation_pu_risk", "epoch": 0, "step": 0},
+            "Training on cuda (cuGraph sampler) into results/baseline/seed-42: 100 steps per "
+            "epoch, at most 30 epochs, early stop after 6 epochs without gain, selecting on "
+            "the validation proxy nnPU risk",
+        ),
+        (
+            {"event": "start", **host, "known_mules": KNOWN, "run": str(run), **plan}
+            | {"selection": "none", "epochs": 10, "epoch": 0, "step": 0},
+            "Training on cuda (cuGraph sampler) into results/baseline/seed-42: 100 steps per "
+            "epoch, 10 epochs, no early stop, keeping the last epoch",
+        ),
         (
             {
                 "event": "train",
