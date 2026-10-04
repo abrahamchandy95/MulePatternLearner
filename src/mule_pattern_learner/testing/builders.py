@@ -74,7 +74,7 @@ from mule_pattern_learner.diagnostics.univariate import univariate
 from mule_pattern_learner.evaluation import audit as evaluation_audit
 from mule_pattern_learner.experiments.tables import COMPLETE, SuiteRun
 from mule_pattern_learner.experiments.variants import Variant
-from mule_pattern_learner.inference.saved_model import SavedModel
+from mule_pattern_learner.inference.saved_model import SELECTED_ON, SavedModel
 from mule_pattern_learner.metrics import (
     bootstrap_intervals,
     proxy_metrics,
@@ -823,7 +823,7 @@ def saved_model(
         "basis_id": BASIS_ID,
         "threshold": 0.5,
         "input_fingerprint": plan.fingerprint(),
-        "selected_on": "validation_observed_label_proxy_ap",
+        "selected_on": SELECTED_ON[config.training.selection],
     }
     if dataset is not None:
         # A dataset's directory is named by its dataset id.

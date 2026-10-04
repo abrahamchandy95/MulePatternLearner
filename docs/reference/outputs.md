@@ -78,7 +78,7 @@ removing `contexts/` by hand only costs the requests again.
 | File | Written by | Content |
 |---|---|---|
 | `config.json` | train | `config` (every setting), `fingerprint` and `provenance`: `git_commit`, `git_dirty`, the `versions` of the package, torch, numpy, scikit-learn and pyTigerGraph, the `device`, `threads` and `deterministic` the run started with, `sampler_backend`, `dataset_id` and `started` |
-| `model.pt` | train | The selected weights (`SavedModel.FORMAT` 1): the configuration, the contract and input fingerprints, the sampler and its fingerprint, the threshold, the dataset id, the observed positives per split, the training device and the sampler backend |
+| `model.pt` | train | The selected weights (`SavedModel.FORMAT` 1): the configuration, the contract and input fingerprints, the sampler and its fingerprint, the threshold, how the epoch was chosen (`selected_on`, by `training.selection`: `validation_observed_label_proxy_ap`, `validation_observed_label_proxy_roc_auc`, `validation_observed_label_proxy_pu_risk` or `last_epoch`), the dataset id, the observed positives per split, the training device and the sampler backend |
 | `resume.pt` | train | What an interrupted run continues from (`ResumeState.FORMAT` 1): the model, optimizer, weight average, random generators, schedule position, the selection so far, the epochs so far, the sampler backend, the dataset id and its manifest's sha256, and the totals of every segment |
 | `history.csv` | train | One row per log interval (`runtime.log_every_steps`) |
 | `epochs.csv` | train | One row per epoch |
@@ -151,9 +151,9 @@ and `label_source`. `audit/<split>_rejected.txt` lists the sampled accounts Tige
 rejected, one per line.
 
 `audit/<split>.json` holds `split`, `purpose` (`decisions` for validation, `reporting` for
-test), `date`, `selection`, `population_accounts`, `metrics`, `intervals`, `constants`,
-`revealed_positives`, `hidden_positives`, the rejection counts, `scope` and
-`model_changed`.
+test), `date`, `selection` (how the model's epoch was chosen: `model.pt`'s `selected_on`),
+`population_accounts`, `metrics`, `intervals`, `constants`, `revealed_positives`,
+`hidden_positives`, the rejection counts, `scope` and `model_changed`.
 
 - **`metrics`** estimate the split's whole population, each sampled account standing for
   1 / `inclusion_probability` accounts: `estimated_population`, `weighted_prevalence`,

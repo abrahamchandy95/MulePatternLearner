@@ -52,6 +52,7 @@ from mule_pattern_learner.experiments.variants import (
     with_model,
 )
 from mule_pattern_learner.experiments.variants import SEEDS as ALL_SEEDS
+from mule_pattern_learner.inference.saved_model import SavedModel
 from mule_pattern_learner.paths import RunPaths, SuitePaths
 from mule_pattern_learner.pipeline import connect as pipeline_connect
 from mule_pattern_learner.pipeline import evaluate as pipeline_evaluate
@@ -248,6 +249,11 @@ def test_a_selection_variant_trains_audits_and_compares_on_the_fakes(
         lowest = int(epochs.epoch[epochs.validation_pu_risk.idxmin()])
         assert epochs.selected.tolist() == [epoch == lowest for epoch in epochs.epoch]
         assert read_json(run.metrics)["best_epoch"] == lowest
+        # model.pt and both audits name the rule.
+        assert SavedModel.load(run.model).selected_on == "validation_observed_label_proxy_pu_risk"
+        for split in ("validation", "test"):
+            report = read_json(run.audit_report(split))
+            assert report["selection"] == "validation_observed_label_proxy_pu_risk"
     compared = SuitePaths.of(risk.name, results)
     comparison = read_comparison(compared.comparison)
     assert comparison.estimate.tolist() == [SEED_MEAN, SEED_MEAN, ENSEMBLE, ENSEMBLE]

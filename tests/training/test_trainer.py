@@ -36,6 +36,7 @@ from mule_pattern_learner.data.manifest import dataset_id, load_prepared
 from mule_pattern_learner.data.observed_labels import label_summary
 from mule_pattern_learner.data.preparation import prepare
 from mule_pattern_learner.data.splits import sample_keys
+from mule_pattern_learner.inference.saved_model import SavedModel
 from mule_pattern_learner.model.loss import NonNegativePULoss
 from mule_pattern_learner.model.tgat import TGAT
 from mule_pattern_learner.paths import DatasetPaths, RunPaths
@@ -547,18 +548,24 @@ PROXY_RISK = (0.5, 0.4, 0.2, 0.3)
 
 
 @pytest.mark.parametrize(
-    ("rule", "kept", "trained"),
+    ("rule", "kept", "trained", "selected_on"),
     [
-        # Patience 2: the AP stops after epoch 3, two epochs past its best.
-        ("validation_ap", 1, 3),
-        ("validation_roc_auc", 2, 4),
-        ("validation_pu_risk", 3, 4),
+        # Patience 2: the AP stops after epoch 3, two epochs past its best. model.pt
+        # names the built-in rule as every model trained before the setting did.
+        ("validation_ap", 1, 3, "validation_observed_label_proxy_ap"),
+        ("validation_roc_auc", 2, 4, "validation_observed_label_proxy_roc_auc"),
+        ("validation_pu_risk", 3, 4, "validation_observed_label_proxy_pu_risk"),
         # No early stopping: every epoch trains and the last is kept.
-        ("none", 4, 4),
+        ("none", 4, 4, "last_epoch"),
     ],
 )
 def test_the_kept_epoch_follows_the_selection_rule(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rule: str, kept: int, trained: int
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    rule: str,
+    kept: int,
+    trained: int,
+    selected_on: str,
 ) -> None:
     config = unit_config(
         RUNTIME_CHANGES,
@@ -595,6 +602,8 @@ def test_the_kept_epoch_follows_the_selection_rule(
     assert epochs.validation_ap.tolist() == list(PROXY_AP[:trained])
     assert epochs.validation_roc_auc.tolist() == list(PROXY_ROC_AUC[:trained])
     assert epochs.validation_pu_risk.tolist() == list(PROXY_RISK[:trained])
+    # model.pt says how its epoch was chosen.
+    assert SavedModel.load(run.model).selected_on == selected_on
     if rule == "none":
         # The final weights are kept, averaged as configured.
         state = torch.load(run.resume, weights_only=True)

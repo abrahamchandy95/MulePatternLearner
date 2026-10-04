@@ -2,9 +2,10 @@
 
 SavedModel.selected builds its payload: the selected weights, the configuration
 (RunConfig.to_dict()), the fingerprint of the feature plan, the threshold, the id and
-manifest digest of the dataset and SavedModel.FORMAT, with what the run was trained on
-for the record. Readers load it once and pass the SavedModel on; each checks only what
-it relies on. A payload of another format, or of none, is refused.
+manifest digest of the dataset and SavedModel.FORMAT, with how the epoch was chosen
+(SELECTED_ON) and what the run was trained on for the record. Readers load it once and
+pass the SavedModel on; each checks only what it relies on. A payload of another
+format, or of none, is refused.
 """
 
 from __future__ import annotations
@@ -16,12 +17,23 @@ from typing import Any, ClassVar
 import torch
 
 from ..artifacts import atomic_write
-from ..config import RunConfig
+from ..config import BUILT_IN_SELECTION, NO_SELECTION, RunConfig
 from ..contract.feature_groups import FeaturePlan, contract_fingerprint
 from ..contract.graph_schema import EVALUATION_PROTOCOL
 from ..contract.time_basis import BASIS_ID
 from ..data.manifest import manifest_digest
 from ..paths import DATA_DIR, DatasetPaths
+
+# How model.pt names each selection rule (training.selection) in its selected_on, which
+# the audit reports copy as their selection: the validation proxy criterion the kept
+# epoch was best at, or the last epoch. The built-in rule keeps the name that every
+# model trained before the setting existed records.
+SELECTED_ON = {
+    BUILT_IN_SELECTION: "validation_observed_label_proxy_ap",
+    "validation_roc_auc": "validation_observed_label_proxy_roc_auc",
+    "validation_pu_risk": "validation_observed_label_proxy_pu_risk",
+    NO_SELECTION: "last_epoch",
+}
 
 
 @dataclass(frozen=True)
@@ -51,8 +63,8 @@ class SavedModel:
         """The model a run selected, to be saved at path.
 
         ``state`` holds the selected weights and ``threshold`` the validation threshold;
-        the feature plan and sampler are config's. The known mules per split, the
-        training device and the sampler backend are recorded, not read.
+        the feature plan, sampler and selection rule are config's. The known mules per
+        split, the training device and the sampler backend are recorded, not read.
         """
         plan, sampler = config.feature_plan(), config.sampler
         payload = {
@@ -68,7 +80,7 @@ class SavedModel:
             "input_fingerprint": plan.fingerprint(),
             "sampler": sampler.query_params(),
             "sampler_fingerprint": sampler.fingerprint(),
-            "selected_on": "validation_observed_label_proxy_ap",
+            "selected_on": SELECTED_ON[config.training.selection],
             "evaluation_protocol": EVALUATION_PROTOCOL,
             "known_mules": known_mules,
             "training_device": str(device),
