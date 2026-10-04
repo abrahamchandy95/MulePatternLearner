@@ -438,7 +438,11 @@ def test_the_estimate_takes_a_cold_first_run_per_new_seed_and_cached_runs_after_
         for s in seeds
         for v in (BASELINE, DROP)
     ]
-    assert time_estimate(runs) == {"estimate_hours": None, "estimated_from": 0}
+    assert time_estimate(runs) == {
+        "estimate_hours": None,
+        "estimated_from": 0,
+        "costed_from_baseline": [],
+    }
     # Seeds 42 and 43 finished: each baseline first, with the cache cold for its seed,
     # and the variant after it, reading the cache.
     took = {("baseline", 42): 1.0, ("baseline", 43): 0.5, (DROP.name, 42): 0.1}
@@ -451,11 +455,28 @@ def test_the_estimate_takes_a_cold_first_run_per_new_seed_and_cached_runs_after_
             run.action = KEEP
     # Seed 44 is new: its baseline takes 0.5 to 1 hour, as a cold first run, and the
     # variant after it 0.1 to 0.2, as a cached one.
-    assert time_estimate(runs) == {"estimate_hours": [0.6, 1.2], "estimated_from": 4}
-    # A variant with no finished run takes the range of the cached runs.
+    assert time_estimate(runs) == {
+        "estimate_hours": [0.6, 1.2],
+        "estimated_from": 4,
+        "costed_from_baseline": [],
+    }
+    # A new variant, with no finished run, is costed from the baseline's runs, 0.5 to 1
+    # hour each, and named.
     other = VARIANTS["no_slot_sum"]
-    runs.append(PlannedRun(other, 42, other.config(BASE, 42), RunPaths(tmp_path / "o"), TRAIN))
-    assert time_estimate(runs)["estimate_hours"] == [0.7, 1.4]
+    for seed in (42, 43):
+        paths = RunPaths(tmp_path / "o" / str(seed))
+        runs.append(PlannedRun(other, seed, other.config(BASE, seed), paths, TRAIN))
+    estimate = time_estimate(runs)
+    assert estimate["estimate_hours"] == [1.6, 3.2]
+    assert estimate["costed_from_baseline"] == ["no_slot_sum"]
+    # Without a finished run of the baseline, it takes the range of every finished run,
+    # 0.1 to 0.2 hours, as the drop's seed 44 does.
+    alone = [run for run in runs if run.variant.name != "baseline"]
+    assert time_estimate(alone) == {
+        "estimate_hours": [0.3, 0.6],
+        "estimated_from": 2,
+        "costed_from_baseline": [],
+    }
 
 
 def test_a_history_that_timed_no_step_times_nothing(tmp_path: Path) -> None:

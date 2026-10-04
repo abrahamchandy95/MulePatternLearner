@@ -4,7 +4,8 @@ python scripts/run_experiments.py [SUITE or VARIANT ...] runs the named suites a
 variants (the controls suite when none is named), the baseline always among them, with
 the ten seeds 42 to 51. Every variant is validated offline and the run matrix printed
 before training, with a range of hours estimated from the suite's finished runs (a cold
-first run per new seed, cached runs after it) beside an upper bound. Complete runs are
+first run per new seed, cached runs after it, and a new variant with none costed from the
+baseline's) beside an upper bound. Complete runs are
 kept, so a suite trained with fewer seeds trains only the new ones; runs whose settings
 differ move to results/archive/ and train again, and the comparison tables, figures and
 report.md are always rewritten under results/experiments/<suite>/. It shows the run

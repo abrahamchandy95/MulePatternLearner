@@ -328,6 +328,28 @@ def records(run: Path) -> list[tuple[dict[str, Any], str | None]]:
         ),
         (
             {
+                "event": "suite",
+                "suite": "controls",
+                "dataset_id": "1a2b3c4d5e6f7a8b9c",
+                "runs": {
+                    "baseline": {"42": "keep", "43": "train"},
+                    "linear": {"42": "train", "43": "train"},
+                    "wide_and_deep": {"42": "train", "43": "train"},
+                },
+                "estimate_hours": [1.5, 3.6],
+                "estimated_from": 1,
+                "costed_from_baseline": ["linear", "wide_and_deep"],
+            },
+            "Suite controls on dataset 1a2b3c4d5e6f: 6 runs, 5 to train, about 1.5 to 3.6 "
+            "hours by the 1 finished run (linear and wide_and_deep, which have none, costed "
+            "from the baseline's)\n"
+            "  variant        seed 42   seed 43\n"
+            "  baseline       keep      train\n"
+            "  linear         train     train\n"
+            "  wide_and_deep  train     train",
+        ),
+        (
+            {
                 "event": "run_archived",
                 "run": str(run.parent.parent / "no_attention" / "seed-43"),
                 "archive": str(run.parent.parent / "archive" / "no_attention" / "seed-43" / "T"),

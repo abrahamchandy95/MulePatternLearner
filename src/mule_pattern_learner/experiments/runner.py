@@ -250,9 +250,10 @@ def time_estimate(runs: Sequence[PlannedRun]) -> dict[str, Any]:
     cache for it (cold), and the other variants' finished runs read much of it (cached).
     A run still to train is taken to last from the fewest to the most hours a finished
     run of its variant took: a new seed's baseline as a cold first run, the variants after
-    it as cached runs. A variant without a finished run takes the range of the finished
-    runs of the variants other than the baseline (cached), or of any finished run when
-    only the baseline's are. None without a finished run.
+    it as cached runs. A new variant, with no finished run of its own, is costed from the
+    baseline's finished runs, which are cold first runs, so its estimate errs high; the
+    result names such variants (costed_from_baseline). When the baseline has no finished
+    run either, it takes the range of every finished run. None without a finished run.
     """
     hours: dict[str, list[float]] = {}
     for run in runs:
@@ -260,17 +261,26 @@ def time_estimate(runs: Sequence[PlannedRun]) -> dict[str, Any]:
         if took is not None:
             hours.setdefault(run.variant.name, []).append(took)
     if not hours:
-        return {"estimate_hours": None, "estimated_from": 0}
-    cached = [h for name, found in hours.items() if name != BASELINE_VARIANT for h in found]
-    fallback = cached or [h for found in hours.values() for h in found]
+        return {"estimate_hours": None, "estimated_from": 0, "costed_from_baseline": []}
+    baseline = hours.get(BASELINE_VARIANT, [])
+    fallback = baseline or [h for found in hours.values() for h in found]
     low = high = 0.0
+    new: dict[str, None] = {}
     for run in runs:
         if run.action == KEEP:
             continue
-        found = hours.get(run.variant.name, fallback)
+        found = hours.get(run.variant.name)
+        if found is None:
+            found = fallback
+            if baseline:
+                new[run.variant.name] = None
         low, high = low + min(found), high + max(found)
     finished = sum(len(found) for found in hours.values())
-    return {"estimate_hours": [round(low, 2), round(high, 2)], "estimated_from": finished}
+    return {
+        "estimate_hours": [round(low, 2), round(high, 2)],
+        "estimated_from": finished,
+        "costed_from_baseline": list(new),
+    }
 
 
 def is_outage(error: BaseException) -> bool:

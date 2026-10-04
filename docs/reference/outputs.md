@@ -220,7 +220,7 @@ with hyphens.
 |---|---|
 | `summary.csv` | One row per run, split and metric: `variant`, `seed`, `split`, `metric`, `value`, `status` (`complete`, `failed` or `stopped`) and `commit`; then the rows of each variant's seed ensemble, of status `ensemble` |
 | `comparison.csv` | One row per variant, compared with the baseline, then one per seed ensemble |
-| `events.jsonl` | The suite's own events: the plan (`suite`, with the hours its runs to train should take: `estimate_hours` from the suite's finished runs and `bound_hours`), each run's step that finished (`run_finished`) or failed (`run_failed`), the runs moved aside (`run_archived`), an outage (`suite_stopped`), and what came before the dataset's preparation recorded its own (the install, connecting) or a dataset found ready (`dataset`); preparation's go to the dataset's `events.jsonl`, and each run's to the run's |
+| `events.jsonl` | The suite's own events: the plan (`suite`, with the hours its runs to train should take: `estimate_hours` from the suite's finished runs, with `costed_from_baseline`, the new variants costed from the baseline's, and `bound_hours`), each run's step that finished (`run_finished`) or failed (`run_failed`), the runs moved aside (`run_archived`), an outage (`suite_stopped`), and what came before the dataset's preparation recorded its own (the install, connecting) or a dataset found ready (`dataset`); preparation's go to the dataset's `events.jsonl`, and each run's to the run's |
 | `plots/comparison_*.png` | Seven figures |
 | `report.md` | The variants ranked by the validation audit AP of their hidden mules, their seed ensembles, the proxy's reliability, the tables and figures |
 

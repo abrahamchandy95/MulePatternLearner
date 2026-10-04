@@ -138,9 +138,13 @@ The plan gives two numbers for the runs it trains:
   `metrics.json`). The suite trains the seeds in turn and the baseline first within
   each, so a new seed's baseline is a cold first run that fills the context cache for
   its seed, and the variants after it read much of it. Each run to train is taken to
-  last from the fewest to the most hours a finished run of its variant took; a variant
-  with no finished run takes the range of the finished runs of the variants other than
-  the baseline. A run that resumes is counted as a whole run, so the estimate is high
+  last from the fewest to the most hours a finished run of its variant took. A new
+  variant, with no finished run of its own, is costed from the baseline's finished runs,
+  and the plan line names it ("linear and wide_and_deep, which have none, costed from
+  the baseline's"; the `suite` event's `costed_from_baseline`): those are cold first
+  runs, so its estimate is high, the more so for a variant that fetches no children.
+  When the baseline has no finished run either, a new variant takes the range of every
+  finished run. A run that resumes is counted as a whole run, so the estimate is high
   for it. A suite with no finished run has no estimate.
 - **The bound** takes every run to train all its epochs at the median seconds per step
   of the latest graph run's `history.csv`. Summary runs are faster, and early stopping

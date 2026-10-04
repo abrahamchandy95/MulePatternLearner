@@ -422,6 +422,11 @@ def _suite(record: Mapping[str, Any]) -> str:
         low, high = estimate
         finished = plural(int(record["estimated_from"]), "finished run")
         timing += f", about {low} to {high} hours by the {finished}"
+        new: list[str] = list(record.get("costed_from_baseline") or [])
+        if new:
+            named = new[0] if len(new) == 1 else ", ".join(new[:-1]) + " and " + new[-1]
+            are = "has" if len(new) == 1 else "have"
+            timing += f" ({named}, which {are} none, costed from the baseline's)"
     if bound is not None and pending:
         timing += f", at most {bound} hours"
     lines = [
