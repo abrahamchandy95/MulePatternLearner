@@ -1,8 +1,9 @@
-"""A prepared dataset's provenance: the graph's vertex counts, source id, queries and scope.
+"""A prepared dataset's provenance: the graph's vertex counts, source id, queries, scope
+and labels.
 
 source_counts and resolve_source_id name the loaded snapshot before preparation;
 verify_frozen_source rechecks it before a streamed run (see scope.py for the scope
-checks).
+checks, and reveal.py for the label check).
 """
 
 from __future__ import annotations
@@ -11,9 +12,10 @@ from typing import Any
 
 from ..contract.fingerprints import fingerprint
 from ..contract.server import GRAPH_NAME, SCOPE_VERTEX
-from ..data.manifest import prepared_source
+from ..data.manifest import prepared_reveal, prepared_source
 from .executor import ConnectionExecutor
 from .installer import verify_sources
+from .reveal import verify_labels
 from .scope import scope_header, verify_scope
 
 # Experiment metadata written by preparation itself; never part of source identity.
@@ -50,7 +52,8 @@ def verify_frozen_source(executor: ConnectionExecutor, manifest: dict[str, Any])
 
     Counts and headers catch drift, but cannot prove absence of same-count edits.
     The experiment still requires an operationally frozen source. Scope vertices
-    are experiment metadata, so creating another scope does not invalidate data.
+    are experiment metadata, so creating another scope does not invalidate data; the
+    labels must be those of the dataset's reveal (reveal.verify_labels).
     """
     verify_sources(executor)
     source = prepared_source(manifest)
@@ -67,3 +70,4 @@ def verify_frozen_source(executor: ConnectionExecutor, manifest: dict[str, Any])
         )
     except ValueError as error:
         raise ValueError(f"Prepared experiment scope is no longer valid: {error}") from None
+    verify_labels(executor, *prepared_reveal(manifest))

@@ -77,17 +77,18 @@ unknown label counts as unknown, never as a negative.
 
 ## Who writes the labels
 
-A fresh PhantomLedger load masks every mule. The first preparation runs
-[`reveal_mule_labels`](queries.md#reveal_mule_labels) once to reveal the mules a bank
-would have discovered ([Label reveal](../explanation/label-reveal.md) explains the
-discovery model). It writes every internal Account:
+A fresh PhantomLedger load masks every mule. Preparing a dataset runs
+[`reveal_mule_labels`](queries.md#reveal_mule_labels) to reveal the mules a bank would
+have discovered, unless the graph already holds that reveal's labels
+([Label reveal](../explanation/label-reveal.md) explains the discovery model). It writes
+every internal Account:
 
 - `mule_label_known = true`, with effective clocks at its first observation;
 - for a mule, availability at its simulated discovery: the end of its discovery day in
   UTC, and the last sequence at or before it;
 - for a revealed mule, `is_mule_masked = false` and `pu_label = 1`; others stay masked;
-- `mule_label_source`: the reveal's version and salt, plus the channel that found a
-  revealed mule.
+- `mule_label_source`: the reveal's version, salt and budget, plus the channel that found
+  a revealed mule.
 
 External accounts stay unknown: the generator does not calibrate external mule roles.
 

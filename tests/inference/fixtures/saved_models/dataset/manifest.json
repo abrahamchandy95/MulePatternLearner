@@ -11,7 +11,7 @@
       "queries/split_cutoffs.gsql": "1dbfbf0d8b718cbb96294c668085c5d61fa2cb09731f94bd21f49ea96f40ca49",
       "queries/hub_accounts.gsql": "9dd85dab7d064afc5f4299b33f1dd2cca485b980f292a3e260911acd0d9be8ba"
     },
-    "dataset_id": "2467807c4393c2864b7c25ba60e72772a16edc1a7d9a578020a31c1a8ee76626",
+    "dataset_id": "f5a047446d455b9ccf33795bca796e5527daafedf87dfdb8629f5778a92c53e8",
     "settings": {
       "source_id": "load_fixture",
       "scope": {
@@ -21,7 +21,9 @@
           0.5,
           0.25,
           0.25
-        ]
+        ],
+        "reveal_per_split": null,
+        "reveal_salt": 42
       },
       "dataset": {
         "dates": {
@@ -63,7 +65,7 @@
     "scope_id": "strict_mule_v3"
   },
   "status": "ready",
-  "created_at_utc": "2026-10-04T07:49:23.144284+00:00",
+  "created_at_utc": "2026-10-04T21:03:37.351865+00:00",
   "population_by_split": {
     "train": 120,
     "validation": 40,

@@ -43,9 +43,9 @@ flowchart LR
 
 ## The labels it learns from
 
-Only the mules revealed in the graph (`pu_label`): 20 in train, 11 in validation and 20
-in test on the reference graph, each usable only if known before the scoring cutoff,
-chosen once by the [label reveal](label-reveal.md) as a bank would have found them.
+Only the mules revealed in the graph (`pu_label`): every mule a bank would have
+discovered by its split's cutoff, as the [label reveal](label-reveal.md) simulates, each
+usable only if known before the scoring cutoff.
 Every other account is unlabelled, never a negative: a mixture of non-mules and hidden
 mules. Ground truth stays in the graph for the audit and never reaches training code.
 

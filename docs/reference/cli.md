@@ -57,8 +57,9 @@ recorded query hashes must match the repository's). A stopped preparation resume
 2. If `scope.id` does not exist, create the scope: every Account and Party partitioned
    into train, validation and test. Writes one scope vertex and one membership edge per
    Account and Party.
-3. On a graph without known labels, reveal up to 20 known mules per split by simulating
-   each mule's discovery. Writes every internal Account's label fields.
+3. On a graph without known labels, or with another reveal's, reveal every mule a bank
+   would have discovered by each split's cutoff, by simulating each mule's discovery.
+   Writes every internal Account's label fields.
 4. Page the population, resolve the cutoffs, build the hub registry (no writes).
 
 ## mule train

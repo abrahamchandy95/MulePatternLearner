@@ -1,14 +1,14 @@
 # Label reveal
 
 Which mules the model may know, and since when. A fresh PhantomLedger load masks every
-mule, leaving training no positives, so the first preparation runs
+mule, leaving training no positives, so preparing a dataset runs
 [`reveal_mule_labels`](../reference/queries.md#reveal_mule_labels)
-(`gsql/queries/label_reveal.gsql`) once: it decides which mules a bank would
+(`gsql/queries/label_reveal.gsql`): it decides which mules a bank would
 realistically have confirmed, and when, and writes that into the graph's [Account label
 contract](../reference/labels.md), with no file involved. Training reads only the
 revealed positives and their discovery clocks; the ground truth stays for the audit.
 
-## Why not reveal 20 at random
+## Why not reveal mules at random
 
 Banks mostly find mules reactively: a victim reports a scam to their own bank, the report
 reaches the bank holding the receiving account, which investigates, and investigators
@@ -44,19 +44,21 @@ that UTC day, with the last sequence at or before it.
 ## Which mules are revealed
 
 A mule is eligible for its scope partition's split only if discovered before that
-split's cutoff (train 2024-07-01, validation 2024-10-01, test 2025-01-01). Up to
-`scope.reveal_per_split` (20) eligible mules per split are revealed by stratified Pareto
-pi-ps sampling (Rosen 1997), which gives each its intended inclusion probability
-exactly. The propensity is `0.05 + 0.95 * sigmoid(z)`, with `z` the standardised
+split's cutoff (train 2024-07-01, validation 2024-10-01, test 2025-01-01). Every
+eligible mule is revealed, as a bank trains on every mule it has confirmed.
+`scope.reveal_per_split` can cap each split instead, for a scarcer label setting: up to
+that many eligible mules are then revealed by stratified Pareto pi-ps sampling (Rosen
+1997), which gives each its intended inclusion probability exactly. The propensity is `0.05 + 0.95 * sigmoid(z)`, with `z` the standardised
 `log(1 + reports received by the cutoff)`: mules with more victim reports are likelier
 to be confirmed, but every eligible mule keeps a positive chance (the positivity
 condition of SAR-aware positive-unlabelled learning; [Bekker, Robberechts and Davis
 2019](https://arxiv.org/abs/1809.03207)).
 
-A shortfall is reported, never filled: a mule no channel found by the cutoff is not
-revealed. On the reference graph, with the configured salt 42, the job found 27, 11 and
-23 mules (train, validation, test) discovered before the cutoffs and revealed 20, 11 and
-20; validation cannot reach 20 without revealing mules no bank would yet have confirmed.
+A mule no channel found by the cutoff is never revealed, so a cap may go unfilled. On the
+200,000-person reference graph, with salt 42, the job found 27, 11 and 23 mules (train,
+validation, test) discovered before the cutoffs, and a cap of 20 revealed 20, 11 and 20.
+That cap, the default until 2026-10-05, revealed 20 in each split of the 300,000-person
+graph, whose validation and test splits hold 101 mules each.
 
 An earlier offline simulation (written before the job; its script and exports were not
 kept) gives the spread over 1,000 runs with independent random draws: mules discovered
@@ -94,11 +96,13 @@ mule. External accounts stay unknown, since PhantomLedger does not calibrate ext
 mule roles. The label-contract check (`validate_label_contract`) must then report zero
 violations.
 
-The job runs once: on a graph with known labels it changes nothing, and later
-preparations find them; `force = TRUE` reveals again with other parameters. A prepared
-dataset keeps its own copy of the labels, never checked against the graph's (the dataset
-id omits the reveal's settings, since they act once), so move the dataset aside to
-prepare it again on new labels.
+On a graph with this reveal's labels the job changes nothing. Each mule's label source
+records the reveal's version, salt and budget, so labels another reveal wrote (other
+settings, or code from before the budget was recorded) are told apart, and preparation
+reveals again with `force = TRUE`. A prepared dataset keeps its own copy of the labels,
+and the reveal's settings are part of its id. The audits read which mules were revealed
+from the graph, so before a run reads it a dry run with the dataset's settings must find
+the dataset's labels there; a run whose labels were replaced is refused.
 
 ## Limitations
 

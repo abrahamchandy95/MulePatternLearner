@@ -11,9 +11,11 @@ mirror needs no adapter.
 from __future__ import annotations
 
 # The defaults the reveal query declares. A run sends the budget and salt
-# (tigergraph.reveal.reveal_parameters); the model parameters stay the query's own.
+# (tigergraph.reveal.reveal_parameters); the model parameters stay the query's own. The
+# budget's default, the most the reveal takes per split, is what a run sends to reveal
+# every discovered mule.
 REVEAL_DEFAULTS: dict[str, float] = {
-    "budget": 20,
+    "budget": 1000,
     "salt": 42,
     "p_report": 0.65,
     "p_action_first": 0.5,

@@ -37,9 +37,9 @@ config = DEFAULT_CONFIG.with_changes({"training": {"epochs": 3}, "model": {"slot
   candidate pools (`sampler.roots`, `sampler.children`). Their fingerprint is the dataset
   id, naming `data/<dataset id>/`. Runs sharing them share a dataset; every other setting,
   the feature groups and training seed included, may differ between its runs.
-- **`scope.create`, `scope.reveal_per_split` and `scope.reveal_salt`** act once on the
-  graph (creating a missing scope, the one-time label reveal), so changing them later
-  names no other dataset.
+- **`scope.reveal_per_split` and `scope.reveal_salt`** decide the labels a dataset
+  reads, so they name it too; changing them reveals the labels again when the next
+  dataset is prepared. **`scope.create`** names no dataset.
 - **`transport` and `runtime`** never change a run's numbers, except that
   `runtime.device`, `runtime.threads` and `runtime.deterministic` can change
   floating-point results. `config.json` records the starting values; a resumed segment
@@ -47,7 +47,7 @@ config = DEFAULT_CONFIG.with_changes({"training": {"epochs": 3}, "model": {"slot
 
 ## scope
 
-The frozen experiment scope the splits come from, and the first run's label reveal.
+The frozen experiment scope the splits come from, and the label reveal of its datasets.
 
 | Setting | Default | Meaning |
 |---|---|---|
@@ -57,7 +57,7 @@ The frozen experiment scope the splits come from, and the first run's label reve
 | `scope.train_share` | `0.5` | Share of ownership groups in train: positive, a whole number of 1/10,000, the three shares adding up to 1 |
 | `scope.validation_share` | `0.25` | The same in validation |
 | `scope.test_share` | `0.25` | The same in test |
-| `scope.reveal_per_split` | `20` | Known mules the first run reveals per split, among those a bank would have discovered before the cutoff (0 to 1,000) |
+| `scope.reveal_per_split` | `null` | Known mules revealed per split, among those a bank would have discovered before the cutoff: `null` reveals every one, a number (0 to 1,000) caps each split |
 | `scope.reveal_salt` | `42` | Seed of the reveal's deterministic draws |
 
 ## dataset

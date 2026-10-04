@@ -122,7 +122,7 @@ SCOPE_BUCKETS = 10_000
 
 @dataclass(frozen=True)
 class ScopeConfig:
-    """The frozen scope the splits come from, and the first run's label reveal."""
+    """The frozen scope the splits come from, and the label reveal of its datasets."""
 
     # A scope is created once and never changed, so another partition of the graph, or
     # another load of it, needs a new id: strict_mule_v3 is the first with these shares.
@@ -139,9 +139,12 @@ class ScopeConfig:
     train_share: float = 0.50
     validation_share: float = 0.25
     test_share: float = 0.25
-    # Known mules the first run reveals per split, among those a bank would have
-    # discovered before the split's cutoff (gsql/queries/label_reveal.gsql).
-    reveal_per_split: int = 20
+    # Known mules the reveal makes known per split, among those a bank would have
+    # discovered before the split's cutoff (gsql/queries/label_reveal.gsql). None reveals
+    # every one, as a bank trains on every mule it has confirmed; a number caps each
+    # split, for a scarcer label setting. The reveal settings decide the labels a
+    # dataset reads, so they are dataset settings (data.manifest.dataset_settings).
+    reveal_per_split: int | None = None
     # Seed of the reveal's deterministic draws.
     reveal_salt: int = 42
 
@@ -165,7 +168,8 @@ class ScopeConfig:
                 f"scope.train_share, scope.validation_share and scope.test_share must add up "
                 f"to 1, got {list(self.shares)}"
             )
-        REVEAL_PER_SPLIT.check("scope.reveal_per_split", self.reveal_per_split)
+        if self.reveal_per_split is not None:
+            REVEAL_PER_SPLIT.check("scope.reveal_per_split", self.reveal_per_split)
         _integer("scope.reveal_salt", self.reveal_salt)
 
     @property

@@ -271,6 +271,8 @@ def _reveal(record: Mapping[str, Any]) -> str:
         f"Revealed {plural(sum(counts.values()), 'known mule')}: {by_split(counts)} in train "
         "/ validation / test"
     )
+    if record["labels"] == "revealed again":
+        line += ", replacing the labels of another reveal"
     short = record.get("shortfall_discovered_by_cutoff")
     if short:
         line += f"; fewer than the budget were discovered by the cutoff of {', '.join(short)}"

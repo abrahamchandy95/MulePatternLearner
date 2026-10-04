@@ -86,15 +86,17 @@ mule train
    groups: `scope.train_share`, `scope.validation_share`, `scope.test_share`), with the
    `linked` rule for accounts no party owns. It writes only one scope vertex, which
    records the shares, and one membership edge per Account and Party;
-2. reveals the known mules once ([Label reveal](../explanation/label-reveal.md)), writing
-   the label fields of every internal Account, and checks the label contract;
+2. reveals every mule a bank would have discovered by each split's cutoff ([Label
+   reveal](../explanation/label-reveal.md)), writing the label fields of every internal
+   Account, and checks the label contract;
 3. prepares `data/<dataset id>/`: seed reservoirs, observed labels, cutoff sequences and
    the hub registry (scope and preparation took 6 minutes 19 seconds on the reference
    graph);
 4. trains ([Train and evaluate](train-and-evaluate.md)).
 
 The scope and label fields are the only writes: relationships and business attributes
-never change, and a graph that already has the scope and known labels is only read.
+never change, and a graph that already has the scope and the configured reveal's labels
+is only read. Labels another reveal wrote are revealed again when a dataset is prepared.
 
 ## Reuse a graph
 

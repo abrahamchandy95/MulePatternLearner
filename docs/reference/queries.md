@@ -203,24 +203,29 @@ it.
 
 ### reveal_mule_labels
 
-Decides once which mules a bank would have discovered before each split's cutoff, and
-when, and writes them into the label contract
+Decides which mules a bank would have discovered before each split's cutoff, and when,
+and writes them into the label contract
 ([Label reveal](../explanation/label-reveal.md)). Reads the ground truth and the graph's
 per-payment fraud verdicts.
 
 | Parameter | Meaning |
 |---|---|
 | `scope_id`, `train_cutoff_ms`, `validation_cutoff_ms`, `test_cutoff_ms` | The scope whose partitions are the splits; each split's latest cutoff |
-| `budget` | Most mules revealed per split (`scope.reveal_per_split`, 20) |
+| `budget` | Most mules revealed per split: `scope.reveal_per_split`, or 1,000, the default, to reveal every discovered mule |
 | `salt` | Seed of the deterministic draws (`scope.reveal_salt`, 42) |
 | `apply` | Write the labels; FALSE (default) only prints the plan |
 | `force` | Reveal again on a graph with known labels |
 | `p_report`, `p_action_first`, `p_action_later`, `proactive_per_day`, `trace_probability`, `propensity_slope`, `propensity_floor` | Discovery model (0.65, 0.5, 0.7, 0.00045, 0.25, 1.0, 0.05) |
 | `version` | Recorded in `mule_label_source` (`reveal_v1`) |
 
+Each mule's `mule_label_source` records the reveal and its outcome, as
+`phantomledger_role;reveal_v1;salt=42;budget=1000;revealed:victim_report` (or `hidden`).
 Preparation calls it with `apply = TRUE`: without known labels it writes every internal
-Account's label fields; with them it changes nothing and says `already_revealed`. A
-shortfall is reported, never filled. `contract.discovery` holds the parameters and draws
+Account's label fields. With them it changes nothing and says `already_revealed` when
+every internal mule's label source is this reveal's, or `revealed_differently` with the
+count of other mules (`other_reveal`); preparation then calls it again with `force`.
+Before a run reads the graph, a dry run with the dataset's settings must say
+`already_revealed`. A shortfall under a cap is reported, never filled. `contract.discovery` holds the parameters and draws
 the job shares with its Python mirror (`reference.label_reveal`).
 
 ### draw_reveal_uniforms

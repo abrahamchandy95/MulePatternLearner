@@ -9,9 +9,9 @@ from typing import Any
 import pandas as pd
 
 from ..artifacts import atomic_write, file_digest
-from ..config import RunConfig, as_json, differing_settings
+from ..config import RunConfig, ScopeConfig, SplitDates, as_json, differing_settings
 from ..contract.fingerprints import fingerprint
-from ..contract.graph_schema import context_scope
+from ..contract.graph_schema import SPLITS, context_scope
 from ..contract.sampler_plan import sampler_pools
 from ..contract.server import QUERY_FILES
 from ..paths import GSQL_DIR, DatasetPaths
@@ -68,14 +68,13 @@ def dataset_settings(source_id: str, config: RunConfig) -> dict[str, Any]:
     """What preparation reads, as JSON values: the input of the dataset id.
 
     The source id names the data loaded into the graph. The scope's id, its rule for
-    accounts no party owns and its split shares decide the split partitions, the dataset
-    section gives
-    the cutoffs and seed reservoirs, and sampler_pools is what TigerGraph returns per
-    hop. The scope's other settings (create, reveal_per_split, reveal_salt) act once on
-    the graph, when a missing scope is created and in the one-time reveal, so they name
-    no other dataset. Feature groups are not a dataset setting: a dataset stores no
-    contexts, and the source requests each training model's groups, so variants of any
-    groups and architecture share one dataset.
+    accounts no party owns and its split shares decide the split partitions, its reveal
+    settings (reveal_per_split, reveal_salt) the labels the dataset reads, the dataset
+    section gives the cutoffs and seed reservoirs, and sampler_pools is what TigerGraph
+    returns per hop. scope.create only allows the first run to create a missing scope,
+    so it names no other dataset. Feature groups are not a dataset setting: a dataset
+    stores no contexts, and the source requests each training model's groups, so
+    variants of any groups and architecture share one dataset.
     """
     settings = {
         "source_id": source_id,
@@ -83,6 +82,8 @@ def dataset_settings(source_id: str, config: RunConfig) -> dict[str, Any]:
             "id": config.scope.id,
             "unowned": config.scope.unowned,
             "shares": list(config.scope.shares),
+            "reveal_per_split": config.scope.reveal_per_split,
+            "reveal_salt": config.scope.reveal_salt,
         },
         "dataset": as_json(config.dataset),
         "sampler_pools": sampler_pools(config.sampler),
@@ -147,6 +148,36 @@ def prepared_source(manifest: dict[str, Any]) -> PreparedSource:
         source_id=settings["source_id"],
         split_seed=settings["dataset"]["split_seed"],
         shares=(float(train), float(validation), float(test)),
+    )
+
+
+def prepared_reveal(manifest: dict[str, Any]) -> tuple[ScopeConfig, SplitDates]:
+    """The scope and split dates of the reveal whose labels a dataset read.
+
+    A dataset of earlier code records no reveal settings, and is refused with a
+    ValueError that names them: its labels may come from a reveal of 20 mules per split.
+    """
+    settings = recorded_settings(manifest)
+    scope = settings["scope"]
+    if "reveal_salt" not in scope:
+        raise ValueError(
+            "The dataset records no reveal settings (scope.reveal_per_split and "
+            "scope.reveal_salt): it was prepared by earlier code, from labels revealed with "
+            "at most 20 mules per split. Move it aside; `mule train` prepares a new one"
+        )
+    train, validation, test = scope["shares"]
+    dates = settings["dataset"]["dates"]
+    return (
+        ScopeConfig(
+            id=scope["id"],
+            unowned=scope["unowned"],
+            train_share=train,
+            validation_share=validation,
+            test_share=test,
+            reveal_per_split=scope["reveal_per_split"],
+            reveal_salt=scope["reveal_salt"],
+        ),
+        SplitDates(**{split: tuple(dates[split]) for split in SPLITS}),
     )
 
 

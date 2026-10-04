@@ -47,6 +47,7 @@ from mule_pattern_learner.contract.server import (
     GRAPH_NAME,
     HUB_QUERY,
     POPULATION_QUERY,
+    REVEAL_QUERY,
     SCOPE_POLICY_QUERY,
     SCOPE_VERTEX,
     TRAINING_QUERY_FILES,
@@ -173,6 +174,9 @@ class FakeTigerGraph:
     without include_observed their labels are withheld. `truth` holds the rows the
     ground-truth query pages through, with its field names (ground_truth_rows).
     `reveal` holds what the reveal's interpreted inputs query prints (reveal_inputs).
+    `other_reveal` is the count of mules whose label another reveal wrote, which the
+    reveal's dry run, the label check before a streamed run, reports (default 0: the
+    labels are the dataset's reveal's).
     The analytics context query answers each key with its context row (as the context
     query would, cut to the requested pool), relabelled with ANALYTICS_CONTRACT, its
     messages carrying the analytics message fields unseen and its node features joined
@@ -211,6 +215,7 @@ class FakeTigerGraph:
         population: Iterable[dict[str, Any]] = (),
         truth: Iterable[dict[str, Any]] = (),
         reveal: list[dict[str, Any]] | None = None,
+        other_reveal: int = 0,
         analytics: Callable[[ContextKey], dict[str, float]] | None = None,
         scopes: dict[str, dict[str, Any]] | None = None,
         counts: dict[str, int] | None = None,
@@ -227,6 +232,7 @@ class FakeTigerGraph:
         self.population = sorted(population, key=lambda row: str(row["account_id"]))
         self.truth = sorted(truth, key=lambda row: str(row["account_id"]))
         self.reveal = reveal
+        self.other_reveal = other_reveal
         self.analytics = analytics or no_analytics
         self.factory = factory or context
         self.statuses = statuses or {}
@@ -270,6 +276,8 @@ class FakeTigerGraph:
             return self.population_rows(params)
         if name == TRUTH_QUERY:
             return self.truth_rows(params)
+        if name == REVEAL_QUERY:
+            return self.reveal_check(params, options)
         if name == CREATE_SCOPE_QUERY:
             return self.create_scope(params)
         if name == FINALIZE_SCOPE_QUERY:
@@ -306,6 +314,26 @@ class FakeTigerGraph:
         if "SHOW QUERY" not in text:
             assert attempts == 1, f"{what} writes, so it must run once"
         return self.client.conn.gsql(text)
+
+    def reveal_check(self, params: dict[str, Any], options: dict[str, Any]) -> list[dict[str, Any]]:
+        """The reveal's dry run on a graph with known labels: the label check's answer.
+
+        Preparation's reveal, which writes, is never answered here (tests replace
+        pipeline.prepare.ensure_revealed_labels).
+        """
+        assert params["apply"] is False and not params.get("force"), params
+        assert options.get("attempts") == 1
+        record = f"phantomledger_role;reveal_v1;salt={params['salt']};budget={params['budget']}"
+        status = "revealed_differently" if self.other_reveal else "already_revealed"
+        return [
+            {
+                "status": status,
+                "known_labels": len(self.population),
+                "revealed_labels": 0,
+                "other_reveal": self.other_reveal,
+                "reveal_record": record,
+            }
+        ]
 
     def names(self) -> list[str]:
         return [name for name, _ in self.calls]

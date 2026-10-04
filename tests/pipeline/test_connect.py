@@ -12,12 +12,13 @@ from typing import Any
 import pytest
 
 from mule_pattern_learner.config import DEFAULT_CONFIG, TransportConfig
-from mule_pattern_learner.contract.server import SCOPE_POLICY_QUERY
+from mule_pattern_learner.contract.server import REVEAL_QUERY, SCOPE_POLICY_QUERY
 from mule_pattern_learner.data.context_cache import ContextCache
 from mule_pattern_learner.data.manifest import dataset_id, dataset_settings, source_fingerprint
 from mule_pattern_learner.paths import DatasetPaths
 from mule_pattern_learner.pipeline import connect
 from mule_pattern_learner.testing.fake_graph import FakeTigerGraph, ready_scope
+from mule_pattern_learner.tigergraph.reveal import reveal_parameters
 
 # open_context_source reads the dataset from its manifest; nothing fetches, so the
 # directory of its context cache is not read.
@@ -103,7 +104,11 @@ def test_a_resumed_stream_checks_the_frozen_source_before_fetching(
     backend = connect.open_context_source(UNUSED, manifest, config)
     backend.close()
     assert budgets == [(3, 60)]
-    assert graph.calls == [(SCOPE_POLICY_QUERY, {"scope_id": "scope"})]
+    # The scope's policy, then a dry run of the reveal of the dataset's settings.
+    (policy, (reveal, params)) = graph.calls
+    assert policy == (SCOPE_POLICY_QUERY, {"scope_id": "scope"})
+    assert reveal == REVEAL_QUERY and params["apply"] is False
+    assert params == reveal_parameters(config.scope, config.dataset.dates, apply=False)
     # Queries whose installed text differs from the repository's are refused.
     graph.stale = frozenset({SCOPE_POLICY_QUERY})
     with pytest.raises(ValueError, match="mule install"):
@@ -118,6 +123,11 @@ def test_a_resumed_stream_checks_the_frozen_source_before_fetching(
     with pytest.raises(ValueError, match="counts changed"):
         connect.open_context_source(UNUSED, manifest, config)
     graph.counts["Account"] -= 1
+    # Labels another reveal wrote are not the ones the dataset read.
+    graph.other_reveal = 4
+    with pytest.raises(ValueError, match="4 mules have another reveal's label"):
+        connect.open_context_source(UNUSED, manifest, config)
+    graph.other_reveal = 0
     # A session's sources share its one connection, and each checks the frozen source.
     session = connect.Session(config.with_changes({"transport": {"max_outage_s": 90}}).transport)
     budgets.clear()
@@ -125,7 +135,7 @@ def test_a_resumed_stream_checks_the_frozen_source_before_fetching(
     for _ in range(2):
         connect.open_context_source(UNUSED, manifest, config, session=session).close()
     assert budgets == [(3, 90)]
-    assert graph.names() == [SCOPE_POLICY_QUERY] * 2
+    assert graph.names() == [SCOPE_POLICY_QUERY, REVEAL_QUERY] * 2
     graph.scopes["scope"]["ready"] = False
     with pytest.raises(ValueError, match="no longer valid"):
         connect.open_context_source(UNUSED, manifest, config)

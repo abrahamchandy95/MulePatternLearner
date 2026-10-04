@@ -540,12 +540,18 @@ def reveal_section(home: Reported, frame: pd.DataFrame, record: Mapping[str, Any
         rows.append(cells)
     header = ["Split", "Mules", "Discovered by the cutoff", f"Salt {salt}", "Revealed"]
     header.append(f"Salt {salt}")
+    budget = reveal.get("budget", "n/a")
+    revealed = (
+        "Every mule discovered by its split's cutoff is revealed."
+        if budget is None
+        else f"The budget is {budget} mules per split."
+    )
     return [
         "## The label reveal over salts",
         "",
         f"The reveal's mirror replayed for {frame.salt.nunique():,} salts: the median over "
         "salts and, in parentheses, its 5th to 95th percentile, beside the configured salt's "
-        f"outcome. The budget is {reveal.get('budget', 'n/a')} mules per split.",
+        f"outcome. {revealed}",
         "",
         *table(header, rows),
         "",

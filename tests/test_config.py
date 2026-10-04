@@ -116,10 +116,12 @@ def test_the_built_in_run_keeps_its_settings() -> None:
     # without this literal; the configuration reference is edited with the code, so it
     # cannot pin them. The settings the golden run overrides are spelled out.
     assert DEFAULT_CONFIG.fingerprint() == (
-        "6aa8f7c23d4d367f88e46e894376f53d0ef9cffc8c58b30c684acf60884bb8ff"
+        "7a409c3314d48d1bf095ca2f941bf0c72a19114a32e0748b22d47590c51e2007"
     )
     scope = DEFAULT_CONFIG.scope
     assert (scope.id, scope.shares) == ("strict_mule_v3", (0.5, 0.25, 0.25))
+    # Every mule a bank would have discovered by the cutoff is revealed.
+    assert (scope.reveal_per_split, scope.reveal_salt) == (None, 42)
     training = DEFAULT_CONFIG.training
     assert (training.epochs, training.steps_per_epoch, training.patience) == (30, 100, 6)
     assert training.batch_size == 64 and DEFAULT_CONFIG.model.dropout == 0.15

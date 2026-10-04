@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +34,7 @@ def test_the_dataset_id_covers_only_the_dataset_settings() -> None:
     same: list[dict[str, Any]] = [
         {"training": {"learning_rate": 0.5, "epochs": 3, "seed": 1}, "model": {"hidden": 8}},
         {"transport": {"request_batch_size": 4, "max_outage_s": 60}},
-        {"scope": {"unowned": "linked", "create": False, "reveal_per_split": 5, "reveal_salt": 7}},
+        {"scope": {"unowned": "linked", "create": False}},
         {"sampler": {"association_slots": 1, "fanouts": [8, 2]}},  # selection, not pools
         # A dataset stores no contexts, so feature groups and architecture do not count.
         {"features": list(CORE_GROUPS), "model": {"architecture": "summary"}},
@@ -48,6 +49,9 @@ def test_the_dataset_id_covers_only_the_dataset_settings() -> None:
         {"scope": {"id": "other_scope"}},
         {"scope": {"unowned": "independent"}},
         {"scope": {"unowned": "shared"}},
+        # The reveal settings decide the labels a dataset reads.
+        {"scope": {"reveal_per_split": 20}},
+        {"scope": {"reveal_salt": 7}},
         {"sampler": {"children": {"recent": 2}}},
     ]
     for change in different:
@@ -60,6 +64,19 @@ def test_the_dataset_id_covers_only_the_dataset_settings() -> None:
     assert data_manifest.dataset_mismatches(base, {"source": {}}) == list(
         data_manifest.DATASET_SETTINGS
     )
+
+
+def test_a_dataset_names_the_reveal_it_read_and_earlier_ones_are_refused() -> None:
+    config = unit_config().with_changes({"scope": {"reveal_per_split": 20, "reveal_salt": 7}})
+    manifest = {"source": {"settings": data_manifest.dataset_settings("source", config)}}
+    scope, dates = data_manifest.prepared_reveal(manifest)
+    # scope.create names no dataset, so the scope has its default.
+    assert replace(scope, create=config.scope.create) == config.scope
+    assert dates == config.dataset.dates
+    # A dataset of earlier code recorded no reveal settings.
+    del manifest["source"]["settings"]["scope"]["reveal_salt"]
+    with pytest.raises(ValueError, match="no reveal settings.*Move it aside"):
+        data_manifest.prepared_reveal(manifest)
 
 
 def test_a_dataset_records_its_query_files_by_path_and_passes_its_own_check(

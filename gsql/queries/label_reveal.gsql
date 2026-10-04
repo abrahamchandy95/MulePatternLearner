@@ -46,10 +46,13 @@ FOR GRAPH Mule_Pattern_Learner RETURNS (ListAccum<DOUBLE>) SYNTAX V2 {
    Account: a known label with effective clocks at first observation; mules get the
    end of their discovery day (and the last sequence at or before it) as availability,
    and revealed mules get is_mule_masked = FALSE and pu_label = 1. External accounts stay
-   unknown. A graph that already has known labels is left alone unless force = TRUE. */
+   unknown. Each mule's label source records the reveal (version, salt and budget) and
+   its outcome. A graph that already has known labels is left alone unless force = TRUE:
+   status already_revealed when every internal mule's label is this reveal's, and
+   revealed_differently, with the count of other mules, when it is not. */
 CREATE OR REPLACE QUERY reveal_mule_labels(
   STRING scope_id, UINT train_cutoff_ms, UINT validation_cutoff_ms, UINT test_cutoff_ms,
-  INT budget = 20, INT salt = 42, BOOL apply = FALSE, BOOL force = FALSE,
+  INT budget = 1000, INT salt = 42, BOOL apply = FALSE, BOOL force = FALSE,
   DOUBLE p_report = 0.65, DOUBLE p_action_first = 0.5, DOUBLE p_action_later = 0.7,
   DOUBLE proactive_per_day = 0.00045, DOUBLE trace_probability = 0.25,
   DOUBLE propensity_slope = 1.0, DOUBLE propensity_floor = 0.05,
@@ -58,7 +61,7 @@ CREATE OR REPLACE QUERY reveal_mule_labels(
   TYPEDEF TUPLE<DOUBLE report_ms, DOUBLE action_u, DOUBLE confirm_days> Report;
   TYPEDEF TUPLE<DOUBLE q, VERTEX<Account> account> Pick;
   TYPEDEF TUPLE<STRING account_id, INT split, INT known_ts_ms, STRING channel, DOUBLE inclusion> Revealed;
-  SumAccum<INT> @@known_labels, @@revealed_labels, @@mules_without_split;
+  SumAccum<INT> @@known_labels, @@revealed_labels, @@other_reveal, @@mules_without_split;
   MapAccum<INT, SumAccum<INT>> @@mules, @@eligible, @@revealed, @@capped, @@new_caps;
   MapAccum<STRING, SumAccum<INT>> @@eligible_by_channel, @@revealed_by_channel;
   MapAccum<INT, SumAccum<DOUBLE>> @@z_sum, @@z_sq, @@w_sum;
@@ -88,6 +91,8 @@ CREATE OR REPLACE QUERY reveal_mule_labels(
   INT sweep = 0;
   INT running = 0;
   STRING status = "dry_run";
+  STRING reveal_record = "phantomledger_role;" + version + ";salt=" + to_string(salt)
+    + ";budget=" + to_string(budget);
 
   IF budget < 0 OR budget > 1000 THEN PRINT "invalid_budget" AS status; RETURN; END;
   IF NOT (train_cutoff_ms < validation_cutoff_ms AND validation_cutoff_ms < test_cutoff_ms) THEN
@@ -106,10 +111,20 @@ CREATE OR REPLACE QUERY reveal_mule_labels(
   Internal = SELECT a FROM Internal:a WHERE NOT a.is_external
     POST-ACCUM
       IF a.mule_label_known THEN @@known_labels += 1 END,
-      IF a.pu_label == 1 THEN @@revealed_labels += 1 END;
+      IF a.pu_label == 1 THEN @@revealed_labels += 1 END,
+      IF a.is_mule == 1 AND NOT (a.mule_label_known
+          AND (a.mule_label_source == reveal_record + ";hidden"
+               OR a.mule_label_source == reveal_record + ";revealed:victim_report"
+               OR a.mule_label_source == reveal_record + ";revealed:network_trace"
+               OR a.mule_label_source == reveal_record + ";revealed:monitoring")) THEN
+        @@other_reveal += 1
+      END;
   IF (@@known_labels > 0 OR @@revealed_labels > 0) AND NOT force THEN
-    PRINT "already_revealed" AS status, @@known_labels AS known_labels,
-      @@revealed_labels AS revealed_labels;
+    status = "already_revealed";
+    IF @@other_reveal > 0 THEN status = "revealed_differently"; END;
+    PRINT status AS status, @@known_labels AS known_labels,
+      @@revealed_labels AS revealed_labels, @@other_reveal AS other_reveal,
+      reveal_record AS reveal_record;
     RETURN;
   END;
 
@@ -349,7 +364,7 @@ CREATE OR REPLACE QUERY reveal_mule_labels(
           a.pu_label = (CASE WHEN a.@revealed THEN 1 ELSE 0 END),
           a.mule_label_available_seq = a.@avail_seq,
           a.mule_label_available_ts_ms = a.@avail_ts,
-          a.mule_label_source = "phantomledger_role;" + version + ";salt=" + to_string(salt) + ";"
+          a.mule_label_source = reveal_record + ";"
             + (CASE WHEN a.@revealed THEN "revealed:" + a.@channel ELSE "hidden" END)
         ELSE
           a.is_mule_masked = TRUE,
@@ -360,6 +375,7 @@ CREATE OR REPLACE QUERY reveal_mule_labels(
         END;
   END;
   PRINT status AS status, version AS version, salt AS salt, budget AS budget,
+    reveal_record AS reveal_record,
     @@mules AS mules, @@eligible AS eligible, @@revealed AS revealed,
     @@eligible_by_channel AS eligible_by_channel, @@revealed_by_channel AS revealed_by_channel,
     @@mules_without_split AS mules_without_split, Internal.size() AS internal_accounts,

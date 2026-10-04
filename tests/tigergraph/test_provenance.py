@@ -1,4 +1,4 @@
-"""Provenance checks ignore experiment scope vertices."""
+"""Provenance checks ignore experiment scope vertices and check the labels' reveal."""
 
 from __future__ import annotations
 
@@ -46,6 +46,17 @@ def test_source_counts_ignore_experiment_scopes() -> None:
     # And the installed queries: one whose text differs is refused.
     graph.stale = frozenset({CUTOFF_QUERY})
     with pytest.raises(ValueError, match=f"{CUTOFF_QUERY} differs.*mule install"):
+        provenance.verify_frozen_source(graph, manifest)
+    graph.stale = frozenset()
+    # And the labels: those another reveal wrote are not the ones the dataset read.
+    graph.other_reveal = 3
+    with pytest.raises(ValueError, match="3 mules have another reveal's label"):
+        provenance.verify_frozen_source(graph, manifest)
+    graph.other_reveal = 0
+    provenance.verify_frozen_source(graph, manifest)
+    # A dataset of earlier code, which recorded no reveal settings, is refused.
+    del settings["scope"]["reveal_salt"]
+    with pytest.raises(ValueError, match="no reveal settings"):
         provenance.verify_frozen_source(graph, manifest)
 
 

@@ -9,6 +9,7 @@ from mule_pattern_learner.contract.discovery import REVEAL_DEFAULTS, reveal_unif
 from mule_pattern_learner.contract.server import REVEAL_QUERY
 from mule_pattern_learner.paths import GSQL_DIR
 from mule_pattern_learner.tigergraph.gsql_text import definitions
+from mule_pattern_learner.tigergraph.reveal import reveal_budget
 
 REVEAL_FILE = GSQL_DIR / "queries/label_reveal.gsql"
 
@@ -35,5 +36,6 @@ def test_reveal_defaults_are_the_query_defaults() -> None:
     header = query.split("(", 1)[1].split(") FOR GRAPH", 1)[0]
     declared = re.findall(r"\b(?:INT|DOUBLE)\s+(\w+)\s*=\s*([-\d.]+)", header)
     assert {name: float(value) for name, value in declared} == REVEAL_DEFAULTS
-    assert DEFAULT_CONFIG.scope.reveal_per_split == REVEAL_DEFAULTS["budget"]
+    # The built-in run reveals every discovered mule, which sends the default budget.
+    assert reveal_budget(DEFAULT_CONFIG.scope) == REVEAL_DEFAULTS["budget"]
     assert DEFAULT_CONFIG.scope.reveal_salt == REVEAL_DEFAULTS["salt"]
