@@ -106,9 +106,11 @@ correction, and through how often the non-negative clamp fires (`corrected_steps
 run's `history.csv`), so `prior_tenth` and `prior_tenfold` are expected to differ little
 from the baseline. A near-null result is itself a finding: the balanced weight makes the
 ranking robust to a mule rate known only to a factor of ten. The three selection variants
-change only which epoch is kept and when training stops: on the same host settings they
-train exactly the baseline's epochs, so their contexts are in the cache and their runs
-are cheap.
+change only which epoch is kept and when training stops. On the same host settings they
+follow the baseline's schedule, so the epochs both train request the contexts the
+baseline cached and cost little. The epochs past the baseline's early stop are new:
+`select_on_roc_auc` and `select_on_pu_risk` may stop later than it, and
+`fixed_10_epochs` always trains ten, more whenever the baseline stopped sooner.
 
 Variants only drop groups or change the model, the loss or the training: training reads
 only the built-in run's groups, so no variant adds one. How well a table of the account's
@@ -133,7 +135,8 @@ The plan gives two numbers for the runs it trains:
   its seed, and the variants after it read much of it. Each run to train is taken to
   last from the fewest to the most hours a finished run of its variant took; a variant
   with no finished run takes the range of the finished runs of the variants other than
-  the baseline. A suite with no finished run has no estimate.
+  the baseline. A run that resumes is counted as a whole run, so the estimate is high
+  for it. A suite with no finished run has no estimate.
 - **The bound** takes every run to train all its epochs at the median seconds per step
   of the latest graph run's `history.csv`. Summary runs are faster, and early stopping
   and the cache end most runs far sooner, so it is an upper bound.
@@ -159,7 +162,10 @@ validation audit AP and marks the test audit "for reporting, not selection".
   and `_high`) resamples the accounts alone, for these seeds. Over the controls suite's
   first three seeds the spread between seeds was as large as the differences between
   variants, which only the two-source interval shows (`comparison_delta.png` draws both,
-  with the per-seed deltas).
+  with the per-seed deltas). Its seed half is a percentile bootstrap over the seeds,
+  which is too narrow with few of them: resampling n seeds understates their variance
+  by about (n - 1) / n and draws few distinct sets (three seeds give ten), so the
+  interval is reliable only with many seeds, such as the ten every suite now trains.
 - **The seeds that agree** (`validation_ap_delta_agreeing` of `validation_ap_delta_seeds`,
   "8 of 10" in report.md) are those whose own delta has the sign of the mean.
 - **`consistent`** is true when the two-source interval excludes zero and every seed
