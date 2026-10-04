@@ -42,6 +42,8 @@ from mule_pattern_learner.metrics import (
     paired_replicates,
     percentile_interval,
     ranking_metrics,
+    seed_draws,
+    two_source_replicates,
 )
 from mule_pattern_learner.paths import RunPaths, SuitePaths
 from mule_pattern_learner.testing.builders import write_suite_runs
@@ -87,25 +89,57 @@ def test_the_paired_delta_of_a_small_case_worked_by_hand(tmp_path: Path) -> None
     delta = paired_delta(paired, "prior_weight")
     assert delta is not None and delta.seeds == pytest.approx({1: -0.375, 2: 0.0})
     assert delta.value == pytest.approx(-0.1875)
-    # One seed without a difference: the delta is not consistent, whatever its interval.
-    assert not delta.consistent
-    # The interval is that of the mean difference over the replicates every run shares.
+    # Of the two seeds, only seed 1's delta has the sign of the mean.
+    assert delta.agreeing == 1
+    # The audit-only interval is that of the mean difference over the replicates every
+    # run shares; the two-source one also resamples the seeds on each replicate.
     y, weight = np.array(IS_MULE), 1 / np.array(INCLUSION)
     scores = [
         pd.read_parquet(run.paths.audit_scores("validation")).score.to_numpy() for run in runs
     ]
     replicates = paired_replicates(y, weight, scores, average_precision, np.array(RINGS))
-    expected = replicates[:, [1, 3]].mean(axis=1) - replicates[:, [0, 2]].mean(axis=1)
-    assert delta.interval == percentile_interval(expected)
+    differences = replicates[:, [1, 3]] - replicates[:, [0, 2]]
+    assert delta.audit_interval == percentile_interval(differences.mean(axis=1))
+    both = two_source_replicates(differences, seed_draws(2, replicates=len(differences)))
+    assert delta.interval == percentile_interval(both)
+    # Seed 2 differs nowhere, so a replicate that draws it twice has no difference, and
+    # one that draws seed 1 twice has seed 1's: the seeds' spread widens the interval.
+    assert delta.interval is not None and delta.audit_interval is not None
+    low, high = delta.interval
+    audit_low, audit_high = delta.audit_interval
+    assert low <= audit_low and high >= audit_high and high == 0.0
+    assert not delta.consistent
     assert paired_delta(paired, "baseline") is None
 
 
-def test_consistent_deltas_agree_in_sign_and_exclude_zero() -> None:
-    assert Delta(-0.2, [-0.3, -0.1], {1: -0.1, 2: -0.3}).consistent
-    assert Delta(0.2, [0.1, 0.3], {1: 0.1, 2: 0.3}).consistent
-    assert not Delta(-0.2, [-0.3, 0.05], {1: -0.1, 2: -0.3}).consistent
-    assert not Delta(-0.2, [-0.3, -0.1], {1: 0.1, 2: -0.5}).consistent
-    assert not Delta(-0.2, None, {1: -0.1}).consistent
+def test_the_two_source_replicates_of_a_small_case_worked_by_hand() -> None:
+    # Three replicates of the accounts, two seeds: each row is one resample of the
+    # accounts, each column a seed's difference from the baseline on it.
+    differences = np.array([[1.0, 3.0], [2.0, 4.0], [0.0, 2.0]])
+    # The first replicate draws seed 0 twice, the second seed 1 twice, the third both.
+    draws = np.array([[0, 0], [1, 1], [0, 1]])
+    assert two_source_replicates(differences, draws).tolist() == [1.0, 4.0, 1.0]
+    # Without a resample of the seeds each replicate averages them all: the audit alone.
+    assert two_source_replicates(differences, np.array([[0, 1]] * 3)).tolist() == [2, 3, 1]
+    # The seeds' draws are their own: they do not repeat the accounts' resamples drawn
+    # with the same seed, and they are the same on every call.
+    first = seed_draws(10, replicates=1000)
+    assert first.shape == (1000, 10) and first.min() == 0 and first.max() == 9
+    assert (seed_draws(10, replicates=1000) == first).all()
+    accounts = np.random.default_rng(0).integers(0, 10, size=(1000, 10))
+    assert not (accounts == first).all()
+
+
+def test_a_delta_is_consistent_when_its_two_source_interval_excludes_zero() -> None:
+    seeds = {1: -0.1, 2: -0.3}
+    assert Delta(-0.2, [-0.3, -0.1], [-0.25, -0.15], seeds).consistent
+    assert Delta(0.2, [0.1, 0.3], [0.15, 0.25], {1: 0.1, 2: 0.3}).consistent
+    # The audit-only interval does not decide: the two-source one must exclude zero.
+    assert not Delta(-0.2, [-0.3, 0.05], [-0.25, -0.15], seeds).consistent
+    # A seed of the other sign is counted, not disqualifying.
+    mixed = Delta(-0.2, [-0.3, -0.1], [-0.25, -0.15], {1: 0.1, 2: -0.5, 3: -0.2})
+    assert mixed.consistent and mixed.agreeing == 2
+    assert not Delta(-0.2, None, None, {1: -0.1}).consistent
 
 
 def test_accounts_some_audit_rejected_leave_the_pairing_and_other_samples_are_refused(
@@ -203,7 +237,12 @@ def test_comparison_csv_compares_each_variant_with_the_baseline(
         assert delta == pytest.approx(deltas.mean()) and low <= delta <= high
         assert row["validation_ap_low"] <= row["validation_ap"] <= row["validation_ap_high"]
         seeds = dict(enumerate(deltas.tolist()))
-        assert row["consistent"] == Delta(delta, [low, high], seeds).consistent
+        audit = [row["validation_ap_delta_audit_low"], row["validation_ap_delta_audit_high"]]
+        assert audit[0] <= delta <= audit[1]
+        assert row["consistent"] == Delta(delta, [low, high], audit, seeds).consistent
+        found = Delta(delta, [low, high], audit, seeds)
+        assert row["validation_ap_delta_seeds"] == 2
+        assert row["validation_ap_delta_agreeing"] == found.agreeing
     assert pd.isna(comparison["baseline"]["validation_ap_delta"])
     changes = "model.architecture = summary; model.slot_sum = False"
     assert comparison["no_attention"]["changes"] == changes

@@ -139,13 +139,15 @@ def variant_seeds(
     column: str,
     *,
     interval: str | None = None,
+    audit: str | None = None,
     ensemble: bool = False,
 ) -> list[VariantSeeds]:
     """Each ranked variant's per-seed values of a summary metric and its comparison column.
 
     ``interval`` names the comparison columns of the interval without their _low and
-    _high endings. With ``ensemble`` each variant also gets its seed ensemble's value of
-    the column, and its interval, where the suite has one.
+    _high endings, and ``audit`` those of a second, audit-only interval. With
+    ``ensemble`` each variant also gets its seed ensemble's value of the column, and its
+    interval, where the suite has one.
     """
     summary = files.summary
     chosen = summary[(summary.split == split) & (summary.metric == metric)]
@@ -165,6 +167,7 @@ def variant_seeds(
                 str(record["consistent"]) == "True",
                 ensemble=None if joint is None else value_or_none(joint[column]),
                 ensemble_interval=None if joint is None else _bounds(joint, interval),
+                audit_interval=_bounds(record, audit),
             )
         )
     return rows
@@ -237,7 +240,12 @@ def suite_drawings(files: SuiteFiles) -> dict[str, tuple[Drawing, tuple[float, f
 
     drawings["comparison_ap"] = (both, rows_size(count, width=9.0))
     deltas = variant_seeds(
-        files, "validation", DELTA_METRIC, "validation_ap_delta", interval="validation_ap_delta"
+        files,
+        "validation",
+        DELTA_METRIC,
+        "validation_ap_delta",
+        interval="validation_ap_delta",
+        audit="validation_ap_delta_audit",
     )
     deltas = sorted(
         (row for row in deltas if row.mean is not None),
@@ -386,8 +394,8 @@ def suite_text(suite: SuitePaths, files: SuiteFiles) -> str:
             f"; {dirty} of the complete runs had uncommitted changes." if dirty else "."
         )
     unpaired = comparison.unpaired_accounts.dropna()
-    # The variants compared with the baseline.
-    variants = max(len(comparison) - 1, 0)
+    # The comparisons with the baseline: the variants with a delta.
+    compared = int(comparison.validation_ap_delta.notna().sum())
     lines += [
         "",
         "Decisions use the validation audit; the test audit is for reporting, not selection. "
@@ -402,11 +410,16 @@ def suite_text(suite: SuitePaths, files: SuiteFiles) -> str:
         "resample of the accounts every audit scored and apply it to every run. It covers "
         "the audit sample's uncertainty for these seeds, not the spread between seeds (the "
         "standard deviation beside it). The delta is the variant's mean AP minus the "
-        "baseline's over the seeds both completed, on those same accounts; a consistent "
-        "delta has one sign in every seed and an interval that excludes zero. "
-        f"With {variants} variant{'' if variants == 1 else 's'} at {INTERVAL:.0%}, about "
-        f"{variants * (1 - INTERVAL):.1f} would exclude zero by chance, so a single "
-        "consistent delta is exploratory until repeated with more seeds.",
+        "baseline's over the seeds both completed, each seed paired with the baseline's run "
+        "of the same seed on those same accounts. Its interval covers both sources of "
+        "uncertainty: each replicate also resamples the seeds, so the interval widens with "
+        "the spread between them. The audit-only interval beside it resamples the accounts "
+        "alone, for these seeds. The seeds that agree are those whose own delta has the "
+        "sign of the mean. A delta is consistent when its interval over both sources "
+        f"excludes zero. The suite makes {compared} comparison"
+        f"{'' if compared == 1 else 's'} with the baseline, so at {INTERVAL:.0%} about "
+        f"{compared * (1 - INTERVAL):.1f} would exclude zero by chance even if no variant "
+        "differed from it: a single consistent delta is a lead to repeat, not a finding.",
         "",
     ]
     if len(unpaired) and unpaired.iloc[0] > 0:
@@ -423,21 +436,28 @@ def suite_text(suite: SuitePaths, files: SuiteFiles) -> str:
         "AP",
         "Standard deviation",
         "Delta from the baseline",
+        "Audit-only interval",
+        "Seeds that agree",
         "Consistent",
         "ROC AUC",
         "Recall in the top " + " / ".join(share_label(f) for f in REVIEW_BUDGETS),
     ]
     rows = []
     for rank, row in enumerate(records(comparison), start=1):
-        delta = (
-            _interval_text(
+        compared_here = not pd.isna(row["validation_ap_delta"])
+        delta = audit = agree = ""
+        if compared_here:
+            delta = _interval_text(
                 row["validation_ap_delta"],
                 row["validation_ap_delta_low"],
                 row["validation_ap_delta_high"],
             )
-            if not pd.isna(row["validation_ap_delta"])
-            else ""
-        )
+            low, high = row["validation_ap_delta_audit_low"], row["validation_ap_delta_audit_high"]
+            audit = "" if pd.isna(low) or pd.isna(high) else f"{number(low)} to {number(high)}"
+            agree = (
+                f"{int(row['validation_ap_delta_agreeing'])} of "
+                f"{int(row['validation_ap_delta_seeds'])}"
+            )
         rows.append(
             [
                 str(rank),
@@ -448,7 +468,9 @@ def suite_text(suite: SuitePaths, files: SuiteFiles) -> str:
                 ),
                 number(value_or_none(row["validation_ap_spread"])),
                 delta,
-                {True: "yes", False: "no"}.get(row["consistent"], "") if delta else "",
+                audit,
+                agree,
+                {True: "yes", False: "no"}.get(row["consistent"], "") if compared_here else "",
                 number(value_or_none(row["validation_roc_auc"])),
                 " / ".join(
                     number(value_or_none(row[f"validation_recall_at_{b}"])) for b in budgets

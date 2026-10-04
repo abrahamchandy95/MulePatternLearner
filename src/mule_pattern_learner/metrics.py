@@ -359,6 +359,42 @@ def log_odds_mean(scores: NDArray[Any], clip: float = LOG_ODDS_CLIP) -> NDArray[
     return 1 / (1 + np.exp(-mean))
 
 
+# The stream of the seeds' draws (seed_draws), apart from the accounts' resamples drawn
+# with the same seed, so that the two are independent.
+SEED_STREAM = 1
+
+
+def seed_draws(
+    count: int, *, replicates: int = BOOTSTRAP_REPLICATES, seed: int = BOOTSTRAP_SEED
+) -> NDArray[np.intp]:
+    """The seeds each bootstrap replicate draws: replicates by ``count`` positions.
+
+    Each replicate draws ``count`` of the seeds' positions with replacement, from a
+    generator of its own (``seed`` and SEED_STREAM), independent of the accounts'
+    resamples.
+    """
+    rng = np.random.default_rng([seed, SEED_STREAM])
+    return rng.integers(0, count, size=(replicates, count)).astype(np.intp)
+
+
+def two_source_replicates(
+    differences: NDArray[Any], draws: NDArray[Any] | None = None
+) -> NDArray[np.float64]:
+    """The mean paired difference on each replicate, the seeds and the accounts resampled.
+
+    ``differences`` has one row per bootstrap replicate of the audit sample, each one
+    resample of the accounts and rings applied to every run (paired_replicates), and one
+    column per seed: the difference between two runs of that seed on that resample. Each
+    replicate also draws as many seeds as there are, with replacement (``draws``, by
+    default seed_draws), and averages their differences, so the replicates vary with
+    both sources of uncertainty: which seeds were trained, and which accounts audited.
+    """
+    values = np.asarray(differences, dtype=np.float64)
+    if draws is None:
+        draws = seed_draws(values.shape[1], replicates=values.shape[0])
+    return np.take_along_axis(values, np.asarray(draws, dtype=np.intp), axis=1).mean(axis=1)
+
+
 def weighted_quantiles(
     values: NDArray[Any], weight: NDArray[Any], quantiles: Sequence[float]
 ) -> NDArray[np.float64]:

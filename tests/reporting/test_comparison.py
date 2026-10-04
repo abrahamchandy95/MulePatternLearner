@@ -16,6 +16,7 @@ from mule_pattern_learner.paths import RunPaths, SuitePaths
 from mule_pattern_learner.reporting.comparison import (
     VariantSeeds,
     plot_comparison,
+    plot_paired_delta,
     rank_correlation,
 )
 from mule_pattern_learner.reporting.report import report_directory
@@ -78,6 +79,11 @@ def test_the_suite_report_ranks_by_validation_and_keeps_test_for_reporting(
     for section in (validation, ensembles):
         assert re.findall(r"^\| (\d) \| (\S+) \|", section, flags=re.MULTILINE) == expected
     assert "averaged on the log-odds scale" in ensembles
+    # Two comparisons with the baseline, each over both sources of uncertainty, with the
+    # audit-only interval and the seeds that agree beside it.
+    assert "The suite makes 2 comparisons with the baseline, so at 90% about 0.2" in validation
+    assert "| Delta from the baseline | Audit-only interval | Seeds that agree |" in validation
+    assert len(re.findall(r"\| \d of 2 \|", validation)) == 2
     assert "| 1 | **baseline** | 42 43 |" in ensembles
     links = re.findall(r"!\[[^\]]+\]\(([^)]+)\)", text)
     assert links == [f"plots/{name}.png" for name in SUITE_FIGURES]
@@ -132,3 +138,28 @@ def test_the_comparison_draws_each_seed_ensemble_below_its_mean() -> None:
     legend = ax.get_legend()
     assert legend is not None
     assert "seed ensemble, its interval" not in [t.get_text() for t in legend.get_texts()]
+
+
+def test_the_delta_figure_draws_both_intervals() -> None:
+    ax = Figure().add_subplot()
+    row = VariantSeeds(
+        "prior_weight",
+        {42: -0.3, 43: -0.1},
+        -0.2,
+        (-0.35, -0.05),
+        consistent=True,
+        audit_interval=(-0.25, -0.15),
+    )
+    plot_paired_delta(ax, [row])
+    lines = [
+        np.ravel(np.asarray([line.get_xdata(), line.get_ydata()], dtype=float)).tolist()
+        for line in ax.get_lines()
+    ]
+    # The two-source interval on the row, the audit-only one a little above it.
+    assert [-0.35, -0.05, 0.0, 0.0] in lines and [-0.25, -0.15, 0.25, 0.25] in lines
+    legend = ax.get_legend()
+    assert legend is not None
+    assert [text.get_text() for text in legend.get_texts()][3:5] == [
+        "90% interval over seeds and accounts",
+        "over the audit's accounts alone",
+    ]

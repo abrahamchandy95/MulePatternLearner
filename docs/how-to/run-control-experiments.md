@@ -145,16 +145,23 @@ seconds for the controls suite of three seeds and grow with the runs.
 Open `results/experiments/<suite>/report.md`. It ranks the variants by the seed-mean
 validation audit AP and marks the test audit "for reporting, not selection".
 
-- **The paired delta** (`validation_ap_delta` with its interval) is the variant's
-  seed-mean validation AP minus the baseline's. Every audit of a dataset scores the same
-  accounts, so each bootstrap replicate resamples those accounts and their rings once and
-  applies the resample to every run. The interval covers the audit sample's uncertainty
-  for these seeds, not the spread between seeds, which the per-seed deltas beside it show
-  (`comparison_delta.png`).
-- **`consistent`** is true only when every seed's delta has the same sign and the interval
-  excludes zero. The `all` suite compares 12 variants with the baseline, so at 90% about
-  one will exclude zero by chance: treat results as exploratory until repeated with more
-  seeds.
+- **The paired delta** (`validation_ap_delta`) is the variant's seed-mean validation AP
+  minus the baseline's, over the seeds both completed, each seed paired with the
+  baseline's run of the same seed. Every audit of a dataset scores the same accounts, so
+  each bootstrap replicate resamples those accounts and their rings once and applies the
+  resample to every run. Its interval (`validation_ap_delta_low` and `_high`) covers both
+  sources of uncertainty: each replicate also resamples the seeds, so it widens with the
+  spread between them. The audit-only interval beside it (`validation_ap_delta_audit_low`
+  and `_high`) resamples the accounts alone, for these seeds. Over the controls suite's
+  first three seeds the spread between seeds was as large as the differences between
+  variants, which only the two-source interval shows (`comparison_delta.png` draws both,
+  with the per-seed deltas).
+- **The seeds that agree** (`validation_ap_delta_agreeing` of `validation_ap_delta_seeds`,
+  "8 of 10" in report.md) are those whose own delta has the sign of the mean.
+- **`consistent`** is true when the two-source interval excludes zero. report.md states
+  how many comparisons the suite makes and how many would exclude zero by chance: the
+  `all` suite compares 17 variants with the baseline, so at 90% about 1.7 would even if
+  no variant differed. Treat a single consistent delta as a lead to repeat.
 - **Seed ensembles** combine each variant's seeds (two or more) into one model: their
   scores of the accounts every audit scored, averaged on the log-odds scale, audited on
   validation and test as a run is, with the AP's interval over the same replicates. On

@@ -218,9 +218,14 @@ clipped 2^-50 from 0 and 1 first), then audited as a run is. Its rows have the s
 `ensemble` for its seed ensemble's row), `question`, `changes` and `seeds`; for each split the
 seed-mean AP, its spread over seeds and the 90% interval of the seed mean
 (`validation_ap`, `validation_ap_spread`, `validation_ap_low`, `validation_ap_high`, and
-the same for `test_ap`); the paired validation delta against the baseline with its
-interval (`validation_ap_delta`, `validation_ap_delta_low`, `validation_ap_delta_high`)
-and `consistent` (every seed's delta has one sign and the interval excludes zero); the
+the same for `test_ap`); the paired validation delta against the baseline
+(`validation_ap_delta`) with its interval over both the seeds and the audit sample
+(`validation_ap_delta_low`, `validation_ap_delta_high`: each replicate resamples the
+accounts and rings once and the seeds, paired by seed) and its interval over the audit
+sample alone (`validation_ap_delta_audit_low`, `validation_ap_delta_audit_high`), the
+seeds both completed (`validation_ap_delta_seeds`) and those whose own delta has the
+mean's sign (`validation_ap_delta_agreeing`), and `consistent` (the two-source interval
+excludes zero); the
 seed means of `validation_roc_auc`, `test_roc_auc` and recall and precision at each
 budget (`validation_recall_at_1pct`, `validation_precision_at_1pct` and so on for `5pct`,
 `10pct` and the test split); `best_epoch`, `parameter_count` and `training_hours`;
@@ -237,7 +242,7 @@ no delta and no run values.
 | Figure | What it shows |
 |---|---|
 | `comparison_ap.png` | Validation and test audit AP per variant: a dot per seed, the seed mean, its interval, the baseline line, and below each mean the seed ensemble as a hollow diamond on its interval |
-| `comparison_delta.png` | Validation audit AP minus the baseline's: the paired interval, per-seed deltas, zero line; filled when consistent |
+| `comparison_delta.png` | Validation audit AP minus the baseline's: the interval over seeds and accounts, the audit-only interval as a thin line above it, per-seed deltas, zero line; filled when consistent |
 | `comparison_budget.png` | Validation audit recall at 1%, 5% and 10% per variant |
 | `comparison_capture.png` | Seed-mean validation capture curves, one panel per variant with the baseline in each |
 | `comparison_validation.png` | Seed-mean proxy AP per epoch, up to the last epoch every seed trained, one panel per variant with the baseline in each |

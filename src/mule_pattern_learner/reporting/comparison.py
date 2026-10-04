@@ -35,8 +35,9 @@ BUDGET_MARKERS = ("o", "s", "D")
 class VariantSeeds:
     """One variant's value of a metric: per seed, the mean over seeds and its interval.
 
-    ``consistent`` marks a paired delta whose seeds all agree in sign with an interval
-    that excludes zero (experiments.tables.Delta). ``ensemble`` is the value of the
+    ``consistent`` marks a paired delta whose two-source interval, over the seeds and
+    the audit sample, excludes zero (experiments.tables.Delta); ``audit_interval`` is
+    such a delta's interval over the audit sample alone. ``ensemble`` is the value of the
     variant's seed ensemble, its seeds' scores averaged on the log-odds scale, and
     ``ensemble_interval`` its interval, where the suite has one.
     """
@@ -48,6 +49,7 @@ class VariantSeeds:
     consistent: bool = False
     ensemble: float | None = None
     ensemble_interval: tuple[float, float] | None = None
+    audit_interval: tuple[float, float] | None = None
 
 
 def _colour(name: str, split: str) -> str:
@@ -190,16 +192,24 @@ def plot_paired_delta(ax: Axes, rows: Sequence[VariantSeeds]) -> Axes:
     """Each variant's validation audit AP minus the baseline's, paired on shared accounts.
 
     Per seed, the difference from the baseline of the same seed; the large marker is the
-    difference of the seed means, on its paired interval. A filled marker is consistent:
-    every seed's difference has its sign and the interval excludes zero.
+    difference of the seed means, on its two-source interval (the seeds and the audit
+    sample resampled), with the audit-only interval as a thin line above it. A filled
+    marker is consistent: its two-source interval excludes zero.
     """
     y = _rows(ax, rows)
     colour = SPLIT_COLOURS["validation"]
     for position, row in zip(y, rows, strict=True):
         _seeds(ax, position, row, colour)
         _estimate(ax, position, row, colour, filled=row.consistent)
+        if row.audit_interval is not None:
+            above = position + 0.25
+            ax.plot(row.audit_interval, [above, above], color=colour, linewidth=0.9)
     ax.axvline(0.0, color=BASELINE, linewidth=1.0, zorder=1)
-    handles, labels = _dot_legend("validation", interval=f"paired {INTERVAL:.0%} interval")
+    handles, labels = _dot_legend(
+        "validation", interval=f"{INTERVAL:.0%} interval over seeds and accounts"
+    )
+    handles.append(Line2D([], [], color=colour, linewidth=0.9))
+    labels.append("over the audit's accounts alone")
     handles.insert(
         2,
         Line2D(

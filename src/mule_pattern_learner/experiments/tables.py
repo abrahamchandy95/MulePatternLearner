@@ -11,11 +11,15 @@ audit metrics, their spread over seeds, and the paired comparison with the basel
 Every variant is audited on the same accounts, because the audit sample depends only on
 the scope, the truth and dataset.split_seed. Each bootstrap replicate therefore draws one
 resample of those accounts and their rings and applies it to every run
-(metrics.paired_replicates), and the seed-mean AP of a variant and its difference from
-the baseline's (over the seeds both completed) get their 90% intervals from those
-replicates. The intervals cover the audit sample's uncertainty for these seeds, not the
-spread between seeds, which the per-seed deltas beside them show. Accounts some run's
-audit rejected are left out of the pairing, and comparison.csv counts them.
+(metrics.paired_replicates), and the seed-mean AP of a variant gets its 90% interval
+from those replicates: the audit sample's uncertainty for these seeds. The variant's
+difference from the baseline's (over the seeds both completed, paired by seed) gets two:
+the audit-only interval, from the same replicates, and the two-source interval, which
+on each replicate also resamples the seeds (metrics.two_source_replicates), so it covers
+the spread between seeds as well. Decisions use the two-source interval: a delta is
+consistent when it excludes zero, and comparison.csv counts the seeds whose own delta
+has the mean's sign. Accounts some run's audit rejected are left out of the pairing,
+and comparison.csv counts them.
 
 A variant's seed ensemble combines its complete seeds (two or more) into one ranking of
 those shared accounts, their scores averaged on the log-odds scale
@@ -60,6 +64,7 @@ from ..metrics import (
     paired_replicates,
     percentile_interval,
     ranking_metrics,
+    two_source_replicates,
 )
 from ..paths import BASELINE_VARIANT, RunPaths, SuitePaths
 from .variants import Variant
@@ -99,6 +104,10 @@ COMPARISON_COLUMNS = (
     "validation_ap_delta",
     "validation_ap_delta_low",
     "validation_ap_delta_high",
+    "validation_ap_delta_audit_low",
+    "validation_ap_delta_audit_high",
+    "validation_ap_delta_seeds",
+    "validation_ap_delta_agreeing",
     "consistent",
     *(f"{split}_{metric}" for split in HELD_OUT_SPLITS for metric in AUDIT_METRICS[1:]),
     *RUN_METRICS,
@@ -266,26 +275,41 @@ def seed_ensembles(paired: PairedSplit) -> dict[str, Ensemble]:
 
 @dataclass(frozen=True)
 class Delta:
-    """A variant's paired difference in validation AP from the baseline's."""
+    """A variant's paired difference in validation AP from the baseline's.
+
+    ``interval`` covers both sources of uncertainty, the seeds and the audit sample
+    (metrics.two_source_replicates); ``audit_interval`` the audit sample's alone, for
+    these seeds. ``seeds`` holds each seed's difference.
+    """
 
     value: float
     interval: list[float] | None
+    audit_interval: list[float] | None
     seeds: dict[int, float]
 
     @property
     def consistent(self) -> bool:
-        """Every seed's delta has one sign, and the interval excludes zero on that side."""
-        if self.interval is None or not self.seeds:
+        """Whether the two-source interval excludes zero."""
+        if self.interval is None:
             return False
         low, high = self.interval
-        deltas = list(self.seeds.values())
-        return (all(d > 0 for d in deltas) and low > 0) or (all(d < 0 for d in deltas) and high < 0)
+        return low > 0 or high < 0
+
+    @property
+    def agreeing(self) -> int:
+        """The seeds whose difference has the sign of the mean difference."""
+        return sum(delta * self.value > 0 for delta in self.seeds.values())
 
 
 def paired_delta(paired: PairedSplit, variant: str) -> Delta | None:
     """The variant's seed-mean AP minus the baseline's, over the seeds both completed.
 
-    None for the baseline itself and for a variant with no seed the baseline completed.
+    Each seed's difference pairs the variant's run with the baseline's run of that seed,
+    on the accounts every audit scored. The audit-only interval averages the seeds'
+    differences on each shared replicate of those accounts; the two-source interval also
+    resamples the seeds on each replicate (metrics.two_source_replicates), so it widens
+    with the spread between seeds. None for the baseline itself and for a variant with no
+    seed the baseline completed.
     """
     mine, baseline = paired.columns(variant), paired.columns(BASELINE_VARIANT)
     seeds = sorted(mine.keys() & baseline.keys())
@@ -293,9 +317,14 @@ def paired_delta(paired: PairedSplit, variant: str) -> Delta | None:
         return None
     ours, theirs = [mine[s] for s in seeds], [baseline[s] for s in seeds]
     by_seed = {s: float(paired.point[mine[s]] - paired.point[baseline[s]]) for s in seeds}
-    replicated = paired.replicates[:, ours].mean(axis=1) - paired.replicates[:, theirs].mean(1)
+    differences = paired.replicates[:, ours] - paired.replicates[:, theirs]
     value = float(paired.point[ours].mean() - paired.point[theirs].mean())
-    return Delta(value, percentile_interval(replicated), by_seed)
+    return Delta(
+        value,
+        percentile_interval(two_source_replicates(differences)),
+        percentile_interval(differences.mean(axis=1)),
+        by_seed,
+    )
 
 
 def summary_rows(
@@ -430,10 +459,15 @@ def comparison_rows(
         delta = paired_delta(validation, variant.name) if validation is not None else None
         if delta is not None:
             low, high = interval_pair(delta.interval)
+            audit_low, audit_high = interval_pair(delta.audit_interval)
             row |= {
                 "validation_ap_delta": delta.value,
                 "validation_ap_delta_low": low,
                 "validation_ap_delta_high": high,
+                "validation_ap_delta_audit_low": audit_low,
+                "validation_ap_delta_audit_high": audit_high,
+                "validation_ap_delta_seeds": len(delta.seeds),
+                "validation_ap_delta_agreeing": delta.agreeing,
                 "consistent": delta.consistent,
             }
         for split in HELD_OUT_SPLITS:
