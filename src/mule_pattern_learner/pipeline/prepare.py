@@ -33,14 +33,16 @@ def install_queries(config: RunConfig = DEFAULT_CONFIG) -> dict[str, Any]:
     """What `mule install` does, on a connection with config's retry budgets.
 
     It adds the scope vertex type if it is missing and installs the training queries
-    whose text differs (installer.install). Once that has passed, so every renamed query
-    is installed, it drops the retired queries still installed (installer.drop_retired):
-    it is the only command that drops them, because code from before the rename calls
-    them. Last it lists the installed queries that no repository file defines, which it
-    leaves in place.
+    whose text differs (installer.install). It is the only command that replaces scope
+    types that differ from gsql/schema/scope_vertex.gsql, while the graph holds no scope
+    vertex, and then installs every training query (installer.replace_scope_types).
+    Once that has passed, so every renamed query is installed, it drops the retired
+    queries still installed (installer.drop_retired): it is the only command that drops
+    them, because code from before the rename calls them. Last it lists the installed
+    queries that no repository file defines, which it leaves in place.
     """
     executor = connect(config.transport)
-    result = install(executor)
+    result = install(executor, replace_scope=True)
     result["dropped"] = drop_retired(executor)
     result["not_defined"] = undefined_queries(executor)
     return result

@@ -116,6 +116,20 @@ def records(run: Path) -> list[tuple[dict[str, Any], str | None]]:
             "Dropped 2 retired queries: old_a, old_b",
         ),
         ({"event": "drop_retired", "dropped": []}, None),
+        # Scope types that predate the split shares, replaced by `mule install`.
+        (
+            {
+                "event": "scope_types",
+                "replacing": ["Temporal_Training_Scope lacks train_share, validation_share"],
+                "dropping": ["fetch_training_context", "create_training_scope"],
+            },
+            "Replacing the scope vertex type (Temporal_Training_Scope lacks train_share, "
+            "validation_share): dropping the 2 queries that use it first...",
+        ),
+        (
+            {"event": "scope_types", "replaced": ["Temporal_Training_Scope lacks"], "dropped": []},
+            "Replaced the scope vertex type; every training query is installed again",
+        ),
         # A scope found in place, or created, and the hub registry show nothing.
         ({"event": "scope", "scope": "strict_mule_v2", "unowned_members": {"gl": 9}}, None),
         (
@@ -494,6 +508,11 @@ def test_a_count_of_one_reads_in_the_singular(
         ),
         ({"event": "installed", "installed": ["q1"], "seconds": 30}, "Installed 1 query in 30 s"),
         ({"event": "drop_retired", "dropped": ["old_a"]}, "Dropped 1 retired query: old_a"),
+        (
+            {"event": "scope_types", "replacing": ["it differs"], "dropping": ["q1"]},
+            "Replacing the scope vertex type (it differs): dropping the 1 query that uses it "
+            "first...",
+        ),
         (
             {"event": "reveal", "labels": "revealed", "revealed": {"2": 1}},
             "Revealed 1 known mule: 0 / 1 / 0 in train / validation / test",

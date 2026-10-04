@@ -21,7 +21,7 @@ from typing import Any
 from .diagnostics.study import ANALYSES, INCOMPLETE
 from .metrics import REVIEW_BUDGETS, budget_name
 from .paths import REPOSITORY_ROOT, RESULTS_DIR, RunPaths, check_report, command_events
-from .pipeline.check import check
+from .pipeline.check import CLEAR_DATA, check
 from .pipeline.diagnose import diagnose_built_in
 from .pipeline.evaluate import evaluate_run
 from .pipeline.prepare import install_queries
@@ -55,9 +55,11 @@ def build_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
     commands.add_parser(
         "install",
-        help="Add the scope vertex type if it is missing, install the training queries whose "
-        "text differs (train does this too), drop the retired queries still installed (only "
-        "install does) and list installed queries no file defines",
+        help="Add the scope vertex type if it is missing, or replace it while no scope "
+        "uses it if it differs from gsql/schema/scope_vertex.gsql (only install does), "
+        "install the training queries whose text differs (train does this too), drop the "
+        "retired queries still installed (only install does) and list installed queries no "
+        "file defines",
     )
     commands.add_parser(
         "train",
@@ -280,7 +282,7 @@ def check_summary(report: Mapping[str, Any], saved: Path) -> str:
         mark = "-" if ready is None else "x" if ready else " "
         lines.append(f"  [{mark}] {text}")
 
-    item(report["scope_schema"] == "present", f"scope vertex type {report['scope_schema']}")
+    item(report["scope_schema"] == "present", _scope_item(report))
     stale = queries["stale"]
     training = plural(total, "training query", "training queries")
     if stale:
@@ -305,10 +307,26 @@ def check_summary(report: Mapping[str, Any], saved: Path) -> str:
         commands = [
             c for c in ("mule install", "mule train") if any(f"`{c}`" in p for p in problems)
         ]
-        todo = ", then ".join(f"`{c}`" for c in commands)
-        lines.append(f"Not ready: run {todo}." if todo else "Not ready: see the items not ticked.")
+        steps = ["run " + ", then ".join(f"`{c}`" for c in commands)] if commands else []
+        if any(CLEAR_DATA in problem for problem in problems):
+            steps.insert(0, CLEAR_DATA)
+        todo = ", then ".join(steps)
+        lines.append(f"Not ready: {todo}." if todo else "Not ready: see the items not ticked.")
     lines.append(f"The full report, with every tensor's digest, is in {shown_path(saved)}")
     return "\n".join(lines)
+
+
+def _scope_item(report: Mapping[str, Any]) -> str:
+    """The checklist item of the scope vertex type: present, missing or how it is outdated."""
+    outdated = report.get("scope_outdated")
+    if report["scope_schema"] != "outdated" or not outdated:
+        return f"scope vertex type {report['scope_schema']}"
+    text = f"scope vertex type outdated: {'; '.join(outdated['differences'])}"
+    scopes = int(outdated["scopes"])
+    if scopes:
+        held = plural(scopes, "scope vertex", "scope vertices")
+        return f"{text}; the graph holds {held}, so {CLEAR_DATA} first"
+    return f"{text}; `mule install` replaces it"
 
 
 def _cugraph(probe: Mapping[str, Any], problems: list[str]) -> tuple[bool | None, str]:
@@ -345,6 +363,13 @@ def _first_step(step: Mapping[str, Any] | None) -> tuple[bool, str]:
 def install_summary(result: Mapping[str, Any]) -> str:
     """What `mule install` leaves: the queries in place, and what it did not touch."""
     lines = ["Added the scope vertex type"] if "scope_schema" in result else []
+    replaced = result.get("scope_replaced")
+    if replaced:
+        line = f"Replaced the scope vertex type ({'; '.join(replaced['differences'])})"
+        if replaced["dropped"]:
+            queries = plural(len(replaced["dropped"]), "query", "queries")
+            line += f", after dropping the {queries} that used it"
+        lines.append(line)
     verified, installed = result["verified"], result["installed"]
     line = f"{plural(len(verified), 'training query', 'training queries')} installed with the "
     line += f"repository's text, {len(installed)} of them now"

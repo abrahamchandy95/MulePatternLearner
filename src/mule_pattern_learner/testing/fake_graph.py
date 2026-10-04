@@ -20,6 +20,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping
 from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 import threading
 import time
@@ -77,6 +78,12 @@ from mule_pattern_learner.tigergraph.hubs import TigerGraphHubReader
 from mule_pattern_learner.tigergraph.labels import TigerGraphObservedLabelReader
 from mule_pattern_learner.tigergraph.oracle import REVEAL_INPUTS_QUERY
 from mule_pattern_learner.tigergraph.scope import SHARE_ATTRIBUTES, TigerGraphScopeReader
+from mule_pattern_learner.tigergraph.scope_types import (
+    ScopeTypes,
+    declared_scope_types,
+    parsed_scope_types,
+    uses_scope_types,
+)
 
 
 def signature(path: str, name: str) -> frozenset[str]:
@@ -107,6 +114,15 @@ FINALIZE_SCOPE_PARAMETERS = signature("queries/training_scope.gsql", FINALIZE_SC
 TRUTH_PARAMETERS = signature("evaluation/ground_truth.gsql", TRUTH_QUERY)
 # The queries FakeTigerGraph answers that write to the graph: they must run once.
 WRITE_QUERIES = frozenset({CREATE_SCOPE_QUERY, FINALIZE_SCOPE_QUERY})
+# The scope types of a current graph: those gsql/schema/scope_vertex.gsql declares.
+SCOPE_TYPES = declared_scope_types()
+# The scope types of a graph created before the scope vertex recorded its split shares.
+EARLIER_SCOPE_TYPES = replace(
+    SCOPE_TYPES,
+    vertex_attributes=tuple(
+        (name, kind) for name, kind in SCOPE_TYPES.vertex_attributes if name not in SHARE_ATTRIBUTES
+    ),
+)
 
 
 def pooled(messages: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
@@ -166,9 +182,11 @@ class FakeTigerGraph:
     vertex, which the scope creation queries add; `counts` are the vertex counts by
     type (default: the population's accounts); `queries` maps the installed queries to
     their text (default: every repository query), except that `stale` names queries
-    whose installed text differs until they are created again; and `scope_vertex` says
-    whether the schema has the scope vertex type. `writes` records the GSQL statements
-    that change it and the install requests, in order.
+    whose installed text differs until they are created again; and `scope_types` are
+    the schema's scope vertex and edge types (default: SCOPE_TYPES, those
+    gsql/schema/scope_vertex.gsql declares; EARLIER_SCOPE_TYPES lack the split shares;
+    None, neither type). `writes` records the GSQL statements that change it and the
+    install requests, in order.
 
     A context request waits `delay` seconds before it is answered, and `encodings`
     injects the Fourier faults of context_rows.
@@ -198,7 +216,7 @@ class FakeTigerGraph:
         counts: dict[str, int] | None = None,
         queries: Mapping[str, str] | None = None,
         stale: Iterable[str] = (),
-        scope_vertex: bool = True,
+        scope_types: ScopeTypes | None = SCOPE_TYPES,
         delay: float = 0.0,
         encodings: Literal["exact", "perturbed", "omitted"] = "exact",
         before: Callable[[str, dict[str, Any]], None] | None = None,
@@ -217,7 +235,7 @@ class FakeTigerGraph:
         self.scopes = {scope_id: dict(header) for scope_id, header in (scopes or {}).items()}
         self.counts = dict(counts) if counts is not None else {"Account": len(self.population)}
         self.stale = frozenset(stale)
-        self.scope_vertex = scope_vertex
+        self.scope_types = scope_types
         self.writes: list[str] = []
         self.delay, self.encodings = delay, encodings
         self.before = before
@@ -516,14 +534,58 @@ def retired_query(name: str, calls: str | None = None) -> str:
     return f"{header} {{ {body} }}"
 
 
+def graph_schema(scope_types: ScopeTypes | None) -> dict[str, Any]:
+    """What getSchema answers of a graph with these scope types (None: neither type).
+
+    Account and Party are named only; the scope types are given in full, in
+    TigerGraph's form: the vertex type's primary id apart from its other attributes, and
+    the edge type's vertex type pairs and reverse edge.
+    """
+    vertices: list[dict[str, Any]] = [{"Name": "Account"}, {"Name": "Party"}]
+    edges: list[dict[str, Any]] = []
+    if scope_types is not None:
+        (key, key_type), *attributes = scope_types.vertex_attributes
+        vertices.append(
+            {
+                "Name": scope_types.vertex,
+                "PrimaryId": {
+                    "AttributeName": key,
+                    "AttributeType": {"Name": key_type},
+                    "PrimaryIdAsAttribute": True,
+                },
+                "Attributes": [schema_attribute(*item) for item in attributes],
+            }
+        )
+        edges.append(
+            {
+                "Name": scope_types.edge,
+                "IsDirected": True,
+                "FromVertexTypeName": "*",
+                "ToVertexTypeName": scope_types.vertex,
+                "EdgePairs": [{"From": a, "To": b} for a, b in scope_types.endpoints],
+                "Attributes": [schema_attribute(*item) for item in scope_types.edge_attributes],
+                "Config": {"REVERSE_EDGE": scope_types.reverse_edge},
+            }
+        )
+    return {"GraphName": GRAPH_NAME, "VertexTypes": vertices, "EdgeTypes": edges}
+
+
+def schema_attribute(name: str, kind: str) -> dict[str, Any]:
+    """An attribute as getSchema gives it."""
+    return {"AttributeName": name, "AttributeType": {"Name": kind}}
+
+
 class FakeConnection:
     """The pyTigerGraph connection of a FakeTigerGraph: schema, counts and queries.
 
     GSQL runs SHOW QUERY, CREATE OR REPLACE QUERY (which disables the endpoint until the
     query is installed again), DROP QUERY (refused, as TigerGraph refuses it, while another
-    query calls the query) and the scope schema change; any other GSQL fails.
-    installQueries installs at once. The one interpreted query it runs is the reveal's
-    inputs query, which prints the graph's `reveal` rows.
+    query calls the query) and the scope schema changes; any other GSQL fails. The
+    schema change of gsql/schema/scope_vertex.gsql adds the types it declares, refused
+    while the graph has them; a job that drops them is refused while a query on the
+    graph names one, and deletes every scope. installQueries installs at once; the
+    -force flag is recorded. The one interpreted query it runs is the reveal's inputs
+    query, which prints the graph's `reveal` rows.
     """
 
     def __init__(self, graph: FakeTigerGraph, queries: dict[str, str]) -> None:
@@ -549,8 +611,7 @@ class FakeConnection:
         return deepcopy(self.graph.reveal)
 
     def getSchema(self, force: bool = False) -> dict[str, Any]:
-        names = ["Account", *([SCOPE_VERTEX] if self.graph.scope_vertex else [])]
-        return {"VertexTypes": [{"Name": name} for name in names]}
+        return graph_schema(self.graph.scope_types)
 
     def text(self, name: str) -> str:
         """What SHOW QUERY prints of a query: a stale one's text differs from its file's."""
@@ -568,8 +629,11 @@ class FakeConnection:
             if self.enabled[name]
         }
 
-    def installQueries(self, names: list[str], wait: bool = False) -> dict[str, Any]:
-        self.graph.writes.append("INSTALL QUERY " + ", ".join(names))
+    def installQueries(
+        self, names: list[str], wait: bool = False, flag: str | None = None
+    ) -> dict[str, Any]:
+        forced = "-FORCE " if flag == "-force" else ""
+        self.graph.writes.append(f"INSTALL QUERY {forced}" + ", ".join(names))
         for name in names:
             self.enabled[name] = True
         return {"error": False, "message": "Query installation finished: SUCCESS"}
@@ -590,8 +654,7 @@ class FakeConnection:
             self.enabled.pop(name)
             return f"Successfully dropped queries on the graph '{GRAPH_NAME}': [{name}]."
         if "SCHEMA_CHANGE JOB" in text:
-            self.graph.scope_vertex = True
-            return "Local schema change succeeded."
+            return self.schema_change(text)
         created = definitions(text)
         assert created, "the fake graph runs no other GSQL"
         for name, definition in created.items():
@@ -599,6 +662,23 @@ class FakeConnection:
             self.enabled[name] = False
         self.graph.stale = self.graph.stale - set(created)
         return f"Successfully created queries: [{', '.join(created)}]."
+
+    def schema_change(self, text: str) -> str:
+        """Add the scope types a job declares, or drop the graph's, as TigerGraph would."""
+        graph = self.graph
+        if "ADD VERTEX" in text:
+            if graph.scope_types is not None:
+                return f"Failed: the vertex type {SCOPE_VERTEX} already exists."
+            graph.scope_types = parsed_scope_types(text)
+            return "Local schema change succeeded."
+        assert "DROP VERTEX" in text or "DROP EDGE" in text, text[:80]
+        assert graph.scope_types is not None, "the graph has no scope types to drop"
+        users = [n for n, body in self.shown.items() if uses_scope_types(body, graph.scope_types)]
+        if users:
+            return f"Failed: the queries {', '.join(users)} use the types to drop."
+        graph.scope_types = None
+        graph.scopes.clear()
+        return "Local schema change succeeded."
 
 
 LINKED_COUNTS = {

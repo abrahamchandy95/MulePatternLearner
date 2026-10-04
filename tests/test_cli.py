@@ -509,6 +509,52 @@ def test_a_count_of_one_reads_in_the_singular_in_the_checklist() -> None:
     assert "first training batch on cuda: 1 of 1 root, 1 context request, 2 s;" in ready
 
 
+def test_an_outdated_scope_type_says_how_it_differs_and_what_to_run() -> None:
+    saved = Path("results/check.json")
+    differences = ["Temporal_Training_Scope lacks train_share, validation_share, test_share"]
+    outdated = {"scope_schema": "outdated", "scope_outdated": {"differences": differences}}
+    replaceable = (
+        NOT_READY
+        | outdated
+        | {
+            "scope_outdated": {"differences": differences, "scopes": 0},
+            "problems": [
+                "the scope vertex type is outdated; `mule install` replaces it",
+                *NOT_READY["problems"][1:],
+            ],
+        }
+    )
+    shown = cli.check_summary(replaceable, saved)
+    assert (
+        "  [ ] scope vertex type outdated: Temporal_Training_Scope lacks train_share, "
+        "validation_share, test_share; `mule install` replaces it\n"
+    ) in shown
+    assert "Not ready: run `mule install`, then `mule train`.\n" in shown
+    # Scopes use it, so the graph's data is cleared and loaded again first.
+    used = replaceable | {
+        "scope_outdated": {"differences": differences, "scopes": 2},
+        "problems": [
+            "the scope vertex type is outdated and the graph holds 2 scope vertices, which "
+            "`mule install` refuses to delete; clear the graph's data and load it again "
+            "(docs/how-to/set-up-a-graph.md), then `mule install` replaces it",
+            *NOT_READY["problems"][1:],
+        ],
+    }
+    shown = cli.check_summary(used, saved)
+    assert "; the graph holds 2 scope vertices, so clear the graph's data and load it " in shown
+    assert (
+        "Not ready: clear the graph's data and load it again, then run `mule install`, then "
+        "`mule train`.\n"
+    ) in shown
+    # What `mule install` says once it replaced the type.
+    replaced = {"differences": differences, "dropped": ["q1", "q2"], "output": ""}
+    assert cli.install_summary(INSTALLED | {"scope_replaced": replaced}).startswith(
+        "Replaced the scope vertex type (Temporal_Training_Scope lacks train_share, "
+        "validation_share, test_share), after dropping the 2 queries that used it\n3 training "
+        "queries installed"
+    )
+
+
 STEP_TIME = {"seconds_per_step": 2.0}
 
 

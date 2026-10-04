@@ -268,6 +268,7 @@ This code reads only the datasets and models it writes:
 |---|---|
 | `Installed query differs from repository source or is not installed` | Run `mule install`; it recompiles only the stale queries |
 | `Queries [...] are still not installed after ...s` | The 90-minute wait for compilation ran out, and the server may still be compiling. Once it has finished (`mule check` no longer lists stale training queries; the GSQL shell's `ls` shows the analytics queries), run the same command again (`mule install`, `mule train`, `mule diagnose` or the experiments script): it installs only what is still stale |
+| `The graph's scope types differ from gsql/schema/scope_vertex.gsql: ...` | The graph's `Temporal_Training_Scope` predates the file, such as one without the split shares. Run `mule install`, which replaces it while the graph holds no scope vertex; while it holds one, clear the graph's data and load it again first ([Reuse a graph](set-up-a-graph.md#reuse-a-graph)) |
 | `Prepared dataset ... was built from different GSQL sources` | The query files changed after preparation; install them, then move the dataset aside so it is prepared again |
 | `Graph counts changed; freeze the source and prepare a new dataset` | The graph was modified after preparation; freeze it and prepare a new dataset |
 | `Scope ... was created with scope.unowned = ...` | The scope was created with another rule; use the stored rule or a new `scope.id` |

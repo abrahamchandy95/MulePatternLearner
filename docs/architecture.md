@@ -50,8 +50,8 @@ flowchart LR
 ```
 
 1. **Install.** `mule install` installs the queries of `gsql/queries/` and
-   `gsql/evaluation/` whose text differs, adds the scope vertex type if it is missing, and
-   then drops the retired query names. A preparation that connects (`mule train`, `mule
+   `gsql/evaluation/` whose text differs, adds the scope vertex type if it is missing or
+   replaces it if it is outdated, and then drops the retired query names. A preparation that connects (`mule train`, `mule
    diagnose` or the experiments script, when no ready dataset exists) installs the same
    way and drops nothing ([Queries](reference/queries.md#installation)).
 2. **Scope and reveal.** On a fresh graph the first preparation creates the frozen

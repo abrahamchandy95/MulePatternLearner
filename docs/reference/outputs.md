@@ -341,7 +341,9 @@ The experiments script moves a run whose settings differ from its variant's, who
 ## The report of `mule check`: `results/check.json`
 
 Each `mule check` replaces it with the report its checklist summarises: `graph`,
-`scope_schema` (`present` or `missing`), `queries` (`up_to_date`, `stale` with each query's
+`scope_schema` (`present`, `missing` or `outdated`; an outdated one adds `scope_outdated`,
+its `differences` from `gsql/schema/scope_vertex.gsql` in words and the `scopes` the graph
+holds), `queries` (`up_to_date`, `stale` with each query's
 issues, and `retired`), `cugraph` (the probe's `status`, device and reason), `dataset`,
 `problems`, `status` (`ready` or `not_ready`), `peak_process_rss_bytes` and
 `graph_writes` (always 0). Once the graph is ready it adds `source_open_seconds` and
@@ -357,8 +359,10 @@ the accelerator's peak memory. Nothing else reads it.
 Every `mule` command appends to it the records of the events it emits while no run,
 dataset or study is recording its own, one JSON object each, which names the command
 (`command`, such as `"train"`) after the time (`time`): the queries an install found
-stale and up to date (`install`), the output TigerGraph gave each GSQL write (`gsql`: the
-scope schema change, each `CREATE` and `DROP`), an install request left unanswered with
+stale and up to date (`install`), the replacement of an outdated scope vertex type
+before and after (`scope_types`: its differences and the queries dropped), the output
+TigerGraph gave each GSQL write (`gsql`: each scope schema change, `CREATE` and `DROP`),
+an install request left unanswered with
 the error that ended it (`install_unanswered`), the wait for compilation and its end
 (`install_wait`, `installed`), the retries of connecting with their whole error
 (`retry`), a dataset found ready (`dataset`), a complete run reported

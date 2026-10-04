@@ -30,7 +30,7 @@ from mule_pattern_learner.testing.builders import (
     scoped_accounts,
     unit_config,
 )
-from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
+from mule_pattern_learner.testing.fake_graph import EARLIER_SCOPE_TYPES, FakeTigerGraph
 from mule_pattern_learner.tigergraph import gsql_text
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
 from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffReader
@@ -111,7 +111,7 @@ def test_a_graph_that_is_not_ready_is_reported_without_a_batch(
     server = FakeTigerGraph(
         queries={**installed, RETIRED_QUERIES[0]: installed[CONTEXT_QUERY]},
         stale=[CUTOFF_QUERY],
-        scope_vertex=False,
+        scope_types=None,
     )
     monkeypatch.setattr(pipeline_check, "connect", lambda transport: server)
 
@@ -132,3 +132,35 @@ def test_a_graph_that_is_not_ready_is_reported_without_a_batch(
     assert len(report["problems"]) == 3
     assert any("mule install" in problem for problem in report["problems"])
     assert any("mule train" in problem for problem in report["problems"])
+
+
+def test_an_outdated_scope_type_is_reported_with_what_to_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Scope types that predate the split shares: `mule install` replaces them while no
+    # scope vertex uses them, and refuses while one does.
+    graphs = [
+        FakeTigerGraph(scope_types=EARLIER_SCOPE_TYPES),
+        FakeTigerGraph(scope_types=EARLIER_SCOPE_TYPES, scopes={"strict_mule_v2": {}}),
+    ]
+
+    def checked(graph: FakeTigerGraph) -> dict[str, Any]:
+        def connect(transport: object) -> FakeTigerGraph:
+            return graph
+
+        monkeypatch.setattr(pipeline_check, "connect", connect)
+        report = pipeline_check.check(CONFIG, tmp_path / "data", tmp_path / "results")
+        assert graph.writes == [] and graph.calls == []
+        return report
+
+    reports = [checked(graph) for graph in graphs]
+    differences = ["Temporal_Training_Scope lacks train_share, validation_share, test_share"]
+    for report, scopes in zip(reports, (0, 1), strict=True):
+        assert report["status"] == "not_ready" and report["scope_schema"] == "outdated"
+        assert report["scope_outdated"] == {"differences": differences, "scopes": scopes}
+    empty, used = (report["problems"][0] for report in reports)
+    assert empty == "the scope vertex type is outdated; `mule install` replaces it"
+    assert used.startswith(
+        "the scope vertex type is outdated and the graph holds 1 scope vertex, which "
+        "`mule install` refuses to delete; clear the graph's data and load it again"
+    )

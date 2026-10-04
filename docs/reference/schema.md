@@ -124,7 +124,9 @@ runs again.
 `source_id`, `split_seed`, `train_share`, `validation_share`, `test_share`, `ready`) and
 the edge `Entity_In_Training_Scope` from Account and Party (`partition`, `group_id`;
 reverse `Training_Scope_Has_Entity`). It holds experiment membership apart from the
-business data, and `mule install` applies it when the graph lacks the type. A scope
+business data, and `mule install` applies it when the graph lacks the type, or replaces
+a type that differs from it while the graph holds no scope vertex
+([Queries](queries.md#the-scope-types)). A scope
 records the shares of its partition, and every run refuses a scope whose shares differ
 from its settings, or which records none. The vertex type keeps its name because it is
 part of the graph's schema; the scope id of the built-in run is `strict_mule_v3`.

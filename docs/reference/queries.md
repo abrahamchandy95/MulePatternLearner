@@ -292,7 +292,8 @@ describes what a pair is.
   or failed) is only installed.
 - When the graph has no `Temporal_Training_Scope` vertex type,
   `gsql/schema/scope_vertex.gsql` is applied first, since a schema change invalidates
-  installed queries.
+  installed queries. A scope vertex type that differs from that file is replaced by
+  `mule install` alone ([The scope types](#the-scope-types)).
 - On TigerGraph 4.2.5 the install request answers only when compilation finishes, so it
   runs with a 90-minute read timeout (`tigergraph.installer.INSTALL_DEADLINE_S`); when
   the client gives up first, the endpoint listing is polled every 30 seconds until every
@@ -318,6 +319,36 @@ describes what a pair is.
 `mule diagnose` (`tigergraph.installer.install` with `analytics=True`). A dataset records
 the hashes of the files preparation runs (`contract.server.QUERY_FILES`), so a dataset
 prepared from other query texts is refused.
+
+### The scope types
+
+Every install first compares the graph's scope vertex and edge types with
+`gsql/schema/scope_vertex.gsql` (`tigergraph.installer.scope_schema`): each type's
+attributes, by name and type in order, the vertex type's primary id first, since
+`create_training_scope` inserts a scope by position, and the edge type's vertex types and
+reverse edge. Defaults are not compared. A graph whose types differ, such as one whose
+`Temporal_Training_Scope` was created before the scope recorded its split shares, has
+outdated types: `mule check` reports how they differ, the installs of `mule train`,
+`mule diagnose` and the experiments script refuse them, and `mule install` replaces them
+(`tigergraph.installer.replace_scope_types`):
+
+1. It refuses, and changes nothing, while the graph holds a scope vertex, which replacing
+   the types would delete; while an edge type that the file does not declare reaches the
+   scope vertex type; or while an installed query that no repository file defines uses
+   the scope types or calls a query that does. It never touches such types or queries.
+2. It drops the repository's queries on the server that use the scope types, those of
+   the training, evaluation and analytics files, with the queries that call them, callers
+   first, since TigerGraph drops no type a query uses: today the context, scope, hub,
+   reveal and analytics context queries.
+3. It drops the old scope edge and vertex types in the schema change job
+   `drop_training_scope`, applies `scope_vertex.gsql`, and checks that the graph's types
+   are now the file's.
+4. It installs every training query, whatever its text, with the `-force` flag, since
+   TigerGraph skips an installed query otherwise. The analytics context query waits for
+   `mule diagnose`, as on a fresh graph.
+
+The console says what it replaces and drops (the `scope_types` events), and a second run
+finds the types in place and installs only what is stale.
 
 ### The retired names
 

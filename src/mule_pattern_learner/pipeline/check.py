@@ -1,8 +1,10 @@
 """Read-only readiness of the graph and the built-in run, which `mule check` reports.
 
 check connects with the run's transport section (the connection refuses a graph other
-than contract.server.GRAPH_NAME) and reports whether the scope vertex type exists,
-which training queries are installed with the repository text, which retired queries
+than contract.server.GRAPH_NAME) and reports whether the scope vertex type exists as
+gsql/schema/scope_vertex.gsql declares it (an outdated one with how it differs and how
+many scope vertices the graph holds), which training queries are installed with the
+repository text, which retired queries
 `mule install` would drop and, on a CUDA host, what the cuGraph probe found. When all of
 them are ready and the run's dataset is prepared in data/, it builds the first training
 batch the way train() builds it and runs one optimizer step (first_step). Its source
@@ -41,12 +43,20 @@ from ..data.splits import sample_keys
 from ..model.build import build_model
 from ..model.loss import NonNegativePULoss
 from ..paths import DATA_DIR, RESULTS_DIR, DatasetPaths, check_report
+from ..runtime.console import plural
 from ..runtime.device import choose_device, torch_runtime
 from ..sampling.cugraph_sampler import cugraph_usable
 from ..tigergraph.context_query import TigerGraphContextFetcher
 from ..tigergraph.executor import ConnectionExecutor, TigerGraphExecutor
 from ..tigergraph.gsql_text import repository_queries
-from ..tigergraph.installer import has_scope_vertex, query_problems, retired_installed
+from ..tigergraph.installer import (
+    ABSENT,
+    OUTDATED,
+    query_problems,
+    retired_installed,
+    scope_schema,
+    scope_vertices,
+)
 from ..training.objective import nnpu_objective, nnpu_step
 from ..training.schedule import TrainingStep, epoch_schedule
 from ..training.trainer import build_optimizer, check_limits, training_samples
@@ -63,23 +73,50 @@ def rest_calls(contexts: ContextReader) -> tuple[int, dict[str, int]]:
     return executor.calls, dict(executor.retries)
 
 
+# What to do first when the graph's scope types are outdated and scopes use them.
+CLEAR_DATA = "clear the graph's data and load it again"
+
+
 def graph_readiness(executor: ConnectionExecutor) -> dict[str, Any]:
     """The graph name, the scope vertex type and the installed training queries.
 
-    The retired queries still installed are reported, not a problem: training never
-    calls them, and `mule install` drops them.
+    scope_schema is "present", "missing" or "outdated" (installer.scope_schema); an
+    outdated one adds scope_outdated: how its types differ and how many scope vertices
+    use them. The retired queries still installed are reported, not a problem: training
+    never calls them, and `mule install` drops them.
     """
     problems = query_problems(executor)
     names = repository_queries(TRAINING_QUERY_FILES)
-    return {
-        "graph": executor.graph_name,
-        "scope_schema": "present" if has_scope_vertex(executor) else "missing",
-        "queries": {
-            "up_to_date": [name for name in names if name not in problems],
-            "stale": problems,
-            "retired": retired_installed(executor),
-        },
+    scope = scope_schema(executor)
+    report: dict[str, Any] = {"graph": executor.graph_name, "scope_schema": scope.state}
+    if scope.state == OUTDATED:
+        report["scope_outdated"] = {
+            "differences": list(scope.differences),
+            "scopes": scope_vertices(executor, scope),
+        }
+    report["queries"] = {
+        "up_to_date": [name for name in names if name not in problems],
+        "stale": problems,
+        "retired": retired_installed(executor),
     }
+    return report
+
+
+def scope_problem(report: dict[str, Any]) -> str | None:
+    """The problem graph_readiness's scope schema is, with what to run; None when present."""
+    if report["scope_schema"] == ABSENT:
+        return "the scope vertex type is missing; `mule install` adds it"
+    if report["scope_schema"] != OUTDATED:
+        return None
+    scopes = int(report["scope_outdated"]["scopes"])
+    if not scopes:
+        return "the scope vertex type is outdated; `mule install` replaces it"
+    held = plural(scopes, "scope vertex", "scope vertices")
+    return (
+        f"the scope vertex type is outdated and the graph holds {held}, which "
+        f"`mule install` refuses to delete; {CLEAR_DATA} (docs/how-to/set-up-a-graph.md), "
+        "then `mule install` replaces it"
+    )
 
 
 def cugraph_readiness() -> dict[str, Any]:
@@ -214,8 +251,9 @@ def check(
     executor = connect(config.transport)
     report: dict[str, Any] = {**graph_readiness(executor), "cugraph": cugraph_readiness()}
     problems: list[str] = []
-    if report["scope_schema"] == "missing":
-        problems.append("the scope vertex type is missing; `mule install` adds it")
+    scope = scope_problem(report)
+    if scope is not None:
+        problems.append(scope)
     if report["queries"]["stale"]:
         problems.append("training queries differ from the repository; `mule install` installs them")
     if config.sampler.backend == "cugraph" and report["cugraph"]["status"] != "passed":

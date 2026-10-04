@@ -21,7 +21,12 @@ from mule_pattern_learner.testing.builders import (
     UNIT_SOURCE,
     unit_config,
 )
-from mule_pattern_learner.testing.fake_graph import FakeTigerGraph, retired_query
+from mule_pattern_learner.testing.fake_graph import (
+    EARLIER_SCOPE_TYPES,
+    SCOPE_TYPES,
+    FakeTigerGraph,
+    retired_query,
+)
 from mule_pattern_learner.tigergraph.gsql_text import repository_queries
 from mule_pattern_learner.tigergraph.installer import retired_installed
 
@@ -118,6 +123,29 @@ def test_mule_install_drops_the_retired_queries_once_every_query_is_installed(
     with pytest.raises(RuntimeError, match="Semantic Check"):
         pipeline_prepare.install_queries(unit_config())
     assert retired_installed(graphs[-1]) == list(RETIRED_QUERIES)
+
+
+def test_only_mule_install_replaces_outdated_scope_types(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A graph whose scope types predate the split shares, and no scope uses them.
+    graph = FakeTigerGraph(scope_types=EARLIER_SCOPE_TYPES)
+
+    def connect(transport: TransportConfig) -> FakeTigerGraph:
+        return graph
+
+    monkeypatch.setattr(pipeline_prepare, "connect", connect)
+    # A preparation refuses it, writing nothing, and names the command that replaces it.
+    with pytest.raises(
+        ValueError, match=r"differ from gsql/schema/scope_vertex.gsql.*mule install"
+    ):
+        pipeline_prepare.prepare_dataset(unit_config(), tmp_path / "data")
+    assert graph.writes == [] and graph.scope_types == EARLIER_SCOPE_TYPES
+    result = pipeline_prepare.install_queries(unit_config())
+    assert result["scope_replaced"]["dropped"] and graph.scope_types == SCOPE_TYPES
+    assert (
+        result["installed"] == result["verified"] == list(repository_queries(TRAINING_QUERY_FILES))
+    )
 
 
 def record_graph_steps(monkeypatch: pytest.MonkeyPatch, steps: list[str]) -> None:

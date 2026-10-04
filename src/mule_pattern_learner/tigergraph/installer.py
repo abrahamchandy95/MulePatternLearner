@@ -1,13 +1,16 @@
 """Install and verify the query definitions the training pipeline uses; drop the retired.
 
-Every write (the scope schema change, CREATE, the install request and each DROP) runs
-through the executor with one attempt, so it is never repeated behind the caller's back.
-The output of each GSQL write is recorded in a `gsql` event.
+The scope's types come first: a graph without them gets gsql/schema/scope_vertex.gsql,
+and `mule install` replaces types that differ from it (replace_scope_types). Every write
+(a schema change, CREATE, the install request and each DROP) runs through the executor
+with one attempt, so it is never repeated behind the caller's back. The output of each
+GSQL write is recorded in a `gsql` event.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 import re
 import time
 from typing import Any
@@ -20,6 +23,7 @@ from ..contract.server import (
     TRAINING_QUERY_FILES,
 )
 from ..paths import GSQL_DIR
+from ..runtime.console import plural
 from ..runtime.progress import emit
 from .executor import (
     AVAILABILITY,
@@ -30,6 +34,16 @@ from .executor import (
     failure_class,
 )
 from .gsql_text import calls, definitions, normalized, parameter_names, repository_queries
+from .scope_types import (
+    SCOPE_TYPES_FILE,
+    ScopeTypes,
+    declared_scope_types,
+    drop_job,
+    foreign_scope_edges,
+    graph_scope_types,
+    scope_type_differences,
+    uses_scope_types,
+)
 
 BUILTIN_ENDPOINT_PARAMETERS = frozenset({"query", "read_committed"})
 # How long an install waits for compilation: well over the about 50 minutes that
@@ -38,6 +52,10 @@ INSTALL_DEADLINE_S = 90 * 60.0
 # The problems of query_problems that only a new CREATE resolves.
 MISSING = "is missing on the server"
 DIFFERS = "differs from repository source"
+# The states of a graph's scope types (scope_schema).
+PRESENT, ABSENT, OUTDATED = "present", "missing", "outdated"
+# What TigerGraph answers a schema change job of the graph that succeeded.
+SCHEMA_CHANGED = "Local schema change succeeded"
 
 
 def _write(executor: ConnectionExecutor, text: str, what: str) -> str:
@@ -120,10 +138,162 @@ def verify_sources(
     return list(repository_queries(files))
 
 
-def has_scope_vertex(executor: ConnectionExecutor) -> bool:
-    """Whether the graph schema has the scope vertex type (read-only)."""
+@dataclass(frozen=True)
+class ScopeSchema:
+    """A graph's scope types against gsql/schema/scope_vertex.gsql (scope_schema).
+
+    ``state`` is "present" when they are the same, "missing" when the graph has neither
+    type and "outdated" when they differ, as ``differences`` says in words. ``found``
+    holds the graph's types, and ``foreign_edges`` the edge types the file does not
+    declare that reach the scope vertex type.
+    """
+
+    state: str
+    found: ScopeTypes | None
+    differences: tuple[str, ...]
+    foreign_edges: tuple[str, ...]
+
+
+def scope_schema(executor: ConnectionExecutor) -> ScopeSchema:
+    """The graph's scope types against gsql/schema/scope_vertex.gsql (read-only)."""
     schema = executor.call(lambda conn: conn.getSchema(force=True), what="getSchema")
-    return SCOPE_VERTEX in {v["Name"] for v in schema["VertexTypes"]}
+    declared = declared_scope_types()
+    found = graph_scope_types(schema, declared)
+    differences = tuple(scope_type_differences(found, declared)) if found else ()
+    state = ABSENT if found is None else OUTDATED if differences else PRESENT
+    return ScopeSchema(state, found, differences, tuple(foreign_scope_edges(schema, declared)))
+
+
+def scope_vertices(executor: ConnectionExecutor, schema: ScopeSchema) -> int:
+    """How many scope vertices the graph holds (read-only); 0 without the vertex type."""
+    if schema.found is None or not schema.found.vertex_attributes:
+        return 0
+    raw = executor.call(lambda conn: conn.getVertexCount("*", realtime=True), what="getVertexCount")
+    if not isinstance(raw, dict) or SCOPE_VERTEX not in raw:
+        raise ValueError(f"TigerGraph did not count the {SCOPE_VERTEX} vertices")
+    return int(raw[SCOPE_VERTEX])
+
+
+def outdated_scope(schema: ScopeSchema) -> str:
+    """How a graph's outdated scope types differ, as the messages about them begin."""
+    return f"The graph's scope types differ from gsql/{SCOPE_TYPES_FILE}: " + "; ".join(
+        schema.differences
+    )
+
+
+def _add_scope_types(executor: ConnectionExecutor) -> str:
+    """Apply gsql/schema/scope_vertex.gsql; what TigerGraph answered."""
+    output = _write(executor, (GSQL_DIR / SCOPE_TYPES_FILE).read_text(), "scope schema change")
+    if SCHEMA_CHANGED not in output:
+        raise RuntimeError(output)
+    return output
+
+
+def _on_server(executor: ConnectionExecutor, name: str) -> str | None:
+    """A query's text on the server (SHOW QUERY), installed or not; None without it."""
+    return definitions(_show_query(executor, name)).get(name)
+
+
+def _callers_first(names: list[str], texts: dict[str, str]) -> list[str]:
+    """names in an order that drops each query before every one of them it calls."""
+    ordered, left = [], list(names)
+    while left:
+        free = [name for name in left if not any(calls(texts[o], name) for o in left if o != name)]
+        if not free:
+            raise RuntimeError(f"The queries {left} call one another")
+        ordered += free
+        left = [name for name in left if name not in free]
+    return ordered
+
+
+def scope_dependents(
+    executor: ConnectionExecutor, declared: ScopeTypes
+) -> tuple[list[str], list[str]]:
+    """The queries a replacement of the scope types drops, callers first, and those it may not.
+
+    The first are the repository's queries (the training, evaluation and analytics
+    files) on the server whose text there names a scope type, with the repository's
+    queries on the server that call them. The second are the installed queries that no
+    repository file defines and that name a scope type or call one of the first: a
+    replacement would break them, and it never touches them (read-only).
+    """
+    repository = repository_queries((*TRAINING_QUERY_FILES, *ANALYTICS_QUERY_FILES))
+    texts = {name: text for name in repository if (text := _on_server(executor, name)) is not None}
+    using = {name for name, text in texts.items() if uses_scope_types(text, declared)}
+    dependents = _with_callers(using, {name: ("", text) for name, text in texts.items()})
+    others = []
+    for name in sorted(set(installed_endpoints(executor)) - set(repository)):
+        text = _on_server(executor, name) or ""
+        if uses_scope_types(text, declared) or any(calls(text, d) for d in dependents):
+            others.append(name)
+    return _callers_first([name for name in texts if name in dependents], texts), others
+
+
+def replace_scope_types(executor: ConnectionExecutor, schema: ScopeSchema) -> dict[str, Any]:
+    """Replace a graph's outdated scope types with gsql/schema/scope_vertex.gsql's.
+
+    It refuses, and changes nothing, while the graph holds a scope vertex (replacing the
+    types would delete every scope), while an edge type that the file does not declare
+    reaches the scope vertex type, or while an installed query that no repository file
+    defines uses the types or calls a query that does. Otherwise it drops the
+    repository's queries that use the types, callers first (scope_dependents), since
+    TigerGraph drops no type a query uses; drops the graph's scope edge type and vertex
+    type in a schema change job; applies scope_vertex.gsql; and checks that the graph's
+    types are now the file's. It returns the differences it found and the queries it
+    dropped, which install then installs again with every other training query.
+    """
+    found = schema.found
+    if found is None:
+        raise ValueError("The graph has no scope types to replace")
+    outdated = outdated_scope(schema)
+    scopes = scope_vertices(executor, schema)
+    if scopes:
+        held = plural(scopes, f"{SCOPE_VERTEX} vertex", f"{SCOPE_VERTEX} vertices")
+        raise ValueError(
+            f"{outdated}. The graph holds {held}, "
+            "which replacing the types would delete, so nothing was changed. Clear the "
+            "graph's data and load it again, as docs/how-to/set-up-a-graph.md describes, "
+            "then run `mule install` again."
+        )
+    if schema.foreign_edges:
+        raise ValueError(
+            f"{outdated}. The edge types {', '.join(schema.foreign_edges)}, which no "
+            f"repository file declares, reach {SCOPE_VERTEX}, so nothing was changed: "
+            "drop them, then run `mule install` again."
+        )
+    declared = declared_scope_types()
+    dependents, others = scope_dependents(executor, declared)
+    if others:
+        raise ValueError(
+            f"{outdated}. The queries {', '.join(others)}, which no repository file defines, "
+            "use the scope types or call a query that does, so nothing was changed: drop or "
+            "change them, then run `mule install` again."
+        )
+    emit(
+        {
+            "event": "scope_types",
+            "replacing": list(schema.differences),
+            "dropping": dependents,
+        }
+    )
+    for name in dependents:
+        output = _write(
+            executor, f"USE GRAPH {GRAPH_NAME}\nDROP QUERY {name}", "DROP QUERY " + name
+        )
+        if _on_server(executor, name) is not None:
+            raise RuntimeError(f"DROP QUERY {name} left it on the server: {output}")
+    output = _write(executor, drop_job(found), "scope schema drop")
+    if SCHEMA_CHANGED not in output:
+        raise RuntimeError(output)
+    added = _add_scope_types(executor)
+    after = scope_schema(executor)
+    if after.state != PRESENT:
+        raise RuntimeError(
+            f"The scope types still differ from gsql/{SCOPE_TYPES_FILE} after they were "
+            f"replaced: {'; '.join(after.differences) or 'they are missing'}"
+        )
+    emit({"event": "scope_types", "replaced": list(schema.differences), "dropped": dependents})
+    return {"differences": list(schema.differences), "dropped": dependents, "output": added}
 
 
 def _installation_state(status: Any) -> str:
@@ -198,12 +368,19 @@ def install(
     executor: ConnectionExecutor,
     *,
     analytics: bool = False,
+    replace_scope: bool = False,
     deadline_s: float = INSTALL_DEADLINE_S,
     poll_s: float = 30.0,
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
 ) -> dict[str, Any]:
     """Create and install only the stale queries; the retired ones stay (drop_retired).
+
+    The scope types come first (scope_schema). A graph without them gets
+    gsql/schema/scope_vertex.gsql. One whose types differ from the file is refused
+    unless ``replace_scope``, which only `mule install` sets: replace_scope_types then
+    replaces them, and every query of the files is installed, whatever its text, with
+    the -force flag, since TigerGraph otherwise skips a query it has installed.
 
     A query is stale when SHOW QUERY differs from the repository, its endpoint is
     missing or disabled, or its endpoint parameters differ (see query_problems);
@@ -225,16 +402,21 @@ def install(
     then names the queries installed and the seconds it took.
     """
     logs: dict[str, Any] = {}
-    if not has_scope_vertex(executor):
-        migration = GSQL_DIR / "schema/scope_vertex.gsql"
-        result = _write(executor, migration.read_text(), "scope schema change")
-        if "Local schema change succeeded" not in result:
-            raise RuntimeError(result)
-        logs["scope_schema"] = result
+    scope = scope_schema(executor)
+    if scope.state == OUTDATED:
+        if not replace_scope:
+            raise ValueError(
+                f"{outdated_scope(scope)}. Run `mule install`, which replaces them while the "
+                "graph holds no scope vertex."
+            )
+        logs["scope_replaced"] = replace_scope_types(executor, scope)
+    elif scope.state == ABSENT:
+        logs["scope_schema"] = _add_scope_types(executor)
+    every = "scope_replaced" in logs
     files = (*TRAINING_QUERY_FILES, *(ANALYTICS_QUERY_FILES if analytics else ()))
     queries = repository_queries(files)
     problems = query_problems(executor, files)
-    stale = _with_callers(set(problems), queries)
+    stale = set(queries) if every else _with_callers(set(problems), queries)
     names = [name for name in queries if name in stale]
     texts = {name for name, issues in problems.items() if {MISSING, DIFFERS} & set(issues)}
     created = _with_callers(texts, queries)
@@ -262,8 +444,9 @@ def install(
     status: Any = None
     try:
         with executor.client.request_timeout(read_s=deadline_s):
+            flag = {"flag": "-force"} if every else {}
             status = executor.call(
-                lambda conn: conn.installQueries(names, wait=False),
+                lambda conn: conn.installQueries(names, wait=False, **flag),
                 what="installQueries",
                 attempts=1,
             )

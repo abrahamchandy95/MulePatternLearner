@@ -243,6 +243,18 @@ def _drop_retired(record: Mapping[str, Any]) -> str | None:
     return f"Dropped {retired}: {', '.join(dropped)}"
 
 
+def _scope_types(record: Mapping[str, Any]) -> str:
+    if "replacing" in record:
+        line = f"Replacing the scope vertex type ({'; '.join(record['replacing'])})"
+        dropping = record["dropping"]
+        if dropping:
+            queries = plural(len(dropping), "query", "queries")
+            use = "uses" if len(dropping) == 1 else "use"
+            line += f": dropping the {queries} that {use} it first"
+        return line + "..."
+    return "Replaced the scope vertex type; every training query is installed again"
+
+
 def _scope(record: Mapping[str, Any]) -> str | None:
     # A scope found in place, or the end of its creation, adds nothing to read.
     if record.get("creating"):
@@ -491,6 +503,7 @@ LINES: dict[str, Line] = {
     "install_wait": _install_wait,
     "installed": _installed,
     "drop_retired": _drop_retired,
+    "scope_types": _scope_types,
     "scope": _scope,
     "reveal": _reveal,
     "hubs": _nothing,

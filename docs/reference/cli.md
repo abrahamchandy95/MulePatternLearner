@@ -47,7 +47,7 @@ keeps its cause
 
 | Stage | Run by | TigerGraph work | Writes to TigerGraph |
 |---|---|---|---|
-| Install the queries | `mule install`, and every preparation that connects | Creates and compiles the stale training queries and their callers; `mule install` alone then drops the retired names still installed | The query catalog, and the scope vertex type if it is missing |
+| Install the queries | `mule install`, and every preparation that connects | Creates and compiles the stale training queries and their callers; `mule install` alone replaces an outdated scope vertex type and then drops the retired names still installed | The query catalog, and the scope vertex type if it is missing or, by `mule install` alone, outdated |
 | Create the scope | the first preparation, when `scope.id` does not exist | Partitions every Account and Party into train, validation and test | One scope vertex and one membership edge per Account and Party |
 | Reveal the known mules | the first preparation, on a graph without known labels | Simulates each mule's discovery and reveals up to 20 per split | The label fields of every internal Account |
 | Prepare the dataset | `mule train`, `mule diagnose` and the experiments script when no ready dataset exists | Installs the stale queries (above), then pages the population, resolves the cutoffs, builds the hub registry | Only the install |
@@ -65,7 +65,7 @@ keeps its cause
 | [`mule score ACCOUNTS [DATE]`](#mule-score-accounts-date) | Scores the accounts listed in a file with the built-in run's model | no |
 | [`mule check`](#mule-check) | Read-only readiness, then one training batch's digests and first loss | no |
 | [`mule diagnose [ANALYSIS]`](#mule-diagnose-analysis) | The diagnostic study of the built-in run's dataset | the analytics queries where their text differs |
-| [`mule install`](#mule-install) | Installs the queries whose text differs and drops the retired ones | the query catalog, and the scope vertex type if missing |
+| [`mule install`](#mule-install) | Installs the queries whose text differs and drops the retired ones | the query catalog, and the scope vertex type if missing or outdated |
 
 ## mule train
 
@@ -152,7 +152,9 @@ rejections apart. [Score new accounts](../how-to/score-new-accounts.md) has an e
 ## mule check
 
 Read-only readiness of the graph and the built-in run, shown as a checklist (`[x]` ready,
-`[ ]` not ready, `[-]` for information): whether the scope vertex type exists, whether the
+`[ ]` not ready, `[-]` for information): whether the scope vertex type exists as
+`gsql/schema/scope_vertex.gsql` declares it (an outdated one with how it differs, and
+what to run: `mule install` replaces it while the graph holds no scope vertex), whether the
 training queries are installed with the repository's text (naming the stale ones), which
 retired queries are still installed, on a CUDA host what the cuGraph probe found, and
 whether the built-in run's dataset is prepared in `data/`. When everything is ready it
@@ -163,9 +165,11 @@ context cache, so the installed context query and its first Fourier spot check r
 The checklist's last item gives the batch's roots, context requests and seconds, the
 step's `loss` and `objective` to six decimals, and one digest of the batch's tensors. Two
 code versions that show the same digest and loss on one machine and device built the
-same first batch and step. It ends "Ready to train.", or "Not ready" with the commands to
-run (`mule install`, then `mule train`), and the command then exits 1. The full report
-goes to `results/check.json`, replaced each time: `queries` (`up_to_date`, `stale` and
+same first batch and step. It ends "Ready to train.", or "Not ready" with what to do
+(`mule install`, then `mule train`, after clearing the graph's data and loading it again
+when scopes use an outdated scope vertex type), and the command then exits 1. The full
+report goes to `results/check.json`, replaced each time: `scope_schema` and
+`scope_outdated`, `queries` (`up_to_date`, `stale` and
 `retired`), `cugraph`, `dataset`, `first_step` (the REST calls, retries and seconds, the
 stub and rejected counts, the sampler backend, the digest of every batch tensor in
 `tensor_digests` and their one `batch_digest`, `loss` and `objective`), `problems` and
@@ -198,10 +202,14 @@ installed queries named on `contract.server.RETIRED_QUERIES`, callers first, and
 installed queries that no repository file defines without touching them. Every
 preparation that connects installs the same way but drops nothing: code from before the
 rename calls the retired names, so run `mule install` once no job of that code runs
-anywhere. [Queries](queries.md#installation) describes staleness, the 90-minute wait and
-the retired names. It says what it installs and drops as it goes, and its summary how many
-training queries are installed with the repository's text and which installed queries no
-repository file defines.
+anywhere. A scope vertex type that differs from `gsql/schema/scope_vertex.gsql` is
+replaced first, while the graph holds no scope vertex, and every training query is then
+installed; only `mule install` does this, and the other commands refuse such a type
+([Queries](queries.md#the-scope-types)). [Queries](queries.md#installation) describes
+staleness, the 90-minute wait and the retired names. It says what it installs, replaces
+and drops as it goes, and its summary how many training queries are installed with the
+repository's text, whether it replaced the scope vertex type and which installed queries
+no repository file defines.
 
 ## The scripts
 

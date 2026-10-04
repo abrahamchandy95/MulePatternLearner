@@ -7,7 +7,8 @@ rest. [Schema](../reference/schema.md) describes the graph and
 
 Never run these steps on a populated graph: `schema.gsql` is fresh-graph DDL, and a
 schema change can invalidate compiled queries and positional loading jobs. To load the
-data again, recreate the graph and follow every step.
+data again, recreate the graph and follow every step, or reuse the graph
+([Reuse a graph](#reuse-a-graph)).
 
 ## 1. Create the graph
 
@@ -61,7 +62,9 @@ mule install
 ```
 
 It adds the `Temporal_Training_Scope` vertex type (`gsql/schema/scope_vertex.gsql`), then
-creates and installs the training queries of `gsql/queries/` and `gsql/evaluation/`.
+creates and installs the training queries of `gsql/queries/` and `gsql/evaluation/`. On a
+graph whose scope vertex type differs from that file, it replaces the type first
+([Reuse a graph](#reuse-a-graph)).
 Compiling them takes about 50 minutes, most of it the context query. The command waits
 up to 90 minutes for the compilation; if that runs out, wait until `mule check` no longer
 lists stale training queries, then run it again, and it installs only what is still
@@ -106,6 +109,38 @@ ends "Not ready" until a dataset exists. The first `mule train` then, in order:
 Relationships and business attributes are never changed: the scope and the label
 fields are the only writes, and a graph that already has the scope and known labels is
 only read.
+
+## Reuse a graph
+
+A graph that already has the schema and the queries is loaded again without being
+recreated, in this order:
+
+1. Clear its data in the GSQL shell:
+
+   ```gsql
+   CLEAR GRAPH STORE
+   ```
+
+   It deletes every vertex and edge, the scopes and the revealed labels included, and
+   keeps the schema and the installed queries. It clears every graph of the instance, so
+   run it only when no other graph shares the instance; otherwise recreate the graph and
+   follow every step above.
+2. Push the data again ([Load the data](#2-load-the-data)).
+3. Run `mule install`. It installs what is stale, as on any graph, and replaces a
+   `Temporal_Training_Scope` type that differs from `gsql/schema/scope_vertex.gsql`, such
+   as one created before the scope recorded its split shares, which `mule check` reports
+   as outdated. To replace it, it drops the repository's queries that use the scope types
+   (the context, scope, hub, reveal and analytics context queries), callers first, drops
+   the old scope edge and vertex types in a schema change job, applies
+   `scope_vertex.gsql` and installs every training query, whatever its text: about 50
+   minutes, as on a fresh graph. It refuses, and changes nothing, while the graph holds a
+   scope vertex, which replacing the type would delete, or while a query or an edge type
+   that no repository file defines uses the scope types, which it never touches. `mule
+   train` and `mule diagnose` refuse an outdated type and say to run `mule install`.
+4. Run `mule train`, which creates the scope and reveals the known mules on the new data
+   ([Prepare and train](#6-prepare-and-train)). A dataset in `data/` prepared before the
+   clear with the same `scope.id` describes a scope that is gone: give the run a new
+   `scope.id` first ([After the data changes](#after-the-data-changes)).
 
 ## After the data changes
 
