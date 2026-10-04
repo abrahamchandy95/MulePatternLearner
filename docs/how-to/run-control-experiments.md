@@ -169,9 +169,11 @@ validation audit AP and marks the test audit "for reporting, not selection".
   consistent delta as a lead to repeat.
 - **Seed ensembles** combine each variant's seeds (two or more) into one model: their
   scores of the accounts every audit scored, averaged on the log-odds scale, audited on
-  validation and test as a run is, with the AP's interval over the same replicates. On
-  the log-odds scale a seed that is confident about an account weighs more than a
-  hesitant one, where averaging ranks would give every seed the same say. report.md
+  validation and test with a run's ranking metrics. Like the seed means, an ensemble has
+  an interval for its AP alone, over the same replicates; a run's audit report has one
+  for every ranking metric. On the log-odds scale a seed that is confident about an
+  account weighs more than a hesitant one, where averaging ranks would give every seed
+  the same say. report.md
   ranks them in a section of their own beside the mean of each variant's seeds, and
   `comparison_ap.png` draws each as a hollow diamond below its variant's mean. An
   ensemble above the mean of its seeds gains from their disagreement: a method question

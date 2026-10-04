@@ -26,10 +26,11 @@ left out of the pairing, and comparison.csv counts them.
 A variant's seed ensemble combines its complete seeds (two or more) into one ranking of
 those shared accounts, their scores averaged on the log-odds scale
 (metrics.log_odds_mean, whose docstring gives the trade-off against averaging ranks).
-Each ensemble is audited as a run is, on validation and test: the ranking metrics of
-the audit, and the AP's 90% interval over the same replicates. summary.csv gives its
-metrics in rows of status "ensemble" without a seed, and comparison.csv a row of its own
-after the seed means (estimate "ensemble" against "seed_mean").
+Each ensemble is audited on validation and test with the ranking metrics of a run's
+audit but, like the seed means, has an interval for its AP alone (90%, over the same
+replicates), where a run's audit report has one for every ranking metric. summary.csv
+gives its metrics in rows of status "ensemble" without a seed, and comparison.csv a row
+of its own after the seed means (estimate "ensemble" against "seed_mean").
 """
 
 from __future__ import annotations
@@ -258,11 +259,11 @@ def paired_split(runs: Sequence[SuiteRun], split: str) -> PairedSplit | None:
 
 @dataclass(frozen=True)
 class Ensemble:
-    """A variant's seed ensemble on a split's shared accounts, audited as a run is.
+    """A variant's seed ensemble on a split's shared accounts, audited on a run's metrics.
 
     ``seeds`` are the seeds it combines, ``metrics`` the audit's ranking metrics
     (metrics.ranking_metrics) and ``interval`` the 90% interval of its AP over the
-    split's shared replicates.
+    split's shared replicates: as for the seed means, the AP alone has one.
     """
 
     seeds: tuple[int, ...]

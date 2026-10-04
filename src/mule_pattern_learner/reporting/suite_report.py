@@ -637,12 +637,13 @@ def ensemble_section(files: SuiteFiles) -> list[str]:
         "",
         "Each variant's seeds combined into one model: their scores of the accounts every "
         "audit scored, averaged on the log-odds scale, then audited on validation and test "
-        "as a run is. On that scale a seed that is confident about an account weighs more "
+        "with a run's ranking metrics. On that scale a seed that is confident about an account weighs more "
         "than a hesitant one, where averaging the seeds' ranks would give each the same say. "
         "Ranked by the ensemble's validation audit AP, with its "
         f"{INTERVAL:.0%} interval over the same paired replicates (the audit sample's "
         "uncertainty, for these seeds), beside the mean of its seeds' own AP: an ensemble "
-        "above that mean gains from the seeds' disagreement.",
+        "above that mean gains from the seeds' disagreement. As for the seed means, only "
+        "the AP has an interval; a run's audit report has one for every ranking metric.",
         "",
         *table(header, rows),
         "",
