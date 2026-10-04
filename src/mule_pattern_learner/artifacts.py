@@ -331,13 +331,20 @@ def read_summary(path: Path) -> pd.DataFrame:
 
 
 def read_comparison(path: Path) -> pd.DataFrame:
-    """A suite's comparison.csv: one row per variant, in the suite's order."""
-    frame = _read_table(path, COMPARISON_TEXT)
-    if frame.columns[0] != "variant":
+    """A suite's comparison.csv: a row per variant, in the suite's order, then per ensemble.
+
+    The estimate column tells the two apart. A table whose first columns are not variant
+    and estimate is refused: one written before the seed ensembles is rewritten, from the
+    runs' own files, by running the experiments script again.
+    """
+    leading = tuple(pd.read_csv(path, nrows=0).columns[:2])
+    if leading != ("variant", "estimate"):
         raise ValueError(
-            f"{path} is not a comparison table: its first column is {frame.columns[0]}"
+            f"{path} is not a comparison table of this code: its first columns are "
+            f"{list(leading)}, not variant and estimate; run scripts/run_experiments.py "
+            "again to rewrite the suite's tables from its runs"
         )
-    return frame
+    return _read_table(path, COMPARISON_TEXT)
 
 
 # A diagnostic study's tables (results/diagnostics/<dataset id>/<analysis>.csv), which the

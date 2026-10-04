@@ -24,6 +24,7 @@ from mule_pattern_learner.artifacts import (
     file_digest,
     keep_history,
     pending_path,
+    read_comparison,
     read_epochs,
     read_history,
     read_json,
@@ -212,3 +213,14 @@ def test_the_outputs_reference_names_every_file_column_and_figure() -> None:
     ]
     tables = [f"{name}.csv" for name in DIAGNOSTIC_TABLES]
     assert [name for name in (*files, *columns, *figures, *tables) if name not in named] == []
+
+
+def test_a_comparison_table_of_earlier_code_is_refused_with_what_to_do(tmp_path: Path) -> None:
+    path = tmp_path / "comparison.csv"
+    # A comparison.csv written before the seed ensembles, without the estimate column.
+    path.write_text("variant,question,changes,seeds,validation_ap\nbaseline,q,,42,0.1\n")
+    with pytest.raises(ValueError, match="run scripts/run_experiments.py again"):
+        read_comparison(path)
+    path.write_text("variant,estimate,question,changes,seeds,differs\nbaseline,seed_mean,q,,42,\n")
+    frame = read_comparison(path)
+    assert frame.estimate.tolist() == ["seed_mean"] and frame.changes.tolist() == [""]
