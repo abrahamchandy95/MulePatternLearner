@@ -65,19 +65,21 @@ each variant, so many more runs are affordable.
 
 1. **The spread between seeds is as large as the differences between variants.** The
    baseline's three seeds have a standard deviation of 0.081 around a mean of 0.106, and
-   every difference but `prior_weight`'s and the pool counts' is smaller. A comparison of
-   three seeds a variant mostly measures which seeds were drawn, and the paired interval
-   of the time, which resampled the audit sample alone, could not show it.
-2. **Selection on 11 revealed validation mules picks very early epochs, for every
-   variant.** The baseline's selected epoch was 2.7 on average, `no_attention`'s 2.3 and
-   `drop_time_encoding`'s 1.3: at 100 steps an epoch, the kept weights had trained about
-   230 to 270 steps, and 130 for the drop. With 16 of each step's 64 roots drawn from the
-   20 revealed training mules, each had been seen only about 100 to 220 times by then,
-   and the moving average of the weights, whose span grows with the steps until step 890,
-   averaged only about the last 13 to 27 steps. The proxy AP of 11 mules hangs on where
-   the top few rank, so an early epoch that ranks them well wins, and training stops six
-   epochs later. That adds variance to every variant, and it blurs `no_weight_average`'s
-   question: so early, the average and the raw weights are close.
+   every difference but `prior_weight`'s and the pool counts' is smaller. With three
+   seeds a variant, a comparison mostly measures which seeds were drawn, and the paired
+   interval of the time, which resampled the audit sample alone, could not show it.
+2. **Selection on 11 revealed validation mules picked very early epochs for the
+   baseline, `no_attention` and `drop_time_encoding`.** Their selected epochs were 2.7,
+   2.3 and 1.3 on average, while `no_slot_sum` and `no_pool_counts`, of lower mean APs,
+   selected late ones (8.3 and 9.0). At 100 steps an epoch, the weights the three early
+   variants kept had trained about 230 to 270 steps, and 130 for the drop. With 16 of
+   each step's 64 roots drawn from the 20 revealed training mules, each had been seen
+   only about 100 to 220 times by then, and the moving average of the weights, whose
+   span grows with the steps until step 890, averaged only about the last 13 to 27
+   steps. The proxy AP of 11 mules hangs on where the top few rank, so an early epoch
+   that ranks them well wins, and training stops six epochs later. That adds variance to
+   the variants that stop early, and since the baseline is one of them it blurs
+   `no_weight_average`'s question: so early, the average and the raw weights are close.
 3. **The audit has 33 validation mules.** Its intervals are wide, so differences of a few
    hundredths of AP need many seeds, or more mules, to be told apart.
 
