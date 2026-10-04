@@ -240,6 +240,12 @@ def test_a_comparison_table_of_earlier_code_is_refused_with_what_to_do(tmp_path:
     path.write_text("variant,question,changes,seeds,validation_ap\nbaseline,q,,42,0.1\n")
     with pytest.raises(ValueError, match="run scripts/run_experiments.py again"):
         read_comparison(path)
+    # One written before the audits led with the hidden mules, without their AP.
     path.write_text("variant,estimate,question,changes,seeds,differs\nbaseline,seed_mean,q,,42,\n")
+    with pytest.raises(ValueError, match=r"no validation_hidden_ap.*run scripts/run_experiments"):
+        read_comparison(path)
+    header = "variant,estimate,question,changes,seeds,differs,validation_hidden_ap"
+    path.write_text(f"{header}\nbaseline,seed_mean,q,,42,,0.25\n")
     frame = read_comparison(path)
     assert frame.estimate.tolist() == ["seed_mean"] and frame.changes.tolist() == [""]
+    assert frame.validation_hidden_ap.tolist() == [0.25]

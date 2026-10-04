@@ -6,6 +6,8 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from mule_pattern_learner.contract.feature_groups import CORE_GROUPS
 from mule_pattern_learner.contract.server import QUERY_FILES
 from mule_pattern_learner.data import manifest as data_manifest
@@ -110,6 +112,12 @@ def test_a_manifest_names_its_dataset_and_the_frozen_source_it_was_prepared_from
     changed["source"]["source_counts"]["Account"] += 1
     assert data_manifest.source_fingerprint(changed) != source
     assert data_manifest.recorded_dataset_id(changed) == data_manifest.recorded_dataset_id(manifest)
+    # A dataset of earlier code, whose scope settings record no split shares, is refused
+    # with a message that names them.
+    earlier = deepcopy(manifest)
+    del earlier["source"]["settings"]["scope"]["shares"]
+    with pytest.raises(ValueError, match=r"records no scope shares \(scope.train_share.*aside"):
+        data_manifest.prepared_source(earlier)
 
 
 def test_query_files_are_compared_by_their_path_and_text() -> None:

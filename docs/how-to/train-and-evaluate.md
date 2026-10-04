@@ -258,7 +258,9 @@ This code reads only the datasets and models it writes:
   `mule train` prepares a new one (about 6 minutes). A dataset prepared from other query
   texts is refused ("was built from different GSQL sources"): run `mule install`, move the
   directory aside (its `contexts/` goes with it; nothing deletes it), and run `mule train`
-  to prepare it again.
+  to prepare it again. So is a dataset whose scope settings record no split shares
+  ("records no scope shares"), prepared by earlier code from a scope split 70, 15 and 15%:
+  move it aside, and `mule train` prepares a new one.
 - **A model** must record `SavedModel.FORMAT` and this code's contract fingerprint, so a
   `model.pt` of earlier code is refused. Train it again with this code.
 

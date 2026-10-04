@@ -273,7 +273,9 @@ variants. A seed ensemble's row holds its own AP and the 90% interval of it over
 paired replicates for each split, of the hidden mules and of every mule, and its ROC AUC,
 recall and precision without intervals: like the seed means, an ensemble has an interval
 for its AP alone, where a run's audit report has one for every ranking metric. It has no
-spread, no delta, no consistency and no run values.
+spread, no delta, no consistency and no run values. A `comparison.csv` of earlier code,
+without the `estimate` column or without `validation_hidden_ap`, is refused: run
+`scripts/run_experiments.py` again, which rewrites the suite's tables from its runs.
 
 report.md ranks the variants, and their seed ensembles, by the validation audit AP of
 their hidden mules, with every mule's AP and its delta in the last columns. Its proxy

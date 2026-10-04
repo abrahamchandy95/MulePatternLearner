@@ -127,8 +127,18 @@ class PreparedSource:
 
 
 def prepared_source(manifest: dict[str, Any]) -> PreparedSource:
-    """The graph a dataset was prepared from; a ValueError without its settings."""
+    """The graph a dataset was prepared from; a ValueError without its settings.
+
+    A dataset of earlier code records no split shares in its scope settings, and is
+    refused with a ValueError that names them: its scope was split 70, 15 and 15%.
+    """
     settings = recorded_settings(manifest)
+    if "shares" not in settings["scope"]:
+        raise ValueError(
+            "The dataset records no scope shares (scope.train_share, scope.validation_share "
+            "and scope.test_share): it was prepared by earlier code, from a scope split 70, "
+            "15 and 15%. Move it aside; `mule train` prepares a new one"
+        )
     train, validation, test = settings["scope"]["shares"]
     return PreparedSource(
         counts=dict(manifest["source"]["source_counts"]),

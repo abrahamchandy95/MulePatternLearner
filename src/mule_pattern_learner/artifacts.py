@@ -367,15 +367,24 @@ def read_comparison(path: Path) -> pd.DataFrame:
     """A suite's comparison.csv: a row per variant, in the suite's order, then per ensemble.
 
     The estimate column tells the two apart. A table whose first columns are not variant
-    and estimate is refused: one written before the seed ensembles is rewritten, from the
-    runs' own files, by running the experiments script again.
+    and estimate, one written before the seed ensembles, is refused, and so is one
+    without validation_hidden_ap, written before the audits led with the hidden mules:
+    either is rewritten, from the runs' own files, by running the experiments script
+    again.
     """
-    leading = tuple(pd.read_csv(path, nrows=0).columns[:2])
+    columns = pd.read_csv(path, nrows=0).columns
+    leading = tuple(columns[:2])
     if leading != ("variant", "estimate"):
         raise ValueError(
             f"{path} is not a comparison table of this code: its first columns are "
             f"{list(leading)}, not variant and estimate; run scripts/run_experiments.py "
             "again to rewrite the suite's tables from its runs"
+        )
+    if "validation_hidden_ap" not in columns:
+        raise ValueError(
+            f"{path} is a comparison table of earlier code: it has no validation_hidden_ap, "
+            "the validation audit AP of the hidden mules by which a suite ranks its variants; "
+            "run scripts/run_experiments.py again to rewrite the suite's tables from its runs"
         )
     return _read_table(path, COMPARISON_TEXT)
 
