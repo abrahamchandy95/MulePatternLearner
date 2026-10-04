@@ -1,17 +1,17 @@
 # Features
 
-What the model reads, and what the analytics query computes beside it. Training keeps
-only the feature groups of the built-in run: they are the registry
-`contract.feature_groups.FEATURE_GROUPS`, the training context query
-`fetch_training_context` computes the ones TigerGraph supplies, and the client computes
-the rest. Every other group is analytics: `contract.analytics_features.ANALYTICS_GROUPS`,
-computed only by `fetch_analytics_context` for `mule diagnose`, and no training module may
-import it (the import contract "Training never reads the analytics features").
-[Feature design](../explanation/feature-design.md) explains why the groups are what they
-are; [Time encoding](../explanation/time-encoding.md) explains the Fourier coordinates.
+What the model reads, and what the analytics query computes beside it. Reasons:
+[Feature design](../explanation/feature-design.md); the Fourier coordinates:
+[Time encoding](../explanation/time-encoding.md).
 
-Model columns follow the registry's order, whatever order a configuration lists its
-groups in. Labels, masks, ring ids and learned account embeddings are never features.
+- Training keeps only the built-in run's groups, the registry
+  `contract.feature_groups.FEATURE_GROUPS`. `fetch_training_context` computes those
+  TigerGraph supplies; the client computes the rest.
+- Every other group is analytics, `contract.analytics_features.ANALYTICS_GROUPS`,
+  computed only by `fetch_analytics_context` for `mule diagnose`. No training module may
+  import it (the import contract "Training never reads the analytics features").
+- Model columns follow the registry's order, whatever order a configuration lists them in.
+- Labels, masks, ring ids and learned account embeddings are never features.
 
 ## The training groups
 
@@ -26,40 +26,33 @@ groups in. Labels, masks, ring ids and learned account embeddings are never feat
 | `pool_activity` | the client, from the root's payment messages | summary | 12 counts, below | `pair_history`, `flow_timing` |
 | `pool_internal_inflows` | the client, from the root's payment messages | summary | 3 counts, below | `pair_history` |
 
-The built-in run reads all eight (`BUILT_IN_GROUPS`); the graph model needs
-`message_core`. Without the pool groups the same model is `CORE_GROUPS`.
+The built-in run reads all eight (`BUILT_IN_GROUPS`); without the pool groups it is
+`CORE_GROUPS`. The graph model needs `message_core`.
 
-What the message groups mean:
-
-- **Age** is the context's cutoff minus the event's time; the **pair gap** is the event's
-  time minus the previous event of the same directed pair and rail (`gap_present` is 0
-  when there is none).
-- **Pair history** counts the earlier payments of the same directed pair (relation, rail
-  and counterparty), strictly before the sampled event, and gives the age of the first
-  one. An Account recipient wins over a Token; an unresolved token stays its own
-  counterparty.
-- **Flow timing** measures coincidence, not the movement of the same dollars (the schema
-  has no balances). For an incoming payment it is the delay to the account's next
-  outgoing payment before the cutoff, censored when there is none yet; for an outgoing
-  payment, the time since the previous incoming payment. Both carry the outflow's
-  amount over the inflow's and whether both used the same rail. Only Account contexts
-  have it.
+- **Age**: the context's cutoff minus the event's time. **Pair gap**: the event's time
+  minus the previous event of the same directed pair and rail (`gap_present` 0 if none).
+- **Pair history**: earlier payments of the same directed pair (relation, rail and
+  counterparty) strictly before the sampled event, and the first one's age. An Account
+  recipient wins over a Token; an unresolved token stays its own counterparty.
+- **Flow timing**, for Account contexts only, measures coincidence, not the movement of
+  the same dollars (the schema has no balances). For an incoming payment: the delay to
+  the account's next outgoing payment before the cutoff, censored if none yet. For an
+  outgoing payment: the time since the previous incoming payment. Both carry the
+  outflow's amount over the inflow's and whether both used the same rail.
 
 ### Transforms
 
-Counts, amounts, durations and the flow amount ratio get `log1p`. Flags and the
-entity-type indicators that a group lists under `identity` in the registry pass through
-as they are, and so do `gap_present` and every Fourier coordinate
-(`batching.features.IDENTITY` and its `_fourier_` rule). Missing amounts stay apart from
-real zeros (`amount_present`).
+Counts, amounts, durations and the flow amount ratio get `log1p`. Flags, the entity-type
+indicators a group lists under `identity` in the registry, `gap_present` and every
+Fourier coordinate pass through unchanged (`batching.features.IDENTITY` and its
+`_fourier_` rule). Missing amounts stay apart from real zeros (`amount_present`).
 
 ### The pool groups
 
 Counts over the payment messages of the root's own candidate pool (at most `recent +
-older + distinct` per payment relation, 16 in the built-in run), not over its whole
-history, computed by `batching.pool_counts.pool_activity`. The TGAT model reads them for
-the roots only, in its summary branch, so children and stubs hold zeros there. Every
-count gets `log1p`.
+older + distinct` per payment relation, 16 in the built-in run), not its whole history,
+computed by `batching.pool_counts.pool_activity`. The TGAT model reads them for roots
+only, in its summary branch; children and stubs hold zeros. Every count gets `log1p`.
 
 | Group | Column | Meaning |
 |---|---|---|
@@ -72,13 +65,13 @@ count gets `log1p`.
 
 The first-time and pass-through tests read the per-message `pair_*` and `flow_*` fields,
 which the query computes over the account's whole visible history, so the counts are
-cutoff-safe. The bands, the 24 hours and the 50 to 100 percent are
-`FIRST_INFLOW_BANDS`, `PASS_THROUGH_SECONDS` and `PASS_THROUGH_RATIO` of
-`contract.feature_groups`.
+cutoff-safe. The
+bands, 24 hours and 50 to 100 percent are `FIRST_INFLOW_BANDS`, `PASS_THROUGH_SECONDS`
+and `PASS_THROUGH_RATIO` of `contract.feature_groups`.
 
 ## The model's inputs
 
-For B roots and N distinct contexts of a batch of the built-in run:
+For B roots and N distinct contexts of a built-in run batch:
 
 | Tensor | Shape | Content |
 |---|---|---|
@@ -89,8 +82,8 @@ For B roots and N distinct contexts of a batch of the built-in run:
 | `*_relation`, `*_rail`, `*_channel`, `*_stratum` | slot indices | Categorical codes; the model embeds the relation and the rail |
 | `*_mask`, `root_positions`, `neighbor_positions` | | Padding masks and batch-local positions |
 
-Positions are batch-local: the same account at two cutoffs is two contexts, and no global
-id table exists. Without the pool groups `x` is N x 9.
+Positions are batch-local: the same account at two cutoffs is two contexts, and there is
+no global id table. Without the pool groups `x` is N x 9.
 
 ## What the training query returns
 
@@ -98,10 +91,9 @@ id table exists. Without the pool groups `x` is N x 9.
 `request_index`, `contract_version` (`CONTEXT_CONTRACT`), `basis_id`, the request key
 (`node_type`, `node_id`, `cutoff_seq`, `cutoff_ms`, `scope_id`, `visibility_phase`),
 `diagnostics` (counts of non-USD and visible participations, never model inputs),
-`features` (the node features), `messages` (the candidate pool) and `age_encoding` and
+`features` (node features), `messages` (the candidate pool), and `age_encoding` and
 `gap_encoding` (empty unless the request asked for the Fourier vectors). A rejected
-request gets only its `status` and `request_index`; [Queries](queries.md) lists the
-statuses.
+request gets only `status` and `request_index`; [Queries](queries.md) lists the statuses.
 
 Each message has 27 fields:
 
@@ -115,15 +107,14 @@ Each message has 27 fields:
 | `peer_first_ms`, `peer_external`, `peer_deposit` | The counterparty's first observation and flags |
 
 Association messages carry the tenure's target with the parent's cutoff clocks and no
-payment time. Every message carries its channel and stratum, though no model reads them
-(the loaded data's channels map one to one onto rails).
+payment time. Every message carries its channel and stratum, which no model reads (the
+loaded data's channels map one to one onto rails).
 
 ## The analytics groups
 
-`fetch_analytics_context` takes the training query's parameters with one `include_*`
-flag per group TigerGraph computes (14), computes the training groups exactly as the
-training query does, and adds these. They are hypotheses and controls for analysis; no
-model reads them.
+`fetch_analytics_context` takes the training query's parameters plus one `include_*` flag
+per group TigerGraph computes (14), computes the training groups exactly as the training
+query does, and adds these hypotheses and analysis controls, which no model reads:
 
 | Group | Kind | Columns | Meaning |
 |---|---|---|---|
@@ -138,20 +129,20 @@ model reads them.
 | `pair_window_counts` | message | `pair_count_1h`, `pair_count_1d`, `pair_count_7d` | Earlier payments of the same pair within each window before the message (age less than the window) |
 | `device_ip_context` | message | `device_age_seconds`, `device_present`, `ip_age_seconds`, `ip_present` | Age of the device and IP the payment used, at the payment; the youngest eligible observation when there are several |
 
-The windows, half-lives, ratio bounds and identity relations are constants of
-`contract.analytics_features`. The rows of the analytics query print
-`ANALYTICS_CONTRACT` instead of `CONTEXT_CONTRACT`. `reference.gsql_features` mirrors the
-account aggregates a payment history determines (association counts and identity order
-need the root's associations and are not mirrored), and `pytest -m graph` compares the
-mirror with the installed query.
+- The windows, half-lives, ratio bounds and identity relations are constants of
+  `contract.analytics_features`.
+- Its rows print `ANALYTICS_CONTRACT` instead of `CONTEXT_CONTRACT`.
+- `reference.gsql_features` mirrors the account aggregates a payment history determines
+  (not association counts or identity order, which need the root's associations), and
+  `pytest -m graph` compares the mirror with the installed query.
 
 ## Fingerprints
 
-- **The contract fingerprint** (`contract.feature_groups.contract_fingerprint`) covers
-  what TigerGraph returns: `CONTEXT_CONTRACT`, the time basis, the relations, the rails
-  and the registry's groups other than the pool groups. A saved model records it, and a
-  model of another contract is refused.
-- **The input fingerprint** (`FeaturePlan.fingerprint`) covers a model's inputs: the
-  contract, its groups and its architecture, and, when it reads a pool group, the pool
-  definitions (the bands, the pass-through thresholds and `POOL_ACTIVITY_VERSION`). A
-  model trained under other pool definitions is refused once they change.
+- **Contract fingerprint** (`contract.feature_groups.contract_fingerprint`): what
+  TigerGraph returns, meaning `CONTEXT_CONTRACT`, the time basis, the relations, the
+  rails and the registry's groups other than the pool groups. A saved model records it;
+  a model of another contract is refused.
+- **Input fingerprint** (`FeaturePlan.fingerprint`): a model's inputs, meaning the
+  contract, its groups and architecture, and for a pool group the pool definitions (the
+  bands, the pass-through thresholds and `POOL_ACTIVITY_VERSION`). A model trained under
+  other pool definitions is refused once they change.

@@ -1,32 +1,35 @@
 # Labels
 
-The Account label contract: the attributes that hold each account's mule ground truth,
-its masking and the label available to training, and how training, the audits and the
-loader use them. Labels are never features: no feature, population, cutoff or hub query
-reads them, and the model trains only on the revealed positives. Zelle transfer fraud and
-account mule status are separate targets.
+The Account label contract: mule ground truth, its masking and the label training may
+read. Labels are never features (no feature, population, cutoff or hub query reads them),
+and the model trains only on revealed positives. Zelle transfer fraud is a separate
+target ([Zelle transfer labels](#zelle-transfer-labels)).
 
 ## The Account attributes
 
-Besides `id`, `account_type`, `is_external`, `first_seen_seq` and `first_seen_ts_ms`, an
-Account holds ten supervision fields:
+In load column order (`contract.graph_schema.ACCOUNT_LOAD_COLUMNS`). Positions 5 to 14 are
+the ten supervision fields.
 
-| Attribute | Type and default | Meaning |
-|---|---|---|
-| `is_mule` | INT, 0 | Ground truth: 1 for a mule, 0 for a non-mule when the label is known |
-| `mule_label_known` | BOOL, false | The ground truth is explicitly supplied; false means unknown, not legitimate |
-| `is_mule_masked` | BOOL, true | The positive label is withheld from training |
-| `pu_label` | INT, 0 | 1 for a revealed positive; 0 is unlabelled for positive-unlabelled learning |
-| `mule_label_effective_seq` | UINT, 0 | The first sequence at which the target holds, as the source defines it |
-| `mule_label_effective_ts_ms` | UINT, 0 | The same in UTC epoch milliseconds |
-| `mule_label_available_seq` | UINT, 0 | The sequence at which the label becomes available |
-| `mule_label_available_ts_ms` | UINT, 0 | The same in UTC epoch milliseconds |
-| `mule_ring_id` | INT, -1 | The account's ring of mules; 0 is a valid ring, -1 means none or unknown |
-| `mule_label_source` | STRING, empty | Where the label came from: the generator and version, or the reveal's version, salt and channel |
+| Position | Column | Account attribute | Type | Default | Meaning |
+|---|---|---|---|---|---|
+| 0 | `id` | `id`, the primary id | STRING | | |
+| 1 | `account_type` | `account_type` | STRING | | |
+| 2 | `is_external` | `is_external` | BOOL | | |
+| 3 | `first_seen_seq` | `first_seen_seq` | UINT | | |
+| 4 | `first_seen_ts_ms` | `first_seen_ts_ms` | UINT | | |
+| 5 | `is_mule` | `is_mule` | INT | 0 | Ground truth: 1 mule, 0 non-mule when known |
+| 6 | `mule_label_known` | `mule_label_known` | BOOL | false | Truth supplied; false means unknown, not legitimate |
+| 7 | `is_mule_masked` | `is_mule_masked` | BOOL | true | Positive label withheld from training |
+| 8 | `pu_label` | `pu_label` | INT | 0 | 1 revealed positive, 0 unlabelled (positive-unlabelled learning) |
+| 9 | `mule_label_effective_seq` | `mule_label_effective_seq` | UINT | 0 | First sequence at which the target holds, as the source defines it |
+| 10 | `mule_label_effective_ts_ms` | `mule_label_effective_ts_ms` | UINT | 0 | The same in UTC epoch milliseconds |
+| 11 | `mule_label_available_seq` | `mule_label_available_seq` | UINT | 0 | Sequence at which the label becomes available |
+| 12 | `mule_label_available_ts_ms` | `mule_label_available_ts_ms` | UINT | 0 | The same in UTC epoch milliseconds |
+| 13 | `mule_ring_id` | `mule_ring_id` | INT | -1 | Mule ring; 0 is a valid ring, -1 none or unknown |
+| 14 | `mule_label_source` | `mule_label_source` | STRING | empty | Generator and version, or the reveal's version, salt and channel |
 
 `pu_label = 1` exactly when `mule_label_known AND is_mule == 1 AND NOT is_mule_masked`.
-Masking changes the mask and `pu_label`, never the ground truth, and both change
-together.
+Masking changes the mask and `pu_label` together, never the ground truth.
 
 | Case | `is_mule` | `mule_label_known` | `is_mule_masked` | `pu_label` |
 |---|---:|---|---|---:|
@@ -35,122 +38,97 @@ together.
 | Labelled non-mule | 0 | true | true | 0 |
 | Unknown account | 0 | false | true | 0 |
 
-A labelled non-mule may also have `is_mule_masked = false`; its PU label stays 0.
-Unknown accounts need the masked state, `is_mule = 0` as a placeholder and ring -1, and
-must never be evaluated as negatives.
-
-Every known label needs positive effective clocks and availability clocks at or after
-them, in the sequence domain the payments and association changes share; zero clocks mean
-unspecified and are a violation for a known label. A current `pu_label = 1` is a
-positive for an earlier example only when its availability precedes that example's
-cutoff. The schema holds one ring per account; overlapping memberships would need a
-membership representation of their own.
+- A labelled non-mule may also have `is_mule_masked = false`; its PU label stays 0.
+- An unknown account is masked, with `is_mule = 0` as a placeholder and ring -1, and is
+  never evaluated as a negative.
+- A known label needs positive effective clocks, and availability clocks at or after
+  them, in the sequence domain payments and association changes share. Zero means
+  unspecified: a violation for a known label.
+- A current `pu_label = 1` is a positive for an earlier example only when its
+  availability precedes that example's cutoff.
+- One ring per account; overlapping memberships would need their own representation.
 
 ## What training reads
 
-Training reads only the revealed positives, through the scope population query with
-`include_observed = TRUE` ([`list_scope_accounts`](queries.md#list_scope_accounts)): an
-account is an observed positive exactly when `pu_label == 1 AND is_mule == 1 AND
-mule_label_known AND NOT is_mule_masked`, and only such an account has a discovery time,
-`known_from_ms`, from `mule_label_available_ts_ms`. Every other account, masked mules
-and labelled non-mules included, comes back with `observed_positive` false and
-`known_from_ms` 0, so neither field reveals a withheld label or which accounts are
-labelled.
+Only revealed positives, through [`list_scope_accounts`](queries.md#list_scope_accounts)
+with `include_observed = TRUE`. An observed positive is exactly `pu_label == 1 AND
+is_mule == 1 AND mule_label_known AND NOT is_mule_masked`, and only it gets a discovery
+time, `known_from_ms`, from `mule_label_available_ts_ms`. Every other account, masked
+mules and labelled non-mules included, gets `observed_positive` false and `known_from_ms`
+0, so neither field reveals a withheld label or which accounts are labelled.
 
-The prepared dataset keeps them in `observed_labels.parquet` with the columns
-`account_id`, `known_positive` and `known_from_ms` (`data.observed_labels.LABEL_COLUMNS`).
-An unlisted or zero account is unlabelled, not a confirmed legitimate account. A positive
-is usable at a cutoff only when it was known before it. Oracle columns (`is_mule`, the
-mask, ring ids) are refused by the label interface, and training cannot import the code
-that reads them.
-
-A production system with another label source writes its known positives and their
-discovery times into this contract; the model and the loss need no change. There
-`is_mule = 0` must mean unlabelled unless a case was adjudicated negative, and unknown
-evaluation truth must be absent or -1, never silently a legitimate account.
+- The prepared dataset keeps them in `observed_labels.parquet`: `account_id`,
+  `known_positive`, `known_from_ms` (`data.observed_labels.LABEL_COLUMNS`). An unlisted
+  or zero account is unlabelled, not confirmed legitimate.
+- A positive is usable at a cutoff only when known before it.
+- The label interface refuses oracle columns (`is_mule`, the mask, ring ids); training
+  cannot import the code that reads them.
+- Another label source, as in production, writes its known positives and discovery times
+  into this contract, with no change to the model or loss. There `is_mule = 0` means
+  unlabelled unless adjudicated negative, and unknown evaluation truth is absent or -1,
+  never silently a legitimate account.
 
 ## What the audits read
 
 The ground-truth audits and the diagnostics read every Account's truth through
-[`read_ground_truth`](queries.md#read_ground_truth), as the table
-`contract.graph_schema.TRUTH_COLUMNS`: `account_id`, `is_mule` (1 or 0, and -1 where the
-label is not known), `ring_id` and `label_source`. An account whose label is not known
-counts as unknown, never as a negative.
+[`read_ground_truth`](queries.md#read_ground_truth) as `contract.graph_schema.TRUTH_COLUMNS`:
+`account_id`, `is_mule` (1, 0, or -1 when not known), `ring_id`, `label_source`. An
+unknown label counts as unknown, never as a negative.
 
 ## Who writes the labels
 
-A fresh PhantomLedger load masks every mule, so the first preparation reveals the
-mules a bank would have discovered, once, with
-[`reveal_mule_labels`](queries.md#reveal_mule_labels). It writes every internal Account:
+A fresh PhantomLedger load masks every mule. The first preparation runs
+[`reveal_mule_labels`](queries.md#reveal_mule_labels) once to reveal the mules a bank
+would have discovered ([Label reveal](../explanation/label-reveal.md) explains the
+discovery model). It writes every internal Account:
 
 - `mule_label_known = true`, with effective clocks at its first observation;
-- for a mule, its simulated discovery as availability: the end of its discovery day in
-  UTC and the last sequence at or before it;
-- for a revealed mule, `is_mule_masked = false` and `pu_label = 1`; the others stay
-  masked;
-- `mule_label_source`: the reveal's version and salt, and for a revealed mule the
-  channel that found it.
+- for a mule, availability at its simulated discovery: the end of its discovery day in
+  UTC, and the last sequence at or before it;
+- for a revealed mule, `is_mule_masked = false` and `pu_label = 1`; others stay masked;
+- `mule_label_source`: the reveal's version and salt, plus the channel that found a
+  revealed mule.
 
-External accounts stay unknown, because the generator does not calibrate external mule
-roles. [Label reveal](../explanation/label-reveal.md) explains the discovery model.
+External accounts stay unknown: the generator does not calibrate external mule roles.
 
 ## Loading accounts
 
-The loading job `load_accounts` (`gsql/schema/account_loading.gsql`) reads an
-Account CSV with a header in exactly this column order
-(`contract.graph_schema.ACCOUNT_LOAD_COLUMNS`):
+The loading job `load_accounts` (`gsql/schema/account_loading.gsql`) reads an Account CSV
+with exactly this header. PhantomLedger's mule-temporal export writes its Account table
+in this order, so `load_accounts` reads it as it is.
 
 ```text
 id,account_type,is_external,first_seen_seq,first_seen_ts_ms,is_mule,mule_label_known,is_mule_masked,pu_label,mule_label_effective_seq,mule_label_effective_ts_ms,mule_label_available_seq,mule_label_available_ts_ms,mule_ring_id,mule_label_source
 ```
 
-PhantomLedger's mule-temporal export writes its Account table with these fifteen
-columns in this order, so `load_accounts` reads it as it is. A Kafka loading job, or a
-mapping drawn in the loading UI of GraphStudio or TigerGraph Cloud, maps each column to
-the Account attribute of the same name:
+A Kafka loading job, or a mapping drawn in the loading UI of GraphStudio or TigerGraph
+Cloud, maps each column to the Account attribute of the same name
+([The Account attributes](#the-account-attributes)). Map every column: an unmapped
+attribute keeps its schema default. Unmapped label columns leave every account unknown,
+with no truth to reveal or audit. An unmapped `mule_ring_id` leaves every account at
+-1, no ring, which no check refuses; the audits then resample every mule alone instead
+of with its ring, treating one ring's mules as independent.
 
-| Position | Column | Account attribute | Type |
-|---|---|---|---|
-| 0 | `id` | `id`, the primary id | STRING |
-| 1 | `account_type` | `account_type` | STRING |
-| 2 | `is_external` | `is_external` | BOOL |
-| 3 | `first_seen_seq` | `first_seen_seq` | UINT |
-| 4 | `first_seen_ts_ms` | `first_seen_ts_ms` | UINT |
-| 5 | `is_mule` | `is_mule` | INT |
-| 6 | `mule_label_known` | `mule_label_known` | BOOL |
-| 7 | `is_mule_masked` | `is_mule_masked` | BOOL |
-| 8 | `pu_label` | `pu_label` | INT |
-| 9 | `mule_label_effective_seq` | `mule_label_effective_seq` | UINT |
-| 10 | `mule_label_effective_ts_ms` | `mule_label_effective_ts_ms` | UINT |
-| 11 | `mule_label_available_seq` | `mule_label_available_seq` | UINT |
-| 12 | `mule_label_available_ts_ms` | `mule_label_available_ts_ms` | UINT |
-| 13 | `mule_ring_id` | `mule_ring_id` | INT |
-| 14 | `mule_label_source` | `mule_label_source` | STRING |
-
-Map every column. An unmapped attribute keeps its schema default: unmapped label
-columns leave every account unknown, with no truth to reveal or audit, and an unmapped
-`mule_ring_id` leaves every account at -1, no ring, which no check refuses. The audits
-then resample every mule alone instead of with its ring, so their intervals treat the
-mules of one ring as independent. A positional mapping, as a loading job's `VALUES` list is, follows
-the schema's attribute order, which declares `is_mule` last, after
-`mule_label_source`: by position the values are `$0`, `$1`, `$2`, `$3`, `$4`, `$6` to
+A positional mapping, such as a loading job's `VALUES` list, follows the schema's
+attribute order, which declares `is_mule` last, after `mule_label_source`: by position
+the values are `$0`, `$1`, `$2`, `$3`, `$4`, `$6` to
 `$14`, then `$5`. `load_accounts` lists them in that order, taking each column by its
 header name.
 
-Use integer `0` and `1` for `is_mule` and lowercase `true` and `false` for the flags. A
-header-less PSV export with the same fifteen columns, separated by `|`, works the same.
-Keep the header for server-file loading; the REST++ streaming interface
-(`runLoadingJobWithData`, `runLoadingJobWithFile`) takes data rows without it.
+- Use integer `0` and `1` for `is_mule` and lowercase `true` and `false` for the flags.
+- A header-less PSV export of the same fifteen columns, separated by `|`, works the same.
+- Keep the header for server-file loading; the REST++ streaming interface
+  (`runLoadingJobWithData`, `runLoadingJobWithFile`) takes data rows without it.
+- Derive the ground truth from the simulated account's role, never from an account
+  sending or receiving a fraudulent payment.
+- Give generated non-mules explicit 0 labels, unknown external accounts
+  `mule_label_known = false`, and masked mules their truth, so their recovery can be
+  evaluated.
+- A synthetic mule's effectiveness is its first simulated mule activity; a known
+  synthetic non-mule may use the account's creation for both clocks.
 
-Generate the ground truth from the simulated account's role, never because an account
-sent or received a fraudulent payment. Supply explicit 0 labels for generated non-mules,
-mark unknown external accounts with `mule_label_known = false`, and keep the truth of
-masked mules so their recovery can be evaluated. For synthetic mules, use the first
-simulated mule activity as effectiveness; for known synthetic non-mules the account's
-creation may serve as both clocks.
-
-After loading, check the contract (every violation count must be zero) and read a page of
-the oracle export; the last `account_id` of a page is the `after_id` of the next:
+After loading, check the contract (every violation count must be zero) and read a page
+of the oracle export; a page's last `account_id` is the next page's `after_id`:
 
 ```gsql
 RUN QUERY validate_label_contract()
@@ -160,7 +138,7 @@ RUN QUERY read_ground_truth("", 100)
 ## Zelle transfer labels
 
 `Zelle_Transfer` holds its own supervision: `fraud_label` (-1 unknown, never negative),
-`label_known`, `label_available_seq` and `label_available_ts_ms`. They describe the
+`label_known`, `label_available_seq`, `label_available_ts_ms`. They describe the
 transfer, not the account, and no feature, sampling or aggregate reads them. Only the
-label reveal reads `fraud_label`, as "this payment was a scam"; the verdict arrives at the
-payment instant, so the reveal simulates the reporting and investigation delays itself.
+label reveal reads `fraud_label`, as "this payment was a scam". The verdict arrives at
+the payment instant, so the reveal simulates the reporting and investigation delays.
