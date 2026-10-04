@@ -24,6 +24,7 @@ import pandas as pd
 from ..artifacts import (
     DELTA_METRIC,
     ENSEMBLE,
+    HIDDEN_METRIC,
     PROXY_METRIC,
     SEED_MEAN,
     atomic_write,
@@ -31,13 +32,16 @@ from ..artifacts import (
     read_comparison,
     read_epochs,
     read_json,
+    read_run_config,
     read_run_provenance,
     read_summary,
 )
+from ..config import SELECTION_RULES
 from ..contract.graph_schema import HELD_OUT_SPLITS
 from ..metrics import INTERVAL, REVIEW_BUDGETS, budget_name
 from ..paths import BASELINE_VARIANT, SuitePaths
 from .comparison import (
+    Correlation,
     MeanCurve,
     VariantSeeds,
     mean_capture,
@@ -47,6 +51,7 @@ from .comparison import (
     plot_paired_delta,
     plot_proxy_vs_audit,
     plot_validation_overlay,
+    rank_correlation,
 )
 from .document import (
     Drawing,
@@ -81,7 +86,8 @@ class SuiteFiles:
     validation audit AP, best first, with the variants the audit could not rank last in
     the suite's order; ``ensembles`` its seed-ensemble rows, ranked by their own
     validation audit AP. ``captures`` and ``epochs`` hold each complete run's validation
-    audit sample and epochs.csv, by variant and seed.
+    audit sample and epochs.csv, by variant and seed, and ``rules`` the selection rule
+    (training.selection) of each, by variant and seed.
     """
 
     summary: pd.DataFrame
@@ -90,6 +96,7 @@ class SuiteFiles:
     captures: dict[str, dict[int, SplitScores]]
     epochs: dict[str, dict[int, pd.DataFrame]]
     prevalence: float | None
+    rules: dict[tuple[str, int], str]
 
 
 def complete_runs(summary: pd.DataFrame) -> list[tuple[str, int]]:
@@ -107,9 +114,11 @@ def suite_files(suite: SuitePaths) -> SuiteFiles:
     ensembles = ranked[ranked.estimate == ENSEMBLE].reset_index(drop=True)
     captures: dict[str, dict[int, SplitScores]] = {}
     epochs: dict[str, dict[int, pd.DataFrame]] = {}
+    rules: dict[tuple[str, int], str] = {}
     prevalence = None
     for variant, seed in complete_runs(summary):
         run = suite.run(variant, seed)
+        rules[variant, seed] = read_run_config(run.config).training.selection
         report = read_json(run.audit_report("validation"))
         frame = read_audit_scores(run.audit_scores("validation"))
         captures.setdefault(variant, {})[seed] = SplitScores(
@@ -121,7 +130,7 @@ def suite_files(suite: SuitePaths) -> SuiteFiles:
         epochs.setdefault(variant, {})[seed] = read_epochs(run.epochs)
         if prevalence is None:
             prevalence = read_json(run.metrics)["validation_proxy"].get("prevalence")
-    return SuiteFiles(summary, comparison, ensembles, captures, epochs, prevalence)
+    return SuiteFiles(summary, comparison, ensembles, captures, epochs, prevalence, rules)
 
 
 def _bounds(record: Mapping[str, Any], interval: str | None) -> tuple[float, float] | None:
@@ -316,6 +325,7 @@ def suite_drawings(files: SuiteFiles) -> dict[str, tuple[Drawing, tuple[float, f
     )
     points = proxy_points(files.summary)
     if len(points):
+        correlations = proxy_reliability(points, files.rules)
         drawings["comparison_proxy_vs_audit"] = (
             one(
                 lambda ax: plot_proxy_vs_audit(
@@ -323,9 +333,10 @@ def suite_drawings(files: SuiteFiles) -> dict[str, tuple[Drawing, tuple[float, f
                     points.variant.tolist(),
                     points[PROXY_METRIC].to_numpy(np.float64),
                     points.average_precision.to_numpy(np.float64),
+                    correlations,
                 )
             ),
-            PANEL,
+            (PANEL[0], PANEL[1] + 0.2 * len(correlations)),
         )
     return drawings
 
@@ -345,17 +356,66 @@ def mean_epochs(name: str, epochs: Mapping[int, pd.DataFrame]) -> MeanCurve:
 
 
 def proxy_points(summary: pd.DataFrame) -> pd.DataFrame:
-    """Each complete run's selected proxy AP and validation audit AP (variant, seed, both)."""
+    """Each complete run's selected proxy AP and validation audit AP, in the suite's order.
+
+    One row per run with both: variant, seed, PROXY_METRIC, average_precision and
+    HIDDEN_METRIC, the audit AP on the hidden mules (NaN where the run has none).
+    """
     chosen = summary[
         (summary.status == "complete")
         & (summary.split == "validation")
-        & summary.metric.isin([PROXY_METRIC, "average_precision"])
+        & summary.metric.isin([PROXY_METRIC, "average_precision", HIDDEN_METRIC])
     ]
-    wide = chosen.pivot_table(index=["variant", "seed"], columns="metric", values="value")
+    wide = chosen.pivot_table(
+        index=["variant", "seed"], columns="metric", values="value", sort=False
+    )
     wanted = [PROXY_METRIC, "average_precision"]
     if not set(wanted) <= set(wide.columns):
-        return pd.DataFrame(columns=["variant", "seed", *wanted])
-    return wide.dropna(subset=wanted).reset_index()
+        return pd.DataFrame(columns=["variant", "seed", *wanted, HIDDEN_METRIC])
+    return wide.reindex(columns=[*wanted, HIDDEN_METRIC]).dropna(subset=wanted).reset_index()
+
+
+def proxy_reliability(
+    points: pd.DataFrame, rules: Mapping[tuple[str, int], str]
+) -> list[Correlation]:
+    """How well the validation proxy ranks a suite's models as the validation audit does.
+
+    ``points`` are proxy_points, ``rules`` each run's selection rule. Spearman's rank
+    correlation, each with its n, of the selected epoch's proxy AP with the audit AP:
+    over the runs; over the runs of each selection rule the suite has, since a rule
+    biases the selected proxy AP (a run that selects on it reports the best of its
+    epochs, the others do not); over the variants, by their mean proxy AP and mean audit
+    AP over seeds; and over the runs, against the audit AP on the hidden mules alone,
+    which the proxy never sees.
+    """
+    proxy, audit = points[PROXY_METRIC], points.average_precision
+
+    def over(label: str, rows: pd.Series[bool], against: pd.Series[Any]) -> Correlation:
+        x = np.asarray(proxy[rows], dtype=np.float64)
+        y = np.asarray(against[rows], dtype=np.float64)
+        return Correlation(label, rank_correlation(x, y), len(x))
+
+    every = pd.Series(True, index=points.index)
+    found = [over("runs", every, audit)]
+    chosen = pd.Series(
+        [rules.get((str(v), int(s))) for v, s in zip(points.variant, points.seed, strict=True)],
+        index=points.index,
+    )
+    for rule in SELECTION_RULES:
+        if (chosen == rule).any():
+            found.append(over(f"runs selected on {rule}", chosen == rule, audit))
+    means = points.groupby("variant", sort=False)[[PROXY_METRIC, "average_precision"]].mean()
+    variants = means[PROXY_METRIC].to_numpy(np.float64)
+    found.append(
+        Correlation(
+            "variants, by their seed means",
+            rank_correlation(variants, means.average_precision.to_numpy(np.float64)),
+            len(means),
+        )
+    )
+    hidden = points[HIDDEN_METRIC].notna()
+    found.append(over("runs, audit on the hidden mules", hidden, points[HIDDEN_METRIC]))
+    return found
 
 
 def write_suite_report(suite: SuitePaths) -> dict[str, Any]:
@@ -477,7 +537,7 @@ def suite_text(suite: SuitePaths, files: SuiteFiles) -> str:
                 ),
             ]
         )
-    lines += [*table(header, rows), "", *ensemble_section(files)]
+    lines += [*table(header, rows), "", *ensemble_section(files), *reliability_section(files)]
     test_rows = [
         [
             row["variant"],
@@ -585,6 +645,37 @@ def ensemble_section(files: SuiteFiles) -> list[str]:
         "above that mean gains from the seeds' disagreement.",
         "",
         *table(header, rows),
+        "",
+    ]
+
+
+def reliability_section(files: SuiteFiles) -> list[str]:
+    """report.md's proxy reliability: how the proxy ranks the suite's models against the audit."""
+    points = proxy_points(files.summary)
+    if not len(points):
+        return []
+    rows = [
+        [label, "n/a" if value is None else f"{value:.2f}", str(n)]
+        for label, value, n in proxy_reliability(points, files.rules)
+    ]
+    return [
+        "## Proxy reliability",
+        "",
+        "In real use only the proxy exists: a bank knows a handful of revealed mules and has "
+        "no audit, so it chooses among models by the proxy alone. Spearman's rank "
+        "correlation of the selected epoch's validation proxy AP (on validation's revealed "
+        "mules) with the validation audit AP says how far that choice follows the ground "
+        "truth here; n is the runs or variants it is over. A selection rule picks the epoch "
+        "whose own criterion is best, so a run that selects on the proxy AP reports the best "
+        "of its epochs' values, biased upward, and a run of another rule does not: the "
+        "correlation within each rule compares runs biased alike. The hidden mules are "
+        "those the graph had not revealed, which the proxy never sees; a proxy that follows "
+        "the audit on all mules but not on the hidden ones measures the reveal more than "
+        "detection. A weak correlation means that choosing by the proxy is close to choosing "
+        "at random among these models, and over a few variants even a strong one is "
+        "uncertain.",
+        "",
+        *table(["Correlation over", "Spearman", "n"], rows),
         "",
     ]
 

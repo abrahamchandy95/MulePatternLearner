@@ -97,9 +97,12 @@ SEED_MEAN = "seed_mean"
 # the validation proxy AP of the epoch training selected;
 PROXY_METRIC = "proxy_average_precision"
 # a run's validation audit AP on the accounts every audit of the suite scored, and its
-# difference from the baseline's of the same seed there.
+# difference from the baseline's of the same seed there;
 PAIRED_METRIC = "paired_average_precision"
 DELTA_METRIC = "average_precision_delta"
+# and its validation audit AP on the hidden mules alone: those the graph had not
+# revealed before the cutoff, against the non-mules, which the proxy never sees.
+HIDDEN_METRIC = "hidden_average_precision"
 
 
 def file_digest(path: Path) -> str:

@@ -171,6 +171,13 @@ validation audit AP and marks the test audit "for reporting, not selection".
   `comparison_ap.png` draws each as a hollow diamond below its variant's mean. An
   ensemble above the mean of its seeds gains from their disagreement: a method question
   for a ranking that varies from seed to seed.
+- **The proxy's reliability** says how far a bank, which has only the proxy, could trust
+  it to choose among these models: Spearman's rank correlation of each run's selected
+  validation proxy AP with its validation audit AP, with n beside it, over all runs,
+  within each selection rule (selecting on a criterion biases the selected proxy AP), over
+  the variants' rankings by their seed means, and against the audit on the hidden mules
+  alone, which the proxy never sees. `comparison_proxy_vs_audit.png` draws the runs and
+  gives the same numbers.
 - **`unpaired_accounts`** counts validation accounts some run's audit rejected; they are
   left out of the pairing.
 - **`differs`** lists runs whose commit, dirty state, device or sampler backend differ

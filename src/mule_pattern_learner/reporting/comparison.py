@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from typing import NamedTuple
 
 from matplotlib.axes import Axes
 from matplotlib.lines import Line2D
@@ -376,15 +377,32 @@ def rank_correlation(x: NDArray[np.float64], y: NDArray[np.float64]) -> float | 
     return float(np.corrcoef(rx, ry)[0, 1])
 
 
+class Correlation(NamedTuple):
+    """A Spearman rank correlation of the proxy with the audit: what it is over, its n."""
+
+    label: str
+    value: float | None
+    n: int
+
+    def text(self) -> str:
+        shown = "n/a" if self.value is None else f"{self.value:.2f}"
+        return f"{self.label}: Spearman {shown} (n = {self.n})"
+
+
 def plot_proxy_vs_audit(
-    ax: Axes, names: Sequence[str], proxy: NDArray[np.float64], audit: NDArray[np.float64]
+    ax: Axes,
+    names: Sequence[str],
+    proxy: NDArray[np.float64],
+    audit: NDArray[np.float64],
+    correlations: Sequence[Correlation] = (),
 ) -> Axes:
     """Each run's selected proxy AP against its validation audit AP: is the proxy informative?
 
     One point per run (``names`` holds each run's variant): the proxy AP on validation's
     observed labels at the epoch training selected, and the validation audit AP of the
-    same model. The legend gives Spearman's rank correlation over the runs; a proxy that
-    ranks the runs as the audit does is one to select on.
+    same model. The legend gives Spearman's rank correlation over the runs, and every
+    one of ``correlations`` (the suite's proxy reliability), each with its n; a proxy
+    that ranks the runs as the audit does is one to select on.
     """
     colour = SPLIT_COLOURS["validation"]
     others = np.array([name != BASELINE_VARIANT for name in names], dtype=bool)
@@ -409,13 +427,11 @@ def plot_proxy_vs_audit(
         linestyle="none",
         label="a baseline run",
     )
-    correlation = rank_correlation(proxy, audit)
-    shown = "n/a" if correlation is None else f"{correlation:.2f}"
-    ax.plot(
-        [], [], linestyle="none", label=f"Spearman rank correlation {shown} over {len(names)} runs"
-    )
+    shown = list(correlations) or [Correlation("runs", rank_correlation(proxy, audit), len(names))]
+    for correlation in shown:
+        ax.plot([], [], linestyle="none", label=correlation.text())
     ax.set_xlabel("Selected proxy AP on validation's observed labels")
     ax.set_ylabel("Validation audit AP")
-    legend_below(ax, *ax.get_legend_handles_labels())
+    legend_below(ax, *ax.get_legend_handles_labels(), ncols=1)
     ax.set_title("Proxy selection against the ground-truth audit, per run")
     return ax

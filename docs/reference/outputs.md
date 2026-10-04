@@ -201,13 +201,15 @@ with hyphens.
 | `comparison.csv` | One row per variant, compared with the baseline, then one per seed ensemble |
 | `events.jsonl` | The suite's own events: the plan (`suite`, with the hours its runs to train should take: `estimate_hours` from the suite's finished runs and `bound_hours`), each run's step that finished (`run_finished`) or failed (`run_failed`), the runs moved aside (`run_archived`), an outage (`suite_stopped`), and what came before the dataset's preparation recorded its own (the install, connecting) or a dataset found ready (`dataset`); preparation's go to the dataset's `events.jsonl`, and each run's to the run's |
 | `plots/comparison_*.png` | Six figures |
-| `report.md` | The variants ranked by the validation audit, their seed ensembles, the tables and figures |
+| `report.md` | The variants ranked by the validation audit, their seed ensembles, the proxy's reliability, the tables and figures |
 
 The metrics of `summary.csv` are the audit reports' ranking metrics per split, the run's
 own `best_epoch`, `parameter_count` and `training_hours` (no split), the validation
-`proxy_average_precision`, the validation `paired_average_precision` (on the accounts
-every audit of the suite scored) and, but for the baseline, `average_precision_delta`
-against the baseline's run of the same seed. A run that left no numbers keeps one row
+`proxy_average_precision`, the validation `hidden_average_precision` (the audit AP on the
+hidden mules alone: the revealed mules left out, as in the proxy validity diagnostic), the
+validation `paired_average_precision` (on the accounts every audit of the suite scored)
+and, but for the baseline, `average_precision_delta` against the baseline's run of the
+same seed. A run that left no numbers keeps one row
 without a metric. A variant with two or more complete runs has a seed ensemble: its
 seeds' scores of the accounts every audit scored, averaged on the log-odds scale (each
 clipped 2^-50 from 0 and 1 first), then audited as a run is. Its rows have the status
@@ -239,6 +241,12 @@ variants. A seed ensemble's row holds its own AP and the 90% interval of it over
 paired replicates for each split, and its ROC AUC, recall and precision; it has no spread,
 no delta and no run values.
 
+report.md's proxy reliability gives Spearman's rank correlation of the selected epoch's
+validation proxy AP with the validation audit AP, each with its n: over the complete runs;
+within the runs of each selection rule, since a run that selects on the proxy AP reports
+the best of its epochs' values and the others do not; over the variants, by their seed
+means; and over the runs against the audit on the hidden mules alone.
+
 | Figure | What it shows |
 |---|---|
 | `comparison_ap.png` | Validation and test audit AP per variant: a dot per seed, the seed mean, its interval, the baseline line, and below each mean the seed ensemble as a hollow diamond on its interval |
@@ -246,7 +254,7 @@ no delta and no run values.
 | `comparison_budget.png` | Validation audit recall at 1%, 5% and 10% per variant |
 | `comparison_capture.png` | Seed-mean validation capture curves, one panel per variant with the baseline in each |
 | `comparison_validation.png` | Seed-mean proxy AP per epoch, up to the last epoch every seed trained, one panel per variant with the baseline in each |
-| `comparison_proxy_vs_audit.png` | Selected proxy AP against validation audit AP per run, with Spearman's rank correlation |
+| `comparison_proxy_vs_audit.png` | Selected proxy AP against validation audit AP per run, with the proxy reliability's Spearman rank correlations and their n |
 
 ## A diagnostic study: `results/diagnostics/<dataset id>/`
 

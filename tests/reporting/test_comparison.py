@@ -84,6 +84,12 @@ def test_the_suite_report_ranks_by_validation_and_keeps_test_for_reporting(
     assert "The suite makes 2 comparisons with the baseline, so at 90% about 0.2" in validation
     assert "| Delta from the baseline | Audit-only interval | Seeds that agree |" in validation
     assert len(re.findall(r"\| \d of 2 \|", validation)) == 2
+    # The proxy's reliability, each correlation with its n.
+    reliability = ensembles.split("## Proxy reliability\n")[1]
+    assert "In real use only the proxy exists" in reliability
+    for label, n in (("runs", 6), ("variants, by their seed means", 3)):
+        assert re.search(rf"^\| {label} \| -?\d\.\d\d \| {n} \|$", reliability, re.M), label
+    assert "| runs selected on validation_ap |" in reliability
     assert "| 1 | **baseline** | 42 43 |" in ensembles
     links = re.findall(r"!\[[^\]]+\]\(([^)]+)\)", text)
     assert links == [f"plots/{name}.png" for name in SUITE_FIGURES]

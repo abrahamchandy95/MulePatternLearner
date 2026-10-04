@@ -14,6 +14,7 @@ from mule_pattern_learner.artifacts import (
     DELTA_METRIC,
     ENSEMBLE,
     ENSEMBLE_SEEDS,
+    HIDDEN_METRIC,
     PAIRED_METRIC,
     SEED_MEAN,
     read_comparison,
@@ -30,8 +31,10 @@ from mule_pattern_learner.experiments.tables import (
     FAILED,
     Delta,
     SuiteRun,
+    hidden_ap,
     paired_delta,
     paired_split,
+    run_values,
     seed_ensembles,
     write_tables,
 )
@@ -55,8 +58,18 @@ INCLUSION = [1.0, 1.0, 0.5, 0.5, 0.5, 0.5]
 RINGS = [7, 7, -1, -1, -1, -1]
 
 
-def audited_run(root: Path, name: str, seed: int, scores: list[float], drop: str = "") -> SuiteRun:
-    """A run whose validation audit scored ACCOUNTS (all but drop) with these scores."""
+def audited_run(
+    root: Path,
+    name: str,
+    seed: int,
+    scores: list[float],
+    drop: str = "",
+    revealed: tuple[str, ...] = (),
+) -> SuiteRun:
+    """A run whose validation audit scored ACCOUNTS (all but drop) with these scores.
+
+    The accounts ``revealed`` names are mules the graph revealed before the cutoff.
+    """
     paths = RunPaths.of(name, seed, root)
     paths.audit_scores("validation").parent.mkdir(parents=True)
     frame = pd.DataFrame(
@@ -65,7 +78,7 @@ def audited_run(root: Path, name: str, seed: int, scores: list[float], drop: str
             "is_mule": IS_MULE,
             "inclusion_probability": INCLUSION,
             "score": scores,
-            "revealed": False,
+            "revealed": [account in revealed for account in ACCOUNTS],
             "ring_id": RINGS,
             "label_source": "role",
         }
@@ -186,10 +199,11 @@ def test_summary_csv_lists_every_run_split_and_metric(
     summary = read_summary(suite.summary)
     complete = summary[summary.status == COMPLETE]
     per_run = complete.groupby(["variant", "seed"]).size()
-    # Three run values, the proxy AP, eight audit metrics of each split, the paired AP,
-    # and the delta of every run but the baseline's.
+    # Three run values, the proxy AP, eight audit metrics of each split, the validation
+    # audit AP on the hidden mules, the paired AP, and the delta of every run but the
+    # baseline's.
     assert per_run.to_dict() == {
-        (variant.name, seed): 21 if variant is BASELINE else 22
+        (variant.name, seed): 22 if variant is BASELINE else 23
         for variant in (BASELINE, VARIANTS["no_attention"], VARIANTS["prior_weight"])
         for seed in (42, 43)
     }
@@ -337,3 +351,20 @@ def test_the_log_odds_mean_lets_a_confident_seed_weigh_more_than_a_rank_mean_wou
     clipped = log_odds_mean(np.array([[1.0, 1.0], [0.0, 0.0], [1.0, 0.0]]))
     assert np.isfinite(clipped).all() and 0 < clipped[1] < clipped[2] < clipped[0] < 1
     assert clipped[2] == pytest.approx(0.5)
+
+
+def test_a_runs_audit_ap_on_its_hidden_mules_leaves_the_revealed_out(tmp_path: Path) -> None:
+    # Mule a was revealed. The baseline ranks the hidden mule b above every non-mule:
+    # AP 1. prior_weight ranks c, f and e (weight 2 each) above b: AP 1 / (1 + 6).
+    revealed = ("a",)
+    baseline = audited_run(tmp_path, "baseline", 1, [0.9, 0.8, 0.7, 0.1, 0.2, 0.3], "", revealed)
+    other = [0.9, 0.2, 0.8, 0.1, 0.3, 0.4]
+    variant = audited_run(tmp_path, "prior_weight", 1, other, "", revealed)
+    assert hidden_ap(baseline.paths) == pytest.approx(1.0)
+    assert hidden_ap(variant.paths) == pytest.approx(1 / 7)
+    # Without a hidden mule there is none, and without an audit neither.
+    both = audited_run(tmp_path, "no_attention", 1, other, "", ("a", "b"))
+    assert hidden_ap(both.paths) is None
+    assert hidden_ap(RunPaths(tmp_path / "none")) is None
+    # summary.csv records it with the run's validation numbers.
+    assert ("validation", HIDDEN_METRIC, pytest.approx(1 / 7)) in run_values(variant.paths)

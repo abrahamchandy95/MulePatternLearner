@@ -3,8 +3,10 @@
 summary.csv is long: one row per run, split and metric (SUMMARY_COLUMNS), with the run's
 status and commit on every row. A run's audit metrics come from its audit reports, its
 proxy AP and totals from metrics.json; values with no split belong to the run as a
-whole. A run that left no numbers keeps one row without a metric, so every run of the
-suite is listed.
+whole. Beside them is its validation audit AP on the hidden mules alone (hidden_ap), so
+the suite's report can say how well the proxy, which never sees them, tracks the audit.
+A run that left no numbers keeps one row without a metric, so every run of the suite is
+listed.
 
 comparison.csv holds one row per variant (COMPARISON_COLUMNS): the seed means of the
 audit metrics, their spread over seeds, and the paired comparison with the baseline.
@@ -45,6 +47,7 @@ from ..artifacts import (
     DELTA_METRIC,
     ENSEMBLE,
     ENSEMBLE_SEEDS,
+    HIDDEN_METRIC,
     PAIRED_METRIC,
     PROXY_METRIC,
     SEED_MEAN,
@@ -56,6 +59,7 @@ from ..artifacts import (
 )
 from ..config import DEFAULT_CONFIG, RunConfig
 from ..contract.graph_schema import HELD_OUT_SPLITS
+from ..diagnostics.proxy_validity import subset_rows
 from ..metrics import (
     REVIEW_BUDGETS,
     average_precision,
@@ -138,6 +142,24 @@ def provenance(run: RunPaths) -> dict[str, Any]:
     return read_run_provenance(run.config) if run.config.exists() else {}
 
 
+def hidden_ap(run: RunPaths, split: str = "validation") -> float | None:
+    """A run's audit AP of a split on its hidden mules: the revealed ones left out.
+
+    The audit's revealed mules are the proxy's observed positives, so the subset is
+    proxy_validity's "hidden" one: the mules the graph had not revealed before the
+    split's cutoff, against the non-mules, each standing for 1 / its inclusion
+    probability accounts. None without the audit or without a hidden mule.
+    """
+    path = run.audit_scores(split)
+    if not path.exists():
+        return None
+    frame = read_audit_scores(path)
+    hidden = subset_rows(frame.assign(observed_label=frame.revealed.astype(np.int64)), "hidden")
+    y = hidden.is_mule.to_numpy(np.int64)
+    weight = 1 / hidden.inclusion_probability.to_numpy(np.float64)
+    return average_precision(y, hidden.score.to_numpy(np.float64), weight)
+
+
 def run_values(run: RunPaths) -> list[tuple[str, str, float]]:
     """(split, metric, value) of every number a run's files hold for summary.csv."""
     values: list[tuple[str, str, float]] = []
@@ -159,6 +181,9 @@ def run_values(run: RunPaths) -> list[tuple[str, str, float]]:
                 for name in AUDIT_METRICS
                 if recorded.get(name) is not None
             ]
+    hidden = hidden_ap(run)
+    if hidden is not None:
+        values.append(("validation", HIDDEN_METRIC, hidden))
     return values
 
 
