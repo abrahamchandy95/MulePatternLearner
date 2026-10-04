@@ -240,7 +240,7 @@ cutoff, the pool-activity check and the pass-through thresholds.
 | `profile/p1_groups.py` to `p11_misc.py`, `load_messages.py`, `mule_profile.md` | [the mule profile](mule-profile.md) |
 | `nnpu_sim/sim.py`, `grid.py`, `traj.py` | `diagnostics/nnpu_simulation.py`, `mule diagnose nnpu-simulation`, [the nnPU positive weight](nnpu-positive-weight.md); tested on the graph by the `prior_weight` variant |
 | `mpl_arms/tabular.toml`, `no_internal.toml`, `seed7.toml` | the variants `no_attention` and `drop_pool_internal_inflows`, and the fixed seeds 42, 43 and 44 |
-| `simulate_label_reveal.py`, the repository's script until commit 050ba17 | `diagnostics/reveal_spread.py`, `mule diagnose reveal-spread` |
+| `simulate_label_reveal.py`, the repository's script until commit 8afad48 | `diagnostics/reveal_spread.py`, `mule diagnose reveal-spread` |
 
 ### Not carried over
 

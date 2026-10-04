@@ -518,7 +518,7 @@ def repository(queries: Mapping[str, str] | None) -> dict[str, str]:
 
 
 # The calls between the retired queries, as the GSQL before the rename made them (commit
-# 08b487e): the Fourier wrapper, both pair encoders and the context query called the
+# f203226): the Fourier wrapper, both pair encoders and the context query called the
 # Fourier values, and the reveal called its uniforms.
 RETIRED_CALLS = {
     "temporal_training_context": "temporal_fourier64_values",

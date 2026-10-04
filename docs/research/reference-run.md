@@ -3,7 +3,7 @@
 Three full training runs on the CUDA host, on the same dataset and revealed labels. They
 record where the model stood before the restructuring and why the built-in settings are what
 they are. Their checkpoints load only with the code before the layered restructure, such as
-its last commit, 08b487e.
+its last commit, f203226.
 
 ## How the numbers are measured
 

@@ -110,7 +110,7 @@ renamed queries beside the old names, about 50 minutes within a 90-minute wait),
 every job of the earlier code on every machine, `mule install` (it drops the old names),
 then `mule evaluate`, `mule report`, the control experiments and `mule diagnose`.
 
-The earlier code is commit 08b487e, kept in `main`'s history. It calls the old query
+The earlier code is commit f203226, kept in `main`'s history. It calls the old query
 names, so it runs only until `mule install` drops them; the owner retrains from scratch,
 so nothing is compared with it, and a comparison on the graph would have to run before
 that drop. Its outputs lie in folders this code never writes (`models/`, `artifacts/`,

@@ -350,7 +350,7 @@ def frame_digest(frame: pd.DataFrame) -> str:
 
 def test_the_golden_settings_select_the_recorded_accounts(tmp_path: Path) -> None:
     # The dataset's accounts and observed labels feed every other literal. They were
-    # recorded with the code of commit 08b487e, the last before the layered restructure,
+    # recorded with the code of commit f203226, the last before the layered restructure,
     # which prepared the same rows.
     _, dataset, _ = prepare_golden(tmp_path)
     files = {"accounts": dataset.accounts, "observed_labels": dataset.observed_labels}
