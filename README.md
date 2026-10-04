@@ -166,8 +166,9 @@ each step.
   [Label reveal](docs/explanation/label-reveal.md).
 - Research: [the reference runs](docs/research/reference-run.md),
   [the diagnostic study](docs/research/diagnostic-study.md),
-  [the mule profile](docs/research/mule-profile.md) and
-  [the nnPU positive weight](docs/research/nnpu-positive-weight.md).
+  [the mule profile](docs/research/mule-profile.md),
+  [the nnPU positive weight](docs/research/nnpu-positive-weight.md) and
+  [the control experiments' first three seeds](docs/research/control-experiments.md).
 - [The GSQL folder](gsql/README.md): which query lives where, and who installs it.
 
 ## Development

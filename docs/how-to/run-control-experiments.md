@@ -2,7 +2,11 @@
 
 Measure what each part of the built-in run contributes: train variants of it over the
 ten seeds 42 to 51, audit every run, and compare each variant with the baseline on the
-same accounts. The script takes suite or variant names only.
+same accounts. The script takes suite or variant names only. [The control
+experiments](../research/control-experiments.md) reads the `controls` suite's first three
+seeds: what they established, what is noise so far, and the method problems that led to
+the ten seeds, the `methods` suite, the seed ensembles, the intervals over both seeds and
+accounts, and the proxy's reliability.
 
 ## Run a suite
 

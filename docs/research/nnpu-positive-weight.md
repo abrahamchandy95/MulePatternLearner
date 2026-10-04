@@ -69,7 +69,8 @@ in its marginal are like the labelled ones. The graph reveals the loud mules ins
 its hidden mules are quieter than the revealed. Its test
 on the graph is the `prior_weight` control variant (`loss.positive_weight = "prior"`), which
 the control experiments train over the seeds and compare with the baseline on the
-validation audit (`python scripts/run_experiments.py`).
+validation audit (`python scripts/run_experiments.py`). Over their first three seeds it
+ranked mules near chance in every seed ([the control experiments](control-experiments.md)).
 
 ## Not carried over
 
