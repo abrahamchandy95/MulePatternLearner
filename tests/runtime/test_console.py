@@ -230,6 +230,28 @@ def records(run: Path) -> list[tuple[dict[str, Any], str | None]]:
             "epoch 11  loss 0.099  validation AP n/a    ROC AUC 0.959     41 s\n"
             "early stop: no gain for 6 epochs",
         ),
+        # Another rule names its criterion; the risk, which the line otherwise lacks, is
+        # shown when the rule selects on it. Under "none" no epoch is marked.
+        (
+            {"event": "epoch", "epoch": 5, **epoch, "validation_ap": 0.5661}
+            | {"selection": "validation_pu_risk", "validation_pu_risk": 0.99412}
+            | {"selected": True, "stopped": False, "best_epoch": 5, "epoch_seconds": 186.0},
+            "epoch  5  loss 0.099  validation AP 0.566  ROC AUC 0.959  nnPU risk 0.994  "
+            "3.1 min  lowest risk so far",
+        ),
+        (
+            {"event": "epoch", "epoch": 5, **epoch, "validation_ap": 0.5661}
+            | {"selection": "validation_roc_auc", "validation_pu_risk": 0.99412}
+            | {"selected": True, "stopped": False, "best_epoch": 5, "epoch_seconds": 186.0},
+            "epoch  5  loss 0.099  validation AP 0.566  ROC AUC 0.959  3.1 min  "
+            "best ROC AUC so far",
+        ),
+        (
+            {"event": "epoch", "epoch": 5, **epoch, "validation_ap": 0.5661}
+            | {"selection": "none", "validation_pu_risk": 0.99412}
+            | {"selected": True, "stopped": False, "best_epoch": 5, "epoch_seconds": 186.0},
+            "epoch  5  loss 0.099  validation AP 0.566  ROC AUC 0.959  3.1 min",
+        ),
         ({"event": "complete", "best_epoch": 5}, None),
         (
             {"event": "sampler_backend", "saved": "cugraph", "resumed": "torch", "note": "x"},

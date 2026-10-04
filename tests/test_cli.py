@@ -699,7 +699,7 @@ RECORDED_FIELDS = {
     | {"seconds_per_step", "batch_wait_seconds", "rejected_roots", "batch"}
     | TOTALS,
     "score": {"event", "split", "accounts", "total"} | TOTALS,
-    "epoch": {"event", *EPOCH_COLUMNS} | TOTALS,
+    "epoch": {"event", *EPOCH_COLUMNS, "best_epoch", "selection", "epoch_seconds"} | TOTALS,
     "complete": {"event", "best_epoch"} | TOTALS,
 }
 

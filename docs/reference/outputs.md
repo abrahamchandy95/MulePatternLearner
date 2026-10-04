@@ -175,7 +175,7 @@ test), `date`, `selection` (how the model's epoch was chosen: `model.pt`'s `sele
 |---|---|
 | `training_objective.png` | Loss and unclamped nnPU objective per interval, rolling mean, epoch boundaries |
 | `training_corrections.png` | Share of steps whose non-negative correction fired |
-| `validation_ranking.png` | Proxy AP and ROC AUC per epoch, the selected epoch, the prevalence line, which weights were validated |
+| `validation_ranking.png` | Proxy AP and ROC AUC per epoch, the nnPU risk on an axis of its own where `epochs.csv` has it, the selected epoch marked on the curve of the selection rule's criterion and the rule named, the prevalence line, which weights were validated |
 | `training_throughput.png` | Seconds per step and batch wait; below, contexts requested, distinct and served from memory and from the cache |
 | `proxy_precision_recall.png` | Validation and test precision and recall on observed labels, titled as a proxy |
 | `run_health.png` | Rejections by split and status, stub children, sampler totals, database calls |

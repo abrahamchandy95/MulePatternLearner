@@ -335,16 +335,31 @@ def _train(record: Mapping[str, Any]) -> str:
     )
 
 
+# How an epoch's line marks the epoch kept so far, by the selection rule, which the
+# record names (the built-in rule where it does not). Under "none" every epoch is kept
+# until the next, so no line is marked.
+KEPT_SO_FAR = {
+    "validation_ap": "best so far",
+    "validation_roc_auc": "best ROC AUC so far",
+    "validation_pu_risk": "lowest risk so far",
+}
+
+
 def _epoch(record: Mapping[str, Any]) -> str:
     epoch = int(record["epoch"])
+    selection = record.get("selection", "validation_ap")
     took = duration(float(record["epoch_seconds"])) if "epoch_seconds" in record else ""
     line = (
         f"epoch {epoch:>2}  loss {number(record['loss'])}  "
         f"validation AP {number(record['validation_ap']):<5}  "
-        f"ROC AUC {number(record['validation_roc_auc']):<5}  {took:>7}"
+        f"ROC AUC {number(record['validation_roc_auc']):<5}  "
     )
-    if record.get("selected"):
-        line += "  best so far"
+    # The criterion of a rule that selects on the risk, which the line otherwise lacks.
+    if selection == "validation_pu_risk":
+        line += f"nnPU risk {number(record.get('validation_pu_risk')):<5}  "
+    line += f"{took:>7}"
+    if record.get("selected") and selection in KEPT_SO_FAR:
+        line += f"  {KEPT_SO_FAR[selection]}"
     if record.get("stopped") and "best_epoch" in record:
         line += f"\nearly stop: no gain for {plural(epoch - int(record['best_epoch']), 'epoch')}"
     return line.rstrip()

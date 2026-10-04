@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from matplotlib.artist import Artist
 from matplotlib.axes import Axes
 from matplotlib.lines import Line2D
 from matplotlib.ticker import FuncFormatter, MaxNLocator, PercentFormatter
@@ -20,6 +21,7 @@ import numpy as np
 from numpy.typing import NDArray
 import pandas as pd
 
+from ..config import BUILT_IN_SELECTION
 from .style import (
     AXIS,
     INK,
@@ -116,58 +118,86 @@ def plot_corrections(ax: Axes, history: pd.DataFrame) -> Axes:
     return ax
 
 
-def plot_validation_ranking(ax: Axes, epochs: pd.DataFrame, prevalence: float | None) -> Axes:
+# What the validation figure calls the criterion of each selection rule that has one
+# (training.selection, which names the criterion's epochs.csv column); the rule "none"
+# keeps the last epoch.
+CRITERIA = {
+    "validation_ap": "AP",
+    "validation_roc_auc": "ROC AUC",
+    "validation_pu_risk": "nnPU risk",
+}
+
+
+def plot_validation_ranking(
+    ax: Axes,
+    epochs: pd.DataFrame,
+    prevalence: float | None,
+    selection: str = BUILT_IN_SELECTION,
+) -> Axes:
     """Proxy AP, ROC AUC and nnPU risk of validation per epoch, the selected epoch, chance.
 
     ``prevalence`` is the share of observed positives among validation's scored rows,
     the AP of a random ranking; None leaves that line out. The nnPU risk, lower being
-    better, is drawn where epochs.csv has it (an epochs.csv written before it has not).
-    The title names the weights validation scored (the moving average or the raw
-    weights).
+    better and not on the 0 to 1 scale of the ranking metrics, gets an axis of its own on
+    the right, where epochs.csv has it (an epochs.csv written before it has not).
+    ``selection`` is the run's selection rule: the selected epoch is marked on the curve
+    of the rule's criterion, and the legend names the rule; under "none" the last epoch
+    is marked on the AP curve as kept without selection. The title names the weights
+    validation scored (the moving average or the raw weights).
     """
     x = epochs.epoch.to_numpy(np.int64)
-    ax.plot(x, epochs.validation_ap, marker="o", label="average precision", **measure(0))
-    ax.plot(x, epochs.validation_roc_auc, marker="s", label="ROC AUC", **measure(1))
+    (ap_line,) = ax.plot(x, epochs.validation_ap, marker="o", **measure(0))
+    (auc_line,) = ax.plot(x, epochs.validation_roc_auc, marker="s", **measure(1))
+    handles: list[Artist] = [ap_line, auc_line]
+    labels = ["average precision", "ROC AUC"]
     risk = epochs.get("validation_pu_risk")
-    top = 1.02
+    on_risk: Axes | None = None
     if risk is not None and risk.notna().any():
-        ax.plot(x, risk, marker="^", label="nnPU risk (lower is better)", **measure(2))
-        top = max(top, float(risk.max()) * 1.02)
+        on_risk = ax.twinx()
+        on_risk.grid(False)
+        on_risk.spines["right"].set_visible(True)
+        (risk_line,) = on_risk.plot(x, risk, marker="^", **measure(2))
+        on_risk.set_ylabel("nnPU risk on the proxy sample")
+        handles.append(risk_line)
+        labels.append("nnPU risk, right axis (lower is better)")
     if prevalence is not None:
-        ax.axhline(
-            prevalence,
-            color=MUTED,
-            linestyle="--",
-            linewidth=1.0,
-            label=f"AP of a random ranking ({number(prevalence)})",
-        )
+        handles.append(ax.axhline(prevalence, color=MUTED, linestyle="--", linewidth=1.0))
+        labels.append(f"AP of a random ranking ({number(prevalence)})")
     selected = epochs[epochs.selected.astype(bool)]
     if len(selected):
-        epoch, ap = int(selected.epoch.iloc[0]), float(selected.validation_ap.iloc[0])
+        epoch = int(selected.epoch.iloc[0])
+        name = CRITERIA.get(selection)
+        column = selection if name is not None else "validation_ap"
+        value = float(selected[column].iloc[0])
+        target = on_risk if column == "validation_pu_risk" and on_risk is not None else ax
         ax.axvline(epoch, color=INK, linestyle=":", linewidth=1.0, zorder=0)
-        ax.plot(
+        (mark,) = target.plot(
             epoch,
-            ap,
+            value,
             marker="o",
             markersize=11,
             markerfacecolor="none",
             markeredgecolor=INK,
             markeredgewidth=1.4,
             linestyle="none",
-            label=f"selected: epoch {epoch}, AP {number(ap)}",
+        )
+        handles.append(mark)
+        labels.append(
+            f"selected on {name}: epoch {epoch}, {name} {number(value)}"
+            if name is not None
+            else f"kept without selection: last epoch {epoch}, AP {number(value)}"
         )
     stopped = epochs[epochs.stopped.astype(bool)]
     if len(stopped):
-        ax.plot(
-            [], [], linestyle="none", label=f"early stopping after epoch {stopped.epoch.iloc[0]}"
-        )
+        handles.append(Line2D([], [], linestyle="none"))
+        labels.append(f"early stopping after epoch {stopped.epoch.iloc[0]}")
     ax.set_xlim(0.5, float(x.max()) + 0.5 if len(x) else 1.5)
     ax.xaxis.set_major_locator(MaxNLocator(integer=True))
-    ax.set_ylim(0, top)
+    ax.set_ylim(0, 1.02)
     ax.set_xlabel("Epoch")
-    ax.set_ylabel("Proxy metric on observed labels")
+    ax.set_ylabel("Proxy AP and ROC AUC on observed labels")
     # Under the axes: the curves cross every part of them.
-    legend_below(ax, *ax.get_legend_handles_labels())
+    legend_below(ax, handles, labels)
     weights = " and ".join(sorted(set(epochs.weights.astype(str))))
     ax.set_title(f"Proxy validation ranking per epoch ({weights} weights)")
     return ax

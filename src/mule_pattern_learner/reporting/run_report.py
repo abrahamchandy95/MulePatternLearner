@@ -78,10 +78,12 @@ class TrainingFiles:
     epochs: pd.DataFrame
     metrics: dict[str, Any]
     predictions: dict[str, SplitScores]
+    # The run's selection rule (training.selection of config.json).
+    selection: str
 
 
 def training_files(run: RunPaths) -> TrainingFiles:
-    """history.csv, epochs.csv, metrics.json and the proxy predictions of a complete run."""
+    """A complete run's history.csv, epochs.csv, metrics.json, proxy predictions and rule."""
     metrics = read_json(run.metrics)
     predictions = {}
     for split in HELD_OUT_SPLITS:
@@ -92,7 +94,13 @@ def training_files(run: RunPaths) -> TrainingFiles:
             weight=np.ones(len(frame)),
             metrics=metrics["observed_label_proxy"][split],
         )
-    return TrainingFiles(read_history(run.history), read_epochs(run.epochs), metrics, predictions)
+    return TrainingFiles(
+        read_history(run.history),
+        read_epochs(run.epochs),
+        metrics,
+        predictions,
+        read_run_config(run.config).training.selection,
+    )
 
 
 def audited_splits(run: RunPaths) -> list[str]:
@@ -126,7 +134,7 @@ def training_drawings(files: TrainingFiles) -> dict[str, tuple[Drawing, tuple[fl
         "training_objective": (one(lambda ax: plot_objective(ax, history)), PANEL),
         "training_corrections": (one(lambda ax: plot_corrections(ax, history)), PANEL),
         "validation_ranking": (
-            one(lambda ax: plot_validation_ranking(ax, files.epochs, prevalence)),
+            one(lambda ax: plot_validation_ranking(ax, files.epochs, prevalence, files.selection)),
             PANEL,
         ),
         "training_throughput": (

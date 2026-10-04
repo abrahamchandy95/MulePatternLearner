@@ -100,27 +100,62 @@ def test_the_corrections_figure_shares_each_interval_steps() -> None:
     assert legend.get_texts()[0].get_text() == "whole run: 37.5% of 8 steps"
 
 
+def legend_texts(ax: Axes) -> list[str]:
+    legend = ax.get_legend()
+    assert legend is not None
+    return [text.get_text() for text in legend.get_texts()]
+
+
 def test_the_validation_figure_marks_the_selected_epoch_and_chance() -> None:
     ax = axes()
     plot_validation_ranking(ax, EPOCHS, 0.0055)
-    legend = ax.get_legend()
-    assert legend is not None
-    texts = [text.get_text() for text in legend.get_texts()]
-    assert texts == [
+    assert legend_texts(ax) == [
         "average precision",
         "ROC AUC",
         "AP of a random ranking (0.0055)",
-        "selected: epoch 2, AP 0.500",
+        "selected on AP: epoch 2, AP 0.500",
         "early stopping after epoch 3",
     ]
     assert ax.get_title() == "Proxy validation ranking per epoch (averaged weights)"
-    # The nnPU risk where epochs.csv has it, the axis tall enough for it.
+    # The selected epoch is marked on the AP curve.
+    assert [0.5] in [ys(line) for line in ax.get_lines() if xs(line) == [2.0]]
+    assert ax.get_ylim() == pytest.approx((0, 1.02))
+
+
+def test_the_validation_figure_draws_the_risk_on_its_own_axis_and_names_the_rule() -> None:
+    # The nnPU risk where epochs.csv has it, on an axis of its own: the ranking metrics'
+    # axis keeps their 0 to 1 scale.
+    epochs = EPOCHS.assign(validation_pu_risk=[0.998, 0.992, 0.995])
     ax = axes()
-    plot_validation_ranking(ax, EPOCHS.assign(validation_pu_risk=[1.4, 0.9, 1.0]), None)
-    legend = ax.get_legend()
-    assert legend is not None
-    assert "nnPU risk (lower is better)" in [text.get_text() for text in legend.get_texts()]
-    assert ax.get_ylim()[1] == pytest.approx(1.4 * 1.02)
+    plot_validation_ranking(ax, epochs, None, "validation_pu_risk")
+    figure = ax.get_figure()
+    assert figure is not None
+    (risk,) = [other for other in figure.axes if other is not ax]
+    assert ax.get_ylim() == pytest.approx((0, 1.02))
+    low, high = risk.get_ylim()
+    assert 0.9 < low < 0.992 and 0.998 < high < 1.1
+    # Its selected epoch, the lowest risk's, is marked on the risk's curve.
+    assert [0.992] in [ys(line) for line in risk.get_lines() if xs(line) == [2.0]]
+    assert legend_texts(ax) == [
+        "average precision",
+        "ROC AUC",
+        "nnPU risk, right axis (lower is better)",
+        "selected on nnPU risk: epoch 2, nnPU risk 0.992",
+        "early stopping after epoch 3",
+    ]
+    ax = axes()
+    plot_validation_ranking(ax, EPOCHS, None, "validation_roc_auc")
+    assert "selected on ROC AUC: epoch 2, ROC AUC 0.900" in legend_texts(ax)
+    assert [0.9] in [ys(line) for line in ax.get_lines() if xs(line) == [2.0]]
+    # Under "none" the last epoch is kept, marked on the AP curve.
+    kept = EPOCHS.assign(selected=[False, False, True], stopped=[False] * 3)
+    ax = axes()
+    plot_validation_ranking(ax, kept, None, "none")
+    assert legend_texts(ax) == [
+        "average precision",
+        "ROC AUC",
+        "kept without selection: last epoch 3, AP 0.400",
+    ]
 
 
 def test_the_throughput_panels_draw_seconds_and_context_totals() -> None:

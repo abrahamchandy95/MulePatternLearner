@@ -66,6 +66,11 @@ epoch  1  loss 0.490  validation AP 0.452  ROC AUC 0.955  4.6 min  best so far
 epoch  2  loss 0.212  validation AP 0.431  ROC AUC 0.951  3.1 min
 ```
 
+"best so far" marks the epoch the run keeps so far. Under another `training.selection`
+the mark names the rule's criterion ("best ROC AUC so far", or "lowest risk so far" with
+the nnPU risk on the line), and under `"none"`, which keeps the last epoch, no line is
+marked.
+
 On a terminal the current step is shown in place below them, then the scoring of
 validation ("scoring validation 640/2,011") until the epoch's line replaces it; a log of
 `nohup mule train` has neither. When the run ends, a summary gives the time taken, the best epoch, the

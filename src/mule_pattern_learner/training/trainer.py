@@ -616,10 +616,15 @@ class _TrainingRun:
         self.save_last()
         # After the resume state, so epochs.csv never holds an epoch that resume.pt lacks.
         rows = self.record_epochs()
-        # Beside the epochs.csv row: the best epoch so far, and the seconds this segment
-        # spent on the epoch, its validation included.
+        # Beside the epochs.csv row: the best epoch so far under the selection rule, the
+        # rule, and the seconds this segment spent on the epoch, its validation included.
         seconds = round(time.perf_counter() - self.epoch_started, 3)
-        record = {**rows[-1], "best_epoch": self.best_epoch, "epoch_seconds": seconds}
+        record = {
+            **rows[-1],
+            "best_epoch": self.best_epoch,
+            "selection": self.selection,
+            "epoch_seconds": seconds,
+        }
         self.emit_event({"event": "epoch", **record})
 
     def record_epochs(self) -> list[dict[str, Any]]:
