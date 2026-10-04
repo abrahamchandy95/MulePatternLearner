@@ -11,7 +11,8 @@ protocol: entire ownership groups are withheld from training. The scope is a
 `Temporal_Training_Scope` vertex with one `Entity_In_Training_Scope` edge per Account and
 Party, holding experiment membership apart from the business data. Its creation groups
 the Accounts and Parties connected by any ownership tenure into components and gives each
-a deterministic train, validation or test partition (70, 15 and 15%) from a seeded hash.
+a deterministic train, validation or test partition from a seeded hash, by the scope's
+split shares (half, a quarter and a quarter of the groups in the built-in run).
 It never reads mule truth; all ownership history is used, conservatively, for grouping,
 never as a feature. Membership is verified before the scope becomes ready.
 

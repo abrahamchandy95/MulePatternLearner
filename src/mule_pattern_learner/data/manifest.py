@@ -67,8 +67,9 @@ def check_query_hashes(manifest: dict[str, Any], dataset: DatasetPaths) -> None:
 def dataset_settings(source_id: str, config: RunConfig) -> dict[str, Any]:
     """What preparation reads, as JSON values: the input of the dataset id.
 
-    The source id names the data loaded into the graph. The scope's id and its rule
-    for accounts no party owns decide the split partitions, the dataset section gives
+    The source id names the data loaded into the graph. The scope's id, its rule for
+    accounts no party owns and its split shares decide the split partitions, the dataset
+    section gives
     the cutoffs and seed reservoirs, and sampler_pools is what TigerGraph returns per
     hop. The scope's other settings (create, reveal_per_split, reveal_salt) act once on
     the graph, when a missing scope is created and in the one-time reveal, so they name
@@ -78,7 +79,11 @@ def dataset_settings(source_id: str, config: RunConfig) -> dict[str, Any]:
     """
     settings = {
         "source_id": source_id,
-        "scope": {"id": config.scope.id, "unowned": config.scope.unowned},
+        "scope": {
+            "id": config.scope.id,
+            "unowned": config.scope.unowned,
+            "shares": list(config.scope.shares),
+        },
         "dataset": as_json(config.dataset),
         "sampler_pools": sampler_pools(config.sampler),
     }
@@ -109,7 +114,8 @@ class PreparedSource:
     """The graph a dataset was prepared from, as its manifest records it.
 
     The vertex counts and the scope: its id, its rule for accounts no party owns, the
-    source id it names and the split seed of its partitions.
+    source id it names, and the split seed and the train, validation and test shares of
+    its partitions.
     """
 
     counts: dict[str, int]
@@ -117,17 +123,20 @@ class PreparedSource:
     unowned: str
     source_id: str
     split_seed: int
+    shares: tuple[float, float, float]
 
 
 def prepared_source(manifest: dict[str, Any]) -> PreparedSource:
     """The graph a dataset was prepared from; a ValueError without its settings."""
     settings = recorded_settings(manifest)
+    train, validation, test = settings["scope"]["shares"]
     return PreparedSource(
         counts=dict(manifest["source"]["source_counts"]),
         scope_id=settings["scope"]["id"],
         unowned=settings["scope"]["unowned"],
         source_id=settings["source_id"],
         split_seed=settings["dataset"]["split_seed"],
+        shares=(float(train), float(validation), float(test)),
     )
 
 

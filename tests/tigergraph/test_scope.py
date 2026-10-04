@@ -15,7 +15,7 @@ from mule_pattern_learner.contract.server import (
 )
 from mule_pattern_learner.paths import GSQL_DIR
 from mule_pattern_learner.testing.builders import UNIT_SOURCE, scope_population, unit_config
-from mule_pattern_learner.testing.fake_graph import FakeTigerGraph, policy_counts
+from mule_pattern_learner.testing.fake_graph import FakeTigerGraph, policy_counts, ready_scope
 from mule_pattern_learner.tigergraph import gsql_text, scope
 
 
@@ -37,13 +37,24 @@ def test_missing_scope_is_created_unless_forbidden() -> None:
     _, create = server.calls[0]
     assert create["unowned_policy"] == "linked"
     assert (create["source_id"], create["split_seed"]) == (UNIT_SOURCE, 42)
+    # The split shares are the scope's settings, sent as the query's parameters.
+    shares = (create["train_share"], create["validation_share"], create["test_share"])
+    assert shares == config.shares == (0.5, 0.25, 0.25)
     assert "shared_unowned" not in create
     assert server.calls[1][1] == {"scope_id": "unit_scope", "expected_members": 3}
+    # The scope vertex records them beside the source and the split seed.
     assert server.scopes["unit_scope"] == {
         "ready": True,
         "source_id": UNIT_SOURCE,
         "split_seed": 42,
+        "train_share": 0.5,
+        "validation_share": 0.25,
+        "test_share": 0.25,
     }
+    other = replace(config, train_share=0.7, validation_share=0.15, test_share=0.15)
+    server = FakeTigerGraph(scope_policy="independent", population=scope_population(3))
+    ensure(server, other)
+    assert server.scopes["unit_scope"]["train_share"] == 0.7
     for policy in ("independent", "shared"):
         server = FakeTigerGraph(scope_policy="independent", population=scope_population(3))
         ensure(server, replace(config, unowned=policy))
@@ -56,7 +67,7 @@ def existing(header: dict[str, Any], policy: str) -> FakeTigerGraph:
 
 
 def test_existing_scope_must_have_the_configured_unowned_policy() -> None:
-    header = {"ready": True, "source_id": UNIT_SOURCE, "split_seed": 42}
+    header = ready_scope(UNIT_SOURCE)
     config = unit_config().scope
     for policy in ("independent", "shared", "linked"):
         assert scope.inferred_scope_policy(policy_counts(policy)) == policy
@@ -88,6 +99,12 @@ def test_existing_scope_must_have_the_configured_unowned_policy() -> None:
         ensure(existing({**header, "split_seed": 7}, "linked"), config)
     with pytest.raises(ValueError, match="different source"):
         ensure(existing({**header, "source_id": "another"}, "linked"), config)
+    # A scope of other shares, or of the earlier schema that recorded none (its accounts
+    # split 70, 15 and 15%), is another partition, never reused.
+    earlier = {k: v for k, v in header.items() if not k.endswith("_share")}
+    for found in ({**header, "train_share": 0.7, "test_share": 0.05}, earlier):
+        with pytest.raises(ValueError, match=r"split shares .* Set a new scope.id"):
+            ensure(existing(found, "linked"), config)
     with pytest.raises(ValueError, match="lacks"):
         lacking = FakeTigerGraph(
             answers={SCOPE_POLICY_QUERY: lambda p: [{"status": "ok", "members": 3}]}
@@ -105,3 +122,12 @@ def test_scope_policy_query_prints_what_the_client_reads() -> None:
         assert f"AS {name}" in query, name
     create = gsql_text.parameter_names(queries[CREATE_SCOPE_QUERY])
     assert "unowned_policy" in create and "shared_unowned" not in create
+    assert set(scope.SHARE_ATTRIBUTES) <= create
+    # The scope vertex records the shares the query inserts.
+    schema = (GSQL_DIR / "schema/scope_vertex.gsql").read_text()
+    for name in scope.SHARE_ATTRIBUTES:
+        assert f"    {name} DOUBLE,\n" in schema
+    assert (
+        "INSERT INTO Temporal_Training_Scope VALUES (\n"
+        "    scope_id, source_id, split_seed, train_share, validation_share, test_share, FALSE);"
+    ) in queries[CREATE_SCOPE_QUERY]

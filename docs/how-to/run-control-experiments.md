@@ -127,9 +127,10 @@ The `controls` suite is 90 runs (70 graph runs and the 20 cheap `no_attention` a
 the CUDA host while it requests its contexts from TigerGraph, about an hour with early
 stopping; once the context cache holds them it is far faster. Over the controls suite's
 first three seeds each variant's runs took from 0.00 to 0.25 hours on average. A suite
-trained with fewer seeds keeps its complete runs, so running `controls` again after the
-seeds became ten trains the seven new seeds of the first seven variants and every seed of
-`linear` and `wide_and_deep`: 69 runs.
+trained with fewer seeds keeps its complete runs, but a run of another scope differs in
+its settings: since the built-in scope became `strict_mule_v3`, of other split shares,
+every run of `strict_mule_v2` is moved to the archive and trained again, so the next
+`controls` suite trains all 90.
 
 The plan gives two numbers for the runs it trains:
 

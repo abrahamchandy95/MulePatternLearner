@@ -33,7 +33,7 @@ results/
 
 The dataset id is the fingerprint of the dataset settings: the source id (the identity of
 the data loaded into the graph, recorded on the scope), `scope.id`, `scope.unowned`, the
-`dataset` section and the sampler's candidate pools ([Configuration](configuration.md#which-settings-matter-where)).
+scope's split shares, the `dataset` section and the sampler's candidate pools ([Configuration](configuration.md#which-settings-matter-where)).
 Every run and audit with those settings shares the directory. It is prepared in stages,
 each recorded in the manifest when it is done, so an interrupted preparation resumes.
 

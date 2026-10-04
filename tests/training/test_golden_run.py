@@ -534,18 +534,18 @@ GOLDEN_BATCH_STATS = {
 GOLDEN_STEPS = [
     (1, 1, 0.9973645210266113, 0.9973645210266113, 0),
     (1, 2, 1.0063931941986084, 1.0063931941986084, 0),
-    (1, 3, 1.0002868175506592, 1.0002868175506592, 0),
-    (1, 4, 0.9952985048294067, 0.9952985048294067, 0),
+    (1, 3, 1.0002869367599487, 1.0002869367599487, 0),
+    (1, 4, 0.9952983856201172, 0.9952983856201172, 0),
     (2, 1, 0.9950098991394043, 0.9950098991394043, 0),
     (2, 2, 0.9898823499679565, 0.9898823499679565, 0),
-    (2, 3, 0.9771919846534729, 0.9771919846534729, 0),
-    (2, 4, 0.9766665697097778, 0.9766665697097778, 0),
+    (2, 3, 0.9771920442581177, 0.9771920442581177, 0),
+    (2, 4, 0.9766664505004883, 0.9766664505004883, 0),
 ]
-GOLDEN_EPOCH_AP = [0.47464285714285714, 0.47692307692307695]
-GOLDEN_SELECTED_EPOCH = 2
-GOLDEN_VALIDATION_AP = 0.47692307692307695
-GOLDEN_THRESHOLD = 0.5102718956479596
-GOLDEN_TEST_AP = 0.3216137566137566
+GOLDEN_EPOCH_AP = [0.5037878787878788, 0.47748917748917746]
+GOLDEN_SELECTED_EPOCH = 1
+GOLDEN_VALIDATION_AP = 0.5037878787878788
+GOLDEN_THRESHOLD = 0.515523720606384
+GOLDEN_TEST_AP = 0.46891534391534384
 GOLDEN_QUERY_SHA256 = "21f15c377763febab0e169563284d98eab9958492bf7f68053efb4cb7552f6d2"
 # Rows and frame_digest of the prepared accounts.parquet and observed_labels.parquet.
 GOLDEN_DATASET = {
@@ -560,11 +560,11 @@ GOLDEN_AUDIT: dict[str, dict[str, Any]] = {
             "sample_accounts": 40,
             "sample_positives": 11,
             "estimated_population": 40.0,
-            "average_precision": 0.35639207813120855,
-            "roc_auc": 0.6520376175548589,
-            "precision": 0.375,
-            "recall": 0.8181818181818182,
-            "f1": 0.5142857142857142,
+            "average_precision": 0.3950883950883951,
+            "roc_auc": 0.5924764890282131,
+            "precision": 0.3333333333333333,
+            "recall": 0.18181818181818182,
+            "f1": 0.23529411764705885,
             "precision_at_1pct": 0.0,
             "recall_at_1pct": 0.0,
             "precision_at_5pct": 0.0,
@@ -573,14 +573,14 @@ GOLDEN_AUDIT: dict[str, dict[str, Any]] = {
             "recall_at_10pct": 0.09090909090909091,
         },
         "intervals": {
-            "average_precision": [0.27460380830646947, 0.542421933214359],
-            "roc_auc": [0.49843260188087773, 0.7836990595611285],
-            "precision_at_1pct": [0.0, 0.0],
-            "recall_at_1pct": [0.0, 0.0],
-            "precision_at_5pct": [0.0, 0.5],
-            "recall_at_5pct": [0.0, 0.09090909090909091],
-            "precision_at_10pct": [0.0, 0.5121951219512195],
-            "recall_at_10pct": [0.0, 0.19000000000000003],
+            "average_precision": [0.27563120064480795, 0.6613211616228856],
+            "roc_auc": [0.3887147335423197, 0.7806165099268547],
+            "precision_at_1pct": [0.0, 1.0],
+            "recall_at_1pct": [0.0, 0.03636363636363637],
+            "precision_at_5pct": [0.0, 0.5454545454545455],
+            "recall_at_5pct": [0.0, 0.10000000000000002],
+            "precision_at_10pct": [0.0, 0.75],
+            "recall_at_10pct": [0.0, 0.2727272727272727],
         },
         "positives": (5, 6),
     },
@@ -589,27 +589,27 @@ GOLDEN_AUDIT: dict[str, dict[str, Any]] = {
             "sample_accounts": 40,
             "sample_positives": 12,
             "estimated_population": 40.0,
-            "average_precision": 0.34625358588206884,
-            "roc_auc": 0.4285714285714286,
-            "precision": 0.2916666666666667,
-            "recall": 0.5833333333333334,
-            "f1": 0.38888888888888895,
-            "precision_at_1pct": 1.0,
-            "recall_at_1pct": 0.03333333333333333,
+            "average_precision": 0.3536225575656815,
+            "roc_auc": 0.5148809523809523,
+            "precision": 0.5,
+            "recall": 0.16666666666666666,
+            "f1": 0.25,
+            "precision_at_1pct": 0.0,
+            "recall_at_1pct": 0.0,
             "precision_at_5pct": 0.5,
             "recall_at_5pct": 0.08333333333333333,
-            "precision_at_10pct": 0.25,
-            "recall_at_10pct": 0.08333333333333333,
+            "precision_at_10pct": 0.5,
+            "recall_at_10pct": 0.16666666666666666,
         },
         "intervals": {
-            "average_precision": [0.2492364271417604, 0.5337862670172485],
-            "roc_auc": [0.2618589743589743, 0.6321915584415584],
+            "average_precision": [0.27729110407497715, 0.5551716204122622],
+            "roc_auc": [0.36252497502497505, 0.675],
             "precision_at_1pct": [0.0, 1.0],
-            "recall_at_1pct": [0.0, 0.038],
+            "recall_at_1pct": [0.0, 0.035454545454545454],
             "precision_at_5pct": [0.0, 1.0],
             "recall_at_5pct": [0.0, 0.17727272727272728],
             "precision_at_10pct": [0.0, 0.75],
-            "recall_at_10pct": [0.0, 0.25],
+            "recall_at_10pct": [0.0, 0.2727272727272727],
         },
         "positives": (6, 6),
     },

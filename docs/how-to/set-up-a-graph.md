@@ -83,10 +83,11 @@ mule train
 `mule check` confirms the graph, the scope vertex type and the installed queries, and
 ends "Not ready" until a dataset exists. The first `mule train` then, in order:
 
-1. creates the frozen scope `strict_mule_v2`, partitioning every Account and Party by
-   ownership group into train, validation and test (the `linked` rule for accounts no
-   party owns); this writes one scope vertex and one membership edge per Account and
-   Party, and nothing else;
+1. creates the frozen scope `strict_mule_v3`, partitioning every Account and Party by
+   ownership group into train, validation and test, half, a quarter and a quarter of the
+   groups (`scope.train_share`, `scope.validation_share` and `scope.test_share`), with
+   the `linked` rule for accounts no party owns; this writes one scope vertex, which
+   records the shares, and one membership edge per Account and Party, and nothing else;
 2. reveals the known mules once ([Label reveal](../explanation/label-reveal.md)), writing
    the label fields of every internal Account, and checks the label contract;
 3. prepares the dataset in `data/<dataset id>/`: the seed reservoirs, the observed

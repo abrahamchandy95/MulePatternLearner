@@ -37,6 +37,7 @@ from mule_pattern_learner.inference.predictor import Predictor
 from mule_pattern_learner.inference.saved_model import SavedModel
 from mule_pattern_learner.model.build import build_model
 from mule_pattern_learner.runtime.device import choose_device
+from mule_pattern_learner.testing.fake_graph import ready_scope
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
 from mule_pattern_learner.tigergraph.executor import TigerGraphExecutor
 
@@ -162,7 +163,7 @@ def test_held_out_and_future_data_never_change_training_inputs(
             assert not missing, f"Fixture contexts rejected {dict(source.rejections)}: {missing}"
             return [row for row in rows if row is not None]
 
-        put(SCOPE_VERTEX, "scope", {"source_id": vertices.prefix, "split_seed": 42, "ready": True})
+        put(SCOPE_VERTEX, "scope", ready_scope(vertices.prefix))
         entities = {}
         for kind, name in [
             ("Account", "a"),

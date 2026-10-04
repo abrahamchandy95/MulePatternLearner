@@ -184,14 +184,16 @@ def ground_truth_rows(population: Iterable[Mapping[str, Any]]) -> list[dict[str,
 def assigned_accounts() -> pd.DataFrame:
     """fixture_accounts with an ownership group and a split drawn from the group's hash.
 
-    Each account has its own owner, so it is its own group; about 70% of the groups are
-    train, 15% validation and 15% test.
+    Each account has its own owner, so it is its own group; the groups go to train,
+    validation and test in the built-in scope's shares (half, a quarter and a quarter), as
+    the scope query places them.
     """
     accounts = fixture_accounts()
     accounts["group_id"] = "Account:" + accounts.account_id
     scores = accounts.group_id.map(lambda group: stable_score(str(group), 42, "split"))
+    train, validation, _ = DEFAULT_CONFIG.scope.shares
     accounts["split"] = np.where(
-        scores < 0.7, "train", np.where(scores < 0.85, "validation", "test")
+        scores < train, "train", np.where(scores < train + validation, "validation", "test")
     )
     return accounts
 

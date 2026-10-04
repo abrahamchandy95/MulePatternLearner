@@ -63,6 +63,7 @@ def verify_frozen_source(executor: ConnectionExecutor, manifest: dict[str, Any])
             unowned=source.unowned,
             source_id=source.source_id,
             split_seed=source.split_seed,
+            shares=source.shares,
         )
     except ValueError as error:
         raise ValueError(f"Prepared experiment scope is no longer valid: {error}") from None

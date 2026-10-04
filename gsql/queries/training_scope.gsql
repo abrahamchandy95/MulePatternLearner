@@ -4,6 +4,11 @@ USE GRAPH Mule_Pattern_Learner
    Whole ownership components share a partition, including closed tenures.
    Internal IDs are used only to seed a source-specific partition, not model inputs.
    New/reloaded graphs require a new scope/source ID.
+   A seeded hash of each component places it in one of 10000 buckets; the bucket's
+   middle, as a share of them, below train_share is train (1), below train_share +
+   validation_share validation (2), and otherwise test (3). The shares are positive,
+   add up to 1 and are recorded on the scope vertex; the client sends whole numbers of
+   buckets, so no middle lies near a boundary.
    unowned_policy places the unowned Accounts: those whose ownership component contains
    no Party (they have no ownership edge, so each is its own singleton component).
    - "independent": every component, owned or not, gets its own hash partition and
@@ -26,7 +31,8 @@ USE GRAPH Mule_Pattern_Learner
    labels and the hash expression do not depend on the policy, and only unowned accounts
    are ever moved. summarize_scope_policy reads the policy back from stored membership. */
 CREATE OR REPLACE QUERY create_training_scope(
-  STRING scope_id, STRING source_id, UINT split_seed = 42, INT max_iterations = 100,
+  STRING scope_id, STRING source_id, DOUBLE train_share, DOUBLE validation_share,
+  DOUBLE test_share, UINT split_seed = 42, INT max_iterations = 100,
   STRING unowned_policy = "independent"
 ) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
   MinAccum<UINT> @component;
@@ -42,6 +48,9 @@ CREATE OR REPLACE QUERY create_training_scope(
   SumAccum<INT> @@shared_accounts, @@linked_accounts;
   INT iteration = 0;
   IF scope_id == "" OR source_id == "" OR max_iterations < 1
+     OR train_share <= 0 OR validation_share <= 0 OR test_share <= 0
+     OR train_share + validation_share + test_share < 0.999999
+     OR train_share + validation_share + test_share > 1.000001
      OR (unowned_policy != "independent" AND unowned_policy != "shared"
          AND unowned_policy != "linked") THEN
     PRINT "invalid_parameters" AS status; RETURN;
@@ -106,7 +115,8 @@ CREATE OR REPLACE QUERY create_training_scope(
       WHERE a.@link_found AND a.@link_min == a.@link_max
       POST-ACCUM a.@component = a.@link_component, @@linked_accounts += 1;
   END;
-  INSERT INTO Temporal_Training_Scope VALUES (scope_id, source_id, split_seed, FALSE);
+  INSERT INTO Temporal_Training_Scope VALUES (
+    scope_id, source_id, split_seed, train_share, validation_share, test_share, FALSE);
   Membership = SELECT s FROM Entities:s
     ACCUM IF s.@shared THEN
         INSERT INTO Entity_In_Training_Scope VALUES (
@@ -114,8 +124,8 @@ CREATE OR REPLACE QUERY create_training_scope(
       ELSE
         INSERT INTO Entity_In_Training_Scope VALUES (
           s, scope_id Temporal_Training_Scope,
-          CASE WHEN (((s.@component % 2147483647) * 1103515245 + split_seed) % 2147483647) % 10000 < 7000 THEN 1
-               WHEN (((s.@component % 2147483647) * 1103515245 + split_seed) % 2147483647) % 10000 < 8500 THEN 2
+          CASE WHEN ((((s.@component % 2147483647) * 1103515245 + split_seed) % 2147483647) % 10000 + 0.5) / 10000 < train_share THEN 1
+               WHEN ((((s.@component % 2147483647) * 1103515245 + split_seed) % 2147483647) % 10000 + 0.5) / 10000 < train_share + validation_share THEN 2
                ELSE 3 END,
           to_string(s.@component))
       END;

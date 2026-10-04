@@ -115,15 +115,30 @@ def _set(section: object, name: str, value: object) -> None:
     object.__setattr__(section, name, value)
 
 
+# The buckets the scope's seeded hash places each ownership group in, so a split share
+# is a whole number of them (gsql/queries/training_scope.gsql).
+SCOPE_BUCKETS = 10_000
+
+
 @dataclass(frozen=True)
 class ScopeConfig:
     """The frozen scope the splits come from, and the first run's label reveal."""
 
-    id: str = "strict_mule_v2"
+    # A scope is created once and never changed, so another partition of the graph, or
+    # another load of it, needs a new id: strict_mule_v3 is the first with these shares.
+    id: str = "strict_mule_v3"
     # The first run creates a missing scope; false forbids that write.
     create: bool = True
     # The accounts no party owns: "independent", "shared" or "linked" (tigergraph.scope).
     unowned: str = "linked"
+    # The shares of the ownership groups the scope places in train, validation and test,
+    # each a whole number of the SCOPE_BUCKETS buckets, adding up to 1. Training reads
+    # only the revealed train mules, so half the groups suffice for it, and the held-out
+    # splits get a quarter each, for more mules in every audit (the scope of 70, 15 and
+    # 15% before gave validation 33 mules on the reference graph).
+    train_share: float = 0.50
+    validation_share: float = 0.25
+    test_share: float = 0.25
     # Known mules the first run reveals per split, among those a bank would have
     # discovered before the split's cutoff (gsql/queries/label_reveal.gsql).
     reveal_per_split: int = 20
@@ -134,8 +149,29 @@ class ScopeConfig:
         _text("scope.id", self.id, SCOPE_ID_BYTES)
         _flag("scope.create", self.create)
         _choice("scope.unowned", self.unowned, ("independent", "shared", "linked"))
+        for split in SPLITS:
+            name = f"{split}_share"
+            share = _number(
+                f"scope.{name}", getattr(self, name), 0, 1, open_low=True, open_high=True
+            )
+            if not math.isclose(share * SCOPE_BUCKETS, round(share * SCOPE_BUCKETS)):
+                raise ValueError(
+                    f"scope.{name} must be a whole number of 1/{SCOPE_BUCKETS:,} of the "
+                    f"groups, got {share!r}"
+                )
+            _set(self, name, share)
+        if not math.isclose(sum(self.shares), 1.0):
+            raise ValueError(
+                f"scope.train_share, scope.validation_share and scope.test_share must add up "
+                f"to 1, got {list(self.shares)}"
+            )
         REVEAL_PER_SPLIT.check("scope.reveal_per_split", self.reveal_per_split)
         _integer("scope.reveal_salt", self.reveal_salt)
+
+    @property
+    def shares(self) -> tuple[float, float, float]:
+        """The train, validation and test shares, in that order."""
+        return (self.train_share, self.validation_share, self.test_share)
 
 
 @dataclass(frozen=True)

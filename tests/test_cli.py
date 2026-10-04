@@ -41,7 +41,7 @@ from mule_pattern_learner.testing.builders import (
     recorded_events,
     scope_population,
 )
-from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
+from mule_pattern_learner.testing.fake_graph import FakeTigerGraph, ready_scope
 from mule_pattern_learner.tigergraph.executor import (
     TigerGraphUnavailableError,
     TransientQueryError,
@@ -615,7 +615,7 @@ def train_on_fakes(home: Path, monkeypatch: pytest.MonkeyPatch) -> RunPaths:
         factory=neighbourhood,
         hubs=[("N3", cutoff) for cutoff in (101, 102, 103)],
         population=scope_population(200),
-        scopes={scope: {"ready": True, "source_id": "console_fixture", "split_seed": 42}},
+        scopes={scope: ready_scope("console_fixture")},
     )
 
     def connect(transport: TransportConfig) -> FakeTigerGraph:
@@ -684,8 +684,8 @@ Dataset DATASET: 18 / 5 / 6 known mules in train / validation / test
 Training on cpu (torch sampler) into results/baseline/seed-42: 3 steps per epoch, at most 2 \
 epochs, early stop after 6 epochs without gain
 epoch  1  loss #.###  validation AP #.###  ROC AUC #.### # s  best so far
-epoch  2  loss #.###  validation AP #.###  ROC AUC #.### # s  best so far
-Trained in # s; model.pt holds the weights of the best epoch, 2.
+epoch  2  loss #.###  validation AP #.###  ROC AUC #.### # s
+Trained in # s; model.pt holds the weights of the best epoch, 1.
 Proxy metrics, on the revealed labels at the selected epoch:
               known mules     AP  ROC AUC  recall at 1%
   validation            5  #.###    #.###         #.###

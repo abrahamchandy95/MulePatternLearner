@@ -47,6 +47,12 @@ def test_sections_refuse_values_outside_their_ranges() -> None:
         (lambda: ScopeConfig(unowned="all"), "scope.unowned"),
         (lambda: ScopeConfig(id=""), "scope.id"),
         (lambda: ScopeConfig(reveal_per_split=1001), "scope.reveal_per_split"),
+        (lambda: ScopeConfig(train_share=0.6), "must add up to 1"),
+        (lambda: ScopeConfig(test_share=0.0, validation_share=0.5), "scope.test_share"),
+        (
+            lambda: ScopeConfig(train_share=0.50005, validation_share=0.24995),
+            "whole number of 1/10,000",
+        ),
         (lambda: SplitDates(train=("not a date",)), "not an ISO date"),
         (lambda: SplitDates(train=("2024-11-01",)), "overlap or are out of order"),
         (lambda: SplitDates(test=()), "dataset.dates.test"),
@@ -110,8 +116,10 @@ def test_the_built_in_run_keeps_its_settings() -> None:
     # without this literal; the configuration reference is edited with the code, so it
     # cannot pin them. The settings the golden run overrides are spelled out.
     assert DEFAULT_CONFIG.fingerprint() == (
-        "39ea88acbe405b5200c6eee0f7145564b17148cbe7cc6fcfcc0cde0bd561e521"
+        "6aa8f7c23d4d367f88e46e894376f53d0ef9cffc8c58b30c684acf60884bb8ff"
     )
+    scope = DEFAULT_CONFIG.scope
+    assert (scope.id, scope.shares) == ("strict_mule_v3", (0.5, 0.25, 0.25))
     training = DEFAULT_CONFIG.training
     assert (training.epochs, training.steps_per_epoch, training.patience) == (30, 100, 6)
     assert training.batch_size == 64 and DEFAULT_CONFIG.model.dropout == 0.15

@@ -94,6 +94,7 @@ def test_sent_parameters_match_the_repository_query_signatures() -> None:
     assert set(hubs.calls[0][1]) == signature("queries/hub_accounts.gsql", HUB_QUERY)
     creation = signature("queries/training_scope.gsql", CREATE_SCOPE_QUERY)
     assert {"scope_id", "source_id", "split_seed", "unowned_policy"} <= creation
+    assert {"train_share", "validation_share", "test_share"} <= creation
     policy = signature("queries/training_scope.gsql", SCOPE_POLICY_QUERY)
     assert policy == {"scope_id"}
 
@@ -327,7 +328,10 @@ def test_scope_unowned_policy_keeps_party_partitions() -> None:
     # The hash rule appears once, unchanged, in the branch taken by Party components.
     rule = "(((s.@component % 2147483647) * 1103515245 + split_seed) % 2147483647) % 10000"
     assert create.count(rule) == 2 and hashed.count(rule) == 2
-    assert "< 7000 THEN 1" in hashed and "< 8500 THEN 2" in hashed
+    # A bucket's middle, as a share of the buckets, against the shares the query takes.
+    assert f"({rule} + 0.5) / 10000 < train_share THEN 1" in hashed
+    assert f"({rule} + 0.5) / 10000 < train_share + validation_share THEN 2" in hashed
+    assert "7000" not in create and "8500" not in create
     assert "to_string(s.@component))" in hashed
     # Only unowned EXTERNAL accounts and unowned bank ledger ("gl") accounts are shared,
     # and never under "independent".

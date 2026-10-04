@@ -100,15 +100,21 @@ It is a subquery with no REST endpoint; the context queries call it only when
 
 ### create_training_scope
 
-Creates a frozen, label-blind partition of every Account and Party into train (1, 70%),
-validation (2, 15%) and test (3, 15%), by ownership groups.
+Creates a frozen, label-blind partition of every Account and Party into train (1),
+validation (2) and test (3), by ownership groups, in the shares the client sends
+(`train_share`, `validation_share` and `test_share`, from the scope settings: 0.5, 0.25
+and 0.25 in the built-in run). It refuses (`invalid_parameters`) a share that is not
+positive, or shares that do not add up to 1.
 
 - **Reads:** every Account and Party, every `Party_Owns_Account` tenure of all time, and,
   for the `linked` rule, every payment of the unowned internal accounts with their
   counterparty accounts. Never a label.
 - **Computes:** ownership components, by propagating the smallest internal vertex id over
   ownership edges (at most `max_iterations`, 100), each with a partition from a seeded
-  hash of its id (`split_seed`).
+  hash of its id (`split_seed`): the hash places the component in one of 10,000 buckets,
+  and the bucket's middle, as a share of them, below `train_share` is train, below
+  `train_share + validation_share` validation, and otherwise test. The client sends whole
+  numbers of buckets, so no middle lies near a boundary.
 - **Places the accounts no party owns** (`unowned_policy`, from `scope.unowned`):
   - `independent` (the query's default): each is its own component with a hashed
     partition;
@@ -119,14 +125,16 @@ validation (2, 15%) and test (3, 15%), by ownership groups.
     distinct owned internal deposit counterparties (the other account of any payment, all
     time) are exactly one account takes that account's component, partition and group id.
   Components with a Party keep the same component and partition under every rule.
-- **Writes:** one `Temporal_Training_Scope` vertex (`ready = false`) and one
+- **Writes:** one `Temporal_Training_Scope` vertex (`ready = false`, with the source id,
+  the split seed and the three shares) and one
   `Entity_In_Training_Scope` edge per Account and Party, with `partition` and
   `group_id`. It runs once, with a one-hour timeout and a single attempt; an existing
   scope is `scope_already_exists`.
 
-On the reference graph, `strict_mule_v2` has 988,283 members: 414,074 internal accounts
-linked, 20,709 internal accounts left independent and 35,660 external accounts shared.
-The owned components kept exactly the partitions of the earlier `strict_mule_v1`.
+On the reference graph, `strict_mule_v2`, created when the shares were fixed at 70, 15
+and 15%, has 988,283 members: 414,074 internal accounts linked, 20,709 internal accounts
+left independent and 35,660 external accounts shared. The owned components kept exactly
+the partitions of the earlier `strict_mule_v1`.
 
 ### finalize_training_scope
 
@@ -146,8 +154,8 @@ observed positive exactly when it is the label contract's revealed positive (`pu
 discovery time (`mule_label_available_ts_ms`). Neither field reveals a withheld label or
 which accounts are labelled.
 
-On the reference graph the built-in scope (`strict_mule_v2`) holds 222,337 train, 47,754
-validation and 47,749 test accounts, and preparation kept 24,059 of them: the reservoirs
+On the reference graph the scope of 70, 15 and 15% (`strict_mule_v2`) holds 222,337
+train, 47,754 validation and 47,749 test accounts, and preparation kept 24,059 of them: the reservoirs
 and the observed positives.
 
 ### summarize_scope_policy

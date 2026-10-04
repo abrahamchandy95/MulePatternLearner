@@ -36,8 +36,9 @@ A control experiment declares its change in `experiments/variants.py` instead (s
   settings later, so it is left out at its built-in value, `"validation_ap"`: a run
   trained before it existed keeps its fingerprint, and any other rule is part of it.
 - **The dataset settings** name the prepared dataset: the source id (read from the
-  graph, never configured), `scope.id`, `scope.unowned`, the whole `dataset` section and
-  the sampler's candidate pools (`sampler.roots` and `sampler.children`). Their
+  graph, never configured), `scope.id`, `scope.unowned`, the three split shares
+  (`scope.train_share`, `scope.validation_share` and `scope.test_share`), the whole
+  `dataset` section and the sampler's candidate pools (`sampler.roots` and `sampler.children`). Their
   fingerprint is the dataset id, the name of `data/<dataset id>/`. Runs that share them
   share one dataset; any other setting, the feature groups and the training seed
   included, may differ between runs of one dataset.
@@ -55,9 +56,12 @@ The frozen experiment scope the splits come from, and the first run's label reve
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `scope.id` | `"strict_mule_v2"` | The `Temporal_Training_Scope` vertex the run samples in (at most 256 bytes) |
+| `scope.id` | `"strict_mule_v3"` | The `Temporal_Training_Scope` vertex the run samples in (at most 256 bytes); a new partition or a new load of the graph needs a new id |
 | `scope.create` | `true` | The first run creates a missing scope; `false` forbids that write |
 | `scope.unowned` | `"linked"` | Where accounts no party owns go: `"independent"`, `"shared"` or `"linked"` (see [the scope queries](queries.md#create_training_scope)) |
+| `scope.train_share` | `0.5` | The share of the ownership groups the scope places in train: positive, a whole number of 1/10,000, and with the other two shares adding up to 1 |
+| `scope.validation_share` | `0.25` | The same in validation |
+| `scope.test_share` | `0.25` | The same in test |
 | `scope.reveal_per_split` | `20` | Known mules the first run reveals per split, among those a bank would have discovered before the split's cutoff (0 to 1,000) |
 | `scope.reveal_salt` | `42` | Seed of the reveal's deterministic draws |
 

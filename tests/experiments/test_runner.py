@@ -67,7 +67,7 @@ from mule_pattern_learner.testing.builders import (
     scope_population,
     write_run_files,
 )
-from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
+from mule_pattern_learner.testing.fake_graph import FakeTigerGraph, ready_scope
 from mule_pattern_learner.tigergraph.executor import (
     TigerGraphUnavailableError,
     TransientQueryError,
@@ -97,7 +97,7 @@ def suite_graph(
     the ground truth. A use case that connects other than through the session fails.
     """
     population = scope_population(POPULATION)
-    header = {"ready": True, "source_id": "suite_fixture", "split_seed": 42}
+    header = ready_scope("suite_fixture")
     graph = FakeTigerGraph(
         factory=neighbourhood,
         hubs=[("N3", cutoff) for cutoff in (101, 102, 103)],

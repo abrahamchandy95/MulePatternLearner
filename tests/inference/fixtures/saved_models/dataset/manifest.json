@@ -7,16 +7,21 @@
     "query_hashes": {
       "queries/fourier64.gsql": "8d92ea7534bd67819022e8224a5f5389aebd3efdbcd7dd9825afc892e854c287",
       "queries/training_context.gsql": "21f15c377763febab0e169563284d98eab9958492bf7f68053efb4cb7552f6d2",
-      "queries/training_scope.gsql": "9e2c59543bd8c0264839eae38228bf7dcc6c4affc263b53dd3e79042c293e21d",
+      "queries/training_scope.gsql": "562e5717d854cb31d3c518128a75a023300f097005a57dea92caf96c734bd72d",
       "queries/split_cutoffs.gsql": "1dbfbf0d8b718cbb96294c668085c5d61fa2cb09731f94bd21f49ea96f40ca49",
       "queries/hub_accounts.gsql": "9dd85dab7d064afc5f4299b33f1dd2cca485b980f292a3e260911acd0d9be8ba"
     },
-    "dataset_id": "49213c46c111ae5da4aa0e5d681bb45ed2d930427a5106bacc34dabff7e57e2e",
+    "dataset_id": "2467807c4393c2864b7c25ba60e72772a16edc1a7d9a578020a31c1a8ee76626",
     "settings": {
       "source_id": "load_fixture",
       "scope": {
-        "id": "strict_mule_v2",
-        "unowned": "linked"
+        "id": "strict_mule_v3",
+        "unowned": "linked",
+        "shares": [
+          0.5,
+          0.25,
+          0.25
+        ]
       },
       "dataset": {
         "dates": {
@@ -55,10 +60,10 @@
         }
       }
     },
-    "scope_id": "strict_mule_v2"
+    "scope_id": "strict_mule_v3"
   },
   "status": "ready",
-  "created_at_utc": "2026-10-03T00:03:19.785996+00:00",
+  "created_at_utc": "2026-10-04T07:49:23.144284+00:00",
   "population_by_split": {
     "train": 120,
     "validation": 40,
@@ -80,7 +85,7 @@
   },
   "hubs_sha256": "893a81af0b5638c066da2bdb49c7773b95e9c01a1ffb4943cf9f052ac02ddaa4",
   "hub_threshold": 2048,
-  "hub_scope_id": "strict_mule_v2",
+  "hub_scope_id": "strict_mule_v3",
   "hub_counts": {
     "101": {
       "1": 0,

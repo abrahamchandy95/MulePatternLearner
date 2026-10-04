@@ -27,7 +27,7 @@ from typing import Any, Literal
 
 from pyTigerGraph.common.exception import TigerGraphException
 
-from mule_pattern_learner.config import RunConfig
+from mule_pattern_learner.config import DEFAULT_CONFIG, RunConfig, ScopeConfig
 from mule_pattern_learner.contract.analytics_features import ANALYTICS_GROUPS
 from mule_pattern_learner.contract.bounds import REQUEST_KEYS
 from mule_pattern_learner.contract.feature_groups import FeaturePlan, extraction_plan
@@ -76,7 +76,7 @@ from mule_pattern_learner.tigergraph.gsql_text import (
 from mule_pattern_learner.tigergraph.hubs import TigerGraphHubReader
 from mule_pattern_learner.tigergraph.labels import TigerGraphObservedLabelReader
 from mule_pattern_learner.tigergraph.oracle import REVEAL_INPUTS_QUERY
-from mule_pattern_learner.tigergraph.scope import TigerGraphScopeReader
+from mule_pattern_learner.tigergraph.scope import SHARE_ATTRIBUTES, TigerGraphScopeReader
 
 
 def signature(path: str, name: str) -> frozenset[str]:
@@ -413,7 +413,7 @@ class FakeTigerGraph:
         if params["scope_id"] in self.scopes:
             return [{"status": "scope_already_exists"}]
         self.scope_policy = params["unowned_policy"]
-        header = {"source_id": params["source_id"], "split_seed": params["split_seed"]}
+        header = {name: params[name] for name in ("source_id", "split_seed", *SHARE_ATTRIBUTES)}
         self.scopes[params["scope_id"]] = {"ready": False, **header}
         return [{"status": "ok", "expected_members": len(self.population)}]
 
@@ -431,6 +431,14 @@ class FakeTigerGraph:
 PREPARED_ACCOUNTS = 200
 
 
+def ready_scope(
+    source_id: str, split_seed: int = 42, scope: ScopeConfig = DEFAULT_CONFIG.scope
+) -> dict[str, Any]:
+    """The attributes of a ready scope vertex: its source, split seed and scope's shares."""
+    shares = dict(zip(SHARE_ATTRIBUTES, scope.shares, strict=True))
+    return {"ready": True, "source_id": source_id, "split_seed": split_seed, **shares}
+
+
 def prepared_graph(
     data: Path, config: RunConfig, **options: Any
 ) -> tuple[FakeTigerGraph, DatasetPaths]:
@@ -442,7 +450,7 @@ def prepared_graph(
     are FakeTigerGraph's (statuses, analytics, reveal, ...).
     """
     population = scope_population(PREPARED_ACCOUNTS)
-    header = {"ready": True, "source_id": UNIT_SOURCE, "split_seed": config.dataset.split_seed}
+    header = ready_scope(UNIT_SOURCE, config.dataset.split_seed, config.scope)
     settings: dict[str, Any] = {
         "factory": neighbourhood,
         "hubs": [("N3", cutoff) for cutoff in (101, 102, 103)],

@@ -30,7 +30,7 @@ from mule_pattern_learner.pipeline.evaluate import evaluate_run
 from mule_pattern_learner.pipeline.train import BASELINE_RUN, train_run
 from mule_pattern_learner.reporting.run_report import AUDIT_FIGURES, TRAINING_FIGURES
 from mule_pattern_learner.testing.builders import neighbourhood, scope_population
-from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
+from mule_pattern_learner.testing.fake_graph import FakeTigerGraph, ready_scope
 
 
 def test_minimal_command_and_run_defaults(tmp_path: Path) -> None:
@@ -99,7 +99,7 @@ def fake_graph(monkeypatch: pytest.MonkeyPatch) -> FakeTigerGraph:
     whose known mules are revealed (the reveal is a no-op), so preparation only reads.
     """
     scope = DEFAULT_CONFIG.scope.id
-    header = {"ready": True, "source_id": FAKE_SOURCE, "split_seed": 42}
+    header = ready_scope(FAKE_SOURCE)
     executor = FakeTigerGraph(
         factory=neighbourhood,
         hubs=[("N3", cutoff) for cutoff in (101, 102, 103)],

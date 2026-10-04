@@ -257,7 +257,8 @@ at import. There is no configuration file, no `--config` and no option: another 
   A run records it, a resume must match it, and a complete run of another fingerprint is
   never overwritten.
 - The dataset id is the fingerprint of the dataset settings: the source id, `scope.id`,
-  `scope.unowned`, the `dataset` section and the sampler's candidate pools.
+  `scope.unowned`, the scope's split shares, the `dataset` section and the sampler's
+  candidate pools.
 - The audit's constants (`AUDIT_NEGATIVES`, `REVIEW_BUDGETS`, `BOOTSTRAP_REPLICATES`,
   `INTERVAL`, `BOOTSTRAP_SEED`) are not run configuration: each audit records them.
 - Each real choice is made in one place: the architecture (`model.build.build_model`),
@@ -366,7 +367,8 @@ The owner's decisions that shape the code, each with its reason.
   the revealed positives (`pu_label`), so there is one label path, no label file and no
   table reader, and tests serve their labels through the fake graph.
 - **The dataset id leaves out the scope's one-time settings** (decided on 2026-09-28):
-  of the scope, only `scope.id` and `scope.unowned` name a dataset, because
+  of the scope, only `scope.id`, `scope.unowned` and the split shares (which joined
+  them on 2026-10-04) name a dataset, because
   `scope.create`, `scope.reveal_per_split` and `scope.reveal_salt` act once on the graph
   (whether a missing scope is created, and the one-time reveal), so changing them later
   names no other dataset.

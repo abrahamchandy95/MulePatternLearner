@@ -17,7 +17,7 @@ from mule_pattern_learner.data.context_cache import ContextCache
 from mule_pattern_learner.data.manifest import dataset_id, dataset_settings, source_fingerprint
 from mule_pattern_learner.paths import DatasetPaths
 from mule_pattern_learner.pipeline import connect
-from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
+from mule_pattern_learner.testing.fake_graph import FakeTigerGraph, ready_scope
 
 # open_context_source reads the dataset from its manifest; nothing fetches, so the
 # directory of its context cache is not read.
@@ -78,7 +78,7 @@ def test_the_transport_section_sets_the_source_and_the_retry_budgets(
 def test_a_resumed_stream_checks_the_frozen_source_before_fetching(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    header = {"ready": True, "source_id": "snapshot", "split_seed": 42}
+    header = ready_scope("snapshot")
     graph = FakeTigerGraph(counts={"Account": 10}, scopes={"scope": header})
     budgets: list[tuple[int, int]] = []
 

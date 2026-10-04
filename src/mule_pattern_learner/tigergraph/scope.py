@@ -1,14 +1,16 @@
 """Experiment scopes: the frozen Temporal_Training_Scope a strict run samples in.
 
 ensure_scope creates a scope on first use; every later preparation and every
-streamed run verifies its header (ready, source, split seed) and the scope.unowned
-rule its membership was created with. TigerGraphScopeReader reads the scope's accounts.
+streamed run verifies its header (ready, source, split seed and split shares) and the
+scope.unowned rule its membership was created with. TigerGraphScopeReader reads the
+scope's accounts.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterator
 import json
+import math
 from typing import Any
 
 from ..config import ScopeConfig
@@ -62,13 +64,38 @@ def scope_header(executor: ConnectionExecutor, scope_id: str) -> dict[str, Any] 
     return dict(rows[0]["attributes"]) if rows else None
 
 
+# The split shares a scope vertex records, in the order of ScopeConfig.shares.
+SHARE_ATTRIBUTES = ("train_share", "validation_share", "test_share")
+
+
 def check_scope(
-    attrs: dict[str, Any] | None, scope_id: str, *, source_id: str, split_seed: int
+    attrs: dict[str, Any] | None,
+    scope_id: str,
+    *,
+    source_id: str,
+    split_seed: int,
+    shares: tuple[float, float, float],
 ) -> None:
+    """Refuse a missing scope, one not ready, or one of another source or partition.
+
+    The partition is the split seed and the train, validation and test shares. A scope
+    vertex of the earlier schema records no shares, so it is refused as another
+    partition: its accounts were split 70, 15 and 15%.
+    """
     if attrs is None:
         raise ValueError(f"Prepared experiment scope is missing: {scope_id}")
     if not attrs["ready"] or attrs["source_id"] != source_id or attrs["split_seed"] != split_seed:
         raise ValueError("Scope is incomplete or belongs to a different source/partition")
+    recorded = [attrs.get(name) for name in SHARE_ATTRIBUTES]
+    if not all(
+        isinstance(have, int | float) and math.isclose(have, want)
+        for have, want in zip(recorded, shares, strict=True)
+    ):
+        raise ValueError(
+            f"Scope {scope_id!r} records the split shares {recorded}, not {list(shares)}: it "
+            "belongs to a different partition. Set a new scope.id; the next `mule train` "
+            "creates it."
+        )
 
 
 # Unowned member Accounts by membership class and side, as the scope policy query prints them.
@@ -155,10 +182,15 @@ def verify_scope(
     unowned: str,
     source_id: str,
     split_seed: int,
+    shares: tuple[float, float, float],
 ) -> dict[str, int]:
-    """Header (ready, source, split seed) and scope.unowned rule of an existing scope."""
+    """Header (ready, source, split seed, shares) and scope.unowned rule of an existing scope."""
     check_scope(
-        scope_header(executor, scope_id), scope_id, source_id=source_id, split_seed=split_seed
+        scope_header(executor, scope_id),
+        scope_id,
+        source_id=source_id,
+        split_seed=split_seed,
+        shares=shares,
     )
     counts = scope_policy_counts(executor, scope_id)
     check_scope_policy(counts, scope_id, unowned)
@@ -171,7 +203,8 @@ def ensure_scope(
     """Use the frozen scope, creating it on first use unless scope.create is false.
 
     Creation writes a Temporal_Training_Scope vertex and one membership edge per
-    Account and Party, recording the source id and the split seed that partitions it.
+    Account and Party, recording the source id, and the split seed and scope.train_share,
+    scope.validation_share and scope.test_share that partition it.
     scope.unowned decides the accounts without an owning Party:
     - "independent": each is its own ownership group with a hashed partition.
     - "shared": unowned external accounts and unowned bank ledger ("gl") accounts
@@ -187,7 +220,12 @@ def ensure_scope(
 
     def verified() -> dict[str, int]:
         return verify_scope(
-            executor, scope_id, unowned=scope.unowned, source_id=source_id, split_seed=split_seed
+            executor,
+            scope_id,
+            unowned=scope.unowned,
+            source_id=source_id,
+            split_seed=split_seed,
+            shares=scope.shares,
         )
 
     attrs = scope_header(executor, scope_id)
@@ -208,6 +246,7 @@ def ensure_scope(
                 "scope_id": scope_id,
                 "source_id": source_id,
                 "split_seed": split_seed,
+                **dict(zip(SHARE_ATTRIBUTES, scope.shares, strict=True)),
                 "unowned_policy": scope.unowned,
             },
             timeout_s=3600.0,
