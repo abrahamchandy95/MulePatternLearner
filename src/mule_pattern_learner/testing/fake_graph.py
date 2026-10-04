@@ -425,9 +425,16 @@ class FakeTigerGraph:
         return [{"status": "ok"}, {"accounts": page(self.truth, params)}]
 
     def create_scope(self, params: dict[str, Any]) -> list[dict[str, Any]]:
-        """A scope vertex that is not ready yet, with the rule its membership follows."""
+        """A scope vertex that is not ready yet, with the rule its membership follows.
+
+        Split shares that are not all positive, or do not add up to 1 within 1e-6, are
+        invalid_parameters, and nothing is written, as create_training_scope refuses them.
+        """
         # max_iterations has a default, which the pipeline keeps.
         assert set(params) <= CREATE_SCOPE_PARAMETERS, set(params) - CREATE_SCOPE_PARAMETERS
+        shares = [params[name] for name in SHARE_ATTRIBUTES]
+        if min(shares) <= 0 or not 0.999999 <= sum(shares) <= 1.000001:
+            return [{"status": "invalid_parameters"}]
         if params["scope_id"] in self.scopes:
             return [{"status": "scope_already_exists"}]
         self.scope_policy = params["unowned_policy"]

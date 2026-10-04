@@ -131,9 +131,11 @@ def fixture_accounts(count: int = 1000, date: str = "2024-07-01") -> pd.DataFram
 def scope_population(count: int = 200) -> list[dict[str, Any]]:
     """Scope members as the scope population query prints them with include_observed.
 
-    Partitions repeat 1, 1, 1, 2, 3 (train, validation, test). Every seventh account is
-    a revealed mule, discovered on 2024-03-01, so every split has revealed mules. Every
-    account was opened on 2024-01-01, before each split's cutoff.
+    Partitions repeat 1, 1, 1, 2, 3 (train, validation, test): a fixed fixture, which
+    neither follows the split shares a scope records nor hashes the groups as
+    create_training_scope does, so a scope of any shares gives these partitions. Every
+    seventh account is a revealed mule, discovered on 2024-03-01, so every split has
+    revealed mules. Every account was opened on 2024-01-01, before each split's cutoff.
     """
     rows = []
     for i in range(count):

@@ -61,6 +61,30 @@ def test_missing_scope_is_created_unless_forbidden() -> None:
         assert server.calls[0][1]["unowned_policy"] == policy
 
 
+def test_invalid_split_shares_create_no_scope() -> None:
+    # The fake graph refuses them as create_training_scope does: a share that is not
+    # positive, or shares that do not add up to 1.
+    params = {
+        "scope_id": "unit_scope",
+        "source_id": UNIT_SOURCE,
+        "split_seed": 42,
+        "unowned_policy": "linked",
+    }
+    queries = gsql_text.definitions((GSQL_DIR / "queries/training_scope.gsql").read_text())
+    create = queries[CREATE_SCOPE_QUERY]
+    assert "OR train_share <= 0 OR validation_share <= 0 OR test_share <= 0" in create
+    assert "OR train_share + validation_share + test_share < 0.999999" in create
+    assert "OR train_share + validation_share + test_share > 1.000001" in create
+    for shares in ((0.5, 0.5, 0.0), (0.6, 0.25, 0.25), (0.5, 0.25, 0.2), (1.2, -0.1, -0.1)):
+        server = FakeTigerGraph(population=scope_population(3))
+        named = dict(zip(scope.SHARE_ATTRIBUTES, shares, strict=True))
+        rows = server.run(CREATE_SCOPE_QUERY, {**params, **named}, attempts=1)
+        assert rows == [{"status": "invalid_parameters"}] and server.scopes == {}, shares
+    server = FakeTigerGraph(population=scope_population(3))
+    named = dict(zip(scope.SHARE_ATTRIBUTES, (0.5, 0.25, 0.25), strict=True))
+    assert server.run(CREATE_SCOPE_QUERY, {**params, **named}, attempts=1)[0]["status"] == "ok"
+
+
 def existing(header: dict[str, Any], policy: str) -> FakeTigerGraph:
     """A graph whose unit scope has this header and was created under this rule."""
     return FakeTigerGraph(scope_policy=policy, scopes={"unit_scope": header})
