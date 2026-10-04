@@ -485,6 +485,65 @@ def subgroups_section(home: Reported, frame: pd.DataFrame) -> list[str]:
     return [*lines, *figure_links(home, figures)]
 
 
+# How report.md names each activity timing (diagnostics.activity_timing.TIMINGS).
+TIMING_NAMES = {
+    "recent": "last scam inflow within 30 days",
+    "earlier": "last 31 to 90 days before",
+    "long_before": "last over 90 days before",
+    "not_yet": "first after the cutoff",
+    "none": "no Zelle scam inflow",
+}
+
+
+def activity_section(frame: pd.DataFrame) -> list[str]:
+    """report.md's lines on when the audited mules were active, and what the run found."""
+    budgets = [budget_name(f) for f in REVIEW_BUDGETS]
+    rows = []
+    for split in HELD_OUT_SPLITS:
+        mine = frame[frame.split == split]
+        for name, label in TIMING_NAMES.items():
+            hidden = mine[(mine.subset == "hidden") & (mine.timing == name)]
+            revealed = mine[(mine.subset == "revealed") & (mine.timing == name)]
+            if hidden.empty and revealed.empty:
+                continue
+            rows.append(
+                [
+                    split,
+                    label,
+                    number(_int(_value(hidden, metric="mules"))),
+                    " / ".join(number(_int(_value(hidden, metric=f"in_top_{b}"))) for b in budgets),
+                    number(_value(hidden, metric="roc_auc")),
+                    number(_int(_value(hidden, metric="median_population_rank"))),
+                    number(_int(_value(revealed, metric="mules"))),
+                ]
+            )
+    shares = " / ".join(share_label(f) for f in REVIEW_BUDGETS)
+    return [
+        "## When the mules were active",
+        "",
+        "Each audited mule by its fraud-labelled Zelle inflows before the split's cutoff: "
+        "how long before the cutoff the last one came, none before it, or none at all. The "
+        "hidden mules are ranked as the audit ranks them, the revealed ones removed. A run "
+        "that finds the recent mules and misses those active long before the cutoff weighs "
+        "only the latest of an account's history; a mule whose first scam inflow came after "
+        "the cutoff had received none by then.",
+        "",
+        *table(
+            [
+                "Split",
+                "Activity before the cutoff",
+                "Hidden mules",
+                f"In the top {shares}",
+                "ROC AUC against the non-mules",
+                "Median population rank",
+                "Revealed mules",
+            ],
+            rows,
+        ),
+        "",
+    ]
+
+
 def proxy_section(home: Reported, frame: pd.DataFrame) -> list[str]:
     """report.md's lines on the proxy predictions against the ground truth."""
     rows = []
@@ -637,6 +696,7 @@ def study_text(study: DiagnosticsPaths, files: StudyFiles) -> str:
         ("univariate", partial(univariate_section, study)),
         ("drift", partial(drift_section, study)),
         ("subgroups", partial(subgroups_section, study)),
+        ("activity_timing", activity_section),
         ("proxy_validity", partial(proxy_section, study)),
         ("reveal_spread", lambda frame: reveal_section(study, frame, record)),
         ("nnpu_simulation", partial(nnpu_section, study)),

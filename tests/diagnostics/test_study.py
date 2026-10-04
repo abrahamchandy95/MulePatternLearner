@@ -101,9 +101,9 @@ def studied(
     """A fake graph without the analytics queries, a prepared dataset and an audited run."""
     config = unit_config()
     data = tmp_path / "data"
-    graph, dataset = prepared_graph(
-        data, config, queries=without_analytics(), reveal=reveal_inputs()
-    )
+    # The reveal's inputs hold every mule of the graph, which the audits score.
+    inputs = reveal_inputs(scope_population(PREPARED_ACCOUNTS))
+    graph, dataset = prepared_graph(data, config, queries=without_analytics(), reveal=inputs)
     assert dataset == DatasetPaths.of(dataset_id(UNIT_SOURCE, config), data)
     connected: list[TransportConfig] = []
 

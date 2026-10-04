@@ -42,8 +42,9 @@ fake graph serves the mirror itself.
 | `baselines` | How well a table of the account's own activity ranks mules, with no neighbour, association or pool input, beside the run's audits | the feature table; the run's audits when it has them |
 | `learning-curve` | How ranking quality grows with the number of labelled training mules | the feature table; the run's audits when it has them |
 | `subgroups` | Which mules the run's audits find: revealed or hidden, how few make its AP, which rings | the run's audits |
+| `activity-timing` | Whether the run finds mules active long before the cutoff as well as recent ones: each mule by its last fraud-labelled Zelle inflow before the cutoff (within 30 days, 31 to 90, over 90, none before it, none at all) | the run's audits and the reveal's inputs |
 | `proxy-validity` | How well the run's ranking, whose epoch the proxy chose, finds the ground truth: the hidden and revealed mules from its audit samples, which hold every hidden mule, and all of its proxy predictions | the run's audits and the graph's truth |
-| `reveal-spread` | How the one-time label reveal's outcome varies with its salt, replayed offline over salts 0 to 999 | the reveal's inputs, read once |
+| `reveal-spread` | How the label reveal's outcome varies with its salt, replayed offline over salts 0 to 999 | the reveal's inputs, read once |
 | `nnpu-simulation` | Whether the nnPU positive weight alone explains the collapse of textbook nnPU, on a synthetic problem | nothing (offline, about 15 seconds) |
 
 - **The feature table** is built first when missing or stale. It samples each split as its

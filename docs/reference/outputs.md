@@ -260,6 +260,7 @@ columns, then `metric` and `value`; a key not applying to a row is empty.
 | `baselines.csv` | `baseline`, `features`, `model`, `split`, `metric`, `value`, `low`, `high` (bootstrap interval) | `baselines.png` |
 | `learning_curve.csv` | `model`, `labels`, `mules`, `repeat`, `split`, `metric`, `value` | `learning_curve.png` |
 | `subgroups.csv` | `split`, `subset`, `rank`, `metric`, `value` | `ap_concentration.png`, `ring_coverage.png` |
+| `activity_timing.csv` | `split`, `subset`, `timing`, `metric`, `value` | none |
 | `proxy_validity.csv` | `split`, `subset`, `metric`, `value` | `proxy_validity.png` |
 | `reveal_spread.csv` | `salt`, `split`, `metric`, `value` | `reveal_spread.png` |
 | `nnpu_simulation.csv` | `positive_weight`, `seed`, `metric`, `value` | `nnpu_simulation.png` |
@@ -270,6 +271,10 @@ columns, then `metric` and `value`; a key not applying to a row is empty.
 - `subgroups.csv` subsets: `hidden` and `revealed` (each kind against the non-mules),
   `hidden` and `mules` for the running AP sum (`cumulative_average_precision`, by `rank`),
   and `rings`.
+- `activity_timing.csv`: `subset` is `hidden` or `revealed` (each kind against the
+  non-mules, the other kind removed); `timing` is `recent`, `earlier`, `long_before`,
+  `not_yet` or `none` (the last fraud inflow at most 30 days, 31 to 90 days or more than
+  90 days before the cutoff, none before it, none at all).
 - `proxy_validity.csv` subsets: `hidden` and `revealed` from the run's audit samples
   (which hold every hidden mule), weighted to the population; `all`, the proxy
   predictions, unweighted.

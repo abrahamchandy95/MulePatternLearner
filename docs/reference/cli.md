@@ -166,7 +166,7 @@ Runs the diagnostic study of the built-in run's dataset into
 `results/diagnostics/<dataset id>/`: every analysis in this order, or the one named:
 
 `features`, `univariate`, `drift`, `baselines`, `learning-curve`, `subgroups`,
-`proxy-validity`, `reveal-spread`, `nnpu-simulation`
+`activity-timing`, `proxy-validity`, `reveal-spread`, `nnpu-simulation`
 
 After [preparation](#preparation) it writes the feature table, a long table per analysis,
 `study.json`, `events.jsonl`, the figures and `report.md`. Only this command installs the

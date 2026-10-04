@@ -373,12 +373,15 @@ def neighbourhood(key: ContextKey) -> dict[str, Any]:
     return context(key, messages, encodings=False)
 
 
-def reveal_inputs() -> list[dict[str, Any]]:
+def reveal_inputs(population: Iterable[Mapping[str, Any]] = ()) -> list[dict[str, Any]]:
     """What tigergraph.oracle.REVEAL_INPUTS_QUERY prints for five mules and one Zelle link.
 
     A (train) and D (test) received five fraud-labelled inflows about eight years
     before their split's cutoff; B (train) exchanged money with A before A could be
-    discovered; C (validation) has no evidence; E has no split.
+    discovered; C (validation) has no evidence; E has no split. The mules of
+    ``population``, scope population rows labelled as ground_truth_rows labels them,
+    follow, the k-th with one fraud inflow 10, 60 or 200 days before its split's cutoff
+    or 10 days after it, or none, as k leaves 0 to 4 divided by 5.
     """
     day = 86_400_000
     cutoffs = {1: "2024-07-01", 2: "2024-10-01", 3: "2025-01-01"}
@@ -398,6 +401,17 @@ def reveal_inputs() -> list[dict[str, Any]]:
 
     mules = [mule("A", 1, 101, 5), mule("B", 1, 102, 0), mule("C", 2, 103, 0)]
     mules += [mule("D", 3, 104, 5), mule("E", 0, 105, 5)]
+    rows = {str(row["account_id"]): row for row in population}
+    truth = ground_truth_rows(rows.values())
+    labelled = [row["account_id"] for row in truth if row["is_mule"] == 1]
+    for k, account in enumerate(labelled):
+        part = int(rows[account]["partition"])
+        days = (10, 60, 200, -10, None)[k % 5]
+        found = mule(account, part, 1000 + k, 0)
+        if days is not None:
+            at = timestamp(cutoffs[part]) - days * day
+            found["attributes"]["M.@inflows"] = [f"{(1000 + k) * 10}:{at}"]
+        mules.append(found)
     link = {
         "LZ.event_seq": 2001,
         "LZ.event_ts_ms": timestamp(cutoffs[1]) - 2950 * day,

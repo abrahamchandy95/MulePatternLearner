@@ -400,6 +400,7 @@ DIAGNOSTIC_TABLES: dict[str, tuple[str, ...]] = {
     "baselines": ("baseline", "features", "model", "split", "metric", "value", "low", "high"),
     "learning_curve": ("model", "labels", "mules", "repeat", "split", "metric", "value"),
     "subgroups": ("split", "subset", "rank", "metric", "value"),
+    "activity_timing": ("split", "subset", "timing", "metric", "value"),
     "proxy_validity": ("split", "subset", "metric", "value"),
     "reveal_spread": ("salt", "split", "metric", "value"),
     "nnpu_simulation": ("positive_weight", "seed", "metric", "value"),
@@ -415,6 +416,7 @@ DIAGNOSTIC_TEXT = (
     "features",
     "labels",
     "subset",
+    "timing",
 )
 # features.parquet: the diagnostic feature table (diagnostics.feature_table), one row per
 # sampled account with these columns first, then its features, each named

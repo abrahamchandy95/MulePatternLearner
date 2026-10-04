@@ -13,6 +13,8 @@ The analyses, in the order `mule diagnose` runs them all:
   they build first when it is missing or stale. The baselines and the curve add the
   run's audits when it has them.
 - subgroups: the run's audit samples (`mule evaluate` writes them).
+- activity-timing: the run's audit samples beside the reveal's inputs, which date each
+  mule's scam inflows.
 - proxy-validity: the run's proxy predictions against the graph's truth, with the hidden
   and revealed mules of its audit samples (`mule evaluate` writes them).
 - reveal-spread: the reveal's inputs, read from the graph, replayed over salts.
@@ -59,6 +61,7 @@ from ..paths import RESULTS_DIR, DatasetPaths, DiagnosticsPaths, RunPaths
 from ..reporting.study_report import write_diagnostics_report
 from ..runtime.console import shown_path
 from ..runtime.progress import emit, recording
+from .activity_timing import activity_timing
 from .baselines import baselines
 from .drift import drift
 from .feature_table import AnalyticsFetcher, build_feature_table, current
@@ -77,6 +80,7 @@ ANALYSES = (
     "baselines",
     "learning-curve",
     "subgroups",
+    "activity-timing",
     "proxy-validity",
     "reveal-spread",
     "nnpu-simulation",
@@ -142,6 +146,7 @@ class Study:
     graph: StudyReader
     outcomes: dict[str, dict[str, Any]] = field(default_factory=dict[str, dict[str, Any]])
     frame: pd.DataFrame | None = None
+    inputs: list[dict[str, Any]] | None = None
 
     @property
     def unusable_run(self) -> str | None:
@@ -163,6 +168,22 @@ class Study:
             for split in HELD_OUT_SPLITS
             if self.run.audit_report(split).exists()
         }
+
+    def audit_samples(self) -> dict[str, pd.DataFrame]:
+        """The run's scored audit samples by audited split; Skipped without any."""
+        reason = self.unusable_run
+        if reason is not None:
+            raise Skipped(reason)
+        audited = [s for s in HELD_OUT_SPLITS if self.run.audit_report(s).exists()]
+        if not audited:
+            raise Skipped(f"{shown_path(self.run.root)} has no audit; run `mule evaluate`")
+        return {split: read_audit_scores(self.run.audit_scores(split)) for split in audited}
+
+    def reveal_inputs(self) -> list[dict[str, Any]]:
+        """The reveal's inputs, read from the graph once for every analysis that needs them."""
+        if self.inputs is None:
+            self.inputs = self.graph.reveal_inputs()
+        return self.inputs
 
     def features(self) -> pd.DataFrame:
         """The feature table: kept if current, else read from the graph and written."""
@@ -211,15 +232,11 @@ class Study:
             case "learning-curve":
                 return learning_curve(self.features(), audits=self.audits())
             case "subgroups":
-                reason = self.unusable_run
-                if reason is not None:
-                    raise Skipped(reason)
-                audited = [s for s in HELD_OUT_SPLITS if self.run.audit_report(s).exists()]
-                if not audited:
-                    raise Skipped(f"{shown_path(self.run.root)} has no audit; run `mule evaluate`")
-                return subgroups(
-                    {split: read_audit_scores(self.run.audit_scores(split)) for split in audited}
-                )
+                return subgroups(self.audit_samples())
+            case "activity-timing":
+                samples = self.audit_samples()
+                dates = {split: report["date"] for split, report in self.audits().items()}
+                return activity_timing(samples, dates, self.reveal_inputs())
             case "proxy-validity":
                 reason = self.unusable_run
                 if reason is not None:
@@ -232,8 +249,7 @@ class Study:
                     raise Skipped(f"{shown_path(self.run.root)} has no audit; run `mule evaluate`")
                 return proxy_validity(self.run, self.graph.oracle().read())
             case "reveal-spread":
-                graph = self.graph
-                return reveal_spread(graph.reveal_inputs(), graph.reveal_parameters())
+                return reveal_spread(self.reveal_inputs(), self.graph.reveal_parameters())
             case "nnpu-simulation":
                 return nnpu_simulation()
             case other:
