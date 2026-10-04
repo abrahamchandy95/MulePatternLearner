@@ -45,7 +45,7 @@ mirror itself, so only this check compares the mirror with the GSQL.
 | `baselines` | How well a table of the account's own activity ranks mules, with no neighbour, association or pool input, beside the run's audits | the feature table; the run's audits when it has them |
 | `learning-curve` | How ranking quality grows with the number of labelled training mules | the feature table; the run's audits when it has them |
 | `subgroups` | Which mules the run's audits find: revealed or hidden, how few make its AP, which rings | the run's audits |
-| `proxy-validity` | How well the run's proxy predictions rank the ground truth, hidden and revealed mules apart | the run and the graph's truth |
+| `proxy-validity` | How well the run's ranking, whose epoch the proxy chose, finds the ground truth: the hidden and revealed mules from its audit samples, which hold every hidden mule, and all of its proxy predictions | the run's audits and the graph's truth |
 | `reveal-spread` | How the one-time label reveal's outcome varies with its salt, replayed offline over salts 0 to 999 | the reveal's inputs, read once |
 | `nnpu-simulation` | Whether the nnPU positive weight alone explains the collapse of textbook nnPU, on a synthetic problem | nothing (offline, about 15 seconds) |
 

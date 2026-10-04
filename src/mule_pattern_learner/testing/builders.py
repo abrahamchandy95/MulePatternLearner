@@ -1275,11 +1275,11 @@ def diagnostic_tables(seed: int = 0) -> dict[str, pd.DataFrame]:
 
     The feature table's analyses run on feature_frame, with the audit reports of a
     synthetic run on its accounts beside them (study_audits, with bootstrap intervals);
-    the subgroups on that run's audit samples; the proxy validity on proxy_predictions;
-    the reveal spread over 50 salts of reveal_population; the nnPU simulation on a small,
-    short problem. The baselines' intervals take 40 replicates and the curve two draws,
-    and the tables of a seed are computed once per process (each call gets copies), to
-    keep the tests fast.
+    the subgroups on that run's audit samples; the proxy validity on proxy_predictions and
+    those audit samples; the reveal spread over 50 salts of reveal_population; the nnPU
+    simulation on a small, short problem. The baselines' intervals take 40 replicates and
+    the curve two draws, and the tables of a seed are computed once per process (each
+    call gets copies), to keep the tests fast.
     """
     return {name: table.copy() for name, table in _diagnostic_tables(seed).items()}
 
@@ -1304,7 +1304,7 @@ def _diagnostic_tables(seed: int) -> dict[str, pd.DataFrame]:
         "learning_curve": learning_curve(frame, repeats=2, audits=audits),
         "subgroups": subgroups(samples),
         "proxy_validity": validity_table(
-            {split: rows for split, (rows, _) in predicted.items()}, truth, 0.5
+            {split: rows for split, (rows, _) in predicted.items()}, samples, truth, 0.5
         ),
         "reveal_spread": reveal_spread(reveal_population(seed), params, salts=range(50)),
         "nnpu_simulation": nnpu_simulation(seeds=(1, 2), problem=small),

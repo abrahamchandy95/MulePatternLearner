@@ -13,7 +13,8 @@ The analyses, in the order `mule diagnose` runs them all:
   they build first when it is missing or stale. The baselines and the curve add the
   run's audits when it has them.
 - subgroups: the run's audit samples (`mule evaluate` writes them).
-- proxy-validity: the run's proxy predictions against the graph's truth.
+- proxy-validity: the run's proxy predictions against the graph's truth, with the hidden
+  and revealed mules of its audit samples (`mule evaluate` writes them).
 - reveal-spread: the reveal's inputs, read from the graph, replayed over salts.
 - nnpu-simulation: offline.
 
@@ -227,6 +228,8 @@ class Study:
                     raise Skipped(
                         f"{shown_path(self.run.root)} is not complete: it has no metrics.json"
                     )
+                if not any(self.run.audit_report(s).exists() for s in HELD_OUT_SPLITS):
+                    raise Skipped(f"{shown_path(self.run.root)} has no audit; run `mule evaluate`")
                 return proxy_validity(self.run, self.graph.oracle().read())
             case "reveal-spread":
                 graph = self.graph

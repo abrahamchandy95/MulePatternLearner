@@ -326,7 +326,9 @@ ranking, in metrics named `hidden_` and the metric (`hidden_average_precision`,
 `hidden_roc_auc`), then of every mule. The figures draw the hidden mules', but for the
 ring coverage. `subgroups.csv` has the subsets `hidden` and `revealed` (each kind of mule
 against the non-mules), `hidden` and `mules` for the running sum of the AP
-(`cumulative_average_precision`, by `rank`), and `rings`.
+(`cumulative_average_precision`, by `rank`), and `rings`. `proxy_validity.csv` has the
+subsets `hidden` and `revealed`, from the run's audit samples, which hold every hidden
+mule, weighted to the population, and `all`, the proxy predictions, unweighted.
 
 ## The archive: `results/archive/`
 

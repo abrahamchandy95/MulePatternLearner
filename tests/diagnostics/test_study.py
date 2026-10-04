@@ -233,8 +233,12 @@ def test_the_run_analyses_are_skipped_when_the_run_cannot_be_compared(
     result = study_of(("subgroups", "proxy-validity"), config, dataset, run)
     assert result["status"] == INCOMPLETE
     named = run.root.relative_to(home).as_posix()
-    assert result["skipped"] == {"subgroups": f"{named} has no audit; run `mule evaluate`"}
-    assert result["analyses"]["proxy-validity"]["status"] == WRITTEN
+    # Both read the run's audit samples: the proxy validity takes its hidden and revealed
+    # mules from them.
+    assert result["skipped"] == {
+        "subgroups": f"{named} has no audit; run `mule evaluate`",
+        "proxy-validity": f"{named} has no audit; run `mule evaluate`",
+    }
     # A run of another dataset is not compared at all.
     write_run_config(run.config, config, {"dataset_id": "other"})
     result = study_of(("baselines", "proxy-validity"), config, dataset, run)

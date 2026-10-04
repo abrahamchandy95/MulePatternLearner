@@ -415,10 +415,11 @@ PROXY_SUBSETS = {
 
 
 def plot_proxy_validity(ax: Axes, table: pd.DataFrame) -> Axes:
-    """The ROC AUC of the proxy predictions against the ground truth, by subset and split.
+    """The ROC AUC of the run's ranking against the ground truth, by subset and split.
 
-    The hidden mules against the non-mules, the revealed mules against them, and all the
-    predicted accounts; each bar is labelled with its AP. A proxy that ranks revealed
+    The hidden mules against the non-mules and the revealed mules against them, from the
+    run's audit samples, weighted, and all the proxy's predicted accounts, unweighted;
+    each bar is labelled with its AP. A proxy that ranks revealed
     mules well and hidden ones near chance measures the reveal, not mule detection.
     """
     subsets = list(PROXY_SUBSETS)
@@ -455,12 +456,12 @@ def plot_proxy_validity(ax: Axes, table: pd.DataFrame) -> Axes:
     ax.grid(axis="x", visible=False)
     ax.set_ylim(0, 1.1)
     ax.set_ylabel("ROC AUC against the ground truth")
-    ax.set_xlabel("The accounts of the proxy predictions scored")
+    ax.set_xlabel("Hidden and revealed: the audit sample, weighted; all: the proxy predictions")
     handles, labels = ax.get_legend_handles_labels()
     handles.append(Line2D([], [], color=MUTED, linestyle="--", linewidth=1.0))
     labels.append("chance")
     legend_below(ax, handles, labels)
-    ax.set_title("The proxy predictions against the ground truth")
+    ax.set_title("The run's ranking against the ground truth")
     return ax
 
 

@@ -66,7 +66,7 @@ DIAGNOSTICS_FIGURES = {
     "drift": "The non-mules' feature drift from the train cutoff",
     "ap_concentration": "How few hidden mules make their audit AP",
     "ring_coverage": "Rings with a member in the review budgets",
-    "proxy_validity": "The proxy predictions against the ground truth",
+    "proxy_validity": "The run's ranking against the ground truth, by subset",
     "reveal_spread": "The label reveal replayed over salts",
     "nnpu_simulation": "The nnPU positive weight, simulated",
 }
@@ -506,9 +506,15 @@ def proxy_section(home: Reported, frame: pd.DataFrame) -> list[str]:
     return [
         "## Proxy validity",
         "",
-        "The run's proxy predictions (its observed positives and a sample of unlabelled "
-        "accounts) scored against the ground truth, unweighted: the hidden mules against "
-        "the non-mules, the revealed mules against them, and all of them.",
+        "How the ranking of the run, whose epoch the proxy chose, finds the ground truth. "
+        "The hidden and revealed subsets come from the run's audit samples, which hold "
+        "every mule of the split, so the hidden rows are never empty: the hidden mules "
+        "against the non-mules with the revealed ones removed, and the revealed mules "
+        "against the non-mules with the hidden ones removed, weighted to the split's "
+        "population (the accounts and mules count the sample). The proxy's own sample of "
+        "unlabelled accounts holds the hidden mules only at their population rate, a "
+        "handful at most. All: the proxy predictions, its observed positives and that "
+        "sample, against the ground truth, unweighted.",
         "",
         *table(["Split", "Subset", "Accounts", "Mules", "AP", "ROC AUC"], rows),
         "",
