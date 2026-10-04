@@ -109,8 +109,12 @@ gain the summary model's steadiness, a seed ensemble is the way to use it.
   scores averaged on the log-odds scale, beside the mean of its seeds.
 - **Intervals over both sources**: a delta's interval now resamples the seeds, paired by
   seed, as well as the audit sample, the audit-only interval stays beside it, and the
-  report says how many seeds agree on the sign (a consistent delta needs them all) and
-  how many of its comparisons would exclude zero by chance.
+  report says how many seeds agree on the sign and how many of its comparisons would
+  exclude zero by chance. A delta is consistent when its interval over both sources
+  excludes zero on the side of the mean: that interval already widens with seeds that
+  disagree, so the seeds that agree are shown beside it and do not decide, and with ten
+  seeds a rule that every seed agree would refuse a clear difference for one noisy
+  seed.
 - **Proxy reliability**: how far the validation proxy, the only thing a bank has, ranks
   the runs and the variants as the audit does, within each selection rule, and on the
   hidden mules alone.

@@ -23,9 +23,10 @@ from those replicates: the audit sample's uncertainty for these seeds. The varia
 difference from the baseline's (over the seeds both completed, paired by seed) gets two:
 the audit-only interval, from the same replicates, and the two-source interval, which
 on each replicate also resamples the seeds (metrics.two_source_replicates), so it covers
-the spread between seeds as well. comparison.csv counts the seeds whose own delta has
-the mean's sign, and the hidden mules' delta is consistent when its two-source interval
-excludes zero and every seed compared agrees on that sign. Accounts some run's audit
+the spread between seeds as well. The hidden mules' delta is consistent when its
+two-source interval excludes zero on the side of the mean; comparison.csv counts beside
+it the seeds whose own delta has the mean's sign, which does not decide. Accounts some
+run's audit
 rejected are left out of the pairing, and comparison.csv counts them.
 
 A variant's seed ensemble combines its complete seeds (two or more) into one ranking of
@@ -333,15 +334,23 @@ class Delta:
 
     @property
     def consistent(self) -> bool:
-        """Whether the two-source interval excludes zero and every seed has the mean's sign."""
+        """Whether the two-source interval excludes zero on the side of the mean.
+
+        The interval covers both the seeds and the audit sample, so it already widens
+        with seeds that disagree; how many agree (agreeing) is shown beside it and does
+        not decide. An exactly zero mean is on neither side, so it is never consistent.
+        """
         if self.interval is None:
             return False
         low, high = self.interval
-        return (low > 0 or high < 0) and self.agreeing == len(self.seeds)
+        return (self.value > 0 and low > 0) or (self.value < 0 and high < 0)
 
     @property
     def agreeing(self) -> int:
-        """The seeds whose difference has the sign of the mean difference."""
+        """The seeds whose difference has the sign of the mean difference.
+
+        An exactly zero difference, or mean, has neither sign, so it agrees with none.
+        """
         return sum(delta * self.value > 0 for delta in self.seeds.values())
 
 

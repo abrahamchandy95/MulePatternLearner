@@ -252,8 +252,9 @@ seeds and the audit sample (`validation_hidden_ap_delta_low`,
 and the seeds, paired by seed) and its interval over the audit sample alone
 (`validation_hidden_ap_delta_audit_low`, `validation_hidden_ap_delta_audit_high`), the
 seeds both completed (`validation_hidden_ap_delta_seeds`) and those whose own delta has
-the mean's sign (`validation_hidden_ap_delta_agreeing`), and `consistent` (the two-source
-interval excludes zero and every seed compared agrees on the sign); the seed means of
+the mean's sign (`validation_hidden_ap_delta_agreeing`; an exactly zero delta agrees with
+neither sign), and `consistent` (the two-source interval excludes zero on the side of the
+mean; the seeds that agree are shown beside it and do not decide); the seed means of
 `validation_hidden_roc_auc`, `test_hidden_roc_auc` and recall and precision at each
 budget (`validation_hidden_recall_at_1pct`, `validation_hidden_precision_at_1pct` and so
 on for `5pct`, `10pct` and the test split). Then the same columns of every mule, without

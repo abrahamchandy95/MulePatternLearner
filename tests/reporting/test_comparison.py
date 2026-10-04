@@ -85,6 +85,9 @@ def test_the_suite_report_ranks_by_validation_and_keeps_test_for_reporting(
     assert "The suite makes 2 comparisons with the baseline, so at 90% about 0.2" in validation
     assert "| Delta from the baseline | Audit-only interval | Seeds that agree |" in validation
     assert len(re.findall(r"\| \d of 2 \|", validation)) == 2
+    # The interval decides; the seeds that agree are beside it.
+    assert "excludes zero on the side of the mean" in validation
+    assert "are shown beside it and do not decide" in validation
     # The hidden mules lead; every mule's AP and its delta follow.
     assert "Decisions use the validation audit AP of the hidden mules" in text
     assert "| AP, every mule | Its delta |" in validation

@@ -145,17 +145,24 @@ def test_the_two_source_replicates_of_a_small_case_worked_by_hand() -> None:
     assert not (accounts == first).all()
 
 
-def test_a_delta_is_consistent_when_its_interval_excludes_zero_and_every_seed_agrees() -> None:
+def test_a_delta_is_consistent_when_its_interval_excludes_zero_on_the_side_of_the_mean() -> None:
     seeds = {1: -0.1, 2: -0.3}
     assert Delta(-0.2, [-0.3, -0.1], [-0.25, -0.15], seeds).consistent
     assert Delta(0.2, [0.1, 0.3], [0.15, 0.25], {1: 0.1, 2: 0.3}).consistent
     # The audit-only interval does not decide: the two-source one must exclude zero.
     assert not Delta(-0.2, [-0.3, 0.05], [-0.25, -0.15], seeds).consistent
-    # A seed of the other sign is counted, and the delta is not consistent.
+    # Nor do the seeds that agree, which are counted beside it: the two-source interval
+    # already widens with a seed of the other sign.
     mixed = Delta(-0.2, [-0.3, -0.1], [-0.25, -0.15], {1: 0.1, 2: -0.5, 3: -0.2})
-    assert not mixed.consistent and mixed.agreeing == 2
-    # Nor is one whose seed has no difference at all.
-    assert not Delta(-0.2, [-0.3, -0.1], [-0.25, -0.15], {1: 0.0, 2: -0.4}).consistent
+    assert mixed.consistent and mixed.agreeing == 2
+    # A seed without any difference agrees with neither sign.
+    still = Delta(-0.2, [-0.3, -0.1], [-0.25, -0.15], {1: 0.0, 2: -0.4})
+    assert still.consistent and still.agreeing == 1
+    # An interval on the other side of the mean, which unpaired accounts can make, is not
+    # consistent, and an exactly zero mean is on neither side: no seed agrees with it.
+    assert not Delta(-0.02, [0.01, 0.3], [0.02, 0.2], seeds).consistent
+    zero = Delta(0.0, [0.1, 0.3], [0.15, 0.25], {1: 0.1, 2: -0.1})
+    assert not zero.consistent and zero.agreeing == 0
     assert not Delta(-0.2, None, None, {1: -0.1}).consistent
 
 

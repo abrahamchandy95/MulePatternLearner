@@ -180,14 +180,16 @@ but for `comparison_ap_every_mule.png`.
   resampling n seeds understates their variance by about (n - 1) / n and draws few
   distinct sets (three seeds give ten), so the interval is reliable only with many seeds,
   such as the ten every suite now trains.
+- **`consistent`** is true when the hidden mules' two-source interval excludes zero on
+  the side of the mean. The interval resamples the seeds, so it already widens when
+  they disagree. report.md states how many comparisons the suite makes and how many
+  would exclude zero by chance: the `all` suite compares 19 variants with the baseline,
+  so at 90% about 1.9 would even if no variant differed. Treat a single consistent delta
+  as a lead to repeat.
 - **The seeds that agree** (`validation_hidden_ap_delta_agreeing` of
   `validation_hidden_ap_delta_seeds`, "8 of 10" in report.md) are those whose own delta
-  has the sign of the mean.
-- **`consistent`** is true when the hidden mules' two-source interval excludes zero and
-  every seed compared agrees on the sign. report.md states how many comparisons the
-  suite makes and how many would exclude zero by chance: the `all` suite compares 17
-  variants with the baseline, so at 90% about 1.7 would even if no variant differed.
-  Treat a single consistent delta as a lead to repeat.
+  has the sign of the mean; an exactly zero delta, or mean, agrees with neither sign.
+  They are shown beside the delta and do not decide whether it is consistent.
 - **Seed ensembles** combine each variant's seeds (two or more) into one model: their
   scores of the accounts every audit scored, averaged on the log-odds scale, audited on
   validation and test with a run's ranking metrics, of the hidden mules and of every

@@ -38,8 +38,7 @@ class VariantSeeds:
     """One variant's value of a metric: per seed, the mean over seeds and its interval.
 
     ``consistent`` marks a paired delta whose two-source interval, over the seeds and
-    the audit sample, excludes zero, every seed's own delta having the mean's sign
-    (experiments.tables.Delta); ``audit_interval`` is such a delta's interval over the
+    the audit sample, excludes zero on the side of the mean (experiments.tables.Delta); ``audit_interval`` is such a delta's interval over the
     audit sample alone. ``ensemble`` is the value of the variant's seed ensemble, its
     seeds' scores averaged on the log-odds scale, and ``ensemble_interval`` its
     interval, where the suite has one.
@@ -203,8 +202,8 @@ def plot_paired_delta(ax: Axes, rows: Sequence[VariantSeeds]) -> Axes:
     Per seed, the difference from the baseline of the same seed; the large marker is the
     difference of the seed means, on its two-source interval (the seeds and the audit
     sample resampled), with the audit-only interval as a thin line above it. A filled
-    marker is consistent: its two-source interval excludes zero and every seed agrees on
-    the sign.
+    marker is consistent: its two-source interval excludes zero on the side of the mean,
+    whatever the seeds' own signs, which the small markers show.
     """
     y = _rows(ax, rows)
     colour = SPLIT_COLOURS["validation"]
