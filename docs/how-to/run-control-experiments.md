@@ -155,6 +155,15 @@ validation audit AP and marks the test audit "for reporting, not selection".
   excludes zero. The `all` suite compares 12 variants with the baseline, so at 90% about
   one will exclude zero by chance: treat results as exploratory until repeated with more
   seeds.
+- **Seed ensembles** combine each variant's seeds (two or more) into one model: their
+  scores of the accounts every audit scored, averaged on the log-odds scale, audited on
+  validation and test as a run is, with the AP's interval over the same replicates. On
+  the log-odds scale a seed that is confident about an account weighs more than a
+  hesitant one, where averaging ranks would give every seed the same say. report.md
+  ranks them in a section of their own beside the mean of each variant's seeds, and
+  `comparison_ap.png` draws each as a hollow diamond below its variant's mean. An
+  ensemble above the mean of its seeds gains from their disagreement: a method question
+  for a ranking that varies from seed to seed.
 - **`unpaired_accounts`** counts validation accounts some run's audit rejected; they are
   left out of the pairing.
 - **`differs`** lists runs whose commit, dirty state, device or sampler backend differ

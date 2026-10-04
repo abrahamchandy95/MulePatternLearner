@@ -336,6 +336,29 @@ def paired_replicates(
     return result
 
 
+# How close to 0 or 1 log_odds_mean lets a score be: 2 ** -50, about 8.9e-16 or 34.7 in
+# log-odds, near where float64 can still tell a score from 1. A score of exactly 0 or 1
+# has no finite log-odds; a power of two makes 1 - clip exact, so both ends clip alike.
+LOG_ODDS_CLIP = 2.0**-50
+
+
+def log_odds_mean(scores: NDArray[Any], clip: float = LOG_ODDS_CLIP) -> NDArray[np.float64]:
+    """The scores of several models of the same accounts, averaged on the log-odds scale.
+
+    ``scores`` holds one column per model (a seed of a variant) and one row per account,
+    as probabilities. Each is clipped to [clip, 1 - clip], turned into its log-odds,
+    averaged over the columns and turned back into a probability: the geometric mean of
+    the odds. The trade-off: on the log-odds scale a model that is confident about an
+    account, scoring it near 0 or 1, moves the mean further than one that is unsure, so a
+    confident seed weighs more than a hesitant one; averaging the models' ranks instead
+    would give every seed the same say about every account, whatever its confidence. The
+    clip bounds how far one model can pull.
+    """
+    clipped = np.clip(np.asarray(scores, dtype=np.float64), clip, 1 - clip)
+    mean = (np.log(clipped) - np.log1p(-clipped)).mean(axis=1)
+    return 1 / (1 + np.exp(-mean))
+
+
 def weighted_quantiles(
     values: NDArray[Any], weight: NDArray[Any], quantiles: Sequence[float]
 ) -> NDArray[np.float64]:

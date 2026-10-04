@@ -52,6 +52,7 @@ from typing import Any
 import numpy as np
 
 from ..artifacts import (
+    SEED_MEAN,
     read_comparison,
     read_history,
     read_json,
@@ -467,6 +468,7 @@ def suite_summary(result: Mapping[str, Any], top: int = TOP) -> str:
     suite = SuitePaths(Path(result["directory"]))
     if suite.comparison.exists():
         comparison = read_comparison(suite.comparison)
+        comparison = comparison[comparison.estimate == SEED_MEAN]
         ranked = comparison.sort_values("validation_ap", ascending=False, na_position="last")
         rows = [["variant", "seeds", "validation AP", "delta from the baseline", "test AP"]]
         for row in ranked.head(top).to_dict(orient="records"):

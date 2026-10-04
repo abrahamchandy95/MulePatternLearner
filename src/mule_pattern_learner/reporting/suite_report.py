@@ -3,7 +3,7 @@
 write_suite_report reads the suite's summary.csv and comparison.csv and the validation
 audits and epochs of its complete runs, draws the comparison figures
 (reporting.comparison) and rewrites its report.md: the variants ranked by the validation
-audit, with the tables and the figures.
+audit, their seed ensembles, the tables and the figures.
 """
 
 from __future__ import annotations
@@ -23,7 +23,9 @@ import pandas as pd
 
 from ..artifacts import (
     DELTA_METRIC,
+    ENSEMBLE,
     PROXY_METRIC,
+    SEED_MEAN,
     atomic_write,
     read_audit_scores,
     read_comparison,
@@ -75,14 +77,16 @@ PANELS_PER_ROW = 3
 class SuiteFiles:
     """What a suite's tables and its complete runs saved, as its figures read them.
 
-    ``comparison`` is ranked by the seed-mean validation audit AP, best first, with the
-    variants the audit could not rank last in the suite's order. ``captures`` and
-    ``epochs`` hold each complete run's validation audit sample and epochs.csv, by
-    variant and seed.
+    ``comparison`` holds comparison.csv's seed-mean rows, ranked by the seed-mean
+    validation audit AP, best first, with the variants the audit could not rank last in
+    the suite's order; ``ensembles`` its seed-ensemble rows, ranked by their own
+    validation audit AP. ``captures`` and ``epochs`` hold each complete run's validation
+    audit sample and epochs.csv, by variant and seed.
     """
 
     summary: pd.DataFrame
     comparison: pd.DataFrame
+    ensembles: pd.DataFrame
     captures: dict[str, dict[int, SplitScores]]
     epochs: dict[str, dict[int, pd.DataFrame]]
     prevalence: float | None
@@ -97,8 +101,10 @@ def complete_runs(summary: pd.DataFrame) -> list[tuple[str, int]]:
 def suite_files(suite: SuitePaths) -> SuiteFiles:
     """summary.csv, comparison.csv, and the validation audits and epochs of complete runs."""
     summary = read_summary(suite.summary)
-    comparison = read_comparison(suite.comparison)
-    comparison = comparison.sort_values("validation_ap", ascending=False, na_position="last")
+    table = read_comparison(suite.comparison)
+    ranked = table.sort_values("validation_ap", ascending=False, na_position="last")
+    comparison = ranked[ranked.estimate == SEED_MEAN].reset_index(drop=True)
+    ensembles = ranked[ranked.estimate == ENSEMBLE].reset_index(drop=True)
     captures: dict[str, dict[int, SplitScores]] = {}
     epochs: dict[str, dict[int, pd.DataFrame]] = {}
     prevalence = None
@@ -115,35 +121,50 @@ def suite_files(suite: SuitePaths) -> SuiteFiles:
         epochs.setdefault(variant, {})[seed] = read_epochs(run.epochs)
         if prevalence is None:
             prevalence = read_json(run.metrics)["validation_proxy"].get("prevalence")
-    return SuiteFiles(summary, comparison.reset_index(drop=True), captures, epochs, prevalence)
+    return SuiteFiles(summary, comparison, ensembles, captures, epochs, prevalence)
+
+
+def _bounds(record: Mapping[str, Any], interval: str | None) -> tuple[float, float] | None:
+    """A row's interval, from the columns ``interval`` names without _low and _high."""
+    if interval is None:
+        return None
+    low, high = record[f"{interval}_low"], record[f"{interval}_high"]
+    return None if pd.isna(low) or pd.isna(high) else (float(low), float(high))
 
 
 def variant_seeds(
-    files: SuiteFiles, split: str, metric: str, column: str, *, interval: str | None = None
+    files: SuiteFiles,
+    split: str,
+    metric: str,
+    column: str,
+    *,
+    interval: str | None = None,
+    ensemble: bool = False,
 ) -> list[VariantSeeds]:
     """Each ranked variant's per-seed values of a summary metric and its comparison column.
 
     ``interval`` names the comparison columns of the interval without their _low and
-    _high endings.
+    _high endings. With ``ensemble`` each variant also gets its seed ensemble's value of
+    the column, and its interval, where the suite has one.
     """
     summary = files.summary
     chosen = summary[(summary.split == split) & (summary.metric == metric)]
     chosen = chosen[chosen.status == "complete"]
+    combined = {str(row["variant"]): row for row in records(files.ensembles)}
     rows = []
     for record in records(files.comparison):
         name = str(record["variant"])
         mine = chosen[chosen.variant == name]
-        bounds = None
-        if interval is not None:
-            low, high = record[f"{interval}_low"], record[f"{interval}_high"]
-            bounds = None if pd.isna(low) or pd.isna(high) else (float(low), float(high))
+        joint = combined.get(name) if ensemble else None
         rows.append(
             VariantSeeds(
                 name,
                 dict(zip(mine.seed.astype(int), mine.value.astype(float), strict=True)),
                 value_or_none(record[column]),
-                bounds,
+                _bounds(record, interval),
                 str(record["consistent"]) == "True",
+                ensemble=None if joint is None else value_or_none(joint[column]),
+                ensemble_interval=None if joint is None else _bounds(joint, interval),
             )
         )
     return rows
@@ -198,7 +219,12 @@ def suite_drawings(files: SuiteFiles) -> dict[str, tuple[Drawing, tuple[float, f
     count = len(files.comparison)
     splits = {
         split: variant_seeds(
-            files, split, "average_precision", f"{split}_ap", interval=f"{split}_ap"
+            files,
+            split,
+            "average_precision",
+            f"{split}_ap",
+            interval=f"{split}_ap",
+            ensemble=True,
         )
         for split in HELD_OUT_SPLITS
     }
@@ -340,9 +366,9 @@ def _interval_text(value: Any, low: Any, high: Any) -> str:
 
 
 def suite_text(suite: SuitePaths, files: SuiteFiles) -> str:
-    """A suite's report.md: its runs, the validation ranking, the test audit, the figures."""
+    """A suite's report.md: runs, validation ranking, seed ensembles, test audit, figures."""
     summary, comparison = files.summary, files.comparison
-    runs = summary.drop_duplicates(["variant", "seed"])
+    runs = summary[summary.status != ENSEMBLE].drop_duplicates(["variant", "seed"])
     statuses = runs.status.value_counts()
     counted = ", ".join(f"{number(int(n))} {status}" for status, n in statuses.items())
     seeds = ", ".join(str(seed) for seed in sorted(runs.seed.astype(int).unique()))
@@ -429,7 +455,7 @@ def suite_text(suite: SuitePaths, files: SuiteFiles) -> str:
                 ),
             ]
         )
-    lines += [*table(header, rows), ""]
+    lines += [*table(header, rows), "", *ensemble_section(files)]
     test_rows = [
         [
             row["variant"],
@@ -486,6 +512,59 @@ def suite_text(suite: SuitePaths, files: SuiteFiles) -> str:
         lines += [f"Not compared: {listed}.", ""]
     lines += figure_links(suite, SUITE_FIGURES)
     return "\n".join(lines).rstrip("\n") + "\n"
+
+
+def ensemble_section(files: SuiteFiles) -> list[str]:
+    """report.md's seed ensembles, ranked by their validation audit AP; none without one."""
+    if not len(files.ensembles):
+        return []
+    budgets = [budget_name(f) for f in REVIEW_BUDGETS]
+    means = {str(row["variant"]): row for row in records(files.comparison)}
+    rows = []
+    for rank, row in enumerate(records(files.ensembles), start=1):
+        name = str(row["variant"])
+        seed_mean = means[name]["validation_ap"] if name in means else None
+        rows.append(
+            [
+                str(rank),
+                f"**{name}**" if name == BASELINE_VARIANT else name,
+                row["seeds"],
+                _interval_text(
+                    row["validation_ap"], row["validation_ap_low"], row["validation_ap_high"]
+                ),
+                number(value_or_none(seed_mean)),
+                number(value_or_none(row["validation_roc_auc"])),
+                " / ".join(
+                    number(value_or_none(row[f"validation_recall_at_{b}"])) for b in budgets
+                ),
+                _interval_text(row["test_ap"], row["test_ap_low"], row["test_ap_high"]),
+            ]
+        )
+    header = [
+        "Rank",
+        "Variant",
+        "Seeds",
+        "Ensemble AP",
+        "Mean of its seeds' AP",
+        "ROC AUC",
+        "Recall in the top " + " / ".join(share_label(f) for f in REVIEW_BUDGETS),
+        "Test AP, for reporting",
+    ]
+    return [
+        "## Seed ensembles",
+        "",
+        "Each variant's seeds combined into one model: their scores of the accounts every "
+        "audit scored, averaged on the log-odds scale, then audited on validation and test "
+        "as a run is. On that scale a seed that is confident about an account weighs more "
+        "than a hesitant one, where averaging the seeds' ranks would give each the same say. "
+        "Ranked by the ensemble's validation audit AP, with its "
+        f"{INTERVAL:.0%} interval over the same paired replicates (the audit sample's "
+        "uncertainty, for these seeds), beside the mean of its seeds' own AP: an ensemble "
+        "above that mean gains from the seeds' disagreement.",
+        "",
+        *table(header, rows),
+        "",
+    ]
 
 
 def records(frame: pd.DataFrame) -> list[dict[str, Any]]:

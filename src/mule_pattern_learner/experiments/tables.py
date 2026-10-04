@@ -16,6 +16,14 @@ the baseline's (over the seeds both completed) get their 90% intervals from thos
 replicates. The intervals cover the audit sample's uncertainty for these seeds, not the
 spread between seeds, which the per-seed deltas beside them show. Accounts some run's
 audit rejected are left out of the pairing, and comparison.csv counts them.
+
+A variant's seed ensemble combines its complete seeds (two or more) into one ranking of
+those shared accounts, their scores averaged on the log-odds scale
+(metrics.log_odds_mean, whose docstring gives the trade-off against averaging ranks).
+Each ensemble is audited as a run is, on validation and test: the ranking metrics of
+the audit, and the AP's 90% interval over the same replicates. summary.csv gives its
+metrics in rows of status "ensemble" without a seed, and comparison.csv a row of its own
+after the seed means (estimate "ensemble" against "seed_mean").
 """
 
 from __future__ import annotations
@@ -31,8 +39,11 @@ import pandas as pd
 
 from ..artifacts import (
     DELTA_METRIC,
+    ENSEMBLE,
+    ENSEMBLE_SEEDS,
     PAIRED_METRIC,
     PROXY_METRIC,
+    SEED_MEAN,
     SUMMARY_COLUMNS,
     read_audit_scores,
     read_json,
@@ -45,8 +56,10 @@ from ..metrics import (
     REVIEW_BUDGETS,
     average_precision,
     budget_name,
+    log_odds_mean,
     paired_replicates,
     percentile_interval,
+    ranking_metrics,
 )
 from ..paths import BASELINE_VARIANT, RunPaths, SuitePaths
 from .variants import Variant
@@ -78,6 +91,7 @@ def _split_columns(split: str) -> list[str]:
 
 COMPARISON_COLUMNS = (
     "variant",
+    "estimate",
     "question",
     "changes",
     "seeds",
@@ -145,13 +159,19 @@ class PairedSplit:
 
     ``point`` holds each run's AP on those accounts and ``replicates`` its AP on each
     shared bootstrap replicate (replicates by runs, in the order of ``runs``).
-    ``unpaired`` counts the accounts some audit rejected, which are left out.
+    ``unpaired`` counts the accounts some audit rejected, which are left out. ``y``,
+    ``weight`` and ``rings`` are the shared accounts' truth, inverse inclusion
+    probability and ring, and ``scores`` each run's scores of them (accounts by runs).
     """
 
     runs: tuple[SuiteRun, ...]
     point: NDArray[np.float64]
     replicates: NDArray[np.float64]
     unpaired: int
+    y: NDArray[np.int64]
+    weight: NDArray[np.float64]
+    rings: NDArray[np.int64]
+    scores: NDArray[np.float64]
 
     def columns(self, variant: str) -> dict[int, int]:
         """The column of each of a variant's runs, by seed."""
@@ -197,7 +217,51 @@ def paired_split(runs: Sequence[SuiteRun], split: str) -> PairedSplit | None:
         [np.nan if (ap := average_precision(y, s, weight)) is None else ap for s in scores]
     )
     replicates = paired_replicates(y, weight, scores, average_precision, rings)
-    return PairedSplit(complete, point, replicates, len(every) - len(shared))
+    unpaired = len(every) - len(shared)
+    matrix = np.column_stack(scores) if scores else np.zeros((0, 0))
+    return PairedSplit(complete, point, replicates, unpaired, y, weight, rings, matrix)
+
+
+@dataclass(frozen=True)
+class Ensemble:
+    """A variant's seed ensemble on a split's shared accounts, audited as a run is.
+
+    ``seeds`` are the seeds it combines, ``metrics`` the audit's ranking metrics
+    (metrics.ranking_metrics) and ``interval`` the 90% interval of its AP over the
+    split's shared replicates.
+    """
+
+    seeds: tuple[int, ...]
+    metrics: dict[str, float | None]
+    interval: list[float] | None
+
+
+def seed_ensembles(paired: PairedSplit) -> dict[str, Ensemble]:
+    """The seed ensemble of every variant with two or more complete runs on a split.
+
+    Each averages its seeds' scores of the shared accounts on the log-odds scale
+    (metrics.log_odds_mean). Its AP interval comes from the bootstrap replicates every
+    run of the split shares (one resample of the accounts and rings per replicate,
+    metrics.paired_replicates), the replicates of every audit's own interval.
+    """
+    combined: dict[str, tuple[tuple[int, ...], NDArray[np.float64]]] = {}
+    for variant in dict.fromkeys(run.variant.name for run in paired.runs):
+        columns = paired.columns(variant)
+        if len(columns) > 1:
+            score = log_odds_mean(paired.scores[:, list(columns.values())])
+            combined[variant] = (tuple(columns), score)
+    if not combined:
+        return {}
+    scores = [score for _, score in combined.values()]
+    replicates = paired_replicates(paired.y, paired.weight, scores, average_precision, paired.rings)
+    return {
+        variant: Ensemble(
+            seeds,
+            ranking_metrics(paired.y, score, paired.weight),
+            percentile_interval(replicates[:, column]),
+        )
+        for column, (variant, (seeds, score)) in enumerate(combined.items())
+    }
 
 
 @dataclass(frozen=True)
@@ -234,8 +298,15 @@ def paired_delta(paired: PairedSplit, variant: str) -> Delta | None:
     return Delta(value, percentile_interval(replicated), by_seed)
 
 
-def summary_rows(runs: Sequence[SuiteRun], validation: PairedSplit | None) -> list[dict[str, Any]]:
-    """summary.csv's rows: each run's numbers, then its paired validation AP and delta."""
+def summary_rows(
+    runs: Sequence[SuiteRun],
+    validation: PairedSplit | None,
+    ensembles: Mapping[str, Mapping[str, Ensemble]],
+) -> list[dict[str, Any]]:
+    """summary.csv's rows: each run's numbers and paired validation AP and delta, then ensembles.
+
+    ``ensembles`` holds each split's seed ensembles by variant (seed_ensembles).
+    """
     deltas: dict[tuple[str, int], float] = {}
     paired_ap: dict[tuple[str, int], float] = {}
     if validation is not None:
@@ -263,6 +334,21 @@ def summary_rows(runs: Sequence[SuiteRun], validation: PairedSplit | None) -> li
             rows.append(
                 {**fixed, "split": split, "metric": metric, "value": value, "commit": commit}
             )
+    for variant in dict.fromkeys(run.variant.name for run in runs):
+        found = {split: by[variant] for split, by in ensembles.items() if variant in by}
+        if not found:
+            continue
+        fixed = {"variant": variant, "seed": None, "status": ENSEMBLE, "commit": ""}
+        seeds = max(len(ensemble.seeds) for ensemble in found.values())
+        values = [("", ENSEMBLE_SEEDS, float(seeds))]
+        values += [
+            (split, name, value)
+            for split, ensemble in found.items()
+            for name, value in ensemble.metrics.items()
+            if value is not None
+        ]
+        for split, metric, value in values:
+            rows.append({**fixed, "split": split, "metric": metric, "value": value})
     return [{name: row[name] for name in SUMMARY_COLUMNS} for row in rows]
 
 
@@ -307,12 +393,16 @@ def interval_pair(interval: list[float] | None) -> tuple[float, float]:
 
 
 def comparison_rows(
-    runs: Sequence[SuiteRun], paired: Mapping[str, PairedSplit | None], base: RunConfig
+    runs: Sequence[SuiteRun],
+    paired: Mapping[str, PairedSplit | None],
+    ensembles: Mapping[str, Mapping[str, Ensemble]],
+    base: RunConfig,
 ) -> list[dict[str, Any]]:
-    """comparison.csv's rows: one per variant of the suite, in the suite's order.
+    """comparison.csv's rows: one per variant, in the suite's order, then one per ensemble.
 
     Point values are the seed means of what each complete run's audit recorded; the
-    intervals and the delta come from the paired AP of the shared accounts.
+    intervals and the delta come from the paired AP of the shared accounts. An ensemble's
+    row holds its own audit metrics and AP intervals (``ensembles``, by split and variant).
     """
     complete = [run for run in runs if run.status == COMPLETE]
     recorded = {
@@ -327,6 +417,7 @@ def comparison_rows(
         values = [recorded[id(run)] for run in mine]
         row: dict[str, Any] = {
             "variant": variant.name,
+            "estimate": SEED_MEAN,
             "question": variant.question,
             "changes": variant.change_text(base),
             "seeds": " ".join(str(run.seed) for run in mine),
@@ -352,7 +443,33 @@ def comparison_rows(
         row["unpaired_accounts"] = validation.unpaired if validation is not None else np.nan
         row["differs"] = flags.get(variant.name, "")
         rows.append({name: row.get(name, np.nan) for name in COMPARISON_COLUMNS})
+    for variant in dict.fromkeys(run.variant for run in runs):
+        found = {split: by[variant.name] for split, by in ensembles.items() if variant.name in by}
+        if not found:
+            continue
+        seeds = max((ensemble.seeds for ensemble in found.values()), key=len)
+        row = {
+            "variant": variant.name,
+            "estimate": ENSEMBLE,
+            "question": variant.question,
+            "changes": variant.change_text(base),
+            "seeds": " ".join(map(str, seeds)),
+        }
+        for split, ensemble in found.items():
+            low, high = interval_pair(ensemble.interval)
+            row |= {f"{split}_ap": ensemble.metrics["average_precision"]}
+            row |= {f"{split}_ap_low": low, f"{split}_ap_high": high}
+            for metric in AUDIT_METRICS[1:]:
+                row[f"{split}_{metric}"] = ensemble.metrics.get(metric)
+        row["unpaired_accounts"] = validation.unpaired if validation is not None else np.nan
+        row["differs"] = flags.get(variant.name, "")
+        rows.append({name: _cell(row.get(name)) for name in COMPARISON_COLUMNS})
     return rows
+
+
+def _cell(value: Any) -> Any:
+    """A table cell: a value, or NaN for one that is missing."""
+    return np.nan if value is None else value
 
 
 def write_tables(
@@ -367,9 +484,12 @@ def write_tables(
     """
     suite.root.mkdir(parents=True, exist_ok=True)
     paired = {split: paired_split(runs, split) for split in HELD_OUT_SPLITS}
-    summary = summary_rows(runs, paired["validation"])
+    ensembles = {
+        split: seed_ensembles(pairing) for split, pairing in paired.items() if pairing is not None
+    }
+    summary = summary_rows(runs, paired["validation"], ensembles)
     write_table(suite.summary, pd.DataFrame(summary, columns=list(SUMMARY_COLUMNS)))
-    comparison = comparison_rows(runs, paired, base)
+    comparison = comparison_rows(runs, paired, ensembles, base)
     write_table(suite.comparison, pd.DataFrame(comparison, columns=list(COMPARISON_COLUMNS)))
     validation = paired["validation"]
     return {

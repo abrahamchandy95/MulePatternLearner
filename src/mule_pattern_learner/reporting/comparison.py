@@ -36,7 +36,9 @@ class VariantSeeds:
     """One variant's value of a metric: per seed, the mean over seeds and its interval.
 
     ``consistent`` marks a paired delta whose seeds all agree in sign with an interval
-    that excludes zero (experiments.tables.Delta).
+    that excludes zero (experiments.tables.Delta). ``ensemble`` is the value of the
+    variant's seed ensemble, its seeds' scores averaged on the log-odds scale, and
+    ``ensemble_interval`` its interval, where the suite has one.
     """
 
     name: str
@@ -44,6 +46,8 @@ class VariantSeeds:
     mean: float | None = None
     interval: tuple[float, float] | None = None
     consistent: bool = False
+    ensemble: float | None = None
+    ensemble_interval: tuple[float, float] | None = None
 
 
 def _colour(name: str, split: str) -> str:
@@ -120,21 +124,58 @@ def _dot_legend(split: str, *, interval: str) -> tuple[list[Line2D], list[str]]:
     return handles, ["one seed", "mean over seeds", interval]
 
 
+def _ensemble(ax: Axes, y: float, row: VariantSeeds, colour: str) -> None:
+    """A row's seed ensemble as a diamond on its interval's thin line, below the mean."""
+    below = y - 0.3
+    if row.ensemble_interval is not None:
+        ax.plot(row.ensemble_interval, [below, below], color=colour, linewidth=1.0)
+    if row.ensemble is not None:
+        ax.plot(
+            row.ensemble,
+            below,
+            marker="D",
+            markersize=6,
+            markerfacecolor=SURFACE,
+            markeredgecolor=colour,
+            markeredgewidth=1.4,
+            linestyle="none",
+            zorder=3,
+        )
+
+
 def plot_comparison(
     ax: Axes, rows: Sequence[VariantSeeds], *, split: str, baseline: float | None
 ) -> Axes:
-    """Each variant's audit AP on one split: its seeds, their mean and the mean's interval.
+    """Each variant's audit AP on one split: its seeds, their mean, its interval, its ensemble.
 
     ``baseline`` is the baseline's seed-mean AP, drawn as a dashed ink line through the
     panel. The interval is the paired bootstrap's for the seed mean: it covers the audit
-    sample's uncertainty, not the spread between seeds, which the seeds show.
+    sample's uncertainty, not the spread between seeds, which the seeds show. Below each
+    mean, a hollow diamond on a thin line is the variant's seed ensemble and its interval,
+    where the suite has one.
     """
     y = _rows(ax, rows)
     for position, row in zip(y, rows, strict=True):
         colour = _colour(row.name, split)
         _seeds(ax, position, row, colour)
         _estimate(ax, position, row, colour)
+        _ensemble(ax, position, row, colour)
     handles, labels = _dot_legend(split, interval=f"{INTERVAL:.0%} interval of the mean")
+    if any(row.ensemble is not None for row in rows):
+        colour = SPLIT_COLOURS[split]
+        handles.append(
+            Line2D(
+                [],
+                [],
+                marker="D",
+                markersize=6,
+                markerfacecolor=SURFACE,
+                markeredgecolor=colour,
+                color=colour,
+                linewidth=1.0,
+            )
+        )
+        labels.append("seed ensemble, its interval")
     if baseline is not None:
         ax.axvline(baseline, color=BASELINE, linestyle="--", linewidth=1.0, zorder=1)
         handles.append(Line2D([], [], color=BASELINE, linestyle="--", linewidth=1.0))

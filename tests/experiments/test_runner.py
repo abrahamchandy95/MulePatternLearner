@@ -12,6 +12,8 @@ from typing import Any
 import pytest
 
 from mule_pattern_learner.artifacts import (
+    ENSEMBLE,
+    SEED_MEAN,
     keep_history,
     read_comparison,
     read_events,
@@ -161,15 +163,20 @@ def test_a_suite_trains_audits_and_compares_then_keeps_or_archives_what_it_has(
     # Both tables, the figures and report.md.
     compared = SuitePaths.of(DROP.name, results)
     summary = read_summary(compared.summary)
-    assert set(zip(summary.variant, summary.seed, summary.status, strict=True)) == {
+    runs_rows = summary[summary.status != ENSEMBLE]
+    assert set(zip(runs_rows.variant, runs_rows.seed, runs_rows.status, strict=True)) == {
         (variant, seed, COMPLETE) for variant, seed in order
     }
+    # Each variant's two seeds make a seed ensemble, without a seed of its own.
+    ensembles = summary[summary.status == ENSEMBLE]
+    assert set(ensembles.variant) == {BASELINE.name, DROP.name} and ensembles.seed.isna().all()
     comparison = read_comparison(compared.comparison)
-    assert comparison.variant.tolist() == [BASELINE.name, DROP.name]
-    assert comparison.seeds.tolist() == ["42 43", "42 43"]
+    assert comparison.variant.tolist() == [BASELINE.name, DROP.name] * 2
+    assert comparison.estimate.tolist() == [SEED_MEAN, SEED_MEAN, ENSEMBLE, ENSEMBLE]
+    assert comparison.seeds.tolist() == ["42 43"] * 4
     # Every audit scored the same accounts, so all of them pair.
-    assert comparison.unpaired_accounts.tolist() == [0, 0]
-    assert not comparison.validation_ap_delta.iloc[1:].isna().any()
+    assert comparison.unpaired_accounts.tolist() == [0] * 4
+    assert not comparison.validation_ap_delta.iloc[1:2].isna().any()
     assert sorted(p.stem for p in compared.plots.iterdir()) == sorted(SUITE_FIGURES)
     assert compared.report.read_text().startswith(f"# Suite {DROP.name}\n")
     # The script's summary: how the suite ended, the variants ranked as report.md ranks
@@ -180,7 +187,8 @@ def test_a_suite_trains_audits_and_compares_then_keeps_or_archives_what_it_has(
         "Variants ranked by their validation audit AP, with 90% intervals:",
     ]
     assert shown[2].split()[:3] == ["variant", "seeds", "validation"]
-    ranked = comparison.sort_values("validation_ap", ascending=False).variant.tolist()
+    means = comparison[comparison.estimate == SEED_MEAN]
+    ranked = means.sort_values("validation_ap", ascending=False).variant.tolist()
     assert [line.split()[0] for line in shown[3:5]] == ranked
     assert all("42 43" in line and "[" in line for line in shown[3:5])
     assert shown[5].startswith(f"Report: {compared.report}, beside summary.csv")
@@ -227,7 +235,8 @@ def test_a_variant_that_fails_on_its_own_fails_alone(
     assert "train: ValueError: this variant's own failure" in outcomes[DROP.name][1]
     assert result["status"] == FAILED
     comparison = read_comparison(SuitePaths.of(DROP.name, results).comparison)
-    assert comparison.seeds.tolist() == ["42", ""]
+    # One seed makes no ensemble.
+    assert comparison.seeds.tolist() == ["42", ""] and set(comparison.estimate) == {SEED_MEAN}
     # The suite records the failure, and its summary names it.
     (failed,) = events(results, "run_failed")
     assert (failed["variant"], failed["step"]) == (DROP.name, "train")

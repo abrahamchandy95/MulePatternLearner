@@ -197,20 +197,25 @@ with hyphens.
 
 | File | Content |
 |---|---|
-| `summary.csv` | One row per run, split and metric: `variant`, `seed`, `split`, `metric`, `value`, `status` (`complete`, `failed` or `stopped`) and `commit` |
-| `comparison.csv` | One row per variant, compared with the baseline |
+| `summary.csv` | One row per run, split and metric: `variant`, `seed`, `split`, `metric`, `value`, `status` (`complete`, `failed` or `stopped`) and `commit`; then the rows of each variant's seed ensemble, of status `ensemble` |
+| `comparison.csv` | One row per variant, compared with the baseline, then one per seed ensemble |
 | `events.jsonl` | The suite's own events: the plan (`suite`, with the hours its runs to train should take: `estimate_hours` from the suite's finished runs and `bound_hours`), each run's step that finished (`run_finished`) or failed (`run_failed`), the runs moved aside (`run_archived`), an outage (`suite_stopped`), and what came before the dataset's preparation recorded its own (the install, connecting) or a dataset found ready (`dataset`); preparation's go to the dataset's `events.jsonl`, and each run's to the run's |
 | `plots/comparison_*.png` | Six figures |
-| `report.md` | The variants ranked by the validation audit, with the tables and figures |
+| `report.md` | The variants ranked by the validation audit, their seed ensembles, the tables and figures |
 
 The metrics of `summary.csv` are the audit reports' ranking metrics per split, the run's
 own `best_epoch`, `parameter_count` and `training_hours` (no split), the validation
 `proxy_average_precision`, the validation `paired_average_precision` (on the accounts
 every audit of the suite scored) and, but for the baseline, `average_precision_delta`
 against the baseline's run of the same seed. A run that left no numbers keeps one row
-without a metric.
+without a metric. A variant with two or more complete runs has a seed ensemble: its
+seeds' scores of the accounts every audit scored, averaged on the log-odds scale (each
+clipped 2^-50 from 0 and 1 first), then audited as a run is. Its rows have the status
+`ensemble`, no seed and no commit: the audit's ranking metrics of each split, and
+`ensemble_seeds`, the seeds it combines (no split).
 
-`comparison.csv` has `variant`, `question`, `changes` and `seeds`; for each split the
+`comparison.csv` has `variant`, `estimate` (`seed_mean` for a variant's row of seed means,
+`ensemble` for its seed ensemble's row), `question`, `changes` and `seeds`; for each split the
 seed-mean AP, its spread over seeds and the 90% interval of the seed mean
 (`validation_ap`, `validation_ap_spread`, `validation_ap_low`, `validation_ap_high`, and
 the same for `test_ap`); the paired validation delta against the baseline with its
@@ -225,11 +230,13 @@ backend differ from the suite's usual value). The seed-mean AP is the mean of ea
 own audit, while its interval and the delta come from the accounts every audit scored, so
 when `unpaired_accounts` is above 0 the mean can fall outside its interval. The built-in
 rejection limit of 0 fails any audit that rejects an account, so it is 0 for the built-in
-variants.
+variants. A seed ensemble's row holds its own AP and the 90% interval of it over the same
+paired replicates for each split, and its ROC AUC, recall and precision; it has no spread,
+no delta and no run values.
 
 | Figure | What it shows |
 |---|---|
-| `comparison_ap.png` | Validation and test audit AP per variant: a dot per seed, the seed mean, its interval, the baseline line |
+| `comparison_ap.png` | Validation and test audit AP per variant: a dot per seed, the seed mean, its interval, the baseline line, and below each mean the seed ensemble as a hollow diamond on its interval |
 | `comparison_delta.png` | Validation audit AP minus the baseline's: the paired interval, per-seed deltas, zero line; filled when consistent |
 | `comparison_budget.png` | Validation audit recall at 1%, 5% and 10% per variant |
 | `comparison_capture.png` | Seed-mean validation capture curves, one panel per variant with the baseline in each |

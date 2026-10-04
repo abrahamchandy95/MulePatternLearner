@@ -88,6 +88,12 @@ AUDIT_COLUMNS = (
 # failed or stopped) and commit on each. Its metrics are those of the audit reports, the
 # run's own values (best_epoch, parameter_count, training_hours: no split) and these:
 SUMMARY_COLUMNS = ("variant", "seed", "split", "metric", "value", "status", "commit")
+# The status of the summary.csv rows of a variant's seed ensemble, which have no seed and
+# no commit: its audit metrics on each split, and how many seeds it combines.
+ENSEMBLE = "ensemble"
+ENSEMBLE_SEEDS = "ensemble_seeds"
+# comparison.csv's estimate column: a variant's row of seed means, or of its seed ensemble.
+SEED_MEAN = "seed_mean"
 # the validation proxy AP of the epoch training selected;
 PROXY_METRIC = "proxy_average_precision"
 # a run's validation audit AP on the accounts every audit of the suite scored, and its
@@ -301,7 +307,7 @@ def write_table(path: Path, frame: pd.DataFrame) -> None:
 
 # The text columns of a suite's tables; an empty cell reads as an empty string.
 SUMMARY_TEXT = ("variant", "split", "metric", "status", "commit")
-COMPARISON_TEXT = ("variant", "question", "changes", "seeds", "differs")
+COMPARISON_TEXT = ("variant", "estimate", "question", "changes", "seeds", "differs")
 
 
 def _read_table(path: Path, text: tuple[str, ...]) -> pd.DataFrame:

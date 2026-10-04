@@ -12,7 +12,10 @@ import pytest
 from mule_pattern_learner.artifacts import (
     AUDIT_COLUMNS,
     DELTA_METRIC,
+    ENSEMBLE,
+    ENSEMBLE_SEEDS,
     PAIRED_METRIC,
+    SEED_MEAN,
     read_comparison,
     read_json,
     read_run_provenance,
@@ -29,10 +32,17 @@ from mule_pattern_learner.experiments.tables import (
     SuiteRun,
     paired_delta,
     paired_split,
+    seed_ensembles,
     write_tables,
 )
 from mule_pattern_learner.experiments.variants import BASELINE, VARIANTS
-from mule_pattern_learner.metrics import average_precision, paired_replicates, percentile_interval
+from mule_pattern_learner.metrics import (
+    average_precision,
+    log_odds_mean,
+    paired_replicates,
+    percentile_interval,
+    ranking_metrics,
+)
 from mule_pattern_learner.paths import RunPaths, SuitePaths
 from mule_pattern_learner.testing.builders import write_suite_runs
 
@@ -171,13 +181,15 @@ def test_comparison_csv_compares_each_variant_with_the_baseline(
     table = read_comparison(suite.comparison)
     summary = read_summary(suite.summary)
     assert list(table.columns) == list(COMPARISON_COLUMNS)
+    # The seed means of every variant, then the ensembles of those with two seeds.
+    assert table.estimate.tolist() == [SEED_MEAN] * 4 + [ENSEMBLE] * 3
     comparison: dict[str, dict[str, Any]] = {
         str(row["variant"]): {str(k): v for k, v in row.items()}
-        for row in table.to_dict(orient="records")
+        for row in table[table.estimate == SEED_MEAN].to_dict(orient="records")
     }
     assert list(comparison) == ["baseline", "no_attention", "prior_weight", "no_slot_sum"]
     for variant in ("no_attention", "prior_weight"):
-        rows = summary[summary.variant == variant]
+        rows = summary[(summary.variant == variant) & (summary.status == COMPLETE)]
         validation = rows[(rows.split == "validation") & (rows.metric == "average_precision")]
         deltas = rows[rows.metric == DELTA_METRIC].value.to_numpy()
         row = comparison[variant]
@@ -202,3 +214,87 @@ def test_comparison_csv_compares_each_variant_with_the_baseline(
     # A variant without a complete run has no numbers.
     assert comparison["no_slot_sum"]["seeds"] == ""
     assert pd.isna(comparison["no_slot_sum"]["test_ap"])
+
+
+def test_each_variants_seed_ensemble_is_audited_as_a_run_is(
+    compared: tuple[SuitePaths, list[SuiteRun]],
+) -> None:
+    suite, runs = compared
+    table = read_comparison(suite.comparison)
+    summary = read_summary(suite.summary)
+    ensembles = {
+        str(row["variant"]): {str(k): v for k, v in row.items()}
+        for row in table[table.estimate == ENSEMBLE].to_dict(orient="records")
+    }
+    assert list(ensembles) == ["baseline", "no_attention", "prior_weight"]
+    for split in ("validation", "test"):
+        paired = paired_split(runs, split)
+        assert paired is not None
+        for variant, row in ensembles.items():
+            # The log-odds mean of the variant's two seeds on the shared accounts, audited.
+            columns = list(paired.columns(variant).values())
+            score = log_odds_mean(paired.scores[:, columns])
+            expected = ranking_metrics(paired.y, score, paired.weight)
+            assert row["seeds"] == "42 43" and pd.isna(row[f"{split}_ap_spread"])
+            assert row[f"{split}_ap"] == pytest.approx(expected["average_precision"])
+            assert row[f"{split}_roc_auc"] == pytest.approx(expected["roc_auc"])
+            low, high = row[f"{split}_ap_low"], row[f"{split}_ap_high"]
+            assert low <= row[f"{split}_ap"] <= high
+            # summary.csv holds the same metrics, as rows of status ensemble without a seed.
+            rows = summary[(summary.status == ENSEMBLE) & (summary.variant == variant)]
+            assert rows.seed.isna().all() and set(rows.commit) == {""}
+            chosen = rows[(rows.split == split) & (rows.metric == "average_precision")]
+            assert chosen.value.tolist() == pytest.approx([expected["average_precision"]])
+            seeds = rows[rows.metric == ENSEMBLE_SEEDS].value.tolist()
+            assert seeds == [2.0]
+    # Ensembles have no delta, no consistency and no run values of their own.
+    for row in ensembles.values():
+        assert pd.isna(row["validation_ap_delta"]) and pd.isna(row["best_epoch"])
+
+
+def test_a_seed_ensemble_of_a_small_case_worked_by_hand(tmp_path: Path) -> None:
+    runs = [
+        audited_run(tmp_path, "baseline", 1, [0.9, 0.8, 0.7, 0.1, 0.2, 0.3]),
+        audited_run(tmp_path, "prior_weight", 1, [0.9, 0.2, 0.8, 0.1, 0.3, 0.4]),
+        audited_run(tmp_path, "baseline", 2, [0.9, 0.8, 0.7, 0.1, 0.2, 0.3]),
+        audited_run(tmp_path, "prior_weight", 2, [0.3, 0.9, 0.1, 0.2, 0.25, 0.05]),
+        audited_run(tmp_path, "no_attention", 1, [0.5] * 6),
+    ]
+    paired = paired_split(runs, "validation")
+    assert paired is not None
+    ensembles = seed_ensembles(paired)
+    # A variant of one seed has no ensemble.
+    assert set(ensembles) == {"baseline", "prior_weight"}
+    # The baseline's two seeds agree, so its ensemble is either of them: AP 1.
+    assert ensembles["baseline"].metrics["average_precision"] == pytest.approx(1.0)
+    # prior_weight's ensemble takes the geometric mean of each account's odds over its
+    # seeds: a 9 and 3/7 make 1.96, b 1/4 and 9 make 1.5, c 4 and 1/9 make 0.67, then e
+    # 0.38, f 0.19 and d 0.17. Both mules rank first, so its AP is 1, where its seeds'
+    # are 0.625 and 1.
+    odds = np.sqrt([9 * 3 / 7, 0.25 * 9, 4 / 9, 1 / 9 * 0.25, 3 / 7 / 3, 2 / 3 / 19])
+    assert log_odds_mean(paired.scores[:, [1, 3]]) == pytest.approx(odds / (1 + odds))
+    ensemble = ensembles["prior_weight"]
+    assert ensemble.seeds == (1, 2)
+    assert ensemble.metrics["average_precision"] == pytest.approx(1.0)
+    # Its interval is that of its AP over the replicates every run of the split shares.
+    y, weight = np.array(IS_MULE), 1 / np.array(INCLUSION)
+    replicates = paired_replicates(
+        y, weight, [odds / (1 + odds)], average_precision, np.array(RINGS)
+    )
+    assert ensemble.interval == pytest.approx(percentile_interval(replicates[:, 0]))
+
+
+def test_the_log_odds_mean_lets_a_confident_seed_weigh_more_than_a_rank_mean_would() -> None:
+    # Two seeds of two accounts: the first seed is sure of a and lukewarm on b, the second
+    # mildly prefers b. The ranks tie, a rank mean cannot separate them, but on the
+    # log-odds scale the confident seed carries a above b.
+    scores = np.array([[0.999999, 0.4], [0.6, 0.6]])
+    combined = log_odds_mean(scores)
+    assert combined[0] > combined[1]
+    assert combined[1] == pytest.approx(0.6)
+    # Two scores of 0.9 and 0.5 have odds 9 and 1, whose geometric mean 3 is a score of 0.75.
+    assert log_odds_mean(np.array([[0.9, 0.5]])) == pytest.approx([0.75])
+    # Scores of exactly 0 or 1 are clipped, so the mean stays finite and inside (0, 1).
+    clipped = log_odds_mean(np.array([[1.0, 1.0], [0.0, 0.0], [1.0, 0.0]]))
+    assert np.isfinite(clipped).all() and 0 < clipped[1] < clipped[2] < clipped[0] < 1
+    assert clipped[2] == pytest.approx(0.5)

@@ -6,13 +6,18 @@ from pathlib import Path
 import re
 import struct
 
+from matplotlib.figure import Figure
 import numpy as np
 import pytest
 
 from mule_pattern_learner.experiments.tables import write_tables
 from mule_pattern_learner.experiments.variants import BASELINE, VARIANTS
 from mule_pattern_learner.paths import RunPaths, SuitePaths
-from mule_pattern_learner.reporting.comparison import rank_correlation
+from mule_pattern_learner.reporting.comparison import (
+    VariantSeeds,
+    plot_comparison,
+    rank_correlation,
+)
 from mule_pattern_learner.reporting.report import report_directory
 from mule_pattern_learner.reporting.style import DPI
 from mule_pattern_learner.reporting.suite_report import SUITE_FIGURES
@@ -65,9 +70,15 @@ def test_the_suite_report_ranks_by_validation_and_keeps_test_for_reporting(
     assert "## Validation audit, for decisions" in text
     assert "## Test audit, for reporting, not selection" in text
     assert "pool groups (pool_activity and pool_internal_inflows) were designed after" in text
-    # Ranked by the mean validation audit AP: the variants' found shares order them here.
-    ranked = re.findall(r"^\| (\d) \| (\S+) \|", text, flags=re.MULTILINE)
-    assert ranked == [("1", "**baseline**"), ("2", "no_attention"), ("3", "prior_weight")]
+    # Ranked by the mean validation audit AP: the variants' found shares order them here,
+    # and their seed ensembles in the same order.
+    validation, rest = text.split("## Seed ensembles\n")
+    ensembles, _ = rest.split("## Test audit")
+    expected = [("1", "**baseline**"), ("2", "no_attention"), ("3", "prior_weight")]
+    for section in (validation, ensembles):
+        assert re.findall(r"^\| (\d) \| (\S+) \|", section, flags=re.MULTILINE) == expected
+    assert "averaged on the log-odds scale" in ensembles
+    assert "| 1 | **baseline** | 42 43 |" in ensembles
     links = re.findall(r"!\[[^\]]+\]\(([^)]+)\)", text)
     assert links == [f"plots/{name}.png" for name in SUITE_FIGURES]
     assert all((suite.root / link).exists() for link in links)
@@ -89,3 +100,35 @@ def test_rank_correlation_is_spearmans_with_tied_ranks_shared() -> None:
     assert tied == pytest.approx(np.corrcoef([0, 1.5, 1.5, 3], [0, 1, 2, 3])[0, 1])
     assert rank_correlation(x[:2], x[:2]) is None
     assert rank_correlation(x, np.ones(4)) is None
+
+
+def test_the_comparison_draws_each_seed_ensemble_below_its_mean() -> None:
+    ax = Figure().add_subplot()
+    rows = [
+        VariantSeeds(
+            "baseline",
+            {42: 0.2, 43: 0.4},
+            0.3,
+            (0.2, 0.4),
+            ensemble=0.5,
+            ensemble_interval=(0.45, 0.6),
+        ),
+        VariantSeeds("prior_weight", {42: 0.1}, 0.1, None),
+    ]
+    plot_comparison(ax, rows, split="validation", baseline=0.3)
+    # The baseline's row is on top (y = 1); its ensemble is a diamond below it.
+    diamonds = [line for line in ax.get_lines() if line.get_marker() == "D"]
+    points = [
+        np.ravel(np.asarray([line.get_xdata(), line.get_ydata()], dtype=float)).tolist()
+        for line in diamonds
+    ]
+    assert points == [[0.5, pytest.approx(0.7)]]
+    legend = ax.get_legend()
+    assert legend is not None
+    assert "seed ensemble, its interval" in [text.get_text() for text in legend.get_texts()]
+    # Without an ensemble the legend does not name one.
+    ax = Figure().add_subplot()
+    plot_comparison(ax, rows[1:], split="validation", baseline=None)
+    legend = ax.get_legend()
+    assert legend is not None
+    assert "seed ensemble, its interval" not in [t.get_text() for t in legend.get_texts()]
