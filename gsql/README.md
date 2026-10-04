@@ -1,10 +1,10 @@
 # GSQL
 
 Every GSQL file of the graph `Mule_Pattern_Learner`. A file is named after the
-responsibility its queries share, and a query verb first after its own; the names are
+responsibility its queries share, a query verb first after its own; the names are
 constants of `contract.server`. [Queries](../docs/reference/queries.md) describes each
-query, and [Set up a graph](../docs/how-to/set-up-a-graph.md) the procedure for a fresh
-graph and for one reused.
+query; [Set up a graph](../docs/how-to/set-up-a-graph.md) covers a fresh graph and a
+reused one.
 
 | Folder | File | Defines | Installed by |
 |---|---|---|---|
@@ -24,21 +24,18 @@ graph and for one reused.
 | | `payment_pair_gaps.gsql` | `encode_payment_pair_gaps` | the same |
 
 - **Installation** creates and installs only the queries whose text differs (comments,
-  whitespace and the case outside string literals aside), with the queries that call them; `mule install` then drops the
-  retired query names still installed. Installing everything takes about 50 minutes,
-  most of it the context query ([Queries](../docs/reference/queries.md#installation)).
-- **Generated files.** The two context queries are rendered by `tigergraph.render` from
-  the Python feature contracts; `python scripts/render_queries.py --check` and the tests
-  fail when a file and its renderer drift apart, and a changed text needs a new contract
-  (`CONTEXT_CONTRACT` or `ANALYTICS_CONTRACT`).
-- **Writes.** Only scope creation and finalisation (experiment membership) and the
-  one-time label reveal (the label fields of the internal Accounts) write; everything
-  else reads, and relationships are never changed.
-- **Labels.** Only the reveal, `validate_label_contract` and `read_ground_truth` read the
+  whitespace and case outside string literals aside), with their callers; `mule install`
+  then drops the retired names still installed. A full install takes about 50 minutes,
+  mostly the context query ([Installation](../docs/reference/queries.md#installation)).
+- **Generated files**, rendered by `tigergraph.render` from the Python feature contracts:
+  `python scripts/render_queries.py --check` and the tests catch drift, and a changed text
+  needs a new contract (`CONTEXT_CONTRACT` or `ANALYTICS_CONTRACT`).
+- **Writes**: only scope creation and finalisation (experiment membership) and the
+  one-time label reveal (label fields of the internal Accounts); relationships never change.
+- **Labels**: only the reveal, `validate_label_contract` and `read_ground_truth` read the
   ground truth; no feature, population, cutoff or hub query reads a label attribute
   ([Labels](../docs/reference/labels.md)).
-- **Schema changes** may invalidate compiled queries and positional loading jobs; verify
-  and restore both afterwards. `schema.gsql` creates a fresh graph, and the installer
-  applies only the scope vertex type: to a graph that lacks it, or, by `mule install`, in
-  place of an outdated one while no scope vertex uses it, after dropping the queries that
-  use it ([Queries](../docs/reference/queries.md#the-scope-types)).
+- **Schema changes** may invalidate compiled queries and positional loading jobs: verify
+  and restore both. The installer applies only the scope vertex type, when it is missing
+  or, by `mule install`, in place of an outdated one while no scope vertex uses it
+  ([The scope types](../docs/reference/queries.md#the-scope-types)).
