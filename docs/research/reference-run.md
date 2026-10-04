@@ -3,7 +3,9 @@
 Three full training runs on the CUDA host, on the same dataset and revealed labels. They
 record where the model stood before the restructuring and why the built-in settings are what
 they are. Their checkpoints load only with the code before the layered restructure, such as
-its last commit, f203226.
+its last commit, f203226. The last section is the built-in run on the [300,000-person
+graph](#the-300000-person-graph-2026-10-04), which led the reveal to make every discovered
+mule known.
 
 ## How the numbers are measured
 
@@ -65,3 +67,36 @@ its notes:
 | [The diagnostic study](diagnostic-study.md) | the constant root input, the baselines on the root features and the pool counts, the learning curve, the cutoff shift, and where each script of the study went |
 | [The mule profile](mule-profile.md) | what separates mules from other accounts; revealed against hidden mules; the detection ceiling |
 | [The nnPU positive weight](nnpu-positive-weight.md) | the collapse of run 1 and the simulation of the positive weight |
+
+## The 300,000-person graph (2026-10-04)
+
+The built-in run, retrained on PhantomLedger data of 300,000 people with ring ids, split
+50, 25 and 25% (commit 56f4b30, dataset `c6e1af6004a5`). Each held-out split has about
+119,000 accounts and 101 mules; the reveal capped every split at 20 known mules.
+
+| Audit | Validation | Test |
+|---|---|---|
+| Hidden mules / revealed | 81 / 20 | 81 / 20 |
+| Hidden-mule AP (90% interval) | 0.209 (0.132 to 0.310) | 0.168 (0.100 to 0.276) |
+| Hidden-mule ROC AUC | 0.764 | 0.800 |
+| Hidden mules in the top 1 / 5 / 10% | 0.333 / 0.370 / 0.432 | 0.309 / 0.481 / 0.519 |
+| Every mule's AP / ROC AUC | 0.272 / 0.783 | 0.264 / 0.832 |
+
+- **A third found, the rest not.** A third of the hidden mules rank in the top 1%; from
+  there to the top 10% the recall barely moves. The model finds one kind of mule sharply
+  and ranks the others like everyone else.
+- **Twenty training mules.** Training learned from the 20 revealed train mules. The loss
+  fell to 0.02, and the validation proxy ROC AUC peaked at epoch 2 (0.896) and slid to
+  0.857 while its AP on the 20 revealed validation mules rose (epoch 7 selected): the model
+  narrowed to the kind of mule it was shown. On the 200,000-person graph a logistic
+  regression went from AP 0.14 with 20 train mules to 0.24 with 160
+  ([the diagnostic study](diagnostic-study.md)).
+- **What changed.** The reveal now makes every mule a bank would have discovered by the
+  cutoff known, as a bank trains on every mule it has confirmed
+  ([Label reveal](../explanation/label-reveal.md)). The hidden mules left are then the
+  ones no channel had found, so hidden-mule numbers are not comparable with this run's.
+- **What to test next.** PhantomLedger's rings act in a 7 to 14 day burst and behave
+  normally otherwise, and the model reads a context of each account's recent and a few
+  older payments. `mule diagnose activity-timing` sorts each audited mule by when its last
+  fraud-labelled inflow came before the cutoff: a run that finds the recent ones and
+  misses those active months earlier needs a longer view of history.
