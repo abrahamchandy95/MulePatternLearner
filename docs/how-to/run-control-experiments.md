@@ -58,9 +58,12 @@ from the baseline, the test AP of the hidden mules and the validation AP of ever
 and where the report is, and exits 1 unless every run is trained and
 audited without an error. A run whose figures failed after its numbers were saved stays complete in the
 tables, with its error beside it; `mule report results/<variant>/seed-<n>` redraws them.
-Run the script again to finish: complete runs are kept. So are the runs of a suite
-trained with fewer seeds than `experiments.variants.SEEDS` holds now, such as the
-controls suite's first three: running it again trains the new seeds only.
+Run the script again to finish: complete runs of the same settings are kept. So are the
+runs of a suite trained with fewer seeds than `experiments.variants.SEEDS` holds now:
+running it again trains the new seeds. A run of another scope id differs in its
+settings, though, so since the built-in scope became `strict_mule_v3` every run of
+`strict_mule_v2` is moved to the archive and trained again, the controls suite's first
+three seeds included: the next `controls` suite trains all 90 runs ([Cost](#cost)).
 
 A suite of chosen variants is named by their names joined with hyphens, as in
 `results/experiments/no_attention-prior_weight/`.
