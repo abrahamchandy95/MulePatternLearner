@@ -1,59 +1,47 @@
 # The diagnostic study of September 2026
 
-Why could the second reference run not detect mules, and what would? This note records
-the study that answered it, between runs 2 and 3 of the [reference runs](reference-run.md).
-Its scripts, notes and data files stay on the owner's machine, outside the repository,
-under `results/archive/diagnostic-study-2026-09/`; everything worth keeping from them is
-here, in [the mule profile](mule-profile.md) and in
-[the nnPU positive weight](nnpu-positive-weight.md).
-The analyses that should run again whenever the dataset, the features or the model change
-became `mule diagnose` (see [Where the study went](#where-the-study-went)).
+Why could [reference run](reference-run.md) 2 not detect mules, and what would? Studied
+between runs 2 and 3; its scripts, notes and data stay untracked on the owner's machine under
+`results/archive/diagnostic-study-2026-09/`. What matters is here, in [the mule
+profile](mule-profile.md) and in [the nnPU positive weight](nnpu-positive-weight.md); the
+repeatable analyses became `mule diagnose` ([Where the study went](#where-the-study-went)).
 
 ## The question and the data
 
-Run 2 (imbalanced nnPU, no pool counts) reached a ground-truth audit AP of 0.0024 and ROC
-AUC of 0.782 on test, at a prevalence of 0.00084: 2.9 times a random ranking's AP. Its
-threshold, chosen by F1 on 11 validation positives, sat above every test score.
+- **Run 2** (imbalanced nnPU, no pool counts): test audit AP 0.0024 (2.9 times random), ROC
+  AUC 0.782, prevalence 0.00084. Its F1 threshold, from 11 validation positives, sat above
+  every test score.
+- **Access.** TigerGraph read-only through the installed queries; ground truth for analysis
+  only, fed to no model.
+- **Sample.** 8,233 accounts: all 233 mules (160 train, 33 validation, 40 test) and uniform
+  non-mules (3,000, 2,000, 3,000; seed 7) weighted to their split's population as in the
+  audits (a test non-mule stands for 15.9 of the 47,749 test accounts).
+- **Cutoffs and visibility.** 2024-07-01 (phase 1), 2024-10-01 (phase 2), 2025-01-01 (phase
+  3). Revealed mules, all known before the cutoff: 20, 11, 20.
+- **219 features.** The root vector; aggregates of the hop-1 messages attended at evaluation
+  and of the whole candidate pool; pool counts by relation, stratum and rail; the summary
+  groups the model lacked (windows, decayed activity, recency, identity order). No account
+  rejected; 2,060 requests needed no retry.
 
-The study used TigerGraph read-only, through the installed queries, and read the ground
-truth for analysis only; nothing it computed fed a model.
-
-- **The sample.** 8,233 accounts: all 233 mules (160 train, 33 validation, 40 test) and
-  uniform non-mules, 3,000 of train, 2,000 of validation and 3,000 of test, drawn with
-  seed 7. Each non-mule was weighted to its split's population (a test non-mule stands for
-  15.9 of the 47,749 test accounts), as the audits weight theirs.
-- **The cutoffs.** Each account was read at its own split's cutoff and visibility
-  (2024-07-01 in phase 1, 2024-10-01 in phase 2, 2025-01-01 in phase 3). Revealed mules:
-  20 train, 11 validation, 20 test, all known before their cutoff.
-- **The features.** 219 columns per account: the model's root vector, aggregates of the
-  hop-1 messages the model attends to at evaluation, the same over the whole candidate pool
-  TigerGraph returns, pool counts by relation, stratum and rail, and the summary groups the
-  model did not get (windows, decayed activity, recency, identity order). 0 of 8,233
-  accounts were rejected, and 2,060 requests needed no retry.
-
-**Caveat: the test numbers are optimistic.** The study scored the test split, and the
-first-time and internal inflow counts it found were defined after reading the data
-generator's mule typology and test-split mules. Every test number below that depends on
-them is optimistic, and none of them was a decision. Decisions since use the validation
-audit, now its AP of the hidden mules; the test audit is for reporting.
+**Caveat.** Test numbers that depend on the first-time and internal inflow counts are
+optimistic (defined after reading the generator's mule typology and test mules), and none was
+a decision. Decisions use the validation audit, now the hidden mules' AP; test is for
+reporting.
 
 ## What it found
 
 ### The root input was the same for every account
 
-With the `split` architecture and no summary group in the feature list, the model's root
-vector held only the entity flags. For all 8,233 sampled accounts it was
-`type_Account = 1, is_deposit = 1` and zeros: one distinct vector. Every signal had to come
-through softmax attention over at most 16 sampled hop-1 payments, a weighted average that
-cannot count, and the number of filled slots saturated at 16 for every test mule and for
-more than three quarters of the non-mules. A static review of the code at that commit found
-no bug that misaligned scores and labels, mis-weighted the audit or leaked the future.
+With the `split` architecture and no summary group, all 8,233 root vectors were
+`type_Account = 1, is_deposit = 1` and zeros. Signal had to pass softmax attention over at
+most 16 sampled hop-1 payments, an average that cannot count, and all 16 slots were filled for
+every test mule and over three quarters of non-mules.
 
 ### Counts over the candidate pool separate mules best
 
 ![Each feature alone, the study's features](figures/study_univariate_auc.png)
 
-Each feature alone, weighted, on the study's sample (from its `bl_univariate.csv`):
+Each feature alone, weighted (`bl_univariate.csv`):
 
 | Feature | Test ROC AUC | Train | Validation | Test AP | Test mule / non-mule median |
 |---|---|---|---|---|---|
@@ -64,20 +52,18 @@ Each feature alone, weighted, on the study's sample (from its `bl_univariate.csv
 | 90-day decayed inflow amount (`extra__decay_90d_in_amount`) | 0.723 | 0.729 | 0.757 | 0.0021 | 32,800 / 14,700 |
 | visible event count (`extra__visible_event_count`) | 0.722 | 0.702 | 0.721 | 0.0017 | 459 / 320 |
 
-The strongest signals are structural counts of the hop-1 candidate pool: how many distinct
-peers, incoming payments and Zelle inflows fill it. A lower share of events with an
-earlier event of the same pair (mules deal with more new counterparties) ranks next. The
-account-level summaries the model did not get are weaker, ROC AUC 0.68 to 0.72. The ranking
-holds on train and validation; it is not an artefact of the test split.
+Pool structure counts lead (distinct peers, incoming payments, Zelle inflows), then a lower
+share of events with an earlier same-pair event (mules meet more new counterparties); the
+summaries the model lacked reach ROC AUC 0.68 to 0.72. The ranking holds on train and
+validation.
 
 ### Simple models on the same labels beat the model
 
 ![The study's baselines on its test sample](figures/study_baselines.png)
 
-PU baselines trained at the train cutoff on the 20 revealed train mules, every other
-sampled train account unlabelled and weighted back to the population (the study's
-experiment A2), scored on its test sample (from `bl_results.csv` and
-`pool_activity_check_models.csv`, with stratified 90% bootstrap intervals):
+PU baselines (A2: the 20 revealed train mules at the train cutoff, other sampled train
+accounts unlabelled and weighted to the population) on test, with stratified 90% bootstrap
+intervals (`bl_results.csv`, `pool_activity_check_models.csv`):
 
 | Features | Learner | Test AP (90% interval) | ROC AUC | Recall in the top 1% / 5% |
 |---|---|---|---|---|
@@ -91,46 +77,45 @@ experiment A2), scored on its test sample (from `bl_results.csv` and
 | distinct-peer candidate events alone, no training | | 0.0090 (0.0048 to 0.062) | 0.880 | 0.215 / 0.356 |
 | run 2's audit (2,000 seed-42 negatives, not paired) | | 0.0024 | 0.782 | 0.025 / 0.175 |
 
-- A single untrained count beat the model on ROC AUC (0.88 against 0.78) and AP (0.009
-  against 0.0024), and so did every PU baseline.
-- Treating the 140 hidden train mules as negatives (A1), weighting the unlabelled to the
-  population (A2) or dropping the hidden mules (A3) gave nearly the same numbers, so
-  contamination by hidden mules did not matter at this scale.
-- Logistic regression on the 16 pool counts, which the study's follow-up check computed
-  with the repository's code from the saved rows, reached about 100 times the model's AP.
-  Its lower AP bound (0.11 to 0.15 across the ways of treating the unlabelled) was above
-  the upper bound of the all-feature logistic regressions (0.09).
-  It also held on validation: AP 0.38 and ROC AUC 0.85 with 51.5% of the mules in the top
-  1%.
-- The signal is real but modest in absolute terms. At a prevalence of 0.084%, ROC AUC 0.90
-  to 0.94 is 2 to 3% precision in the top 1% of accounts. The most reliable estimate free
-  of shift, 5-fold cross-validation inside the test cutoff, gave ROC AUC 0.89 to 0.90, AP
-  0.045 to 0.054 and 31 to 37% of the mules in the top 1%.
+- One untrained count beat the model (ROC AUC 0.88 against 0.78, AP 0.009 against 0.0024),
+  and so did every PU baseline.
+- The 140 hidden train mules as negatives (A1), weighted as unlabelled (A2) or dropped (A3)
+  gave nearly equal numbers: contamination does not matter at this scale.
+- LR on the 16 pool counts (the follow-up check, the repository's code on the saved rows)
+  reached about 100 times the model's AP. Over A1 to A3: ROC AUC 0.946 to 0.947, AP 0.20 to
+  0.26, top-1% recall 0.675 to 0.70, and a lower AP bound (0.11 to 0.15) above the
+  all-feature regressions' upper bound (0.09). Validation: AP 0.38, ROC AUC 0.85, top-1%
+  recall 51.5%.
+- Modest in absolute terms: at 0.084% prevalence, ROC AUC 0.90 to 0.94 is 2 to 3% precision
+  in the top 1%. The most reliable shift-free estimate, 5-fold CV inside the test cutoff:
+  ROC AUC 0.89 to 0.90, AP 0.045 to 0.054, top-1% recall 31 to 37%.
 
 Which counts carry it:
 
 ![The pool counts alone](figures/study_pool_univariate_auc.png)
 
-- The internal first-time inflow count (incoming payments from an internal peer with no
-  earlier event of the pair) was the strongest: test ROC AUC 0.918, and AP 0.237 for those
-  of $100 or more. At $200 or more, the study's own definition, the raw count gives ROC
-  AUC 0.921 and AP 0.233; the study's headline for it, 0.968 and 0.276, scored the count
-  plus 0.001 times the distinct-peer count, a tie-break.
-- The implemented pass-through count (inflows forwarded within 24 hours at an amount ratio
-  of 0.5 to 1.0) flagged 46.6% of test non-mules against 8.3% for the study's signature
-  (0.5 to 15.1 hours, ratio 0.88 to 0.96), so it carried little: AP 0.0097 against 0.153.
-  The lower ratio bound dilutes it. Dropping it barely moved the logistic regression (AP
-  0.2525 to 0.2491), so it was kept as a definitional choice.
-- Train-cutoff ROC AUCs are much weaker (0.61 to 0.75 for the first-time counts): mid-year,
-  many mules' bursts had not happened yet ([the mule profile](mule-profile.md)).
+- **Internal first-time inflows** (from an internal peer, no earlier event of the pair):
+  strongest, ROC AUC 0.918, AP 0.237 at $100 or more. At $200 or more (the study's
+  definition) the raw count gives 0.921 and 0.233; the study's headline, 0.968 and 0.276,
+  added 0.001 times the distinct-peer count as a tie-break.
+- **Pass-through.** The implemented count (forwarded within 24 hours, amount ratio 0.5 to
+  1.0) flags 46.6% of test non-mules against 8.3% for the study's signature (0.5 to 15.1
+  hours, ratio 0.88 to 0.96): AP 0.0097 against 0.153, diluted by the lower ratio bound. Kept
+  as a definitional choice, since dropping it barely moved the LR (AP 0.2525 to 0.2491). A
+  ratio of 0.8 to 0.99 flagged 21% of non-mules and raised test AP about tenfold, but was
+  found after reading test and validation labels: a lead, not a tuned value.
+- **Train cutoff.** The first-time counts reach only ROC AUC 0.61 to 0.75: by mid-year many
+  bursts had not happened ([the mule profile](mule-profile.md)).
+- **The pool-activity check.** The implemented group matches the study's definitions on all
+  8,233 accounts, its batch path carries exactly the transformed values, and the built-in
+  run's query flags were unchanged.
 
 ### More labels help, but labels were not what held the model back
 
 ![The learning curve](figures/study_learning_curve.png)
 
-Logistic regression and gradient boosting on all 165 features, trained on k train mules
-drawn at random (revealed or hidden) against 3,000 train non-mules, five draws each and one
-at k = 160 (from `bl_results.csv`):
+LR and HGB on all 165 features, k random train mules (revealed or hidden) against 3,000 train
+non-mules; five draws, one at k = 160 (`bl_results.csv`):
 
 | k train mules | 10 | 20 | 40 | 80 | 160 |
 |---|---|---|---|---|---|
@@ -138,17 +123,14 @@ at k = 160 (from `bl_results.csv`):
 | LR recall in the top 5% | 0.130 | 0.245 | 0.300 | 0.450 | 0.525 |
 | HGB test ROC AUC | 0.693 | 0.745 | 0.780 | 0.828 | 0.842 |
 
-ROC AUC and the top-5% recall rise steadily and are not saturated at 160 labels, so more
-labels would help. AP has no clean trend, since a mule or two at the very top moves it
-(each mule that ranks above every sampled non-mule adds about 0.025). The 20 revealed mules
-trained better models than 96 to 100% of 25 random draws of 20, hidden-only draws included:
-they behave like 40 to 80 random labels, because they are the loud mules. The 20 revealed
-labels already let simple models reach ROC AUC 0.86, so the model was not label-limited at
-its level.
+Still rising at 160, so more labels would help; AP has no clean trend (each mule above every
+sampled non-mule adds about 0.025). The 20 revealed mules beat 96 to 100% of 25 random draws
+of 20, hidden-only draws included: being the loud mules, they act like 40 to 80 random labels
+and already give simple models ROC AUC 0.86. The model was not label-limited at its level.
 
 ### Revealed and hidden mules
 
-Each half of the test mules against every weighted test non-mule (from `bl_subgroup.csv`):
+Each half of the test mules against all weighted test non-mules (`bl_subgroup.csv`):
 
 | Ranking | ROC AUC, 20 revealed | ROC AUC, 20 hidden | Mules in the top 1% (477 accounts) |
 |---|---|---|---|
@@ -158,21 +140,19 @@ Each half of the test mules against every weighted test non-mule (from `bl_subgr
 | oracle, 140 hidden train mules only, HGB | 0.884 | 0.819 | 5 |
 | run 2 (implied by its proxy and audit AUCs) | about 0.875 | about 0.69 | 1 |
 
-Hidden test mules are somewhat harder for trees even when the trees train on hidden mules
-only, so part of the gap is that hidden mules are quieter. Logistic regression and the raw
-count score both halves about equally. Run 2's gap was much larger, which suggested it fit
-something specific to the revealed mules rather than the broad count signal.
+Trees find hidden test mules harder even when trained only on hidden mules, so hidden mules
+are partly quieter; LR and the raw count score both halves alike. Run 2's far larger gap
+suggests it fit something specific to revealed mules, not the count signal.
 
 ### Cutoff shift costs trees, not a log-linear model
 
 ![Feature drift of the study's non-mules](figures/study_drift.png)
 
-Each split is read at its own cutoff, so its accounts have seen about 6, 9 and 12 months of
-history. History volume shifts most (median visible payment participations of non-mules
-145, 229 and 320), then the pair-history edge inputs the model consumes: for the maximum
-age of a pair's first event, 94% of test non-mules lie above train's 90th percentile, and
-the share of events with an earlier event of the same pair moves from 0.80 to 0.87. The
-capped pool counts shift mildly (medians move by 1 or 2, shift ROC AUC 0.60 to 0.62).
+The splits see about 6, 9 and 12 months of history. History volume shifts most (non-mules'
+median visible payment participations 145, 229, 320), then the pair-history edge inputs: 94%
+of test non-mules exceed train's 90th percentile of the maximum age of a pair's first event,
+and the share of events with an earlier same-pair event goes from 0.80 to 0.87. The capped
+pool counts shift mildly (medians by 1 or 2, shift ROC AUC 0.60 to 0.62).
 
 | Training setup, scored on test | HGB ROC AUC | LR ROC AUC | HGB recall in the top 1% |
 |---|---|---|---|
@@ -182,133 +162,105 @@ capped pool counts shift mildly (medians move by 1 or 2, shift ROC AUC 0.60 to 0
 | train cutoff, 160 mules, per-split percentiles | 0.866 | 0.896 | 0.100 |
 | 5-fold CV inside the test cutoff (5 seeds) | 0.889 | 0.899 | 0.370 |
 
-At matched label counts a tree trained at the validation cutoff beat one trained at the
-train cutoff, while logistic regression on log features barely moved. Per-split percentiles
-recover part of the trees' loss. Shift was second-order next to the missing counts: a
-log-linear model trained at the train cutoff still reached ROC AUC 0.90 with all 160 mules.
+At matched label counts trees gain from the validation cutoff, while LR on log features
+barely moves; per-split percentiles recover part of the trees' loss. Shift is second-order to
+the missing counts: LR at the train cutoff reached ROC AUC 0.90 with all 160 mules.
 
-The figure's standardised mean differences were computed for this note from the study's
-feature table with `diagnostics.drift`, which reproduces the study's recorded shift ROC AUCs
-and shares above train's 90th percentile exactly. The difference understates a shift that
-moves a few accounts far: the maximum pair-first age differs by only 0.22 standard
-deviations, because the accounts without a pair event (age 0) inflate the variance, while
-its shift ROC AUC is 0.94.
+The figure's standardised mean differences come from `diagnostics.drift` on the study's
+feature table, which reproduces the study's shift ROC AUCs and shares above train's 90th
+percentile exactly. They understate a shift that moves few accounts far: the maximum
+pair-first age differs by 0.22 standard deviations (accounts without a pair event, age 0,
+inflate the variance) but has shift ROC AUC 0.94.
 
 ### What AP to expect from an ROC AUC
 
-Under an equal-variance binormal ranking, ROC AUC 0.78 at a prevalence of 0.00084 gives an
-AP of about 0.0047, and the proxy's ROC AUC 0.875 at its prevalence of 0.0099 about 0.146.
-Run 2's observed APs (0.0024 and 0.049) were 2 to 3 times lower, so the top of its ranking
-was crowded with non-mules scoring very high, or with ties at the saturated top: its scores
-were float32 probabilities, and any logit above about 16.6 became exactly 1.0.
+Under an equal-variance binormal ranking, ROC AUC 0.78 at prevalence 0.00084 implies AP about
+0.0047, and the proxy's 0.875 at 0.0099 about 0.146. Run 2's APs (0.0024, 0.049) were 2 to 3
+times lower: very high-scoring non-mules at the top, or ties at a saturated top (float32
+probabilities turn any logit above about 16.6 into exactly 1.0).
 
 ## What changed because of it
 
-- The `pool_activity` and `pool_internal_inflows` groups feed the counts over the
-  candidate pool to the root, and the slot sum (a per-slot MLP summed over the hop-1 slots
-  beside attention) lets the model count a combined condition. Run 3 with them reached an
-  audit AP of 0.134 and ROC AUC of 0.931 ([reference runs](reference-run.md)).
-- Scores are float64 from the logit, and the audit reports recall and precision at the
-  review budgets of 1, 5 and 10% with ties shared.
-- The control experiments test what the study suggested on validation: `no_pool_counts`,
-  `drop_pool_internal_inflows`, `no_slot_sum` and `no_attention`.
+- **Constant root, missing counts.** `pool_activity` and `pool_internal_inflows` feed the pool
+  counts to the root, and the slot sum (a per-slot MLP summed over the hop-1 slots beside
+  attention) lets the model count a combined condition. Run 3: audit AP 0.134, ROC AUC 0.931
+  ([reference runs](reference-run.md)).
+- **Float32 ties.** Scores are float64 from the logit; the audit reports recall and precision
+  at review budgets of 1, 5 and 10%, ties shared.
+- **Noisy audit AP.** Ring-clustered intervals.
+- **Shift.** [The mule profile](mule-profile.md) measures the visibility-phase shift, and
+  `mule diagnose drift` the cutoff shift.
+- **Controls.** `no_pool_counts`, `drop_pool_internal_inflows`, `no_slot_sum` and
+  `no_attention` test the study's suggestions on validation.
 
 ## What the static review left open
 
-The study began with a static review of the code at commit 5770926 (`shift_review.md` in
-the archive). It found no bug, and ranked the problems of the inputs and of the training
-setup. The constant root input and the missing counts led to the pool groups and the slot
-sum, float32 ties to float64 scores, and the noisy audit AP to ring-clustered intervals;
-[the mule profile](mule-profile.md) measures the visibility-phase shift, and `mule
-diagnose drift` the cutoff shift. These findings still hold for this code, and nothing
-has acted on them yet:
+The study began with a static review of commit 5770926 (`shift_review.md` in the archive). It
+found no bug (no misaligned scores and labels, audit mis-weighting or future leak) and ranked
+the problems of the inputs and training. Those not acted on above still hold:
 
-- **One neighbourhood draw per scored account.** Evaluation draws each account's
-  candidates with hash keys from `sampler.evaluation_seed`, so its score rests on one
-  subset of its pool, while training saw many draws. Averaging the logits over a few
-  evaluation seeds would cost scoring time only; the contexts would not change.
-- **Every hub stub looks the same.** A hub child becomes a local stub with only
-  `is_external`, `is_deposit` and `history_withheld`, so every stub embeds to one vector
-  and only its edge differs. In run 2's test audit, stubs filled about 6.4 of a root's 16
-  hop-1 slots (12,974 stub children for 2,040 roots).
-- **Association slots carry no event.** An association message has every event field at
-  zero, and the children's pool takes no associations, so a Party, Token or Device child,
-  which makes no payment, brings no hop-2 message: the slot says only that the relation
-  exists.
-- **Inputs that repeat others.** `amount_present` repeats `is_event`, since every amount
-  in the reference graph is present; `pair_first_present` repeats `gap_present` for
-  Account contexts; and `flow_observation_seconds` repeats the event's age.
-- **Edge inputs on different scales.** Fourier coordinates between -1 and 1, 0 or 1
-  flags and log-seconds up to about 17 reach the first linear layer unstandardised.
-- **A positive scored confidently low learns little.** The gradient of the sigmoid
-  surrogate for a positive, σ(f)(1 - σ(f)), is near zero when the model scores it far
-  below zero, and each batch's 16 positives are drawn with replacement from 20 revealed
-  train mules, the loud ones: the hard mules are left behind while the easy ones are
+- **One neighbourhood draw per scored account.** Evaluation keys candidates by
+  `sampler.evaluation_seed`, so a score rests on one subset of the pool, while training saw
+  many. Averaging logits over a few evaluation seeds would cost scoring time, not new contexts.
+- **Every hub stub looks the same.** A hub child becomes a local stub with only `is_external`,
+  `is_deposit` and `history_withheld`, so all stubs embed alike and only the edge differs. In
+  run 2's test audit stubs filled about 6.4 of a root's 16 hop-1 slots (12,974 stub children,
+  2,040 roots).
+- **Association slots carry no event.** Every event field is zero and the children's pool
+  takes no associations, so a Party, Token or Device child (no payments) brings no hop-2
+  message: the slot says only that the relation exists.
+- **Repeated inputs.** `amount_present` repeats `is_event` (every amount in the reference
+  graph is present), `pair_first_present` repeats `gap_present` for Account contexts, and
+  `flow_observation_seconds` repeats the event's age.
+- **Unstandardised edge inputs.** Fourier coordinates (-1 to 1), 0 or 1 flags and log-seconds
+  up to about 17 enter the first linear layer as they are.
+- **Confidently low positives learn little.** The sigmoid surrogate's gradient for a positive,
+  σ(f)(1 - σ(f)), vanishes for f far below zero, and each batch's 16 positives are drawn with
+  replacement from the 20 loud revealed mules: hard mules are left behind, easy ones
   memorised.
 
-## One-off answers
-
-These answered a question once and are not rerun:
-
-- **Contamination of the unlabelled by hidden mules** (A1 against A2 and A3 above): it does
-  not matter at this scale.
-- **Selection bias** (the random-20 draws): the revealed mules are the loud ones and train
-  better models than random labels.
-- **Training at another cutoff** (the shift table): the trees' gap, and pooling train and
-  validation.
-- **The pool-activity check**: the implemented group equals the study's definitions on all
-  8,233 accounts, its batch path carries exactly the transformed values, and the query flags
-  of the built-in run were unchanged.
-- **The pass-through thresholds**: narrowing the ratio to 0.8 to 0.99 cut the share of
-  non-mules flagged to 21% and raised test AP about tenfold, but that was found after
-  reading test and validation labels, so it is a lead, not a tuned value.
-
 ## Where the study went
+
+One-off and not rerun: contamination (A1 to A3), the random-20 draws, training at another
+cutoff, the pool-activity check and the pass-through thresholds.
 
 | Archived | Now |
 |---|---|
 | `mpl_diag/stage_*.py`, `common.py`, `probe.py` (the feature table) | `diagnostics/feature_table.py`, `mule diagnose features`: the audits' samples, the training query's inputs and the analytics query's account history |
 | `bl_lib.py` (metrics and weighting) | `metrics.py`; `split_rank_transform` in `diagnostics/drift.py` |
-| `bl_univariate.py` | `diagnostics/univariate.py`, `mule diagnose univariate`; it reproduces the study's 166 ROC AUCs to 1e-16 |
-| `bl_models.py`, PU baselines (A) | `diagnostics/baselines.py`, `mule diagnose baselines`, the question of the retired `no_graph` control; on the study's table its A2 setup gives the recorded AP 0.0357 (LR) and 0.0570 (HGB) |
+| `bl_univariate.py` | `diagnostics/univariate.py`, `mule diagnose univariate`; reproduces the study's 166 ROC AUCs to 1e-16 |
+| `bl_models.py`, PU baselines (A) | `diagnostics/baselines.py`, `mule diagnose baselines` (the retired `no_graph` control's question); its A2 setup on the study's table gives the recorded AP 0.0357 (LR) and 0.0570 (HGB) |
 | `bl_models.py`, the learning curve (B) | `diagnostics/learning_curve.py`, `mule diagnose learning-curve` |
 | `bl_models.py`, cutoff shift (D), and `bl_shift.py` | `diagnostics/drift.py`, `mule diagnose drift` |
-| `bl_subgroup.py`, `mpl_arms/audit_summary.py` (revealed and hidden) | `diagnostics/subgroups.py`, `mule diagnose subgroups`, which adds the AP concentration and the rings |
+| `bl_subgroup.py`, `mpl_arms/audit_summary.py` (revealed and hidden) | `diagnostics/subgroups.py`, `mule diagnose subgroups`, adding the AP concentration and the rings |
 | `mpl_arms/audit_summary.py` (intervals) | `evaluation/audit.py`: ring-clustered intervals and tie-aware budgets |
 | `bl_report.py`, `bl_template.md`, `bl_tables.md`, `baselines.md` | `reporting.study_report.write_diagnostics_report`, and this note |
 | `pool_activity_check*.py`, `pool_activity_offline.py`, `pool_activity_passthrough.py`, `pool_activity_check.md` | this note; the `univariate` and `baselines` analyses and the `drop_pool_*` variants rerun what matters |
-| `binormal_ap.py` | this note ([What AP to expect from an ROC AUC](#what-ap-to-expect-from-an-roc-auc)) |
-| `shift_review.md` | this note ([What the static review left open](#what-the-static-review-left-open)) and the shift analysis |
-| `extract_notes.md` | this note ([The question and the data](#the-question-and-the-data)) |
+| `binormal_ap.py`, `shift_review.md`, `extract_notes.md` | this note: [What AP to expect from an ROC AUC](#what-ap-to-expect-from-an-roc-auc), [What the static review left open](#what-the-static-review-left-open) (with the shift analysis), [The question and the data](#the-question-and-the-data) |
 | `profile/p1_groups.py` to `p11_misc.py`, `load_messages.py`, `mule_profile.md` | [the mule profile](mule-profile.md) |
-| `nnpu_sim/sim.py`, `grid.py`, `traj.py` | `diagnostics/nnpu_simulation.py`, `mule diagnose nnpu-simulation`, and [the nnPU positive weight](nnpu-positive-weight.md); its test on the graph is the `prior_weight` variant |
+| `nnpu_sim/sim.py`, `grid.py`, `traj.py` | `diagnostics/nnpu_simulation.py`, `mule diagnose nnpu-simulation`, [the nnPU positive weight](nnpu-positive-weight.md); tested on the graph by the `prior_weight` variant |
 | `mpl_arms/tabular.toml`, `no_internal.toml`, `seed7.toml` | the variants `no_attention` and `drop_pool_internal_inflows`, and the fixed seeds 42, 43 and 44 |
 | `simulate_label_reveal.py`, the repository's script until commit 050ba17 | `diagnostics/reveal_spread.py`, `mule diagnose reveal-spread` |
 
 ### Not carried over
 
-- **`mpl_diag/head_src/`**, a byte-identical copy of `src/` at commit 5770926, which the
-  flag check compared with the working tree. That commit is in the repository's history.
-- **`mpl_diag/flags_check.py`**, which compared the query flags of that copy with the
-  working tree: the variant tests now build every variant's plan and flags offline.
-- **The study's fetch of the extended context**, which asked the training query for the
-  summary groups beside the model's: those groups now come from `fetch_analytics_context`.
-- **The study's own evaluation sample** (3,000 test non-mules drawn with seed 7): the
-  analyses now score the audits' samples (2,000 non-mules per split drawn with the split
-  seed), so a baseline and a run's audit rank the same accounts.
-- **The cross-validation of the revealed mules against the hidden ones, the top-scoring
-  non-mules' profiles and the trace features** of the profile scripts: one-off answers,
-  recorded in [the mule profile](mule-profile.md).
-- **The data files** (the feature tables, the raw context rows, the logs and the CSVs):
-  they stay on the owner's machine under `results/archive/diagnostic-study-2026-09/`,
-  which is not tracked.
-- **`mpl_arms/fake/`**, the output of a smoke run on the fake graph, kept with the data
-  files.
+- **`mpl_diag/head_src/`** (a byte-identical copy of `src/` at commit 5770926, which is in the
+  history) and **`mpl_diag/flags_check.py`**, which compared its query flags with the working
+  tree: the variant tests now build every variant's plan and flags offline.
+- **The study's fetch of the extended context** (the summary groups from the training query):
+  they now come from `fetch_analytics_context`.
+- **The study's evaluation sample** (3,000 test non-mules, seed 7): the analyses now score the
+  audits' samples (2,000 non-mules per split, the split seed), so a baseline and a run's audit
+  rank the same accounts.
+- **The profile scripts' cross-validation of revealed against hidden mules, top-scoring
+  non-mules' profiles and trace features**: one-off, in [the mule profile](mule-profile.md).
+- **The data files** (feature tables, raw context rows, logs, CSVs) and **`mpl_arms/fake/`**
+  (a smoke run on the fake graph): untracked, under
+  `results/archive/diagnostic-study-2026-09/`.
 
 ## The figures
 
-Each was drawn for this note with the plot functions of `reporting.diagnostics` from the
-study's archived files, which stay outside the repository:
+Drawn for this note with `reporting.diagnostics` from the study's archived files:
 
 | Figure | Function | From |
 |---|---|---|

@@ -1,24 +1,21 @@
 # Reference runs
 
-Three full training runs on the CUDA host, on the same dataset and the same revealed labels.
-They record where the model stood before the restructuring and why the built-in settings are
-what they are. Their checkpoints load only with the code before the layered restructure,
-such as commit 08b487e, its last. The diagnostic study that sits between runs 2 and 3 is
-recorded in [the diagnostic study](diagnostic-study.md), [the mule profile](mule-profile.md)
-and [the nnPU positive weight](nnpu-positive-weight.md).
+Three full training runs on the CUDA host, on the same dataset and revealed labels. They
+record where the model stood before the restructuring and why the built-in settings are what
+they are. Their checkpoints load only with the code before the layered restructure, such as
+its last commit, 08b487e.
 
 ## How the numbers are measured
 
-- **Proxy metrics** are what training records: a split's revealed mules against a sample of up
-  to 2,000 unlabelled accounts, which count as negatives. Validation has 11 revealed mules, so
-  its proxy prevalence is 0.0055 and its AP moves in large steps. The selected ("best") epoch
-  is the one with the highest validation proxy AP, and training stops after 6 epochs without
-  improvement.
-- **The ground-truth audit** (that code's `evaluate-final` command) scores all 40 test mules plus
-  2,000 uniform non-mules, weighted by inverse inclusion probability to the 47,749 test accounts
-  (prevalence 0.00084). The sample depends only on the test population, the truth and the split
-  seed, so runs 2 and 3 were audited on the same accounts. Recall in the top k% is the share of
-  the 40 mules ranked within the top k% of accounts by weight.
+- **Proxy metrics**, recorded in training: a split's revealed mules against up to 2,000
+  unlabelled accounts counted as negatives. Validation has 11 revealed mules, so its proxy
+  prevalence is 0.0055 and its AP moves in large steps. The selected ("best") epoch has the
+  highest validation proxy AP; training stops after 6 epochs without improvement.
+- **The ground-truth audit** (that code's `evaluate-final`): all 40 test mules plus 2,000
+  uniform non-mules, weighted by inverse inclusion probability to the 47,749 test accounts
+  (prevalence 0.00084). The sample depends only on the test population, the truth and the
+  split seed, so runs 2 and 3 were audited on the same accounts. Recall in the top k% is the
+  share of the 40 mules within the top k% of accounts by weight.
 
 ## Results
 
@@ -42,52 +39,26 @@ Audit: mules ranked in the top share of the 47,749 test accounts (recall in brac
 | 20% | 22 of 40 (0.55) | not recorded |
 | 50% | 35 of 40 (0.875) | not recorded |
 
-**Run 1, textbook nnPU.** The loss collapsed to 0.0010 within one epoch, with every score near
-1.7e-7: with the positive weight equal to the prior, scoring every account near zero costs only
-the prior.
-
-**Run 2, imbalanced nnPU, no pool counts.** The model learned in its first epoch and then
-drifted: the validation proxy AP swung between 0.011 and 0.096 from epoch to epoch, and early
-stopping kept the peak at epoch 7. The scores were bimodal, most near 0.00007 or 0.99999. The
-swing is why validation now scores a moving average of the weights.
-
-**Run 3, the current built-in run.** The `pool_activity` and `pool_internal_inflows` groups, the
-slot sum and weight averaging (decay 0.99); 101,121 parameters. Early stopping ended it at epoch
-11 with epoch 5 selected. The F1 threshold picked on the 11 validation mules (0.99999) gives an
-audit precision of 0.077 and recall of 0.15. With 11 positives that threshold is not meaningful;
-read the ranking metrics and the budgets instead.
+- **Run 1, textbook nnPU.** The loss collapsed to 0.0010 within one epoch, every score near
+  1.7e-7: with the positive weight equal to the prior, scoring every account near zero costs
+  only the prior ([the nnPU positive weight](nnpu-positive-weight.md)).
+- **Run 2, imbalanced nnPU, no pool counts.** It learned in its first epoch, then drifted: the
+  validation proxy AP swung between 0.011 and 0.096 from epoch to epoch, and early stopping
+  kept the peak at epoch 7. Scores were bimodal, most near 0.00007 or 0.99999. The swing is why
+  validation now scores a moving average of the weights.
+- **Run 3, the current built-in run.** The `pool_activity` and `pool_internal_inflows` groups,
+  the slot sum and weight averaging (decay 0.99); 101,121 parameters. Early stopping ended it
+  at epoch 11, epoch 5 selected. The F1 threshold from the 11 validation mules (0.99999) gives
+  audit precision 0.077 and recall 0.15; with 11 positives it is not meaningful, so read the
+  ranking metrics and budgets instead.
 
 ## The diagnostic study between runs 2 and 3
 
-The study asked why run 2 could not detect mules. It used TigerGraph read-only and ground truth
-for analysis only.
-
-- In run 2 every account had the same root input vector, so a mule could only show through
-  attention over at most 16 sampled payments.
-- The strongest mule signals are counts over the account's candidate pool, the payments
-  TigerGraph already returns for it: distinct payers, incoming payments, and inflows from
-  first-time payers.
-- Logistic regression on the study's 16 pool features, trained on the 20 revealed training
-  mules, reached test ROC AUC 0.946 to 0.947, AP 0.20 to 0.26 and recall 0.675 to 0.70 in the
-  top 1%, depending on how the unlabelled training accounts were treated. The study scored all
-  40 test mules against 3,000 uniform non-mules drawn with seed 7, not the audit's 2,000 drawn
-  with seed 42, so these numbers are not paired with the runs' audits.
-- Logistic regression on the 165 account-level features of the baselines (not the pool
-  features), trained on k random training mules (revealed or hidden) against 3,000 training
-  non-mules, gives this learning curve on the same test sample (the mean of 5 draws, and a
-  single run at k = 160):
-
-  | k | 10 | 20 | 40 | 80 | 160 |
-  |---|---|---|---|---|---|
-  | ROC AUC | 0.68 | 0.78 | 0.83 | 0.87 | 0.90 |
-
-- Revealed mules are louder than hidden ones: they show the typology's traces more often.
-
-**Caveat.** The first-time and internal inflow counts were chosen after reading the generator's
-mule typology and test-split mules, so test results for them are optimistic. Decisions use the
-validation audit's AP of the hidden mules; the test audit is for reporting.
-
-## Where the details are
+Why could run 2 not detect mules? Every account had the same root input, while the strongest
+signals are counts over the candidate pool TigerGraph already returns (distinct payers,
+incoming payments, inflows from first-time payers); that led to run 3's pool counts and slot
+sum. The study's numbers, its caveat on test results and what became of its scripts are in
+its notes:
 
 | Note | What it holds |
 |---|---|
