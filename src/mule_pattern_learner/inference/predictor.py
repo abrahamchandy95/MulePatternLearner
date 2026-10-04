@@ -52,7 +52,8 @@ def score_batch(
 ) -> ScoredBatch:
     """The logits of one assembled batch, on ``device``; the model must be in eval mode.
 
-    With ``embeddings`` the head scores the encoder's output, which is kept too.
+    With ``embeddings`` the model's logits come from the encoder's output, which is kept
+    too.
     """
     if prepared.batch is None:
         return ScoredBatch(prepared, None)
@@ -61,7 +62,7 @@ def score_batch(
         if not embeddings:
             return ScoredBatch(prepared, model(batch))
         hidden = model.encode(batch)
-        return ScoredBatch(prepared, model.head(hidden).squeeze(-1), hidden)
+        return ScoredBatch(prepared, model.logits(batch, hidden), hidden)
 
 
 def score_batches(

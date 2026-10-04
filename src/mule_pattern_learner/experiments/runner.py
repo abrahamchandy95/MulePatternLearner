@@ -202,11 +202,11 @@ def latest_graph_history(results: Path) -> Path | None:
     for history in results.glob("*/seed-*/history.csv"):
         run = RunPaths(history.parent)
         try:
-            architecture = read_run_config(run.config).model.architecture
+            graph = not read_run_config(run.config).feature_plan().root_only
             seconds = read_history(history).seconds_per_step.to_numpy(dtype=np.float64)
         except (KeyError, OSError, ValueError):
             continue
-        if architecture == "tgat" and np.isfinite(seconds).any():
+        if graph and np.isfinite(seconds).any():
             found.append((history.stat().st_mtime, history))
     return max(found)[1] if found else None
 
@@ -216,8 +216,8 @@ def time_bound(runs: Sequence[PlannedRun], results: Path) -> dict[str, Any]:
 
     Every run is taken to train all its epochs (early stopping ends most sooner) at the
     median seconds per step of the latest graph run's history.csv (latest_graph_history)
-    that timed a step; the summary models take far less. None without such a history, or
-    when an epoch has no fixed steps.
+    that timed a step; the models of the root's own inputs take far less. None without
+    such a history, or when an epoch has no fixed steps.
     """
     pending = [run for run in runs if run.action != KEEP]
     history = latest_graph_history(results)

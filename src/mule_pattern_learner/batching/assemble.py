@@ -177,7 +177,7 @@ def build_batch(
             f"(status counts {dict(contexts.rejections)}); first {missing[0]}"
         )
     accepted = [row for row in root_rows if row is not None]
-    if plan.architecture == "summary":
+    if plan.root_only:
         if stats is not None:
             stats.update(counts, contexts=len(set(roots)), stub_children=0)
             stats.update(rejected_children=0, first_edges=0, second_edges=0)

@@ -140,8 +140,13 @@ BUILT_IN_GROUPS = (*CORE_GROUPS, *POOL_GROUPS)
 
 
 # The model architectures: "tgat" is the graph model (model.tgat.TGAT), "summary" the
-# controls without attention (model.summary_mlp.SummaryMLP).
-ARCHITECTURES = ("tgat", "summary")
+# controls without attention (model.summary_mlp.SummaryMLP), "linear" one linear layer
+# of the root's own inputs and "wide_and_deep" the graph model with that layer's output
+# added to its logit (model.linear).
+ARCHITECTURES = ("tgat", "summary", "linear", "wide_and_deep")
+# The architectures that read the root's own inputs alone: their batches hold only the
+# roots, and they fetch no children.
+ROOT_ARCHITECTURES = frozenset({"summary", "linear"})
 
 
 @dataclass(frozen=True)
@@ -149,8 +154,10 @@ class FeaturePlan:
     """The feature groups a model reads and its architecture.
 
     "tgat" is the graph model: attention over sampled neighbours, with a summary
-    branch for the root's summary columns. "summary" reads only the root's node and
-    summary columns (the controls without attention).
+    branch for the root's summary columns, and "wide_and_deep" the same with a linear
+    layer of the root's node and summary columns added to its logit. "summary" and
+    "linear" read only the root's node and summary columns (root_only), through an MLP
+    and through one linear layer.
     """
 
     groups: tuple[str, ...] = BUILT_IN_GROUPS
@@ -164,10 +171,15 @@ class FeaturePlan:
         for name in self.groups:
             if set(FEATURE_GROUPS[name].requires) - set(self.groups):
                 raise ValueError(f"Missing dependencies for {name}")
-        if self.architecture != "summary" and "message_core" not in self.groups:
+        if not self.root_only and "message_core" not in self.groups:
             raise ValueError("Graph models require message_core")
-        if self.architecture == "summary" and not self.names("node", "summary"):
-            raise ValueError("Summary model needs node or summary inputs")
+        if self.root_only and not self.names("node", "summary"):
+            raise ValueError("A model of the root's own inputs needs node or summary inputs")
+
+    @property
+    def root_only(self) -> bool:
+        """Whether the model reads the root's own inputs alone, and no neighbours."""
+        return self.architecture in ROOT_ARCHITECTURES
 
     def names(self, *paths: str) -> tuple[str, ...]:
         # Registry order is canonical, independent of configuration list order.
@@ -202,15 +214,15 @@ class FeaturePlan:
         """GSQL `include_*` parameters for one hop: one per group TigerGraph computes.
 
         message_core is always computed and client groups are never requested; every
-        message carries its channel and sampling stratum. TGAT models read only node
+        message carries its channel and sampling stratum. Graph models read only node
         and message inputs of children, so their second hop would skip a summary group
         TigerGraph computed; none of the training groups is one (the summary groups are
-        the client's pool counts), so both hops send the same flags. Summary models
-        fetch no children.
+        the client's pool counts), so both hops send the same flags. Models of the
+        root's own inputs (root_only) fetch no children.
         """
         if hop not in (1, 2):
             raise ValueError("Hop must be 1 or 2")
-        skip_summary = hop == 2 and self.architecture == "tgat"
+        skip_summary = hop == 2 and not self.root_only
         return {
             "include_" + name: name in self.groups and not (skip_summary and spec.path == "summary")
             for name, spec in FEATURE_GROUPS.items()
@@ -221,7 +233,7 @@ class FeaturePlan:
 def extraction_plan(model: FeaturePlan) -> FeaturePlan:
     """What the context source asks TigerGraph for: the model's groups but the client ones.
 
-    Client groups are computed locally. The architecture is the model's, so a TGAT
+    Client groups are computed locally. The architecture is the model's, so a graph
     model skips summary groups at hop 2.
     """
     groups = tuple(g for g in model.groups if g not in CLIENT_GROUPS)

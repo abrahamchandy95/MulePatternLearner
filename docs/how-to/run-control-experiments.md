@@ -83,7 +83,7 @@ the baseline's dataset.
 
 | Suite | Variants |
 |---|---|
-| `controls` (the default) | `baseline`, `no_attention`, `no_slot_sum`, `no_pool_counts`, `prior_weight`, `no_weight_average`, `drop_time_encoding` |
+| `controls` (the default) | `baseline`, `no_attention`, `no_slot_sum`, `no_pool_counts`, `linear`, `wide_and_deep`, `prior_weight`, `no_weight_average`, `drop_time_encoding` |
 | `feature_drops` | `baseline` and one drop per built-in group but `message_core`: `drop_entity_meta`, `drop_hub_indicator`, `drop_time_encoding`, `drop_pair_history`, `drop_flow_timing`, `drop_pool_activity`, `drop_pool_internal_inflows` |
 | `methods` | `baseline`, `select_on_roc_auc`, `select_on_pu_risk`, `fixed_10_epochs`, `prior_tenth`, `prior_tenfold` |
 | `all` | Every variant of the three, each once |
@@ -93,6 +93,8 @@ the baseline's dataset.
 | `no_attention` | Does attention over sampled neighbours add anything beyond the root's own inputs, pool counts included? | `model.architecture = "summary"`, no slot sum |
 | `no_slot_sum` | Does the per-slot MLP sum help beyond attention? | `model.slot_sum = false` |
 | `no_pool_counts` | How much of the ranking comes from the candidate-pool counts? | without both pool groups |
+| `linear` | A bank that must explain every score could rank accounts with one linear layer of each account's own inputs, trained with the same nnPU loss and model selection: does it find the hidden mules as well as the graph model does? | `model.architecture = "linear"`, no slot sum |
+| `wide_and_deep` | On the reference graph a logistic regression of the account's own inputs, fitted on the same revealed mules, ranked validation's mules better than the graph model: if a bank adds such a linear score to the graph model's, inside one model trained as the graph model is, does it find more hidden mules than either alone? | `model.architecture = "wide_and_deep"` |
 | `prior_weight` | Does the balanced positive weight beat textbook nnPU across seeds? | `loss.positive_weight = "prior"` |
 | `no_weight_average` | Does selecting on the moving average of the weights help? | `training.weight_average_decay = 0.0` |
 | `drop_<group>` | What does the model lose without the group? | without the group, and the groups that read it (`drop_pair_history` also drops both pool groups, `drop_flow_timing` also `pool_activity`) |
@@ -120,13 +122,14 @@ baselines ([Run the diagnostics](run-diagnostics.md)).
 
 ## Cost
 
-The `controls` suite is 70 runs (60 graph runs and the 10 cheap `no_attention` runs,
-which fetch no children). A graph run takes about 3 seconds per step on the CUDA host
-while it requests its contexts from TigerGraph, about an hour with early stopping; once
-the context cache holds them it is far faster. Over the controls suite's first three
-seeds each variant's runs took from 0.00 to 0.25 hours on average. A suite trained with
-fewer seeds keeps its complete runs, so running `controls` again after the seeds became
-ten trains only the seven new ones: 49 runs.
+The `controls` suite is 90 runs (70 graph runs and the 20 cheap `no_attention` and
+`linear` runs, which fetch no children). A graph run takes about 3 seconds per step on
+the CUDA host while it requests its contexts from TigerGraph, about an hour with early
+stopping; once the context cache holds them it is far faster. Over the controls suite's
+first three seeds each variant's runs took from 0.00 to 0.25 hours on average. A suite
+trained with fewer seeds keeps its complete runs, so running `controls` again after the
+seeds became ten trains the seven new seeds of the first seven variants and every seed of
+`linear` and `wide_and_deep`: 69 runs.
 
 The plan gives two numbers for the runs it trains:
 

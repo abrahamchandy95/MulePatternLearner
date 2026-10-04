@@ -36,5 +36,9 @@ class SummaryMLP(nn.Module):
         assert self.node is not None
         return self.node(batch["x"])[batch["root_positions"]]
 
+    def logits(self, batch: dict[str, torch.Tensor], hidden: torch.Tensor) -> torch.Tensor:
+        """The logits of roots whose encoding (encode) is ``hidden``: the head's."""
+        return self.head(hidden).squeeze(-1)
+
     def forward(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
         return self.head(self.encode(batch)).squeeze(-1)

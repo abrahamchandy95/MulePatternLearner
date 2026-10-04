@@ -136,6 +136,21 @@ CONTROLS = (
         lambda c: without_groups(c, POOL_GROUPS),
     ),
     Variant(
+        "linear",
+        "A bank that must explain every score could rank accounts with one linear layer of "
+        "each account's own inputs, trained with the same nnPU loss and model selection: "
+        "does it find the hidden mules as well as the graph model does?",
+        lambda c: with_model(c, architecture="linear", slot_sum=False),
+    ),
+    Variant(
+        "wide_and_deep",
+        "On the reference graph a logistic regression of the account's own inputs, fitted on "
+        "the same revealed mules, ranked validation's mules better than the graph model: if "
+        "a bank adds such a linear score to the graph model's, inside one model trained as "
+        "the graph model is, does it find more hidden mules than either alone?",
+        lambda c: with_model(c, architecture="wide_and_deep"),
+    ),
+    Variant(
         "prior_weight",
         "Does the balanced positive weight beat textbook nnPU across seeds?",
         lambda c: with_loss(c, positive_weight="prior"),

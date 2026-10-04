@@ -7,11 +7,13 @@ import torch
 
 from ..config import ModelConfig
 from ..contract.feature_groups import FeaturePlan
+from .linear import LinearModel, WideAndDeep
 from .summary_mlp import SummaryMLP
 from .tgat import TGAT
 
-# The model of either architecture: the graph model, or the controls without attention.
-type Model = TGAT | SummaryMLP
+# The model of any architecture: the graph model (with or without the wide path), or
+# the controls of the root's own inputs.
+type Model = TGAT | SummaryMLP | LinearModel
 
 
 def probabilities_from_logits(logits: torch.Tensor) -> np.ndarray:
@@ -31,11 +33,13 @@ def build_model(
 ) -> Model:
     """The model of a model section (hidden, heads, dropout, slot_sum) over plan's inputs.
 
-    plan's architecture chooses the class: "tgat" builds TGAT, "summary" SummaryMLP.
-    ``first_fanout`` is the sampler's hop-1 fan-out, the divisor of the slot sum.
-    ``dropout`` replaces the configured rate, for dropout-free determinism checks. The
-    summary architecture has no hop-1 slots, so it ignores ``heads``, ``slot_sum`` and
-    the fanouts.
+    plan's architecture chooses the class: "tgat" builds TGAT, "summary" SummaryMLP,
+    "linear" LinearModel and "wide_and_deep" WideAndDeep. ``first_fanout`` is the
+    sampler's hop-1 fan-out, the divisor of the slot sum. ``dropout`` replaces the
+    configured rate, for dropout-free determinism checks. The summary architecture has
+    no hop-1 slots, so it ignores ``heads``, ``slot_sum`` and the fanouts. The linear
+    architecture reads the summary architecture's inputs, the root's node and summary
+    columns, with one linear layer, so it ignores every setting of the section.
     """
     rate = model.dropout if dropout is None else dropout
     match plan.architecture:
@@ -48,7 +52,18 @@ def build_model(
                 slot_sum=model.slot_sum,
                 first_fanout=first_fanout,
             )
+        case "wide_and_deep":
+            return WideAndDeep(
+                model.hidden,
+                model.heads,
+                rate,
+                plan=plan,
+                slot_sum=model.slot_sum,
+                first_fanout=first_fanout,
+            )
         case "summary":
             return SummaryMLP(model.hidden, rate, plan=plan)
+        case "linear":
+            return LinearModel(plan=plan)
         case other:
             raise ValueError(f"Unknown architecture {other!r}")

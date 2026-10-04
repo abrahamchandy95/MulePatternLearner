@@ -418,6 +418,15 @@ def test_the_time_bound_comes_from_the_latest_graph_run(tmp_path: Path) -> None:
     assert bound["timed_from"] == str(history)
     # Three runs to train, one epoch of three steps each, at about 3 s per step.
     assert bound["bound_hours"] == pytest.approx(3 * 3 * 3.0 / 3600, abs=0.01)
+    # A later run of a model of the root's own inputs, whose steps fetch no children, is
+    # passed over; a later graph model with the wide path times the steps.
+    os.utime(history, (1, 1))
+    for when, name in enumerate(("linear", "wide_and_deep"), start=2):
+        variant = VARIANTS[name]
+        later = write_run_files(RunPaths.of(name, 7, tmp_path), config=variant.config(BASE, 7))
+        os.utime(later.history, (when, when))
+        expected = history if name == "linear" else later.history
+        assert time_bound(runs, tmp_path)["timed_from"] == str(expected)
 
 
 def test_the_estimate_takes_a_cold_first_run_per_new_seed_and_cached_runs_after_it(

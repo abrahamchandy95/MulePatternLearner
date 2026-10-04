@@ -230,7 +230,9 @@ BUILT_IN_SAMPLER = SamplerPlan(
 class ModelConfig:
     """The model: its architecture, width, attention heads, dropout and slot sum."""
 
-    # "tgat" attends over sampled neighbours; "summary" reads only the root's inputs.
+    # "tgat" attends over sampled neighbours; "summary" reads only the root's inputs
+    # through an MLP and "linear" through one linear layer; "wide_and_deep" is "tgat" with
+    # that linear layer's output added to its logit.
     architecture: str = "tgat"
     hidden: int = 64
     heads: int = 4
@@ -241,7 +243,7 @@ class ModelConfig:
     # counts the slots that meet it (Xu, Hu, Leskovec and Jegelka, "How Powerful are Graph
     # Neural Networks?", ICLR 2019). Most roots fill all 16 slots, so this is mostly the
     # share of such slots. Provisional: not yet measured in a run on the reference graph. The
-    # summary architecture has no slots and ignores it.
+    # summary and linear architectures have no slots and ignore it.
     slot_sum: bool = True
 
     def __post_init__(self) -> None:

@@ -397,8 +397,9 @@ class ContextOpener(Protocol):
 def check_coverage(contexts: ContextReader, plan: FeaturePlan, sampler: SamplerPlan) -> None:
     """The source must request every input the model reads, with the model's pools."""
     source_plan, source_sampler = contexts.plan, contexts.sampler
-    # A summary model never fetches children, so only its first hop matters.
-    for hop in (1,) if plan.architecture == "summary" else (1, 2):
+    # A model of the root's own inputs never fetches children, so only its first hop
+    # matters.
+    for hop in (1,) if plan.root_only else (1, 2):
         have = source_plan.query_flags(hop)
         missing = sorted(k for k, v in plan.query_flags(hop).items() if v and not have.get(k))
         if missing:

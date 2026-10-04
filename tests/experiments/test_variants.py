@@ -87,11 +87,13 @@ def test_the_suites_start_with_the_baseline_and_all_holds_each_variant_once() ->
         "no_attention",
         "no_slot_sum",
         "no_pool_counts",
+        "linear",
+        "wide_and_deep",
         "prior_weight",
         "no_weight_average",
         "drop_time_encoding",
     ]
-    assert len(SUITES["all"]) == 18 == len(VARIANTS)
+    assert len(SUITES["all"]) == 20 == len(VARIANTS)
     # No variant reads a group outside training: there are no additions.
     assert all(
         set(v.config(DEFAULT_CONFIG, 42).features) <= set(BUILT_IN_GROUPS)
@@ -128,6 +130,19 @@ def test_the_methods_suite_changes_the_selection_and_the_prior_on_the_baseline_d
     assert all("near-null result is expected" in v.question for v in METHODS[3:])
 
 
+def test_the_linear_controls_change_the_architecture_alone_and_ask_for_real_use() -> None:
+    assert VARIANTS["linear"].changes() == {
+        "model.architecture": "linear",
+        "model.slot_sum": False,
+    }
+    assert VARIANTS["wide_and_deep"].changes() == {"model.architecture": "wide_and_deep"}
+    assert all("a bank" in VARIANTS[name].question.lower() for name in ("linear", "wide_and_deep"))
+    assert all("hidden mules" in VARIANTS[name].question for name in ("linear", "wide_and_deep"))
+    # The built-in run keeps its architecture, and so its model and fingerprint.
+    assert DEFAULT_CONFIG.model.architecture == "tgat"
+    assert not DEFAULT_CONFIG.feature_plan().root_only
+
+
 def test_names_select_suites_and_variants_and_always_the_baseline() -> None:
     assert select() == (DEFAULT_SUITE, SUITES[DEFAULT_SUITE])
     name, chosen = select(["prior_weight", "no_attention", "prior_weight"])
@@ -152,5 +167,6 @@ def test_the_help_lists_every_suite_and_variant_with_its_changes() -> None:
     text = describe()
     assert all(name in text for name in [*SUITES, *VARIANTS])
     assert "(model.architecture = summary; model.slot_sum = False)" in text
+    assert "(model.architecture = wide_and_deep)" in text
     assert "(loss.positive_weight = prior)" in text
     assert "(features without pool_activity, pool_internal_inflows)" in text

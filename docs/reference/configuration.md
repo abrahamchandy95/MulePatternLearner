@@ -118,11 +118,11 @@ A group's dependencies must come with it (`pool_activity` reads `pair_history` a
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `model.architecture` | `"tgat"` | `"tgat"` attends over sampled neighbours; `"summary"` reads only the root's own inputs (the `no_attention` control) |
+| `model.architecture` | `"tgat"` | `"tgat"` attends over sampled neighbours; `"summary"` reads only the root's own inputs, through an MLP (the `no_attention` control); `"linear"` reads them through one linear layer (the `linear` control); `"wide_and_deep"` is `"tgat"` with that linear layer's output added to its logit (the `wide_and_deep` control) |
 | `model.hidden` | `64` | Hidden width (8 to 512, divisible by the heads) |
 | `model.heads` | `4` | Attention heads (1 to 16) |
 | `model.dropout` | `0.15` | Dropout rate, from 0 up to but excluding 1 |
-| `model.slot_sum` | `true` | Feed the head a sum of a small MLP of each hop-1 slot beside attention; the summary architecture ignores it |
+| `model.slot_sum` | `true` | Feed the head a sum of a small MLP of each hop-1 slot beside attention; the summary and linear architectures ignore it |
 
 ## loss
 

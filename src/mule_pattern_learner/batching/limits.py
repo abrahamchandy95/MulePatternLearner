@@ -49,7 +49,7 @@ class BatchLimits:
         sampler: SamplerPlan | None = None,
     ) -> None:
         first, second = fanouts
-        contexts = roots if plan.architecture == "summary" else roots * (first + 1)
+        contexts = roots if plan.root_only else roots * (first + 1)
         # Upper bound for all float32/int64/bool input arrays, before deduplication.
         edges = roots * first + contexts * second
         size = roots * 8 + contexts * len(plan.node_names) * 4 + roots * first * 8
@@ -62,7 +62,7 @@ class BatchLimits:
                 f"tensor_bytes<={size}. Reduce batch size or fanouts."
             )
         if sampler is not None:
-            children = 0 if plan.architecture == "summary" else roots * first
+            children = 0 if plan.root_only else roots * first
             messages = roots * sampler.response_bound(1) + children * sampler.response_bound(2)
             if messages > self.max_candidate_messages:
                 raise BatchCapacityError(

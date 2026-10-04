@@ -8,6 +8,7 @@ import torch
 from mule_pattern_learner.batching.assemble import build_batch
 from mule_pattern_learner.contract.analytics_features import ANALYTICS_GROUPS
 from mule_pattern_learner.contract.feature_groups import (
+    ARCHITECTURES,
     BUILT_IN_GROUPS,
     CLIENT_GROUPS,
     CORE_GROUPS,
@@ -65,9 +66,17 @@ def test_query_flags_name_each_server_group_and_follow_the_plan() -> None:
         tuple(g for g in BUILT_IN_GROUPS if g not in ("flow_timing", "pool_activity"))
     )
     without = FeaturePlan(("entity_meta", "hub_indicator", "message_core"))
-    for plan in (built_in, dropped, without, FeaturePlan(CORE_GROUPS, "summary")):
+    architectures = (FeaturePlan(CORE_GROUPS, name) for name in ARCHITECTURES)
+    for plan in (built_in, dropped, without, *architectures):
         expected = {flag: flag.removeprefix("include_") in plan.groups for flag in SERVER_FLAGS}
         assert plan.query_flags(1) == plan.query_flags(2) == expected
+    # The models of the root's own inputs fetch no children; the graph models do.
+    assert {name: FeaturePlan(CORE_GROUPS, name).root_only for name in ARCHITECTURES} == {
+        "tgat": False,
+        "summary": True,
+        "linear": True,
+        "wide_and_deep": False,
+    }
     with pytest.raises(ValueError, match="Hop"):
         built_in.query_flags(3)
 

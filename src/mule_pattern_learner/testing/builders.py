@@ -22,6 +22,7 @@ import zlib
 import numpy as np
 import pandas as pd
 import torch
+from torch import nn
 
 from mule_pattern_learner.artifacts import (
     AUDIT_COLUMNS,
@@ -809,8 +810,10 @@ def saved_model(
     plan = config.feature_plan()
     torch.manual_seed(0)
     model = build_model(config.model, plan, config.sampler.fanouts[0], dropout=0.0)
+    # The head's last layer: the head itself of a linear model.
+    last = model.head[-1] if isinstance(model.head, nn.Sequential) else model.head
     with torch.no_grad():
-        bias = model.head[-1].bias
+        bias = last.bias
         assert isinstance(bias, torch.Tensor)
         bias += logit_shift
     payload = {

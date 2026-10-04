@@ -114,6 +114,13 @@ gain the summary model's steadiness, a seed ensemble is the way to use it.
 - **Proxy reliability**: how far the validation proxy, the only thing a bank has, ranks
   the runs and the variants as the audit does, within each selection rule, and on the
   hidden mules alone.
+- **Two linear controls** in the `controls` suite. A logistic regression of the root's
+  own model inputs, fitted on the same 20 revealed train mules (the diagnostics' "model,
+  LR"), reached a validation audit AP of 0.232 against the baseline run's 0.081, with the
+  same ROC AUC. `linear` trains one linear layer of those inputs with the run's own loss,
+  selection and pipeline, and `wide_and_deep` adds that layer's output to the graph
+  model's logit, so the suite can tell whether the graph model loses what a linear score
+  of the root's inputs finds, and whether it gains from having both.
 - **The hidden mules first.** The model exists to find the mules nobody knows on the
   scoring date, and the diagnostics of the reference graph showed the built-in run
   ranking the revealed mules far better than the hidden ones: validation's top 1% held 7

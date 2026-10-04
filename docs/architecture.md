@@ -103,7 +103,7 @@ contract                                         definitions shared with GSQL
 | `runtime` | The device and determinism, the one bounded worker pool, `emit`, the one structured record of each event, and the console's short line for it (`console`) |
 | `data` | The read ports, the seed reservoirs, observed labels, the hub registry, the manifest and dataset id, preparation, and the context source with its cache tiers |
 | `sampling` | Candidate tables and the torch and cuGraph subset samplers |
-| `model` | The torch modules (`TGAT`, `SummaryMLP`), the nnPU loss and the model builder; it imports only `contract` and `config` |
+| `model` | The torch modules (`TGAT`, and for the controls `SummaryMLP`, `LinearModel` and `WideAndDeep`), the nnPU loss and the model builder; it imports only `contract` and `config` |
 | `batching` | Contexts to tensors: feature matrices, pool counts, the device-side Fourier basis, batch limits and assembly |
 | `inference` | `model.pt` (`SavedModel`), the one scoring loop (`predictor`), rejection limits and scoring arbitrary accounts |
 | `training` | The trainer and its schedule, objective, weight average, resume state, history and summary |
@@ -330,7 +330,7 @@ The owner's decisions that shape the code, each with its reason.
   are always the code's or a `RunConfig` recorded in its `config.json`. `RUN` defaults to
   `results/baseline/seed-42`.
 - **One model** (the layered layout the owner approved on 2026-09-27). `TGAT` is the
-  model; `SummaryMLP` exists only for the controls. The variant axis, the `single`
+  model; `SummaryMLP`, `LinearModel` and `WideAndDeep` exist only for the controls. The variant axis, the `single`
   architecture, the feature groups only earlier models read, the `recent` and
   `stratified` samplers, SQLite storage, the `shared_history` protocol and the label file
   were deleted: the built-in run used none of them, and each was a second path to keep

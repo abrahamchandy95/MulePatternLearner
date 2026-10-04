@@ -92,7 +92,12 @@ projection at all.
 The `summary` architecture (`model.summary_mlp.SummaryMLP`, 5,953 parameters) reads only
 the root's own node and pool columns and fetches no children. It exists for the
 `no_attention` control, which asks whether attention adds anything beyond the root's own
-inputs.
+inputs. Two more controls read the same 24 columns (`model.linear`): the `linear`
+architecture (`LinearModel`, 25 parameters) scores a root with one linear layer of them
+and fetches no children either, and `wide_and_deep` (`WideAndDeep`, 101,146 parameters)
+is the graph model with that linear layer's output added to its logit, its graph part
+built first so that a seed gives it the built-in model's initial weights. Both train
+with the same loss, selection and pipeline as the built-in run.
 
 ## The loss
 

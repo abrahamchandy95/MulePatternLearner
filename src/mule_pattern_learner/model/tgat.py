@@ -10,6 +10,8 @@ account embedding table is used.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 import torch
 from torch import nn
 
@@ -67,8 +69,11 @@ class TGAT(nn.Module):
     Beside attention, a summary branch reads the root's summary columns, and the slot
     sum (when on) adds a per-slot MLP summed over the hop-1 slots. Its submodules are
     created in a fixed order, so a seed always gives the same initial weights (the
-    golden run pins them).
+    golden run pins them). ARCHITECTURE is the plan architecture it builds;
+    model.linear.WideAndDeep extends it.
     """
+
+    ARCHITECTURE: ClassVar[str] = "tgat"
 
     def __init__(
         self,
@@ -96,8 +101,11 @@ class TGAT(nn.Module):
                 f"Hop-1 fan-out must be an integer in [{FANOUT.low},{FANOUT.high}], "
                 f"got {first_fanout!r}"
             )
-        if plan.architecture != "tgat":
-            raise ValueError(f"TGAT needs a tgat feature plan, not {plan.architecture!r}")
+        if plan.architecture != self.ARCHITECTURE:
+            raise ValueError(
+                f"{type(self).__name__} needs a {self.ARCHITECTURE} feature plan, "
+                f"not {plan.architecture!r}"
+            )
         self.plan = plan
         self.hidden = hidden
         # The root's node columns go to attention, its summary columns to their own branch.
@@ -175,6 +183,10 @@ class TGAT(nn.Module):
                 f"{self.first_fanout}"
             )
         return mlp(slots).masked_fill(~mask[..., None], 0.0).sum(dim=1) / self.first_fanout
+
+    def logits(self, batch: dict[str, torch.Tensor], hidden: torch.Tensor) -> torch.Tensor:
+        """The logits of roots whose encoding (encode) is ``hidden``: the head's."""
+        return self.head(hidden).squeeze(-1)
 
     def forward(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
         return self.head(self.encode(batch)).squeeze(-1)
