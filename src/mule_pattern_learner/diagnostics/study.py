@@ -38,6 +38,7 @@ from typing import Any, Protocol
 import pandas as pd
 
 from ..artifacts import (
+    read_audit_report,
     read_audit_scores,
     read_feature_table,
     read_json,
@@ -157,7 +158,7 @@ class Study:
         if self.unusable_run is not None:
             return {}
         return {
-            split: read_json(self.run.audit_report(split))
+            split: read_audit_report(self.run.audit_report(split))
             for split in HELD_OUT_SPLITS
             if self.run.audit_report(split).exists()
         }

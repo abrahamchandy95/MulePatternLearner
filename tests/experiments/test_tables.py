@@ -17,6 +17,7 @@ from mule_pattern_learner.artifacts import (
     HIDDEN_METRIC,
     PAIRED_METRIC,
     SEED_MEAN,
+    hidden_rows,
     read_comparison,
     read_json,
     read_run_provenance,
@@ -28,19 +29,20 @@ from mule_pattern_learner.config import DEFAULT_CONFIG
 from mule_pattern_learner.experiments.tables import (
     COMPARISON_COLUMNS,
     COMPLETE,
+    EVERY,
     FAILED,
+    HIDDEN,
     Delta,
     SuiteRun,
-    hidden_ap,
     paired_delta,
     paired_split,
-    run_values,
     seed_ensembles,
     write_tables,
 )
 from mule_pattern_learner.experiments.variants import BASELINE, VARIANTS
 from mule_pattern_learner.metrics import (
     average_precision,
+    hidden_name,
     log_odds_mean,
     paired_replicates,
     percentile_interval,
@@ -94,7 +96,7 @@ def test_the_paired_delta_of_a_small_case_worked_by_hand(tmp_path: Path) -> None
         audited_run(tmp_path, "baseline", 2, [0.9, 0.8, 0.7, 0.1, 0.2, 0.3]),
         audited_run(tmp_path, "prior_weight", 2, [0.3, 0.9, 0.1, 0.2, 0.25, 0.05]),
     ]
-    paired = paired_split(runs, "validation")
+    paired = paired_split(runs, "validation", EVERY)
     assert paired is not None and paired.unpaired == 0
     # Seed 1 ranks a, then c, f and e (weight 2 each), then b: AP = 0.5 * 1 + 0.5 * 2 / 8.
     # Every other run ranks both mules first.
@@ -164,7 +166,7 @@ def test_accounts_some_audit_rejected_leave_the_pairing_and_other_samples_are_re
         audited_run(tmp_path, "baseline", 1, [0.9, 0.8, 0.7, 0.1, 0.2, 0.3]),
         audited_run(tmp_path, "prior_weight", 1, [0.9, 0.2, 0.8, 0.1, 0.3, 0.4], drop="f"),
     ]
-    paired = paired_split(runs, "validation")
+    paired = paired_split(runs, "validation", EVERY)
     assert paired is not None and paired.unpaired == 1
     # Without f the variant ranks a, c, e (weight 2 each), then b: 0.5 + 0.5 * 2 / 6.
     assert paired.point.tolist() == pytest.approx([1.0, 0.5 + 0.5 * 2 / 6])
@@ -173,9 +175,12 @@ def test_accounts_some_audit_rejected_leave_the_pairing_and_other_samples_are_re
     frame.loc[frame.account_id == "c", "is_mule"] = 1
     write_audit_scores(other.paths.audit_scores("validation"), frame[list(AUDIT_COLUMNS)])
     with pytest.raises(ValueError, match="other accounts or truth"):
-        paired_split([*runs, other], "validation")
+        paired_split([*runs, other], "validation", EVERY)
     # Runs that did not complete are not paired.
-    assert paired_split([SuiteRun(BASELINE, 1, RunPaths(tmp_path), FAILED)], "validation") is None
+    assert (
+        paired_split([SuiteRun(BASELINE, 1, RunPaths(tmp_path), FAILED)], "validation", EVERY)
+        is None
+    )
 
 
 @pytest.fixture(scope="module")
@@ -201,11 +206,11 @@ def test_summary_csv_lists_every_run_split_and_metric(
     summary = read_summary(suite.summary)
     complete = summary[summary.status == COMPLETE]
     per_run = complete.groupby(["variant", "seed"]).size()
-    # Three run values, the proxy AP, eight audit metrics of each split, the validation
-    # audit AP on the hidden mules, the paired AP, and the delta of every run but the
+    # Three run values, the proxy AP, eight audit metrics of each split of the hidden mules
+    # and eight of every mule, the paired AP of each, and the deltas of every run but the
     # baseline's.
     assert per_run.to_dict() == {
-        (variant.name, seed): 22 if variant is BASELINE else 23
+        (variant.name, seed): 38 if variant is BASELINE else 40
         for variant in (BASELINE, VARIANTS["no_attention"], VARIANTS["prior_weight"])
         for seed in (42, 43)
     }
@@ -215,12 +220,18 @@ def test_summary_csv_lists_every_run_split_and_metric(
         ["no_slot_sum", 42, "", ""]
     ]
     assert failed.value.isna().all()
-    # The recorded audit metrics, as each run's report holds them.
+    # The recorded audit metrics, as each run's report holds them, the hidden mules' named
+    # with hidden_ first.
     run = runs[2]
-    recorded = read_json(run.paths.audit_report("test"))["metrics"]["average_precision"]
+    report = read_json(run.paths.audit_report("test"))
     rows = complete[(complete.variant == run.variant.name) & (complete.seed == run.seed)]
-    chosen = rows[(rows.split == "test") & (rows.metric == "average_precision")]
-    assert chosen.value.tolist() == [recorded]
+    for metric, recorded in (
+        (HIDDEN_METRIC, report["hidden_metrics"]["average_precision"]),
+        ("average_precision", report["metrics"]["average_precision"]),
+    ):
+        chosen = rows[(rows.split == "test") & (rows.metric == metric)]
+        assert chosen.value.tolist() == [recorded]
+    assert hidden_name("recall_at_1pct") in set(rows.metric)
     assert set(rows.commit) == {"0" * 40}
 
 
@@ -240,25 +251,32 @@ def test_comparison_csv_compares_each_variant_with_the_baseline(
     assert list(comparison) == ["baseline", "no_attention", "prior_weight", "no_slot_sum"]
     for variant in ("no_attention", "prior_weight"):
         rows = summary[(summary.variant == variant) & (summary.status == COMPLETE)]
-        validation = rows[(rows.split == "validation") & (rows.metric == "average_precision")]
-        deltas = rows[rows.metric == DELTA_METRIC].value.to_numpy()
         row = comparison[variant]
         assert row["seeds"] == "42 43"
-        assert row["validation_ap"] == pytest.approx(validation.value.mean())
-        assert row["validation_ap_spread"] == pytest.approx(validation.value.std(ddof=1))
-        # No audit rejected an account, so the paired AP is the recorded one.
-        paired = rows[rows.metric == PAIRED_METRIC].value.to_numpy()
-        assert paired == pytest.approx(validation.value.to_numpy())
-        delta, low, high = (row[f"validation_ap_delta{end}"] for end in ("", "_low", "_high"))
-        assert delta == pytest.approx(deltas.mean()) and low <= delta <= high
-        assert row["validation_ap_low"] <= row["validation_ap"] <= row["validation_ap_high"]
-        seeds = dict(enumerate(deltas.tolist()))
-        audit = [row["validation_ap_delta_audit_low"], row["validation_ap_delta_audit_high"]]
-        assert audit[0] <= delta <= audit[1]
-        assert row["consistent"] == Delta(delta, [low, high], audit, seeds).consistent
-        found = Delta(delta, [low, high], audit, seeds)
-        assert row["validation_ap_delta_seeds"] == 2
-        assert row["validation_ap_delta_agreeing"] == found.agreeing
+        # The hidden mules' numbers and then every mule's, each from its own metrics.
+        for prefix, mules in (("validation_hidden_ap", HIDDEN), ("validation_ap", EVERY)):
+            name = hidden_name if mules == HIDDEN else str
+            chosen = rows[(rows.split == "validation") & (rows.metric == name("average_precision"))]
+            deltas = rows[rows.metric == name(DELTA_METRIC)].value.to_numpy()
+            assert row[prefix] == pytest.approx(chosen.value.mean())
+            assert row[f"{prefix}_spread"] == pytest.approx(chosen.value.std(ddof=1))
+            # No audit rejected an account, so the paired AP is the recorded one.
+            paired = rows[rows.metric == name(PAIRED_METRIC)].value.to_numpy()
+            assert paired == pytest.approx(chosen.value.to_numpy())
+            delta, low, high = (row[f"{prefix}_delta{end}"] for end in ("", "_low", "_high"))
+            assert delta == pytest.approx(deltas.mean()) and low <= delta <= high
+            assert row[f"{prefix}_low"] <= row[prefix] <= row[f"{prefix}_high"]
+            seeds = dict(enumerate(deltas.tolist()))
+            audit = [row[f"{prefix}_delta_audit_low"], row[f"{prefix}_delta_audit_high"]]
+            assert audit[0] <= delta <= audit[1]
+            found = Delta(delta, [low, high], audit, seeds)
+            assert row[f"{prefix}_delta_seeds"] == 2
+            assert row[f"{prefix}_delta_agreeing"] == found.agreeing
+            # Decisions use the hidden mules: theirs is the delta that may be consistent.
+            if mules == HIDDEN:
+                assert row["consistent"] == found.consistent
+        assert row["validation_hidden_ap"] < row["validation_ap"]
+    assert pd.isna(comparison["baseline"]["validation_hidden_ap_delta"])
     assert pd.isna(comparison["baseline"]["validation_ap_delta"])
     changes = "model.architecture = summary; model.slot_sum = False"
     assert comparison["no_attention"]["changes"] == changes
@@ -283,27 +301,33 @@ def test_each_variants_seed_ensemble_is_audited_as_a_run_is(
     }
     assert list(ensembles) == ["baseline", "no_attention", "prior_weight"]
     for split in ("validation", "test"):
-        paired = paired_split(runs, split)
-        assert paired is not None
-        for variant, row in ensembles.items():
-            # The log-odds mean of the variant's two seeds on the shared accounts, audited.
-            columns = list(paired.columns(variant).values())
-            score = log_odds_mean(paired.scores[:, columns])
-            expected = ranking_metrics(paired.y, score, paired.weight)
-            assert row["seeds"] == "42 43" and pd.isna(row[f"{split}_ap_spread"])
-            assert row[f"{split}_ap"] == pytest.approx(expected["average_precision"])
-            assert row[f"{split}_roc_auc"] == pytest.approx(expected["roc_auc"])
-            low, high = row[f"{split}_ap_low"], row[f"{split}_ap_high"]
-            assert low <= row[f"{split}_ap"] <= high
-            # summary.csv holds the same metrics, as rows of status ensemble without a seed.
-            rows = summary[(summary.status == ENSEMBLE) & (summary.variant == variant)]
-            assert rows.seed.isna().all() and set(rows.commit) == {""}
-            chosen = rows[(rows.split == split) & (rows.metric == "average_precision")]
-            assert chosen.value.tolist() == pytest.approx([expected["average_precision"]])
-            seeds = rows[rows.metric == ENSEMBLE_SEEDS].value.tolist()
-            assert seeds == [2.0]
+        for mules in (HIDDEN, EVERY):
+            paired = paired_split(runs, split, mules)
+            assert paired is not None
+            infix = "_hidden" if mules == HIDDEN else ""
+            name = hidden_name if mules == HIDDEN else str
+            for variant, row in ensembles.items():
+                # The log-odds mean of the variant's two seeds on the shared accounts, audited.
+                columns = list(paired.columns(variant).values())
+                score = log_odds_mean(paired.scores[:, columns])
+                expected = ranking_metrics(paired.y, score, paired.weight)
+                ap = f"{split}{infix}_ap"
+                assert row["seeds"] == "42 43" and pd.isna(row[f"{ap}_spread"])
+                assert row[ap] == pytest.approx(expected["average_precision"])
+                assert row[f"{split}{infix}_roc_auc"] == pytest.approx(expected["roc_auc"])
+                assert row[f"{ap}_low"] <= row[ap] <= row[f"{ap}_high"]
+                # summary.csv holds the same metrics, as rows of status ensemble without a
+                # seed.
+                rows = summary[(summary.status == ENSEMBLE) & (summary.variant == variant)]
+                assert rows.seed.isna().all() and set(rows.commit) == {""}
+                metric = name("average_precision")
+                chosen = rows[(rows.split == split) & (rows.metric == metric)]
+                assert chosen.value.tolist() == pytest.approx([expected["average_precision"]])
+                seeds = rows[rows.metric == ENSEMBLE_SEEDS].value.tolist()
+                assert seeds == [2.0]
     # Ensembles have no delta, no consistency and no run values of their own.
     for row in ensembles.values():
+        assert pd.isna(row["validation_hidden_ap_delta"]) and pd.isna(row["consistent"])
         assert pd.isna(row["validation_ap_delta"]) and pd.isna(row["best_epoch"])
 
 
@@ -315,7 +339,7 @@ def test_a_seed_ensemble_of_a_small_case_worked_by_hand(tmp_path: Path) -> None:
         audited_run(tmp_path, "prior_weight", 2, [0.3, 0.9, 0.1, 0.2, 0.25, 0.05]),
         audited_run(tmp_path, "no_attention", 1, [0.5] * 6),
     ]
-    paired = paired_split(runs, "validation")
+    paired = paired_split(runs, "validation", EVERY)
     assert paired is not None
     ensembles = seed_ensembles(paired)
     # A variant of one seed has no ensemble.
@@ -355,18 +379,28 @@ def test_the_log_odds_mean_lets_a_confident_seed_weigh_more_than_a_rank_mean_wou
     assert clipped[2] == pytest.approx(0.5)
 
 
-def test_a_runs_audit_ap_on_its_hidden_mules_leaves_the_revealed_out(tmp_path: Path) -> None:
+def test_the_hidden_mules_are_paired_with_the_revealed_ones_left_out(tmp_path: Path) -> None:
     # Mule a was revealed. The baseline ranks the hidden mule b above every non-mule:
     # AP 1. prior_weight ranks c, f and e (weight 2 each) above b: AP 1 / (1 + 6).
     revealed = ("a",)
     baseline = audited_run(tmp_path, "baseline", 1, [0.9, 0.8, 0.7, 0.1, 0.2, 0.3], "", revealed)
     other = [0.9, 0.2, 0.8, 0.1, 0.3, 0.4]
     variant = audited_run(tmp_path, "prior_weight", 1, other, "", revealed)
-    assert hidden_ap(baseline.paths) == pytest.approx(1.0)
-    assert hidden_ap(variant.paths) == pytest.approx(1 / 7)
-    # Without a hidden mule there is none, and without an audit neither.
+    paired = paired_split([baseline, variant], "validation", HIDDEN)
+    assert paired is not None and paired.mules == HIDDEN
+    assert paired.point.tolist() == pytest.approx([1.0, 1 / 7])
+    # The accounts left are the audit sample's hidden view: every account but a.
+    frame = pd.read_parquet(variant.paths.audit_scores("validation"))
+    assert paired.y.tolist() == hidden_rows(frame).is_mule.tolist()
+    delta = paired_delta(paired, "prior_weight")
+    assert delta is not None and delta.value == pytest.approx(1 / 7 - 1)
+    # Every mule, a included, ranks it first in both runs.
+    every = paired_split([baseline, variant], "validation", EVERY)
+    assert every is not None and len(every.y) == len(paired.y) + 1
+    # Without a hidden mule there is no AP of them.
     both = audited_run(tmp_path, "no_attention", 1, other, "", ("a", "b"))
-    assert hidden_ap(both.paths) is None
-    assert hidden_ap(RunPaths(tmp_path / "none")) is None
-    # summary.csv records it with the run's validation numbers.
-    assert ("validation", HIDDEN_METRIC, pytest.approx(1 / 7)) in run_values(variant.paths)
+    alone = paired_split([both], "validation", HIDDEN)
+    assert alone is not None and np.isnan(alone.point).all()
+    # Audits that disagree on what was revealed belong to other samples.
+    with pytest.raises(ValueError, match="other accounts or truth"):
+        paired_split([baseline, both], "validation", HIDDEN)

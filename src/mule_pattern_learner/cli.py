@@ -194,26 +194,40 @@ def train_summary(metrics: Mapping[str, Any], run: RunPaths) -> str:
 
 
 def evaluate_summary(reports: Mapping[str, Mapping[str, Any]], run: RunPaths) -> str:
-    """A run's audits: each split's ranking metrics with their intervals, side by side."""
+    """A run's audits side by side: the hidden mules' ranking metrics, then every mule's.
+
+    Each metric is shown with its interval.
+    """
     audits = list(reports.values())
     level = audits[0]["constants"]["interval"] if audits else 0.9
     rows = [["", *(f"{split} ({report['purpose']})" for split, report in reports.items())]]
-    rows.append(["mules", *(count(report["metrics"]["sample_positives"]) for report in audits)])
+    rows.append(
+        [
+            "mules: hidden / revealed",
+            *(f"{count(r['hidden_positives'])} / {count(r['revealed_positives'])}" for r in audits),
+        ]
+    )
     metrics = [("AP", "average_precision"), ("ROC AUC", "roc_auc")]
     for kind in ("recall", "precision"):
         metrics += [
             (f"{kind} at {fraction:.0%}", f"{kind}_at_{budget_name(fraction)}")
             for fraction in REVIEW_BUDGETS
         ]
-    for label, key in metrics:
-        cells = [estimate(r["metrics"].get(key), r["intervals"].get(key)) for r in audits]
-        rows.append([label, *cells])
+    for heading, prefix in (("hidden mules", "hidden_"), ("all mules", "")):
+        rows.append([heading, *("" for _ in audits)])
+        for label, key in metrics:
+            cells = [
+                estimate(r[f"{prefix}metrics"].get(key), r[f"{prefix}intervals"].get(key))
+                for r in audits
+            ]
+            rows.append([f"  {label}", *cells])
     audit = shown_path(run.audit_report("validation").parent)
     return "\n".join(
         [
             f"Ground-truth audit of {shown_path(run.root)}, with {level:.0%} intervals:",
             *table(rows),
-            "Decide on validation; the test audit is for reporting only.",
+            "Hidden mules: not revealed by the cutoff, ranked with the revealed ones removed.",
+            "Decide on validation's hidden mules; the test audit is for reporting only.",
             f"Files: {audit}/ (reports and scored samples), plots/ and report.md",
         ]
     )

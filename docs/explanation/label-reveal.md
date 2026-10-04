@@ -115,5 +115,5 @@ new labels.
   populate the ring id (`mule_ring_id` is -1 for every mule).
 - nnPU assumes positives are selected completely at random; this reveal deliberately
   selects them as a bank would, the setting a production model faces. The audit
-  (`mule evaluate`) scores every mule of a split, revealed or hidden, and reports the two
-  apart.
+  (`mule evaluate`) scores every mule of a split, revealed or hidden, and leads with the
+  hidden ones, ranked with the revealed mules removed.

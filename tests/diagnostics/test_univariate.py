@@ -20,7 +20,12 @@ def test_each_feature_that_varies_on_train_is_ranked_in_every_split() -> None:
     assert ranked == set(varying(frame))
     assert not {"model__type_Account", "model__is_deposit", "account__age_days"} & ranked
     assert set(table.split) == {"train", "validation", "test"}
-    assert set(table.metric) == {"roc_auc", "average_precision"}
+    assert set(table.metric) == {
+        "hidden_roc_auc",
+        "hidden_average_precision",
+        "roc_auc",
+        "average_precision",
+    }
     # Weighted by 1 / inclusion probability, without the rejected account.
     test = frame[(frame.split == "test") & ~frame.rejected]
     name = "model__pool_first_in_internal"
@@ -29,6 +34,11 @@ def test_each_feature_that_varies_on_train_is_ranked_in_every_split() -> None:
     assert row["roc_auc"] == roc_auc_score(test.is_mule, test[name], sample_weight=weight)
     assert row["average_precision"] == average_precision_score(
         test.is_mule, test[name], sample_weight=weight
+    )
+    # The hidden mules' rank without the revealed ones.
+    hidden = test[~test.revealed]
+    assert row["hidden_roc_auc"] == roc_auc_score(
+        hidden.is_mule, hidden[name], sample_weight=hidden.weight.to_numpy()
     )
     assert table.family[table.feature == name].unique().tolist() == ["model"]
 

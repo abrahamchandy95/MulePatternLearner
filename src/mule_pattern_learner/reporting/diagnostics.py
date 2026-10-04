@@ -5,7 +5,8 @@ artifacts.DIAGNOSTIC_TABLES, and returns it; none reads or saves a file
 (reporting.study_report.write_diagnostics_report does). The held-out splits keep their
 colours (validation for decisions, test for reporting); train, which only fixes
 directions and fits, is grey. The learners take MEASURES in order, and the run the study
-compares with, the built-in run, is ink.
+compares with, the built-in run, is ink. A figure of mules ranks the hidden mules, the
+split's revealed mules removed (metrics named hidden_...), unless it says otherwise.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from matplotlib.ticker import FuncFormatter, NullFormatter, PercentFormatter
 import numpy as np
 import pandas as pd
 
-from ..metrics import REVIEW_BUDGETS, budget_name
+from ..metrics import REVIEW_BUDGETS, budget_name, hidden_name
 from .comparison import PURPOSES
 from .ranking import share_label
 from .style import (
@@ -90,27 +91,32 @@ def _decimal(value: float, _: object = None) -> str:
 
 
 def strongest_features(
-    table: pd.DataFrame, count: int = FEATURE_ROWS, split: str = "validation"
+    table: pd.DataFrame,
+    count: int = FEATURE_ROWS,
+    split: str = "validation",
+    metric: str = hidden_name("roc_auc"),
 ) -> list[str]:
     """The features of a univariate table whose ROC AUC on a split is farthest from 0.5.
 
-    Decisions use the validation split, so the features are ranked there.
+    Decisions use the validation split's hidden mules, so the features are ranked by
+    their ROC AUC there (``metric``).
     """
-    auc = table[(table.split == split) & (table.metric == "roc_auc")]
+    auc = table[(table.split == split) & (table.metric == metric)]
     distance = (auc.value - 0.5).abs().to_numpy()
     order = np.argsort(-distance, kind="stable")
     return auc.feature.iloc[order].head(count).tolist()
 
 
 def plot_univariate(ax: Axes, table: pd.DataFrame, *, count: int = FEATURE_ROWS) -> Axes:
-    """Each feature alone: its weighted ROC AUC per split, the strongest on validation first.
+    """Each feature alone: its weighted ROC AUC of the hidden mules per split, strongest first.
 
-    A feature left of 0.5 is lower for mules. Train is hollow and grey: it fixed each
-    feature's direction for the AP in the table. Within a row validation sits above and
-    test below (ROW_OFFSETS), so equal values stay visible.
+    The features are ranked by that ROC AUC on validation. A feature left of 0.5 is lower
+    for mules. Train is hollow and grey: it fixed each feature's direction for the AP in
+    the table. Within a row validation sits above and test below (ROW_OFFSETS), so equal
+    values stay visible.
     """
     names = strongest_features(table, count)
-    auc = table[table.metric == "roc_auc"].pivot_table(
+    auc = table[table.metric == hidden_name("roc_auc")].pivot_table(
         index="feature", columns="split", values="value"
     )
     y = _names(ax, [feature_label(name) for name in names])
@@ -120,11 +126,11 @@ def plot_univariate(ax: Axes, table: pd.DataFrame, *, count: int = FEATURE_ROWS)
             ax.plot(values, y + ROW_OFFSETS[split], **_dot(COLOURS[split], hollow=split == "train"))
     ax.axvline(0.5, color=MUTED, linestyle="--", linewidth=1.0)
     ax.set_xlim(0, 1)
-    ax.set_xlabel("Weighted ROC AUC of the raw value (below 0.5: lower for mules)")
+    ax.set_xlabel("Weighted ROC AUC of the raw value, hidden mules (below 0.5: lower for mules)")
     entries = [(split, _dot(COLOURS[split], hollow=split == "train")) for split in SPLITS]
     entries.append(("chance", {"color": MUTED, "linestyle": "--", "linewidth": 1.0}))
     legend_below(ax, *_legend(entries))
-    ax.set_title(f"Each feature alone: the {len(names)} strongest on validation")
+    ax.set_title(f"Each feature alone: the {len(names)} strongest on validation's hidden mules")
     return ax
 
 
@@ -199,17 +205,18 @@ def plot_baselines(
     labels: bool = True,
     interval: str = "ring-clustered 90% interval",
 ) -> Axes:
-    """Each baseline's audit AP on one split, with its interval.
+    """Each baseline's audit AP of the hidden mules on one split, with its interval.
 
     The run (ink) is the model's recorded audit; the PU baselines are fitted at the train
     cutoff on the revealed train mules; the single features rank with no training; the
-    dashed line is chance, a random ranking's AP (the weighted prevalence). The x axis is
-    logarithmic, since AP spans chance to far above it. ``labels`` False leaves the row
-    names to a panel beside this one; ``interval`` names the intervals the table holds
-    (the baselines' are ring-clustered, metrics.bootstrap_intervals).
+    dashed line is chance, a random ranking's AP (the weighted prevalence of the hidden
+    mules). The x axis is logarithmic, since AP spans chance to far above it. ``labels``
+    False leaves the row names to a panel beside this one; ``interval`` names the
+    intervals the table holds (the baselines' are ring-clustered,
+    metrics.bootstrap_intervals).
     """
     rows = baseline_rows(table)
-    chosen = table[(table.split == split) & (table.metric == "average_precision")]
+    chosen = table[(table.split == split) & (table.metric == hidden_name("average_precision"))]
     y = _names(ax, [label for label, *_ in rows])
     if not labels:
         ax.tick_params(axis="y", labelleft=False)
@@ -241,25 +248,35 @@ def plot_baselines(
     ax.set_xscale("log")
     ax.xaxis.set_major_formatter(FuncFormatter(_decimal))
     ax.xaxis.set_minor_formatter(NullFormatter())
-    ax.set_xlabel(f"{split.capitalize()} audit average precision (log scale)")
+    ax.set_xlabel(f"{split.capitalize()} audit AP of the hidden mules (log scale)")
     legend_below(ax, *_legend(entries))
     ax.set_title(f"{split.capitalize()} audit, {PURPOSES[split]}")
     return ax
 
 
 # The metrics a learning curve can draw, and how its labels name them.
-CURVE_NAMES = {"average_precision": ("average precision", "AP"), "roc_auc": ("ROC AUC", "ROC AUC")}
+CURVE_NAMES = {
+    hidden_name("average_precision"): ("AP of the hidden mules", "AP"),
+    hidden_name("roc_auc"): ("ROC AUC of the hidden mules", "ROC AUC"),
+    "average_precision": ("average precision", "AP"),
+    "roc_auc": ("ROC AUC", "ROC AUC"),
+}
 
 
 def plot_learning_curve(
-    ax: Axes, table: pd.DataFrame, *, split: str = "test", metric: str = "average_precision"
+    ax: Axes,
+    table: pd.DataFrame,
+    *,
+    split: str = "test",
+    metric: str = hidden_name("average_precision"),
 ) -> Axes:
     """An audit metric against the number of oracle-labelled train mules a learner had.
 
     Per learner, the mean over the random draws of k mules and the range of the draws;
     a star is the learner fitted on the revealed train mules alone, the labels training
     has, and the ink line the run's audit, at the revealed count (dotted). ``metric`` is
-    the average precision, which a mule or two at the top moves, or the ROC AUC.
+    the average precision, which a mule or two at the top moves, or the ROC AUC, of the
+    hidden mules or of every mule (CURVE_NAMES).
     """
     name, short = CURVE_NAMES[metric]
     chosen = table[(table.split == split) & (table.metric == metric)]
@@ -300,7 +317,7 @@ def plot_learning_curve(
     counts = sorted(int(k) for k in chosen.mules.unique())
     ax.set_xticks(counts, [str(k) for k in counts])
     ax.xaxis.set_minor_formatter(NullFormatter())
-    if metric == "roc_auc":
+    if metric.endswith("roc_auc"):
         ax.axhline(0.5, color=MUTED, linestyle="--", linewidth=1.0)
         handles.append(Line2D([], [], color=MUTED, linestyle="--", linewidth=1.0))
         labels.append("chance")
@@ -314,12 +331,13 @@ def plot_learning_curve(
 
 
 def plot_ap_concentration(ax: Axes, table: pd.DataFrame) -> Axes:
-    """The AP the top-ranked mules make: its running sum over the mules, best ranked first.
+    """The AP the top-ranked hidden mules make: its running sum over them, best ranked first.
 
-    Each split's dashed line is its whole AP; a curve that reaches it within a few mules
-    says a handful of mules make the AP, so it moves in large steps.
+    The AP of the hidden mules, the revealed ones removed from the ranking. Each split's
+    dashed line is its whole AP; a curve that reaches it within a few mules says a
+    handful of mules make the AP, so it moves in large steps.
     """
-    chosen = table[table.metric == "cumulative_average_precision"]
+    chosen = table[(table.metric == "cumulative_average_precision") & (table.subset == "hidden")]
     for split in ("validation", "test"):
         mine = chosen[chosen.split == split]
         if not len(mine):
@@ -332,10 +350,10 @@ def plot_ap_concentration(ax: Axes, table: pd.DataFrame) -> Axes:
         )
     ax.set_xlim(left=0)
     ax.set_ylim(bottom=0)
-    ax.set_xlabel("Mules, ranked by score, highest first")
-    ax.set_ylabel("Average precision of the mules ranked so far")
+    ax.set_xlabel("Hidden mules, ranked by score, highest first")
+    ax.set_ylabel("Average precision of the hidden mules ranked so far")
     ax.legend(loc="lower right")
-    ax.set_title("How few mules make the audit AP")
+    ax.set_title("How few hidden mules make their audit AP")
     return ax
 
 
@@ -390,17 +408,17 @@ def plot_ring_coverage(ax: Axes, table: pd.DataFrame) -> Axes:
 
 # The subsets of the proxy validity table and how its figure names them.
 PROXY_SUBSETS = {
-    "all": "all predicted\naccounts",
     "hidden": "hidden mules\nagainst non-mules",
     "revealed": "revealed mules\nagainst non-mules",
+    "all": "all predicted\naccounts",
 }
 
 
 def plot_proxy_validity(ax: Axes, table: pd.DataFrame) -> Axes:
     """The ROC AUC of the proxy predictions against the ground truth, by subset and split.
 
-    All the predicted accounts, the hidden mules against the non-mules, and the revealed
-    mules against them; each bar is labelled with its AP. A proxy that ranks revealed
+    The hidden mules against the non-mules, the revealed mules against them, and all the
+    predicted accounts; each bar is labelled with its AP. A proxy that ranks revealed
     mules well and hidden ones near chance measures the reveal, not mule detection.
     """
     subsets = list(PROXY_SUBSETS)

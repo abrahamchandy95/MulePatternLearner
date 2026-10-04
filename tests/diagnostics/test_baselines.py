@@ -24,6 +24,8 @@ from mule_pattern_learner.testing.builders import feature_frame
 
 AUDITS: dict[str, dict[str, Any]] = {
     split: {
+        "hidden_metrics": {"average_precision": ap / 4, "roc_auc": 0.85},
+        "hidden_intervals": {"average_precision": [ap / 8, ap / 2], "roc_auc": [0.8, 0.9]},
         "metrics": {"average_precision": ap, "roc_auc": 0.93, "threshold": 0.99},
         "intervals": {"average_precision": [ap / 2, ap * 1.5], "roc_auc": [0.9, 0.95]},
     }
@@ -46,9 +48,8 @@ def test_every_baseline_is_scored_on_validation_and_test_with_intervals(
     singles = table[table.baseline == "single_feature"]
     assert singles.features.nunique() == SINGLE_FEATURES and set(singles.model) == {"raw"}
     ranking = table[~table.baseline.isin(["model", "chance"])]
-    assert {"average_precision", "roc_auc", "recall_at_1pct", "precision_at_10pct"} <= set(
-        ranking.metric
-    )
+    measured = {"average_precision", "roc_auc", "recall_at_1pct", "precision_at_10pct"}
+    assert measured | {f"hidden_{name}" for name in measured} <= set(ranking.metric)
     assert (ranking.low <= ranking.high).all()
     # The account's own history ranks the synthetic mules well above chance, though its
     # visible event count grows with the cutoff, which costs the trees the most.
@@ -70,10 +71,15 @@ def test_the_attribute_floor_ranks_at_chance_and_no_model_reads_the_cutoff(
     for split in ("validation", "test"):
         part = frame[(frame.split == split) & ~frame.rejected]
         prevalence = part.weight[part.is_mule == 1].sum() / part.weight.sum()
+        hidden = part[~part.revealed]
+        rate = hidden.weight[hidden.is_mule == 1].sum() / hidden.weight.sum()
         assert np.allclose(floor.xs(split, level="split").average_precision, prevalence)
-        # A random ranking's expectation: the prevalence, 0.5, and each budget's share.
+        assert np.allclose(floor.xs(split, level="split").hidden_average_precision, rate)
+        # A random ranking's expectation: the prevalence, 0.5, and each budget's share, of
+        # the hidden mules and of every mule.
         expected = chance[chance.split == split].set_index("metric").value
         assert expected["average_precision"] == pytest.approx(prevalence)
+        assert expected["hidden_average_precision"] == pytest.approx(rate) and rate < prevalence
         assert expected["roc_auc"] == 0.5 and expected["recall_at_5pct"] == 0.05
         assert expected["precision_at_10pct"] == pytest.approx(prevalence)
     for families in BASELINE_FAMILIES.values():
@@ -83,10 +89,18 @@ def test_the_attribute_floor_ranks_at_chance_and_no_model_reads_the_cutoff(
 def test_the_run_is_added_from_its_audit_reports(table: pd.DataFrame) -> None:
     model = table[table.baseline == "model"]
     assert set(model.features) == {"baseline/seed-42"} and set(model.model) == {"audit"}
-    # Only the metrics with intervals: the ranking metrics, not the threshold.
-    assert set(model.metric) == {"average_precision", "roc_auc"}
+    # Only the metrics with intervals: the ranking metrics, not the threshold; the hidden
+    # mules' first.
+    assert model.metric.unique().tolist() == [
+        "hidden_average_precision",
+        "hidden_roc_auc",
+        "average_precision",
+        "roc_auc",
+    ]
     test = model[(model.split == "test") & (model.metric == "average_precision")]
     assert test[["value", "low", "high"]].to_numpy().tolist() == [[0.13, 0.065, 0.13 * 1.5]]
+    hidden = model[(model.split == "test") & (model.metric == "hidden_average_precision")]
+    assert hidden[["value", "low", "high"]].to_numpy().tolist() == [[0.0325, 0.01625, 0.065]]
 
 
 def test_single_features_are_ranked_in_their_train_direction(table: pd.DataFrame) -> None:

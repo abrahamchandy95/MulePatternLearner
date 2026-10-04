@@ -219,7 +219,7 @@ else. Two things keep the ground truth (`is_mule`) out of its reach:
 - **The imports.** The code that reads truth (`tigergraph.oracle`, `evaluation`,
   `diagnostics`) is unreachable from training's modules by contract, and the label
   interface refuses oracle columns. The audits read truth only after the model and
-  threshold are fixed, and decisions use the validation audit.
+  threshold are fixed, and decisions use the validation audit's hidden mules.
 
 Every run reads the graph's labels; there is no label file and no table label reader. A
 production system writes its known positives and their discovery times into the graph's
@@ -353,6 +353,15 @@ The owner's decisions that shape the code, each with its reason.
 - **Decisions use the validation audit; the test audit is for reporting.** Choosing on
   test would make the reported number optimistic, and the pool groups were already
   designed after reading test-split mules.
+- **The hidden mules lead, and decisions use their validation AP** (decided on
+  2026-10-04). The model exists to find the mules nobody knows on the scoring date. Every
+  audit ranks the hidden mules against the non-mules with the revealed mules removed, as
+  an investigator would remove the cases already known, beside the metrics of every
+  mule; the run report, `mule evaluate`, a suite's comparison and the diagnostics give
+  the hidden mules' numbers first, and a suite ranks, compares and ensembles by the
+  validation AP of the hidden mules. On the reference graph the built-in run ranked the
+  revealed mules far better than the hidden ones, so the AP of every mule mostly
+  measured the reveal.
 - **Every run reads the graph's labels** (decided on 2026-09-28). The model trains only on
   the revealed positives (`pu_label`), so there is one label path, no label file and no
   table reader, and tests serve their labels through the fake graph.

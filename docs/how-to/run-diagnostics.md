@@ -84,7 +84,11 @@ analysis' last outcome, kept for the analyses a later call does not run. [Output
 lists every table and figure, and `mule report results/diagnostics/<dataset id>` redraws
 them offline.
 
-Keep the study's warnings in mind: the pool groups were designed after reading
-test-split mules, so their test numbers are optimistic, and decisions use validation. A
+Like the audits, every ranking of mules is measured on the hidden mules first, the
+split's revealed mules removed from the ranking (metrics named `hidden_` and the metric),
+then on every mule: the tables give both, the hidden mules' first, and the figures draw
+the hidden mules', but for the ring coverage. Keep the study's warnings in mind: the
+pool groups were designed after reading test-split mules, so their test numbers are
+optimistic, and decisions use validation's hidden mules. A
 figure whose table is gone keeps its old PNG in `plots/`, though `report.md` no longer
 links it.

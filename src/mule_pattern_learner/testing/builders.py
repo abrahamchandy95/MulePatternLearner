@@ -76,9 +76,7 @@ from mule_pattern_learner.experiments.tables import COMPLETE, SuiteRun
 from mule_pattern_learner.experiments.variants import Variant
 from mule_pattern_learner.inference.saved_model import SELECTED_ON, SavedModel
 from mule_pattern_learner.metrics import (
-    bootstrap_intervals,
     proxy_metrics,
-    ranking_metrics,
     select_threshold,
 )
 from mule_pattern_learner.model.build import build_model
@@ -1083,18 +1081,13 @@ def write_run_files(
     for split, (date, accounts, _, _, _) in REPORTED_SPLITS.items():
         frame = audit_frame(rng, split, found)
         write_audit_scores(run.audit_scores(split), frame)
-        y, weight = frame.is_mule.to_numpy(), 1 / frame.inclusion_probability.to_numpy()
-        intervals = bootstrap_intervals(
-            y, frame.score.to_numpy(), weight, frame.ring_id.to_numpy(), replicates=100
-        )
         mules = frame[frame.is_mule == 1]
         report = {
             "split": split,
             "purpose": evaluation_audit.AUDIT_SPLITS[split],
             "date": date,
             "population_accounts": accounts,
-            "metrics": evaluation_audit.audit_metrics(frame, threshold),
-            "intervals": intervals,
+            **evaluation_audit.audit_results(frame, threshold, replicates=100),
             "constants": evaluation_audit.audit_constants(42),
             "revealed_positives": int(mules.revealed.sum()),
             "hidden_positives": int((~mules.revealed).sum()),
@@ -1291,16 +1284,10 @@ def _diagnostic_tables(seed: int) -> dict[str, pd.DataFrame]:
     rng = np.random.default_rng(seed)
     frame = feature_frame(seed)
     samples = study_audits(frame, rng)
-    audits = {}
-    for split, sample in samples.items():
-        y, score = sample.is_mule.to_numpy(), sample.score.to_numpy()
-        weight = 1 / sample.inclusion_probability.to_numpy()
-        audits[split] = {
-            "metrics": ranking_metrics(y, score, weight),
-            "intervals": bootstrap_intervals(
-                y, score, weight, sample.ring_id.to_numpy(), replicates=40
-            ),
-        }
+    audits = {
+        split: evaluation_audit.audit_results(sample, 0.5, replicates=40)
+        for split, sample in samples.items()
+    }
     predicted = {split: proxy_predictions(rng, split) for split in REPORTED_SPLITS}
     truth = pd.concat([found for _, found in predicted.values()], ignore_index=True)
     params = reveal_parameters(DEFAULT_CONFIG.scope, DEFAULT_CONFIG.dataset.dates, apply=False)

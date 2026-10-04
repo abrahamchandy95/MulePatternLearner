@@ -68,7 +68,10 @@ run's `metrics.json` and changes nothing.
 
 `mule evaluate` audits the model against the ground truth on validation (for decisions)
 and test (for reporting), weighting a sample of every mule and 2,000 non-mules to the
-whole split, with 90% intervals. `mule score ACCOUNTS [DATE]` scores the accounts listed
+whole split, with 90% intervals. It leads with the hidden mules, those nobody knew at the
+cutoff, which the model exists to find: the revealed mules are removed from the ranking,
+as an investigator would remove the known cases, and decisions use the validation AP of
+the hidden mules. `mule score ACCOUNTS [DATE]` scores the accounts listed
 in a file, and `mule install` installs the queries ahead of time. `python -m
 mule_pattern_learner` runs the same commands. The console shows each command's progress
 and then a short summary; the full records are in the files it writes (`events.jsonl`,

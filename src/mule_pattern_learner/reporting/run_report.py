@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,8 @@ import pandas as pd
 
 from ..artifacts import (
     atomic_write,
+    hidden_rows,
+    read_audit_report,
     read_audit_scores,
     read_epochs,
     read_history,
@@ -61,9 +64,12 @@ TRAINING_FIGURES = {
     "run_health": "Rejections, sampler totals and database calls",
 }
 AUDIT_FIGURES = {
-    "audit_precision_recall": "Audit precision and recall",
-    "audit_roc": "Audit ROC",
-    "audit_capture": "Audit capture of mules by review budget",
+    "audit_hidden_precision_recall": "Audit precision and recall of the hidden mules",
+    "audit_hidden_roc": "Audit ROC of the hidden mules",
+    "audit_hidden_capture": "Audit capture of the hidden mules by review budget",
+    "audit_precision_recall": "Audit precision and recall of every mule",
+    "audit_roc": "Audit ROC of every mule",
+    "audit_capture": "Audit capture of every mule by review budget",
     "audit_threshold": "Test audit metrics at each threshold",
     "audit_score_distribution": "Test audit score densities",
     "audit_revealed_hidden": "Test audit ranks of revealed and hidden mules",
@@ -108,18 +114,25 @@ def audited_splits(run: RunPaths) -> list[str]:
     return [split for split in HELD_OUT_SPLITS if run.audit_report(split).exists()]
 
 
-def audit_files(run: RunPaths) -> dict[str, SplitScores]:
-    """The scored audit sample of each audited split, with its report's metrics."""
+def audit_files(run: RunPaths, *, hidden: bool = False) -> dict[str, SplitScores]:
+    """The scored audit sample of each audited split, with its report's metrics.
+
+    With ``hidden`` the sample without its revealed mules (artifacts.hidden_rows), with
+    the report's hidden-mule metrics.
+    """
     audits = {}
     for split in audited_splits(run):
-        report = read_json(run.audit_report(split))
+        report = read_audit_report(run.audit_report(split))
         frame = read_audit_scores(run.audit_scores(split))
+        if hidden:
+            frame = hidden_rows(frame)
+        prefix = "hidden_" if hidden else ""
         audits[split] = SplitScores(
             y=frame.is_mule.to_numpy(np.int64),
             score=frame.score.to_numpy(np.float64),
             weight=1 / frame.inclusion_probability.to_numpy(np.float64),
-            metrics=report["metrics"],
-            intervals=report["intervals"],
+            metrics=report[f"{prefix}metrics"],
+            intervals=report[f"{prefix}intervals"],
             revealed=frame.revealed.to_numpy(bool),
         )
     return audits
@@ -153,23 +166,37 @@ def training_drawings(files: TrainingFiles) -> dict[str, tuple[Drawing, tuple[fl
 
 
 def audit_drawings(
-    audits: Mapping[str, SplitScores],
+    audits: Mapping[str, SplitScores], hidden: Mapping[str, SplitScores]
 ) -> dict[str, tuple[Drawing, tuple[float, float]]]:
     """The drawing and size of each audit figure the audited splits allow.
 
-    The precision-recall, ROC and capture figures draw every audited split; the
-    threshold, density and revealed-and-hidden figures need the test split's audit.
+    ``hidden`` holds the same audits without their revealed mules (audit_files with
+    hidden). The precision-recall, ROC and capture figures draw every audited split, of
+    the hidden mules first and then of every mule; the threshold, density and
+    revealed-and-hidden figures need the test split's audit.
     """
     drawings: dict[str, tuple[Drawing, tuple[float, float]]] = {}
     if not audits:
         return drawings
-    weighted = "Ground-truth audit, weighted to each split's population"
-    drawings["audit_precision_recall"] = (
-        one(lambda ax: plot_precision_recall(ax, audits, title=weighted)),
-        PANEL,
+    views = (
+        (
+            "audit_hidden_",
+            hidden,
+            "Audit of the hidden mules, the revealed removed",
+            "hidden mules",
+        ),
+        ("audit_", audits, "Audit of every mule, weighted to each split's population", "mules"),
     )
-    drawings["audit_roc"] = (one(lambda ax: plot_roc(ax, audits, title=weighted)), PANEL)
-    drawings["audit_capture"] = (one(lambda ax: plot_capture(ax, audits, title=weighted)), PANEL)
+    for prefix, scores, title, mules in views:
+        drawings[f"{prefix}precision_recall"] = (
+            one(partial(plot_precision_recall, splits=scores, title=title)),
+            PANEL,
+        )
+        drawings[f"{prefix}roc"] = (one(partial(plot_roc, splits=scores, title=title)), PANEL)
+        drawings[f"{prefix}capture"] = (
+            one(partial(plot_capture, splits=scores, title=title, mules=mules)),
+            PANEL,
+        )
     test = audits.get("test")
     if test is not None:
         threshold = float(test.metrics["threshold"])
@@ -195,7 +222,8 @@ def write_training_report(run: RunPaths) -> dict[str, Any]:
 
 def write_audit_report(run: RunPaths) -> dict[str, Any]:
     """The audit figures of the audited splits, then report.md (what `mule evaluate` adds)."""
-    return draw(run, audit_drawings(audit_files(run)), lambda: write_report(run))
+    drawings = audit_drawings(audit_files(run), audit_files(run, hidden=True))
+    return draw(run, drawings, lambda: write_report(run))
 
 
 def report_run(run: RunPaths) -> dict[str, Any]:
@@ -207,7 +235,22 @@ def report_run(run: RunPaths) -> dict[str, Any]:
     if not complete and not audits:
         raise ValueError(f"{run.root} holds neither a complete run nor an audit to report")
     drawings = training_drawings(training_files(run)) if complete else {}
-    return draw(run, {**drawings, **audit_drawings(audits)}, lambda: write_report(run))
+    drawings |= audit_drawings(audits, audit_files(run, hidden=True))
+    return draw(run, drawings, lambda: write_report(run))
+
+
+def _ranking_rows(
+    metrics: Mapping[str, Mapping[str, Any]], intervals: Mapping[str, Mapping[str, Any]]
+) -> list[list[str]]:
+    """The weighted prevalence, AP, ROC AUC and review budgets of each split's audit."""
+    return [
+        ["Weighted prevalence", *(number(m["weighted_prevalence"]) for m in metrics.values())],
+        *(
+            [label, *(estimate(metrics[s].get(key), intervals[s].get(key)) for s in metrics)]
+            for label, key in (("Average precision", "average_precision"), ("ROC AUC", "roc_auc"))
+        ),
+        *_budget_rows(metrics, intervals),
+    ]
 
 
 def _budget_rows(
@@ -234,10 +277,12 @@ def _threshold_row(metrics: Mapping[str, Mapping[str, Any]]) -> list[str]:
 
 
 def audit_section(run: RunPaths) -> list[str]:
-    """report.md's audit tables and figures, for the audited splits."""
-    reports = {split: read_json(run.audit_report(split)) for split in audited_splits(run)}
+    """report.md's audit tables and figures, for the audited splits: hidden mules first."""
+    reports = {split: read_audit_report(run.audit_report(split)) for split in audited_splits(run)}
     metrics = {split: report["metrics"] for split, report in reports.items()}
     intervals = {split: report["intervals"] for split, report in reports.items()}
+    hidden = {split: report["hidden_metrics"] for split, report in reports.items()}
+    hidden_intervals = {split: report["hidden_intervals"] for split, report in reports.items()}
     header = ["", *(f"{split} ({report['purpose']})" for split, report in reports.items())]
     rows = [
         ["Cutoff", *(report["date"] for report in reports.values())],
@@ -256,25 +301,35 @@ def audit_section(run: RunPaths) -> list[str]:
                 for r in reports.values()
             ),
         ],
-        ["Weighted prevalence", *(number(m["weighted_prevalence"]) for m in metrics.values())],
-        *(
-            [label, *(estimate(metrics[s].get(key), intervals[s].get(key)) for s in reports)]
-            for label, key in (("Average precision", "average_precision"), ("ROC AUC", "roc_auc"))
-        ),
-        *_budget_rows(metrics, intervals),
-        _threshold_row(metrics),
         ["Rejected accounts", *(number(r["rejected_accounts"]) for r in reports.values())],
     ]
     level = next(iter(reports.values()))["constants"]["interval"]
     return [
         "## Ground-truth audit",
         "",
-        "Decisions use the validation audit; the test audit is for reporting. Each audit "
-        "scores every mule of its split and a uniform sample of the other accounts, "
-        "weighted to the split's whole population. In parentheses: the ring-clustered "
-        f"{level:.0%} bootstrap interval.",
+        "Decisions use the validation audit's hidden mules; the test audit is for reporting. "
+        "Each audit scores every mule of its split and a uniform sample of the other "
+        "accounts, weighted to the split's whole population. In parentheses: the "
+        f"ring-clustered {level:.0%} bootstrap interval.",
         "",
         *table(header, rows),
+        "",
+        "### Hidden mules, for decisions",
+        "",
+        "The model exists to find the mules nobody knows on the scoring date. The mules the "
+        "graph had revealed by each split's cutoff are removed from the ranking, as an "
+        "investigator would remove the cases already known, and the hidden mules are ranked "
+        "against the non-mules of the population that is left.",
+        "",
+        *table(header, _ranking_rows(hidden, hidden_intervals)),
+        "",
+        "### Every mule",
+        "",
+        "The revealed mules ranked with the hidden ones. The model was trained on mules "
+        "like the revealed ones, so these numbers mix finding new mules with ranking the "
+        "known ones again.",
+        "",
+        *table(header, [*_ranking_rows(metrics, intervals), _threshold_row(metrics)]),
         "",
         *figure_links(run, AUDIT_FIGURES),
     ]

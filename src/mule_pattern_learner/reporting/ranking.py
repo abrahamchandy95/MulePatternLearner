@@ -251,8 +251,17 @@ def _place(
     _clear(label, placed, 1 if places[0][0][1] > 0 else -1, span)
 
 
-def plot_capture(ax: Axes, splits: Mapping[str, SplitScores], *, title: str) -> Axes:
+def plot_capture(
+    ax: Axes,
+    splits: Mapping[str, SplitScores],
+    *,
+    title: str,
+    mules: str = "mules",
+) -> Axes:
     """The share of mules found against the share of accounts reviewed, highest scores first.
+
+    ``mules`` names the mules of the y axis: "hidden mules" for an audit without its
+    revealed mules.
 
     The x axis is logarithmic, so the review budgets of 1, 5 and 10% and the accounts
     above them stay apart. The dashed grey line is a random ranking, and each split's
@@ -319,7 +328,7 @@ def plot_capture(ax: Axes, splits: Mapping[str, SplitScores], *, title: str) -> 
     ax.set_ylim(0, 1.02)
     ax.yaxis.set_major_formatter(PercentFormatter(1.0))
     ax.set_xlabel("Top share of accounts reviewed, by score (log scale)")
-    ax.set_ylabel("Share of mules found (recall)")
+    ax.set_ylabel(f"Share of {mules} found (recall)")
     # Below the axes, clear of the curves and their labels.
     ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.16), ncols=3)
     ax.set_title(title)

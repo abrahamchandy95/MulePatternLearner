@@ -48,6 +48,7 @@ def test_every_suite_figure_renders_to_a_png_under_its_fixed_name(
         "comparison_capture",
         "comparison_validation",
         "comparison_proxy_vs_audit",
+        "comparison_ap_every_mule",
     ]
     assert result["figures"] == [str(suite.figure(name)) for name in SUITE_FIGURES]
     assert sorted(p.name for p in suite.plots.iterdir()) == sorted(
@@ -71,8 +72,8 @@ def test_the_suite_report_ranks_by_validation_and_keeps_test_for_reporting(
     assert "## Validation audit, for decisions" in text
     assert "## Test audit, for reporting, not selection" in text
     assert "pool groups (pool_activity and pool_internal_inflows) were designed after" in text
-    # Ranked by the mean validation audit AP: the variants' found shares order them here,
-    # and their seed ensembles in the same order.
+    # Ranked by the mean validation audit AP of the hidden mules: the variants' found
+    # shares order them here, and their seed ensembles in the same order.
     validation, rest = text.split("## Seed ensembles\n")
     ensembles, _ = rest.split("## Test audit")
     expected = [("1", "**baseline**"), ("2", "no_attention"), ("3", "prior_weight")]
@@ -84,10 +85,17 @@ def test_the_suite_report_ranks_by_validation_and_keeps_test_for_reporting(
     assert "The suite makes 2 comparisons with the baseline, so at 90% about 0.2" in validation
     assert "| Delta from the baseline | Audit-only interval | Seeds that agree |" in validation
     assert len(re.findall(r"\| \d of 2 \|", validation)) == 2
+    # The hidden mules lead; every mule's AP and its delta follow.
+    assert "Decisions use the validation audit AP of the hidden mules" in text
+    assert "| AP, every mule | Its delta |" in validation
     # The proxy's reliability, each correlation with its n.
     reliability = ensembles.split("## Proxy reliability\n")[1]
     assert "In real use only the proxy exists" in reliability
-    for label, n in (("runs", 6), ("variants, by their seed means", 3)):
+    for label, n in (
+        ("runs", 6),
+        ("variants, by their seed means", 3),
+        ("runs, audit of every mule", 6),
+    ):
         assert re.search(rf"^\| {label} \| -?\d\.\d\d \| {n} \|$", reliability, re.M), label
     assert "| runs selected on the proxy AP |" in reliability
     assert "| 1 | **baseline** | 42 43 |" in ensembles

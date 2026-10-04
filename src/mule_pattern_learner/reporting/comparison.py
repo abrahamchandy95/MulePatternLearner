@@ -6,7 +6,8 @@ runs' files). A variant's numbers are VariantSeeds: one value per seed, the seed
 and, where the suite has one, the interval of the paired bootstrap. The rows come in
 the order they are to be drawn, top to bottom, and the baseline is always ink. The
 panels of a split take its colour, so a figure of the validation audit is drawn in the
-validation colour throughout.
+validation colour throughout. The audit numbers drawn are of the hidden mules, which
+decisions use, but for plot_comparison's AP of every mule.
 """
 
 from __future__ import annotations
@@ -148,7 +149,12 @@ def _ensemble(ax: Axes, y: float, row: VariantSeeds, colour: str) -> None:
 
 
 def plot_comparison(
-    ax: Axes, rows: Sequence[VariantSeeds], *, split: str, baseline: float | None
+    ax: Axes,
+    rows: Sequence[VariantSeeds],
+    *,
+    split: str,
+    baseline: float | None,
+    mules: str = "the hidden mules",
 ) -> Axes:
     """Each variant's audit AP on one split: its seeds, their mean, its interval, its ensemble.
 
@@ -156,7 +162,8 @@ def plot_comparison(
     panel. The interval is the paired bootstrap's for the seed mean: it covers the audit
     sample's uncertainty, not the spread between seeds, which the seeds show. Below each
     mean, a hollow diamond on a thin line is the variant's seed ensemble and its interval,
-    where the suite has one.
+    where the suite has one. ``mules`` names the mules the AP ranks: the hidden mules, or
+    every mule.
     """
     y = _rows(ax, rows)
     for position, row in zip(y, rows, strict=True):
@@ -184,14 +191,14 @@ def plot_comparison(
         ax.axvline(baseline, color=BASELINE, linestyle="--", linewidth=1.0, zorder=1)
         handles.append(Line2D([], [], color=BASELINE, linestyle="--", linewidth=1.0))
         labels.append(f"baseline mean {number(baseline)}")
-    ax.set_xlabel(f"{split.capitalize()} audit average precision")
+    ax.set_xlabel(f"{split.capitalize()} audit average precision of {mules}")
     legend_below(ax, handles, labels)
     ax.set_title(f"{split.capitalize()} audit, {PURPOSES[split]}")
     return ax
 
 
 def plot_paired_delta(ax: Axes, rows: Sequence[VariantSeeds]) -> Axes:
-    """Each variant's validation audit AP minus the baseline's, paired on shared accounts.
+    """Each variant's validation audit AP of the hidden mules minus the baseline's, paired.
 
     Per seed, the difference from the baseline of the same seed; the large marker is the
     difference of the seed means, on its two-source interval (the seeds and the audit
@@ -230,14 +237,16 @@ def plot_paired_delta(ax: Axes, rows: Sequence[VariantSeeds]) -> Axes:
     labels.insert(2, "not consistent")
     handles.append(Line2D([], [], color=BASELINE, linewidth=1.0))
     labels.append("no difference from the baseline")
-    ax.set_xlabel("Validation audit AP minus the baseline's (same accounts, same seed)")
+    ax.set_xlabel(
+        "Validation audit AP of the hidden mules minus the baseline's (same accounts, same seed)"
+    )
     legend_below(ax, handles, labels)
-    ax.set_title("Validation audit AP against the baseline, paired")
+    ax.set_title("Validation audit AP of the hidden mules against the baseline, paired")
     return ax
 
 
 def plot_budget_recall(ax: Axes, rows: Mapping[float, Sequence[VariantSeeds]]) -> Axes:
-    """Each variant's validation audit recall in the top 1, 5 and 10% of accounts.
+    """Each variant's validation audit recall of the hidden mules in the top 1, 5 and 10%.
 
     ``rows`` holds, for each review budget, the variants in drawing order. Each budget
     has its colour and marker; the small markers are the seeds, the large ones their mean.
@@ -283,9 +292,9 @@ def plot_budget_recall(ax: Axes, rows: Mapping[float, Sequence[VariantSeeds]]) -
     labels.append("one seed")
     ax.set_xlim(0, 1.02)
     ax.xaxis.set_major_formatter(PercentFormatter(1.0))
-    ax.set_xlabel("Share of the validation split's mules found (recall)")
+    ax.set_xlabel("Share of the validation split's hidden mules found (recall)")
     legend_below(ax, handles, labels)
-    ax.set_title("Validation audit recall at the review budgets")
+    ax.set_title("Validation audit recall of the hidden mules at the review budgets")
     return ax
 
 
@@ -398,11 +407,11 @@ def plot_proxy_vs_audit(
     audit: NDArray[np.float64],
     correlations: Sequence[Correlation] = (),
 ) -> Axes:
-    """Each run's selected proxy AP against its validation audit AP: is the proxy informative?
+    """Each run's selected proxy AP against its hidden mules' audit AP: is the proxy informative?
 
     One point per run (``names`` holds each run's variant): the proxy AP on validation's
     observed labels at the epoch training selected, and the validation audit AP of the
-    same model. The legend gives Spearman's rank correlation over the runs, and every
+    same model's hidden mules, which the proxy never sees. The legend gives Spearman's rank correlation over the runs, and every
     one of ``correlations`` (the suite's proxy reliability), each with its n; a proxy
     that ranks the runs as the audit does is one to select on.
     """
@@ -433,7 +442,7 @@ def plot_proxy_vs_audit(
     for correlation in shown:
         ax.plot([], [], linestyle="none", label=correlation.text())
     ax.set_xlabel("Selected proxy AP on validation's observed labels")
-    ax.set_ylabel("Validation audit AP")
+    ax.set_ylabel("Validation audit AP of the hidden mules")
     legend_below(ax, *ax.get_legend_handles_labels(), ncols=1)
     ax.set_title("Proxy selection against the ground-truth audit, per run")
     return ax

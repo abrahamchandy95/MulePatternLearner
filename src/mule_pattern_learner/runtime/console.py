@@ -456,8 +456,9 @@ def _run_finished(record: Mapping[str, Any]) -> str:
             f"{number(record['validation_proxy_ap'])}{took}"
         )
     return (
-        f"{_who(record)} audited: validation AP {number(record['validation_ap'])}, test AP "
-        f"{number(record['test_ap'])}"
+        f"{_who(record)} audited: hidden-mule AP {number(record['validation_hidden_ap'])} on "
+        f"validation, {number(record['test_hidden_ap'])} on test; every mule "
+        f"{number(record['validation_ap'])} and {number(record['test_ap'])}"
     )
 
 

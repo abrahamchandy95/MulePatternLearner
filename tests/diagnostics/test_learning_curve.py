@@ -9,7 +9,12 @@ from mule_pattern_learner.testing.builders import FEATURE_SAMPLE, feature_frame
 
 def test_random_draws_up_to_every_train_mule_then_the_revealed_labels_and_the_run() -> None:
     frame = feature_frame()
-    audits = {"test": {"metrics": {"average_precision": 0.13, "roc_auc": 0.93}}}
+    audits = {
+        "test": {
+            "hidden_metrics": {"average_precision": 0.05, "roc_auc": 0.88},
+            "metrics": {"average_precision": 0.13, "roc_auc": 0.93},
+        }
+    }
     table = learning_curve(frame, counts=(10, 20, 80), repeats=3, audits=audits)
     assert tuple(table.columns) == DIAGNOSTIC_TABLES["learning_curve"]
     mules = FEATURE_SAMPLE["train"][0]
@@ -26,7 +31,10 @@ def test_random_draws_up_to_every_train_mule_then_the_revealed_labels_and_the_ru
     count = int((train.is_mule.eq(1) & train.revealed).sum())
     assert set(revealed.mules) == {count} and set(revealed.model) == {"lr", "hgb"}
     run = table[table.model == "model"]
+    # The run's audit of the hidden mules, then of every mule.
     assert run[["mules", "split", "metric", "value"]].to_numpy().tolist() == [
+        [count, "test", "hidden_average_precision", 0.05],
+        [count, "test", "hidden_roc_auc", 0.88],
         [count, "test", "average_precision", 0.13],
         [count, "test", "roc_auc", 0.93],
     ]

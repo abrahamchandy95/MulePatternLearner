@@ -41,7 +41,7 @@ script, in order:
    with its own figures.
 5. **Audits** validation and test for every complete run that lacks them, reading the
    ground truth once for the whole suite.
-6. **Compares** the runs and writes `summary.csv`, `comparison.csv`, six figures and
+6. **Compares** the runs and writes `summary.csv`, `comparison.csv`, seven figures and
    `report.md` under `results/experiments/<suite>/`, always, even after a failure.
 
 Each run shows its own lines as it trains and audits, then one line as each of its steps
@@ -53,8 +53,9 @@ the same way. The suite's own events are recorded in
 `results/experiments/<suite>/events.jsonl`, with the install and connecting that come
 before preparation; preparation's are in the dataset's, and each run's in its own. The
 script ends with how the suite did, the runs' errors, the top ten variants ranked by
-their validation audit AP as `report.md` ranks them (with the delta from the baseline
-and the test AP) and where the report is, and exits 1 unless every run is trained and
+the validation audit AP of their hidden mules as `report.md` ranks them (with the delta
+from the baseline, the test AP of the hidden mules and the validation AP of every mule)
+and where the report is, and exits 1 unless every run is trained and
 audited without an error. A run whose figures failed after its numbers were saved stays complete in the
 tables, with its error beside it; `mule report results/<variant>/seed-<n>` redraws them.
 Run the script again to finish: complete runs are kept. So are the runs of a suite
@@ -150,32 +151,43 @@ seconds for the controls suite of three seeds and grow with the runs.
 ## Read the comparison
 
 Open `results/experiments/<suite>/report.md`. It ranks the variants by the seed-mean
-validation audit AP and marks the test audit "for reporting, not selection".
+validation audit AP of their hidden mules and marks the test audit "for reporting, not
+selection". The hidden mules are those the graph had not revealed by the split's cutoff,
+ranked against the non-mules with the revealed mules removed, as an investigator would
+remove the cases already known: the model exists to find them. Every number of them
+comes first, in the columns and metrics named with `hidden` (`validation_hidden_ap`,
+`hidden_average_precision`), and the same of every mule follows; the ranking, the delta,
+its consistency, the seed ensembles' ranking and the figures are of the hidden mules,
+but for `comparison_ap_every_mule.png`.
 
-- **The paired delta** (`validation_ap_delta`) is the variant's seed-mean validation AP
-  minus the baseline's, over the seeds both completed, each seed paired with the
-  baseline's run of the same seed. Every audit of a dataset scores the same accounts, so
-  each bootstrap replicate resamples those accounts and their rings once and applies the
-  resample to every run. Its interval (`validation_ap_delta_low` and `_high`) covers both
-  sources of uncertainty: each replicate also resamples the seeds, so it widens with the
-  spread between them. The audit-only interval beside it (`validation_ap_delta_audit_low`
-  and `_high`) resamples the accounts alone, for these seeds. Over the controls suite's
-  first three seeds the spread between seeds was as large as the differences between
-  variants, which only the two-source interval shows (`comparison_delta.png` draws both,
-  with the per-seed deltas). Its seed half is a percentile bootstrap over the seeds,
-  which is too narrow with few of them: resampling n seeds understates their variance
-  by about (n - 1) / n and draws few distinct sets (three seeds give ten), so the
-  interval is reliable only with many seeds, such as the ten every suite now trains.
-- **The seeds that agree** (`validation_ap_delta_agreeing` of `validation_ap_delta_seeds`,
-  "8 of 10" in report.md) are those whose own delta has the sign of the mean.
-- **`consistent`** is true when the two-source interval excludes zero and every seed
-  compared agrees on the sign. report.md states how many comparisons the suite makes
-  and how many would exclude zero by chance: the `all` suite compares 17 variants with
-  the baseline, so at 90% about 1.7 would even if no variant differed. Treat a single
-  consistent delta as a lead to repeat.
+- **The paired delta** (`validation_hidden_ap_delta`) is the variant's seed-mean
+  validation AP of the hidden mules minus the baseline's, over the seeds both completed,
+  each seed paired with the baseline's run of the same seed. Every audit of a dataset
+  scores the same accounts, so each bootstrap replicate resamples those accounts and
+  their rings once and applies the resample to every run. Its interval
+  (`validation_hidden_ap_delta_low` and `_high`) covers both sources of uncertainty: each
+  replicate also resamples the seeds, so it widens with the spread between them. The
+  audit-only interval beside it (`validation_hidden_ap_delta_audit_low` and `_high`)
+  resamples the accounts alone, for these seeds. `validation_ap_delta` is the same of
+  every mule, beside it. Over the controls suite's first three seeds the spread between
+  seeds was as large as the differences between variants, which only the two-source
+  interval shows (`comparison_delta.png` draws both, with the per-seed deltas). Its seed
+  half is a percentile bootstrap over the seeds, which is too narrow with few of them:
+  resampling n seeds understates their variance by about (n - 1) / n and draws few
+  distinct sets (three seeds give ten), so the interval is reliable only with many seeds,
+  such as the ten every suite now trains.
+- **The seeds that agree** (`validation_hidden_ap_delta_agreeing` of
+  `validation_hidden_ap_delta_seeds`, "8 of 10" in report.md) are those whose own delta
+  has the sign of the mean.
+- **`consistent`** is true when the hidden mules' two-source interval excludes zero and
+  every seed compared agrees on the sign. report.md states how many comparisons the
+  suite makes and how many would exclude zero by chance: the `all` suite compares 17
+  variants with the baseline, so at 90% about 1.7 would even if no variant differed.
+  Treat a single consistent delta as a lead to repeat.
 - **Seed ensembles** combine each variant's seeds (two or more) into one model: their
   scores of the accounts every audit scored, averaged on the log-odds scale, audited on
-  validation and test with a run's ranking metrics. Like the seed means, an ensemble has
+  validation and test with a run's ranking metrics, of the hidden mules and of every
+  mule, and ranked by their validation AP of the hidden mules. Like the seed means, an ensemble has
   an interval for its AP alone, over the same replicates; a run's audit report has one
   for every ranking metric. On the log-odds scale a seed that is confident about an
   account weighs more than a hesitant one, where averaging ranks would give every seed
@@ -186,10 +198,10 @@ validation audit AP and marks the test audit "for reporting, not selection".
   for a ranking that varies from seed to seed.
 - **The proxy's reliability** says how far a bank, which has only the proxy, could trust
   it to choose among these models: Spearman's rank correlation of each run's selected
-  validation proxy AP with its validation audit AP, with n beside it, over all runs,
-  within each selection rule (selecting on a criterion biases the selected proxy AP), over
-  the variants' rankings by their seed means, and against the audit on the hidden mules
-  alone, which the proxy never sees. `comparison_proxy_vs_audit.png` draws the runs and
+  validation proxy AP with its validation audit AP of the hidden mules, which the proxy
+  never sees, with n beside it, over all runs, within each selection rule (selecting on a
+  criterion biases the selected proxy AP), over the variants' rankings by their seed
+  means, and last against the audit AP of every mule, the revealed ones included. `comparison_proxy_vs_audit.png` draws the runs and
   gives the same numbers.
 - **`unpaired_accounts`** counts validation accounts some run's audit rejected; they are
   left out of the pairing.

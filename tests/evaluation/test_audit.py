@@ -14,7 +14,12 @@ from mule_pattern_learner.artifacts import AUDIT_COLUMNS, read_audit_scores, rea
 from mule_pattern_learner.batching import assemble
 from mule_pattern_learner.contract.clock import timestamp
 from mule_pattern_learner.contract.graph_schema import SPLIT_PHASE, ContextKey
-from mule_pattern_learner.evaluation.audit import audit, audit_inputs, audit_population
+from mule_pattern_learner.evaluation.audit import (
+    audit,
+    audit_inputs,
+    audit_population,
+    audit_results,
+)
 from mule_pattern_learner.paths import RunPaths
 from mule_pattern_learner.runtime import console
 from mule_pattern_learner.testing.builders import (
@@ -102,6 +107,13 @@ def test_the_audit_scores_a_split_through_the_dataset_clock_and_hubs(
         f"all_{split}_positives_plus_uniform_negatives_inverse_probability_weighted"
         "_minus_rejected_negatives"
     )
+    # The report leads with the hidden mules. Nothing was revealed here, so they are every
+    # mule, ranked alike.
+    assert list(result)[5:9] == ["hidden_metrics", "hidden_intervals", "metrics", "intervals"]
+    hidden = result["hidden_metrics"]
+    assert hidden["evaluation_sample"] == metrics["evaluation_sample"].replace("all_", "hidden_")
+    assert hidden["average_precision"] == metrics["average_precision"]
+    assert result["hidden_intervals"] == result["intervals"]
     for name, interval in result["intervals"].items():
         assert interval is not None and interval[0] <= interval[1], name
     assert result["constants"] == {
@@ -186,3 +198,34 @@ def test_the_population_is_the_split_before_its_cutoff_with_what_the_graph_revea
         "split": ["validation"],
         "revealed": [True],
     }
+
+
+def test_the_hidden_mules_are_ranked_with_the_revealed_ones_removed() -> None:
+    # A revealed mule a on top, a non-mule c of weight 2, the hidden mule b, then the
+    # non-mule d of weight 2.
+    frame = pd.DataFrame(
+        {
+            "account_id": ["a", "b", "c", "d"],
+            "is_mule": [1, 1, 0, 0],
+            "inclusion_probability": [1.0, 1.0, 0.5, 0.5],
+            "score": [0.9, 0.5, 0.7, 0.1],
+            "revealed": [True, False, False, False],
+            "ring_id": [-1, -1, -1, -1],
+            "label_source": "phantomledger_role",
+        }
+    )
+    results = audit_results(frame, 0.5, replicates=50)
+    # Every mule: a, then c, then b: AP = 0.5 * 1 + 0.5 * 2 / 4.
+    every = results["metrics"]
+    assert every["average_precision"] == pytest.approx(0.75) and every["threshold"] == 0.5
+    # As an investigator would, the hidden mules' ranking leaves the known a out: c, b, d.
+    # b's precision is 1 / 3; it ranks above d and below c, so its ROC AUC is 0.5; the
+    # population left is 5 accounts, a fifth of them the hidden mule.
+    hidden = results["hidden_metrics"]
+    assert hidden["average_precision"] == pytest.approx(1 / 3)
+    assert hidden["roc_auc"] == pytest.approx(0.5)
+    assert (hidden["sample_positives"], hidden["estimated_population"]) == (1, 5.0)
+    assert hidden["weighted_prevalence"] == pytest.approx(0.2)
+    # The top 10% is half an account, inside c: no hidden mule is found there.
+    assert hidden["recall_at_10pct"] == 0.0 and "threshold" not in hidden
+    assert set(results["hidden_intervals"]) == set(results["intervals"])

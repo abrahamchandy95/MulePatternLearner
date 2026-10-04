@@ -52,6 +52,9 @@ def test_every_figure_renders_to_a_png_at_150_dpi_under_its_fixed_name(
         "training_throughput",
         "proxy_precision_recall",
         "run_health",
+        "audit_hidden_precision_recall",
+        "audit_hidden_roc",
+        "audit_hidden_capture",
         "audit_precision_recall",
         "audit_roc",
         "audit_capture",
@@ -82,7 +85,13 @@ def test_report_md_holds_the_tables_and_links_every_figure_relatively(
     assert "| validation (decisions) | test (reporting) |" in text
     assert "| Population accounts | 47,120 | 47,749 |" in text
     assert "| Audit sample: mules / accounts | 38 / 2,038 | 40 / 2,040 |" in text
-    assert re.search(r"\| Average precision \| 0\.\d{3} \(0\.\d+ to 0\.\d+\) \|", text)
+    assert "| Revealed / hidden mules | 11 / 27 | 11 / 29 |" in text
+    # The hidden mules' table leads, every mule's follows, each with its intervals.
+    audit = text.split("## Training")[0]
+    hidden, every = audit.split("### Hidden mules, for decisions\n")[1].split("### Every mule\n")
+    for part in (hidden, every):
+        assert re.search(r"\| Average precision \| 0\.\d{3} \(0\.\d+ to 0\.\d+\) \|", part)
+    assert "At the selected threshold" in every and "At the selected threshold" not in hidden
     assert "| Observed positives / accounts | 11 / 2,011 | 12 / 2,012 |" in text
     assert "| Epochs run (selected) | 11 (5) |" in text
     assert "| Selection rule | validation_ap |" in text
@@ -101,7 +110,14 @@ def test_training_and_evaluation_each_draw_their_own_figures(tmp_path: Path) -> 
     audited = write_run_files(RunPaths(tmp_path / "audited"))
     audited.audit_report("test").unlink()
     drawn = [Path(path).stem for path in write_audit_report(audited)["figures"]]
-    assert drawn == ["audit_precision_recall", "audit_roc", "audit_capture"]
+    assert drawn == [
+        "audit_hidden_precision_recall",
+        "audit_hidden_roc",
+        "audit_hidden_capture",
+        "audit_precision_recall",
+        "audit_roc",
+        "audit_capture",
+    ]
     assert "| validation (decisions) |\n" in audited.report.read_text()
 
 

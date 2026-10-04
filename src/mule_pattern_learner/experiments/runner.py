@@ -34,7 +34,8 @@ dataset's preparation records its own (the install, connecting) or the `dataset`
 of a dataset found ready. Preparation records its events in the dataset's events.jsonl,
 and each run in the run's. suite_summary is what the experiments script
 shows at the end: how the suite ended, its runs' errors, the top of its comparison
-(ranked by validation audit AP, as report.md ranks it) and where its report is.
+(ranked by the validation audit AP of the hidden mules, as report.md ranks it) and where
+its report is.
 """
 
 from __future__ import annotations
@@ -53,6 +54,7 @@ import numpy as np
 
 from ..artifacts import (
     SEED_MEAN,
+    read_audit_report,
     read_comparison,
     read_history,
     read_json,
@@ -285,7 +287,8 @@ def finished(run: PlannedRun, step: str) -> dict[str, Any]:
     """The `run_finished` event of a run's step (train or audit), with the numbers it saved.
 
     A trained run gives its best epoch, validation proxy AP and seconds (metrics.json),
-    an audited one the AP of each audited split; a number the run has no file for is None.
+    an audited one the AP of each audited split, of its hidden mules and of every mule; a
+    number the run has no file for is None.
     """
     record: dict[str, Any] = {
         "event": "run_finished",
@@ -303,9 +306,11 @@ def finished(run: PlannedRun, step: str) -> dict[str, Any]:
         }
     else:
         for split in HELD_OUT_SPLITS:
-            report = run.paths.audit_report(split)
-            metrics = read_json(report)["metrics"] if report.exists() else {}
-            record[f"{split}_ap"] = metrics.get("average_precision")
+            path = run.paths.audit_report(split)
+            report = read_audit_report(path) if path.exists() else {}
+            hidden, every = report.get("hidden_metrics", {}), report.get("metrics", {})
+            record[f"{split}_hidden_ap"] = hidden.get("average_precision")
+            record[f"{split}_ap"] = every.get("average_precision")
     return record
 
 
@@ -469,20 +474,33 @@ def suite_summary(result: Mapping[str, Any], top: int = TOP) -> str:
     if suite.comparison.exists():
         comparison = read_comparison(suite.comparison)
         comparison = comparison[comparison.estimate == SEED_MEAN]
-        ranked = comparison.sort_values("validation_ap", ascending=False, na_position="last")
-        rows = [["variant", "seeds", "validation AP", "delta from the baseline", "test AP"]]
+        ranked = comparison.sort_values("validation_hidden_ap", ascending=False, na_position="last")
+        rows = [
+            [
+                "variant",
+                "seeds",
+                "validation AP",
+                "delta from the baseline",
+                "test AP",
+                "validation AP, every mule",
+            ]
+        ]
         for row in ranked.head(top).to_dict(orient="records"):
             row = {str(key): value for key, value in row.items()}
             rows.append(
                 [
                     str(row["variant"]),
                     str(row["seeds"]) or "none",
-                    _estimate(row, "validation_ap"),
-                    _estimate(row, "validation_ap_delta"),
-                    number(row["test_ap"]),
+                    _estimate(row, "validation_hidden_ap"),
+                    _estimate(row, "validation_hidden_ap_delta"),
+                    number(row["test_hidden_ap"]),
+                    number(row["validation_ap"]),
                 ]
             )
-        lines += ["Variants ranked by their validation audit AP, with 90% intervals:", *table(rows)]
+        lines += [
+            "Variants ranked by the validation audit AP of their hidden mules, with 90% intervals:",
+            *table(rows),
+        ]
         if len(ranked) > top:
             lines.append(f"  and {len(ranked) - top} more, in report.md")
     lines.append(

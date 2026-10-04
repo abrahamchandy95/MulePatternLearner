@@ -108,8 +108,11 @@ below"); when both are recorded nothing connects. Otherwise the model, its
 dataset (the one `model.pt` names, in `data/`) and the hub registry are checked first,
 then one connection, with the model's retry budgets, checks the frozen source, reads the
 truth once for both splits and audits the missing ones. The summary is a table with a
-column per split, saying which is for decisions: the mules in the sample, then AP, ROC
-AUC and recall and precision at 1%, 5% and 10%, each with its 90% interval. An audit
+column per split, saying which is for decisions: the hidden and revealed mules in the
+sample, then AP, ROC AUC and recall and precision at 1%, 5% and 10% of the hidden mules
+(the revealed mules removed from the ranking, as an investigator would remove the cases
+already known), then the same of every mule, each with its 90% interval. Decisions use
+the validation audit's hidden mules. An audit
 fails before writing anything when a mule is rejected, or when the rejected share exceeds
 the model's `runtime.max_rejected_root_fraction`.
 

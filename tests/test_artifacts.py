@@ -22,8 +22,10 @@ from mule_pattern_learner.artifacts import (
     append_history,
     atomic_write,
     file_digest,
+    hidden_rows,
     keep_history,
     pending_path,
+    read_audit_report,
     read_comparison,
     read_epochs,
     read_history,
@@ -176,6 +178,23 @@ def test_predictions_keep_their_columns_and_json_refuses_nan(tmp_path: Path) -> 
     assert not (tmp_path / "metrics.json").exists()
     write_json(tmp_path / "metrics.json", {"ap": 0.5})
     assert read_json(tmp_path / "metrics.json") == {"ap": 0.5}
+
+
+def test_an_audit_of_earlier_code_is_refused_and_the_hidden_rows_leave_the_revealed_out(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "audit" / "validation.json"
+    path.parent.mkdir()
+    write_json(path, {"metrics": {"average_precision": 0.3}, "intervals": {}})
+    with pytest.raises(ValueError, match=r"audit of earlier code.*mule evaluate"):
+        read_audit_report(path)
+    report = {"hidden_metrics": {}, "hidden_intervals": {}, "metrics": {}, "intervals": {}}
+    write_json(path, report)
+    assert read_audit_report(path) == report
+    frame = pd.DataFrame(
+        {"account_id": ["a", "b", "c"], "is_mule": [1, 1, 0], "revealed": [True, False, False]}
+    )
+    assert hidden_rows(frame).account_id.tolist() == ["b", "c"]
 
 
 def test_run_configurations_round_trip_with_their_fingerprint(tmp_path: Path) -> None:

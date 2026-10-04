@@ -9,9 +9,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from mule_pattern_learner import metrics
 from mule_pattern_learner.metrics import (
     bootstrap_intervals,
     capture_curve,
+    hidden_first,
+    hidden_name,
     paired_replicates,
     percentile_interval,
     precision_recall_curve,
@@ -279,3 +282,23 @@ def test_weighted_quantiles_interpolate_between_the_middles_of_the_weights() -> 
     assert found.tolist() == [1.0, 1.0, 2.0, 2.5, 3.0]
     unit = weighted_quantiles(np.arange(5.0), np.ones(5), [0.5])
     assert unit.tolist() == [2.0]
+
+
+def test_the_hidden_mules_are_measured_first_without_the_revealed_ones() -> None:
+    # The first mule (weight 1, at 0.9) is revealed: without it the mule of weight 4,
+    # tied at 0.5 with a non-mule of weight 2, ranks first, ahead of the non-mule of
+    # weight 8. Its AP is 4 / 6; of the 10 weighted pairs it beats 8 and ties 2: 0.9.
+    revealed = np.array([True, False, False, False])
+    found = hidden_first(Y, SCORE, WEIGHT, revealed)
+    assert list(found)[:2] == [hidden_name("average_precision"), hidden_name("roc_auc")]
+    assert found["hidden_average_precision"] == pytest.approx(4 / 6)
+    assert found["hidden_roc_auc"] == pytest.approx(0.9)
+    # Every mule's follow, as ranking_metrics gives them.
+    every = ranking_metrics(Y, SCORE, WEIGHT)
+    assert {name: found[name] for name in every} == every
+    # A sample's description and ranking metrics are weighted_metrics' without a threshold.
+    sample = metrics.sample_metrics(Y, SCORE, WEIGHT)
+    weighted = weighted_metrics(Y, SCORE, WEIGHT, 0.5)
+    assert sample == {name: weighted[name] for name in sample}
+    assert (sample["estimated_population"], sample["weighted_prevalence"]) == (15.0, 1 / 3)
+    assert set(weighted) - set(sample) == {"threshold", "precision", "recall", "f1"}

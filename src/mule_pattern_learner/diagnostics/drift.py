@@ -13,7 +13,9 @@ every split's non-mules sit beside them.
 The shift cost: a learner trained at the train cutoff with every train mule labelled,
 scored on validation and test, against the same learner on each split's percentiles
 (split_rank_transform, which removes the shift of each feature's distribution), and a
-cross-validation inside each held-out split, which no shift touches.
+cross-validation inside each held-out split, which no shift touches. Each is measured on
+the hidden mules first, the split's revealed mules removed (metrics named hidden_...),
+then on every mule.
 """
 
 from __future__ import annotations
@@ -26,7 +28,7 @@ from sklearn.model_selection import StratifiedKFold
 
 from ..artifacts import DIAGNOSTIC_TABLES
 from ..contract.graph_schema import HELD_OUT_SPLITS
-from ..metrics import ranking_metrics, roc_auc, weighted_quantiles
+from ..metrics import hidden_first, roc_auc, weighted_quantiles
 from .baselines import KINDS, fit_scores, model_columns
 from .feature_table import FAMILIES, FEATURE_SPLITS, family_of, usable
 from .univariate import varying
@@ -98,7 +100,7 @@ def split_rank_transform(frame: pd.DataFrame, columns: list[str]) -> pd.DataFram
 
 
 def shift_cost(frame: pd.DataFrame, *, seed: int = 0) -> list[tuple[Any, ...]]:
-    """The ranking metrics of each learner and setup on validation and test."""
+    """The ranking metrics of each learner and setup on validation and test, hidden mules first."""
     rows = usable(frame)
     columns = model_columns(frame, FAMILIES)
     ranked = split_rank_transform(rows, columns)
@@ -106,7 +108,8 @@ def shift_cost(frame: pd.DataFrame, *, seed: int = 0) -> list[tuple[Any, ...]]:
 
     def record(kind: str, setup: str, split: str, part: pd.DataFrame, score: np.ndarray) -> None:
         y, weight = part.is_mule.to_numpy(np.int64), part.weight.to_numpy(np.float64)
-        for metric, value in ranking_metrics(y, score, weight).items():
+        found = hidden_first(y, score, weight, part.revealed.to_numpy(bool))
+        for metric, value in found.items():
             if value is not None:
                 records.append(("", "all", kind, setup, split, metric, float(value)))
 

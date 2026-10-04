@@ -152,22 +152,40 @@ rejected, one per line.
 
 `audit/<split>.json` holds `split`, `purpose` (`decisions` for validation, `reporting` for
 test), `date`, `selection` (how the model's epoch was chosen: `model.pt`'s `selected_on`),
-`population_accounts`, `metrics`, `intervals`, `constants`, `revealed_positives`,
-`hidden_positives`, the rejection counts, `scope` and `model_changed`.
+`population_accounts`, `hidden_metrics`, `hidden_intervals`, `metrics`, `intervals`,
+`constants`, `revealed_positives`, `hidden_positives`, the rejection counts, `scope` and
+`model_changed`.
 
-- **`metrics`** estimate the split's whole population, each sampled account standing for
-  1 / `inclusion_probability` accounts: `estimated_population`, `weighted_prevalence`,
-  `average_precision`, `roc_auc`, and `precision`, `recall` and `f1` at the frozen
-  threshold, plus `precision_at_1pct` and `recall_at_1pct` and the same at `5pct` and
-  `10pct`: reviewing the highest-scored 1, 5 or 10% of the estimated population. A budget
-  that ends inside a block of tied scores takes the same share of each account in it, so
-  neither account ids nor row order matter. `evaluation_sample` names the sample, and
-  ends in `_minus_rejected_negatives` when rejected non-mules were left out.
+- **`hidden_metrics`** lead. The model exists to find the mules nobody knows on the
+  scoring date, so the mules the graph had revealed by the split's cutoff (`revealed` in
+  the scored sample) are removed from the ranking, as an investigator would remove the
+  cases already known, and the hidden mules are ranked against the non-mules of the
+  population that is left: `sample_accounts`, `sample_positives` (the hidden mules),
+  `estimated_population`, `weighted_prevalence`, `average_precision`, `roc_auc`, and
+  `precision_at_1pct` and `recall_at_1pct` and the same at `5pct` and `10pct`, each of
+  that population, and `evaluation_sample`, which begins with `hidden_`. Decisions use
+  the validation audit's hidden-mule `average_precision`. Without a hidden mule the AP and
+  ROC AUC are null.
+- **`hidden_intervals`** give each of those ranking metrics its interval, as
+  `intervals` do for every mule.
+- **`metrics`** rank every mule, the revealed ones included, and estimate the split's
+  whole population, each sampled account standing for 1 / `inclusion_probability`
+  accounts: `estimated_population`, `weighted_prevalence`, `average_precision`,
+  `roc_auc`, and `precision`, `recall` and `f1` at the frozen threshold, plus
+  `precision_at_1pct` and `recall_at_1pct` and the same at `5pct` and `10pct`: reviewing
+  the highest-scored 1, 5 or 10% of the estimated population. A budget that ends inside
+  a block of tied scores takes the same share of each account in it, so neither account
+  ids nor row order matter. `evaluation_sample` names the sample, and ends in
+  `_minus_rejected_negatives` when rejected non-mules were left out.
 - **`intervals`** give each ranking metric its 90% bootstrap interval: 1,000 replicates
   drawn with seed 0, mules resampled by ring (a mule without a ring alone) and non-mules
   within their class, each keeping its inclusion weight.
 - **`constants`** record the sample's size and seed, the review budgets and the bootstrap
   settings.
+
+Every reader refuses an `audit/<split>.json` without `hidden_metrics`, which earlier code
+wrote: move the split's `audit/<split>.*` files aside and run `mule evaluate` on the run
+again.
 
 ### The run's figures
 
@@ -179,9 +197,12 @@ test), `date`, `selection` (how the model's epoch was chosen: `model.pt`'s `sele
 | `training_throughput.png` | Seconds per step and batch wait; below, contexts requested, distinct and served from memory and from the cache |
 | `proxy_precision_recall.png` | Validation and test precision and recall on observed labels, titled as a proxy |
 | `run_health.png` | Rejections by split and status, stub children, sampler totals, database calls |
-| `audit_precision_recall.png` | Weighted precision and recall per audited split, the chance line, AP with its interval |
-| `audit_roc.png` | Weighted ROC per split with its AUC |
-| `audit_capture.png` | Share of mules found against the top share of accounts reviewed (log axis), random and perfect lines, the review budgets labelled with recall and precision |
+| `audit_hidden_precision_recall.png` | Weighted precision and recall of the hidden mules per audited split, the revealed mules removed, the chance line, AP with its interval |
+| `audit_hidden_roc.png` | Weighted ROC of the hidden mules per split with its AUC |
+| `audit_hidden_capture.png` | Share of the hidden mules found against the top share of the accounts left reviewed (log axis), random and perfect lines, the review budgets labelled with recall and precision |
+| `audit_precision_recall.png` | The same of every mule, the revealed ones included |
+| `audit_roc.png` | Weighted ROC of every mule per split with its AUC |
+| `audit_capture.png` | Share of every mule found against the top share of accounts reviewed, as `audit_hidden_capture.png` |
 | `audit_threshold.png` | Weighted precision, recall and F1 of the test audit against the threshold (log10 odds), the selected threshold |
 | `audit_score_distribution.png` | Weighted densities of the test audit's log10 odds, mules against non-mules, the threshold |
 | `audit_revealed_hidden.png` | Where the test audit ranks revealed and hidden mules: the share of accounts ranked above each, on a log axis, with medians |
@@ -200,37 +221,47 @@ with hyphens.
 | `summary.csv` | One row per run, split and metric: `variant`, `seed`, `split`, `metric`, `value`, `status` (`complete`, `failed` or `stopped`) and `commit`; then the rows of each variant's seed ensemble, of status `ensemble` |
 | `comparison.csv` | One row per variant, compared with the baseline, then one per seed ensemble |
 | `events.jsonl` | The suite's own events: the plan (`suite`, with the hours its runs to train should take: `estimate_hours` from the suite's finished runs and `bound_hours`), each run's step that finished (`run_finished`) or failed (`run_failed`), the runs moved aside (`run_archived`), an outage (`suite_stopped`), and what came before the dataset's preparation recorded its own (the install, connecting) or a dataset found ready (`dataset`); preparation's go to the dataset's `events.jsonl`, and each run's to the run's |
-| `plots/comparison_*.png` | Six figures |
-| `report.md` | The variants ranked by the validation audit, their seed ensembles, the proxy's reliability, the tables and figures |
+| `plots/comparison_*.png` | Seven figures |
+| `report.md` | The variants ranked by the validation audit AP of their hidden mules, their seed ensembles, the proxy's reliability, the tables and figures |
 
-The metrics of `summary.csv` are the audit reports' ranking metrics per split, the run's
-own `best_epoch`, `parameter_count` and `training_hours` (no split), the validation
-`proxy_average_precision`, the validation `hidden_average_precision` (the audit AP on the
-hidden mules alone: the revealed mules left out, as in the proxy validity diagnostic), the
-validation `paired_average_precision` (on the accounts every audit of the suite scored)
-and, but for the baseline, `average_precision_delta` against the baseline's run of the
-same seed. A run that left no numbers keeps one row without a metric. A variant with two
-or more complete runs has a seed ensemble: its seeds' scores of the accounts every audit
-scored, averaged on the log-odds scale (each clipped 2^-50 from 0 and 1 first), then
-audited on a run's ranking metrics. Its rows have the status `ensemble`, no seed and no
-commit: the audit's ranking metrics of each split, and `ensemble_seeds`, the seeds it
-combines (no split).
+Every audit number of a suite comes twice: of the hidden mules first, named `hidden_` and
+the metric (`hidden_average_precision`), the revealed mules removed from the ranking as
+in the audit reports' `hidden_metrics`, and then of every mule. Decisions use the
+validation `hidden_average_precision`. The metrics of `summary.csv` are the audit reports'
+ranking metrics per split of both kinds, the run's own `best_epoch`, `parameter_count`
+and `training_hours` (no split), the validation `proxy_average_precision`, the validation
+`hidden_paired_average_precision` and `paired_average_precision` (on the accounts every
+audit of the suite scored) and, but for the baseline, `hidden_average_precision_delta` and
+`average_precision_delta` against the baseline's run of the same seed. A run that left no
+numbers keeps one row without a metric. A variant with two or more complete runs has a
+seed ensemble: its seeds' scores of the accounts every audit scored, averaged on the
+log-odds scale (each clipped 2^-50 from 0 and 1 first), then audited on a run's ranking
+metrics, of the hidden mules and of every mule. Its rows have the status `ensemble`, no
+seed and no commit: the audit's ranking metrics of each split, and `ensemble_seeds`, the
+seeds it combines (no split).
 
 `comparison.csv` has `variant`, `estimate` (`seed_mean` for a variant's row of seed means,
-`ensemble` for its seed ensemble's row), `question`, `changes` and `seeds`; for each split the
-seed-mean AP, its spread over seeds and the 90% interval of the seed mean
-(`validation_ap`, `validation_ap_spread`, `validation_ap_low`, `validation_ap_high`, and
-the same for `test_ap`); the paired validation delta against the baseline
-(`validation_ap_delta`) with its interval over both the seeds and the audit sample
-(`validation_ap_delta_low`, `validation_ap_delta_high`: each replicate resamples the
-accounts and rings once and the seeds, paired by seed) and its interval over the audit
-sample alone (`validation_ap_delta_audit_low`, `validation_ap_delta_audit_high`), the
-seeds both completed (`validation_ap_delta_seeds`) and those whose own delta has the
-mean's sign (`validation_ap_delta_agreeing`), and `consistent` (the two-source interval
-excludes zero and every seed compared agrees on the sign); the seed means of
-`validation_roc_auc`, `test_roc_auc` and recall and precision at each budget
-(`validation_recall_at_1pct`, `validation_precision_at_1pct` and so on for `5pct`, `10pct`
-and the test split); `best_epoch`, `parameter_count` and `training_hours`;
+`ensemble` for its seed ensemble's row), `question`, `changes` and `seeds`. The hidden
+mules' columns follow, which decisions use: for each split the seed-mean AP of the hidden
+mules, its spread over seeds and the 90% interval of the seed mean
+(`validation_hidden_ap`, `validation_hidden_ap_spread`, `validation_hidden_ap_low`,
+`validation_hidden_ap_high`, and the same for `test_hidden_ap`); the paired validation
+delta against the baseline (`validation_hidden_ap_delta`) with its interval over both the
+seeds and the audit sample (`validation_hidden_ap_delta_low`,
+`validation_hidden_ap_delta_high`: each replicate resamples the accounts and rings once
+and the seeds, paired by seed) and its interval over the audit sample alone
+(`validation_hidden_ap_delta_audit_low`, `validation_hidden_ap_delta_audit_high`), the
+seeds both completed (`validation_hidden_ap_delta_seeds`) and those whose own delta has
+the mean's sign (`validation_hidden_ap_delta_agreeing`), and `consistent` (the two-source
+interval excludes zero and every seed compared agrees on the sign); the seed means of
+`validation_hidden_roc_auc`, `test_hidden_roc_auc` and recall and precision at each
+budget (`validation_hidden_recall_at_1pct`, `validation_hidden_precision_at_1pct` and so
+on for `5pct`, `10pct` and the test split). Then the same columns of every mule, without
+`hidden_` in their names (`validation_ap`, `validation_ap_spread`, `validation_ap_low`,
+`validation_ap_high`, `test_ap` and the rest, `validation_ap_delta` with its intervals,
+seeds and agreeing seeds, `validation_roc_auc`, `validation_recall_at_1pct` and so on),
+but for `consistent`, which is the hidden mules' alone; `best_epoch`, `parameter_count`
+and `training_hours`;
 `unpaired_accounts` (validation accounts left out of the pairing because some audit
 rejected them); and `differs` (the runs whose commit, dirty state, device or sampler
 backend differ from the suite's usual value). The seed-mean AP is the mean of each run's
@@ -238,24 +269,29 @@ own audit, while its interval and the delta come from the accounts every audit s
 when `unpaired_accounts` is above 0 the mean can fall outside its interval. The built-in
 rejection limit of 0 fails any audit that rejects an account, so it is 0 for the built-in
 variants. A seed ensemble's row holds its own AP and the 90% interval of it over the same
-paired replicates for each split, and its ROC AUC, recall and precision without intervals:
-like the seed means, an ensemble has an interval for its AP alone, where a run's audit
-report has one for every ranking metric. It has no spread, no delta and no run values.
+paired replicates for each split, of the hidden mules and of every mule, and its ROC AUC,
+recall and precision without intervals: like the seed means, an ensemble has an interval
+for its AP alone, where a run's audit report has one for every ranking metric. It has no
+spread, no delta, no consistency and no run values.
 
-report.md's proxy reliability gives Spearman's rank correlation of the selected epoch's
-validation proxy AP with the validation audit AP, each with its n: over the complete runs;
+report.md ranks the variants, and their seed ensembles, by the validation audit AP of
+their hidden mules, with every mule's AP and its delta in the last columns. Its proxy
+reliability gives Spearman's rank correlation of the selected epoch's validation proxy AP
+with the validation audit AP of the hidden mules, each with its n: over the complete runs;
 within the runs of each selection rule, since a run that selects on the proxy AP reports
 the best of its epochs' values and the others do not; over the variants, by their seed
-means; and over the runs against the audit on the hidden mules alone.
+means; and last over the runs against the audit AP of every mule, the revealed ones
+included.
 
 | Figure | What it shows |
 |---|---|
-| `comparison_ap.png` | Validation and test audit AP per variant: a dot per seed, the seed mean, its interval, the baseline line, and below each mean the seed ensemble as a hollow diamond on its interval |
-| `comparison_delta.png` | Validation audit AP minus the baseline's: the interval over seeds and accounts, the audit-only interval as a thin line above it, per-seed deltas, zero line; filled when consistent |
-| `comparison_budget.png` | Validation audit recall at 1%, 5% and 10% per variant |
-| `comparison_capture.png` | Seed-mean validation capture curves, one panel per variant with the baseline in each |
+| `comparison_ap.png` | Validation and test audit AP of the hidden mules per variant: a dot per seed, the seed mean, its interval, the baseline line, and below each mean the seed ensemble as a hollow diamond on its interval |
+| `comparison_delta.png` | Validation audit AP of the hidden mules minus the baseline's: the interval over seeds and accounts, the audit-only interval as a thin line above it, per-seed deltas, zero line; filled when consistent |
+| `comparison_budget.png` | Validation audit recall of the hidden mules at 1%, 5% and 10% per variant |
+| `comparison_capture.png` | Seed-mean validation capture curves of the hidden mules, one panel per variant with the baseline in each |
 | `comparison_validation.png` | Seed-mean proxy AP per epoch, up to the last epoch every seed trained, one panel per variant with the baseline in each |
-| `comparison_proxy_vs_audit.png` | Selected proxy AP against validation audit AP per run, with the proxy reliability's Spearman rank correlations and their n |
+| `comparison_proxy_vs_audit.png` | Selected proxy AP against the validation audit AP of the hidden mules per run, with the proxy reliability's Spearman rank correlations and their n |
+| `comparison_ap_every_mule.png` | As `comparison_ap.png`, of every mule, in the same order |
 
 ## A diagnostic study: `results/diagnostics/<dataset id>/`
 
@@ -284,7 +320,13 @@ Every table is in long format, its key columns then `metric` and `value`:
 | `nnpu_simulation.csv` | `positive_weight`, `seed`, `metric`, `value` | `nnpu_simulation.png` |
 
 A key that does not apply to a row is empty; the baselines give each metric's bootstrap
-interval in `low` and `high`.
+interval in `low` and `high`. The tables that rank mules measure each ranking twice, as
+the audits do: of the hidden mules first, the split's revealed mules removed from the
+ranking, in metrics named `hidden_` and the metric (`hidden_average_precision`,
+`hidden_roc_auc`), then of every mule. The figures draw the hidden mules', but for the
+ring coverage. `subgroups.csv` has the subsets `hidden` and `revealed` (each kind of mule
+against the non-mules), `hidden` and `mules` for the running sum of the AP
+(`cumulative_average_precision`, by `rank`), and `rings`.
 
 ## The archive: `results/archive/`
 

@@ -3,9 +3,9 @@
 Training selects its epoch and threshold, and reports, on observed labels only: the
 proxy. These predictions (predictions/<split>.parquet) score the observed positives and a
 sample of the unlabeled accounts of validation and test. proxy_validity scores them
-against the ground truth in three subsets: all the predicted accounts; the hidden mules
-against the non-mules, leaving the revealed mules out; and the revealed mules against
-the non-mules. A proxy that ranks the revealed mules well and the hidden ones no better
+against the ground truth in three subsets: the hidden mules against the non-mules,
+leaving the revealed mules out, first; the revealed mules against the non-mules; and all
+the predicted accounts. A proxy that ranks the revealed mules well and the hidden ones no better
 than chance measures the reveal, not mule detection.
 
 The metrics are unweighted (metrics.proxy_metrics with the ground truth as labels): the
@@ -28,14 +28,15 @@ from ..evaluation.truth import checked_truth
 from ..metrics import proxy_metrics
 from ..paths import RunPaths
 
-# The subsets of a predicted split's accounts, each scored on its own.
-SUBSETS = ("all", "hidden", "revealed")
+# The subsets of a predicted split's accounts, each scored on its own, the hidden mules
+# first.
+SUBSETS = ("hidden", "revealed", "all")
 # The long-format columns of the result.
 COLUMNS = ("split", "subset", "metric", "value")
 
 
 def subset_rows(frame: pd.DataFrame, subset: str) -> pd.DataFrame:
-    """The predicted accounts of a subset: all, or the hidden or revealed mules with the non-mules.
+    """The predicted accounts of a subset: the hidden or revealed mules with the non-mules, or all.
 
     A revealed mule has observed_label 1; a hidden one is a mule the proxy saw unlabeled.
     """

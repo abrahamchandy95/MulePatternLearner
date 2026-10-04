@@ -85,7 +85,7 @@ for analysis only.
 
 **Caveat.** The first-time and internal inflow counts were chosen after reading the generator's
 mule typology and test-split mules, so test results for them are optimistic. Decisions use the
-validation audit; the test audit is for reporting.
+validation audit's AP of the hidden mules; the test audit is for reporting.
 
 ## Where the details are
 

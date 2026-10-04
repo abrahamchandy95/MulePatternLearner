@@ -107,13 +107,20 @@ redraws the audit figures and `report.md`. `mule evaluate results/<variant>/seed
 audits another run. Each audit scores every mule of its split and 2,000 uniform
 non-mules, weighted to the whole split, with 90% intervals.
 
-It ends with a table of both splits: the mules sampled, AP, ROC AUC and recall and
-precision at 1, 5 and 10%, each with its 90% interval. Read `report.md`, or
-`audit/validation.json` and `audit/test.json`, for the rest:
+It ends with a table of both splits: the hidden and revealed mules, then AP, ROC AUC and
+recall and precision at 1, 5 and 10% of the hidden mules and then of every mule, each
+with its 90% interval. Read `report.md`, or `audit/validation.json` and `audit/test.json`,
+for the rest:
 
-- **Decide on validation.** `purpose` says it: `decisions` for validation, `reporting` for
-  test. Comparing settings or picking a threshold on the test audit makes the test
-  number optimistic.
+- **Judge by the hidden mules.** The model exists to find the mules nobody knows on the
+  scoring date. The hidden mules are those the graph had not revealed by the split's
+  cutoff; their metrics (`hidden_metrics`) rank them against the non-mules with the
+  revealed mules removed, as an investigator would remove the cases already known. The
+  metrics of every mule (`metrics`) follow: the model was trained on mules like the
+  revealed ones, so those mix finding new mules with ranking the known ones again.
+- **Decide on validation's hidden mules.** `purpose` says which split: `decisions` for
+  validation, `reporting` for test. Comparing settings or picking a threshold on the test
+  audit makes the test number optimistic.
 - **Read the ranking.** Average precision against `weighted_prevalence`, ROC AUC, and
   recall and precision at reviewing the top 1, 5 and 10% of accounts, each with its
   interval. The F1 threshold was chosen on about a dozen validation mules and means

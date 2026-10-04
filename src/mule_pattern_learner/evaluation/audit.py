@@ -8,6 +8,13 @@ audit_population reads the split's frozen population from the scope, audit_sampl
 (evaluation.sample) draws the sample, score_sample scores it with the run's model, and
 write_audit writes the files. audit_inputs loads and checks the model and its dataset
 once for every split.
+
+The report leads with the metrics of the hidden mules, the mules nobody knew at the
+split's cutoff, which the model exists to find: the revealed mules removed from the
+ranking, as an investigator would remove the known cases (artifacts.hidden_rows), and
+the hidden mules ranked against the non-mules. Decisions use the validation audit's
+hidden-mule AP. The metrics of every mule follow, the revealed ones ranked with the
+hidden; audit_results computes both, each with its ring-clustered intervals.
 """
 
 from __future__ import annotations
@@ -17,9 +24,16 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from numpy.typing import NDArray
 import pandas as pd
 
-from ..artifacts import AUDIT_COLUMNS, write_audit_scores, write_json, write_rejected
+from ..artifacts import (
+    AUDIT_COLUMNS,
+    hidden_rows,
+    write_audit_scores,
+    write_json,
+    write_rejected,
+)
 from ..contract.bounds import AUDIT_POPULATION, AUDIT_SAMPLE
 from ..contract.clock import timestamp
 from ..contract.graph_schema import HELD_OUT_SPLITS, SPLIT_PHASE
@@ -42,6 +56,7 @@ from ..metrics import (
     INTERVAL,
     REVIEW_BUDGETS,
     bootstrap_intervals,
+    sample_metrics,
     weighted_metrics,
 )
 from ..paths import DATA_DIR, DatasetPaths, RunPaths
@@ -135,11 +150,10 @@ def audit_population(scope: ScopeReader, scope_id: str, split: str, date: str) -
     )
 
 
-def audit_metrics(frame: pd.DataFrame, threshold: float) -> dict[str, Any]:
-    """The weighted metrics (``metrics.weighted_metrics``) of an audit sample.
+def checked_sample(frame: pd.DataFrame) -> tuple[NDArray[Any], NDArray[Any], NDArray[Any]]:
+    """An audit sample's truth, scores and weights (1 / inclusion probability), checked.
 
-    Each account is weighted by 1 / its inclusion probability. Account IDs are not
-    read, so they cannot break ties.
+    Account IDs are not read, so they cannot break ties.
     """
     if not len(frame) or not frame.is_mule.isin([0, 1]).all():
         raise ValueError("Weighted evaluation needs binary truth and nonempty predictions")
@@ -149,10 +163,32 @@ def audit_metrics(frame: pd.DataFrame, threshold: float) -> dict[str, Any]:
     y, score = frame.is_mule.to_numpy(int), frame.score.to_numpy(float)
     if not np.isfinite(score).all() or ((score < 0) | (score > 1)).any():
         raise ValueError("Invalid prediction probabilities")
-    return weighted_metrics(y, score, 1 / p, threshold)
+    return y, score, 1 / p
 
 
-def audit_intervals(frame: pd.DataFrame) -> dict[str, list[float] | None]:
+def audit_metrics(frame: pd.DataFrame, threshold: float) -> dict[str, Any]:
+    """The weighted metrics (``metrics.weighted_metrics``) of an audit sample, every mule.
+
+    Each account is weighted by 1 / its inclusion probability.
+    """
+    return weighted_metrics(*checked_sample(frame), threshold)
+
+
+def hidden_metrics(frame: pd.DataFrame) -> dict[str, Any]:
+    """The weighted metrics of an audit sample's hidden mules against its non-mules.
+
+    The revealed mules are removed from the ranking (artifacts.hidden_rows), and the
+    rest is measured as a sample of its own (``metrics.sample_metrics``): the hidden
+    mules and the estimated population without the revealed ones, the AP, the ROC AUC
+    and the recall and precision at the review budgets of that population. Without a
+    hidden mule the AP and ROC AUC are None and the budgets find nothing.
+    """
+    return sample_metrics(*checked_sample(hidden_rows(frame)))
+
+
+def audit_intervals(
+    frame: pd.DataFrame, *, replicates: int = BOOTSTRAP_REPLICATES
+) -> dict[str, list[float] | None]:
     """The ring-clustered bootstrap intervals of an audit sample's ranking metrics.
 
     Mules are resampled by ring (ring_id; a mule without a ring alone) and non-mules
@@ -163,7 +199,26 @@ def audit_intervals(frame: pd.DataFrame) -> dict[str, list[float] | None]:
         frame.score.to_numpy(float),
         1 / frame.inclusion_probability.to_numpy(float),
         frame.ring_id.to_numpy(int),
+        replicates=replicates,
     )
+
+
+def audit_results(
+    frame: pd.DataFrame, threshold: float, *, replicates: int = BOOTSTRAP_REPLICATES
+) -> dict[str, Any]:
+    """What an audit report records of a scored sample: hidden mules first, then every mule.
+
+    ``hidden_metrics`` and ``hidden_intervals`` rank the hidden mules against the
+    non-mules, the revealed mules removed (hidden_metrics); ``metrics`` and
+    ``intervals`` rank every mule, with the precision, recall and F1 at ``threshold``.
+    The intervals of both are ring-clustered over the same number of ``replicates``.
+    """
+    return {
+        "hidden_metrics": hidden_metrics(frame),
+        "hidden_intervals": audit_intervals(hidden_rows(frame), replicates=replicates),
+        "metrics": audit_metrics(frame, threshold),
+        "intervals": audit_intervals(frame, replicates=replicates),
+    }
 
 
 def audit_constants(seed: int) -> dict[str, Any]:
@@ -250,7 +305,7 @@ def audit(
     (default 0), fails the audit before anything is written: the weighted metrics
     would silently describe a censored population. Rejected negatives within the limit
     are listed in audit/<split>_rejected.txt, and the metrics' ``evaluation_sample``
-    says that they were dropped.
+    says that they were dropped. The report's metrics are audit_results'.
     """
     if split not in AUDIT_SPLITS:
         raise ValueError(f"Audits cover {list(AUDIT_SPLITS)}, not {split!r}")
@@ -281,13 +336,12 @@ def audit(
             f"first {examples}. Weighted metrics over the remaining accounts would describe "
             "a censored population, so no report was written"
         )
-    metrics = {
-        **audit_metrics(scored, run.model.threshold),
-        "evaluation_sample": f"all_{split}_positives_plus_uniform_negatives_"
-        "inverse_probability_weighted",
-    }
+    results = audit_results(scored, run.model.threshold)
+    sample = f"{split}_positives_plus_uniform_negatives_inverse_probability_weighted"
     if len(unscored):
-        metrics["evaluation_sample"] += "_minus_rejected_negatives"
+        sample += "_minus_rejected_negatives"
+    results["hidden_metrics"]["evaluation_sample"] = f"hidden_{sample}"
+    results["metrics"]["evaluation_sample"] = f"all_{sample}"
     mules = scored[scored.is_mule == 1]
     report = {
         "split": split,
@@ -295,9 +349,9 @@ def audit(
         "date": date,
         "selection": run.model.selected_on,
         "population_accounts": len(population),
-        "metrics": metrics,
-        # The ring-clustered 90% bootstrap interval of each ranking metric.
-        "intervals": audit_intervals(scored),
+        # The hidden mules' metrics, then every mule's, each beside the ring-clustered 90%
+        # bootstrap interval of each ranking metric.
+        **results,
         "constants": audit_constants(config.dataset.split_seed),
         "revealed_positives": int(mules.revealed.sum()),
         "hidden_positives": int((~mules.revealed).sum()),

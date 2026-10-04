@@ -41,18 +41,28 @@ def test_each_audited_split_has_its_subsets_rings_and_ap_concentration() -> None
         rows = table[table.split == split]
         mules = frame[frame.is_mule == 1]
         counts = rows[rows.metric == "mules"].set_index("subset").value
-        assert counts.to_dict() == {
-            "revealed": mules.revealed.sum(),
-            "hidden": (~mules.revealed).sum(),
-        }
-        head = rows[rows.metric == "cumulative_average_precision"]
-        assert head["rank"].tolist() == list(range(1, len(mules) + 1))
-        assert head.value.is_monotonic_increasing
+        # The hidden mules lead.
+        assert list(counts.items()) == [
+            ("hidden", (~mules.revealed).sum()),
+            ("revealed", mules.revealed.sum()),
+        ]
         weight = 1 / frame.inclusion_probability
         ap = average_precision_score(frame.is_mule, frame.score, sample_weight=weight)
-        assert head.value.iloc[-1] == pytest.approx(ap)
-        (recorded,) = rows[rows.metric == "average_precision"].value
-        assert recorded == pytest.approx(ap)
+        hidden = frame[~frame.revealed]
+        hidden_ap = average_precision_score(
+            hidden.is_mule, hidden.score, sample_weight=1 / hidden.inclusion_probability
+        )
+        for subset, total, count in (
+            ("mules", ap, len(mules)),
+            ("hidden", hidden_ap, (~mules.revealed).sum()),
+        ):
+            head = rows[(rows.metric == "cumulative_average_precision") & (rows.subset == subset)]
+            assert head["rank"].tolist() == list(range(1, count + 1))
+            assert head.value.is_monotonic_increasing
+            assert head.value.iloc[-1] == pytest.approx(total)
+        recorded = rows[rows.metric == "average_precision"].set_index("subset").value
+        assert recorded["mules"] == pytest.approx(ap)
+        assert recorded["hidden"] == pytest.approx(hidden_ap)
         rings = rows[rows.subset == "rings"].set_index("metric").value
         assert rings["rings"] == mules.ring_id[mules.ring_id >= 0].nunique()
         coverage = [rings[f"coverage_at_{b}"] for b in ("1pct", "5pct", "10pct")]

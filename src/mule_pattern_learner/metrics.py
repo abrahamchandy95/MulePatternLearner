@@ -4,7 +4,8 @@ Everything here is pure numpy and scikit-learn: arrays in, numbers out. The prox
 metrics (proxy_metrics) score observed labels as they are; the weighted metrics estimate population
 values from a sample in which each account stands for ``weight`` accounts. Both share
 the thresholded precision, recall and F1 (threshold_metrics) and the tie-aware review
-budgets (capture_at_budgets). weighted_quantiles summarises such a sample's values.
+budgets (capture_at_budgets). weighted_quantiles summarises such a sample's values, and
+hidden_name names a metric of the hidden mules alone.
 """
 
 from __future__ import annotations
@@ -204,28 +205,66 @@ def ranking_metrics(
     }
 
 
-def weighted_metrics(
-    y: NDArray[Any], score: NDArray[Any], weight: NDArray[Any], threshold: float
-) -> dict[str, Any]:
-    """Weighted AP, ROC AUC, threshold and top-fraction metrics of a weighted sample.
+def sample_metrics(y: NDArray[Any], score: NDArray[Any], weight: NDArray[Any]) -> dict[str, Any]:
+    """A weighted sample's size, estimated population and prevalence, and ranking metrics.
 
     Each sampled account stands for ``weight`` population accounts, so these are
-    estimates, not census measurements. The top-fraction metrics
-    (``capture_at_budgets``) share a budget that ends among tied scores evenly
-    across them, so row order does not matter.
+    estimates, not census measurements. The ranking metrics are ranking_metrics'.
     """
     positives = float(weight[y == 1].sum())
-    ranking = ranking_metrics(y, score, weight)
     return {
         "sample_accounts": len(y),
         "sample_positives": int(y.sum()),
         "estimated_population": float(weight.sum()),
         "weighted_prevalence": positives / float(weight.sum()),
-        "average_precision": ranking.pop("average_precision"),
-        "roc_auc": ranking.pop("roc_auc"),
+        **ranking_metrics(y, score, weight),
+    }
+
+
+def weighted_metrics(
+    y: NDArray[Any], score: NDArray[Any], weight: NDArray[Any], threshold: float
+) -> dict[str, Any]:
+    """Weighted AP, ROC AUC, threshold and top-fraction metrics of a weighted sample.
+
+    sample_metrics, and the precision, recall and F1 of the accounts scored at or above
+    ``threshold``. The top-fraction metrics (``capture_at_budgets``) share a budget that
+    ends among tied scores evenly across them, so row order does not matter.
+    """
+    found = sample_metrics(y, score, weight)
+    # The review budgets' metrics, precision_at_1pct and the like, come last.
+    budgets = {name: value for name, value in found.items() if "_at_" in name}
+    return {
+        **{name: value for name, value in found.items() if name not in budgets},
         "threshold": threshold,
         **threshold_metrics(y, score, weight, threshold),
-        **ranking,
+        **budgets,
+    }
+
+
+def hidden_name(metric: str) -> str:
+    """How a metric of the hidden mules alone is named beside the one of every mule.
+
+    The hidden mules are those not yet revealed at the split's cutoff, ranked against
+    the non-mules with the revealed mules removed: "average_precision" of the hidden
+    mules is "hidden_average_precision".
+    """
+    return f"hidden_{metric}"
+
+
+def hidden_first(
+    y: NDArray[Any], score: NDArray[Any], weight: NDArray[Any], revealed: NDArray[Any]
+) -> dict[str, float | None]:
+    """ranking_metrics of the hidden mules (hidden_name), then of every mule.
+
+    The hidden mules' rank without the accounts ``revealed`` marks (the mules revealed by
+    the cutoff), as an investigator would remove the cases already known; every mule's
+    rank all the accounts.
+    """
+    kept = ~np.asarray(revealed, dtype=bool)
+    hidden = ranking_metrics(y[kept], score[kept], weight[kept])
+    return {
+        **{hidden_name(name): value for name, value in hidden.items()},
+        **ranking_metrics(y, score, weight),
     }
 
 

@@ -3,10 +3,12 @@
 The `controls` suite trained its seven variants over the seeds 42, 43 and 44 on the CUDA
 host: 21 runs on one dataset, each audited against the ground truth on validation and
 test ([Run the control experiments](../how-to/run-control-experiments.md)). This note
-reads the validation audit, which decisions use; the test audit is for reporting and is
-not read here. It reads it in the spirit the project holds to: the data are synthetic, so
-the experiments study the method (the loss, how a model is selected, how it is
-evaluated, whether seeds are worth combining), never which inputs to delete.
+reads the validation audit AP of every mule, which decisions used when the suite ran; the
+test audit is for reporting and is not read here. Decisions now use the validation AP of
+the hidden mules, ranked with the revealed mules removed (see the follow-up), which these
+runs did not report. It reads the audit in the spirit the project holds to: the data are
+synthetic, so the experiments study the method (the loss, how a model is selected, how
+it is evaluated, whether seeds are worth combining), never which inputs to delete.
 
 ## The results
 
@@ -112,6 +114,13 @@ gain the summary model's steadiness, a seed ensemble is the way to use it.
 - **Proxy reliability**: how far the validation proxy, the only thing a bank has, ranks
   the runs and the variants as the audit does, within each selection rule, and on the
   hidden mules alone.
+- **The hidden mules first.** The model exists to find the mules nobody knows on the
+  scoring date, and the diagnostics of the reference graph showed the built-in run
+  ranking the revealed mules far better than the hidden ones: validation's top 1% held 7
+  of its 11 revealed mules and 5 of its 22 hidden ones. Every audit now ranks the hidden
+  mules against the non-mules with the revealed ones removed, as an investigator would
+  remove the cases already known, and a suite ranks, compares and ensembles its variants
+  by their validation AP of the hidden mules; the AP of every mule stays beside it.
 - **A larger synthetic dataset with more mules at the same rate.** 33 validation mules
   make wide audit intervals and 11 revealed ones a noisy selection; a larger population
   at the same mule rate keeps the problem's imbalance and gives both more mules. It needs

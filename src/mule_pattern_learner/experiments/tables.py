@@ -1,36 +1,42 @@
 """A suite's comparison tables: summary.csv, every run's numbers, and comparison.csv.
 
+The model exists to find the mules nobody knows on the scoring date, so the hidden mules
+lead: every audit number is computed twice, first of the hidden mules alone, ranked
+against the non-mules with the revealed mules removed (artifacts.hidden_rows), then of
+every mule. Decisions use the validation audit AP of the hidden mules: the ranking, the
+delta from the baseline, its consistency and the seed ensembles' ranking are of it.
+
 summary.csv is long: one row per run, split and metric (SUMMARY_COLUMNS), with the run's
-status and commit on every row. A run's audit metrics come from its audit reports, its
-proxy AP and totals from metrics.json; values with no split belong to the run as a
-whole. Beside them is its validation audit AP on the hidden mules alone (hidden_ap), so
-the suite's report can say how well the proxy, which never sees them, tracks the audit.
-A run that left no numbers keeps one row without a metric, so every run of the suite is
-listed.
+status and commit on every row. A run's audit metrics come from its audit reports, the
+hidden mules' named with "hidden_" first (metrics.hidden_name); its proxy AP and totals
+come from metrics.json; values with no split belong to the run as a whole. A run that
+left no numbers keeps one row without a metric, so every run of the suite is listed.
 
 comparison.csv holds one row per variant (COMPARISON_COLUMNS): the seed means of the
-audit metrics, their spread over seeds, and the paired comparison with the baseline.
-Every variant is audited on the same accounts, because the audit sample depends only on
-the scope, the truth and dataset.split_seed. Each bootstrap replicate therefore draws one
-resample of those accounts and their rings and applies it to every run
+audit metrics, their spread over seeds, and the paired comparison with the baseline, of
+the hidden mules and then of every mule. Every variant is audited on the same accounts,
+because the audit sample depends only on the scope, the truth and dataset.split_seed,
+and the same of them are revealed. Each bootstrap replicate therefore draws one resample
+of those accounts and their rings and applies it to every run
 (metrics.paired_replicates), and the seed-mean AP of a variant gets its 90% interval
 from those replicates: the audit sample's uncertainty for these seeds. The variant's
 difference from the baseline's (over the seeds both completed, paired by seed) gets two:
 the audit-only interval, from the same replicates, and the two-source interval, which
 on each replicate also resamples the seeds (metrics.two_source_replicates), so it covers
 the spread between seeds as well. comparison.csv counts the seeds whose own delta has
-the mean's sign, and a delta is consistent when its two-source interval excludes zero
-and every seed compared agrees on that sign. Accounts some run's audit rejected are
-left out of the pairing, and comparison.csv counts them.
+the mean's sign, and the hidden mules' delta is consistent when its two-source interval
+excludes zero and every seed compared agrees on that sign. Accounts some run's audit
+rejected are left out of the pairing, and comparison.csv counts them.
 
 A variant's seed ensemble combines its complete seeds (two or more) into one ranking of
 those shared accounts, their scores averaged on the log-odds scale
 (metrics.log_odds_mean, whose docstring gives the trade-off against averaging ranks).
 Each ensemble is audited on validation and test with the ranking metrics of a run's
-audit but, like the seed means, has an interval for its AP alone (90%, over the same
-replicates), where a run's audit report has one for every ranking metric. summary.csv
-gives its metrics in rows of status "ensemble" without a seed, and comparison.csv a row
-of its own after the seed means (estimate "ensemble" against "seed_mean").
+audit, of the hidden mules and of every mule, but, like the seed means, has an interval
+for its AP alone (90%, over the same replicates), where a run's audit report has one for
+every ranking metric. summary.csv gives its metrics in rows of status "ensemble" without
+a seed, and comparison.csv a row of its own after the seed means (estimate "ensemble"
+against "seed_mean").
 """
 
 from __future__ import annotations
@@ -48,11 +54,11 @@ from ..artifacts import (
     DELTA_METRIC,
     ENSEMBLE,
     ENSEMBLE_SEEDS,
-    HIDDEN_METRIC,
     PAIRED_METRIC,
     PROXY_METRIC,
     SEED_MEAN,
     SUMMARY_COLUMNS,
+    read_audit_report,
     read_audit_scores,
     read_json,
     read_run_provenance,
@@ -60,11 +66,11 @@ from ..artifacts import (
 )
 from ..config import DEFAULT_CONFIG, RunConfig
 from ..contract.graph_schema import HELD_OUT_SPLITS
-from ..diagnostics.proxy_validity import subset_rows
 from ..metrics import (
     REVIEW_BUDGETS,
     average_precision,
     budget_name,
+    hidden_name,
     log_odds_mean,
     paired_replicates,
     percentile_interval,
@@ -84,18 +90,47 @@ BUDGET_METRICS = tuple(
     for kind in ("recall", "precision")
 )
 AUDIT_METRICS = ("average_precision", "roc_auc", *BUDGET_METRICS)
+# The mules an audit's numbers rank: the hidden mules alone, which decisions use, then
+# every mule, the revealed ones included.
+HIDDEN, EVERY = "hidden", "every"
+MULES = (HIDDEN, EVERY)
 # The run's own values, with no split.
 RUN_METRICS = ("best_epoch", "parameter_count", "training_hours")
 # What comparison.csv flags when a variant's runs differ from the suite's usual value.
 PROVENANCE = ("git_commit", "git_dirty", "device", "sampler_backend")
 
 
-def _split_columns(split: str) -> list[str]:
+def metric_name(metric: str, mules: str) -> str:
+    """How summary.csv names a metric of the hidden mules, or of every mule."""
+    return hidden_name(metric) if mules == HIDDEN else metric
+
+
+def column(split: str, metric: str, mules: str) -> str:
+    """comparison.csv's column of a split's metric: validation_hidden_ap, validation_ap."""
+    return f"{split}_{metric_name(metric, mules)}"
+
+
+def _split_columns(ap: str) -> list[str]:
+    return [ap, f"{ap}_spread", f"{ap}_low", f"{ap}_high"]
+
+
+def _delta_columns(ap: str) -> list[str]:
+    delta = f"{ap}_delta"
+    ends = ("", "_low", "_high", "_audit_low", "_audit_high", "_seeds", "_agreeing")
+    return [f"{delta}{end}" for end in ends]
+
+
+def _mules_columns(mules: str) -> list[str]:
+    """The columns of the hidden mules' numbers, or of every mule's; consistent is the first's."""
     return [
-        f"{split}_ap",
-        f"{split}_ap_spread",
-        f"{split}_ap_low",
-        f"{split}_ap_high",
+        *(name for split in HELD_OUT_SPLITS for name in _split_columns(column(split, "ap", mules))),
+        *_delta_columns(column("validation", "ap", mules)),
+        *(["consistent"] if mules == HIDDEN else []),
+        *(
+            column(split, metric, mules)
+            for split in HELD_OUT_SPLITS
+            for metric in AUDIT_METRICS[1:]
+        ),
     ]
 
 
@@ -105,16 +140,7 @@ COMPARISON_COLUMNS = (
     "question",
     "changes",
     "seeds",
-    *(column for split in HELD_OUT_SPLITS for column in _split_columns(split)),
-    "validation_ap_delta",
-    "validation_ap_delta_low",
-    "validation_ap_delta_high",
-    "validation_ap_delta_audit_low",
-    "validation_ap_delta_audit_high",
-    "validation_ap_delta_seeds",
-    "validation_ap_delta_agreeing",
-    "consistent",
-    *(f"{split}_{metric}" for split in HELD_OUT_SPLITS for metric in AUDIT_METRICS[1:]),
+    *(name for mules in MULES for name in _mules_columns(mules)),
     *RUN_METRICS,
     "unpaired_accounts",
     "differs",
@@ -143,26 +169,12 @@ def provenance(run: RunPaths) -> dict[str, Any]:
     return read_run_provenance(run.config) if run.config.exists() else {}
 
 
-def hidden_ap(run: RunPaths, split: str = "validation") -> float | None:
-    """A run's audit AP of a split on its hidden mules: the revealed ones left out.
-
-    The audit's revealed mules are the proxy's observed positives, so the subset is
-    proxy_validity's "hidden" one: the mules the graph had not revealed before the
-    split's cutoff, against the non-mules, each standing for 1 / its inclusion
-    probability accounts. None without the audit or without a hidden mule.
-    """
-    path = run.audit_scores(split)
-    if not path.exists():
-        return None
-    frame = read_audit_scores(path)
-    hidden = subset_rows(frame.assign(observed_label=frame.revealed.astype(np.int64)), "hidden")
-    y = hidden.is_mule.to_numpy(np.int64)
-    weight = 1 / hidden.inclusion_probability.to_numpy(np.float64)
-    return average_precision(y, hidden.score.to_numpy(np.float64), weight)
-
-
 def run_values(run: RunPaths) -> list[tuple[str, str, float]]:
-    """(split, metric, value) of every number a run's files hold for summary.csv."""
+    """(split, metric, value) of every number a run's files hold for summary.csv.
+
+    Each audited split gives its hidden mules' metrics (hidden_average_precision and so
+    on), then every mule's.
+    """
     values: list[tuple[str, str, float]] = []
     if run.metrics.exists():
         metrics = read_json(run.metrics)
@@ -176,15 +188,13 @@ def run_values(run: RunPaths) -> list[tuple[str, str, float]]:
             values.append(("validation", PROXY_METRIC, float(proxy)))
     for split in HELD_OUT_SPLITS:
         if run.audit_report(split).exists():
-            recorded = read_json(run.audit_report(split))["metrics"]
-            values += [
-                (split, name, float(recorded[name]))
-                for name in AUDIT_METRICS
-                if recorded.get(name) is not None
-            ]
-    hidden = hidden_ap(run)
-    if hidden is not None:
-        values.append(("validation", HIDDEN_METRIC, hidden))
+            report = read_audit_report(run.audit_report(split))
+            for mules, recorded in ((HIDDEN, report["hidden_metrics"]), (EVERY, report["metrics"])):
+                values += [
+                    (split, metric_name(name, mules), float(recorded[name]))
+                    for name in AUDIT_METRICS
+                    if recorded.get(name) is not None
+                ]
     return values
 
 
@@ -192,14 +202,17 @@ def run_values(run: RunPaths) -> list[tuple[str, str, float]]:
 class PairedSplit:
     """The runs' AP on the accounts every audit of a split scored, and on each replicate.
 
-    ``point`` holds each run's AP on those accounts and ``replicates`` its AP on each
-    shared bootstrap replicate (replicates by runs, in the order of ``runs``).
-    ``unpaired`` counts the accounts some audit rejected, which are left out. ``y``,
-    ``weight`` and ``rings`` are the shared accounts' truth, inverse inclusion
-    probability and ring, and ``scores`` each run's scores of them (accounts by runs).
+    ``mules`` says which accounts are ranked: the hidden mules and the non-mules
+    (HIDDEN), the revealed mules removed, or every account (EVERY). ``point`` holds each
+    run's AP on those accounts and ``replicates`` its AP on each shared bootstrap
+    replicate (replicates by runs, in the order of ``runs``). ``unpaired`` counts the
+    accounts some audit rejected, which are left out. ``y``, ``weight`` and ``rings`` are
+    the accounts' truth, inverse inclusion probability and ring, and ``scores`` each
+    run's scores of them (accounts by runs).
     """
 
     runs: tuple[SuiteRun, ...]
+    mules: str
     point: NDArray[np.float64]
     replicates: NDArray[np.float64]
     unpaired: int
@@ -220,12 +233,13 @@ class PairedSplit:
         return percentile_interval(self.replicates[:, columns].mean(axis=1))
 
 
-def paired_split(runs: Sequence[SuiteRun], split: str) -> PairedSplit | None:
+def paired_split(runs: Sequence[SuiteRun], split: str, mules: str) -> PairedSplit | None:
     """The paired AP of the complete runs on a split's shared audit accounts.
 
     Every audit scored the same sample, less the accounts TigerGraph rejected in it, so
-    the accounts every run scored carry the same truth, inclusion probability and ring in
-    each audit; an audit that disagrees belongs to another sample and is refused. None
+    the accounts every run scored carry the same truth, inclusion probability, ring and
+    revealed flag in each audit; an audit that disagrees belongs to another sample and is
+    refused. ``mules`` HIDDEN leaves the revealed mules out of every run alike. None
     without complete runs.
     """
     complete = tuple(run for run in runs if run.status == COMPLETE)
@@ -237,13 +251,16 @@ def paired_split(runs: Sequence[SuiteRun], split: str) -> PairedSplit | None:
     every = set[str]().union(*(set(frame.index) for frame in frames))
     shared = sorted(set[str](frames[0].index).intersection(*(frame.index for frame in frames)))
     aligned = [frame.loc[shared] for frame in frames]
-    truth = aligned[0][["is_mule", "inclusion_probability", "ring_id"]]
+    truth = aligned[0][["is_mule", "inclusion_probability", "ring_id", "revealed"]]
     for run, frame in zip(complete, aligned, strict=True):
         if not frame[truth.columns].equals(truth):
             raise ValueError(
                 f"The {split} audit of {run.paths.root} scored other accounts or truth than "
                 f"the suite's other audits; audits of one sample are needed to pair them"
             )
+    if mules == HIDDEN:
+        kept = ~truth.revealed.astype(bool).to_numpy()
+        truth, aligned = truth[kept], [frame[kept] for frame in aligned]
     y = truth.is_mule.to_numpy(np.int64)
     weight = 1 / truth.inclusion_probability.to_numpy(np.float64)
     rings = truth.ring_id.to_numpy(np.int64)
@@ -254,7 +271,7 @@ def paired_split(runs: Sequence[SuiteRun], split: str) -> PairedSplit | None:
     replicates = paired_replicates(y, weight, scores, average_precision, rings)
     unpaired = len(every) - len(shared)
     matrix = np.column_stack(scores) if scores else np.zeros((0, 0))
-    return PairedSplit(complete, point, replicates, unpaired, y, weight, rings, matrix)
+    return PairedSplit(complete, mules, point, replicates, unpaired, y, weight, rings, matrix)
 
 
 @dataclass(frozen=True)
@@ -262,8 +279,9 @@ class Ensemble:
     """A variant's seed ensemble on a split's shared accounts, audited on a run's metrics.
 
     ``seeds`` are the seeds it combines, ``metrics`` the audit's ranking metrics
-    (metrics.ranking_metrics) and ``interval`` the 90% interval of its AP over the
-    split's shared replicates: as for the seed means, the AP alone has one.
+    (metrics.ranking_metrics) of the accounts its PairedSplit ranks, and ``interval`` the
+    90% interval of its AP over the split's shared replicates: as for the seed means,
+    the AP alone has one.
     """
 
     seeds: tuple[int, ...]
@@ -353,34 +371,40 @@ def paired_delta(paired: PairedSplit, variant: str) -> Delta | None:
     )
 
 
+# Each split's paired AP, of the hidden mules and of every mule (PairedSplit's mules).
+Paired = Mapping[str, PairedSplit | None]
+# Each split's seed ensembles, of the hidden mules and of every mule, by variant.
+Ensembles = Mapping[str, Mapping[str, Mapping[str, Ensemble]]]
+
+
 def summary_rows(
-    runs: Sequence[SuiteRun],
-    validation: PairedSplit | None,
-    ensembles: Mapping[str, Mapping[str, Ensemble]],
+    runs: Sequence[SuiteRun], validation: Paired, ensembles: Ensembles
 ) -> list[dict[str, Any]]:
     """summary.csv's rows: each run's numbers and paired validation AP and delta, then ensembles.
 
-    ``ensembles`` holds each split's seed ensembles by variant (seed_ensembles).
+    ``validation`` holds the validation split's paired AP of the hidden mules and of every
+    mule, and ``ensembles`` each split's seed ensembles (seed_ensembles), by mules and
+    variant.
     """
-    deltas: dict[tuple[str, int], float] = {}
-    paired_ap: dict[tuple[str, int], float] = {}
-    if validation is not None:
-        paired_ap = {
-            (run.variant.name, run.seed): float(value)
-            for run, value in zip(validation.runs, validation.point, strict=True)
-        }
-        for variant in dict.fromkeys(run.variant.name for run in validation.runs):
-            delta = paired_delta(validation, variant)
+    found: dict[tuple[str, int], list[tuple[str, str, float]]] = {}
+    for mules in MULES:
+        pairing = validation[mules]
+        if pairing is None:
+            continue
+        for run, value in zip(pairing.runs, pairing.point, strict=True):
+            name = metric_name(PAIRED_METRIC, mules)
+            found.setdefault((run.variant.name, run.seed), []).append(
+                ("validation", name, float(value))
+            )
+        for variant in dict.fromkeys(run.variant.name for run in pairing.runs):
+            delta = paired_delta(pairing, variant)
             if delta is not None:
-                deltas |= {(variant, seed): value for seed, value in delta.seeds.items()}
+                for seed, value in delta.seeds.items():
+                    name = metric_name(DELTA_METRIC, mules)
+                    found.setdefault((variant, seed), []).append(("validation", name, value))
     rows: list[dict[str, Any]] = []
     for run in runs:
-        key = (run.variant.name, run.seed)
-        values = run_values(run.paths)
-        if key in paired_ap:
-            values.append(("validation", PAIRED_METRIC, paired_ap[key]))
-        if key in deltas:
-            values.append(("validation", DELTA_METRIC, deltas[key]))
+        values = run_values(run.paths) + found.get((run.variant.name, run.seed), [])
         commit = provenance(run.paths).get("git_commit") or ""
         fixed = {"variant": run.variant.name, "seed": run.seed, "status": run.status}
         if not values:
@@ -390,15 +414,20 @@ def summary_rows(
                 {**fixed, "split": split, "metric": metric, "value": value, "commit": commit}
             )
     for variant in dict.fromkeys(run.variant.name for run in runs):
-        found = {split: by[variant] for split, by in ensembles.items() if variant in by}
-        if not found:
+        combined = [
+            (split, mules, by[variant])
+            for split, kinds in ensembles.items()
+            for mules, by in kinds.items()
+            if variant in by
+        ]
+        if not combined:
             continue
         fixed = {"variant": variant, "seed": None, "status": ENSEMBLE, "commit": ""}
-        seeds = max(len(ensemble.seeds) for ensemble in found.values())
+        seeds = max(len(ensemble.seeds) for _, _, ensemble in combined)
         values = [("", ENSEMBLE_SEEDS, float(seeds))]
         values += [
-            (split, name, value)
-            for split, ensemble in found.items()
+            (split, metric_name(name, mules), value)
+            for split, mules, ensemble in combined
             for name, value in ensemble.metrics.items()
             if value is not None
         ]
@@ -447,17 +476,33 @@ def interval_pair(interval: list[float] | None) -> tuple[float, float]:
     return (interval[0], interval[1]) if interval is not None else (np.nan, np.nan)
 
 
+def delta_cells(delta: Delta, mules: str) -> dict[str, Any]:
+    """comparison.csv's cells of a variant's delta from the baseline, of these mules.
+
+    Only the hidden mules' delta, which decisions use, has a ``consistent`` cell.
+    """
+    low, high = interval_pair(delta.interval)
+    audit_low, audit_high = interval_pair(delta.audit_interval)
+    names = _delta_columns(column("validation", "ap", mules))
+    cells = (delta.value, low, high, audit_low, audit_high, len(delta.seeds), delta.agreeing)
+    found: dict[str, Any] = dict(zip(names, cells, strict=True))
+    if mules == HIDDEN:
+        found["consistent"] = delta.consistent
+    return found
+
+
 def comparison_rows(
     runs: Sequence[SuiteRun],
-    paired: Mapping[str, PairedSplit | None],
-    ensembles: Mapping[str, Mapping[str, Ensemble]],
+    paired: Mapping[str, Paired],
+    ensembles: Ensembles,
     base: RunConfig,
 ) -> list[dict[str, Any]]:
     """comparison.csv's rows: one per variant, in the suite's order, then one per ensemble.
 
     Point values are the seed means of what each complete run's audit recorded; the
-    intervals and the delta come from the paired AP of the shared accounts. An ensemble's
-    row holds its own audit metrics and AP intervals (``ensembles``, by split and variant).
+    intervals and the delta come from the paired AP of the shared accounts (``paired``,
+    by split and mules). An ensemble's row holds its own audit metrics and AP intervals
+    (``ensembles``, by split, mules and variant).
     """
     complete = [run for run in runs if run.status == COMPLETE]
     recorded = {
@@ -465,7 +510,8 @@ def comparison_rows(
         for run in complete
     }
     flags = differences(runs)
-    validation = paired["validation"]
+    every = paired["validation"][EVERY]
+    unpaired = every.unpaired if every is not None else np.nan
     rows = []
     for variant in dict.fromkeys(run.variant for run in runs):
         mine = [run for run in complete if run.variant.name == variant.name]
@@ -477,37 +523,34 @@ def comparison_rows(
             "changes": variant.change_text(base),
             "seeds": " ".join(str(run.seed) for run in mine),
         }
-        for split in HELD_OUT_SPLITS:
-            pairing = paired[split]
-            interval = pairing.mean_interval(variant.name) if pairing is not None else None
-            cells = (*seed_means(values, split, "average_precision"), *interval_pair(interval))
-            row |= dict(zip(_split_columns(split), cells, strict=True))
-        delta = paired_delta(validation, variant.name) if validation is not None else None
-        if delta is not None:
-            low, high = interval_pair(delta.interval)
-            audit_low, audit_high = interval_pair(delta.audit_interval)
-            row |= {
-                "validation_ap_delta": delta.value,
-                "validation_ap_delta_low": low,
-                "validation_ap_delta_high": high,
-                "validation_ap_delta_audit_low": audit_low,
-                "validation_ap_delta_audit_high": audit_high,
-                "validation_ap_delta_seeds": len(delta.seeds),
-                "validation_ap_delta_agreeing": delta.agreeing,
-                "consistent": delta.consistent,
-            }
-        for split in HELD_OUT_SPLITS:
-            for metric in AUDIT_METRICS[1:]:
-                row[f"{split}_{metric}"] = seed_means(values, split, metric)[0]
+        for mules in MULES:
+            for split in HELD_OUT_SPLITS:
+                pairing = paired[split][mules]
+                interval = pairing.mean_interval(variant.name) if pairing is not None else None
+                ap = metric_name("average_precision", mules)
+                cells = (*seed_means(values, split, ap), *interval_pair(interval))
+                row |= dict(zip(_split_columns(column(split, "ap", mules)), cells, strict=True))
+                for metric in AUDIT_METRICS[1:]:
+                    found = seed_means(values, split, metric_name(metric, mules))[0]
+                    row[column(split, metric, mules)] = found
+            pairing = paired["validation"][mules]
+            delta = paired_delta(pairing, variant.name) if pairing is not None else None
+            if delta is not None:
+                row |= delta_cells(delta, mules)
         row |= {metric: seed_means(values, "", metric)[0] for metric in RUN_METRICS}
-        row["unpaired_accounts"] = validation.unpaired if validation is not None else np.nan
+        row["unpaired_accounts"] = unpaired
         row["differs"] = flags.get(variant.name, "")
         rows.append({name: row.get(name, np.nan) for name in COMPARISON_COLUMNS})
     for variant in dict.fromkeys(run.variant for run in runs):
-        found = {split: by[variant.name] for split, by in ensembles.items() if variant.name in by}
-        if not found:
+        combined = [
+            (split, mules, by[variant.name])
+            for split, kinds in ensembles.items()
+            for mules, by in kinds.items()
+            if variant.name in by
+        ]
+        if not combined:
             continue
-        seeds = max((ensemble.seeds for ensemble in found.values()), key=len)
+        seeds = max((ensemble.seeds for _, _, ensemble in combined), key=len)
         row = {
             "variant": variant.name,
             "estimate": ENSEMBLE,
@@ -515,13 +558,13 @@ def comparison_rows(
             "changes": variant.change_text(base),
             "seeds": " ".join(map(str, seeds)),
         }
-        for split, ensemble in found.items():
+        for split, mules, ensemble in combined:
+            ap = column(split, "ap", mules)
             low, high = interval_pair(ensemble.interval)
-            row |= {f"{split}_ap": ensemble.metrics["average_precision"]}
-            row |= {f"{split}_ap_low": low, f"{split}_ap_high": high}
+            row |= {ap: ensemble.metrics["average_precision"], f"{ap}_low": low, f"{ap}_high": high}
             for metric in AUDIT_METRICS[1:]:
-                row[f"{split}_{metric}"] = ensemble.metrics.get(metric)
-        row["unpaired_accounts"] = validation.unpaired if validation is not None else np.nan
+                row[column(split, metric, mules)] = ensemble.metrics.get(metric)
+        row["unpaired_accounts"] = unpaired
         row["differs"] = flags.get(variant.name, "")
         rows.append({name: _cell(row.get(name)) for name in COMPARISON_COLUMNS})
     return rows
@@ -543,15 +586,23 @@ def write_tables(
     left out of the validation pairing.
     """
     suite.root.mkdir(parents=True, exist_ok=True)
-    paired = {split: paired_split(runs, split) for split in HELD_OUT_SPLITS}
+    paired = {
+        split: {mules: paired_split(runs, split, mules) for mules in MULES}
+        for split in HELD_OUT_SPLITS
+    }
     ensembles = {
-        split: seed_ensembles(pairing) for split, pairing in paired.items() if pairing is not None
+        split: {
+            mules: seed_ensembles(pairing)
+            for mules, pairing in kinds.items()
+            if pairing is not None
+        }
+        for split, kinds in paired.items()
     }
     summary = summary_rows(runs, paired["validation"], ensembles)
     write_table(suite.summary, pd.DataFrame(summary, columns=list(SUMMARY_COLUMNS)))
     comparison = comparison_rows(runs, paired, ensembles, base)
     write_table(suite.comparison, pd.DataFrame(comparison, columns=list(COMPARISON_COLUMNS)))
-    validation = paired["validation"]
+    validation = paired["validation"][EVERY]
     return {
         "summary": str(suite.summary),
         "comparison": str(suite.comparison),

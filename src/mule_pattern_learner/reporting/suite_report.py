@@ -3,7 +3,10 @@
 write_suite_report reads the suite's summary.csv and comparison.csv and the validation
 audits and epochs of its complete runs, draws the comparison figures
 (reporting.comparison) and rewrites its report.md: the variants ranked by the validation
-audit, their seed ensembles, the tables and the figures.
+audit AP of the hidden mules, which decisions use, their seed ensembles, the tables and
+the figures. The hidden mules are those the graph had not revealed by the cutoff, ranked
+against the non-mules with the revealed mules removed (artifacts.hidden_rows); every
+number of them leads, and the same of every mule follows.
 """
 
 from __future__ import annotations
@@ -28,6 +31,8 @@ from ..artifacts import (
     PROXY_METRIC,
     SEED_MEAN,
     atomic_write,
+    hidden_rows,
+    read_audit_report,
     read_audit_scores,
     read_comparison,
     read_epochs,
@@ -38,7 +43,7 @@ from ..artifacts import (
 )
 from ..config import SELECTION_RULES
 from ..contract.graph_schema import HELD_OUT_SPLITS
-from ..metrics import INTERVAL, REVIEW_BUDGETS, budget_name
+from ..metrics import INTERVAL, REVIEW_BUDGETS, budget_name, hidden_name
 from ..paths import BASELINE_VARIANT, SuitePaths
 from .comparison import (
     Correlation,
@@ -67,12 +72,14 @@ from .style import BASELINE, MUTED, PANEL, SPLIT_COLOURS, estimate, number
 
 # The figures of a control-experiment suite, and what its report.md calls them.
 SUITE_FIGURES = {
-    "comparison_ap": "Audit AP per variant on validation and test",
-    "comparison_delta": "Validation audit AP against the baseline, paired",
-    "comparison_budget": "Validation audit recall at the review budgets",
-    "comparison_capture": "Seed-mean validation audit capture against the baseline",
+    "comparison_ap": "Audit AP of the hidden mules per variant on validation and test",
+    "comparison_delta": "Validation audit AP of the hidden mules against the baseline, paired",
+    "comparison_budget": "Validation audit recall of the hidden mules at the review budgets",
+    "comparison_capture": "Seed-mean validation audit capture of the hidden mules",
     "comparison_validation": "Seed-mean proxy validation AP per epoch against the baseline",
-    "comparison_proxy_vs_audit": "Selected proxy AP against the validation audit AP, per run",
+    "comparison_proxy_vs_audit": "Selected proxy AP against the validation audit AP of the "
+    "hidden mules, per run",
+    "comparison_ap_every_mule": "Audit AP of every mule per variant on validation and test",
 }
 # The small multiples of a suite: panels per row.
 PANELS_PER_ROW = 3
@@ -83,11 +90,11 @@ class SuiteFiles:
     """What a suite's tables and its complete runs saved, as its figures read them.
 
     ``comparison`` holds comparison.csv's seed-mean rows, ranked by the seed-mean
-    validation audit AP, best first, with the variants the audit could not rank last in
-    the suite's order; ``ensembles`` its seed-ensemble rows, ranked by their own
-    validation audit AP. ``captures`` and ``epochs`` hold each complete run's validation
-    audit sample and epochs.csv, by variant and seed, and ``rules`` the selection rule
-    (training.selection) of each, by variant and seed.
+    validation audit AP of the hidden mules, best first, with the variants the audit
+    could not rank last in the suite's order; ``ensembles`` its seed-ensemble rows,
+    ranked by their own. ``captures`` and ``epochs`` hold each complete run's validation
+    audit sample without its revealed mules and epochs.csv, by variant and seed, and
+    ``rules`` the selection rule (training.selection) of each, by variant and seed.
     """
 
     summary: pd.DataFrame
@@ -109,7 +116,7 @@ def suite_files(suite: SuitePaths) -> SuiteFiles:
     """summary.csv, comparison.csv, and the validation audits and epochs of complete runs."""
     summary = read_summary(suite.summary)
     table = read_comparison(suite.comparison)
-    ranked = table.sort_values("validation_ap", ascending=False, na_position="last")
+    ranked = table.sort_values("validation_hidden_ap", ascending=False, na_position="last")
     comparison = ranked[ranked.estimate == SEED_MEAN].reset_index(drop=True)
     ensembles = ranked[ranked.estimate == ENSEMBLE].reset_index(drop=True)
     captures: dict[str, dict[int, SplitScores]] = {}
@@ -119,13 +126,13 @@ def suite_files(suite: SuitePaths) -> SuiteFiles:
     for variant, seed in complete_runs(summary):
         run = suite.run(variant, seed)
         rules[variant, seed] = read_run_config(run.config).training.selection
-        report = read_json(run.audit_report("validation"))
-        frame = read_audit_scores(run.audit_scores("validation"))
+        report = read_audit_report(run.audit_report("validation"))
+        frame = hidden_rows(read_audit_scores(run.audit_scores("validation")))
         captures.setdefault(variant, {})[seed] = SplitScores(
             y=frame.is_mule.to_numpy(np.int64),
             score=frame.score.to_numpy(np.float64),
             weight=1 / frame.inclusion_probability.to_numpy(np.float64),
-            metrics=report["metrics"],
+            metrics=report["hidden_metrics"],
         )
         epochs.setdefault(variant, {})[seed] = read_epochs(run.epochs)
         if prevalence is None:
@@ -229,32 +236,14 @@ def suite_drawings(files: SuiteFiles) -> dict[str, tuple[Drawing, tuple[float, f
     if not files.captures:
         return drawings
     count = len(files.comparison)
-    splits = {
-        split: variant_seeds(
-            files,
-            split,
-            "average_precision",
-            f"{split}_ap",
-            interval=f"{split}_ap",
-            ensemble=True,
-        )
-        for split in HELD_OUT_SPLITS
-    }
-
-    def both(figure: Figure) -> None:
-        axes = figure.subplots(1, len(splits), sharey=True, squeeze=False)[0]
-        for ax, (split, rows) in zip(axes, splits.items(), strict=True):
-            baseline = next((row.mean for row in rows if row.name == BASELINE_VARIANT), None)
-            plot_comparison(ax, rows, split=split, baseline=baseline)
-
-    drawings["comparison_ap"] = (both, rows_size(count, width=9.0))
+    drawings["comparison_ap"] = (both_splits(files, hidden=True), rows_size(count, width=9.0))
     deltas = variant_seeds(
         files,
         "validation",
-        DELTA_METRIC,
-        "validation_ap_delta",
-        interval="validation_ap_delta",
-        audit="validation_ap_delta_audit",
+        hidden_name(DELTA_METRIC),
+        "validation_hidden_ap_delta",
+        interval="validation_hidden_ap_delta",
+        audit="validation_hidden_ap_delta_audit",
     )
     deltas = sorted(
         (row for row in deltas if row.mean is not None),
@@ -269,8 +258,8 @@ def suite_drawings(files: SuiteFiles) -> dict[str, tuple[Drawing, tuple[float, f
         fraction: variant_seeds(
             files,
             "validation",
-            f"recall_at_{budget_name(fraction)}",
-            f"validation_recall_at_{budget_name(fraction)}",
+            hidden_name(f"recall_at_{budget_name(fraction)}"),
+            f"validation_hidden_recall_at_{budget_name(fraction)}",
         )
         for fraction in REVIEW_BUDGETS
     }
@@ -285,7 +274,8 @@ def suite_drawings(files: SuiteFiles) -> dict[str, tuple[Drawing, tuple[float, f
     prevalences = [
         scores.prevalence for runs in files.captures.values() for scores in runs.values()
     ]
-    grid = np.geomspace(min([1e-4, *(p / 2 for p in prevalences)]), 1.0, 200)
+    # A sample without hidden mules has none to find, and no start of its own.
+    grid = np.geomspace(min([1e-4, *(p / 2 for p in prevalences if p > 0)]), 1.0, 200)
     captures = {
         name: mean_capture(name, list(files.captures[name].values()), grid) for name in audited
     }
@@ -300,7 +290,10 @@ def suite_drawings(files: SuiteFiles) -> dict[str, tuple[Drawing, tuple[float, f
                 for name in order
             ],
             overlay_legend("validation", "random ranking"),
-            ("Top share of accounts reviewed, by score (log scale)", "Share of mules found"),
+            (
+                "Top share of accounts reviewed, by score (log scale)",
+                "Share of the hidden mules found",
+            ),
         ),
         panels_size(len(order)),
     )
@@ -332,13 +325,46 @@ def suite_drawings(files: SuiteFiles) -> dict[str, tuple[Drawing, tuple[float, f
                     ax,
                     points.variant.tolist(),
                     points[PROXY_METRIC].to_numpy(np.float64),
-                    points.average_precision.to_numpy(np.float64),
+                    points[HIDDEN_METRIC].to_numpy(np.float64),
                     correlations,
                 )
             ),
             (PANEL[0], PANEL[1] + 0.2 * len(correlations)),
         )
+    drawings["comparison_ap_every_mule"] = (
+        both_splits(files, hidden=False),
+        rows_size(count, width=9.0),
+    )
     return drawings
+
+
+def both_splits(files: SuiteFiles, *, hidden: bool) -> Drawing:
+    """Each variant's audit AP on validation and test, side by side, in the ranked order.
+
+    The hidden mules' with ``hidden``, every mule's without; the rows keep the ranking by
+    the hidden mules' validation AP either way.
+    """
+    prefix = "hidden_" if hidden else ""
+    splits = {
+        split: variant_seeds(
+            files,
+            split,
+            f"{prefix}average_precision",
+            f"{split}_{prefix}ap",
+            interval=f"{split}_{prefix}ap",
+            ensemble=True,
+        )
+        for split in HELD_OUT_SPLITS
+    }
+    mules = "the hidden mules" if hidden else "every mule"
+
+    def drawing(figure: Figure) -> None:
+        axes = figure.subplots(1, len(splits), sharey=True, squeeze=False)[0]
+        for ax, (split, rows) in zip(axes, splits.items(), strict=True):
+            baseline = next((row.mean for row in rows if row.name == BASELINE_VARIANT), None)
+            plot_comparison(ax, rows, split=split, baseline=baseline, mules=mules)
+
+    return drawing
 
 
 def mean_epochs(name: str, epochs: Mapping[int, pd.DataFrame]) -> MeanCurve:
@@ -358,21 +384,23 @@ def mean_epochs(name: str, epochs: Mapping[int, pd.DataFrame]) -> MeanCurve:
 def proxy_points(summary: pd.DataFrame) -> pd.DataFrame:
     """Each complete run's selected proxy AP and validation audit AP, in the suite's order.
 
-    One row per run with both: variant, seed, PROXY_METRIC, average_precision and
-    HIDDEN_METRIC, the audit AP on the hidden mules (NaN where the run has none).
+    One row per run with both: variant, seed, PROXY_METRIC, HIDDEN_METRIC (the audit AP
+    of the hidden mules) and average_precision, the audit AP of every mule (NaN where the
+    run has none).
     """
     chosen = summary[
         (summary.status == "complete")
         & (summary.split == "validation")
-        & summary.metric.isin([PROXY_METRIC, "average_precision", HIDDEN_METRIC])
+        & summary.metric.isin([PROXY_METRIC, HIDDEN_METRIC, "average_precision"])
     ]
     wide = chosen.pivot_table(
         index=["variant", "seed"], columns="metric", values="value", sort=False
     )
-    wanted = [PROXY_METRIC, "average_precision"]
+    wanted = [PROXY_METRIC, HIDDEN_METRIC]
     if not set(wanted) <= set(wide.columns):
-        return pd.DataFrame(columns=["variant", "seed", *wanted, HIDDEN_METRIC])
-    return wide.reindex(columns=[*wanted, HIDDEN_METRIC]).dropna(subset=wanted).reset_index()
+        return pd.DataFrame(columns=["variant", "seed", *wanted, "average_precision"])
+    columns = [*wanted, "average_precision"]
+    return wide.reindex(columns=columns).dropna(subset=wanted).reset_index()
 
 
 # How the proxy reliability names the runs of each selection rule (training.selection).
@@ -390,14 +418,15 @@ def proxy_reliability(
     """How well the validation proxy ranks a suite's models as the validation audit does.
 
     ``points`` are proxy_points, ``rules`` each run's selection rule. Spearman's rank
-    correlation, each with its n, of the selected epoch's proxy AP with the audit AP:
-    over the runs; over the runs of each selection rule the suite has, since a rule
-    biases the selected proxy AP (a run that selects on it reports the best of its
-    epochs, the others do not); over the variants, by their mean proxy AP and mean audit
-    AP over seeds; and over the runs, against the audit AP on the hidden mules alone,
-    which the proxy never sees.
+    correlation, each with its n, of the selected epoch's proxy AP with the audit AP of
+    the hidden mules, which the proxy never sees and decisions use: over the runs; over
+    the runs of each selection rule the suite has, since a rule biases the selected proxy
+    AP (a run that selects on it reports the best of its epochs, the others do not); and
+    over the variants, by their mean proxy AP and mean audit AP over seeds. Last, over the
+    runs, against the audit AP of every mule, the revealed ones included, whose ranking
+    the proxy measures in part.
     """
-    proxy, audit = points[PROXY_METRIC], points.average_precision
+    proxy, audit = points[PROXY_METRIC], points[HIDDEN_METRIC]
 
     def over(label: str, rows: pd.Series[bool], against: pd.Series[Any]) -> Correlation:
         x = np.asarray(proxy[rows], dtype=np.float64)
@@ -413,17 +442,17 @@ def proxy_reliability(
     for rule in SELECTION_RULES:
         if (chosen == rule).any():
             found.append(over(RULE_RUNS[rule], chosen == rule, audit))
-    means = points.groupby("variant", sort=False)[[PROXY_METRIC, "average_precision"]].mean()
+    means = points.groupby("variant", sort=False)[[PROXY_METRIC, HIDDEN_METRIC]].mean()
     variants = means[PROXY_METRIC].to_numpy(np.float64)
     found.append(
         Correlation(
             "variants, by their seed means",
-            rank_correlation(variants, means.average_precision.to_numpy(np.float64)),
+            rank_correlation(variants, means[HIDDEN_METRIC].to_numpy(np.float64)),
             len(means),
         )
     )
-    hidden = points[HIDDEN_METRIC].notna()
-    found.append(over("runs, audit on the hidden mules", hidden, points[HIDDEN_METRIC]))
+    recorded = points.average_precision.notna()
+    found.append(over("runs, audit of every mule", recorded, points.average_precision))
     return found
 
 
@@ -464,31 +493,38 @@ def suite_text(suite: SuitePaths, files: SuiteFiles) -> str:
         )
     unpaired = comparison.unpaired_accounts.dropna()
     # The comparisons with the baseline: the variants with a delta.
-    compared = int(comparison.validation_ap_delta.notna().sum())
+    compared = int(comparison.validation_hidden_ap_delta.notna().sum())
     lines += [
         "",
-        "Decisions use the validation audit; the test audit is for reporting, not selection. "
-        "The pool groups (pool_activity and pool_internal_inflows) were designed after "
-        "reading test-split mules and the data generator's mule typology, so the test "
-        "audit is optimistic for every variant that keeps them.",
+        "The model exists to find the mules nobody knows on the scoring date: the hidden "
+        "mules, those the graph had not revealed by the split's cutoff. Every audit number "
+        "below is of them first, the revealed mules removed from the ranking as an "
+        "investigator would remove the cases already known, and of every mule after. "
+        "Decisions use the validation audit AP of the hidden mules; the test audit is for "
+        "reporting, not selection. The pool groups (pool_activity and "
+        "pool_internal_inflows) were designed after reading test-split mules and the data "
+        "generator's mule typology, so the test audit is optimistic for every variant that "
+        "keeps them.",
         "",
         "## Validation audit, for decisions",
         "",
-        f"Variants ranked by their mean validation audit AP over seeds. In parentheses: the "
-        f"{INTERVAL:.0%} interval of the mean over paired bootstrap replicates, which draw one "
-        "resample of the accounts every audit scored and apply it to every run. It covers "
-        "the audit sample's uncertainty for these seeds, not the spread between seeds (the "
-        "standard deviation beside it). The delta is the variant's mean AP minus the "
-        "baseline's over the seeds both completed, each seed paired with the baseline's run "
-        "of the same seed on those same accounts. Its interval covers both sources of "
-        "uncertainty: each replicate also resamples the seeds, so the interval widens with "
-        "the spread between them. The audit-only interval beside it resamples the accounts "
-        "alone, for these seeds. The seeds that agree are those whose own delta has the "
-        "sign of the mean. A delta is consistent when its interval over both sources "
-        f"excludes zero and every seed agrees. The suite makes {compared} comparison"
-        f"{'' if compared == 1 else 's'} with the baseline, so at {INTERVAL:.0%} about "
-        f"{compared * (1 - INTERVAL):.1f} would exclude zero by chance even if no variant "
-        "differed from it: a single consistent delta is a lead to repeat, not a finding.",
+        "Variants ranked by their mean validation audit AP of the hidden mules over seeds. "
+        f"In parentheses: the {INTERVAL:.0%} interval of the mean over paired bootstrap "
+        "replicates, which draw one resample of the accounts every audit scored and apply it "
+        "to every run. It covers the audit sample's uncertainty for these seeds, not the "
+        "spread between seeds (the standard deviation beside it). The delta is the variant's "
+        "mean AP minus the baseline's over the seeds both completed, each seed paired with "
+        "the baseline's run of the same seed on those same accounts. Its interval covers "
+        "both sources of uncertainty: each replicate also resamples the seeds, so the "
+        "interval widens with the spread between them. The audit-only interval beside it "
+        "resamples the accounts alone, for these seeds. The seeds that agree are those whose "
+        "own delta has the sign of the mean. A delta is consistent when its interval over "
+        f"both sources excludes zero and every seed agrees. The suite makes {compared} "
+        f"comparison{'' if compared == 1 else 's'} with the baseline, so at {INTERVAL:.0%} "
+        f"about {compared * (1 - INTERVAL):.1f} would exclude zero by chance even if no "
+        "variant differed from it: a single consistent delta is a lead to repeat, not a "
+        "finding. The last columns rank every mule, the revealed ones included, with the "
+        "delta of that AP from the baseline's.",
         "",
     ]
     if len(unpaired) and unpaired.iloc[0] > 0:
@@ -498,6 +534,7 @@ def suite_text(suite: SuitePaths, files: SuiteFiles) -> str:
             "",
         ]
     budgets = [budget_name(f) for f in REVIEW_BUDGETS]
+    recall = "Recall in the top " + " / ".join(share_label(f) for f in REVIEW_BUDGETS)
     header = [
         "Rank",
         "Variant",
@@ -509,23 +546,26 @@ def suite_text(suite: SuitePaths, files: SuiteFiles) -> str:
         "Seeds that agree",
         "Consistent",
         "ROC AUC",
-        "Recall in the top " + " / ".join(share_label(f) for f in REVIEW_BUDGETS),
+        recall,
+        "AP, every mule",
+        "Its delta",
     ]
     rows = []
     for rank, row in enumerate(records(comparison), start=1):
-        compared_here = not pd.isna(row["validation_ap_delta"])
+        compared_here = not pd.isna(row["validation_hidden_ap_delta"])
         delta = audit = agree = ""
         if compared_here:
             delta = _interval_text(
-                row["validation_ap_delta"],
-                row["validation_ap_delta_low"],
-                row["validation_ap_delta_high"],
+                row["validation_hidden_ap_delta"],
+                row["validation_hidden_ap_delta_low"],
+                row["validation_hidden_ap_delta_high"],
             )
-            low, high = row["validation_ap_delta_audit_low"], row["validation_ap_delta_audit_high"]
+            low = row["validation_hidden_ap_delta_audit_low"]
+            high = row["validation_hidden_ap_delta_audit_high"]
             audit = "" if pd.isna(low) or pd.isna(high) else f"{number(low)} to {number(high)}"
             agree = (
-                f"{int(row['validation_ap_delta_agreeing'])} of "
-                f"{int(row['validation_ap_delta_seeds'])}"
+                f"{int(row['validation_hidden_ap_delta_agreeing'])} of "
+                f"{int(row['validation_hidden_ap_delta_seeds'])}"
             )
         rows.append(
             [
@@ -533,16 +573,26 @@ def suite_text(suite: SuitePaths, files: SuiteFiles) -> str:
                 f"**{row['variant']}**" if row["variant"] == BASELINE_VARIANT else row["variant"],
                 row["seeds"] or "none",
                 _interval_text(
-                    row["validation_ap"], row["validation_ap_low"], row["validation_ap_high"]
+                    row["validation_hidden_ap"],
+                    row["validation_hidden_ap_low"],
+                    row["validation_hidden_ap_high"],
                 ),
-                number(value_or_none(row["validation_ap_spread"])),
+                number(value_or_none(row["validation_hidden_ap_spread"])),
                 delta,
                 audit,
                 agree,
                 {True: "yes", False: "no"}.get(row["consistent"], "") if compared_here else "",
-                number(value_or_none(row["validation_roc_auc"])),
+                number(value_or_none(row["validation_hidden_roc_auc"])),
                 " / ".join(
-                    number(value_or_none(row[f"validation_recall_at_{b}"])) for b in budgets
+                    number(value_or_none(row[f"validation_hidden_recall_at_{b}"])) for b in budgets
+                ),
+                _interval_text(
+                    row["validation_ap"], row["validation_ap_low"], row["validation_ap_high"]
+                ),
+                _interval_text(
+                    row["validation_ap_delta"],
+                    row["validation_ap_delta_low"],
+                    row["validation_ap_delta_high"],
                 ),
             ]
         )
@@ -550,19 +600,26 @@ def suite_text(suite: SuitePaths, files: SuiteFiles) -> str:
     test_rows = [
         [
             row["variant"],
+            _interval_text(
+                row["test_hidden_ap"], row["test_hidden_ap_low"], row["test_hidden_ap_high"]
+            ),
+            number(value_or_none(row["test_hidden_ap_spread"])),
+            number(value_or_none(row["test_hidden_roc_auc"])),
+            " / ".join(number(value_or_none(row[f"test_hidden_recall_at_{b}"])) for b in budgets),
             _interval_text(row["test_ap"], row["test_ap_low"], row["test_ap_high"]),
-            number(value_or_none(row["test_ap_spread"])),
-            number(value_or_none(row["test_roc_auc"])),
-            " / ".join(number(value_or_none(row[f"test_recall_at_{b}"])) for b in budgets),
         ]
         for row in records(comparison)
     ]
     lines += [
         "## Test audit, for reporting, not selection",
         "",
-        "In the validation ranking's order; never rank or choose variants by these.",
+        "In the validation ranking's order; never rank or choose variants by these. The "
+        "hidden mules' numbers first, then the AP of every mule.",
         "",
-        *table(["Variant", "AP", "Standard deviation", "ROC AUC", header[-1]], test_rows),
+        *table(
+            ["Variant", "AP", "Standard deviation", "ROC AUC", recall, "AP, every mule"],
+            test_rows,
+        ),
         "",
         "## Variants and runs",
         "",
@@ -606,7 +663,7 @@ def suite_text(suite: SuitePaths, files: SuiteFiles) -> str:
 
 
 def ensemble_section(files: SuiteFiles) -> list[str]:
-    """report.md's seed ensembles, ranked by their validation audit AP; none without one."""
+    """report.md's seed ensembles, ranked by their validation audit AP of the hidden mules."""
     if not len(files.ensembles):
         return []
     budgets = [budget_name(f) for f in REVIEW_BUDGETS]
@@ -614,21 +671,28 @@ def ensemble_section(files: SuiteFiles) -> list[str]:
     rows = []
     for rank, row in enumerate(records(files.ensembles), start=1):
         name = str(row["variant"])
-        seed_mean = means[name]["validation_ap"] if name in means else None
+        seed_mean = means[name]["validation_hidden_ap"] if name in means else None
         rows.append(
             [
                 str(rank),
                 f"**{name}**" if name == BASELINE_VARIANT else name,
                 row["seeds"],
                 _interval_text(
-                    row["validation_ap"], row["validation_ap_low"], row["validation_ap_high"]
+                    row["validation_hidden_ap"],
+                    row["validation_hidden_ap_low"],
+                    row["validation_hidden_ap_high"],
                 ),
                 number(value_or_none(seed_mean)),
-                number(value_or_none(row["validation_roc_auc"])),
+                number(value_or_none(row["validation_hidden_roc_auc"])),
                 " / ".join(
-                    number(value_or_none(row[f"validation_recall_at_{b}"])) for b in budgets
+                    number(value_or_none(row[f"validation_hidden_recall_at_{b}"])) for b in budgets
                 ),
-                _interval_text(row["test_ap"], row["test_ap_low"], row["test_ap_high"]),
+                _interval_text(
+                    row["validation_ap"], row["validation_ap_low"], row["validation_ap_high"]
+                ),
+                _interval_text(
+                    row["test_hidden_ap"], row["test_hidden_ap_low"], row["test_hidden_ap_high"]
+                ),
             ]
         )
     header = [
@@ -639,6 +703,7 @@ def ensemble_section(files: SuiteFiles) -> list[str]:
         "Mean of its seeds' AP",
         "ROC AUC",
         "Recall in the top " + " / ".join(share_label(f) for f in REVIEW_BUDGETS),
+        "AP, every mule",
         "Test AP, for reporting",
     ]
     return [
@@ -646,13 +711,15 @@ def ensemble_section(files: SuiteFiles) -> list[str]:
         "",
         "Each variant's seeds combined into one model: their scores of the accounts every "
         "audit scored, averaged on the log-odds scale, then audited on validation and test "
-        "with a run's ranking metrics. On that scale a seed that is confident about an account weighs more "
-        "than a hesitant one, where averaging the seeds' ranks would give each the same say. "
-        "Ranked by the ensemble's validation audit AP, with its "
-        f"{INTERVAL:.0%} interval over the same paired replicates (the audit sample's "
-        "uncertainty, for these seeds), beside the mean of its seeds' own AP: an ensemble "
-        "above that mean gains from the seeds' disagreement. As for the seed means, only "
-        "the AP has an interval; a run's audit report has one for every ranking metric.",
+        "with a run's ranking metrics. On that scale a seed that is confident about an "
+        "account weighs more than a hesitant one, where averaging the seeds' ranks would give "
+        "each the same say. Ranked by the ensemble's validation audit AP of the hidden mules, "
+        f"with its {INTERVAL:.0%} interval over the same paired replicates (the audit "
+        "sample's uncertainty, for these seeds), beside the mean of its seeds' own AP of the "
+        "hidden mules: an ensemble above that mean gains from the seeds' disagreement. The "
+        "ensemble's AP of every mule and its test AP of the hidden mules follow. As for the "
+        "seed means, only the AP has an interval; a run's audit report has one for every "
+        "ranking metric.",
         "",
         *table(header, rows),
         "",
@@ -674,16 +741,16 @@ def reliability_section(files: SuiteFiles) -> list[str]:
         "In real use only the proxy exists: a bank knows a handful of revealed mules and has "
         "no audit, so it chooses among models by the proxy alone. Spearman's rank "
         "correlation of the selected epoch's validation proxy AP (on validation's revealed "
-        "mules) with the validation audit AP says how far that choice follows the ground "
-        "truth here; n is the runs or variants it is over. A selection rule picks the epoch "
-        "whose own criterion is best, so a run that selects on the proxy AP reports the best "
-        "of its epochs' values, biased upward, and a run of another rule does not: the "
-        "correlation within each rule compares runs biased alike. The hidden mules are "
-        "those the graph had not revealed, which the proxy never sees; a proxy that follows "
-        "the audit on all mules but not on the hidden ones measures the reveal more than "
-        "detection. A weak correlation means that choosing by the proxy is close to choosing "
-        "at random among these models, and over a few variants even a strong one is "
-        "uncertain.",
+        "mules) with the validation audit AP of the hidden mules, which the proxy never "
+        "sees, says how far that choice follows the ground truth here; n is the runs or "
+        "variants it is over. A selection rule picks the epoch whose own criterion is best, "
+        "so a run that selects on the proxy AP reports the best of its epochs' values, "
+        "biased upward, and a run of another rule does not: the correlation within each rule "
+        "compares runs biased alike. The last row is against the audit AP of every mule, "
+        "the revealed ones included; a proxy that follows that audit but not the hidden "
+        "mules' measures the reveal more than detection. A weak correlation means that "
+        "choosing by the proxy is close to choosing at random among these models, and over "
+        "a few variants even a strong one is uncertain.",
         "",
         *table(["Correlation over", "Spearman", "n"], rows),
         "",

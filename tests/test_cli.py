@@ -164,22 +164,28 @@ METRICS: dict[str, Any] = {
 }
 
 
-def audit_report(split: str, purpose: str, mules: int, ap: float) -> dict[str, Any]:
+def audit_report(split: str, purpose: str, mules: tuple[int, int], ap: float) -> dict[str, Any]:
+    """An audit report of ``mules`` hidden and revealed mules, the hidden ranked lower."""
     ranking = {"average_precision": ap, "roc_auc": 0.941}
     for kind, values in (("recall", (0.196, 0.451, 0.608)), ("precision", (0.352, 0.181, 0.122))):
         ranking |= {f"{kind}_at_{n}pct": v for n, v in zip((1, 5, 10), values, strict=True)}
+    hidden = {name: 0.871 if name == "roc_auc" else value / 4 for name, value in ranking.items()}
     return {
         "split": split,
         "purpose": purpose,
-        "metrics": {"sample_positives": mules, **ranking, "threshold": 0.5},
+        "hidden_metrics": {"sample_positives": mules[0], **hidden},
+        "hidden_intervals": {name: [value - 0.02, value + 0.02] for name, value in hidden.items()},
+        "metrics": {"sample_positives": sum(mules), **ranking, "threshold": 0.5},
         "intervals": {name: [value - 0.05, value + 0.05] for name, value in ranking.items()},
         "constants": {"interval": 0.9},
+        "hidden_positives": mules[0],
+        "revealed_positives": mules[1],
     }
 
 
 AUDITS = {
-    "validation": audit_report("validation", "decisions", 51, 0.3121),
-    "test": audit_report("test", "reporting", 62, 0.2984),
+    "validation": audit_report("validation", "decisions", (40, 11), 0.3121),
+    "test": audit_report("test", "reporting", (42, 20), 0.2984),
 }
 CHECKED: dict[str, Any] = {
     "graph": "Mule_Pattern_Learner",
@@ -322,17 +328,28 @@ def test_each_command_runs_its_use_case_and_shows_a_short_summary(
 
 EVALUATED = """\
 Ground-truth audit of results/baseline/seed-42, with 90% intervals:
-                    validation (decisions)      test (reporting)
-  mules                                 51                    62
-  AP                  0.312 [0.262, 0.362]  0.298 [0.248, 0.348]
-  ROC AUC             0.941 [0.891, 0.991]  0.941 [0.891, 0.991]
-  recall at 1%        0.196 [0.146, 0.246]  0.196 [0.146, 0.246]
-  recall at 5%        0.451 [0.401, 0.501]  0.451 [0.401, 0.501]
-  recall at 10%       0.608 [0.558, 0.658]  0.608 [0.558, 0.658]
-  precision at 1%     0.352 [0.302, 0.402]  0.352 [0.302, 0.402]
-  precision at 5%     0.181 [0.131, 0.231]  0.181 [0.131, 0.231]
-  precision at 10%    0.122 [0.072, 0.172]  0.122 [0.072, 0.172]
-Decide on validation; the test audit is for reporting only.
+                            validation (decisions)      test (reporting)
+  mules: hidden / revealed                 40 / 11               42 / 20
+  hidden mules
+    AP                        0.078 [0.058, 0.098]  0.075 [0.055, 0.095]
+    ROC AUC                   0.871 [0.851, 0.891]  0.871 [0.851, 0.891]
+    recall at 1%              0.049 [0.029, 0.069]  0.049 [0.029, 0.069]
+    recall at 5%              0.113 [0.093, 0.133]  0.113 [0.093, 0.133]
+    recall at 10%             0.152 [0.132, 0.172]  0.152 [0.132, 0.172]
+    precision at 1%           0.088 [0.068, 0.108]  0.088 [0.068, 0.108]
+    precision at 5%           0.045 [0.025, 0.065]  0.045 [0.025, 0.065]
+    precision at 10%          0.030 [0.010, 0.051]  0.030 [0.010, 0.051]
+  all mules
+    AP                        0.312 [0.262, 0.362]  0.298 [0.248, 0.348]
+    ROC AUC                   0.941 [0.891, 0.991]  0.941 [0.891, 0.991]
+    recall at 1%              0.196 [0.146, 0.246]  0.196 [0.146, 0.246]
+    recall at 5%              0.451 [0.401, 0.501]  0.451 [0.401, 0.501]
+    recall at 10%             0.608 [0.558, 0.658]  0.608 [0.558, 0.658]
+    precision at 1%           0.352 [0.302, 0.402]  0.352 [0.302, 0.402]
+    precision at 5%           0.181 [0.131, 0.231]  0.181 [0.131, 0.231]
+    precision at 10%          0.122 [0.072, 0.172]  0.122 [0.072, 0.172]
+Hidden mules: not revealed by the cutoff, ranked with the revealed ones removed.
+Decide on validation's hidden mules; the test audit is for reporting only.
 Files: results/baseline/seed-42/audit/ (reports and scored samples), plots/ and report.md
 """
 SCORE_SUMMARY = """\

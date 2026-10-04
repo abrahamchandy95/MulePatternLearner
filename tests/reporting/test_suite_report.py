@@ -33,8 +33,8 @@ def test_the_proxy_reliability_of_a_small_case_worked_by_hand() -> None:
             "variant": ["baseline", "baseline", "a", "a", "b", "b"],
             "seed": [1, 2, 1, 2, 1, 2],
             PROXY_METRIC: [0.5, 0.4, 0.3, 0.2, 0.1, 0.05],
-            "average_precision": [0.6, 0.3, 0.5, 0.2, 0.1, 0.0],
-            HIDDEN_METRIC: [0.3, 0.2, 0.25, np.nan, 0.05, 0.02],
+            HIDDEN_METRIC: [0.6, 0.3, 0.5, 0.2, 0.1, 0.0],
+            "average_precision": [0.3, 0.2, 0.25, np.nan, 0.05, 0.02],
         }
     )
     rules = {(v, s): "validation_ap" for v in ("baseline", "a") for s in (1, 2)}
@@ -42,14 +42,14 @@ def test_the_proxy_reliability_of_a_small_case_worked_by_hand() -> None:
     found = proxy_reliability(points, rules)
     # Over the six runs the ranks differ only where the second and third swap: Spearman
     # is 1 - 6 * 2 / (6 * 35). Over the four runs that select on the AP, 1 - 12 / 60.
-    # The two runs of "none" are too few. The variants' seed means rank alike; on the
-    # hidden mules five runs have a value, two of them swapped: 1 - 12 / 120.
+    # The two runs of "none" are too few. The variants' seed means rank alike; on every
+    # mule five runs have a value, two of them swapped: 1 - 12 / 120.
     assert [(c.label, c.n) for c in found] == [
         ("runs", 6),
         ("runs selected on the proxy AP", 4),
         ("runs keeping the last epoch", 2),
         ("variants, by their seed means", 3),
-        ("runs, audit on the hidden mules", 5),
+        ("runs, audit of every mule", 5),
     ]
     assert found[2].value is None
     values = [c.value for c in found if c.value is not None]
@@ -75,16 +75,16 @@ def test_proxy_points_take_the_complete_runs_and_leave_the_ensembles_out() -> No
     summary = pd.DataFrame(
         [
             row("baseline", 42, PROXY_METRIC, 0.5, "complete"),
-            row("baseline", 42, "average_precision", 0.3, "complete"),
-            row("baseline", 42, HIDDEN_METRIC, 0.2, "complete"),
+            row("baseline", 42, HIDDEN_METRIC, 0.3, "complete"),
+            row("baseline", 42, "average_precision", 0.4, "complete"),
             row("a", 42, PROXY_METRIC, 0.4, "complete"),
-            row("a", 42, "average_precision", 0.1, "complete"),
+            row("a", 42, HIDDEN_METRIC, 0.1, "complete"),
             row("a", 43, PROXY_METRIC, 0.4, "failed"),
-            row("baseline", np.nan, "average_precision", 0.6, "ensemble"),
+            row("baseline", np.nan, HIDDEN_METRIC, 0.6, "ensemble"),
         ]
     )
     points = proxy_points(summary)
     assert points.variant.tolist() == ["baseline", "a"]
     assert points[PROXY_METRIC].tolist() == [0.5, 0.4]
-    assert points.average_precision.tolist() == [0.3, 0.1]
-    assert points[HIDDEN_METRIC].iloc[0] == 0.2 and np.isnan(points[HIDDEN_METRIC].iloc[1])
+    assert points[HIDDEN_METRIC].tolist() == [0.3, 0.1]
+    assert points.average_precision.iloc[0] == 0.4 and np.isnan(points.average_precision.iloc[1])

@@ -3,7 +3,9 @@
 The oracle curve: a learner trained at the train cutoff on k train mules drawn at random
 (revealed or hidden, labelled from the ground truth) against every sampled train
 non-mule, for k from 10 up to every train mule, REPEATS draws each (one when k takes
-them all), scored on the validation and test audit samples. Beside it, the same learner
+them all), scored on the validation and test audit samples, of the hidden mules first
+(the split's revealed mules removed, metrics named hidden_...) and then of every mule.
+Beside it, the same learner
 on the revealed train mules alone against the same non-mules (the study's A3 setup: the
 mules training knows, but clean negatives, where training's unlabelled accounts hold
 hidden mules), and a run's audits at the revealed count, when the run is audited. A
@@ -21,7 +23,7 @@ import pandas as pd
 
 from ..artifacts import DIAGNOSTIC_TABLES
 from ..contract.graph_schema import HELD_OUT_SPLITS
-from ..metrics import ranking_metrics
+from ..metrics import hidden_first, hidden_name
 from .baselines import KINDS, fit_scores, model_columns
 from .feature_table import FAMILIES, usable
 
@@ -29,8 +31,9 @@ COLUMNS = DIAGNOSTIC_TABLES["learning_curve"]
 # The mule counts of the curve, and the random draws of each.
 LABEL_COUNTS = (10, 20, 40, 80, 160)
 REPEATS = 5
-# The metrics the curve records.
-CURVE_METRICS = ("average_precision", "roc_auc", "recall_at_1pct", "recall_at_5pct")
+# The metrics the curve records, of the hidden mules and then of every mule.
+MEASURED = ("average_precision", "roc_auc", "recall_at_1pct", "recall_at_5pct")
+CURVE_METRICS = (*(hidden_name(metric) for metric in MEASURED), *MEASURED)
 
 
 def learning_curve(
@@ -57,7 +60,7 @@ def learning_curve(
     def record(kind: str, labels: str, k: int, repeat: int, scores: list[np.ndarray]) -> None:
         for split, part, score in zip(HELD_OUT_SPLITS, held, scores, strict=True):
             y, weight = part.is_mule.to_numpy(np.int64), part.weight.to_numpy(np.float64)
-            found = ranking_metrics(y, score, weight)
+            found = hidden_first(y, score, weight, part.revealed.to_numpy(bool))
             for metric in CURVE_METRICS:
                 value = found[metric]
                 if value is not None:
@@ -78,8 +81,12 @@ def learning_curve(
             scores = fit_scores(kind, fitted, labels, columns, held)
             record(kind, "revealed", len(revealed), 0, scores)
     for split, report in (audits or {}).items():
+        recorded = {
+            **{hidden_name(name): value for name, value in report["hidden_metrics"].items()},
+            **report["metrics"],
+        }
         for metric in CURVE_METRICS:
-            value = report["metrics"].get(metric)
+            value = recorded.get(metric)
             if value is not None:
                 records.append(("model", "revealed", len(revealed), 0, split, metric, float(value)))
     return pd.DataFrame(records, columns=list(COLUMNS))

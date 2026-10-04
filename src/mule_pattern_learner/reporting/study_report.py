@@ -2,7 +2,9 @@
 
 write_diagnostics_report reads study.json, the feature table and each analysis' table,
 draws the figures the tables it has allow (reporting.diagnostics) and rewrites the
-study's report.md, one section per analysis.
+study's report.md, one section per analysis. Each section leads with the hidden mules,
+the split's revealed mules removed from the ranking (metrics named hidden_...), and
+gives every mule's numbers after them.
 """
 
 from __future__ import annotations
@@ -26,7 +28,7 @@ from ..artifacts import (
     read_json,
 )
 from ..contract.graph_schema import HELD_OUT_SPLITS
-from ..metrics import INTERVAL, REVIEW_BUDGETS, budget_name
+from ..metrics import INTERVAL, REVIEW_BUDGETS, budget_name, hidden_name
 from ..paths import DiagnosticsPaths
 from .diagnostics import (
     baseline_rows,
@@ -57,11 +59,12 @@ from .style import PANEL, estimate, number
 
 # The figures of a diagnostic study, and what its report.md calls them.
 DIAGNOSTICS_FIGURES = {
-    "baselines": "Each baseline's audit AP beside the run's",
-    "learning_curve": "Audit AP against the oracle-labelled train mules a learner was fitted on",
-    "univariate_auc": "Each feature's ROC AUC alone",
+    "baselines": "Each baseline's audit AP of the hidden mules beside the run's",
+    "learning_curve": "Audit AP of the hidden mules against the oracle-labelled train mules "
+    "a learner was fitted on",
+    "univariate_auc": "Each feature's ROC AUC of the hidden mules alone",
     "drift": "The non-mules' feature drift from the train cutoff",
-    "ap_concentration": "How few mules make the audit AP",
+    "ap_concentration": "How few hidden mules make their audit AP",
     "ring_coverage": "Rings with a member in the review budgets",
     "proxy_validity": "The proxy predictions against the ground truth",
     "reveal_spread": "The label reveal replayed over salts",
@@ -214,6 +217,7 @@ def features_section(features: pd.DataFrame) -> list[str]:
     rows = []
     for split, part in features.groupby("split", sort=False):
         mules = part.is_mule.eq(1)
+        revealed = mules & part.revealed.astype(bool)
         weight = part.weight.to_numpy(np.float64)
         prevalence = float(weight[mules.to_numpy()].sum() / weight.sum())
         rows.append(
@@ -221,13 +225,14 @@ def features_section(features: pd.DataFrame) -> list[str]:
                 str(split),
                 str(part.date.iloc[0]),
                 number(len(part)),
-                number(int(mules.sum())),
-                number(int((mules & part.revealed.astype(bool)).sum())),
+                number(int((mules & ~revealed).sum())),
+                number(int(revealed.sum())),
                 number(int(part.rejected.astype(bool).sum())),
                 number(prevalence),
             ]
         )
-    header = ["Split", "Cutoff", "Accounts", "Mules", "Revealed", "Rejected", "Prevalence"]
+    header = ["Split", "Cutoff", "Accounts", "Hidden mules", "Revealed mules", "Rejected"]
+    header.append("Prevalence of every mule")
     return [
         "## Feature table",
         "",
@@ -248,17 +253,23 @@ def baselines_section(home: Reported, frame: pd.DataFrame) -> list[str]:
             (frame.baseline == baseline) & (frame.features == features) & (frame.model == model)
         ]
         cells = [label]
-        for split in HELD_OUT_SPLITS:
-            for metric in ("average_precision", "roc_auc"):
-                found = mine[(mine.split == split) & (mine.metric == metric)]
-                if found.empty:
-                    cells.append("")
-                    continue
-                row = found.iloc[0]
-                bounds = None if pd.isna(row.low) else [float(row.low), float(row.high)]
-                cells.append(estimate(float(row.value), bounds))
+        wanted = [
+            (split, hidden_name(metric))
+            for split in HELD_OUT_SPLITS
+            for metric in ("average_precision", "roc_auc")
+        ]
+        wanted += [(split, "average_precision") for split in HELD_OUT_SPLITS]
+        for split, metric in wanted:
+            found = mine[(mine.split == split) & (mine.metric == metric)]
+            if found.empty:
+                cells.append("")
+                continue
+            row = found.iloc[0]
+            bounds = None if pd.isna(row.low) else [float(row.low), float(row.high)]
+            cells.append(estimate(float(row.value), bounds))
         rows.append(cells)
     header = ["Ranking", "Validation AP", "Validation ROC AUC", "Test AP", "Test ROC AUC"]
+    header += ["Validation AP, every mule", "Test AP, every mule"]
     return [
         "## Baselines",
         "",
@@ -267,8 +278,9 @@ def baselines_section(home: Reported, frame: pd.DataFrame) -> list[str]:
         "baselines are fitted at the train cutoff on the revealed train mules, against every "
         "other sampled train account weighted to the population; `account` reads only the "
         "account's own history, which no model reads, `model` the root's own model inputs, "
-        "`messages` its candidate pool, and `all` everything. In parentheses: the "
-        f"ring-clustered {INTERVAL:.0%} interval.",
+        "`messages` its candidate pool, and `all` everything. Each is scored on the hidden "
+        "mules, the split's revealed mules removed from the ranking, and in the last two "
+        f"columns on every mule. In parentheses: the ring-clustered {INTERVAL:.0%} interval.",
         "",
         *table(header, rows),
         "",
@@ -285,19 +297,26 @@ def curve_section(home: Reported, frame: pd.DataFrame) -> list[str]:
         for labels, mules in sorted({*zip(mine["labels"], mine.mules.astype(int), strict=True)}):
             part = mine[(mine["labels"] == labels) & (mine.mules == mules)]
             cells = [model, str(labels), number(mules), number(int(part.repeat.nunique()))]
-            for split in HELD_OUT_SPLITS:
-                for metric in ("average_precision", "roc_auc"):
-                    values = part[(part.split == split) & (part.metric == metric)].value
-                    cells.append(number(float(values.mean())) if len(values) else "")
+            wanted = [
+                (split, hidden_name(metric))
+                for split in HELD_OUT_SPLITS
+                for metric in ("average_precision", "roc_auc")
+            ]
+            wanted += [(split, "average_precision") for split in HELD_OUT_SPLITS]
+            for split, metric in wanted:
+                values = part[(part.split == split) & (part.metric == metric)].value
+                cells.append(number(float(values.mean())) if len(values) else "")
             rows.append(cells)
     header = ["Learner", "Labels", "Train mules", "Draws", "Validation AP", "Validation ROC AUC"]
-    header += ["Test AP", "Test ROC AUC"]
+    header += ["Test AP", "Test ROC AUC", "Validation AP, every mule", "Test AP, every mule"]
     return [
         "## Learning curve",
         "",
         "A learner fitted at the train cutoff on k train mules with oracle labels, drawn at "
         "random, against every sampled train non-mule (the mean of the draws), beside the "
-        "same learner on the revealed train mules alone and the run's audit.",
+        "same learner on the revealed train mules alone and the run's audit. Scored on the "
+        "hidden mules of each held-out split, its revealed mules removed from the ranking, "
+        "and in the last two columns on every mule.",
         "",
         *table(header, rows),
         "",
@@ -307,8 +326,11 @@ def curve_section(home: Reported, frame: pd.DataFrame) -> list[str]:
 
 def univariate_section(home: Reported, frame: pd.DataFrame) -> list[str]:
     """report.md's lines on each feature alone: the strongest on validation."""
-    auc = _metric(frame, "roc_auc").pivot_table(index="feature", columns="split", values="value")
-    ap = _metric(frame, "average_precision")
+    auc = _metric(frame, hidden_name("roc_auc")).pivot_table(
+        index="feature", columns="split", values="value"
+    )
+    ap = _metric(frame, hidden_name("average_precision"))
+    every = _metric(frame, "roc_auc")
     rows = []
     for name in strongest_features(frame, REPORTED_ROWS):
         cells = [f"`{name}`"]
@@ -316,14 +338,17 @@ def univariate_section(home: Reported, frame: pd.DataFrame) -> list[str]:
             number(value_or_none(auc.loc[name].get(split))) for split in ("train", *HELD_OUT_SPLITS)
         ]
         cells.append(number(_value(ap, feature=name, split="validation")))
+        cells.append(number(_value(every, feature=name, split="validation")))
         rows.append(cells)
     header = ["Feature", "Train ROC AUC", "Validation ROC AUC", "Test ROC AUC", "Validation AP"]
+    header.append("Validation ROC AUC, every mule")
     shown = "The feature" if len(rows) == 1 else f"The {len(rows)} features"
     return [
         "## Each feature alone",
         "",
-        f"{shown} whose validation ROC AUC is farthest from 0.5. The AP ranks by the value "
-        "in the direction the train split gives it.",
+        f"{shown} whose validation ROC AUC of the hidden mules, each split's revealed mules "
+        "removed, is farthest from 0.5. The AP ranks by the value in the direction the "
+        "train split gives it. The last column ranks every mule.",
         "",
         *table(header, rows),
         "",
@@ -352,7 +377,9 @@ def drift_section(home: Reported, frame: pd.DataFrame) -> list[str]:
         cells = [str(model), str(setup)]
         for split in HELD_OUT_SPLITS:
             for metric in ("average_precision", "roc_auc"):
-                cells.append(number(_value(part, split=split, metric=metric)))
+                cells.append(number(_value(part, split=split, metric=hidden_name(metric))))
+        for split in HELD_OUT_SPLITS:
+            cells.append(number(_value(part, split=split, metric="average_precision")))
         cost_rows.append(cells)
     return [
         "## Drift",
@@ -369,10 +396,21 @@ def drift_section(home: Reported, frame: pd.DataFrame) -> list[str]:
         "",
         "What the shift costs a learner fitted with every train mule labelled: at the train "
         "cutoff on raw values, on each split's own percentiles, and fitted inside each "
-        "held-out split by cross-validation, which no shift touches:",
+        "held-out split by cross-validation, which no shift touches. Scored on the hidden "
+        "mules, each split's revealed mules removed, and in the last two columns on every "
+        "mule:",
         "",
         *table(
-            ["Learner", "Setup", "Validation AP", "Validation ROC AUC", "Test AP", "Test ROC AUC"],
+            [
+                "Learner",
+                "Setup",
+                "Validation AP",
+                "Validation ROC AUC",
+                "Test AP",
+                "Test ROC AUC",
+                "Validation AP, every mule",
+                "Test AP, every mule",
+            ],
             cost_rows,
         ),
         "",
@@ -386,7 +424,7 @@ def subgroups_section(home: Reported, frame: pd.DataFrame) -> list[str]:
     rows = []
     for split in HELD_OUT_SPLITS:
         mine = frame[frame.split == split]
-        for subset in ("revealed", "hidden"):
+        for subset in ("hidden", "revealed"):
             part = mine[mine.subset == subset]
             if part.empty:
                 continue
@@ -395,6 +433,7 @@ def subgroups_section(home: Reported, frame: pd.DataFrame) -> list[str]:
                     split,
                     subset,
                     number(_int(_value(part, metric="mules"))),
+                    number(_value(part, metric="average_precision")),
                     number(_value(part, metric="roc_auc")),
                     " / ".join(number(_int(_value(part, metric=f"in_top_{b}"))) for b in budgets),
                     number(_int(_value(part, metric="median_population_rank"))),
@@ -417,14 +456,18 @@ def subgroups_section(home: Reported, frame: pd.DataFrame) -> list[str]:
         "## Revealed and hidden mules, AP concentration and rings",
         "",
         "From the run's audit samples. A ranking that finds the revealed mules and not the "
-        "hidden ones measures the reveal, not mule detection. The population rank is the "
-        "estimated number of non-mules scoring at least as high.",
+        "hidden ones measures the reveal, not mule detection. Each kind is ranked against "
+        "the non-mules with the other kind removed; the top shares and the population rank "
+        "are of the whole ranking, the estimated number of non-mules scoring at least as "
+        "high. The AP concentration figure is of the hidden mules, the ring coverage of "
+        "every mule.",
         "",
         *table(
             [
                 "Split",
                 "Mules",
                 "Number",
+                "AP against the non-mules",
                 "ROC AUC against the non-mules",
                 f"In the top {shares}",
                 "Median population rank",
@@ -446,7 +489,7 @@ def proxy_section(home: Reported, frame: pd.DataFrame) -> list[str]:
     """report.md's lines on the proxy predictions against the ground truth."""
     rows = []
     for split in HELD_OUT_SPLITS:
-        for subset in ("all", "hidden", "revealed"):
+        for subset in ("hidden", "revealed", "all"):
             part = frame[(frame.split == split) & (frame.subset == subset)]
             if part.empty:
                 continue
@@ -464,8 +507,8 @@ def proxy_section(home: Reported, frame: pd.DataFrame) -> list[str]:
         "## Proxy validity",
         "",
         "The run's proxy predictions (its observed positives and a sample of unlabelled "
-        "accounts) scored against the ground truth, unweighted: all of them, the hidden "
-        "mules against the non-mules, and the revealed mules against them.",
+        "accounts) scored against the ground truth, unweighted: the hidden mules against "
+        "the non-mules, the revealed mules against them, and all of them.",
         "",
         *table(["Split", "Subset", "Accounts", "Mules", "AP", "ROC AUC"], rows),
         "",

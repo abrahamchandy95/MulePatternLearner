@@ -1,18 +1,20 @@
-"""Which mules a run's ranking finds: revealed or hidden, how few make its AP, which rings.
+"""Which mules a run's ranking finds: hidden or revealed, how few make its AP, which rings.
 
 From a run's audit samples (audit/<split>.parquet), each account weighted by 1 / its
 inclusion probability, for validation and test:
-- revealed and hidden: each kind of mule against every non-mule, their weighted ROC
-  AUC, the mules and how many of them rank in the top 1, 5 and 10% of the split's
-  population, and their median population rank (the estimated number of non-mules
-  scoring at least as high). A proxy trained on revealed mules that finds only them
-  measures the reveal, not mule detection.
+- hidden and revealed: each kind of mule against every non-mule, the hidden first: their
+  weighted AP and ROC AUC with the other kind left out, the mules and how many of them
+  rank in the top 1, 5 and 10% of the split's population, and their median population
+  rank (the estimated number of non-mules scoring at least as high). A proxy trained on
+  revealed mules that finds only them measures the reveal, not mule detection.
 - AP concentration: the average precision is a sum over the mules, each adding the
   precision at its score times its share of the mules, so its running sum over the mules
   ranked highest first says how few mules make most of the AP (cumulative_average_precision
-  at each rank; the last one is the split's AP).
+  at each rank; the last one is the AP). Of the hidden mules, the revealed ones removed
+  from the ranking as the audit's hidden-mule metrics remove them, and of every mule
+  (subsets "hidden" and "mules").
 - ring coverage: the share of the split's rings (ring_id 0 and up) with a member in the
-  top 1, 5 and 10%, beside the share of the mules there.
+  top 1, 5 and 10%, beside the share of the mules there, over every mule.
 
 An account is in the top fraction f when the population accounts scoring at least as
 high as it, itself and every tie included, are at most f of the split's population.
@@ -86,16 +88,22 @@ def split_rows(split: str, frame: pd.DataFrame) -> list[tuple[Any, ...]]:
         if value is not None:
             records.append((split, subset, rank, metric, float(value)))
 
-    for subset, chosen in (("revealed", revealed), ("hidden", ~revealed)):
+    for subset, chosen in (("hidden", ~revealed), ("revealed", revealed)):
         mules = (y == 1) & chosen
         keep = (y == 0) | mules
         add(subset, "mules", int(mules.sum()))
+        add(subset, "average_precision", average_precision(y[keep], score[keep], weight[keep]))
         add(subset, "roc_auc", roc_auc(y[keep], score[keep], weight[keep]))
         for fraction in REVIEW_BUDGETS:
             add(subset, f"in_top_{budget_name(fraction)}", int((mules & (share <= fraction)).sum()))
         if mules.any():
             ranks = population_rank(score[keep], weight[keep], y[keep])
             add(subset, "median_population_rank", float(np.median(ranks)))
+    hidden = ~revealed
+    if (y[hidden] == 1).any():
+        parts = ap_contributions(y[hidden], score[hidden], weight[hidden])
+        for rank, value in enumerate(np.cumsum(parts), start=1):
+            add("hidden", "cumulative_average_precision", value, float(rank))
     parts = ap_contributions(y, score, weight)
     for rank, value in enumerate(np.cumsum(parts), start=1):
         add("mules", "cumulative_average_precision", value, float(rank))

@@ -7,7 +7,7 @@ from typing import Any
 
 import pandas as pd
 
-from ..artifacts import read_json
+from ..artifacts import read_audit_report
 from ..data.context_cache import ContextCache
 from ..data.contexts import close_source
 from ..evaluation.audit import AUDIT_SPLITS, audit, audit_inputs
@@ -65,7 +65,9 @@ def evaluate_run(
     """
     inputs = audit_inputs(run, data=data)
     reports = {
-        split: read_json(run.audit_report(split)) for split in AUDIT_SPLITS if inputs.audited(split)
+        split: read_audit_report(run.audit_report(split))
+        for split in AUDIT_SPLITS
+        if inputs.audited(split)
     }
     if reports:
         audited = [str(run.audit_report(split)) for split in reports]

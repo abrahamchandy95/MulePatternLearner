@@ -35,7 +35,7 @@ truth for analysis only; nothing it computed fed a model.
 first-time and internal inflow counts it found were defined after reading the data
 generator's mule typology and test-split mules. Every test number below that depends on
 them is optimistic, and none of them was a decision. Decisions since use the validation
-audit; the test audit is for reporting.
+audit, now its AP of the hidden mules; the test audit is for reporting.
 
 ## What it found
 

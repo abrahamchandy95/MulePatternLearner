@@ -81,12 +81,30 @@ AUDIT_COLUMNS = (
     "ring_id",
     "label_source",
 )
+# audit/<split>.json: what the audit of a split found. The hidden-mule metrics and their
+# intervals lead (hidden_rows says which accounts they rank), the metrics of every mule
+# follow; an audit report without the hidden ones is of earlier code (read_audit_report).
+HIDDEN_AUDIT_KEYS = ("hidden_metrics", "hidden_intervals")
+
+
+def hidden_rows(frame: pd.DataFrame) -> pd.DataFrame:
+    """The rows of an audit sample, or of a diagnostic feature table, but its revealed mules.
+
+    The model exists to find the mules nobody knows on the scoring date. An investigator
+    who reviews its ranking removes the cases already known, so the hidden-mule metrics
+    rank what is left: the mules the graph had not revealed by the split's cutoff
+    (``revealed`` false) against the non-mules, each account standing for as many
+    accounts as in the whole sample. An audit sample keeps every mule, so these rows hold
+    every hidden mule of its split.
+    """
+    return frame[~frame.revealed.astype(bool).to_numpy()].reset_index(drop=True)
 
 
 # A control-experiment suite's tables, which experiments.tables writes and reporting reads.
 # summary.csv: one row per run, split and metric, with the run's status (complete,
 # failed or stopped) and commit on each. Its metrics are those of the audit reports, the
-# run's own values (best_epoch, parameter_count, training_hours: no split) and these:
+# hidden mules' named with "hidden_" first (metrics.hidden_name), the run's own values
+# (best_epoch, parameter_count, training_hours: no split) and these:
 SUMMARY_COLUMNS = ("variant", "seed", "split", "metric", "value", "status", "commit")
 # The status of the summary.csv rows of a variant's seed ensemble, which have no seed and
 # no commit: its audit metrics on each split, and how many seeds it combines.
@@ -97,11 +115,13 @@ SEED_MEAN = "seed_mean"
 # the validation proxy AP of the epoch training selected;
 PROXY_METRIC = "proxy_average_precision"
 # a run's validation audit AP on the accounts every audit of the suite scored, and its
-# difference from the baseline's of the same seed there;
+# difference from the baseline's of the same seed there, each beside the same of the
+# hidden mules alone (hidden_paired_average_precision, hidden_average_precision_delta);
 PAIRED_METRIC = "paired_average_precision"
 DELTA_METRIC = "average_precision_delta"
-# and its validation audit AP on the hidden mules alone: those the graph had not
-# revealed before the cutoff, against the non-mules, which the proxy never sees.
+# and, as the audit reports record it, the audit AP of the hidden mules alone: those the
+# graph had not revealed before the cutoff, against the non-mules, which the proxy never
+# sees, and which decisions use (metrics.hidden_name).
 HIDDEN_METRIC = "hidden_average_precision"
 
 
@@ -295,6 +315,19 @@ def read_audit_scores(path: Path) -> pd.DataFrame:
     if tuple(frame.columns) != AUDIT_COLUMNS:
         raise ValueError(f"{path} has the columns {list(frame.columns)}")
     return frame
+
+
+def read_audit_report(path: Path) -> dict[str, Any]:
+    """An audit/<split>.json; one of earlier code, without the hidden-mule metrics, is refused."""
+    report = read_json(path)
+    missing = [key for key in HIDDEN_AUDIT_KEYS if key not in report]
+    if missing:
+        raise ValueError(
+            f"{path} is an audit of earlier code: it lacks {missing}, the metrics of the "
+            "hidden mules. Move the run's audit/ files of that split aside and run `mule "
+            "evaluate` on the run again"
+        )
+    return dict(report)
 
 
 def write_rejected(path: Path, ids: Iterable[str]) -> None:

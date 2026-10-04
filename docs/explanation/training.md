@@ -226,13 +226,20 @@ each held-out split:
   resampled by ring, since mules of one ring are not independent (a mule without a ring
   alone; the reference load records none), and non-mules within their class, each keeping
   its inclusion weight.
-- **Revealed and hidden mules** are reported apart: a model that ranks only the mules
-  like those it was shown is not the detector a bank needs.
+- **The hidden mules lead.** The model exists to find the mules nobody knows on the
+  scoring date, so every audit first ranks the hidden mules, those the graph had not
+  revealed by the split's cutoff, against the non-mules, with the revealed mules removed
+  from the ranking as an investigator would remove the cases already known. The same
+  metrics of every mule follow. A model that ranks only the mules like those it was
+  shown is not the detector a bank needs, and on the reference graph the built-in run
+  ranked the revealed mules far above the hidden ones.
 - **Its bounds:** an audit holds at most 1,000,000 accounts of a split's partition and
   scores at most 100,000 (`contract.bounds`). It is a bounded audit of a frozen graph, not
   a production truth service, and it needs complete 0/1 truth and one cutoff per split.
 
-**Decisions use the validation audit; the test audit is for reporting.** Choosing a
+**Decisions use the validation audit's hidden mules; the test audit is for reporting.**
+A suite ranks, compares and ensembles its variants by their validation AP of the hidden
+mules. Choosing a
 variant, a setting or a threshold on the test audit would make the test number
 optimistic. It is optimistic already for one reason: the pool groups were designed after
 a diagnostic study read test-split mules ([the diagnostic

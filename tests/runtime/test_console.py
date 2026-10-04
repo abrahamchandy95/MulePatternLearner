@@ -343,8 +343,10 @@ def records(run: Path) -> list[tuple[dict[str, Any], str | None]]:
         ),
         (
             {"event": "run_finished", "variant": "baseline", "seed": 42, "step": "audit"}
+            | {"validation_hidden_ap": 0.0812, "test_hidden_ap": None}
             | {"validation_ap": 0.3121, "test_ap": None},
-            "baseline seed 42 audited: validation AP 0.312, test AP n/a",
+            "baseline seed 42 audited: hidden-mule AP 0.081 on validation, n/a on test; every "
+            "mule 0.312 and n/a",
         ),
         (
             {"event": "run_failed", "variant": "no_attention", "seed": 43, "step": "train"}

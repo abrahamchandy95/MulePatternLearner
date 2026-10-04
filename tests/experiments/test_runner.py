@@ -159,7 +159,9 @@ def test_a_suite_trains_audits_and_compares_then_keeps_or_archives_what_it_has(
     # Each run's training and audit finished, in order, with the numbers they saved.
     finished = [(e["variant"], e["seed"], e["step"]) for e in events(results, "run_finished")]
     assert finished == [(v, s, "train") for v, s in order] + [(v, s, "audit") for v, s in order]
-    assert all(e["validation_ap"] is not None for e in events(results, "run_finished")[4:])
+    audits = events(results, "run_finished")[4:]
+    assert all(e["validation_hidden_ap"] is not None for e in audits)
+    assert all(e["validation_ap"] is not None for e in audits)
     # The console has the plan and a line for each of them, and no record.
     shown = capsys.readouterr().out.splitlines()
     dataset = result["dataset_id"][:12]
@@ -188,6 +190,7 @@ def test_a_suite_trains_audits_and_compares_then_keeps_or_archives_what_it_has(
     assert comparison.seeds.tolist() == ["42 43"] * 4
     # Every audit scored the same accounts, so all of them pair.
     assert comparison.unpaired_accounts.tolist() == [0] * 4
+    assert not comparison.validation_hidden_ap_delta.iloc[1:2].isna().any()
     assert not comparison.validation_ap_delta.iloc[1:2].isna().any()
     assert sorted(p.stem for p in compared.plots.iterdir()) == sorted(SUITE_FIGURES)
     assert compared.report.read_text().startswith(f"# Suite {DROP.name}\n")
@@ -196,11 +199,11 @@ def test_a_suite_trains_audits_and_compares_then_keeps_or_archives_what_it_has(
     shown = suite_summary(result).splitlines()
     assert shown[:2] == [
         f"Suite {DROP.name} complete: 4 runs, 4 complete",
-        "Variants ranked by their validation audit AP, with 90% intervals:",
+        "Variants ranked by the validation audit AP of their hidden mules, with 90% intervals:",
     ]
     assert shown[2].split()[:3] == ["variant", "seeds", "validation"]
     means = comparison[comparison.estimate == SEED_MEAN]
-    ranked = means.sort_values("validation_ap", ascending=False).variant.tolist()
+    ranked = means.sort_values("validation_hidden_ap", ascending=False).variant.tolist()
     assert [line.split()[0] for line in shown[3:5]] == ranked
     assert all("42 43" in line and "[" in line for line in shown[3:5])
     assert shown[5].startswith(f"Report: {compared.report}, beside summary.csv")

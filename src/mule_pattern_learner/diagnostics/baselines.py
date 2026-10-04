@@ -17,8 +17,10 @@ them, single-feature rankings with no training: the features whose train ROC AUC
 farthest from 0.5, each in its train direction. All are scored on the validation audit
 sample (for decisions) and the test one (for reporting), with the metrics and the
 ring-clustered intervals of the audits (metrics.bootstrap_intervals), so they compare
-with a run's audits of the same accounts, which the table adds as `model` rows. The
-`chance` rows are what a random ranking scores there in expectation.
+with a run's audits of the same accounts, which the table adds as `model` rows. Like the
+audits, every ranking is measured on the hidden mules first, the split's revealed mules
+removed from it (metrics named hidden_..., metrics.hidden_name), then on every mule.
+The `chance` rows are what a random ranking scores there in expectation.
 """
 
 from __future__ import annotations
@@ -43,6 +45,7 @@ from ..metrics import (
     REVIEW_BUDGETS,
     bootstrap_intervals,
     budget_name,
+    hidden_name,
     ranking_metrics,
     roc_auc,
 )
@@ -168,48 +171,73 @@ def scored_rows(
     score: NDArray[np.float64],
     replicates: int,
 ) -> list[tuple[Any, ...]]:
-    """One ranking's rows: its ranking metrics with their ring-clustered intervals."""
+    """One ranking's rows: its ranking metrics with their ring-clustered intervals.
+
+    The hidden mules' first, the split's revealed mules left out of the ranking (named
+    hidden_...), then every mule's.
+    """
     y = part.is_mule.to_numpy(np.int64)
     weight = part.weight.to_numpy(np.float64)
     rings = part.ring_id.to_numpy(np.int64)
-    metrics = ranking_metrics(y, score, weight)
-    intervals = bootstrap_intervals(y, score, weight, rings, replicates=replicates)
     rows = []
-    for metric, value in metrics.items():
-        if value is None:
-            continue
-        interval = intervals.get(metric) or [np.nan, np.nan]
-        rows.append((baseline, features, model, split, metric, value, *interval))
+    for hidden, kept in mule_views(part):
+        found = ranking_metrics(y[kept], score[kept], weight[kept])
+        intervals = bootstrap_intervals(
+            y[kept], score[kept], weight[kept], rings[kept], replicates=replicates
+        )
+        for metric, value in found.items():
+            if value is None:
+                continue
+            interval = intervals.get(metric) or [np.nan, np.nan]
+            name = hidden_name(metric) if hidden else metric
+            rows.append((baseline, features, model, split, name, value, *interval))
     return rows
+
+
+def mule_views(part: pd.DataFrame) -> list[tuple[bool, NDArray[np.bool_]]]:
+    """The rows each ranking is measured on: without the revealed mules (hidden), then all."""
+    revealed = part.revealed.astype(bool).to_numpy()
+    return [(True, ~revealed), (False, np.ones(len(part), dtype=bool))]
 
 
 def chance_rows(split: str, part: pd.DataFrame) -> list[tuple[Any, ...]]:
     """What a random ranking scores on a split in expectation: the `chance` rows.
 
     Its AP is the split's weighted prevalence and its ROC AUC 0.5, and each review
-    budget finds that share of the mules at the prevalence's precision. They have no
-    interval.
+    budget finds that share of the mules at the prevalence's precision; of the hidden
+    mules first, the revealed ones removed, then of every mule. They have no interval.
     """
     y = part.is_mule.to_numpy(np.int64)
     weight = part.weight.to_numpy(np.float64)
-    prevalence = float(weight[y == 1].sum() / weight.sum())
-    values = {"average_precision": prevalence, "roc_auc": 0.5}
-    for fraction in REVIEW_BUDGETS:
-        values[f"precision_at_{budget_name(fraction)}"] = prevalence
-        values[f"recall_at_{budget_name(fraction)}"] = fraction
-    return [("chance", "", "", split, m, v, np.nan, np.nan) for m, v in values.items()]
+    rows = []
+    for hidden, kept in mule_views(part):
+        prevalence = float(weight[kept][y[kept] == 1].sum() / weight[kept].sum())
+        values = {"average_precision": prevalence, "roc_auc": 0.5}
+        for fraction in REVIEW_BUDGETS:
+            values[f"precision_at_{budget_name(fraction)}"] = prevalence
+            values[f"recall_at_{budget_name(fraction)}"] = fraction
+        for metric, value in values.items():
+            name = hidden_name(metric) if hidden else metric
+            rows.append(("chance", "", "", split, name, value, np.nan, np.nan))
+    return rows
 
 
 def audit_rows(run: str, audits: Mapping[str, Mapping[str, Any]]) -> list[tuple[Any, ...]]:
-    """A run's recorded audit metrics and intervals as `model` rows, per audited split."""
+    """A run's recorded audit metrics and intervals as `model` rows, per audited split.
+
+    The hidden mules' first (named hidden_...), then every mule's; only the metrics with
+    an interval, the ranking metrics.
+    """
     rows = []
     for split, report in audits.items():
-        intervals = report.get("intervals", {})
-        for metric, value in report["metrics"].items():
-            if metric not in intervals or value is None:
-                continue
-            interval = intervals.get(metric) or [np.nan, np.nan]
-            rows.append(("model", run, "audit", split, metric, float(value), *interval))
+        for prefix in ("hidden_", ""):
+            intervals = report.get(f"{prefix}intervals", {})
+            for metric, value in report[f"{prefix}metrics"].items():
+                if metric not in intervals or value is None:
+                    continue
+                interval = intervals.get(metric) or [np.nan, np.nan]
+                name = hidden_name(metric) if prefix else metric
+                rows.append(("model", run, "audit", split, name, float(value), *interval))
     return rows
 
 

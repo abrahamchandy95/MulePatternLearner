@@ -55,7 +55,8 @@ def test_the_features_are_ranked_on_validation_and_named_by_family(
     tables: dict[str, pd.DataFrame],
 ) -> None:
     table = tables["univariate"]
-    auc = table[table.metric == "roc_auc"].pivot_table(
+    # Ranked by the ROC AUC of validation's hidden mules.
+    auc = table[table.metric == "hidden_roc_auc"].pivot_table(
         index="feature", columns="split", values="value"
     )
     distance = (auc.validation - 0.5).abs().sort_values(ascending=False)
@@ -91,10 +92,11 @@ def test_the_baselines_mark_chance_at_the_prevalence_and_the_run_in_ink(
     for split in ("validation", "test"):
         ax = drawn(lambda ax, split=split: figures.plot_baselines(ax, table, split=split))
         assert ax.get_xscale() == "log" and split.capitalize() in ax.get_title()
+        # Chance at the prevalence of the hidden mules, the AP the figure draws.
         chance = table[
             (table.baseline == "chance")
             & (table.split == split)
-            & (table.metric == "average_precision")
+            & (table.metric == "hidden_average_precision")
         ].value.item()
         vertical = [line for line in ax.get_lines() if line.get_color() == MUTED]
         assert [xs(line)[0] for line in vertical] == [pytest.approx(chance)]
@@ -125,7 +127,7 @@ def test_the_learning_curve_marks_the_run_at_the_revealed_count(
         ax = drawn(lambda ax, split=split: figures.plot_learning_curve(ax, table, split=split))
         assert ax.get_xscale() == "log"
         run = table[(table.model == "model") & (table.split == split)]
-        run = run[run.metric == "average_precision"].iloc[0]
+        run = run[run.metric == "hidden_average_precision"].iloc[0]
         ink = [line for line in ax.get_lines() if line.get_color() == BASELINE]
         assert {ys(line)[0] for line in ink} >= {run.value}
         assert {xs(line)[0] for line in ink} >= {run.mules}
