@@ -57,7 +57,18 @@ BATCH = 16
 
 
 @pytest.fixture(scope="module")
-def live() -> TigerGraphExecutor:
+def export() -> Path:
+    """The export's directory; without one every test skips before connecting."""
+    directory = os.environ.get(EXPORT)
+    if not directory:
+        pytest.skip(f"{EXPORT} must name the directory of the export the live graph holds")
+    return Path(directory)
+
+
+@pytest.fixture(scope="module")
+def live(export: Path) -> TigerGraphExecutor:
+    """The live graph, connected only once the export is known."""
+    del export
     executor = TigerGraphExecutor(settings=ConnectionSettings())
     verify(executor)
     return executor
@@ -74,12 +85,9 @@ def _splits(live: TigerGraphExecutor, vertex_type: str) -> dict[str, int]:
 
 
 @pytest.fixture(scope="module")
-def reference(live: TigerGraphExecutor) -> ReferenceGraph:
+def reference(export: Path, live: TigerGraphExecutor) -> ReferenceGraph:
     """The export, with the live graph's party splits written as write_split writes them."""
-    directory = os.environ.get(EXPORT)
-    if not directory:
-        pytest.skip(f"{EXPORT} must name the directory of the export the live graph holds")
-    graph = ReferenceGraph.from_csv(Path(directory))
+    graph = ReferenceGraph.from_csv(export)
     written = {party: split for party, split in _splits(live, "Party").items() if split in (0, 1)}
     if written:
         graph.run(WRITE_SPLIT, split_params(written))
