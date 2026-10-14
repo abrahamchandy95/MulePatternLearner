@@ -4,9 +4,10 @@
 Seeds that share an as-of time are fetched together, at most batch_size to a request, so
 TigerGraph computes each identity node's features once per request. The cache keeps one
 file per (world, phase, as-of date) holding each seed's subgraph as fetch_subgraphs printed
-it, under the key it was fetched with: the query's version and the subgraph settings. A
-file under another key holds nothing the current code may read, and the next fetch of its
-date replaces it.
+it, under the key it was fetched with: the query's version, the subgraph settings and the
+seed of the customer hold-out written on the graph, which decides who the training phase
+cannot see. A file under another key holds nothing the current code may read, and the next
+fetch of its date replaces it.
 """
 
 from __future__ import annotations
@@ -41,19 +42,26 @@ _EPOCH = date(1970, 1, 1)
 _WORLD = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
 
-def cache_key(config: SubgraphConfig) -> dict[str, Any]:
-    """What a cached subgraph depends on: the query's version and the subgraph settings."""
-    return {"version": SUBGRAPH_VERSION, "settings": asdict(config)}
+def cache_key(config: SubgraphConfig, holdout_seed: int) -> dict[str, Any]:
+    """What a cached subgraph depends on besides the loaded world: the query's version, the
+    subgraph settings and the seed the graph's customer hold-out was written with."""
+    return {"version": SUBGRAPH_VERSION, "settings": asdict(config), "holdout_seed": holdout_seed}
 
 
 class SubgraphCache:
     """One world's printed subgraphs by seed, in one file per (phase, as-of date) under
-    root/world, each file with the key its subgraphs were fetched with."""
+    root/world, each file with the key its subgraphs were fetched with.
 
-    def __init__(self, root: Path, world: str) -> None:
+    holdout_seed is the seed write_holdout last wrote the world's split with
+    (DataConfig.seed). A split written with another seed hides other customers, so the
+    subgraphs cached under the old one are not read.
+    """
+
+    def __init__(self, root: Path, world: str, holdout_seed: int) -> None:
         if not _WORLD.fullmatch(world):
             raise ValueError(f"A world is named by letters, digits, '.', '_' and '-': {world!r}")
         self.directory = root / world
+        self.holdout_seed = holdout_seed
 
     def path(self, as_of_ms: int, phase: Phase) -> Path:
         days, rest = divmod(as_of_ms, DAY_MS)
@@ -62,22 +70,26 @@ class SubgraphCache:
         day = _EPOCH + timedelta(days=days)
         return self.directory / phase.value / f"{day.isoformat()}.json.gz"
 
-    def load(self, as_of_ms: int, phase: Phase, key: Mapping[str, Any]) -> dict[str, Any]:
-        """The printed subgraph of each seed the file holds under key, none under another."""
+    def load(self, as_of_ms: int, phase: Phase, config: SubgraphConfig) -> dict[str, Any]:
+        """The printed subgraph of each seed the file holds under the key of config and this
+        cache's hold-out seed, none under another key."""
         path = self.path(as_of_ms, phase)
         if not path.exists():
             return {}
         with gzip.open(path, "rt", encoding="utf-8") as file:
             stored = json.load(file)
+        key = cache_key(config, self.holdout_seed)
         return dict(stored["subgraphs"]) if stored["key"] == key else {}
 
     def save(
-        self, as_of_ms: int, phase: Phase, key: Mapping[str, Any], subgraphs: Mapping[str, Any]
+        self, as_of_ms: int, phase: Phase, config: SubgraphConfig, subgraphs: Mapping[str, Any]
     ) -> None:
-        """Replaces the file with subgraphs under key, so no reader sees half of it."""
+        """Replaces the file with subgraphs under the key of config and this cache's hold-out
+        seed, so no reader sees half of it."""
         path = self.path(as_of_ms, phase)
         path.parent.mkdir(parents=True, exist_ok=True)
         partial = path.with_name(f"{path.name}.partial")
+        key = cache_key(config, self.holdout_seed)
         with gzip.open(partial, "wt", encoding="utf-8") as file:
             json.dump({"key": key, "subgraphs": subgraphs}, file)
         partial.replace(path)
@@ -103,11 +115,10 @@ def fetch(
     dates: dict[int, dict[str, None]] = {}
     for account_id, as_of_ms in seeds:
         dates.setdefault(as_of_ms, {})[account_id] = None
-    key = cache_key(config)
     batches: dict[int, SubgraphBatch] = {}
     for as_of_ms in sorted(dates):
         accounts = list(dates[as_of_ms])
-        printed = {} if cache is None else cache.load(as_of_ms, phase, key)
+        printed = {} if cache is None else cache.load(as_of_ms, phase, config)
         found = _cached(printed, [seed for seed in accounts if seed in printed], as_of_ms, phase)
         missing = [seed for seed in accounts if seed not in printed]
         for start in range(0, len(missing), batch_size):
@@ -116,7 +127,7 @@ def fetch(
             found.update((sub.seed, sub) for sub in parse_subgraphs(rows, request).subgraphs)
             printed.update(zip(request.seed_ids, rows[1:], strict=True))
         if cache is not None and missing:
-            cache.save(as_of_ms, phase, key, printed)
+            cache.save(as_of_ms, phase, config, printed)
         subgraphs = tuple(found[seed] for seed in accounts)
         batches[as_of_ms] = SubgraphBatch(SUBGRAPH_VERSION, as_of_ms, phase, subgraphs)
     return batches

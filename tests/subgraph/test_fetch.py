@@ -22,15 +22,19 @@ from mule_pattern_learner.testing.world import LATER, T, standard_world
 from mule_pattern_learner.tigergraph.queries import (
     FETCH_SUBGRAPHS,
     SUBGRAPH_VERSION,
+    WRITE_SPLIT,
     Phase,
     SubgraphBatch,
     SubgraphRequest,
     parse_subgraphs,
+    split_params,
     subgraph_params,
 )
 
 CONFIG = DEFAULT_CONFIG.subgraph
 TRAINING = Phase.TRAINING
+# The hold-out seed the standard world's split stands for: the world writes it by hand.
+HOLDOUT = DEFAULT_CONFIG.data.seed
 
 
 class _Recording:
@@ -72,6 +76,12 @@ def _direct(
     return parse_subgraphs(rows, request)
 
 
+def _accounts(batch: SubgraphBatch) -> list[str]:
+    """The accounts of the batch's only subgraph, sorted."""
+    [subgraph] = batch.subgraphs
+    return sorted(node.id for node in subgraph.accounts)
+
+
 def _stored(path: Path) -> dict[str, Any]:
     with gzip.open(path, "rt", encoding="utf-8") as file:
         return json.load(file)
@@ -101,7 +111,7 @@ def test_seeds_are_fetched_by_as_of_date_batch_size_to_a_request(graph: _Recordi
 
 
 def test_a_cached_date_is_read_back_without_a_request(graph: _Recording, tmp_path: Path) -> None:
-    cache = SubgraphCache(tmp_path, "dev")
+    cache = SubgraphCache(tmp_path, "dev", HOLDOUT)
     seeds = [("A_MIA", T), ("A_ANN", T)]
     first = fetch(graph, seeds, TRAINING, CONFIG, cache=cache)
     assert graph.requests == [(T, ["A_MIA", "A_ANN"])]
@@ -114,7 +124,7 @@ def test_a_cached_date_is_read_back_without_a_request(graph: _Recording, tmp_pat
 
 
 def test_only_the_seeds_the_cache_lacks_are_fetched(graph: _Recording, tmp_path: Path) -> None:
-    cache = SubgraphCache(tmp_path, "dev")
+    cache = SubgraphCache(tmp_path, "dev", HOLDOUT)
     fetch(graph, [("A_MIA", T)], TRAINING, CONFIG, cache=cache)
     batches = fetch(graph, [("A_ANN", T), ("A_MIA", T)], TRAINING, CONFIG, cache=cache)
     assert graph.requests == [(T, ["A_MIA"]), (T, ["A_ANN"])]
@@ -124,26 +134,27 @@ def test_only_the_seeds_the_cache_lacks_are_fetched(graph: _Recording, tmp_path:
 
 def test_a_changed_query_version_misses_the_cache(graph: _Recording, tmp_path: Path) -> None:
     """A file written by another version of fetch_subgraphs is fetched again and replaced."""
-    cache = SubgraphCache(tmp_path, "dev")
+    cache = SubgraphCache(tmp_path, "dev", HOLDOUT)
     fetch(graph, [("A_MIA", T)], TRAINING, CONFIG, cache=cache)
     path = cache.path(T, TRAINING)
     stored = _stored(path)
     stored["key"]["version"] = "subgraphs-000000000000"
     with gzip.open(path, "wt", encoding="utf-8") as file:
         json.dump(stored, file)
-    assert cache.load(T, TRAINING, cache_key(CONFIG)) == {}
+    assert cache.load(T, TRAINING, CONFIG) == {}
     batches = fetch(graph, [("A_MIA", T)], TRAINING, CONFIG, cache=cache)
     assert graph.requests == [(T, ["A_MIA"]), (T, ["A_MIA"])]
     assert batches[T] == _direct(graph, ["A_MIA"], T)
     assert _stored(path)["key"] == {
         "version": SUBGRAPH_VERSION,
         "settings": stored["key"]["settings"],
+        "holdout_seed": HOLDOUT,
     }
 
 
 def test_changed_settings_miss_the_cache(graph: _Recording, tmp_path: Path) -> None:
     """Under caps of one payment each way, Ann's subgraph keeps fewer of her payments."""
-    cache = SubgraphCache(tmp_path, "dev")
+    cache = SubgraphCache(tmp_path, "dev", HOLDOUT)
     fetch(graph, [("A_ANN", T)], TRAINING, CONFIG, cache=cache)
     fewer = replace(CONFIG, seed_payments=1, other_payments=1)
     batches = fetch(graph, [("A_ANN", T)], TRAINING, fewer, cache=cache)
@@ -152,8 +163,29 @@ def test_changed_settings_miss_the_cache(graph: _Recording, tmp_path: Path) -> N
     assert batches[T] != _direct(graph, ["A_ANN"], T)
 
 
+def test_a_split_written_with_another_seed_misses_the_cache(
+    graph: _Recording, tmp_path: Path
+) -> None:
+    """Holding out Max hides him, and the cash-out account reached only through him, from
+    Mia's training subgraph: the subgraphs cached under the old split are not read."""
+    before = fetch(
+        graph, [("A_MIA", T)], TRAINING, CONFIG, cache=SubgraphCache(tmp_path, "dev", HOLDOUT)
+    )
+    assert _accounts(before[T]) == ["A_MAX", "A_MIA", "A_QUY", "A_VIC", "X_CASH"]
+    [written] = graph.graph.run(WRITE_SPLIT, split_params(standard_world().splits() | {"P_MAX": 1}))
+    assert written["status"] == "ok"
+    cache = SubgraphCache(tmp_path, "dev", HOLDOUT + 1)
+    assert cache.load(T, TRAINING, CONFIG) == {}
+    batches = fetch(graph, [("A_MIA", T)], TRAINING, CONFIG, cache=cache)
+    assert graph.requests == [(T, ["A_MIA"]), (T, ["A_MIA"])]
+    assert batches[T] == _direct(graph, ["A_MIA"], T)
+    assert _accounts(batches[T]) == ["A_MIA", "A_QUY", "A_VIC"]
+    assert _stored(cache.path(T, TRAINING))["key"] == cache_key(CONFIG, HOLDOUT + 1)
+
+
 def test_each_world_and_phase_has_files_of_its_own(graph: _Recording, tmp_path: Path) -> None:
-    dev, other = SubgraphCache(tmp_path, "dev"), SubgraphCache(tmp_path, "other-1")
+    dev = SubgraphCache(tmp_path, "dev", HOLDOUT)
+    other = SubgraphCache(tmp_path, "other-1", HOLDOUT)
     fetch(graph, [("A_MIA", T)], TRAINING, CONFIG, cache=dev)
     fetch(graph, [("A_MIA", T)], TRAINING, CONFIG, cache=other)
     test = fetch(graph, [("A_MIA", T)], Phase.TEST, CONFIG, cache=dev)
@@ -164,7 +196,7 @@ def test_each_world_and_phase_has_files_of_its_own(graph: _Recording, tmp_path: 
 
 
 def test_a_refused_request_stops_the_fetch(graph: _Recording, tmp_path: Path) -> None:
-    cache = SubgraphCache(tmp_path, "dev")
+    cache = SubgraphCache(tmp_path, "dev", HOLDOUT)
     with pytest.raises(ValueError, match="unknown_seed"):
         fetch(graph, [("A_MIA", T), ("A_NOBODY", T)], TRAINING, CONFIG, cache=cache)
     assert not cache.path(T, TRAINING).exists()
@@ -177,6 +209,6 @@ def test_the_cache_refuses_a_world_that_is_no_name_and_a_time_inside_a_day(
 ) -> None:
     for world in ("", "../dev", "dev/one", ".hidden"):
         with pytest.raises(ValueError, match="world"):
-            SubgraphCache(tmp_path, world)
+            SubgraphCache(tmp_path, world, HOLDOUT)
     with pytest.raises(ValueError, match="00:00 UTC"):
-        SubgraphCache(tmp_path, "dev").path(T + 1, TRAINING)
+        SubgraphCache(tmp_path, "dev", HOLDOUT).path(T + 1, TRAINING)
