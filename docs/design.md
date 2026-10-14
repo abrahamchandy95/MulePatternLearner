@@ -226,8 +226,11 @@ association).
 
 ## Evaluation
 
-- **Scoring.** Every test account is scored on every weekly date in the test window. Mules
-  already discovered before a date are removed from that date's ranking.
+- **Scoring.** On every weekly date in the test window, every true mule active that date is
+  scored, plus an inverse-probability-weighted random sample of the other accounts (the
+  kept audit sample), so the metrics estimate the full ranking without scoring every
+  account every week. Mules already discovered before a date are removed from that date's
+  ranking.
 - **Per-date alert budgets** (top 1% and 5%): precision and recall of hidden mules active on
   that date.
 - **Account level.** The first alert date: time to detection (first alert minus onset) and
