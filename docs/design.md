@@ -151,9 +151,10 @@ At most 48 hop-2 accounts reached through identity per seed. Token gets no relat
 token belongs to exactly one account, so its age becomes an account feature.
 
 **Hubs.** An identity node or counterparty with more distinct visible owners than a measured
-threshold (carrier NAT, busy terminals, billers, the bank's ledger accounts) stays as a leaf
-node with its degree and age as features and is not expanded. The count is computed in the
-query as of t, stopping early at the threshold.
+threshold (carrier NAT, busy terminals, billers, the bank's ledger accounts) stays in the
+subgraph as a leaf: it keeps its features (its counts and age among them) but is not
+expanded. The count is computed in the query as of t; a counterparty with no more payments
+in all time than the threshold is not counted.
 
 **Node features** (computed in TigerGraph as of t, only over customers visible in the phase):
 
@@ -257,10 +258,11 @@ variant needs; how they reach the model is not settled yet.
 
 **Label-input variant.** The same model also sees whether each neighbour account was a
 confirmed mule by t, with the Fourier encoding of time since confirmation, split by how it is
-linked. The seed and every account of its owner always read as unknown. The query returns the
-visible confirmations as data, and masking (*default*: each confirmed neighbour hidden with
-probability 0.5 during training, never at evaluation) happens on the GPU, so cached
-subgraphs are reused across epochs.
+linked. The seed and every account of its owner always read as unknown. The visible
+confirmations are data kept apart from the subgraph (`fetch_subgraphs` reads no supervision;
+how they reach the model is not settled yet), and masking (*default*: each confirmed
+neighbour hidden with probability 0.5 during training, never at evaluation) happens on the
+GPU, so cached subgraphs are reused across epochs.
 
 ## Training
 
