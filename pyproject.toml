@@ -88,7 +88,8 @@ include_external_packages = true
 # The import rules of docs/design.md for the packages that exist so far, each holding
 # without exceptions; tests/test_import_contracts.py runs them. The layers are exhaustive,
 # so every new top-level module must be placed in one. Nothing below evaluation imports
-# it, so only evaluation reads the answer key.
+# it, so only evaluation reads the answer key. testing (the reference graph and the test
+# world) sits beside cli at the top, so only the tests import it.
 
 [[tool.importlinter.contracts]]
 name = "Layers run one way"
@@ -98,7 +99,7 @@ containers = ["mule_pattern_learner"]
 exhaustive = true
 exhaustive_ignores = ["__main__"]
 layers = [
-    "cli",
+    "cli | testing",
     "evaluation",
     "tigergraph | model",
     "runtime | metrics",
