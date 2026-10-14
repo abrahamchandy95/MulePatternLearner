@@ -177,6 +177,73 @@ query as of t, stopping early at the threshold.
 **The contract lock.** The query prints a version, and the model file stores it with a
 fingerprint of the feature layout. Scoring refuses a model built for another version.
 
+### Response format
+
+The reference graph of the tests produces exactly this, and `tigergraph/queries.py` parses
+it.
+
+**Request.** `seed_ids` (distinct accounts) share one `as_of_ms`, t: callers group seeds by
+date. `held_out_visible` is true only in the test phase. The caps, `hub_threshold` and
+`lookback_days` come from config under the names of the fields below.
+
+**Rows.** A refused request prints one row, `{"status": reason}`: `invalid_parameters`,
+`duplicate_seed`, or `unknown_seed` and `invisible_seed` (not opened by t, or held out
+while hidden) with the offending `seeds`. Otherwise the first row is `{"status": "ok",
+"version", "as_of_ms", "held_out_visible"}`, then one row per seed in request order with
+`seed`, the node lists `accounts`, `parties`, `devices`, `ips`, `addresses`, and the edge
+lists `pays`, `owned_by`, `enrolled_on_device`, `enrolled_on_ip`, `at_address`,
+`sent_from_device`, `sent_from_ip`, each edge from an account. Lists are unordered; a node
+appears once, the seed is among the accounts, and both ends of every edge are nodes of the
+same subgraph. Durations are milliseconds and never negative; one whose presence flag is
+false is 0. Python adds the reverse edges.
+
+**Visibility.** Unless `held_out_visible`, accounts and parties of split 1 do not exist. A
+payment is visible when `t - lookback_days <= event_ts_ms < t` and both its accounts are
+visible; a link when `valid_from_ms <= t` and its party is visible, and one that ended by t
+stays with its end. A device or IP is observed on the visible payments an account sent.
+
+**Expansion.** Every cap keeps the newest first, ties broken by id.
+
+- The seeds, then each counterparty of a seed's payments that is not a hub (hop 1),
+  expand: their sent and received payments (`seed_payments` per direction for a seed,
+  `other_payments` otherwise), one edge each, whose other account becomes a node; their
+  owner (latest ownership link); their owner's links to devices, IPs and addresses
+  (`enrolled_devices`, `enrolled_ips`, `addresses` by start, one edge per link); and the
+  devices and IPs observed on their own payments (`sent_devices`, `sent_ips` by last use,
+  one edge per node).
+- A seed's owner adds its `siblings` newest accounts by ownership start; the seed's own
+  ownership edge is always there.
+- Each device, IP or address a seed reached that is not a hub adds other customers' visible
+  deposit accounts (owned by another party than the seed's owner): those whose owner links
+  to it, one candidate per link, and those observed sending from it, one per account. Per
+  seed, candidates are taken newest first (link start or last use), ties by account, node
+  and relation: at most `reverse_accounts` per node and relation, and at most
+  `identity_accounts` distinct accounts.
+- A hop-1 counterparty is a hub when more than `hub_threshold` distinct visible parties own
+  the other accounts of its visible payments; one with no more payments than that in all
+  time is not counted. A device, IP or address is a hub when more than `hub_threshold`
+  parties are linked to it or own accounts observed on it. A hub keeps its node and
+  features but is not expanded.
+
+**Node fields.**
+
+| List | Fields |
+|---|---|
+| `accounts` | `id`, `account_type`, `is_external`; `age_ms` (from `opened_ms`); `token_present`, `token_age_ms` (from its earliest visible token link); `in_7d`, `in_30d`, `in_365d`, `out_7d`, `out_30d`, `out_365d` (visible payments received and sent in the last 7, 30 and 365 days); `amount_in_30d`, `amount_out_30d`; `counterparties_in_30d`, `counterparties_out_30d` (distinct accounts); `first_inflows_7d`, `first_inflows_30d` (inflows with no earlier visible payment from the same sender in the window); `passed_on_30d` (the amount of the last 30 days' inflows followed within 24 hours, at or after them, by a visible outflow); `last_in_present`, `since_last_in_ms`, `last_out_present`, `since_last_out_ms`; `closed` (`0 < closed_ms <= t`) |
+| `parties` | `id`, `age_ms` (from `joined_ms`), `open_accounts`, `closed_accounts` (accounts it owns by t) |
+| `devices`, `ips`, `addresses` | `id`; `age_ms` (from its first visible link start or observed payment); `parties_now` (visible parties with a link open at t), `parties_ever`; `accounts` (visible accounts its parties own by t, and accounts observed on it); `new_parties_30d` (parties whose first link to it started in the last 30 days); `observed_only` (observed, linked to no party); `hub` |
+
+**Edge fields.**
+
+| Lists | Fields |
+|---|---|
+| `pays` | `id` (the payment), `from_id` (sender), `to_id` (receiver), `amount`, `rail` (`payment_rail`, or `zelle`), `age_ms`; `prior_count` (visible payments from the same sender to the same receiver earlier in the window), `first_in_pair` (none), `gap_present`, `gap_ms` (since the latest of them), `pair_age_ms` (since the earliest); `next_outflow_present`, `next_outflow_ms` (to the receiver's earliest visible outflow at or after it, before t) |
+| `owned_by`, `enrolled_on_device`, `enrolled_on_ip`, `at_address` | `from_id`, `to_id`; `since_start_ms`; `active` (`valid_to_ms` 0 or after t); `since_end_ms`; `held_ms` (from its start to its end, or to t while active) |
+| `sent_from_device`, `sent_from_ip` | `from_id`, `to_id`, `since_first_ms`, `since_last_ms`, `uses` (its payments observed on the node) |
+
+The query reads no supervision, so it does not return the confirmations the label-input
+variant needs; how they reach the model is not settled yet.
+
 ## The model
 
 - Heterogeneous temporal graph attention: two `HeteroConv` layers of `TransformerConv` per
