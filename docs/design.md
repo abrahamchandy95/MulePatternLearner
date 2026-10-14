@@ -274,7 +274,7 @@ GPU, so cached subgraphs are reused across epochs.
 - *Defaults*: Adam, learning rate 0.001, weight decay 0.0001, at most 30 epochs, patience
   5, five seeds per world.
 - **Caching.** Subgraphs are cached on disk per (world, phase, as-of date), keyed by the
-  query version.
+  query version, the subgraph settings and the hold-out seed.
 
 ## Comparisons
 
