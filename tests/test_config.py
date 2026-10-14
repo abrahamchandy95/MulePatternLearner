@@ -11,8 +11,10 @@ import pytest
 from mule_pattern_learner.config import (
     DEFAULT_CONFIG,
     DataConfig,
+    ModelConfig,
     RunConfig,
     SubgraphConfig,
+    TrainingConfig,
     TransportConfig,
 )
 
@@ -38,6 +40,13 @@ def test_the_defaults_are_the_built_in_settings() -> None:
     )
     assert (data.maturity_gap_days, data.unlabelled_per_positive) == (60, 15)
     assert (data.scored_sample, data.seed) == (2000, 0)
+    # The design's model and training defaults, and a batch size it leaves.
+    model = DEFAULT_CONFIG.model
+    assert (model.hidden, model.heads, model.dropout, model.label_mask) == (64, 4, 0.2, 0.5)
+    training = DEFAULT_CONFIG.training
+    optimiser = (training.learning_rate, training.weight_decay)
+    assert (optimiser, training.max_epochs, training.patience) == ((0.001, 0.0001), 30, 5)
+    assert (training.priors, training.batch_size) == ((0.001, 0.003, 0.01), 128)
 
 
 def test_sections_refuse_values_outside_their_ranges() -> None:
@@ -69,6 +78,23 @@ def test_sections_refuse_values_outside_their_ranges() -> None:
         (lambda: DataConfig(scored_sample=0), "data.scored_sample"),
         (lambda: DataConfig(seed=-1), "data.seed"),
         (lambda: RunConfig(data=None), "data must be"),  # pyright: ignore[reportArgumentType]
+        (lambda: ModelConfig(hidden=0), "model.hidden"),
+        (lambda: ModelConfig(heads=0), "model.heads"),
+        (lambda: ModelConfig(hidden=64, heads=5), "split evenly"),
+        (lambda: ModelConfig(dropout=1.0), "model.dropout"),
+        (lambda: ModelConfig(dropout=True), "model.dropout"),  # pyright: ignore[reportArgumentType]
+        (lambda: ModelConfig(label_mask=-0.1), "model.label_mask"),
+        (lambda: RunConfig(model="wide"), "model must be"),  # pyright: ignore[reportArgumentType]
+        (lambda: TrainingConfig(learning_rate=0), "training.learning_rate"),
+        (lambda: TrainingConfig(weight_decay=-1e-4), "training.weight_decay"),
+        (lambda: TrainingConfig(max_epochs=0), "training.max_epochs"),
+        (lambda: TrainingConfig(patience=0), "training.patience"),
+        (lambda: TrainingConfig(priors=()), "training.priors"),
+        (lambda: TrainingConfig(priors=[0.01]), "training.priors"),  # pyright: ignore[reportArgumentType]
+        (lambda: TrainingConfig(priors=(0.01, 1.0)), "training.priors"),
+        (lambda: TrainingConfig(priors=(0.01, 0.01)), "repeats"),
+        (lambda: TrainingConfig(batch_size=0), "training.batch_size"),
+        (lambda: RunConfig(training=0), "training must be"),  # pyright: ignore[reportArgumentType]
     ]
     for build, name in bad:
         with pytest.raises(ValueError, match=name):
