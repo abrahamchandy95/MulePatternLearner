@@ -57,7 +57,9 @@ class SubgraphConfig:
     # Payments per direction: a seed's newest, and those of every other expanded account.
     seed_payments: int = 32
     other_payments: int = 16
-    # The seed owner's accounts.
+    # An expanded account's owners, by its newest ownership links, and each seed owner's
+    # accounts.
+    owners: int = 1
     siblings: int = 8
     # An account's links through its owner, and the nodes observed on its own payments.
     enrolled_devices: int = 8
@@ -78,6 +80,7 @@ class SubgraphConfig:
         for name in (
             "seed_payments",
             "other_payments",
+            "owners",
             "siblings",
             "enrolled_devices",
             "enrolled_ips",

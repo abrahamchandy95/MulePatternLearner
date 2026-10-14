@@ -39,7 +39,7 @@ QUERY_FILES = {
 # The version fetch_subgraphs prints: "subgraphs-" and 12 hex digits of the hash of its
 # text (installer.text_version). A test keeps the two equal, so a change to the query needs
 # a new value here; a model stores it, and scoring refuses a model built for another.
-SUBGRAPH_VERSION = "subgraphs-40d794a3cd10"
+SUBGRAPH_VERSION = "subgraphs-7f185ca8af14"
 
 # How a discovered mule was found.
 DISCOVERY_CHANNELS = frozenset({"victim_report", "monitoring", "trace"})

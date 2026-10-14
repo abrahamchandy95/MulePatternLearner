@@ -9,7 +9,7 @@ USE GRAPH Mule_Pattern_Learner
    are visible; a link when valid_from_ms <= t. Unless held_out_visible, an account or
    party of split 1 is invisible, with every payment and link that reaches it.
    Expansion: the seeds (hop 0), then the counterparties of their payments that are not
-   hubs (hop 1) follow every relation from an account; the seed's owner adds its accounts,
+   hubs (hop 1) follow every relation from an account; a seed's owners add their accounts,
    and each identity node of a seed that is not a hub adds other customers' deposit
    accounts. Every cap keeps the newest first, ties by id.
    Reads no supervision and no answer key. */
@@ -19,6 +19,7 @@ CREATE OR REPLACE QUERY fetch_subgraphs(
     BOOL held_out_visible,
     INT seed_payments,
     INT other_payments,
+    INT owners,
     INT siblings,
     INT enrolled_devices,
     INT enrolled_ips,
@@ -134,7 +135,7 @@ CREATE OR REPLACE QUERY fetch_subgraphs(
     /* An expanded account's picks, per relation. */
     HeapAccum<PayPick>(seed_payments, ts DESC, id ASC) @seed_out, @seed_in;
     HeapAccum<PayPick>(other_payments, ts DESC, id ASC) @other_out, @other_in;
-    HeapAccum<LinkPick>(1, start_ms DESC, id ASC) @owner_pick;
+    HeapAccum<LinkPick>(owners, start_ms DESC, id ASC) @owner_pick;
     HeapAccum<LinkPick>(enrolled_devices, start_ms DESC, id ASC) @device_pick;
     HeapAccum<LinkPick>(enrolled_ips, start_ms DESC, id ASC) @ip_pick;
     HeapAccum<LinkPick>(addresses, start_ms DESC, id ASC) @address_pick;
@@ -168,7 +169,7 @@ CREATE OR REPLACE QUERY fetch_subgraphs(
     MapAccum<STRING, SetAccum<INT>> @@expand_for, @@accounts_in, @@parties_in, @@devices_in,
       @@ips_in, @@addresses_in, @@transactions_in, @@transfers_in;
     MapAccum<STRING, SetAccum<INT>> @@hop1, @@owner_of, @@device_of, @@ip_of, @@address_of;
-    MapAccum<INT, MaxAccum<STRING>> @@seed_owner;
+    MapAccum<INT, SetAccum<STRING>> @@seed_owners;
     SetAccum<STRING> @@ids, @@found, @@problem;
     SetAccum<Link> @@links;
     SetAccum<Sent> @@sent;
@@ -199,9 +200,10 @@ CREATE OR REPLACE QUERY fetch_subgraphs(
     LinkRow link_row;
 
     @@seed_list = seed_ids;
-    IF @@seed_list.size() < 1 OR seed_payments < 1 OR other_payments < 1 OR siblings < 1
-       OR enrolled_devices < 1 OR enrolled_ips < 1 OR addresses < 1 OR sent_devices < 1
-       OR sent_ips < 1 OR reverse_accounts < 1 OR identity_accounts < 1 OR hub_threshold < 1
+    IF @@seed_list.size() < 1 OR seed_payments < 1 OR other_payments < 1 OR owners < 1
+       OR siblings < 1 OR enrolled_devices < 1 OR enrolled_ips < 1 OR addresses < 1
+       OR sent_devices < 1 OR sent_ips < 1 OR reverse_accounts < 1 OR identity_accounts < 1
+       OR hub_threshold < 1
        OR lookback_days < 30 OR lookback_days > 3650
        OR as_of_ms < 365 * day_ms OR as_of_ms < lookback_days * day_ms THEN
         PRINT "invalid_parameters" AS status;
@@ -398,7 +400,7 @@ CREATE OR REPLACE QUERY fetch_subgraphs(
                 @@parties_in += (x.id -> @@expand_for.get(a.id)),
                 FOREACH i IN @@expand_for.get(a.id) DO
                     @@links += Link(i, "owned_by", a.id, x.id, x.start_ms, x.end_ms),
-                    IF hop == 0 THEN @@owner_of += (x.id -> i), @@seed_owner += (i -> x.id) END
+                    IF hop == 0 THEN @@owner_of += (x.id -> i), @@seed_owners += (i -> x.id) END
                 END
             END,
             FOREACH x IN a.@device_pick DO
@@ -439,7 +441,7 @@ CREATE OR REPLACE QUERY fetch_subgraphs(
         hop = hop + 1;
     END;
 
-    /* The seed's owner adds its newest accounts; the seed's own ownership is already in. */
+    /* Each owner of a seed adds its newest accounts; the seed's own ownership is in. */
     @@ids.clear();
     FOREACH (party_id, marks) IN @@owner_of DO @@ids += party_id; END;
     SeedOwners = to_vertex_set(@@ids, "Party");
@@ -557,7 +559,7 @@ CREATE OR REPLACE QUERY fetch_subgraphs(
       WHERE NOT n.@hub AND l.valid_from_ms <= as_of_ms AND o.valid_from_ms <= as_of_ms
         AND b.account_type == "deposit" AND (held_out_visible OR b.split != 1)
       ACCUM FOREACH i IN @@device_of.get(n.id) DO
-          IF q.id != @@seed_owner.get(i) THEN
+          IF NOT @@seed_owners.get(i).contains(q.id) THEN
               @@reverse += Reverse(i, l.valid_from_ms, b.id, n.id, "enrolled_on_device",
                 l.valid_to_ms, 0)
           END
@@ -567,7 +569,7 @@ CREATE OR REPLACE QUERY fetch_subgraphs(
       WHERE NOT n.@hub AND l.valid_from_ms <= as_of_ms AND o.valid_from_ms <= as_of_ms
         AND b.account_type == "deposit" AND (held_out_visible OR b.split != 1)
       ACCUM FOREACH i IN @@ip_of.get(n.id) DO
-          IF q.id != @@seed_owner.get(i) THEN
+          IF NOT @@seed_owners.get(i).contains(q.id) THEN
               @@reverse += Reverse(i, l.valid_from_ms, b.id, n.id, "enrolled_on_ip",
                 l.valid_to_ms, 0)
           END
@@ -577,7 +579,7 @@ CREATE OR REPLACE QUERY fetch_subgraphs(
       WHERE NOT n.@hub AND l.valid_from_ms <= as_of_ms AND o.valid_from_ms <= as_of_ms
         AND b.account_type == "deposit" AND (held_out_visible OR b.split != 1)
       ACCUM FOREACH i IN @@address_of.get(n.id) DO
-          IF q.id != @@seed_owner.get(i) THEN
+          IF NOT @@seed_owners.get(i).contains(q.id) THEN
               @@reverse += Reverse(i, l.valid_from_ms, b.id, n.id, "at_address",
                 l.valid_to_ms, 0)
           END
@@ -608,7 +610,7 @@ CREATE OR REPLACE QUERY fetch_subgraphs(
       POST-ACCUM
         FOREACH (node_id, last_ms) IN b.@reverse_device_last DO
             FOREACH i IN @@device_of.get(node_id) DO
-                IF b.@owner_id != @@seed_owner.get(i) THEN
+                IF NOT @@seed_owners.get(i).contains(b.@owner_id) THEN
                     @@reverse += Reverse(i, last_ms, b.id, node_id, "sent_from_device",
                       b.@reverse_device_first.get(node_id), b.@reverse_device_uses.get(node_id))
                 END
@@ -616,7 +618,7 @@ CREATE OR REPLACE QUERY fetch_subgraphs(
         END,
         FOREACH (node_id, last_ms) IN b.@reverse_ip_last DO
             FOREACH i IN @@ip_of.get(node_id) DO
-                IF b.@owner_id != @@seed_owner.get(i) THEN
+                IF NOT @@seed_owners.get(i).contains(b.@owner_id) THEN
                     @@reverse += Reverse(i, last_ms, b.id, node_id, "sent_from_ip",
                       b.@reverse_ip_first.get(node_id), b.@reverse_ip_uses.get(node_id))
                 END
@@ -834,7 +836,7 @@ CREATE OR REPLACE QUERY fetch_subgraphs(
             CASE WHEN p.@next_out < as_of_ms THEN p.@next_out - p.event_ts_ms ELSE 0 END))
       END;
 
-    PRINT "ok" AS status, "subgraphs-40d794a3cd10" AS version, as_of_ms AS as_of_ms,
+    PRINT "ok" AS status, "subgraphs-7f185ca8af14" AS version, as_of_ms AS as_of_ms,
       held_out_visible AS held_out_visible;
     FOREACH i IN RANGE[0, @@seed_list.size() - 1] DO
         PRINT @@seed_list.get(i) AS seed,

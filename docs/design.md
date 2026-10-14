@@ -207,17 +207,17 @@ stays with its end. A device or IP is observed on the visible payments an accoun
 - The seeds, then each counterparty of a seed's payments that is not a hub (hop 1),
   expand: their sent and received payments (`seed_payments` per direction for a seed,
   `other_payments` otherwise), one edge each, whose other account becomes a node; their
-  owner (latest ownership link); their owner's links to devices, IPs and addresses
-  (`enrolled_devices`, `enrolled_ips`, `addresses` by start, one edge per link); and the
-  devices and IPs observed on their own payments (`sent_devices`, `sent_ips` by last use,
-  one edge per node).
-- A seed's owner adds its `siblings` newest accounts by ownership start; the seed's own
-  ownership edge is always there.
+  owners (their `owners` latest ownership links); their owners' links to devices, IPs and
+  addresses (`enrolled_devices`, `enrolled_ips`, `addresses` by start, one edge per link);
+  and the devices and IPs observed on their own payments (`sent_devices`, `sent_ips` by
+  last use, one edge per node).
+- Each owner of a seed adds its `siblings` newest accounts by ownership start; the seed's
+  own ownership edges are always there.
 - Each device, IP or address a seed reached that is not a hub adds other customers' visible
-  deposit accounts (owned by another party than the seed's owner): those whose owner links
-  to it, one candidate per link, and those observed sending from it, one per account. Per
-  seed, candidates are taken newest first (link start or last use), ties by account, node
-  and relation: at most `reverse_accounts` per node and relation, and at most
+  deposit accounts (owned by a party that is not an owner of the seed): those whose owner
+  links to it, one candidate per link, and those observed sending from it, one per account.
+  Per seed, candidates are taken newest first (link start or last use), ties by account,
+  node and relation: at most `reverse_accounts` per node and relation, and at most
   `identity_accounts` distinct accounts.
 - A hop-1 counterparty is a hub when more than `hub_threshold` distinct visible parties own
   the other accounts of its visible payments; one with no more payments than that in all

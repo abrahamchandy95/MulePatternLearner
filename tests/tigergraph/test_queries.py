@@ -397,6 +397,7 @@ def test_subgraph_parameters_are_the_request_and_every_setting() -> None:
         "held_out_visible": False,
         "seed_payments": 32,
         "other_payments": 16,
+        "owners": 1,
         "siblings": 8,
         "enrolled_devices": 8,
         "enrolled_ips": 8,
