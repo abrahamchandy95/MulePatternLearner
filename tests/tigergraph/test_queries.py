@@ -38,8 +38,10 @@ from mule_pattern_learner.tigergraph.queries import (
 DAY = 86_400_000
 T = 1_719_792_000_000  # 2024-07-01 00:00 UTC
 
-# Seed A1 paid B2 by Zelle and was paid back; B2, a counterparty, paid the external C3.
-# A1's owner P1 is enrolled on D1, and so is E5's owner; A1 sent from I1. A2 is new.
+# Seed A1 paid B2 by Zelle (T1, from I1) and was paid back an hour later (T2); B2, an
+# ownerless counterparty, had paid the external C3 the day before (T3). These are every
+# payment of the three in the window. A1's owner P1 is enrolled on D1, as E5's owner was
+# until 10 days ago. A2 opened at t.
 SUBGRAPHS: list[dict[str, Any]] = [
     {"status": "ok", "version": SUBGRAPH_VERSION, "as_of_ms": T, "held_out_visible": False},
     {
@@ -53,22 +55,22 @@ SUBGRAPHS: list[dict[str, Any]] = [
                 "token_present": True,
                 "token_age_ms": 30 * DAY,
                 "in_7d": 1,
-                "in_30d": 2,
-                "in_365d": 14,
+                "in_30d": 1,
+                "in_365d": 1,
                 "out_7d": 1,
-                "out_30d": 2,
-                "out_365d": 9,
-                "amount_in_30d": 1800.0,
-                "amount_out_30d": 1750.5,
+                "out_30d": 1,
+                "out_365d": 1,
+                "amount_in_30d": 900,
+                "amount_out_30d": 875.25,
                 "counterparties_in_30d": 1,
                 "counterparties_out_30d": 1,
-                "first_inflows_7d": 0,
+                "first_inflows_7d": 1,
                 "first_inflows_30d": 1,
-                "passed_on_30d": 900,
+                "passed_on_30d": 0,
                 "last_in_present": True,
                 "since_last_in_ms": 2 * DAY - 3_600_000,
                 "last_out_present": True,
-                "since_last_out_ms": DAY,
+                "since_last_out_ms": 2 * DAY,
                 "closed": False,
             },
             {
@@ -166,7 +168,7 @@ SUBGRAPHS: list[dict[str, Any]] = [
         "ips": [
             {
                 "id": "I1",
-                "age_ms": 20 * DAY,
+                "age_ms": 2 * DAY,
                 "parties_now": 0,
                 "parties_ever": 0,
                 "accounts": 1,
@@ -204,8 +206,8 @@ SUBGRAPHS: list[dict[str, Any]] = [
                 "pair_age_ms": 0,
                 "prior_count": 0,
                 "first_in_pair": True,
-                "next_outflow_present": True,
-                "next_outflow_ms": DAY - 3_600_000,
+                "next_outflow_present": False,
+                "next_outflow_ms": 0,
             },
             {
                 "id": "T3",
@@ -258,9 +260,9 @@ SUBGRAPHS: list[dict[str, Any]] = [
             {
                 "from_id": "A1",
                 "to_id": "I1",
-                "since_first_ms": 20 * DAY,
-                "since_last_ms": DAY,
-                "uses": 4,
+                "since_first_ms": 2 * DAY,
+                "since_last_ms": 2 * DAY,
+                "uses": 1,
             }
         ],
     },
@@ -330,13 +332,14 @@ def test_a_subgraph_response_parses_into_one_subgraph_per_seed() -> None:
     assert (first.seed, second.seed) == ("A1", "A2")
     assert [account.id for account in first.accounts] == ["A1", "B2", "C3", "E5"]
     seed = first.accounts[0]
-    assert isinstance(seed, AccountNode) and seed.passed_on_30d == 900.0
-    assert isinstance(seed.passed_on_30d, float) and seed.token_age_ms == 30 * DAY
+    assert isinstance(seed, AccountNode) and seed.amount_in_30d == 900.0
+    assert isinstance(seed.amount_in_30d, float) and isinstance(seed.passed_on_30d, float)
+    assert seed.token_age_ms == 30 * DAY
     assert first.pays[0] == PaymentEdge(
         "T1", "A1", "B2", 875.25, "zelle", 2 * DAY, False, 0, 0, 0, True, True, 3_600_000
     )
     assert first.enrolled_on_device[1] == LinkEdge("E5", "D1", 60 * DAY, False, 10 * DAY, 50 * DAY)
-    assert first.sent_from_ip == (SentEdge("A1", "I1", 20 * DAY, DAY, 4),)
+    assert first.sent_from_ip == (SentEdge("A1", "I1", 2 * DAY, 2 * DAY, 1),)
     assert first.ips[0].observed_only and not first.devices[0].hub
     assert second.pays == () and second.parties[0].id == "P2"
 
