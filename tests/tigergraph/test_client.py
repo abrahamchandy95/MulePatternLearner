@@ -6,16 +6,26 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from pyTigerGraph.common.exception import TigerGraphException
 import requests
 
-from mule_pattern_learner.contract.server import GRAPH_NAME
-from mule_pattern_learner.testing.fake_connection import executor
 from mule_pattern_learner.tigergraph.client import Client, _status_error, _TimeoutConnection
-from mule_pattern_learner.tigergraph.executor import ServerTimeoutError
+from mule_pattern_learner.tigergraph.executor import ServerTimeoutError, TigerGraphExecutor
+
+GRAPH = "Test_Graph"
+
+
+class SleeplessExecutor(TigerGraphExecutor):
+    """The real retry policy over a connection; its sleeps are recorded, not slept."""
+
+    def __init__(self, conn: Any) -> None:
+        self.sleeps: list[float] = []
+        client = SimpleNamespace(conn=conn, graphname=GRAPH)
+        super().__init__(client=client, sleep=self.sleeps.append)
 
 
 def test_json_bodied_status_errors_keep_their_status_through_pytigergraph(
@@ -31,24 +41,24 @@ def test_json_bodied_status_errors_keep_their_status_through_pytigergraph(
         return response
 
     monkeypatch.setattr(requests.Session, "request", fake)
-    conn = _TimeoutConnection(host="http://127.0.0.1", graphname=GRAPH_NAME)
+    conn = _TimeoutConnection(host="http://127.0.0.1", graphname=GRAPH)
     ok = {"error": False, "message": "", "results": [{"status": "ok"}]}
     script[:] = [
         (503, {"error": True, "message": "The service is not ready", "code": "REST-0005"}),
         (429, {"error": True, "message": "Rate limit exceeded"}),
         (200, ok),
     ]
-    tg = executor(conn)
+    tg = SleeplessExecutor(conn)
     assert tg.run("q", {"node_ids": ["a"]}) == [{"status": "ok"}]
     assert len(tg.sleeps) == 2 and not script
     script[:] = [(400, {"error": True, "message": "bad parameter", "code": "GSQL-1"}), (200, ok)]
-    tg = executor(conn)
+    tg = SleeplessExecutor(conn)
     with pytest.raises(TigerGraphException, match="bad parameter"):
         tg.run("q", {})
     assert not tg.sleeps and len(script) == 1
     script[:] = [(500, {"error": True, "message": "timed out", "code": "REST-3002"})] * 2
     with pytest.raises(ServerTimeoutError):
-        executor(conn).run("q", {})
+        SleeplessExecutor(conn).run("q", {})
     assert not script
     for status in (401, 404, 400, 200):
         response = requests.Response()
@@ -70,7 +80,7 @@ def test_connection_default_timeout_is_effective_and_overridable(
         raise requests.ConnectionError("no network in tests")
 
     monkeypatch.setattr(requests.Session, "request", fake)
-    conn = _TimeoutConnection(host="http://127.0.0.1", graphname=GRAPH_NAME)
+    conn = _TimeoutConnection(host="http://127.0.0.1", graphname=GRAPH)
     client = Client.__new__(Client)
     client.conn = conn
     for timeout in (None, 7):

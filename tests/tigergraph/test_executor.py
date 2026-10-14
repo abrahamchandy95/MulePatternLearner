@@ -7,17 +7,12 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import json
-from pathlib import Path
 from typing import Any
 
 import pytest
 from pyTigerGraph.common.exception import TigerGraphException
 import requests
 
-from mule_pattern_learner.artifacts import read_events
-from mule_pattern_learner.contract.server import CONTEXT_QUERY, CREATE_SCOPE_QUERY, CUTOFF_QUERY
-from mule_pattern_learner.runtime.progress import recording
-from mule_pattern_learner.testing.fake_connection import FakeClock, FakeConn, executor
 from mule_pattern_learner.tigergraph.executor import (
     AVAILABILITY,
     DETERMINISTIC,
@@ -31,6 +26,73 @@ from mule_pattern_learner.tigergraph.executor import (
     failure_summary,
     short_reason,
 )
+
+# A query that takes a batch of keys, so a retry names how many it asked for.
+QUERY = "fetch_subgraphs"
+
+
+class FakeClock:
+    """Monotonic clock that advances only when sleeping or when a test says so."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+        self.sleeps: list[float] = []
+
+    def time(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
+class FakeConn:
+    """Scripted pyTigerGraph connection: each call pops the next outcome.
+
+    An outcome is a result, an exception to raise, or a callable run with the
+    call's arguments (it may advance a clock, raise or return).
+    """
+
+    def __init__(self, outcomes: list[Any]) -> None:
+        self.outcomes = list(outcomes)
+        self.calls: list[tuple[Any, ...]] = []
+
+    def _next(self, *args: Any) -> Any:
+        self.calls.append(args)
+        outcome = self.outcomes.pop(0)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        if callable(outcome):
+            return outcome(*args)
+        return outcome
+
+    def runInstalledQuery(self, name: str, params: dict[str, Any], **kwargs: Any) -> Any:
+        return self._next(name, params, kwargs)
+
+    def gsql(self, text: str) -> Any:
+        return self._next(text)
+
+
+class FakeClient:
+    """A connected client of a graph over a scripted connection."""
+
+    def __init__(self, conn: Any, graphname: str) -> None:
+        self.conn = conn
+        self.graphname = graphname
+
+
+class RecordingExecutor(TigerGraphExecutor):
+    """The real retry policy over a fake connection and a fake clock; sleeps are recorded."""
+
+    def __init__(self, conn: Any, graph: str = "Test_Graph", **kwargs: Any) -> None:
+        self.clock = FakeClock()
+        self.sleeps = self.clock.sleeps
+        client = FakeClient(conn, graph)
+        super().__init__(client=client, sleep=self.clock.sleep, clock=self.clock.time, **kwargs)
+
+
+def executor(conn: Any, **kwargs: Any) -> RecordingExecutor:
+    return RecordingExecutor(conn, **kwargs)
 
 
 def http_error(status: int, body: Any = b"") -> requests.HTTPError:
@@ -63,9 +125,9 @@ def test_availability_failures_are_retried_with_capped_exponential_backoff() -> 
         ]
     )
     tg = executor(conn, base_delay_s=4, max_delay_s=10)
-    assert tg.run(CUTOFF_QUERY, {"cutoff_times": [1]}) == [{"status": "ok"}]
+    assert tg.run("q", {"dates": [1]}) == [{"status": "ok"}]
     assert len(conn.calls) == 6
-    assert tg.retries[CUTOFF_QUERY] == 5 and tg.calls == 1
+    assert tg.retries["q"] == 5 and tg.calls == 1
     bases = [4, 8, 10, 10, 10]  # capped at max_delay_s
     assert all(b / 2 <= s <= b for b, s in zip(bases, tg.sleeps, strict=True))
     kwargs = conn.calls[0][2]
@@ -173,27 +235,23 @@ def test_a_failure_is_named_in_a_few_words_never_by_its_page(
 
 
 def test_retries_and_the_outage_that_ends_them_name_the_reason_without_the_page(
-    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    events = tmp_path / "events.jsonl"
-    with recording(events):
-        tg = executor(FakeConn([STARTING] * 100), max_attempts=3, max_outage_s=120)
-        with pytest.raises(TigerGraphUnavailableError) as raised:
-            tg.run("q", {})
+    tg = executor(FakeConn([STARTING] * 100), max_attempts=3, max_outage_s=120)
+    with pytest.raises(TigerGraphUnavailableError) as raised:
+        tg.run("q", {})
     message = str(raised.value)
     assert "<" not in message and len(message) < 200
     assert message.endswith("TigerGraphException: starting workspace")
-    retries = read_events(events)
-    assert {(e["event"], e["failure"], e["reason"]) for e in retries} == {
-        ("retry", AVAILABILITY, "starting workspace")
-    }
-    # The record keeps the error's start too, for whoever reads the file.
-    assert retries[0]["error"].startswith("TigerGraphException: Cannot parse json: <html>")
+    lines = capsys.readouterr().out.splitlines()
+    assert len(lines) == len(tg.sleeps) > 1
+    for line in lines:
+        assert line.startswith("TigerGraph is not answering yet (starting workspace): attempt ")
 
 
 # TigerGraph's own words for a failure, longer than a retry's line keeps.
 OUT_OF_MEMORY = TigerGraphException(
-    "Runtime Error: the query fetch_training_context ran out of memory on partition 3"
+    "Runtime Error: the query fetch_subgraphs ran out of memory on partition 3"
 )
 URLLIB3_REFUSED = (
     "HTTPSConnectionPool(host='tg.example', port=443): Max retries exceeded with url: "
@@ -207,8 +265,8 @@ URLLIB3_REFUSED = (
     [
         (
             OUT_OF_MEMORY,
-            "TigerGraphException: Runtime Error: the query fetch_training_context ran out of "
-            "memory on partition 3",
+            "TigerGraphException: Runtime Error: the query fetch_subgraphs ran out of memory "
+            "on partition 3",
         ),
         (STARTING, "TigerGraphException: starting workspace"),
         (
@@ -250,19 +308,22 @@ def test_the_error_that_ends_the_retries_keeps_its_cause_but_never_a_page(
     assert "<" not in summary and len(summary) < 230
 
 
-def test_retries_that_run_out_keep_the_cause_tigergraph_gave(tmp_path: Path) -> None:
-    events = tmp_path / "events.jsonl"
-    with recording(events):
-        tg = executor(FakeConn([OUT_OF_MEMORY] * 2))
-        with pytest.raises(TransientQueryError) as raised:
-            tg.run(CONTEXT_QUERY, {"node_ids": ["a"] * 512})
+def test_retries_that_run_out_keep_the_cause_tigergraph_gave(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    tg = executor(FakeConn([OUT_OF_MEMORY] * 2))
+    with pytest.raises(TransientQueryError) as raised:
+        tg.run(QUERY, {"node_ids": ["a"] * 512})
     # The retry's line names the reason in a few words; the error keeps TigerGraph's.
-    (retry,) = read_events(events)
-    assert retry["reason"] == "runtime error: the query fetch_training_context ran out of..."
+    (line,) = capsys.readouterr().out.splitlines()
+    assert line.startswith(
+        "TigerGraph failed fetch_subgraphs, 512 keys (runtime error: the query fetch_subgraphs "
+        "ran out of...): attempt 1, retrying in "
+    )
     assert str(raised.value) == (
-        "fetch_training_context (512 keys) failed after 2 attempts (suspected "
-        "deterministic failure, retried once): TigerGraphException: Runtime Error: the query "
-        "fetch_training_context ran out of memory on partition 3"
+        "fetch_subgraphs (512 keys) failed after 2 attempts (suspected deterministic "
+        "failure, retried once): TigerGraphException: Runtime Error: the query "
+        "fetch_subgraphs ran out of memory on partition 3"
     )
     # A write has one attempt, so no retry records its error: the error itself names it.
     conn = FakeConn([requests.ConnectionError(URLLIB3_REFUSED)])
@@ -290,7 +351,7 @@ def test_suspected_deterministic_failures_are_retried_once() -> None:
         conn = FakeConn([error, error, [{"status": "ok"}]])
         tg = executor(conn, max_attempts=20)
         with pytest.raises(raised, match="after 2 attempt"):
-            tg.run(CONTEXT_QUERY, {"node_ids": ["a", "b"]})
+            tg.run(QUERY, {"node_ids": ["a", "b"]})
         assert len(conn.calls) == 2 and len(tg.sleeps) == 1, error
         # One failure followed by success recovers.
         conn = FakeConn([error, [{"status": "ok"}]])
@@ -375,7 +436,7 @@ def test_permanent_errors_and_writes_are_not_retried() -> None:
     # Writes use a single attempt.
     conn = FakeConn([requests.ConnectionError("down"), [{"status": "ok"}]])
     with pytest.raises(TransientQueryError):
-        executor(conn).run(CREATE_SCOPE_QUERY, {}, attempts=1)
+        executor(conn).run("write_q", {}, attempts=1)
     assert len(conn.calls) == 1
 
 
@@ -413,17 +474,23 @@ def test_resume_page_in_gsql_output_is_transient() -> None:
 
 
 def test_executor_connects_only_with_the_settings_it_is_given() -> None:
-    # The pipeline reads .env (pipeline.connect.connect); the executor never does.
+    # Its caller reads .env (ConnectionSettings); the executor never does.
     with pytest.raises(ValueError, match="connected client or its settings"):
         TigerGraphExecutor()
+
+
+def test_the_graph_is_the_one_the_connection_names() -> None:
+    # No graph name is built in: GRAPHNAME in .env chooses it.
+    for graph in ("Mule_Pattern_Learner", "Sensitivity_World"):
+        assert executor(FakeConn([]), graph=graph).graph_name == graph
 
 
 def test_a_count_of_one_in_a_failure_reads_in_the_singular() -> None:
     timeout = TigerGraphException("Query timeout exceeded", "REST-3002")
     with pytest.raises(ServerTimeoutError) as raised:
-        executor(FakeConn([timeout] * 2)).run(CONTEXT_QUERY, {"node_ids": ["a"]})
+        executor(FakeConn([timeout] * 2)).run(QUERY, {"node_ids": ["a"]})
     assert str(raised.value).startswith(
-        "fetch_training_context (1 key) failed after 2 attempts (server timeout, 1 retry allowed): "
+        "fetch_subgraphs (1 key) failed after 2 attempts (server timeout, 1 retry allowed): "
     )
     with pytest.raises(ServerTimeoutError) as raised:
         executor(FakeConn([timeout])).run("q", {}, timeout_retries=0)

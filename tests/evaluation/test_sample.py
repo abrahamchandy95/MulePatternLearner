@@ -4,8 +4,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from mule_pattern_learner.evaluation.audit import audit_metrics
 from mule_pattern_learner.evaluation.sample import AUDIT_NEGATIVES, audit_sample
+from mule_pattern_learner.metrics import sample_metrics
 
 
 def population_of(split: str, count: int = 10000) -> pd.DataFrame:
@@ -18,8 +18,7 @@ def truth_of(population: pd.DataFrame, mules: int = 40) -> pd.DataFrame:
     ring = np.where(np.arange(count) < mules, np.arange(count) // 4, -1)
     return population[["account_id"]].assign(
         is_mule=np.r_[np.ones(mules, int), np.zeros(count - mules, int)],
-        ring_id=ring,
-        label_source="phantomledger_role",
+        mule_ring_id=ring,
     )
 
 
@@ -29,12 +28,13 @@ def test_the_audit_sample_covers_rare_positives_and_recovers_population_prevalen
     sample = audit_sample(population, truth, negatives=100, seed=7)
     assert len(sample) == 140 and sample.is_mule.sum() == 40
     assert sample.account_id.is_monotonic_increasing
-    # The truth's ring and label source come with every sampled account.
-    assert sample[sample.is_mule == 1].ring_id.tolist() == [i // 4 for i in range(40)]
-    assert (sample[sample.is_mule == 0].ring_id == -1).all()
+    # The truth's ring comes with every sampled account.
+    assert sample[sample.is_mule == 1].mule_ring_id.tolist() == [i // 4 for i in range(40)]
+    assert (sample[sample.is_mule == 0].mule_ring_id == -1).all()
     assert set(sample.inclusion_probability) == {1.0, 100 / 9960}
-    sample["score"] = sample.is_mule * 0.8 + 0.1
-    metrics = audit_metrics(sample, 0.5)
+    score = sample.is_mule.to_numpy(float) * 0.8 + 0.1
+    weight = 1 / sample.inclusion_probability.to_numpy(float)
+    metrics = sample_metrics(sample.is_mule.to_numpy(int), score, weight)
     assert metrics["weighted_prevalence"] == pytest.approx(0.004)
     assert metrics["estimated_population"] == pytest.approx(10000)
     assert metrics["average_precision"] == pytest.approx(1)

@@ -23,21 +23,10 @@ dependencies = [
     # installed, which is faster than the standard json module on every batch.
     "orjson>=3.10",
     "torch>=2.9",
-    "matplotlib>=3.10",
+    "torch_geometric>=2.7",
 ]
 
 [project.optional-dependencies]
-# GPU neighbor resampling for training (Linux x86_64 with CUDA). Pick the
-# extra that matches the CUDA major version of the installed torch wheel: cu12 wheels are on
-# pypi.nvidia.com (use with torch cu129), cu13 wheels are on pypi.org (torch>=2.13 cu130/cu132).
-cuda12 = [
-    "pylibcugraph-cu12==26.8.*; sys_platform == 'linux'",
-    "cupy-cuda12x>=14.0.1,!=14.1.0; sys_platform == 'linux'",
-]
-cuda13 = [
-    "pylibcugraph-cu13==26.8.*; sys_platform == 'linux'",
-    "cupy-cuda13x>=14.0.1,!=14.1.0; sys_platform == 'linux'",
-]
 # Dev tooling.
 dev = [
     "pytest>=8.3",
@@ -55,17 +44,15 @@ packages = ["src/mule_pattern_learner"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # Tests import the installed package (pip install -e), never src/ through sys.path. Tests
-# marked graph, graph_write or cuda need TigerGraph or a GPU, so they are deselected
-# unless -m names them: a -m on the command line replaces this one, and -m "" runs all.
-addopts = ["--import-mode=importlib", "-m", "not graph and not graph_write and not cuda"]
+# marked graph need TigerGraph, so they are deselected unless -m names them: a -m on the
+# command line replaces this one, and -m "" runs all.
+addopts = ["--import-mode=importlib", "-m", "not graph"]
 markers = [
-    "graph: reads from the TigerGraph named in .env; excluded by default (-m graph)",
-    "graph_write: writes to the TigerGraph named in .env; excluded by default (-m graph_write)",
-    "cuda: needs a CUDA device; excluded by default (-m cuda)",
+    "graph: needs the TigerGraph named in .env; excluded by default (-m graph)",
 ]
 
 [tool.basedpyright]
-include = ["src", "tests", "scripts"]
+include = ["src", "tests"]
 exclude = ["**/__pycache__", ".venv"]
 venvPath = "."
 venv = ".venv"
@@ -82,7 +69,7 @@ reportUnknownLambdaType = "warning"
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-src = ["src", "tests", "scripts"]
+src = ["src", "tests"]
 
 [tool.ruff.lint]
 # The default rules plus import sorting, so `ruff check` alone gates the import order.
@@ -98,9 +85,9 @@ force-sort-within-sections = true
 root_package = "mule_pattern_learner"
 include_external_packages = true
 
-# The import contracts of docs/architecture.md (its Layers). Every contract holds
-# without exceptions: none of them ignores an import. tests/test_import_contracts.py
-# checks that the contracts which list every package but the ones they allow list each.
+# The import rules of docs/design.md for the packages that exist so far, each holding
+# without exceptions; tests/test_import_contracts.py runs them. Nothing below evaluation
+# imports it, so only evaluation reads the answer key.
 
 [[tool.importlinter.contracts]]
 name = "Layers run one way"
@@ -108,161 +95,14 @@ type = "layers"
 containers = ["mule_pattern_learner"]
 layers = [
     "cli",
-    "experiments",
-    "pipeline",
-    "diagnostics",
-    "training | evaluation | reporting | tigergraph",
-    "inference",
-    "batching",
-    "data | sampling | model",
-    "runtime",
-    "artifacts | metrics",
+    "evaluation",
+    "tigergraph | model",
+    "runtime | metrics",
     "config | paths",
-    "contract",
 ]
-
-[[tool.importlinter.contracts]]
-name = "Use cases reach TigerGraph only through ports"
-type = "forbidden"
-source_modules = [
-    "mule_pattern_learner.training",
-    "mule_pattern_learner.evaluation",
-    "mule_pattern_learner.data",
-    "mule_pattern_learner.batching",
-    "mule_pattern_learner.inference",
-    "mule_pattern_learner.sampling",
-    "mule_pattern_learner.model",
-    "mule_pattern_learner.reporting",
-    "mule_pattern_learner.diagnostics",
-]
-forbidden_modules = ["mule_pattern_learner.tigergraph", "pyTigerGraph"]
-
-[[tool.importlinter.contracts]]
-name = "Training never reads ground truth"
-type = "forbidden"
-source_modules = [
-    "mule_pattern_learner.training",
-    "mule_pattern_learner.data",
-    "mule_pattern_learner.batching",
-    "mule_pattern_learner.inference",
-    "mule_pattern_learner.sampling",
-    "mule_pattern_learner.model",
-    "mule_pattern_learner.config",
-    # The adapter every training batch's contexts come through.
-    "mule_pattern_learner.tigergraph.context_query",
-    # The use cases of the pipeline that prepare, train, check and score.
-    "mule_pattern_learner.pipeline.connect",
-    "mule_pattern_learner.pipeline.prepare",
-    "mule_pattern_learner.pipeline.train",
-    "mule_pattern_learner.pipeline.check",
-    "mule_pattern_learner.pipeline.score",
-]
-forbidden_modules = [
-    "mule_pattern_learner.evaluation",
-    "mule_pattern_learner.diagnostics",
-    "mule_pattern_learner.tigergraph.oracle",
-]
-
-[[tool.importlinter.contracts]]
-name = "Only reporting draws"
-type = "forbidden"
-source_modules = [
-    "mule_pattern_learner.__main__",
-    "mule_pattern_learner.cli",
-    "mule_pattern_learner.config",
-    "mule_pattern_learner.paths",
-    "mule_pattern_learner.artifacts",
-    "mule_pattern_learner.metrics",
-    "mule_pattern_learner.contract",
-    "mule_pattern_learner.runtime",
-    "mule_pattern_learner.tigergraph",
-    "mule_pattern_learner.data",
-    "mule_pattern_learner.sampling",
-    "mule_pattern_learner.model",
-    "mule_pattern_learner.batching",
-    "mule_pattern_learner.inference",
-    "mule_pattern_learner.training",
-    "mule_pattern_learner.evaluation",
-    "mule_pattern_learner.pipeline",
-    "mule_pattern_learner.experiments",
-    "mule_pattern_learner.reference",
-    "mule_pattern_learner.testing",
-    "mule_pattern_learner.diagnostics",
-]
-forbidden_modules = ["matplotlib"]
-# pipeline, cli, experiments and diagnostics call reporting
-allow_indirect_imports = true
-
-[[tool.importlinter.contracts]]
-name = "Reporting reads files, not models or the graph"
-type = "forbidden"
-source_modules = ["mule_pattern_learner.reporting"]
-forbidden_modules = [
-    "torch",
-    "mule_pattern_learner.model",
-    "mule_pattern_learner.inference",
-    "mule_pattern_learner.training",
-]
-
-[[tool.importlinter.contracts]]
-name = "Fakes stay out of the package"
-type = "forbidden"
-source_modules = [
-    "mule_pattern_learner.__main__",
-    "mule_pattern_learner.cli",
-    "mule_pattern_learner.config",
-    "mule_pattern_learner.paths",
-    "mule_pattern_learner.artifacts",
-    "mule_pattern_learner.metrics",
-    "mule_pattern_learner.contract",
-    "mule_pattern_learner.runtime",
-    "mule_pattern_learner.tigergraph",
-    "mule_pattern_learner.data",
-    "mule_pattern_learner.sampling",
-    "mule_pattern_learner.model",
-    "mule_pattern_learner.batching",
-    "mule_pattern_learner.inference",
-    "mule_pattern_learner.training",
-    "mule_pattern_learner.evaluation",
-    "mule_pattern_learner.pipeline",
-    "mule_pattern_learner.experiments",
-    "mule_pattern_learner.reference",
-    "mule_pattern_learner.reporting",
-    "mule_pattern_learner.diagnostics",
-]
-forbidden_modules = ["mule_pattern_learner.testing"]
-
-[[tool.importlinter.contracts]]
-name = "Only diagnostics uses the verification mirrors"
-type = "forbidden"
-source_modules = [
-    "mule_pattern_learner.__main__",
-    "mule_pattern_learner.cli",
-    "mule_pattern_learner.config",
-    "mule_pattern_learner.paths",
-    "mule_pattern_learner.artifacts",
-    "mule_pattern_learner.metrics",
-    "mule_pattern_learner.contract",
-    "mule_pattern_learner.runtime",
-    "mule_pattern_learner.tigergraph",
-    "mule_pattern_learner.data",
-    "mule_pattern_learner.sampling",
-    "mule_pattern_learner.model",
-    "mule_pattern_learner.batching",
-    "mule_pattern_learner.inference",
-    "mule_pattern_learner.training",
-    "mule_pattern_learner.evaluation",
-    "mule_pattern_learner.pipeline",
-    "mule_pattern_learner.experiments",
-    "mule_pattern_learner.testing",
-    "mule_pattern_learner.reporting",
-]
-forbidden_modules = ["mule_pattern_learner.reference"]
-# cli and pipeline.diagnose reach reference only through diagnostics
-allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]
 name = "The model knows nothing about storage"
 type = "forbidden"
 source_modules = ["mule_pattern_learner.model"]
-forbidden_modules = ["pandas", "pyarrow", "requests", "mule_pattern_learner.data"]
+forbidden_modules = ["pandas", "pyarrow", "requests", "pyTigerGraph"]

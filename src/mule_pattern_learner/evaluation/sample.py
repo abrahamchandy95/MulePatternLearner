@@ -5,8 +5,6 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from ..contract.graph_schema import TRUTH_COLUMNS
-
 # The negatives an audit sample draws from its split; every positive is kept.
 AUDIT_NEGATIVES = 2000
 
@@ -20,14 +18,13 @@ def audit_sample(
 ) -> pd.DataFrame:
     """Case/control sample of one split's population with known inclusion probabilities.
 
-    The caller supplies the COMPLETE frozen population of the split (audit_population),
-    not the preparation reservoir; the sample must never feed training or threshold
-    selection. It keeps every positive and draws ``negatives`` negatives uniformly with
-    ``seed`` (dataset.split_seed), so it depends only on the population, the truth and
-    the seed: every run of a dataset is audited on the same accounts. The rows, in
-    account order, carry the population's columns, the truth's (TRUTH_COLUMNS) and
-    inclusion_probability. Unknown truth is an error: otherwise neither prevalence nor
-    weights is known.
+    The caller supplies the COMPLETE frozen population of the split, not a sample of
+    it; the audit sample must never feed training or threshold selection. It keeps every
+    positive and draws ``negatives`` negatives uniformly with ``seed``, so it depends
+    only on the population, the truth and the seed: every run is audited on the same
+    accounts. The rows, in account order, carry the population's columns, the truth's
+    (account_id, is_mule and whatever else it holds) and inclusion_probability. Unknown
+    truth is an error: otherwise neither prevalence nor weights is known.
     """
     if negatives < 1 or "split" not in population or population.split.nunique() != 1:
         raise ValueError("Provide the complete population of one split and a positive count")
@@ -35,9 +32,7 @@ def audit_sample(
         raise ValueError("The population and the truth must have unique account IDs")
     if "is_mule" in population:
         raise ValueError("Evaluation population must be label-blind")
-    frame = population.merge(
-        truth[list(TRUTH_COLUMNS)], on="account_id", how="left", validate="one_to_one"
-    )
+    frame = population.merge(truth, on="account_id", how="left", validate="one_to_one")
     if not frame.is_mule.isin([0, 1]).all():
         raise ValueError("Complete binary truth is required for population-weighted evaluation")
     positive = frame[frame.is_mule == 1].copy()

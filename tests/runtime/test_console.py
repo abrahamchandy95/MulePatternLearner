@@ -1,548 +1,76 @@
-"""The console: each event's short line, the progress rewritten in place, and nothing else."""
+"""The console: the line of each retry, and how lines write counts and messages."""
 
 from __future__ import annotations
 
-import ast
-import io
-from pathlib import Path
-import sys
-from typing import Any
-
 import pytest
 
-from mule_pattern_learner.paths import REPOSITORY_ROOT
-from mule_pattern_learner.runtime import console
-from mule_pattern_learner.runtime.console import (
-    LINES,
-    event_text,
-    show,
-    show_event,
-    show_scoring,
-)
+from mule_pattern_learner.runtime.console import brief, plural, retry_line, show
 
 
-class Terminal(io.StringIO):
-    """A stdout that says it is a terminal."""
-
-    def isatty(self) -> bool:
-        return True
-
-
-# Records as the commands emit them; most are the owner's first run on the CUDA host.
-KNOWN = {"train": 20, "validation": 11, "test": 20}
-STALE = [f"query_{n}" for n in range(12)]
-
-
-def records(run: Path) -> list[tuple[dict[str, Any], str | None]]:
-    """(record, its console text) pairs; ``run`` is a run directory under the cwd."""
-    plan = {"epochs": 30, "steps_per_epoch": 100, "steps": 100, "patience": 6, "stopped": False}
-    host = {"device": "cuda", "threads": 4, "deterministic": True, "sampler_backend": "cugraph"}
-    epoch = {"loss": 0.0991, "steps": 100, "weights": "averaged", "validation_roc_auc": 0.9592}
-    return [
+@pytest.mark.parametrize(
+    "failure, operation, attempt, wait, reason, line",
+    [
         (
-            {
-                "event": "retry",
-                "failure": "availability",
-                "operation": "connect",
-                "attempt": 2,
-                "retry_in_s": 5.8,
-                "error": "TigerGraphException: Cannot parse json: <html> <title>Starting "
-                "workspace</title> ...",
-                "reason": "starting workspace, HTTP 502",
-            },
+            "availability",
+            "connect",
+            2,
+            5.8,
+            "starting workspace, HTTP 502",
             "TigerGraph is not answering yet (starting workspace, HTTP 502): attempt 2, "
             "retrying in 6 s",
         ),
         (
-            {
-                "event": "retry",
-                "failure": "server_timeout",
-                "operation": "fetch_training_context (64 keys)",
-                "attempt": 1,
-                "retry_in_s": 3.2,
-                "error": "TigerGraphException: Query timeout exceeded",
-                "reason": "query timeout exceeded",
-            },
-            "TigerGraph timed out on fetch_training_context, 64 keys (query timeout "
-            "exceeded): attempt 1, retrying in 3 s",
+            "server_timeout",
+            "fetch_subgraphs (64 keys)",
+            1,
+            3.2,
+            "query timeout exceeded",
+            "TigerGraph timed out on fetch_subgraphs, 64 keys (query timeout exceeded): "
+            "attempt 1, retrying in 3 s",
         ),
+        # A count of one reads in the singular.
         (
-            {
-                "event": "retry",
-                "failure": "deterministic",
-                "operation": "CREATE QUERY queries/training_context.gsql",
-                "attempt": 1,
-                "retry_in_s": 4.4,
-                "error": "TigerGraphException: Runtime Error: out of memory",
-                "reason": "runtime error: out of memory",
-            },
-            "TigerGraph failed CREATE QUERY queries/training_context.gsql (runtime error: out "
-            "of memory): attempt 1, retrying in 4 s",
-        ),
-        (
-            {"event": "context_split", "keys": 64, "hop": 1, "error": "ServerTimeoutError: x"},
-            "TigerGraph timed out on a request of 64 keys at hop 1; requesting its halves on "
-            "their own",
-        ),
-        (
-            {"event": "install", "stale": STALE, "up_to_date": []},
-            "Installing all 12 queries on TigerGraph (about 50 minutes)...",
-        ),
-        # Only an install of every query gives the time a fresh graph's install took.
-        (
-            {"event": "install", "stale": STALE[:3], "up_to_date": STALE[3:]},
-            "Installing 3 queries on TigerGraph...",
-        ),
-        ({"event": "install", "stale": [], "up_to_date": STALE}, None),
-        (
-            {
-                "event": "install_unanswered",
-                "error": "ServerTimeoutError",
-                "note": "polling the endpoint listing",
-            },
-            "TigerGraph has not answered the install request (ServerTimeoutError); waiting "
-            "until the installed queries are enabled",
-        ),
-        (
-            {"event": "install_wait", "awaiting": STALE[:2], "elapsed_s": 840},
-            "Waiting for 2 queries to compile: 14.0 min so far",
-        ),
-        (
-            {"event": "installed", "installed": STALE, "seconds": 2880},
-            "Installed 12 queries in 48.0 min",
-        ),
-        (
-            {"event": "drop_retired", "dropped": ["old_a", "old_b"]},
-            "Dropped 2 retired queries: old_a, old_b",
-        ),
-        ({"event": "drop_retired", "dropped": []}, None),
-        # Scope types that predate the split shares, replaced by `mule install`.
-        (
-            {
-                "event": "scope_types",
-                "replacing": ["Temporal_Training_Scope lacks train_share, validation_share"],
-                "dropping": ["fetch_training_context", "create_training_scope"],
-            },
-            "Replacing the scope vertex type (Temporal_Training_Scope lacks train_share, "
-            "validation_share): dropping the 2 queries that use it first...",
-        ),
-        (
-            {"event": "scope_types", "replaced": ["Temporal_Training_Scope lacks"], "dropped": []},
-            "Replaced the scope vertex type; every training query is installed again",
-        ),
-        # The split found in place, or created, and the hub registry show nothing.
-        ({"event": "scope", "found": True}, None),
-        (
-            {"event": "scope", "creating": True},
-            "Creating the graph's train, validation and test split on TigerGraph...",
-        ),
-        ({"event": "scope", "created": True}, None),
-        (
-            {
-                "event": "reveal",
-                "labels": "already revealed",
-                "revealed_labels": 51,
-            },
-            "Known mules already revealed on TigerGraph: 51",
-        ),
-        ({"event": "hubs", "hub_counts": {"101": {"1": 3, "2": 1}, "102": {"1": 2, "2": 0}}}, None),
-        (
-            {
-                "event": "dataset",
-                "dataset_id": "1a2b3c4d5e6f7a8b9c",
-                "status": "reused",
-                "known_mules": KNOWN,
-            },
-            "Dataset 1a2b3c4d5e6f: 20 / 11 / 20 known mules in train / validation / test",
-        ),
-        (
-            {"event": "already_complete", "run": str(run)},
-            "results/baseline/seed-42 is complete; its metrics.json is summarised below",
-        ),
-        (
-            {
-                "event": "already_audited",
-                "run": str(run),
-                "reports": [
-                    str(run / "audit" / f"{split}.json") for split in ("validation", "test")
-                ],
-            },
-            "results/baseline/seed-42 is already audited on validation and test; its "
-            "audit/validation.json and audit/test.json are summarised below",
-        ),
-        (
-            {
-                "event": "already_audited",
-                "run": str(run),
-                "reports": [str(run / "audit" / "validation.json")],
-            },
-            "results/baseline/seed-42 is already audited on validation; its "
-            "audit/validation.json is summarised below",
-        ),
-        (
-            {"event": "start", **host, "known_mules": KNOWN, "run": str(run), **plan}
-            | {"epoch": 0, "step": 0, "database_calls": 0, "elapsed_seconds": 0.1},
-            "Training on cuda (cuGraph sampler) into results/baseline/seed-42: 100 steps per "
-            "epoch, at most 30 epochs, early stop after 6 epochs without gain",
-        ),
-        (
-            {"event": "resume", **host, "run": str(run), **plan, "epoch": 2, "step": 40}
-            | {"sampler_backend": "torch", "device": "cpu", "patience": 0},
-            "Resuming results/baseline/seed-42 at epoch 3, step 40, on cpu (torch sampler): "
-            "100 steps per epoch, at most 30 epochs, no early stop",
-        ),
-        # The steps the schedule takes: three train cutoffs of up to 100 steps each.
-        (
-            {"event": "start", **host, "known_mules": KNOWN, "run": str(run), **plan}
-            | {"steps": 300, "epoch": 0, "step": 0},
-            "Training on cuda (cuGraph sampler) into results/baseline/seed-42: 300 steps per "
-            "epoch, at most 30 epochs, early stop after 6 epochs without gain",
-        ),
-        # A selection rule other than the built-in one is named; "none" keeps the last epoch.
-        (
-            {"event": "start", **host, "known_mules": KNOWN, "run": str(run), **plan}
-            | {"selection": "validation_pu_risk", "epoch": 0, "step": 0},
-            "Training on cuda (cuGraph sampler) into results/baseline/seed-42: 100 steps per "
-            "epoch, at most 30 epochs, early stop after 6 epochs without gain, selecting on "
-            "the validation proxy nnPU risk",
-        ),
-        (
-            {"event": "start", **host, "known_mules": KNOWN, "run": str(run), **plan}
-            | {"selection": "none", "epochs": 10, "epoch": 0, "step": 0},
-            "Training on cuda (cuGraph sampler) into results/baseline/seed-42: 100 steps per "
-            "epoch, 10 epochs, no early stop, keeping the last epoch",
-        ),
-        (
-            {
-                "event": "train",
-                "epoch": 3,
-                "step": 60,
-                "steps": 100,
-                "date": "2024-07-01",
-                "loss": 0.13612,
-                "objective": 0.13612,
-                "seconds_per_step": 1.94,
-                "batch": {"roots": 64},
-                "database_calls": 1234,
-            },
-            "epoch 3  step 60/100  loss 0.136  1.9 s/step",
-        ),
-        (
-            {"event": "score", "split": "validation", "accounts": 640, "total": 2011},
-            None,
-        ),
-        (
-            {"event": "epoch", "epoch": 5, **epoch, "validation_ap": 0.5661}
-            | {"selected": True, "stopped": False, "best_epoch": 5, "epoch_seconds": 186.0},
-            "epoch  5  loss 0.099  validation AP 0.566  ROC AUC 0.959  3.1 min  best so far",
-        ),
-        (
-            {"event": "epoch", "epoch": 11, **epoch, "validation_ap": None}
-            | {"selected": False, "stopped": True, "best_epoch": 5, "epoch_seconds": 41.0},
-            "epoch 11  loss 0.099  validation AP n/a    ROC AUC 0.959     41 s\n"
-            "early stop: no gain for 6 epochs",
-        ),
-        # Another rule names its criterion; the risk, which the line otherwise lacks, is
-        # shown when the rule selects on it. Under "none" no epoch is marked.
-        (
-            {"event": "epoch", "epoch": 5, **epoch, "validation_ap": 0.5661}
-            | {"selection": "validation_pu_risk", "validation_pu_risk": 0.99412}
-            | {"selected": True, "stopped": False, "best_epoch": 5, "epoch_seconds": 186.0},
-            "epoch  5  loss 0.099  validation AP 0.566  ROC AUC 0.959  nnPU risk 0.994  "
-            "3.1 min  lowest risk so far",
-        ),
-        (
-            {"event": "epoch", "epoch": 5, **epoch, "validation_ap": 0.5661}
-            | {"selection": "validation_roc_auc", "validation_pu_risk": 0.99412}
-            | {"selected": True, "stopped": False, "best_epoch": 5, "epoch_seconds": 186.0},
-            "epoch  5  loss 0.099  validation AP 0.566  ROC AUC 0.959  3.1 min  "
-            "best ROC AUC so far",
-        ),
-        (
-            {"event": "epoch", "epoch": 5, **epoch, "validation_ap": 0.5661}
-            | {"selection": "none", "validation_pu_risk": 0.99412}
-            | {"selected": True, "stopped": False, "best_epoch": 5, "epoch_seconds": 186.0},
-            "epoch  5  loss 0.099  validation AP 0.566  ROC AUC 0.959  3.1 min",
-        ),
-        ({"event": "complete", "best_epoch": 5}, None),
-        (
-            {"event": "sampler_backend", "saved": "cugraph", "resumed": "torch", "note": "x"},
-            "Note: the run sampled with the cugraph backend and resumes with torch, so the "
-            "remaining steps sample a different stream",
-        ),
-        (
-            {
-                "event": "host_settings",
-                "saved": {"deterministic": True, "threads": 1},
-                "resumed": {"deterministic": False, "threads": 2},
-                "note": "x",
-            },
-            "Note: this segment runs with deterministic False (was True), threads 2 (was 1), "
-            "so the remaining steps may not reproduce an uninterrupted run",
-        ),
-        (
-            {"event": "warning", "warning": "cugraph_probe", "message": "cuGraph failed."},
-            "Warning: cuGraph failed.",
-        ),
-        (
-            {
-                "event": "feature_table",
-                "split": "validation",
-                "date": "2024-10-01",
-                "accounts": 2051,
-                "mules": 51,
-                "rejected": 0,
-            },
-            "Feature table, validation at 2024-10-01: 2,051 accounts, 51 mules, 0 rejected",
-        ),
-        (
-            {"event": "diagnose", "analysis": "features", "status": "written", "rows": 6123}
-            | {"seconds": 41.2, "finished": "2026-10-03T10:00:00+00:00"},
-            "features         written      6,123 rows  41 s",
-        ),
-        (
-            {"event": "diagnose", "analysis": "subgroups", "status": "skipped", "seconds": 0}
-            | {"reason": "results/baseline/seed-42 has no audit; run `mule evaluate`"},
-            "subgroups        skipped  results/baseline/seed-42 has no audit; run `mule evaluate`",
-        ),
-        (
-            {
-                "event": "suite",
-                "suite": "controls",
-                "dataset_id": "1a2b3c4d5e6f7a8b9c",
-                "runs": {
-                    "baseline": {"42": "keep", "43": "train"},
-                    "no_attention": {"42": "train", "43": "resume"},
-                },
-                "bound_hours": 12.5,
-                "timed_from": "results/baseline/seed-42/history.csv",
-            },
-            "Suite controls on dataset 1a2b3c4d5e6f: 4 runs, 3 to train, at most 12.5 hours\n"
-            "  variant       seed 42   seed 43\n"
-            "  baseline      keep      train\n"
-            "  no_attention  train     resume",
-        ),
-        (
-            {
-                "event": "suite",
-                "suite": "controls",
-                "dataset_id": "1a2b3c4d5e6f7a8b9c",
-                "runs": {"baseline": {"42": "keep", "43": "train"}},
-                "bound_hours": 3.0,
-                "timed_from": "results/baseline/seed-42/history.csv",
-                "estimate_hours": [0.3, 1.2],
-                "estimated_from": 1,
-            },
-            "Suite controls on dataset 1a2b3c4d5e6f: 2 runs, 1 to train, about 0.3 to 1.2 "
-            "hours by the 1 finished run, at most 3.0 hours\n"
-            "  variant   seed 42   seed 43\n"
-            "  baseline  keep      train",
-        ),
-        (
-            {
-                "event": "suite",
-                "suite": "controls",
-                "dataset_id": "1a2b3c4d5e6f7a8b9c",
-                "runs": {
-                    "baseline": {"42": "keep", "43": "train"},
-                    "linear": {"42": "train", "43": "train"},
-                    "wide_and_deep": {"42": "train", "43": "train"},
-                },
-                "estimate_hours": [1.5, 3.6],
-                "estimated_from": 1,
-                "costed_from_baseline": ["linear", "wide_and_deep"],
-            },
-            "Suite controls on dataset 1a2b3c4d5e6f: 6 runs, 5 to train, about 1.5 to 3.6 "
-            "hours by the 1 finished run (linear and wide_and_deep, which have none, costed "
-            "from the baseline's)\n"
-            "  variant        seed 42   seed 43\n"
-            "  baseline       keep      train\n"
-            "  linear         train     train\n"
-            "  wide_and_deep  train     train",
-        ),
-        (
-            {
-                "event": "run_archived",
-                "run": str(run.parent.parent / "no_attention" / "seed-43"),
-                "archive": str(run.parent.parent / "archive" / "no_attention" / "seed-43" / "T"),
-                "differs": ["training.patience"],
-            },
-            "Moved results/no_attention/seed-43 aside to results/archive/no_attention/seed-43/T "
-            "(differs: training.patience)",
-        ),
-        (
-            {"event": "run_finished", "variant": "baseline", "seed": 42, "step": "train"}
-            | {"best_epoch": 5, "validation_proxy_ap": 0.5661, "seconds": 8640.0},
-            "baseline seed 42 trained: best epoch 5, validation proxy AP 0.566, 2.4 h",
-        ),
-        (
-            {"event": "run_finished", "variant": "baseline", "seed": 42, "step": "audit"}
-            | {"validation_hidden_ap": 0.0812, "test_hidden_ap": None}
-            | {"validation_ap": 0.3121, "test_ap": None},
-            "baseline seed 42 audited: hidden-mule AP 0.081 on validation, n/a on test; every "
-            "mule 0.312 and n/a",
-        ),
-        (
-            {"event": "run_failed", "variant": "no_attention", "seed": 43, "step": "train"}
-            | {"error": "ValueError: this variant's own failure"},
-            "no_attention seed 43 failed in train: ValueError: this variant's own failure",
-        ),
-        (
-            {"event": "suite_stopped", "variant": "no_attention", "seed": 43, "step": "audit"}
-            | {"error": "TigerGraphUnavailableError: connect failed after 31 attempts"},
-            "TigerGraph stayed unavailable, so the suite stops at no_attention seed 43 (audit): "
-            "TigerGraphUnavailableError: connect failed after 31 attempts",
-        ),
-    ]
-
-
-def test_each_event_has_its_short_line_or_none(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    for record, text in records(tmp_path / "results" / "baseline" / "seed-42"):
-        assert event_text(record) == text, record
-    # Running totals, batch counts and scoring progress never reach the console.
-    shown = "\n".join(filter(None, (event_text(r) for r, _ in records(tmp_path))))
-    for hidden in ("database_calls", "1,234", "roots", "640", "2,011", "752,623", "<html"):
-        assert hidden not in shown
-
-
-def test_events_without_a_line_or_the_fields_their_line_reads_show_nothing() -> None:
-    assert event_text({"event": "an_event_no_line_names"}) is None
-    # A record from a test or an older version without its line's fields.
-    assert event_text({"event": "start", "step": 0}) is None
-    assert event_text({"event": "retry", "attempt": 1}) is None
-
-
-def emitted_events() -> set[str]:
-    """Every event name the package emits: the strings of an "event" key's value."""
-    names: set[str] = set()
-    for path in (REPOSITORY_ROOT / "src").rglob("*.py"):
-        for node in ast.walk(ast.parse(path.read_text())):
-            if not isinstance(node, ast.Dict):
-                continue
-            for key, value in zip(node.keys, node.values, strict=True):
-                if isinstance(key, ast.Constant) and key.value == "event":
-                    names |= {
-                        constant.value
-                        for constant in ast.walk(value)
-                        if isinstance(constant, ast.Constant) and isinstance(constant.value, str)
-                    }
-    return names
-
-
-def test_every_event_the_package_emits_has_a_decided_line() -> None:
-    # A new event needs a line, or None, in LINES: what the console shows of it is a choice.
-    emitted = emitted_events()
-    assert {"start", "resume", "epoch", "retry", "warning", "dataset"} <= emitted
-    assert emitted <= set(LINES), emitted - set(LINES)
-
-
-def test_progress_is_rewritten_in_place_on_a_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
-    screen = Terminal()
-    monkeypatch.setattr(sys, "stdout", screen)
-    step = {"event": "train", "epoch": 1, "steps": 100, "seconds_per_step": 2.0}
-    show_event(step | {"step": 10, "loss": 0.5})
-    show_event(step | {"step": 20, "loss": 0.25})
-    show("epoch  1  done")
-    show_event(step | {"step": 10, "loss": 0.125})
-    console.end_progress()
-    first = "epoch 1  step 10/100  loss 0.500  2.0 s/step"
-    second = "epoch 1  step 20/100  loss 0.250  2.0 s/step"
-    assert screen.getvalue() == (
-        f"\r{first}\r{second}"
-        # A line clears the progress line it replaces.
-        f"\r{' ' * len(second)}\repoch  1  done\n"
-        "\repoch 1  step 10/100  loss 0.125  2.0 s/step\n"
-    )
-
-
-def test_scoring_is_rewritten_in_place_and_cleared_by_the_next_line(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    screen = Terminal()
-    monkeypatch.setattr(sys, "stdout", screen)
-    show_scoring("validation", 640, 2011)
-    show_scoring("accounts", 1280)
-    show("epoch  1  done")
-    first, second = "scoring validation 640/2,011", "scoring accounts 1,280"
-    assert screen.getvalue() == (
-        f"\r{first}\r{second.ljust(len(first))}\r{' ' * len(second)}\repoch  1  done\n"
-    )
-
-
-def test_a_file_or_pipe_gets_no_progress_lines(capsys: pytest.CaptureFixture[str]) -> None:
-    step = {"event": "train", "epoch": 1, "step": 10, "steps": 100}
-    show_event(step | {"loss": 0.5, "seconds_per_step": 2.0})
-    show_event({"event": "install_wait", "installing": 12, "elapsed_s": 30})
-    show_scoring("validation", 640, 2011)
-    console.end_progress()
-    show("a line")
-    assert capsys.readouterr().out == "a line\n"
-
-
-def test_a_count_of_one_reads_in_the_singular(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    run = tmp_path / "results" / "baseline" / "seed-42"
-    plan = {"device": "cpu", "sampler_backend": "torch", "run": str(run), "epochs": 1}
-    epoch = {"event": "epoch", "epoch": 2, "loss": 0.1, "validation_ap": 0.5}
-    singular = [
-        (
-            {"event": "retry", "failure": "server_timeout", "attempt": 1, "retry_in_s": 3.2}
-            | {"operation": "fetch_training_context (1 key)", "reason": "query timeout exceeded"},
-            "TigerGraph timed out on fetch_training_context, 1 key (query timeout exceeded): "
+            "server_timeout",
+            "fetch_subgraphs (1 key)",
+            1,
+            3.2,
+            "query timeout exceeded",
+            "TigerGraph timed out on fetch_subgraphs, 1 key (query timeout exceeded): "
             "attempt 1, retrying in 3 s",
         ),
         (
-            {"event": "install", "stale": ["q1"], "up_to_date": ["q2"]},
-            "Installing 1 query on TigerGraph...",
+            "deterministic",
+            "CREATE QUERY fetch_subgraphs",
+            1,
+            4.4,
+            "runtime error: out of memory",
+            "TigerGraph failed CREATE QUERY fetch_subgraphs (runtime error: out of memory): "
+            "attempt 1, retrying in 4 s",
         ),
         (
-            {"event": "install_wait", "awaiting": ["q1"], "elapsed_s": 30},
-            "Waiting for 1 query to compile: 30 s so far",
+            "availability",
+            "connect",
+            3,
+            120.0,
+            "",
+            "TigerGraph is not answering yet (no answer): attempt 3, retrying in 2.0 min",
         ),
-        ({"event": "installed", "installed": ["q1"], "seconds": 30}, "Installed 1 query in 30 s"),
-        ({"event": "drop_retired", "dropped": ["old_a"]}, "Dropped 1 retired query: old_a"),
-        (
-            {"event": "scope_types", "replacing": ["it differs"], "dropping": ["q1"]},
-            "Replacing the scope vertex type (it differs): dropping the 1 query that uses it "
-            "first...",
-        ),
-        (
-            {"event": "reveal", "labels": "revealed", "revealed": {"2": 1}},
-            "Revealed 1 known mule: 0 / 1 / 0 in train / validation / test",
-        ),
-        (
-            {"event": "start", **plan, "steps": 1, "patience": 1, "epoch": 0, "step": 0},
-            "Training on cpu (torch sampler) into results/baseline/seed-42: 1 step per epoch, "
-            "at most 1 epoch, early stop after 1 epoch without gain",
-        ),
-        (
-            epoch
-            | {"validation_roc_auc": 0.9, "epoch_seconds": 41.0}
-            | {"stopped": True, "best_epoch": 1},
-            "epoch  2  loss 0.100  validation AP 0.500  ROC AUC 0.900     41 s\n"
-            "early stop: no gain for 1 epoch",
-        ),
-        (
-            {"event": "audit", "split": "test", "date": "2025-01-01", "accounts": 1}
-            | {"rejected_accounts": 0},
-            "Audited test at 2025-01-01: 1 account scored, 0 rejected",
-        ),
-        (
-            {"event": "feature_table", "split": "test", "date": "2025-01-01", "accounts": 1}
-            | {"mules": 1, "rejected": 0},
-            "Feature table, test at 2025-01-01: 1 account, 1 mule, 0 rejected",
-        ),
-        # The noun keeps the width of "rows", so the times stay in one column.
-        (
-            {"event": "diagnose", "analysis": "features", "status": "written", "rows": 1}
-            | {"seconds": 41.2},
-            "features         written          1 row   41 s",
-        ),
-    ]
-    for record, text in singular:
-        assert event_text(record) == text, record
+    ],
+)
+def test_each_retry_has_its_short_line(
+    failure: str, operation: str, attempt: int, wait: float, reason: str, line: str
+) -> None:
+    assert retry_line(failure, operation, attempt, wait, reason) == line
+
+
+def test_lines_write_counts_and_messages_for_a_person(capsys: pytest.CaptureFixture[str]) -> None:
+    assert (plural(1, "query", "queries"), plural(1200, "query", "queries")) == (
+        "1 query",
+        "1,200 queries",
+    )
+    assert plural(2, "attempt") == "2 attempts"
+    assert brief("a  short\n message") == "a short message"
+    assert brief("word " * 30, 20) == "word word word wo..."
+    show("one line")
+    show("two\nlines")
+    assert capsys.readouterr().out == "one line\ntwo\nlines\n"

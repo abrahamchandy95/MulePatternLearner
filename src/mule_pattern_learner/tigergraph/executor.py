@@ -11,11 +11,8 @@ import threading
 import time
 from typing import TYPE_CHECKING, Any, Protocol, TypeVar
 
-from ..config import DEFAULT_CONFIG
-from ..contract.bounds import OUTAGE_SECONDS, QUERY_ATTEMPTS
-from ..contract.server import GRAPH_NAME
-from ..runtime.console import brief, plural
-from ..runtime.progress import emit
+from ..config import DEFAULT_CONFIG, OUTAGE_SECONDS, QUERY_ATTEMPTS
+from ..runtime.console import brief, plural, retry_line, show
 
 if TYPE_CHECKING:
     from pyTigerGraph import TigerGraphConnection
@@ -291,7 +288,7 @@ class QueryExecutor(Protocol):
 class ConnectionExecutor(QueryExecutor, Protocol):
     """A QueryExecutor that also runs operations on its connection and GSQL statements.
 
-    The scope, provenance and installer functions use these; TigerGraphExecutor
+    Code that installs queries or writes to the graph uses these; TigerGraphExecutor
     retries both under its budgets, and an operation that writes passes attempts=1.
     ``graph_name`` is the graph the connection uses.
     """
@@ -308,8 +305,9 @@ class ConnectionExecutor(QueryExecutor, Protocol):
 class TigerGraphExecutor:
     """Installed-query access with per-class retry budgets (see failure_class).
 
-    It runs on a connected `client`, or connects with `settings` (read from the
-    repository .env by pipeline.connect); credentials never enter cache metadata.
+    It runs on a connected `client`, or connects with `settings` (ConnectionSettings,
+    read from the repository .env); credentials never enter cache metadata. Its
+    `graph_name` is the client's graph, the one the settings name (GRAPHNAME).
     - Availability failures are retried with capped, jittered exponential backoff
       until `max_outage_s` seconds have passed since the operation's first such
       failure, and then raise TigerGraphUnavailableError. Worker threads share one
@@ -345,8 +343,8 @@ class TigerGraphExecutor:
         rng: random.Random | None = None,
     ) -> None:
         if (
-            not QUERY_ATTEMPTS.holds(max_attempts)
-            or max_outage_s < OUTAGE_SECONDS.low
+            max_attempts not in QUERY_ATTEMPTS
+            or max_outage_s < OUTAGE_SECONDS.start
             or timeout_s <= 0
             or not 0 <= base_delay_s <= max_delay_s
             or slow_attempt_s < 0
@@ -369,9 +367,7 @@ class TigerGraphExecutor:
 
             client = self._retry(lambda: Client(settings), what="connect", attempts=None)
         self.client = client
-        if self.client.graphname != GRAPH_NAME:
-            raise ValueError(f"Training queries require {GRAPH_NAME}")
-        self.graph_name: str = GRAPH_NAME
+        self.graph_name: str = self.client.graphname
 
     def delay(self, attempt: int) -> float:
         """Exponential backoff with equal jitter, capped at max_delay_s."""
@@ -452,17 +448,7 @@ class TigerGraphExecutor:
                     pause = self.delay(1)
                 with self._lock:
                     self.retries[what] += 1
-                emit(
-                    {
-                        "event": "retry",
-                        "failure": kind,
-                        "operation": label,
-                        "attempt": total,
-                        "retry_in_s": round(pause, 1),
-                        "error": error_summary(error),
-                        "reason": short_reason(error),
-                    }
-                )
+                show(retry_line(kind, label, total, pause, short_reason(error)))
                 self._sleep(pause)
             else:
                 with self._lock:
