@@ -165,15 +165,21 @@ def standard_world() -> WorldBuilder:
     """The world the reference graph's tests pin, around T (Monday 2024-07-01).
 
     - Ann and Ben share a home: its address H_HOME and its IP I_HOME. Ann has a deposit
-      account with a Zelle token and a credit card; Ben enrolled the device D_BEN at T.
-      Ann paid Ben at the window's start (T01), a second before it (T02), and twice since;
-      Ben's payment back (T05) is at T itself.
+      account with two Zelle tokens (bound 200 and 100 days before T) and a credit card;
+      Ben enrolled the device D_BEN at T. Ann paid Ben at the window's start (T01), a second
+      before it (T02), and twice since; Ben's payment back (T05) is at T itself.
+    - After T: a week later Ann binds a third token, enrolls the device D_ANN_NEW and opens
+      the deposit account A_ANN_NEW; three days later Ben binds his only token.
     - Old's account closed 20 days before T, after it paid Ann.
     - Ring 0: the victim Vic paid Mia (Zelle), who passed it on to Max within two hours, who
       cashed it out to the external X_CASH. Mia and Max hold the ring's device D_RING0
       (Mia's link ended 9 days before T); the ring's IP I_RING0 is linked to no one.
     - Ring 1: Roy paid Sue; both hold D_RING1, Roy until 5 days after T.
-    - Hal is held out: he holds D_RING0 and paid Mia on it.
+    - A mule's customer is offboarded the day it is found, as docs/design.md says (The
+      data): its account closes and its links end. Mia was found 5 days before T, Max 20
+      days after it and Roy 30 days after it; Sue is never found.
+    - Hal is held out: he holds D_RING0, paid Mia on it (T11) and was paid by Mia on it
+      (T14).
     - Quy's account has no payments and Quy holds D_RING0.
     - New joins 14 days after T, holds D_RING1 and pays Roy 20 days after T.
     - G_FEES is the bank's fee ledger (gl).
@@ -184,14 +190,19 @@ def standard_world() -> WorldBuilder:
     w.account("A_ANN", "P_ANN", T - 400 * day)
     w.account("A_ANN_CARD", "P_ANN", T - 300 * day, account_type="credit")
     w.token("K_ANN", "P_ANN", "A_ANN", T - 200 * day)
+    w.token("K_ANN_2", "P_ANN", "A_ANN", T - 100 * day)
     w.device("P_ANN", "D_ANN", T - 400 * day)
     w.ip("P_ANN", "I_HOME", T - 400 * day)
     w.address("P_ANN", "H_HOME", T - 400 * day)
+    w.token("K_ANN_3", "P_ANN", "A_ANN", T + 7 * day)
+    w.device("P_ANN", "D_ANN_NEW", T + 7 * day)
+    w.account("A_ANN_NEW", "P_ANN", T + 7 * day)
     w.party("P_BEN", T - 350 * day)
     w.account("A_BEN", "P_BEN", T - 350 * day)
     w.device("P_BEN", "D_BEN", T)
     w.ip("P_BEN", "I_HOME", T - 350 * day)
     w.address("P_BEN", "H_HOME", T - 350 * day)
+    w.token("K_BEN", "P_BEN", "A_BEN", T + 3 * day)
     w.party("P_OLD", T - 500 * day)
     w.account("A_OLD", "P_OLD", T - 500 * day, closed_ms=T - 20 * day)
     w.party("P_VIC", T - 365 * day)
@@ -203,6 +214,7 @@ def standard_world() -> WorldBuilder:
         "A_MIA",
         "P_MIA",
         T - 300 * day,
+        closed_ms=T - 5 * day,
         mule=Mule(
             0,
             "first_layer",
@@ -219,14 +231,16 @@ def standard_world() -> WorldBuilder:
         "A_MAX",
         "P_MAX",
         T - 250 * day,
+        closed_ms=T + 20 * day,
         mule=Mule(0, "onward_layer", "cash_out", T - 55 * day, T - 8 * day, T + 20 * day, "trace"),
     )
-    w.device("P_MAX", "D_RING0", T - 58 * day)
+    w.device("P_MAX", "D_RING0", T - 58 * day, T + 20 * day)
     w.party("P_ROY", T - 200 * day)
     w.account(
         "A_ROY",
         "P_ROY",
         T - 200 * day,
+        closed_ms=T + 30 * day,
         mule=Mule(
             1, "first_layer", "collector", T - 45 * day, T + 20 * day, T + 30 * day, "monitoring"
         ),
@@ -270,4 +284,5 @@ def standard_world() -> WorldBuilder:
     w.pay("T11", "A_HAL", "A_MIA", T - 20 * day, 300.0, "ach", device="D_RING0")
     w.pay("T12", "A_ROY", "A_SUE", T - 30 * day, 400.0, "zelle", device="D_RING1")
     w.pay("T13", "A_NEW", "A_ROY", T + 20 * day, 200.0, "zelle", device="D_RING1")
+    w.pay("T14", "A_MIA", "A_HAL", T - 9 * day, 10.0, "ach", device="D_RING0")
     return w

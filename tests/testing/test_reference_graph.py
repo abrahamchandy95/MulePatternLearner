@@ -194,6 +194,9 @@ def test_a_link_counts_from_its_start_and_one_that_ended_stays_as_a_past_fact() 
         "A_ROY", "D_RING1", 45 * D, True, 0, 45 * D
     )
     assert _ids(roy.accounts) == {"A_ROY", "A_SUE"}
+    assert _by_id(roy.devices, "D_RING1") == IdentityNode(
+        "D_RING1", 45 * D, 2, 2, 2, 0, False, False
+    )
     later = _subgraph("A_ROY", t=LATER)
     assert _edge(later.enrolled_on_device, "A_ROY", "D_RING1") == LinkEdge(
         "A_ROY", "D_RING1", 73 * D, False, 23 * D, 50 * D
@@ -209,27 +212,58 @@ def test_a_link_counts_from_its_start_and_one_that_ended_stays_as_a_past_fact() 
     )
 
 
-def test_held_out_customers_are_hidden_in_training_even_behind_a_shared_device() -> None:
-    """Hal is held out: he holds D_RING0, as Quy does, and paid Mia on it (T11)."""
+def test_a_link_ownership_or_token_that_starts_after_t_is_not_there_yet() -> None:
+    """A week after t Ann binds a third token, enrolls D_ANN_NEW and opens A_ANN_NEW; three
+    days after t Ben binds his only token."""
     graph = standard_world().graph()
+    ann = _subgraph("A_ANN", graph=graph)
+    assert _ids(ann.accounts) == {"A_ANN", "A_ANN_CARD", "A_BEN", "A_OLD"}
+    assert _ids(ann.devices) == {"D_ANN", "D_BEN"}
+    assert _by_id(ann.parties, "P_ANN") == PartyNode("P_ANN", 400 * D, 2, 0)
+    # The token age is the earliest token's, and a token bound after t is not one yet.
+    row, ben = _by_id(ann.accounts, "A_ANN"), _by_id(ann.accounts, "A_BEN")
+    assert (row.token_present, row.token_age_ms) == (True, 200 * D)
+    assert (ben.token_present, ben.token_age_ms) == (False, 0)
+    later = _subgraph("A_ANN", t=LATER, graph=graph)
+    assert "A_ANN_NEW" in _ids(later.accounts)
+    assert _edge(later.enrolled_on_device, "A_ANN", "D_ANN_NEW") == LinkEdge(
+        "A_ANN", "D_ANN_NEW", 21 * D, True, 0, 21 * D
+    )
+    assert _by_id(later.devices, "D_ANN_NEW") == IdentityNode(
+        "D_ANN_NEW", 21 * D, 1, 1, 3, 1, False, False
+    )
+    assert _by_id(later.parties, "P_ANN") == PartyNode("P_ANN", 428 * D, 3, 0)
+    row, ben = _by_id(later.accounts, "A_ANN"), _by_id(later.accounts, "A_BEN")
+    assert (row.token_present, row.token_age_ms) == (True, 228 * D)
+    assert (ben.token_present, ben.token_age_ms) == (True, 25 * D)
+
+
+def test_held_out_customers_are_hidden_in_training_even_behind_a_shared_device() -> None:
+    """Hal is held out: he holds D_RING0, as Quy does, paid Mia on it (T11) and was paid by
+    Mia on it (T14)."""
+    graph = standard_world().graph()
+    ring = IdentityNode("D_RING0", 62 * D, 2, 3, 3, 0, False, False)
     quy = _subgraph("A_QUY", graph=graph)
     assert _ids(quy.accounts) == {"A_QUY", "A_MIA", "A_MAX"}
-    assert _by_id(quy.devices, "D_RING0") == IdentityNode(
-        "D_RING0", 62 * D, 2, 3, 3, 0, False, False
-    )
+    assert _by_id(quy.devices, "D_RING0") == ring
     seen = _subgraph("A_QUY", phase=Phase.TEST, graph=graph)
     assert _ids(seen.accounts) == {"A_QUY", "A_MIA", "A_MAX", "A_HAL"}
     assert _by_id(seen.devices, "D_RING0") == IdentityNode(
         "D_RING0", 62 * D, 3, 4, 4, 0, False, False
     )
     assert ("A_HAL", "D_RING0") in _pairs(seen.enrolled_on_device) & _pairs(seen.sent_from_device)
+    # Neither Hal's payment to Mia nor hers to him is there in training.
     mia = _subgraph("A_MIA", graph=graph)
-    assert "T11" not in _ids(mia.pays) and "A_HAL" not in _ids(mia.accounts)
-    assert _by_id(mia.accounts, "A_MIA").in_30d == 1
+    assert not {"T11", "T14"} & _ids(mia.pays) and "A_HAL" not in _ids(mia.accounts)
+    row = _by_id(mia.accounts, "A_MIA")
+    assert (row.in_30d, row.out_30d) == (1, 1)
+    assert _by_id(mia.devices, "D_RING0") == ring
     mia_seen = _subgraph("A_MIA", phase=Phase.TEST, graph=graph)
-    assert "T11" in _ids(mia_seen.pays) and "P_HAL" in _ids(mia_seen.parties)
+    assert {"T11", "T14"} <= _ids(mia_seen.pays) and "A_HAL" in _ids(mia_seen.accounts)
+    assert "P_HAL" in _ids(mia_seen.parties)
     row = _by_id(mia_seen.accounts, "A_MIA")
     assert (row.in_30d, row.amount_in_30d, row.counterparties_in_30d) == (2, 1200.0, 2)
+    assert (row.out_30d, row.amount_out_30d, row.counterparties_out_30d) == (2, 880.0, 2)
     with pytest.raises(ValueError, match="invisible_seed"):
         _subgraph("A_HAL", graph=graph)
     assert _subgraph("A_HAL", phase=Phase.TEST, graph=graph).seed == "A_HAL"
@@ -263,6 +297,20 @@ def test_caps_break_ties_by_id() -> None:
     assert _ids(whole.devices) == {"D_OLD", "D_A", "D_B", "X_A", "X_B"}
 
 
+def test_sent_caps_keep_the_nodes_used_last() -> None:
+    """S sent from X 30 days and a day before t, and from Y 10 days before t."""
+    w = WorldBuilder()
+    w.party("P_S", T - 100 * D)
+    w.account("S", "P_S", T - 100 * D)
+    w.account("R", None, T - 100 * D)
+    w.pay("PAY_1", "S", "R", T - 30 * D, 10.0, "ach", device="X")
+    w.pay("PAY_2", "S", "R", T - 10 * D, 10.0, "ach", device="Y")
+    w.pay("PAY_3", "S", "R", T - D, 10.0, "ach", device="X")
+    sub = _subgraph("S", graph=w.graph(), config=replace(CONFIG, sent_devices=1))
+    assert _ids(sub.devices) == {"X"}
+    assert sub.sent_from_device == (SentEdge("S", "X", 30 * D, D, 2),)
+
+
 def test_owner_and_sibling_caps_keep_the_newest_ownership() -> None:
     # Ann's newest account is her card: with one sibling her deposit account brings it, and
     # the card brings nothing more, its owner's newest account being itself.
@@ -270,23 +318,43 @@ def test_owner_and_sibling_caps_keep_the_newest_ownership() -> None:
     assert "A_ANN_CARD" in _ids(_subgraph("A_ANN", config=narrow).accounts)
     assert "A_ANN" not in _ids(_subgraph("A_ANN_CARD", config=narrow).accounts)
     assert "A_ANN" in _ids(_subgraph("A_ANN_CARD").accounts)
+    # P_1 opened J; P_3 and P_2 joined it on one day, P_3's link first in the table, and P_4
+    # joins after t. P_2 opened K_B and K_A on one day, K_B first.
     w = WorldBuilder()
-    w.party("P_1", T - 100 * D)
-    w.party("P_2", T - 100 * D)
+    for party in ("P_1", "P_2", "P_3", "P_4"):
+        w.party(party, T - 100 * D)
     w.account("J", "P_1", T - 100 * D)
+    w.link("Party_Owns_Account", "P_3", "J", T - 50 * D)
     w.link("Party_Owns_Account", "P_2", "J", T - 50 * D)
+    w.link("Party_Owns_Account", "P_4", "J", T + 7 * D)
+    w.account("K_B", "P_2", T - 20 * D)
+    w.account("K_A", "P_2", T - 20 * D)
     graph = w.graph()
-    assert _ids(_subgraph("J", graph=graph).parties) == {"P_2"}
-    assert _ids(_subgraph("J", graph=graph, config=replace(CONFIG, owners=2)).parties) == {
-        "P_1",
-        "P_2",
-    }
+
+    def picked(t: int = T, **caps: int) -> tuple[set[str], set[str]]:
+        sub = _subgraph("J", t=t, graph=graph, config=replace(CONFIG, **caps))
+        return _ids(sub.parties), _ids(sub.accounts)
+
+    assert picked() == ({"P_2"}, {"J", "K_A", "K_B"})
+    assert picked(siblings=1) == ({"P_2"}, {"J", "K_A"})
+    assert picked(owners=2)[0] == {"P_2", "P_3"}
+    assert picked(owners=3)[0] == {"P_1", "P_2", "P_3"}
+    assert picked(LATER)[0] == {"P_4"}
+
+
+def test_identity_nodes_add_other_customers_deposit_accounts_only() -> None:
+    """Ben's home IP and address bring Ann's deposit account, his counterparty already, and
+    not her credit card."""
+    ben = _subgraph("A_BEN")
+    assert _ids(ben.accounts) == {"A_BEN", "A_ANN", "A_OLD"}
+    assert _pairs(ben.enrolled_on_ip) == {("A_BEN", "I_HOME"), ("A_ANN", "I_HOME")}
+    assert _pairs(ben.at_address) == {("A_BEN", "H_HOME"), ("A_ANN", "H_HOME")}
 
 
 def test_identity_caps_take_the_newest_accounts_per_node_and_in_all() -> None:
     """In the test phase D_RING0 offers Quy, newest first: Max, Mia and Hal seen sending
-    from it (8, 10 and 20 days before t), then Hal, Max and Mia linked to it (50, 58 and
-    62 days before t)."""
+    from it (last 8, 9 and 20 days before t), then Hal, Max and Mia linked to it (50, 58
+    and 62 days before t)."""
     per_node = _subgraph("A_QUY", phase=Phase.TEST, config=replace(CONFIG, reverse_accounts=1))
     assert _ids(per_node.accounts) == {"A_QUY", "A_MAX", "A_HAL"}
     assert _pairs(per_node.sent_from_device) == {("A_MAX", "D_RING0")}
@@ -312,6 +380,22 @@ def test_an_identity_node_with_more_visible_owners_than_the_threshold_is_a_leaf(
     assert _by_id(seen.devices, "D_RING0") == IdentityNode(
         "D_RING0", 62 * D, 3, 4, 4, 0, False, True
     )
+
+
+def test_an_identity_node_counts_the_owners_of_accounts_observed_on_it() -> None:
+    """The carrier IP I_NAT is linked to no one; S and C, of two parties, each paid on it."""
+    w = WorldBuilder()
+    for name in ("S", "C"):
+        w.party(f"P_{name}", T - 100 * D)
+        w.account(name, f"P_{name}", T - 100 * D)
+        w.account(f"R_{name}", None, T - 100 * D)
+        w.pay(f"PAY_{name}", name, f"R_{name}", T - D, 10.0, "ach", ip="I_NAT")
+    graph = w.graph()
+    assert _ids(_subgraph("S", graph=graph).accounts) == {"S", "R_S", "C"}
+    hub = _subgraph("S", graph=graph, config=replace(CONFIG, hub_threshold=1))
+    assert _ids(hub.accounts) == {"S", "R_S"}
+    assert _pairs(hub.sent_from_ip) == {("S", "I_NAT")}
+    assert hub.ips == (IdentityNode("I_NAT", D, 0, 0, 2, 0, True, True),)
 
 
 def _biller_world() -> WorldBuilder:
@@ -393,7 +477,7 @@ def test_every_duration_is_measured_back_from_t_or_between_events() -> None:
         for edge in (*mia.owned_by, *mia.enrolled_on_device)
     }
     assert links == {
-        ("A_MIA", "P_MIA"): (300 * D, True, 0, 300 * D),
+        ("A_MIA", "P_MIA"): (300 * D, False, 5 * D, 295 * D),
         ("A_VIC", "P_VIC"): (365 * D, True, 0, 365 * D),
         ("A_MAX", "P_MAX"): (250 * D, True, 0, 250 * D),
         ("A_MIA", "D_RING0"): (62 * D, False, 9 * D, 53 * D),
@@ -448,14 +532,117 @@ def test_account_features_follow_the_visible_payments() -> None:
         1,
     )
     ann = _subgraph("A_ANN")
-    # Ann paid Ben earlier in the window, so her latest payment is no first inflow.
+    # Ann paid Ben earlier in the window, so her latest payment is no first inflow. Of her
+    # payments to him only T04 (80) is in the last 30 days.
     ben = _by_id(ann.accounts, "A_BEN")
     assert (ben.in_30d, ben.first_inflows_30d, ben.passed_on_30d) == (1, 0, 0.0)
+    assert ben.amount_in_30d == _by_id(ann.accounts, "A_ANN").amount_out_30d == 80.0
     card = _by_id(ann.accounts, "A_ANN_CARD")
     assert (card.account_type, card.out_30d, card.amount_out_30d) == ("credit", 1, 25.0)
     assert _by_id(ann.parties, "P_ANN") == PartyNode("P_ANN", 400 * D, 2, 0)
     home = _by_id(ann.ips, "I_HOME")
     assert home == IdentityNode("I_HOME", 400 * D, 2, 2, 3, 0, False, False)
+
+
+def _flow_world() -> WorldBuilder:
+    """Z's payments on either side of the 30-day window and of the 24-hour pass-on.
+
+    - C1 paid Z 100 forty days before t; Z passed it on to R1 an hour later.
+    - C2 paid Z 200 ten days before t; Z passed it on to R2 exactly 24 hours later.
+    - C3 paid Z 30 and 20 in one millisecond five days before t, and Z paid R2 10 in that
+      same millisecond.
+    """
+    w = WorldBuilder()
+    w.party("P_Z", T - 100 * D)
+    w.account("Z", "P_Z", T - 100 * D)
+    for other in ("C1", "C2", "C3", "R1", "R2"):
+        w.account(other, None, T - 100 * D)
+    w.pay("IN_1", "C1", "Z", T - 40 * D, 100.0, "ach")
+    w.pay("OUT_1", "Z", "R1", T - 40 * D + H, 90.0, "ach")
+    w.pay("IN_2", "C2", "Z", T - 10 * D, 200.0, "ach")
+    w.pay("OUT_2", "Z", "R2", T - 9 * D, 150.0, "ach")
+    w.pay("IN_3B", "C3", "Z", T - 5 * D, 20.0, "ach")
+    w.pay("IN_3A", "C3", "Z", T - 5 * D, 30.0, "ach")
+    w.pay("OUT_3", "Z", "R2", T - 5 * D, 10.0, "ach")
+    return w
+
+
+def test_30_day_features_leave_out_older_payments_and_24_hours_is_within_a_day() -> None:
+    sub = _subgraph("Z", graph=_flow_world().graph())
+    assert _by_id(sub.accounts, "Z") == AccountNode(
+        id="Z",
+        account_type="deposit",
+        is_external=False,
+        age_ms=100 * D,
+        token_present=False,
+        token_age_ms=0,
+        in_7d=2,
+        in_30d=3,
+        in_365d=4,
+        out_7d=1,
+        out_30d=2,
+        out_365d=3,
+        amount_in_30d=250.0,
+        amount_out_30d=160.0,
+        counterparties_in_30d=2,
+        counterparties_out_30d=1,
+        first_inflows_7d=2,
+        first_inflows_30d=3,
+        passed_on_30d=250.0,
+        last_in_present=True,
+        since_last_in_ms=5 * D,
+        last_out_present=True,
+        since_last_out_ms=5 * D,
+        closed=False,
+    )
+    # Two payments of a pair in one millisecond are not prior to each other, and an outflow
+    # in the same millisecond is the next one.
+    pays = {
+        pay.id: (pay.prior_count, pay.first_in_pair, pay.next_outflow_present, pay.next_outflow_ms)
+        for pay in sub.pays
+    }
+    assert pays == {
+        "IN_1": (0, True, True, H),
+        "OUT_1": (0, True, False, 0),
+        "IN_2": (0, True, True, D),
+        "OUT_2": (0, True, False, 0),
+        "IN_3A": (0, True, True, 0),
+        "IN_3B": (0, True, True, 0),
+        "OUT_3": (1, False, False, 0),
+    }
+
+
+def _boundary_world() -> WorldBuilder:
+    """P has held A since 100 days before t; A_SHUT, also P's, closed at t, and A_OPEN
+    opened at t. P used the device D from 60 days before t until t, and Q, who owns A_Q, has
+    used it since exactly 30 days before t."""
+    w = WorldBuilder()
+    for party in ("P", "Q"):
+        w.party(party, T - 200 * D)
+    w.account("A", "P", T - 100 * D)
+    w.account("A_SHUT", "P", T - 100 * D, closed_ms=T)
+    w.account("A_OPEN", "P", T)
+    w.account("A_Q", "Q", T - 200 * D)
+    w.device("P", "D", T - 60 * D, T)
+    w.device("Q", "D", T - 30 * D)
+    return w
+
+
+def test_what_ends_at_t_has_ended_and_what_starts_at_t_has_started() -> None:
+    graph = _boundary_world().graph()
+    sub = _subgraph("A", graph=graph)
+    assert _ids(sub.accounts) == {"A", "A_SHUT", "A_OPEN", "A_Q"}
+    assert [_by_id(sub.accounts, account).closed for account in ("A", "A_SHUT")] == [False, True]
+    assert _by_id(sub.accounts, "A_OPEN").age_ms == 0
+    assert _by_id(sub.parties, "P") == PartyNode("P", 200 * D, 2, 1)
+    assert _edge(sub.owned_by, "A_SHUT", "P") == LinkEdge("A_SHUT", "P", 100 * D, False, 0, 100 * D)
+    # P's link to D ended at t, so P is not among its parties now; Q's link, exactly 30 days
+    # old, makes Q a new party.
+    assert _edge(sub.enrolled_on_device, "A", "D") == LinkEdge("A", "D", 60 * D, False, 0, 60 * D)
+    assert _by_id(sub.devices, "D") == IdentityNode("D", 60 * D, 1, 2, 4, 1, False, False)
+    assert _subgraph("A_OPEN", graph=graph).seed == "A_OPEN"
+    population = _population(graph, T, Phase.TRAINING)
+    assert [account.account_id for account in population] == ["A", "A_OPEN", "A_Q"]
 
 
 def _keys(value: object) -> set[str]:
@@ -505,7 +692,7 @@ def test_every_answer_keeps_the_response_contract() -> None:
                 assert pay.next_outflow_present or pay.next_outflow_ms == 0
             links = (*sub.owned_by, *sub.enrolled_on_device, *sub.enrolled_on_ip, *sub.at_address)
             assert all(not link.active or link.since_end_ms == 0 for link in links)
-    assert seen == 12 + 13 + 13 + 14
+    assert seen == 12 + 13 + 14 + 15
 
 
 def test_a_seeds_subgraph_does_not_depend_on_the_other_seeds() -> None:
@@ -553,7 +740,7 @@ def _population(
     return [account for page in pages for account in parse_population(page)]
 
 
-OPEN_AT_T = ["A_ANN", "A_ANN_CARD", "A_BEN", "A_MAX", "A_MIA", "A_QUY", "A_ROY", "A_SUE", "A_VIC"]
+OPEN_AT_T = ["A_ANN", "A_ANN_CARD", "A_BEN", "A_MAX", "A_QUY", "A_ROY", "A_SUE", "A_VIC"]
 
 
 def test_the_population_is_the_phases_customer_accounts_open_at_t() -> None:
@@ -564,9 +751,13 @@ def test_the_population_is_the_phases_customer_accounts_open_at_t() -> None:
     test = _population(graph, T, Phase.TEST)
     assert [account.account_id for account in test] == sorted([*OPEN_AT_T, "A_HAL"])
     assert PopulationAccount("A_HAL", "deposit", T - 200 * D, 1) in test
-    # Old's account was still open a month earlier, and New's opened since.
-    assert "A_OLD" in {account.account_id for account in _population(graph, T - 30 * D, Phase.TEST)}
-    assert "A_NEW" in {account.account_id for account in _population(graph, LATER, Phase.TEST)}
+    # A month earlier Old's account and Mia's, closed the day she was found, were still
+    # open. Four weeks after t New's account and Ann's new one have opened, and Max's has
+    # closed the day he was found.
+    earlier = {account.account_id for account in _population(graph, T - 30 * D, Phase.TEST)}
+    assert {"A_OLD", "A_MIA"} <= earlier
+    later = {account.account_id for account in _population(graph, LATER, Phase.TEST)}
+    assert later == {*OPEN_AT_T, "A_HAL", "A_NEW", "A_ANN_NEW"} - {"A_MAX"}
     refused = {**population_params(T, Phase.TEST), "after_id": "", "batch_size": 0}
     assert graph.run(LIST_POPULATION, refused) == [{"status": "invalid_parameters"}]
 
@@ -575,7 +766,7 @@ def test_supervision_holds_the_mules_found_before_the_cutoff() -> None:
     world = standard_world()
     world.party("P_HELD", T - 100 * D, held_out=True)
     found = Mule(1, "first_layer", "pass_through", T - 50 * D, T - 4 * D, T - 3 * D, "trace")
-    world.account("A_HELD", "P_HELD", T - 100 * D, mule=found)
+    world.account("A_HELD", "P_HELD", T - 100 * D, closed_ms=T - 3 * D, mule=found)
     graph = world.graph()
 
     def supervision(cutoff: int, phase: Phase = Phase.TRAINING) -> list[Supervision]:
@@ -606,9 +797,11 @@ def test_write_split_writes_each_party_and_the_accounts_it_owns() -> None:
     graph = ReferenceGraph(standard_world().tables())
     assert set(graph.account_split.values()) == set(graph.party_split.values()) == {-1}
     assert parse_split(graph.run(WRITE_SPLIT, split_params({"P_ANN": 0, "P_HAL": 1}))) == (
-        SplitWritten(2, 3)
+        SplitWritten(2, 4)
     )
-    assert [graph.account_split[a] for a in ("A_ANN_CARD", "A_HAL", "X_CASH")] == [0, 1, -1]
+    # An account takes its owner's split whenever the ownership starts.
+    splits = [graph.account_split[a] for a in ("A_ANN_CARD", "A_ANN_NEW", "A_HAL", "X_CASH")]
+    assert splits == [0, 0, 1, -1]
     assert (graph.party_split["P_HAL"], graph.party_split["P_BEN"]) == (1, -1)
     refused: list[tuple[dict[str, Any], str]] = [
         ({"party_ids": [], "splits": []}, "invalid_parameters"),
