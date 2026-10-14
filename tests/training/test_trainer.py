@@ -31,6 +31,7 @@ from mule_pattern_learner.testing.world import T, standard_world
 from mule_pattern_learner.tigergraph.queries import (
     SUBGRAPH_VERSION,
     AccountNode,
+    PaymentEdge,
     Phase,
     SubgraphBatch,
 )
@@ -307,3 +308,22 @@ def test_the_contract_lock_refuses_a_model_of_another_feature_layout(
     _rewritten(path, fingerprint=fingerprint(True))
     with pytest.raises(ValueError, match="another feature layout"):
         load(path)
+
+
+def test_the_fingerprint_holds_what_each_column_means_not_only_its_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The columns keep their names when another field says a duration is present, or
+    when counts are transformed another way, but the features change."""
+    before = fingerprint(False)
+    payment = LAYOUTS[PaymentEdge]
+    durations = tuple(
+        (name, "" if name == "pair_age_ms" else present) for name, present in payment.durations
+    )
+    changed = replace(payment, durations=durations)
+    assert changed.columns == payment.columns
+    monkeypatch.setattr(trainer, "LAYOUTS", LAYOUTS | {PaymentEdge: changed})
+    assert fingerprint(False) != before
+    monkeypatch.undo()
+    monkeypatch.setattr(trainer, "COUNT_TRANSFORM", "log")
+    assert fingerprint(False) != before

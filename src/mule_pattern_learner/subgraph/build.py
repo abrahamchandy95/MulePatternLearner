@@ -57,6 +57,9 @@ NODE_TYPES = {
 # PhantomLedger's account types and payment rails; a Zelle_Transfer's rail is zelle.
 ACCOUNT_TYPES = ("deposit", "credit", "brokerage", "gl", "unknown")
 RAILS = ("ach", "card", "cash", "check", "internal", "unknown", "zelle")
+# How _host_columns turns a count into a feature. A model's fingerprint holds it
+# (training.trainer), so rename it whenever the transform changes.
+COUNT_TRANSFORM = "log1p"
 
 
 @dataclass(frozen=True)

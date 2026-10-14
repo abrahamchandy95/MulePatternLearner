@@ -41,7 +41,7 @@ from ..config import ModelConfig, TrainingConfig
 from ..model.hetero import LABEL_WIDTH, EdgeType, HeteroModel
 from ..model.loss import NonNegativePULoss
 from ..model.time_encoding import FREQUENCIES, SCALE
-from ..subgraph.build import LAYOUTS, NODE_TYPES, build
+from ..subgraph.build import COUNT_TRANSFORM, LAYOUTS, NODE_TYPES, build
 from ..tigergraph.queries import NODES, RELATIONS, SUBGRAPH_VERSION, Subgraph, SubgraphBatch
 from .selection import Recall, validation_recall
 
@@ -62,14 +62,17 @@ def dimensions() -> tuple[dict[str, int], dict[EdgeType, int]]:
 
 
 def fingerprint(label_inputs: bool) -> str:
-    """A hash of the feature layout a model reads: the columns of each node type and each
-    relation, the Fourier basis, and the width of the label inputs if it has them."""
+    """A hash of the feature layout a model reads: the Layout of each node type and each
+    relation (its categories, flags, counts, and durations with the fields that say they
+    are present), how counts are transformed, the Fourier basis, and the width of the
+    label inputs if it has them."""
     layout = {
-        "nodes": {NODE_TYPES[name]: LAYOUTS[kind].columns for name, kind in NODES.items()},
+        "nodes": {NODE_TYPES[name]: asdict(LAYOUTS[kind]) for name, kind in NODES.items()},
         "relations": {
-            name: [start, end, LAYOUTS[kind].columns]
+            name: [start, end, asdict(LAYOUTS[kind])]
             for name, (kind, start, end) in RELATIONS.items()
         },
+        "counts": COUNT_TRANSFORM,
         "fourier": [FREQUENCIES.tolist(), SCALE],
         "labels": LABEL_WIDTH if label_inputs else 0,
     }
