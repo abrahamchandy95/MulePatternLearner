@@ -42,6 +42,9 @@ def test_the_audit_sample_covers_rare_positives_and_recovers_population_prevalen
         audit_sample(population, truth.iloc[1:], seed=7)
     with pytest.raises(ValueError, match="one split"):
         audit_sample(pd.concat([population, population_of("train", 3)]), truth, seed=7)
+    # A column in both frames would come back as split_x and split_y, so it is refused.
+    with pytest.raises(ValueError, match=r"share columns \['split'\]"):
+        audit_sample(population, truth.assign(split="test"), seed=7)
 
 
 def test_the_sample_of_a_split_depends_only_on_its_population_truth_and_seed():

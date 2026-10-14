@@ -145,8 +145,7 @@ desktop.ini
 # What this code writes: prepared datasets, and every output.
 /data/
 /results/
-# What the earlier code wrote, which only the owners' machines hold; the README says how
-# to move it out (Starting again on the CUDA host).
+# What the earlier code wrote, which only the owners' machines hold.
 /models/
 /artifacts/
 /outputs/
@@ -172,8 +171,3 @@ desktop.ini
 
 # Local research attachments.
 /docs/*.pdf
-
-# Fixtures the tests load: models and the prepared dataset they were trained on
-# (tests/inference/test_saved_model.py).
-!tests/inference/fixtures/saved_models/*.pt
-!tests/inference/fixtures/saved_models/dataset/*

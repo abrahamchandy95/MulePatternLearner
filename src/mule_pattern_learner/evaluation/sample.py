@@ -24,7 +24,8 @@ def audit_sample(
     only on the population, the truth and the seed: every run is audited on the same
     accounts. The rows, in account order, carry the population's columns, the truth's
     (account_id, is_mule and whatever else it holds) and inclusion_probability. Unknown
-    truth is an error: otherwise neither prevalence nor weights is known.
+    truth is an error: otherwise neither prevalence nor weights is known. So is a column
+    other than account_id in both frames, which the merge would rename.
     """
     if negatives < 1 or "split" not in population or population.split.nunique() != 1:
         raise ValueError("Provide the complete population of one split and a positive count")
@@ -32,6 +33,9 @@ def audit_sample(
         raise ValueError("The population and the truth must have unique account IDs")
     if "is_mule" in population:
         raise ValueError("Evaluation population must be label-blind")
+    shared = (set(population.columns) & set(truth.columns)) - {"account_id"}
+    if shared:
+        raise ValueError(f"The population and the truth share columns {sorted(shared)}")
     frame = population.merge(truth, on="account_id", how="left", validate="one_to_one")
     if not frame.is_mule.isin([0, 1]).all():
         raise ValueError("Complete binary truth is required for population-weighted evaluation")

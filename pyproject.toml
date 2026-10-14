@@ -86,13 +86,17 @@ root_package = "mule_pattern_learner"
 include_external_packages = true
 
 # The import rules of docs/design.md for the packages that exist so far, each holding
-# without exceptions; tests/test_import_contracts.py runs them. Nothing below evaluation
-# imports it, so only evaluation reads the answer key.
+# without exceptions; tests/test_import_contracts.py runs them. The layers are exhaustive,
+# so every new top-level module must be placed in one. Nothing below evaluation imports
+# it, so only evaluation reads the answer key.
 
 [[tool.importlinter.contracts]]
 name = "Layers run one way"
 type = "layers"
 containers = ["mule_pattern_learner"]
+# __main__ only runs the CLI and nothing imports it.
+exhaustive = true
+exhaustive_ignores = ["__main__"]
 layers = [
     "cli",
     "evaluation",
