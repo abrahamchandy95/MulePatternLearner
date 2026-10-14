@@ -237,8 +237,8 @@ stays with its end. A device or IP is observed on the visible payments an accoun
 
 | Lists | Fields |
 |---|---|
-| `pays` | `id` (the payment), `from_id` (sender), `to_id` (receiver), `amount`, `rail` (`payment_rail`, or `zelle`), `age_ms`; `prior_count` (visible payments from the same sender to the same receiver earlier in the window), `first_in_pair` (none), `gap_present`, `gap_ms` (since the latest of them), `pair_age_ms` (since the earliest); `next_outflow_present`, `next_outflow_ms` (to the receiver's earliest visible outflow at or after it, before t) |
-| `owned_by`, `enrolled_on_device`, `enrolled_on_ip`, `at_address` | `from_id`, `to_id`; `since_start_ms`; `active` (`valid_to_ms` 0 or after t); `since_end_ms`; `held_ms` (from its start to its end, or to t while active) |
+| `pays` | `id` (the payment), `from_id` (sender), `to_id` (receiver), `amount`, `rail` (`payment_rail`, or `zelle`), `age_ms`; `prior_count` (visible payments from the same sender to the same receiver earlier in the window), `first_in_pair` (none), `gap_present`, `gap_ms` (since the latest of them), `pair_age_ms` (since the earliest, 0 with none); `next_outflow_present`, `next_outflow_ms` (to the receiver's earliest visible outflow at or after it, before t) |
+| `owned_by`, `enrolled_on_device`, `enrolled_on_ip`, `at_address` | `from_id`, `to_id`; `since_start_ms`; `active` (`valid_to_ms` 0 or after t); `since_end_ms` (0 while active); `held_ms` (from its start to its end, or to t while active) |
 | `sent_from_device`, `sent_from_ip` | `from_id`, `to_id`, `since_first_ms`, `since_last_ms`, `uses` (its payments observed on the node) |
 
 The query reads no supervision, so it does not return the confirmations the label-input
