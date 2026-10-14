@@ -8,6 +8,7 @@ database work. `dataclasses.replace` changes a setting.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 
 # The ranges of the transport settings; the executor checks the ones it is given too.
 QUERY_ATTEMPTS = range(1, 21)
@@ -16,6 +17,11 @@ OUTAGE_SECONDS = range(0, 86_401)
 CAPS = range(1, 1_025)
 HUB_THRESHOLDS = range(1, 1_000_001)
 LOOKBACK_DAYS = range(30, 3_651)
+# The ranges of the data settings.
+GAP_DAYS = range(0, 366)
+PER_POSITIVE = range(1, 1_001)
+SAMPLE_SIZES = range(1, 1_000_001)
+SEEDS = range(0, 2**63)
 
 
 def _integer(name: str, value: object, bounds: range) -> int:
@@ -30,6 +36,18 @@ def _integer(name: str, value: object, bounds: range) -> int:
 def _instance(name: str, value: object, kind: type) -> None:
     if not isinstance(value, kind):
         raise ValueError(f"{name} must be a {kind.__name__}, got {value!r}")
+
+
+def _window(name: str, value: object) -> tuple[date, date]:
+    """value when it is a (first, last) pair of dates, not datetimes, the first not later."""
+    if not (
+        isinstance(value, tuple)
+        and len(value) == 2
+        and all(type(day) is date for day in value)
+        and value[0] <= value[1]
+    ):
+        raise ValueError(f"{name} must be a (first, last) pair of dates in order, got {value!r}")
+    return value
 
 
 @dataclass(frozen=True)
@@ -96,15 +114,53 @@ class SubgraphConfig:
 
 
 @dataclass(frozen=True)
+class DataConfig:
+    """The windows, the customer hold-out and the examples (docs/design.md, "Splits and
+    hidden labels" and "Training examples").
+
+    Each window is its first and last as-of day, and they follow one another. The training
+    and validation windows may use the mules discovered before the day after their last
+    day; the test window uses the full answer key. The windows, the gap and the unlabelled
+    count are the design's defaults; the design gives no scored sample size or seed.
+    """
+
+    training: tuple[date, date] = (date(2024, 1, 1), date(2024, 6, 30))
+    validation: tuple[date, date] = (date(2024, 7, 1), date(2024, 9, 30))
+    test: tuple[date, date] = (date(2024, 10, 1), date(2024, 12, 31))
+    # Days before the training labels' cutoff that no training as-of date comes nearer.
+    maturity_gap_days: int = 60
+    # Unlabelled accounts drawn on a training date per positive on that date.
+    unlabelled_per_positive: int = 15
+    # Accounts other than the active mules drawn on each validation and test date, as many
+    # as the audit sample kept from the earlier code draws.
+    scored_sample: int = 2000
+    # Keys the hold-out hash and seeds every draw of examples.
+    seed: int = 0
+
+    def __post_init__(self) -> None:
+        training = _window("data.training", self.training)
+        validation = _window("data.validation", self.validation)
+        test = _window("data.test", self.test)
+        if not training[1] < validation[0] or not validation[1] < test[0]:
+            raise ValueError("data.training, data.validation and data.test must not overlap")
+        _integer("data.maturity_gap_days", self.maturity_gap_days, GAP_DAYS)
+        _integer("data.unlabelled_per_positive", self.unlabelled_per_positive, PER_POSITIVE)
+        _integer("data.scored_sample", self.scored_sample, SAMPLE_SIZES)
+        _integer("data.seed", self.seed, SEEDS)
+
+
+@dataclass(frozen=True)
 class RunConfig:
     """Every setting; the defaults are DEFAULT_CONFIG."""
 
     transport: TransportConfig = TransportConfig()
     subgraph: SubgraphConfig = SubgraphConfig()
+    data: DataConfig = DataConfig()
 
     def __post_init__(self) -> None:
         _instance("transport", self.transport, TransportConfig)
         _instance("subgraph", self.subgraph, SubgraphConfig)
+        _instance("data", self.data, DataConfig)
 
 
 DEFAULT_CONFIG = RunConfig()

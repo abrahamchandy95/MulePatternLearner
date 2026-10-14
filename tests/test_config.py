@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import FrozenInstanceError, replace
+from datetime import date, datetime
 
 import pytest
 
 from mule_pattern_learner.config import (
     DEFAULT_CONFIG,
+    DataConfig,
     RunConfig,
     SubgraphConfig,
     TransportConfig,
@@ -27,6 +29,15 @@ def test_the_defaults_are_the_built_in_settings() -> None:
     assert (caps, identity, sent) == ((32, 16, 1, 8), (8, 8, 4), (8, 8))
     assert (subgraph.reverse_accounts, subgraph.identity_accounts) == (16, 48)
     assert (subgraph.hub_threshold, subgraph.lookback_days) == (200, 365)
+    # The design's windows, gap and unlabelled count, and a scored sample and seed it leaves.
+    data = DEFAULT_CONFIG.data
+    assert (data.training, data.validation, data.test) == (
+        (date(2024, 1, 1), date(2024, 6, 30)),
+        (date(2024, 7, 1), date(2024, 9, 30)),
+        (date(2024, 10, 1), date(2024, 12, 31)),
+    )
+    assert (data.maturity_gap_days, data.unlabelled_per_positive) == (60, 15)
+    assert (data.scored_sample, data.seed) == (2000, 0)
 
 
 def test_sections_refuse_values_outside_their_ranges() -> None:
@@ -44,6 +55,20 @@ def test_sections_refuse_values_outside_their_ranges() -> None:
         (lambda: SubgraphConfig(lookback_days=29), "subgraph.lookback_days"),
         (lambda: SubgraphConfig(lookback_days=3_651), "subgraph.lookback_days"),
         (lambda: RunConfig(subgraph="wide"), "subgraph must be"),  # pyright: ignore[reportArgumentType]
+        (lambda: DataConfig(training=(date(2024, 6, 30), date(2024, 1, 1))), "data.training"),
+        (lambda: DataConfig(test=(date(2024, 10, 1),)), "data.test"),  # pyright: ignore[reportArgumentType]
+        (
+            lambda: DataConfig(validation=(datetime(2024, 7, 1), date(2024, 9, 30))),
+            "data.validation",
+        ),
+        (lambda: DataConfig(validation=(date(2024, 6, 30), date(2024, 9, 30))), "overlap"),
+        (lambda: DataConfig(test=(date(2024, 9, 30), date(2024, 12, 31))), "overlap"),
+        (lambda: DataConfig(maturity_gap_days=-1), "data.maturity_gap_days"),
+        (lambda: DataConfig(maturity_gap_days=366), "data.maturity_gap_days"),
+        (lambda: DataConfig(unlabelled_per_positive=0), "data.unlabelled_per_positive"),
+        (lambda: DataConfig(scored_sample=0), "data.scored_sample"),
+        (lambda: DataConfig(seed=-1), "data.seed"),
+        (lambda: RunConfig(data=None), "data must be"),  # pyright: ignore[reportArgumentType]
     ]
     for build, name in bad:
         with pytest.raises(ValueError, match=name):

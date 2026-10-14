@@ -101,6 +101,7 @@ exhaustive_ignores = ["__main__"]
 layers = [
     "cli | testing",
     "evaluation",
+    "data",
     "tigergraph | model",
     "runtime | metrics",
     "config | paths",
