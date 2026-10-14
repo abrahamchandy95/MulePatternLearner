@@ -14,7 +14,10 @@ from typing import Any
 import pytest
 
 from mule_pattern_learner.config import DEFAULT_CONFIG
+from mule_pattern_learner.testing.reference_graph import canonical
+from mule_pattern_learner.testing.world import WorldBuilder
 from mule_pattern_learner.tigergraph.queries import (
+    FETCH_SUBGRAPHS,
     SUBGRAPH_VERSION,
     AccountNode,
     LinkEdge,
@@ -342,6 +345,30 @@ def test_a_subgraph_response_parses_into_one_subgraph_per_seed() -> None:
     assert first.sent_from_ip == (SentEdge("A1", "I1", 2 * DAY, 2 * DAY, 1),)
     assert first.ips[0].observed_only and not first.devices[0].hub
     assert second.pays == () and second.parties[0].id == "P2"
+
+
+def test_the_reference_graph_answers_the_request_with_the_hand_written_response() -> None:
+    """The world SUBGRAPHS describes, with its tables built by hand: A1 has held its Zelle
+    token for 30 days, P5 (E5's owner) held D1 from 60 to 10 days before t, and P2 joined
+    at t."""
+    world = WorldBuilder()
+    world.party("P1", T - 480 * DAY)
+    world.account("A1", "P1", T - 480 * DAY)
+    world.token("K1", "P1", "A1", T - 30 * DAY)
+    world.device("P1", "D1", T - 400 * DAY)
+    world.party("P5", T - 90 * DAY)
+    world.account("E5", "P5", T - 90 * DAY)
+    world.device("P5", "D1", T - 60 * DAY, T - 10 * DAY)
+    world.party("P2", T)
+    world.account("A2", "P2", T)
+    world.account("B2", None, T - 200 * DAY)
+    world.account("C3", None, T - 3 * DAY, account_type="unknown", external=True)
+    world.pay("T1", "A1", "B2", T - 2 * DAY, 875.25, "zelle", ip="I1")
+    world.pay("T2", "B2", "A1", T - 2 * DAY + 3_600_000, 900.0, "ach")
+    world.pay("T3", "B2", "C3", T - 3 * DAY, 820.0, "card")
+    rows = world.graph().run(FETCH_SUBGRAPHS, subgraph_params(REQUEST, DEFAULT_CONFIG.subgraph))
+    expected = canonical(parse_subgraphs(_response(), REQUEST))
+    assert canonical(parse_subgraphs(rows, REQUEST)) == expected
 
 
 def test_a_response_of_another_version_is_refused() -> None:
