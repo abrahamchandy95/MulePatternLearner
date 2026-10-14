@@ -27,6 +27,7 @@ HIDDEN = range(1, 4_097)
 HEADS = range(1, 65)
 EPOCHS = range(1, 10_001)
 BATCH_SIZES = range(1, 100_001)
+SEED_COUNTS = range(1, 1_001)
 
 
 def _integer(name: str, value: object, bounds: range) -> int:
@@ -201,8 +202,8 @@ class ModelConfig:
 
 @dataclass(frozen=True)
 class TrainingConfig:
-    """The optimiser, the epochs and the class priors tried (docs/design.md, "Training"). All
-    are the design's defaults but the batch size, which it leaves."""
+    """The optimiser, the epochs, the class priors tried and the seeds (docs/design.md,
+    "Training"). All are the design's defaults but the batch size, which it leaves."""
 
     # Adam's learning rate and weight decay.
     learning_rate: float = 0.001
@@ -214,6 +215,8 @@ class TrainingConfig:
     priors: tuple[float, ...] = (0.001, 0.003, 0.01)
     # Examples per optimiser step.
     batch_size: int = 128
+    # Models trained per world, each from its own seed.
+    seeds: int = 5
 
     def __post_init__(self) -> None:
         _fraction("training.learning_rate", self.learning_rate, zero=False)
@@ -222,6 +225,7 @@ class TrainingConfig:
         _integer("training.patience", self.patience, EPOCHS)
         _priors("training.priors", self.priors)
         _integer("training.batch_size", self.batch_size, BATCH_SIZES)
+        _integer("training.seeds", self.seeds, SEED_COUNTS)
 
 
 @dataclass(frozen=True)

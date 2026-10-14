@@ -46,7 +46,7 @@ def test_the_defaults_are_the_built_in_settings() -> None:
     training = DEFAULT_CONFIG.training
     optimiser = (training.learning_rate, training.weight_decay)
     assert (optimiser, training.max_epochs, training.patience) == ((0.001, 0.0001), 30, 5)
-    assert (training.priors, training.batch_size) == ((0.001, 0.003, 0.01), 128)
+    assert (training.priors, training.batch_size, training.seeds) == ((0.001, 0.003, 0.01), 128, 5)
 
 
 def test_sections_refuse_values_outside_their_ranges() -> None:
@@ -94,6 +94,8 @@ def test_sections_refuse_values_outside_their_ranges() -> None:
         (lambda: TrainingConfig(priors=(0.01, 1.0)), "training.priors"),
         (lambda: TrainingConfig(priors=(0.01, 0.01)), "repeats"),
         (lambda: TrainingConfig(batch_size=0), "training.batch_size"),
+        (lambda: TrainingConfig(seeds=0), "training.seeds"),
+        (lambda: TrainingConfig(seeds=1_001), "training.seeds"),
         (lambda: RunConfig(training=0), "training must be"),  # pyright: ignore[reportArgumentType]
     ]
     for build, name in bad:
