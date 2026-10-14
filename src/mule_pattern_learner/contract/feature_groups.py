@@ -2,8 +2,7 @@
 
 FEATURE_GROUPS holds the groups of the built-in run and no others (the owner's decision
 in docs/architecture.md), in the order that fixes column order. The pool groups and the hub
-indicator are computed by the client; the others come from TigerGraph. The groups
-training does not read are analytics (contract.analytics_features).
+indicator are computed by the client; the others come from TigerGraph.
 """
 
 from __future__ import annotations
@@ -210,31 +209,14 @@ class FeaturePlan:
             value["pool"] = pool_definition(self.groups)
         return fingerprint(value)
 
-    def query_flags(self, hop: int = 1) -> dict[str, bool]:
-        """GSQL `include_*` parameters for one hop: one per group TigerGraph computes.
-
-        message_core is always computed and client groups are never requested; every
-        message carries its channel and sampling stratum. Graph models read only node
-        and message inputs of children, so their second hop would skip a summary group
-        TigerGraph computed; none of the training groups is one (the summary groups are
-        the client's pool counts), so both hops send the same flags. Models of the
-        root's own inputs (root_only) fetch no children.
-        """
-        if hop not in (1, 2):
-            raise ValueError("Hop must be 1 or 2")
-        skip_summary = hop == 2 and not self.root_only
-        return {
-            "include_" + name: name in self.groups and not (skip_summary and spec.path == "summary")
-            for name, spec in FEATURE_GROUPS.items()
-            if name != "message_core" and name not in CLIENT_GROUPS
-        }
-
 
 def extraction_plan(model: FeaturePlan) -> FeaturePlan:
-    """What the context source asks TigerGraph for: the model's groups but the client ones.
+    """The plan a context source checks rows against: the model's groups but the client ones.
 
-    Client groups are computed locally. The architecture is the model's, so a graph
-    model skips summary groups at hop 2.
+    Client groups are computed locally, and the architecture is the model's. TigerGraph
+    returns every group whatever the plan: the source validates those the plan names and
+    asks for the Fourier vectors of a spot check only when the plan has the time encoding
+    (tigergraph.context_query.query_context_rows).
     """
     groups = tuple(g for g in model.groups if g not in CLIENT_GROUPS)
     return FeaturePlan(groups, model.architecture)

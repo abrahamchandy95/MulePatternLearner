@@ -43,13 +43,12 @@ def test_eligible_accounts_existed_before_the_cutoff_date() -> None:
     assert marginal_mask(ACCOUNTS).tolist() == [True, False, True, True]
 
 
-def test_keys_carry_the_cutoff_the_scope_and_the_split_phase() -> None:
-    manifest = {"cutoff_seqs": {"2025-01-01": 30}, "source": {"scope_id": "scope"}}
+def test_keys_carry_the_cutoff_and_the_split_phase() -> None:
+    manifest = {"cutoff_seqs": {"2025-01-01": 30}}
     keys = sample_keys(ACCOUNTS.iloc[2:], "2025-01-01", manifest)
     phase = SPLIT_PHASE["test"]
     assert keys == [
-        ContextKey("Account", name, 30, cutoff_ms("2025-01-01"), "scope", phase)
-        for name in ("c", "d")
+        ContextKey("Account", name, 30, cutoff_ms("2025-01-01"), phase) for name in ("c", "d")
     ]
 
 

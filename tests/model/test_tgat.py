@@ -87,7 +87,7 @@ def slot_batch(
         "first_mask": torch.zeros(roots, width, dtype=torch.bool),
     }
     for prefix, shape in (("first_", (roots, width)), ("second_", (len(rows), second))):
-        for name in ("relation", "rail", "channel", "stratum"):
+        for name in ("relation", "rail"):
             batch[prefix + name] = torch.zeros(shape, dtype=torch.long)
     for i, named in enumerate(slots):
         batch["neighbor_positions"][i, : len(named)] = torch.tensor(named, dtype=torch.long) + roots

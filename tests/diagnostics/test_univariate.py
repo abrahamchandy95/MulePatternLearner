@@ -14,11 +14,10 @@ def test_each_feature_that_varies_on_train_is_ranked_in_every_split() -> None:
     frame = feature_frame()
     table = univariate(frame)
     assert tuple(table.columns) == DIAGNOSTIC_TABLES["univariate"]
-    # The entity flags are the same for every account and the age for every account of a
-    # split, so none of them is ranked.
+    # The entity flags are the same for every account, so neither is ranked.
     ranked = set(table.feature)
     assert ranked == set(varying(frame))
-    assert not {"model__type_Account", "model__is_deposit", "account__age_days"} & ranked
+    assert not {"model__type_Account", "model__is_deposit"} & ranked
     assert set(table.split) == {"train", "validation", "test"}
     assert set(table.metric) == {
         "hidden_roc_auc",

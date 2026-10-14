@@ -26,7 +26,7 @@ from mule_pattern_learner.reporting.run_report import AUDIT_FIGURES
 from mule_pattern_learner.runtime.progress import emit, recording
 from mule_pattern_learner.testing.builders import (
     RUNTIME_CHANGES,
-    UNIT_SOURCE,
+    UNIT_COUNTS,
     ground_truth_rows,
     prepared_dataset,
     recorded_events,
@@ -125,7 +125,7 @@ def test_evaluate_run_connects_after_its_checks_and_reads_truth_once_on_that_con
     assert oracles == [executor] and reads == [1, 1]
 
 
-# The accounts of the fake scope.
+# The accounts of the fake graph's split.
 POPULATION = PREPARED_ACCOUNTS
 
 
@@ -158,7 +158,7 @@ def test_evaluate_run_audits_validation_and_test_on_the_fake_graph(
     config = unit_config()
     graph, data = audited_graph(tmp_path, config)
     monkeypatch.setattr(pipeline_evaluate, "connect", connecting(graph))
-    dataset = DatasetPaths.of(dataset_id(UNIT_SOURCE, config), data)
+    dataset = DatasetPaths.of(dataset_id(UNIT_COUNTS, config), data)
     runs = [RunPaths(tmp_path / name) for name in ("first", "second")]
     for run, shift in zip(runs, (0.0, 2.0), strict=True):
         saved_model(run.model, config, dataset, logit_shift=shift)
@@ -247,7 +247,7 @@ def test_a_session_audits_several_runs_on_one_connection_and_reads_truth_once(
 
     monkeypatch.setattr(pipeline_connect, "connect", connect)
     monkeypatch.setattr(pipeline_evaluate, "connect", connecting(None))
-    dataset = DatasetPaths.of(dataset_id(UNIT_SOURCE, config), data)
+    dataset = DatasetPaths.of(dataset_id(UNIT_COUNTS, config), data)
     runs = [RunPaths(tmp_path / name) for name in ("first", "second")]
     for run, shift in zip(runs, (0.0, 2.0), strict=True):
         saved_model(run.model, config, dataset, logit_shift=shift)
@@ -272,7 +272,7 @@ def test_each_split_reports_the_rejections_of_its_own_audit(
     # A child over its history capacity, which both splits' contexts reach.
     graph, data = audited_graph(tmp_path, config, {"N5": "history_capacity_exceeded"})
     monkeypatch.setattr(pipeline_evaluate, "connect", connecting(graph))
-    dataset = DatasetPaths.of(dataset_id(UNIT_SOURCE, config), data)
+    dataset = DatasetPaths.of(dataset_id(UNIT_COUNTS, config), data)
     both, alone = RunPaths(tmp_path / "both"), RunPaths(tmp_path / "alone")
     for run in (both, alone):
         saved_model(run.model, config, dataset)

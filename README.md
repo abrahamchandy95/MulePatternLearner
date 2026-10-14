@@ -10,10 +10,10 @@ messages with a non-negative positive-unlabelled (nnPU) loss on the few mules th
 reveals. No account id is a model parameter, so the same weights score accounts never seen
 in training.
 
-The repository holds the GSQL (`gsql/`: schema, training, evaluation and analytics
-queries) and the Python package `mule_pattern_learner` with its command `mule`, which
-installs the queries, prepares a bounded dataset, trains, audits against the ground truth,
-scores and reports. It needs a TigerGraph graph `Mule_Pattern_Learner` with the data
+The repository holds the GSQL (`gsql/`: schema, training and evaluation queries) and
+the Python package `mule_pattern_learner` with its command `mule`, which installs the
+queries, prepares a bounded dataset, trains, audits against the ground truth, scores and
+reports. It needs a TigerGraph graph `Mule_Pattern_Learner` with the data
 loaded ([Set up a graph](docs/how-to/set-up-a-graph.md)).
 
 ## Setup
@@ -56,10 +56,10 @@ mule install                # install the queries ahead of time
 
 `mule train` writes `results/baseline/seed-42/` (model, proxy predictions and metrics,
 history, `plots/`, `report.md`) and resumes when run again; a complete run is only
-summarised. On a fresh graph its first run installs the queries, creates the frozen
-experiment scope and reveals the mules a bank would have discovered. Each run prepares its
-dataset in `data/<dataset id>/`, whose context cache spares later runs and audits the same
-requests.
+summarised. On a fresh graph its first run installs the queries, creates the graph's one
+train, validation and test split and reveals the mules a bank would have discovered. Each
+run prepares its dataset in `data/<dataset id>/`, whose context cache spares later runs and
+audits the same requests.
 
 `mule evaluate` audits validation (for decisions) and test (for reporting) on every mule
 and 2,000 sampled non-mules, weighted to the whole split, with 90% intervals. It leads with
@@ -97,18 +97,14 @@ mule diagnose baselines      # one of them
 It studies the built-in run's dataset against the ground truth, for analysis only (single
 features, drift between cutoffs, own-activity baselines, a learning curve, which mules the
 run finds, proxy metric validity, the label reveal over salts, the nnPU positive weight on
-a synthetic problem), into `results/diagnostics/<dataset id>/`. It is the only command that
-installs the analytics queries ([Run the diagnostics](docs/how-to/run-diagnostics.md)).
+a synthetic problem), into `results/diagnostics/<dataset id>/` ([Run the
+diagnostics](docs/how-to/run-diagnostics.md)).
 
 ## Starting again on the CUDA host
 
-This code reads no dataset or model earlier code wrote: start from scratch with `data/`
-and `results/` empty or moved aside, except `results/archive/` (the archived diagnostic
-study, never read). Then follow [On the CUDA host](docs/how-to/train-and-evaluate.md#on-the-cuda-host):
-reinstall with the CUDA extra ([Setup](#setup)), `mule train` (its first run installs the
-renamed queries beside the old names, about 50 minutes within a 90-minute wait), stop
-every job of the earlier code on every machine, `mule install` (it drops the old names),
-then `mule evaluate`, `mule report`, the control experiments and `mule diagnose`.
+This code reads no dataset or model earlier code wrote, and a graph that code built needs
+its split deleted by hand and `mule install` before the first `mule train`. [On the CUDA
+host](docs/how-to/train-and-evaluate.md#on-the-cuda-host) gives every step in order.
 
 The earlier code is commit f203226, kept in `main`'s history. It calls the old query
 names, so it runs only until `mule install` drops them; the owner retrains from scratch,
@@ -152,7 +148,6 @@ still hides so none is committed: move what you keep out of the repository or un
 .venv/bin/basedpyright src
 .venv/bin/basedpyright tests scripts
 .venv/bin/python -m pytest -q
-.venv/bin/python scripts/render_queries.py --check
 .venv/bin/lint-imports
 ```
 
@@ -161,8 +156,8 @@ read-only checks against the graph in `.env`, `-m cuda` for the cuGraph checks o
 host, `-m graph_write --allow-graph-writes` for the scope isolation test, which writes
 fixture vertices and removes them
 ([Command line](docs/reference/cli.md#tests-that-need-the-graph-or-a-gpu)).
-`scripts/render_queries.py` regenerates the two context queries after their Python
-contracts change.
+The GSQL files are the source of the queries: edit them directly, and the tests check
+them against the Python contracts they share.
 
 ## License
 

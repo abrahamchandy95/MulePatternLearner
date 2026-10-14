@@ -11,12 +11,10 @@ import pytest
 from mule_pattern_learner.artifacts import DIAGNOSTIC_TABLES
 from mule_pattern_learner.diagnostics.baselines import (
     BASELINE_FAMILIES,
-    CUTOFF_COLUMNS,
     KINDS,
     SINGLE_FEATURES,
     attribute_columns,
     baselines,
-    model_columns,
     pu_labels,
 )
 from mule_pattern_learner.metrics import ranking_metrics
@@ -51,13 +49,13 @@ def test_every_baseline_is_scored_on_validation_and_test_with_intervals(
     measured = {"average_precision", "roc_auc", "recall_at_1pct", "precision_at_10pct"}
     assert measured | {f"hidden_{name}" for name in measured} <= set(ranking.metric)
     assert (ranking.low <= ranking.high).all()
-    # The account's own history ranks the synthetic mules well above chance, though its
-    # visible event count grows with the cutoff, which costs the trees the most.
-    account = pu[(pu.features == "account") & (pu.metric == "roc_auc")]
-    assert (account[account.model == "lr"].value > 0.8).all()
+    # The pool's summaries rank the synthetic mules well above chance, though its payments
+    # grow with the cutoff, which costs the trees the most.
+    messages = pu[(pu.features == "messages") & (pu.metric == "roc_auc")]
+    assert (messages[messages.model == "lr"].value > 0.8).all()
 
 
-def test_the_attribute_floor_ranks_at_chance_and_no_model_reads_the_cutoff(
+def test_the_attribute_floor_and_a_random_ranking_score_chance(
     table: pd.DataFrame,
 ) -> None:
     frame = feature_frame()
@@ -82,8 +80,6 @@ def test_the_attribute_floor_ranks_at_chance_and_no_model_reads_the_cutoff(
         assert expected["hidden_average_precision"] == pytest.approx(rate) and rate < prevalence
         assert expected["roc_auc"] == 0.5 and expected["recall_at_5pct"] == 0.05
         assert expected["precision_at_10pct"] == pytest.approx(prevalence)
-    for families in BASELINE_FAMILIES.values():
-        assert not CUTOFF_COLUMNS & set(model_columns(frame, families))
 
 
 def test_the_run_is_added_from_its_audit_reports(table: pd.DataFrame) -> None:

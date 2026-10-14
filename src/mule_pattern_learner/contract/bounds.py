@@ -2,9 +2,9 @@
 
 The configuration sections, the sampler plan, batch assembly and its limits, the model,
 the dataset, the audit, the context source and the TigerGraph adapter read their ranges
-here. Some are also checked by a query: the context query renders REQUEST_KEYS and POOL
-into its text, and the hub and reveal queries refuse what HUB_CUTOFFS and
-REVEAL_PER_SPLIT exclude.
+here. Some are also checked by a query: the context query refuses what REQUEST_KEYS
+and POOL exclude (a test compares its text with these bounds), and the hub query
+refuses what HUB_CUTOFFS excludes.
 """
 
 from __future__ import annotations
@@ -93,10 +93,7 @@ DATASET_ROWS = 100_000
 # the sample accounts it scores.
 AUDIT_POPULATION = 1_000_000
 AUDIT_SAMPLE = 100_000
-# Known mules the reveal may reveal per split.
-REVEAL_PER_SPLIT = Bound(0, 1000)
 # Root cutoffs of one hub query.
 HUB_CUTOFFS = Bound(1, 24)
-# Bytes of an entity ID and of a scope ID in a request.
+# Bytes of an entity ID in a request.
 ID_BYTES = 1024
-SCOPE_ID_BYTES = 256

@@ -57,6 +57,7 @@ from ..tigergraph.installer import (
     scope_schema,
     scope_vertices,
 )
+from ..tigergraph.scope import REMOVE_SPLIT
 from ..training.objective import nnpu_objective, nnpu_step
 from ..training.schedule import TrainingStep, epoch_schedule
 from ..training.trainer import build_optimizer, check_limits, training_samples
@@ -73,17 +74,14 @@ def rest_calls(contexts: ContextReader) -> tuple[int, dict[str, int]]:
     return executor.calls, dict(executor.retries)
 
 
-# What to do first when the graph's scope types are outdated and scopes use them.
-CLEAR_DATA = "clear the graph's data and load it again"
-
-
 def graph_readiness(executor: ConnectionExecutor) -> dict[str, Any]:
     """The graph name, the scope vertex type and the installed training queries.
 
     scope_schema is "present", "missing" or "outdated" (installer.scope_schema); an
     outdated one adds scope_outdated: how its types differ and how many scope vertices
-    use them. The retired queries still installed are reported, not a problem: training
-    never calls them, and `mule install` drops them.
+    use them, which the owner removes by hand (tigergraph.scope.REMOVE_SPLIT). The retired
+    queries still installed are reported, not a problem: training never calls them, and
+    `mule install` drops them.
     """
     problems = query_problems(executor)
     names = repository_queries(TRAINING_QUERY_FILES)
@@ -114,8 +112,7 @@ def scope_problem(report: dict[str, Any]) -> str | None:
     held = plural(scopes, "scope vertex", "scope vertices")
     return (
         f"the scope vertex type is outdated and the graph holds {held}, which "
-        f"`mule install` refuses to delete; {CLEAR_DATA} (docs/how-to/set-up-a-graph.md), "
-        "then `mule install` replaces it"
+        f"`mule install` refuses to delete; {REMOVE_SPLIT}, then `mule install` replaces it"
     )
 
 

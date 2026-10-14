@@ -21,7 +21,7 @@ from typing import Any
 from .diagnostics.study import ANALYSES, INCOMPLETE
 from .metrics import REVIEW_BUDGETS, budget_name
 from .paths import REPOSITORY_ROOT, RESULTS_DIR, RunPaths, check_report, command_events
-from .pipeline.check import CLEAR_DATA, check
+from .pipeline.check import REMOVE_SPLIT, check
 from .pipeline.diagnose import diagnose_built_in
 from .pipeline.evaluate import evaluate_run
 from .pipeline.prepare import install_queries
@@ -55,8 +55,8 @@ def build_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
     commands.add_parser(
         "install",
-        help="Add the scope vertex type if it is missing, or replace it while no scope "
-        "uses it if it differs from gsql/schema/scope_vertex.gsql (only install does), "
+        help="Add the scope vertex type if it is missing, or replace it while the graph "
+        "holds no split if it differs from gsql/schema/scope_vertex.gsql (only install does), "
         "install the training queries whose text differs (train does this too), drop the "
         "retired queries still installed (only install does) and list installed queries no "
         "file defines",
@@ -105,8 +105,7 @@ def build_parser() -> argparse.ArgumentParser:
         "diagnose",
         help="Run the diagnostic study of the built-in run's dataset against the ground "
         "truth, beside the built-in run, into results/diagnostics/<dataset id>/ with its "
-        "figures; the only command that installs the analytics queries (where their text "
-        "differs)",
+        "figures",
     )
     diagnosing.add_argument(
         "analysis",
@@ -308,8 +307,8 @@ def check_summary(report: Mapping[str, Any], saved: Path) -> str:
             c for c in ("mule install", "mule train") if any(f"`{c}`" in p for p in problems)
         ]
         steps = ["run " + ", then ".join(f"`{c}`" for c in commands)] if commands else []
-        if any(CLEAR_DATA in problem for problem in problems):
-            steps.insert(0, CLEAR_DATA)
+        if any(REMOVE_SPLIT in problem for problem in problems):
+            steps.insert(0, REMOVE_SPLIT)
         todo = ", then ".join(steps)
         lines.append(f"Not ready: {todo}." if todo else "Not ready: see the items not ticked.")
     lines.append(f"The full report, with every tensor's digest, is in {shown_path(saved)}")
@@ -325,7 +324,7 @@ def _scope_item(report: Mapping[str, Any]) -> str:
     scopes = int(outdated["scopes"])
     if scopes:
         held = plural(scopes, "scope vertex", "scope vertices")
-        return f"{text}; the graph holds {held}, so {CLEAR_DATA} first"
+        return f"{text}; the graph holds {held}, so {REMOVE_SPLIT} first"
     return f"{text}; `mule install` replaces it"
 
 

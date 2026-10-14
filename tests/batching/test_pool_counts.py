@@ -34,7 +34,7 @@ from mule_pattern_learner.model.build import build_model
 from mule_pattern_learner.model.tgat import TGAT
 from mule_pattern_learner.reference import batch_features
 from mule_pattern_learner.reference.batch_features import node_features
-from mule_pattern_learner.testing.builders import association, context, message
+from mule_pattern_learner.testing.builders import UNIT_COUNTS, association, context, message
 from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher, validate_context
 
@@ -272,14 +272,11 @@ def test_client_groups_leave_the_wire_and_the_preparation_unchanged() -> None:
     assert set(POOL_GROUPS) <= set(DEFAULT_CONFIG.features)
     assert PLAN.architecture == "tgat" and PLAN.names("summary") == POOL_NAMES
     assert extraction_plan(PLAN) == extraction_plan(WITHOUT_POOLS.feature_plan())
-    for hop in (1, 2):
-        flags = PLAN.query_flags(hop)
-        assert flags == WITHOUT_POOLS.feature_plan().query_flags(hop)
-        assert not {"include_" + group for group in POOL_GROUPS} & set(flags)
+    assert not set(POOL_GROUPS) & set(extraction_plan(PLAN).groups)
     # A dataset prepared without the groups serves a run that adds them.
-    view = dataset_settings("unit_source", WITHOUT_POOLS)
-    assert dataset_settings("unit_source", CONFIG) == view
-    manifest = {"source": {"source_id": "unit_source", "settings": view}}
+    view = dataset_settings(UNIT_COUNTS, WITHOUT_POOLS)
+    assert dataset_settings(UNIT_COUNTS, CONFIG) == view
+    manifest = {"source": {"source_counts": UNIT_COUNTS, "settings": view}}
     assert dataset_mismatches(CONFIG, manifest) == []
     # The counts read pair (and flow) fields, so the model must extract those groups.
     with pytest.raises(ValueError, match="dependencies for pool_activity"):

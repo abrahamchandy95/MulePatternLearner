@@ -20,21 +20,19 @@ def test_missing_required_message_fields_raise_instead_of_defaulting() -> None:
     rng = context_rng(key)
     for field in ("flow_present", "pair_prior_count", "age_ms", "amount"):
         store = FakeStore(sampler)
-        message = payment(key, "zelle_out", 50, "peer", "recent", rng)
+        message = payment(key, "zelle_out", 50, "peer", rng)
         store.row(key)["messages"] = [message]
         build_batch(store, [key], plan=plan, sampler=replace(sampler, fanouts=(4, 2)))
         del message[field]
         with pytest.raises(ValueError, match=field):
             build_batch(store, [key], plan=plan, sampler=replace(sampler, fanouts=(4, 2)))
     store = FakeStore(sampler)
-    store.row(key)["messages"] = [
-        payment(key, "zelle_out", 50, "peer", "recent", rng) | {"age_ms": -1}
-    ]
+    store.row(key)["messages"] = [payment(key, "zelle_out", 50, "peer", rng) | {"age_ms": -1}]
     with pytest.raises(ValueError, match="Future"):
         build_batch(store, [key], plan=plan, sampler=replace(sampler, fanouts=(4, 2)))
     # Fields of groups outside the plan stay optional.
     store = FakeStore(sampler)
-    message = payment(key, "zelle_out", 50, "peer", "recent", rng)
+    message = payment(key, "zelle_out", 50, "peer", rng)
     del message["flow_present"]
     store.row(key)["messages"] = [message]
     without_flows = FeaturePlan(tuple(g for g in CORE_GROUPS if g != "flow_timing"), "tgat")

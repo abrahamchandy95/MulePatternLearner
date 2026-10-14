@@ -130,20 +130,18 @@ def records(run: Path) -> list[tuple[dict[str, Any], str | None]]:
             {"event": "scope_types", "replaced": ["Temporal_Training_Scope lacks"], "dropped": []},
             "Replaced the scope vertex type; every training query is installed again",
         ),
-        # A scope found in place, or created, and the hub registry show nothing.
-        ({"event": "scope", "scope": "strict_mule_v2", "unowned_members": {"gl": 9}}, None),
+        # The split found in place, or created, and the hub registry show nothing.
+        ({"event": "scope", "found": True}, None),
         (
-            {"event": "scope", "scope": "strict_mule_v2", "creating": True},
-            "Creating scope strict_mule_v2 on TigerGraph...",
+            {"event": "scope", "creating": True},
+            "Creating the graph's train, validation and test split on TigerGraph...",
         ),
-        ({"event": "scope", "scope": "strict_mule_v2", "created": True}, None),
+        ({"event": "scope", "created": True}, None),
         (
             {
                 "event": "reveal",
                 "labels": "already revealed",
-                "known_labels": 752623,
                 "revealed_labels": 51,
-                "contract": {"known_labels": 752623},
             },
             "Known mules already revealed on TigerGraph: 51",
         ),

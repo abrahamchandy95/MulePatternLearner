@@ -22,16 +22,16 @@ from .executor import ConnectionExecutor, QueryExecutor, account_pages
 # its Python mirror (reference.label_reveal.plan). The first result holds the mules
 # (split, draw key, first observation and the "event_seq:label_available_ts_ms"
 # fraud-labelled Zelle inflows), the next two the Zelle and payment events between two
-# mules.
+# mules. A mule's split is its partition in the graph's one ready split.
 REVEAL_INPUTS_QUERY = f"""
-INTERPRET QUERY (STRING scope_id) FOR GRAPH {GRAPH_NAME} {{
+INTERPRET QUERY () FOR GRAPH {GRAPH_NAME} {{
   MaxAccum<INT> @part;
   MinAccum<INT> @key;
   OrAccum @mule;
   ListAccum<STRING> @inflows;
   SetAccum<STRING> @ends;
   Scopes = {{Temporal_Training_Scope.*}};
-  Ready = SELECT r FROM Scopes:r WHERE r.scope_id == scope_id;
+  Ready = SELECT r FROM Scopes:r WHERE r.ready;
   M = {{Account.*}};
   M = SELECT a FROM M:a WHERE a.is_mule == 1 AND NOT a.is_external POST-ACCUM a.@mule += TRUE;
   S = SELECT a FROM Ready:r -(Training_Scope_Has_Entity>:e)- Account:a WHERE a.@mule ACCUM a.@part += e.partition;
@@ -84,7 +84,7 @@ class TigerGraphTruthReader:
 
 
 class TigerGraphRevealInputReader:
-    """The reveal's inputs in a scope, read through the executor with REVEAL_INPUTS_QUERY.
+    """The reveal's inputs in the split, read through the executor with REVEAL_INPUTS_QUERY.
 
     Read-only: the interpreted query writes nothing, and the job itself never runs.
     diagnostics.reveal_spread replays the job's mirror on these rows over many salts.
@@ -93,9 +93,9 @@ class TigerGraphRevealInputReader:
     def __init__(self, executor: ConnectionExecutor) -> None:
         self.executor = executor
 
-    def read(self, scope_id: str) -> list[dict[str, Any]]:
+    def read(self) -> list[dict[str, Any]]:
         rows = self.executor.call(
-            lambda conn: conn.runInterpretedQuery(REVEAL_INPUTS_QUERY, {"scope_id": scope_id}),
+            lambda conn: conn.runInterpretedQuery(REVEAL_INPUTS_QUERY),
             what="reveal inputs",
         )
         if not isinstance(rows, list) or not any("M" in row for row in rows):

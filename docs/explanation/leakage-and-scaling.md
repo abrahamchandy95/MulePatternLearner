@@ -6,29 +6,28 @@ protocol.
 
 ## The experiment scope
 
-`strict_inductive`, the only protocol, withholds whole ownership groups. The scope (a
-`Temporal_Training_Scope` vertex, one `Entity_In_Training_Scope` edge per Account and
-Party) keeps experiment membership apart from the business data. Accounts and Parties
+`strict_inductive`, the only protocol, withholds whole ownership groups. The graph's one
+split (a `Temporal_Training_Scope` vertex, one `Entity_In_Training_Scope` edge per Account
+and Party) keeps experiment membership apart from the business data. Accounts and Parties
 joined by any ownership tenure form a component, which a seeded hash places in train,
 validation or test by the split shares (half, a quarter and a quarter of the groups in the
 built-in run). Ownership history serves grouping only, conservatively, never as a
-feature, and mule truth is never read. Membership is verified before the scope becomes
+feature, and mule truth is never read. Membership is verified before the split becomes
 ready.
 
-`scope.unowned` places accounts no Party owns
-([`create_training_scope`](../reference/queries.md#create_training_scope) has the rules).
-The built-in `"linked"` shares unowned external and ledger accounts (partition 1, visible
-in every phase) and gives an unowned internal account the partition and group of its only
-owned internal deposit counterparty, if it has exactly one:
+Accounts no Party owns follow one rule
+([`create_training_scope`](../reference/queries.md#create_training_scope)): unowned
+external and ledger accounts are shared (partition 1, visible in every phase), and an
+unowned internal account takes the partition and group of its only owned internal deposit
+counterparty, if it has exactly one, else forms a group of its own:
 
 - Ledger accounts (`account_type = "gl"`, the bank's fee and interest books) belong to no
   customer; hashing them would hide every fee posting to a held-out one from training.
 - Internal credit accounts, unowned here, almost always transact with exactly one deposit
   account, their holder: linking keeps a held-out holder's card activity out of training
   and a training root's own card payments in it.
-- Links come after the components are final, so a component with a Party keeps its
-  component, partition and group under every rule. The rule is checked on every use
-  ([`summarize_scope_policy`](../reference/queries.md#summarize_scope_policy)).
+- Links come after the components are final, so they never change a component with a
+  Party.
 
 Visibility is cumulative:
 
@@ -36,15 +35,15 @@ Visibility is cumulative:
 |---|---|---|
 | Train (1) | Train members only | Yes |
 | Validation (2) | Train and validation members | No |
-| Test (3) | Every member of the frozen scope | No; the model and threshold are already fixed |
+| Test (3) | Every member of the split | No; the model and threshold are already fixed |
 
-Shared tokens, devices, IPs and addresses are allowed, and accounts outside the frozen
-scope cannot silently enter training. The benchmark is of unseen existing groups: held-out
+Shared tokens, devices, IPs and addresses are allowed, and accounts outside the split
+cannot silently enter training. The benchmark is of unseen existing groups: held-out
 accounts need not have been opened after training. Membership lives on the graph and a
-request names only its scope and phase: a per-request exclusion list, or filtering only
-the returned neighbours, would leave held-out accounts in the aggregates. Context keys
-carry scope and phase, so no context crosses scopes and no feature computed on the full
-graph is reused.
+request names only its phase: a per-request exclusion list, or filtering only the
+returned neighbours, would leave held-out accounts in the aggregates. Context keys carry
+the phase (0 for no split, as in `mule score`), so no context crosses phases and no
+feature computed on the full graph is reused.
 
 The isolation requirements:
 
@@ -54,15 +53,16 @@ The isolation requirements:
   unchanged;
 - changing hidden truth with the observed labels fixed leaves the training weights and
   selection unchanged;
-- the splits keep their ownership groups apart, and available positives are counted
-  without budgets changing on their own;
-- scoped pair gaps, frequency counts and visibility match a small independent reference.
+- the splits keep their ownership groups apart, and available positives are counted as
+  revealed, never topped up;
+- pair gaps, frequency counts and visibility within a phase match a small independent
+  reference.
 
 `tests/integration/test_scope_isolation.py` (marker `graph_write`) checks the first two on
 the graph: it adds and changes held-out payments and shared-identifier associations,
 compares complete training contexts, checks that future events stay out, scores an
 account inserted after an accelerator update, and removes its fixtures. Unit tests check
-scope propagation, label separation, bounded seed selection and batch-local ids. None of
+phase propagation, label separation, bounded seed selection and batch-local ids. None of
 it shows production-scale performance or rules out missing source availability data.
 
 ## Leakage is broader than labels
@@ -109,7 +109,7 @@ second (`strict_inductive`); the third was its `shared_history` protocol, now re
 a separate run of it must be reported under its own name. If a generator creates every
 mule before the training cutoff there may be no positive cold-start sample: change the
 simulation or observation period rather than moving old accounts into a supposedly
-new-account sample. `mule score` scores accounts outside the scope from the history
+new-account sample. `mule score` scores accounts outside the split from the history
 before any date, so the architecture is inductive; quality on newly arriving accounts
 needs its own chronological sample.
 
@@ -128,13 +128,15 @@ negative without a contract saying so.
 
 ## The frozen source
 
-A dataset records the graph's vertex counts, its scope and the hashes of the query files
-it was prepared with. Every run reading the graph for it (training, its resume, the
-audits, the diagnostics) first checks the installed query texts, the vertex counts (scope
-vertices aside, as experiment metadata) and the scope's header and rule, and refuses a
-change. A same-count edit, or a change during a run, goes undetected: keep the graph
-frozen for the experiment, and after reloading or materially changing it use a new scope
-id and prepare a new dataset.
+A dataset records the graph's vertex counts, which name it, its split's settings and the
+hashes of the query files it was prepared with. Every run reading the graph for it
+(training, its resume, the audits, the diagnostics) first checks the installed query
+texts, the vertex counts (the scope vertex aside, as experiment metadata), the split's
+seed and shares and the reveal's labels, and refuses a change. A same-count edit, a
+change during a run, or a split deleted and made again with the same settings goes
+undetected: keep the graph frozen for the experiment, and after reloading or materially
+changing it delete the split and move the old dataset aside
+([After the data changes](../how-to/set-up-a-graph.md#after-the-data-changes)).
 
 ## Bounded transport
 
@@ -191,14 +193,14 @@ MacBook with an M2 Max), and later on the CUDA host:
 | One 64-root batch, 8 contexts per request, 16 in parallel, cold | 11 to 12 s (76 REST calls, about 960 contexts, 357 stubs) |
 | The same batch, 16 contexts per request, 8 in parallel | 19.6 s |
 | A warm step with prefetch | 4.9 s |
-| Scope creation plus preparation | 6 min 19 s |
+| Split creation plus preparation | 6 min 19 s |
 | Installing every training query | about 50 min, most of it the context query |
 | A training step on the CUDA host | about 3 s; a run with early stopping takes about an hour (the reference run stopped at epoch 11) |
 
 Training is bound by TigerGraph, not the GPU. Scans are not indexed by time, so server
 work per context grows with its all-time adjacency in each payment relation; a heap
 bounds the rows returned, not the history scanned, and hubs never reach the server as
-children. Scope creation visits every ownership component, population pages can rescan
+children. Split creation visits every ownership component, population pages can rescan
 membership, and cutoff resolution scans every event clock. A bounded response bounds
 neither server memory nor latency, and the client cannot promise that TigerGraph or other
 processes never run out of memory.
@@ -209,7 +211,7 @@ predecessor state, handling late events and backfills explicitly. Levers before 
 a larger instance raise the bound on `transport.query_concurrency`
 (`contract.bounds.QUERY_CONCURRENCY`, which the default of 16 already reaches) and then
 the setting; shrink the child pool; process a call's requests together; or materialise
-the event-intrinsic pair features, which depend on neither scope nor cutoff.
+the event-intrinsic pair features, which depend on neither split nor cutoff.
 
 ## Transport alternatives
 
@@ -217,8 +219,8 @@ the event-intrinsic pair features, which depend on neither scope nor cutoff.
 |---|---|---|
 | Bounded custom REST requests (this pipeline) | Simple, minimal client retention | Round trips, JSON overhead and repeated scans |
 | TigerGraph GDS with Kafka-backed batches | Bounded delivery and prefetch, decoupled producer and consumer | Broker, security and Cloud configuration; custom time and visibility semantics still needed |
-| Scoped sharded exports to storage near the GPUs | Repeatable multi-epoch training, distributed readers | Snapshot refresh and storage cost; export only the relevant partitions |
-| A sampler service with a shared cache | Reuse across GPU workers and epochs | Operational complexity; keys must include snapshot, scope and cutoff |
+| Sharded exports of the split's partitions to storage near the GPUs | Repeatable multi-epoch training, distributed readers | Snapshot refresh and storage cost; export only the relevant partitions |
+| A sampler service with a shared cache | Reuse across GPU workers and epochs | Operational complexity; keys must include snapshot, phase and cutoff |
 
 Check the installed version's documentation before choosing GDS: `filter_by` selects
 seeds, not every traversed neighbour, so a seed filter is no inductive boundary, and a
@@ -227,7 +229,7 @@ time filter after fetching cannot undo leaked server-side aggregates. Per the
 HTTP may collect batches before iteration while Kafka delivers them incrementally, so an
 iterator API does not mean bounded streaming.
 
-TigerGraph applies scope and time predicates, finds neighbours and predecessors,
+TigerGraph applies split and time predicates, finds neighbours and predecessors,
 aggregates and computes the requested Fourier vectors; forward passes, gradients and
 optimisation stay in PyTorch. A GSQL calculation is not a learned embedding.
 

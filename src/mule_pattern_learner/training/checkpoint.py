@@ -18,8 +18,8 @@ from typing import Any, ClassVar
 
 import torch
 
-from ..artifacts import atomic_write, read_json, read_run_config, read_run_provenance
-from ..config import RunConfig, differing_settings
+from ..artifacts import atomic_write, read_json, read_run_provenance
+from ..config import RunConfig, differing_settings, retired_settings
 from ..paths import RunPaths
 
 
@@ -108,14 +108,22 @@ def restore_cuda_rng(saved: torch.Tensor | None, device: torch.device) -> None:
 
 
 def changed_settings(config: RunConfig, run: RunPaths) -> list[str]:
-    """The dotted names of the results-relevant settings config changes from the run's."""
+    """The dotted names of the results-relevant settings config changes from the run's.
+
+    A retired setting the run recorded is one of them (config.retired_settings), whatever
+    its value: such a run is of earlier code, whose scope id may be all that tells its
+    split from config's, and whose fingerprint and dataset id covered every one of them,
+    so even a scope.unowned of "linked" or a reveal_per_split of null names another run.
+    """
     try:
-        previous = read_run_config(run.config)
+        recorded = read_json(run.config)["config"]
+        previous = RunConfig.from_dict(recorded)
     except (KeyError, OSError, ValueError) as error:
         raise ValueError(
             f"Cannot read the configuration of the run in {run.root}: {error}"
         ) from None
-    return differing_settings(config.results_view(), previous.results_view())
+    changed = differing_settings(config.results_view(), previous.results_view())
+    return sorted([*changed, *retired_settings(recorded)])
 
 
 def completed_run(config: RunConfig, run: RunPaths) -> dict[str, Any] | None:

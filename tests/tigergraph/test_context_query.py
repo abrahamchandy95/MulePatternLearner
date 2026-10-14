@@ -62,11 +62,10 @@ def test_response_bound_is_per_hop() -> None:
         validate_context(key, row, CORE_PLAN, SMALL_SAMPLER, 2)
 
 
-def test_unknown_channel_is_counted_but_unknown_rail_is_rejected() -> None:
+def test_an_unknown_rail_is_rejected() -> None:
     key = root(0)
     row = context(key, [event(990, key)], encodings=False)
-    row["messages"][0]["channel"] = "carrier_pigeon"
-    assert validate_context(key, row, CORE_PLAN, SMALL_SAMPLER) == 1
+    validate_context(key, row, CORE_PLAN, SMALL_SAMPLER)
     row["messages"][0]["rail"] = "carrier_pigeon"
     with pytest.raises(ValueError, match="rail"):
         validate_context(key, row, CORE_PLAN, SMALL_SAMPLER)
@@ -99,7 +98,7 @@ def test_basis_and_clock_corruption_are_rejected() -> None:
 
 
 def test_a_row_with_a_feature_training_does_not_read_is_refused() -> None:
-    # The training query computes no analytics group, so such a feature means another
+    # The training query computes no account history, so such a feature means another
     # query answered.
     key = ContextKey("Account", "root", 100, 1000)
     validate_context(key, context(key), FeaturePlan(), sampler=SamplerPlan())

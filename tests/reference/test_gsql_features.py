@@ -1,16 +1,16 @@
-"""The CPU mirror of the context queries' timing, decay, strata and account features."""
+"""The CPU mirror of the context query's messages: timing, selection and associations."""
 
 from typing import Any
 
 import pytest
 
-from mule_pattern_learner.contract.analytics_features import ANALYTICS_GROUPS
 from mule_pattern_learner.contract.graph_schema import ContextKey
 from mule_pattern_learner.contract.sampler_plan import PoolPlan
 from mule_pattern_learner.reference.gsql_features import (
-    MIRRORED_ACCOUNT_GROUPS,
-    account_features,
+    association_messages,
     payment_features,
+    payment_messages,
+    root_features,
     stratify,
 )
 
@@ -50,7 +50,7 @@ def test_timing_uses_both_clocks_and_marks_censored_receipts():
         event(10, 9500, "out"),
         event(8, 9200, "out", currency="EUR"),
     ]
-    rows, _ = payment_features(history, root)
+    rows = payment_features(history, root)
     first = rows["zelle_in:e1"]
     assert first["flow_present"] and first["flow_delay_seconds"] == 0
     assert first["flow_amount_ratio"] == 0.9
@@ -60,76 +60,76 @@ def test_timing_uses_both_clocks_and_marks_censored_receipts():
     last = rows["zelle_in:e5"]
     assert last["flow_censored"] and not last["flow_present"]
     assert last["flow_observation_seconds"] == 1
-    assert rows == payment_features(history[:5], root)[0]
+    assert rows == payment_features(history[:5], root)
     assert rows["zelle_in:e3"]["pair_prior_count"] == 1
     assert rows["zelle_in:e5"]["pair_first_age_seconds"] == 8
 
 
-def test_decay_is_smooth_and_missing_amount_is_not_invented():
+def test_a_missing_amount_is_not_invented():
     day = 86400000
     key = ContextKey("Account", "root", 10, 2 * day)
     e = event(1, day)
     e["amount"], e["amount_present"] = 0, False
-    rows, sums = payment_features([e, event(2, day + 1000, "out")], key)
-    assert sums["decay_1d_in_count"] == 0.5
-    assert sums["decay_1d_in_amount"] == 0
+    rows = payment_features([e, event(2, day + 1000, "out")], key)
     assert not rows["zelle_in:e1"]["flow_ratio_present"]
-    later = ContextKey("Account", "root", 10, 2 * day + 1000)
-    assert 0 < payment_features([e], later)[1]["decay_1d_in_count"] < 0.5
 
 
-def test_rank_and_peer_strata_survive_a_recent_burst_without_duplicate_events():
+def test_rank_and_peer_picks_survive_a_recent_burst_without_duplicate_events():
     pool = PoolPlan(4, 3, 2, 2, 2048)
     old = [event(i, i * 1000, peer=f"p{i}") for i in range(1, 61)]
     burst = [event(i, 61000 + i, peer="burst") for i in range(61, 101)]
     rows = stratify(old + burst, pool)
-    assert len({e["event_id"] for e in rows}) == len(rows) == 9
-    assert {e["stratum"] for e in rows} == {"recent", "older", "distinct"}
-    assert any(e["event_seq"] < 61 for e in rows)
+    # The 4 most recent, the ranks 27, 51 and 75 of 100 (sequences 73, 49 and 25), then
+    # the two newest events of peers not yet selected, in the query's order.
+    assert [e["event_seq"] for e in rows] == [100, 99, 98, 97, 73, 49, 25, 60, 59]
     assert stratify(list(reversed(old + burst)), pool) == rows
     with pytest.raises(ValueError, match="capacity"):
         stratify(old + burst, PoolPlan(4, 3, 2, 2, 32))
 
 
-def test_account_features_count_windows_peers_ratios_and_recency() -> None:
-    hour, day = 3_600_000, 86_400_000
-    cutoff = 40 * day
-    key = ContextKey("Account", "root", 100, cutoff)
-    token = {**event(3, cutoff - 2 * day, peer="card"), "node_type": "Token"}
-    missing = {**event(4, cutoff - 10 * day, "out", peer="shop"), "amount": 0}
-    missing["amount_present"] = False
-    history = [
-        event(1, cutoff - hour // 2, peer="a", amount=300),
-        {**event(2, cutoff - 2 * hour, "out", peer="b", amount=90), "relation": "payment_out"},
-        token,
-        missing,
-        event(5, cutoff - 3 * day, peer="a", currency="EUR"),
-        event(100, cutoff - 3 * day, peer="late"),
+def test_payment_messages_carry_every_field_of_the_selected_events():
+    root = ContextKey("Account", "root", 10, 10000)
+    peer = {"peer_first_ms": 5, "peer_external": True, "peer_deposit": False}
+    history = [{**event(seq, seq * 1000, peer="a"), **peer} for seq in (1, 2, 3)]
+    rows = payment_messages(history, root, PoolPlan(2, 0, 0, 0, 2048))
+    assert [m["event_seq"] for m in rows] == [3, 2]
+    newest = rows[0]
+    assert newest["age_ms"] == 7000 and newest["peer_first_ms"] == 5 and newest["peer_external"]
+    assert (newest["gap_ms"], newest["pair_prior_count"]) == (1000, 2)
+    assert newest == {**newest, **payment_features(history, root)["zelle_in:e3"]}
+
+
+def test_associations_keep_the_newest_valid_tenures_of_each_relation():
+    key = ContextKey("Party", "owner", 100, 10000)
+
+    def link(node: str, valid_from: int, valid_to: int = 0, first_seq: int = 1) -> dict[str, Any]:
+        return dict(
+            relation="Party_Owns_Account",
+            node_type="Account",
+            node_id=node,
+            valid_from_seq=valid_from,
+            valid_to_seq=valid_to,
+            first_seen_seq=first_seq,
+            first_seen_ts_ms=1000,
+            external=node == "b",
+            deposit=True,
+        )
+
+    # Ended (c), not yet valid at state_seq 99 (d) and first seen after it (e, f) are left
+    # out; b and b2 tie on valid_from_seq, so the node id orders them.
+    links = [
+        link("a", 10),
+        link("b", 20),
+        link("b2", 20),
+        link("c", 30, 50),
+        link("d", 100),
+        link("e", 5, 0, 100),
+        link("f", 1, 0, 200),
     ]
-    values = account_features(history, key, first_seen_ms=cutoff - 30 * day)
-    names = {n for group in MIRRORED_ACCOUNT_GROUPS for n in ANALYTICS_GROUPS[group].names}
-    assert set(values) <= names
-    assert values["age_days"] == 30.0
-    # The EUR event and the one at the cutoff's sequence are not visible.
-    assert values["visible_event_count"] == 4 and values["history_lt_5_events"] == 1
-    assert (values["1h_in_count"], values["1h_in_amount"], values["1h_in_zelle"]) == (1, 300, 1)
-    assert "1h_out_count" not in values
-    assert (values["1d_out_count"], values["1d_out_zelle"], values["1d_out_unique"]) == (1, 0, 1)
-    # A sending Token is no distinct payer; a recipient of either type is a payee.
-    assert (values["7d_in_count"], values["7d_in_unique"]) == (2, 1)
-    assert (values["30d_out_count"], values["30d_out_missing"], values["30d_out_unique"]) == (
-        2,
-        1,
-        2,
-    )
-    # Out over in, the incoming amount floored at 1 and the ratio capped at 100.
-    assert values["1d_out_in_amount_ratio"] == 0.3
-    assert values["7d_out_in_amount_ratio"] == 90 / 400
-    assert values["in_recency_days"] == pytest.approx(1 / 48)
-    assert values["out_recency_days"] == pytest.approx(1 / 12)
-    assert values["in_recency_present"] == values["out_recency_present"] == 1
-    assert {k: v for k, v in values.items() if k.startswith("decay_")} == payment_features(
-        history, key
-    )[1]
-    alone = account_features([{**history[1], "amount": 500}], key, first_seen_ms=cutoff - day)
-    assert alone["1d_out_in_amount_ratio"] == 100.0 and "in_recency_days" not in alone
+    rows = association_messages(links, key, 2)
+    assert [(m["node_id"], m["peer_external"]) for m in rows] == [("b", True), ("b2", False)]
+    assert rows[0]["event_seq"] == 100 and rows[0]["event_ts_ms"] == 10000
+    assert rows[0]["event_id"] == "" and rows[0]["rail"] == "unknown"
+    assert root_features(key, True, True) == {}
+    account = ContextKey("Account", "a", 100, 10000)
+    assert root_features(account, False, True) == {"is_deposit": 1.0}

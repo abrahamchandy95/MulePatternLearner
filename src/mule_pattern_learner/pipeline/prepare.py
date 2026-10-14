@@ -1,12 +1,11 @@
 """Preparation against the graph, with built-in settings, and the query installation.
 
 `mule train` needs only the TigerGraph credentials in .env. On a fresh graph
-the first run installs the training queries, creates the frozen scope and reveals the
+the first run installs the training queries, creates the graph's split and reveals the
 known mules through the label contract; later runs find all three in place. Settings
-are a config.RunConfig (DEFAULT_CONFIG for the command line), and the source id is read
-from the scope (or derived from the graph). A dataset is prepared in
+are a config.RunConfig (DEFAULT_CONFIG for the command line). A dataset is prepared in
 data/<dataset id>/ (paths.DatasetPaths.of), where the dataset id is the fingerprint of
-the source id and the dataset settings (data.manifest.dataset_id).
+the graph's vertex counts and the dataset settings (data.manifest.dataset_id).
 """
 
 from __future__ import annotations
@@ -23,7 +22,7 @@ from ..tigergraph.cutoffs import TigerGraphCutoffReader
 from ..tigergraph.hubs import TigerGraphHubReader
 from ..tigergraph.installer import drop_retired, install, undefined_queries
 from ..tigergraph.labels import TigerGraphObservedLabelReader
-from ..tigergraph.provenance import resolve_source_id, source_counts
+from ..tigergraph.provenance import source_counts
 from ..tigergraph.reveal import ensure_revealed_labels
 from ..tigergraph.scope import TigerGraphScopeReader, ensure_scope
 from .connect import Session, connect
@@ -49,16 +48,16 @@ def install_queries(config: RunConfig = DEFAULT_CONFIG) -> dict[str, Any]:
 
 
 def find_datasets(config: RunConfig, data: Path = DATA_DIR) -> list[DatasetPaths]:
-    """The datasets under data that config prepares, whatever their source id.
+    """The datasets under data that config prepares, whatever graph they were prepared from.
 
-    A dataset directory is named by its dataset id, the fingerprint of its source id
-    and its dataset settings; it belongs to config when that name is the dataset id
-    config gives its recorded source id.
+    A dataset directory is named by its dataset id, the fingerprint of its graph's
+    vertex counts and its dataset settings; it belongs to config when that name is the
+    dataset id config gives its recorded counts.
     """
     found: list[DatasetPaths] = []
     for dataset in datasets(data):
-        source_id = read_manifest(dataset).get("source", {}).get("source_id")
-        if source_id and dataset.root.name == dataset_id(source_id, config):
+        counts = read_manifest(dataset).get("source", {}).get("source_counts")
+        if counts and dataset.root.name == dataset_id(counts, config):
             found.append(dataset)
     return found
 
@@ -71,14 +70,14 @@ def prepare_dataset(
     A ready dataset of config is reused without connecting, but only after its GSQL
     hashes match the current ones. Otherwise the graph is brought to a trainable state
     first, on the session's connection if there is one: stale queries are installed,
-    the scope is created if missing, and known mules are revealed if the graph has none.
-    A dataset being prepared keeps its source id; with none, or several (the graph was
-    reloaded), the source id is read from the graph. The events of the scope, the reveal
-    and the preparation are recorded in the dataset's events.jsonl, and a `dataset` event
-    names the dataset ready for use, prepared or reused, with its known mules.
+    the split is created if missing, and known mules are revealed if the graph has none
+    or the split is new (tigergraph.reveal.ensure_revealed_labels). The dataset is then
+    the one of the graph's vertex counts, resumed if it is being prepared. The events of
+    the split, the reveal and the preparation are recorded in the dataset's
+    events.jsonl, and a `dataset` event names the dataset ready for use, prepared or
+    reused, with its known mules.
     """
     found = find_datasets(config, data)
-    source_id: str | None = None
     if len(found) == 1:
         (dataset,) = found
         manifest = read_manifest(dataset)
@@ -87,23 +86,19 @@ def prepare_dataset(
             # The trainer re-verifies artifacts before use. No database connection is needed.
             announce(dataset, manifest, "reused", session)
             return dataset
-        source_id = manifest["source"]["source_id"]
     executor = session.executor() if session is not None else connect(config.transport)
     install(executor)
     counts = source_counts(executor)
-    if source_id is None:
-        source_id = resolve_source_id(executor, config.scope.id, counts)
-    dataset = DatasetPaths.of(dataset_id(source_id, config), data)
+    dataset = DatasetPaths.of(dataset_id(counts, config), data)
     split_seed = config.dataset.split_seed
     dataset.root.mkdir(parents=True, exist_ok=True)
     with recording(dataset.events):
-        ensure_scope(executor, config.scope, source_id=source_id, split_seed=split_seed)
-        # The reveal draws its splits from the scope partitions.
-        ensure_revealed_labels(executor, config.scope, config.dataset.dates)
-        counts = source_counts(executor)
+        created = ensure_scope(executor, config.scope, split_seed=split_seed)
+        # The reveal draws its splits from the split's partitions, so a new split's are
+        # revealed again.
+        ensure_revealed_labels(executor, config.scope, config.dataset.dates, new_split=created)
         result = prepare(
             config,
-            source_id,
             dataset,
             counts,
             TigerGraphObservedLabelReader(),

@@ -4,7 +4,7 @@ An audit of a split writes the run's audit/<split>.json (the report),
 audit/<split>.parquet (the scored sample) and audit/<split>_rejected.txt (the accounts
 TigerGraph rejected, if any). `mule evaluate` audits validation and test: decisions use
 the validation audit, and the test audit is for reporting. audit runs the steps:
-audit_population reads the split's frozen population from the scope, audit_sample
+audit_population reads the split's frozen population from the graph's split, audit_sample
 (evaluation.sample) draws the sample, score_sample scores it with the run's model, and
 write_audit writes the files. audit_inputs loads and checks the model and its dataset
 once for every split.
@@ -119,18 +119,18 @@ def audit_inputs(
     return AuditedRun(run, saved, dataset, manifest, registry)
 
 
-def audit_population(scope: ScopeReader, scope_id: str, split: str, date: str) -> pd.DataFrame:
+def audit_population(scope: ScopeReader, split: str, date: str) -> pd.DataFrame:
     """The frozen population of a split at its cutoff: account_id, split and revealed.
 
-    These are the accounts of the split's partition of the scope that existed before
-    the cutoff (data.splits.eligible_mask), in account order. The population is read with
-    its observed labels: revealed says that the graph revealed the account's label
-    before the cutoff, as the proxy metrics see it. At most
-    contract.bounds.AUDIT_POPULATION accounts of the partition are held.
+    These are the accounts of the split's partition that existed before the cutoff
+    (data.splits.eligible_mask), in account order. The population is read with its
+    observed labels: revealed says that the graph revealed the account's label before
+    the cutoff, as the proxy metrics see it. At most contract.bounds.AUDIT_POPULATION
+    accounts of the partition are held.
     """
     phase = SPLIT_PHASE[split]
     rows: list[dict[str, Any]] = []
-    for row in scope_accounts(scope, scope_id, include_observed=True):
+    for row in scope_accounts(scope):
         if row["partition"] == phase:
             rows.append(row)
             if len(rows) > AUDIT_POPULATION:
@@ -239,7 +239,7 @@ def score_sample(
 ) -> tuple[dict[str, float], list[str], dict[str, Any]]:
     """Score an audit sample of one split with the run's model at its split's cutoff.
 
-    The keys are the prepared dataset's: its cutoff clock, scope and the split's phase,
+    The keys are the prepared dataset's: its cutoff clock and the split's phase,
     and the hub registry is the dataset's, so scoring matches training. Returns the
     scores of the accepted accounts by account id, the ids TigerGraph rejected and the
     rejection summary (inference.rejections.rejection_summary) of this sample alone,
@@ -313,7 +313,7 @@ def audit(
         raise FileExistsError(run.paths.audit_report(split))
     config = run.model.config
     (date,) = config.dataset.dates[split]
-    population = audit_population(scope, config.scope.id, split, date)
+    population = audit_population(scope, split, date)
     if not len(population):
         raise ValueError(f"No eligible accounts in the {split} population")
     selected = audit_sample(population, checked_truth(truth), seed=config.dataset.split_seed)
@@ -359,7 +359,6 @@ def audit(
         "rejected_positives": rejected_positives,
         "rejected_negatives": len(unscored) - rejected_positives,
         **summary,
-        "scope": config.scope.id,
         "model_changed": False,
     }
     write_audit(run.paths, split, report, scored, rejected)

@@ -1,4 +1,4 @@
-"""Resumable dataset preparation inside the frozen scope."""
+"""Resumable dataset preparation inside the graph's split."""
 
 from __future__ import annotations
 
@@ -40,14 +40,12 @@ def _stage_population(
 ) -> None:
     """Select and write accounts.parquet unless the manifest records it.
 
-    The accounts are bounded seed reservoirs of the scope partitions plus the observed
+    The accounts are bounded seed reservoirs of the split's partitions plus the observed
     positives (accounts.select_accounts).
     """
     accounts_path = dataset.accounts
     if not accounts_path.exists() or "accounts_sha256" not in manifest:
-        accounts, manifest["population_by_split"] = select_accounts(
-            scope, config.scope.id, config.dataset
-        )
+        accounts, manifest["population_by_split"] = select_accounts(scope, config.dataset)
         if ORACLE_COLUMNS & set(accounts.columns):
             raise ValueError(
                 "Population query returned oracle fields; install the observed-only query"
@@ -90,13 +88,13 @@ def _stage_cutoffs(
 def _stage_hubs(
     config: RunConfig, dataset: DatasetPaths, manifest: dict[str, Any], hub_reader: HubReader
 ) -> None:
-    """Query and save the hub registry of the prepared cutoffs and scope."""
+    """Query and save the hub registry of the prepared cutoffs, by phase of the split."""
     hubs_path = dataset.hubs
     if "hubs_sha256" not in manifest:
         registry = hub_reader.hub_registry(
             manifest["cutoff_seqs"].values(),
             threshold=hub_threshold(config.sampler),
-            scope_id=config.scope.id,
+            by_phase=True,
         )
         registry.save(hubs_path)
         manifest.update(hub_manifest(registry, hubs_path))
@@ -106,7 +104,6 @@ def _stage_hubs(
 
 def prepare(
     config: RunConfig,
-    source_id: str,
     dataset: DatasetPaths,
     source_counts: dict[str, int],
     labels: ObservedLabelReader,
@@ -118,23 +115,19 @@ def prepare(
     """Resumable preparation: the accounts, observed labels, cutoffs and hub registry.
 
     Contexts are not stored: training requests them from TigerGraph. It reads the
-    graph only through its ports: the scope population, the cutoff clocks and the hub
-    registry. `source_id` names the data loaded into the graph, and `labels` is the
-    pipeline's label source, the labels revealed in the graph for every run. The
-    manifest records the dataset's settings and its id (manifest.dataset_settings).
-    Each stage writes the manifest when it is done, and a resumed preparation skips
-    the stages the manifest records.
+    graph only through its ports: the split's population, the cutoff clocks and the hub
+    registry. `source_counts` are the graph's vertex counts, which name the data loaded
+    into it, and `labels` is the pipeline's label source, the labels revealed in the
+    graph for every run. The manifest records the dataset's settings and its id
+    (manifest.dataset_settings). Each stage writes the manifest when it is done, and a
+    resumed preparation skips the stages the manifest records.
     """
-    if not source_id:
-        raise ValueError("A new immutable source id is required after each graph reload/backfill")
     dataset.root.mkdir(parents=True, exist_ok=True)
     metadata = {
-        "source_id": source_id,
         "source_counts": source_counts,
         "query_hashes": query_hashes(),
-        "dataset_id": dataset_id(source_id, config),
-        "settings": dataset_settings(source_id, config),
-        "scope_id": config.scope.id,
+        "dataset_id": dataset_id(source_counts, config),
+        "settings": dataset_settings(source_counts, config),
     }
     manifest: dict[str, Any]
     if dataset.manifest.exists():

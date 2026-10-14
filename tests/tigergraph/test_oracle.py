@@ -9,7 +9,9 @@ import pytest
 from mule_pattern_learner.contract.server import TRUTH_QUERY
 from mule_pattern_learner.testing.builders import reveal_inputs
 from mule_pattern_learner.testing.fake_graph import FakeTigerGraph, page
+from mule_pattern_learner.testing.gsql_blocks import flat
 from mule_pattern_learner.tigergraph.oracle import (
+    REVEAL_INPUTS_QUERY,
     TigerGraphRevealInputReader,
     TigerGraphTruthReader,
 )
@@ -17,13 +19,18 @@ from mule_pattern_learner.tigergraph.oracle import (
 
 def test_the_inputs_of_the_reveal_are_read_through_the_executor() -> None:
     graph = FakeTigerGraph(reveal=reveal_inputs())
-    rows = TigerGraphRevealInputReader(graph).read("scope")
-    assert rows == reveal_inputs() and graph.calls == [("reveal inputs", {"scope_id": "scope"})]
+    rows = TigerGraphRevealInputReader(graph).read()
+    assert rows == reveal_inputs() and graph.calls == [("reveal inputs", {})]
+    # The mules' splits are their partitions in the graph's one ready split, which the
+    # query reads without a parameter.
+    query = flat(REVEAL_INPUTS_QUERY)
+    assert "INTERPRET QUERY () FOR GRAPH" in query and "scope_id" not in query
+    assert "Ready = SELECT r FROM Scopes:r WHERE r.ready;" in query
     # Nothing was written, and no installed query ran: the job itself never runs.
     assert graph.writes == [] and graph.names() == ["reveal inputs"]
     empty = FakeTigerGraph(reveal=[{"zelle_links": []}])
     with pytest.raises(ValueError, match="no mules result"):
-        TigerGraphRevealInputReader(empty).read("scope")
+        TigerGraphRevealInputReader(empty).read()
 
 
 def test_the_graph_truth_pages_the_label_contract() -> None:

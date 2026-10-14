@@ -1,6 +1,6 @@
 """The settings of a run as frozen dataclasses; DEFAULT_CONFIG is the built-in run.
 
-RunConfig has one section per concern: the frozen TigerGraph scope (scope), the
+RunConfig has one section per concern: the graph's one split (scope), the
 prepared dataset (dataset), neighbour sampling (sampler, which is
 contract.sampler_plan.SamplerPlan itself), the model's feature groups (features), the
 model (model), the nnPU loss (loss), optimisation (training), the connection to
@@ -33,8 +33,6 @@ from .contract.bounds import (
     QUERY_ATTEMPTS,
     QUERY_CONCURRENCY,
     REQUEST_KEYS,
-    REVEAL_PER_SPLIT,
-    SCOPE_ID_BYTES,
     SEED_LIMIT,
 )
 from .contract.clock import timestamp
@@ -84,15 +82,10 @@ def _flag(name: str, value: object) -> None:
         raise ValueError(f"{name} must be true or false, got {value!r}")
 
 
-def _text(name: str, value: object, max_bytes: int | None = None) -> None:
-    """value must be a nonempty string, of at most max_bytes bytes when that is given."""
-    if (
-        not isinstance(value, str)
-        or not value
-        or (max_bytes is not None and len(value.encode()) > max_bytes)
-    ):
-        longest = "" if max_bytes is None else f" of at most {max_bytes} bytes"
-        raise ValueError(f"{name} must be a nonempty string{longest}, got {value!r}")
+def _text(name: str, value: object) -> None:
+    """value must be a nonempty string."""
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{name} must be a nonempty string, got {value!r}")
 
 
 def _instance(name: str, value: object, kind: type) -> None:
@@ -115,23 +108,19 @@ def _set(section: object, name: str, value: object) -> None:
     object.__setattr__(section, name, value)
 
 
-# The buckets the scope's seeded hash places each ownership group in, so a split share
+# The buckets the split's seeded hash places each ownership group in, so a split share
 # is a whole number of them (gsql/queries/training_scope.gsql).
 SCOPE_BUCKETS = 10_000
 
 
 @dataclass(frozen=True)
 class ScopeConfig:
-    """The frozen scope the splits come from, and the label reveal of its datasets."""
+    """The graph's one split into train, validation and test, and the label reveal."""
 
-    # A scope is created once and never changed, so another partition of the graph, or
-    # another load of it, needs a new id: strict_mule_v3 is the first with these shares.
-    id: str = "strict_mule_v3"
-    # The first run creates a missing scope; false forbids that write.
+    # The first run creates the split when the graph has none; false forbids that write.
+    # A split is never changed, so the graph's must have these settings (tigergraph.scope).
     create: bool = True
-    # The accounts no party owns: "independent", "shared" or "linked" (tigergraph.scope).
-    unowned: str = "linked"
-    # The shares of the ownership groups the scope places in train, validation and test,
+    # The shares of the ownership groups the split places in train, validation and test,
     # each a whole number of the SCOPE_BUCKETS buckets, adding up to 1. Training reads
     # only the revealed train mules, so half the groups suffice for it, and the held-out
     # splits get a quarter each, for more mules in every audit (the scope of 70, 15 and
@@ -139,19 +128,13 @@ class ScopeConfig:
     train_share: float = 0.50
     validation_share: float = 0.25
     test_share: float = 0.25
-    # Known mules the reveal makes known per split, among those a bank would have
-    # discovered before the split's cutoff (gsql/queries/label_reveal.gsql). None reveals
-    # every one, as a bank trains on every mule it has confirmed; a number caps each
-    # split, for a scarcer label setting. The reveal settings decide the labels a
-    # dataset reads, so they are dataset settings (data.manifest.dataset_settings).
-    reveal_per_split: int | None = None
-    # Seed of the reveal's deterministic draws.
+    # Seed of the reveal's deterministic draws (gsql/queries/label_reveal.gsql), which
+    # decide the labels a dataset reads, so it is a dataset setting
+    # (data.manifest.dataset_settings).
     reveal_salt: int = 42
 
     def __post_init__(self) -> None:
-        _text("scope.id", self.id, SCOPE_ID_BYTES)
         _flag("scope.create", self.create)
-        _choice("scope.unowned", self.unowned, ("independent", "shared", "linked"))
         for split in SPLITS:
             name = f"{split}_share"
             share = _number(
@@ -168,8 +151,6 @@ class ScopeConfig:
                 f"scope.train_share, scope.validation_share and scope.test_share must add up "
                 f"to 1, got {list(self.shares)}"
             )
-        if self.reveal_per_split is not None:
-            REVEAL_PER_SPLIT.check("scope.reveal_per_split", self.reveal_per_split)
         _integer("scope.reveal_salt", self.reveal_salt)
 
     @property
@@ -241,7 +222,7 @@ class DatasetConfig:
     seed_limits: SeedLimits = SeedLimits()
     # Seed of the label-blind seed reservoirs (data.accounts).
     seed: int = 42
-    # Seed of the scope's partition into splits and of the evaluation samples.
+    # Seed of the graph's split and of the evaluation samples.
     split_seed: int = 42
 
     def __post_init__(self) -> None:
@@ -438,6 +419,11 @@ class RuntimeConfig:
 # results: config.json's provenance records those the run started with, and a resumed
 # segment that changes them says so in events.jsonl.
 RUNTIME_SECTIONS = ("transport", "runtime")
+# The settings, by section, that runs recorded and no run has any more: scope.id named
+# one of several splits when a graph could hold more than one, scope.unowned chose the
+# rule for accounts no party owns (the split now always links them) and
+# scope.reveal_per_split could cap the reveal (it now reveals every discovered mule).
+RETIRED_SETTINGS = {"scope": ("id", "unowned", "reveal_per_split")}
 
 
 @dataclass(frozen=True)
@@ -513,8 +499,17 @@ class RunConfig:
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> RunConfig:
-        """The configuration a to_dict table describes; absent keys keep their defaults."""
-        return DEFAULT_CONFIG.with_changes(value)
+        """The configuration a to_dict table describes; absent keys keep their defaults.
+
+        The table may be a recorded one (config.json, model.pt), so its RETIRED_SETTINGS
+        are left out (retired_settings names them); with_changes refuses them.
+        """
+        kept = {
+            section: {k: v for k, v in value[section].items() if k not in names}
+            for section, names in RETIRED_SETTINGS.items()
+            if isinstance(value.get(section), Mapping)
+        }
+        return DEFAULT_CONFIG.with_changes({**value, **kept})
 
     def with_changes(self, changes: Mapping[str, Any]) -> RunConfig:
         """This configuration with the settings a table of to_dict's shape names changed.
@@ -562,6 +557,17 @@ def _leaves(value: object, path: str = "") -> Iterator[tuple[str, object]]:
             yield from _leaves(item, f"{path}.{key}" if path else str(key))
     else:
         yield path, value
+
+
+def retired_settings(recorded: Mapping[str, Any]) -> list[str]:
+    """The dotted names of the RETIRED_SETTINGS a recorded table holds."""
+    return [
+        f"{section}.{name}"
+        for section, names in RETIRED_SETTINGS.items()
+        if isinstance(recorded.get(section), Mapping)
+        for name in names
+        if name in recorded[section]
+    ]
 
 
 def differing_settings(current: Mapping[str, Any], recorded: Mapping[str, Any]) -> list[str]:

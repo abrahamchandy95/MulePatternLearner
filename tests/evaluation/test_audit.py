@@ -36,7 +36,7 @@ from mule_pattern_learner.tigergraph.scope import TigerGraphScopeReader
 
 
 def split_scope(accounts: pd.DataFrame, split: str) -> TigerGraphScopeReader:
-    """A scope whose population is these accounts, all in the split's partition."""
+    """A split whose population is these accounts, all in the split's partition."""
     rows = [
         {
             "account_id": account,
@@ -186,13 +186,13 @@ def test_the_population_is_the_split_before_its_cutoff_with_what_the_graph_revea
         member("E", 2, 1, 5),  # a validation account
     ]
     scope = TigerGraphScopeReader(FakeTigerGraph(population=rows))
-    population = audit_population(scope, "unit_scope", "test", "2025-01-01")
+    population = audit_population(scope, "test", "2025-01-01")
     assert population.to_dict("list") == {
         "account_id": ["A", "B", "C"],
         "split": ["test"] * 3,
         "revealed": [False, True, False],
     }
-    validation = audit_population(scope, "unit_scope", "validation", "2024-10-01")
+    validation = audit_population(scope, "validation", "2024-10-01")
     assert validation.to_dict("list") == {
         "account_id": ["E"],
         "split": ["validation"],

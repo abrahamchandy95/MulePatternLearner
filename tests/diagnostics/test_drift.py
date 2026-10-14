@@ -21,10 +21,10 @@ def test_the_features_that_grow_with_history_shift_the_most(table: pd.DataFrame)
     smd = table[table.metric == "smd"].pivot_table(index="feature", columns="split", values="value")
     largest = smd.abs().max(axis=1).sort_values(ascending=False)
     shifted = largest.index[:2].tolist()
-    assert shifted == ["account__visible_event_count", "messages__max_pair_prior_count"]
+    assert shifted == ["messages__events", "messages__max_pair_prior_count"]
     # A year of history shifts further than nine months, and noise barely shifts.
     assert (smd.loc[shifted, "test"] > smd.loc[shifted, "validation"]).all()
-    noise = smd.loc["message_context__mean_pair_count_7d"].to_numpy(np.float64)
+    noise = smd.loc["messages__mean_flow_delay_seconds"].to_numpy(np.float64)
     assert np.abs(noise).max() < 0.3
     auc = table[(table.metric == "shift_auc") & (table.feature == shifted[0])]
     assert (auc.value > 0.9).all()
@@ -58,7 +58,7 @@ def test_the_shift_cost_compares_each_learner_across_setups(table: pd.DataFrame)
 def test_split_percentiles_remove_the_shift_of_every_feature() -> None:
     frame = feature_frame()
     frame = frame[~frame.rejected]
-    name = "account__visible_event_count"
+    name = "messages__events"
     ranked = split_rank_transform(frame, [name])
     for _, part in ranked.groupby("split"):
         values = part[name]

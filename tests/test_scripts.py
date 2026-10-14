@@ -1,8 +1,7 @@
 """The scripts import, show help without side effects, and run offline.
 
 The checks against the graph are integration tests now (tests/integration), and the reveal's
-simulation is `mule diagnose reveal-spread`; two scripts remain: render_queries.py and
-run_experiments.py.
+simulation is `mule diagnose reveal-spread`; one script remains: run_experiments.py.
 """
 
 from __future__ import annotations
@@ -27,7 +26,7 @@ from mule_pattern_learner.tigergraph.executor import TigerGraphUnavailableError
 
 SCRIPTS = REPOSITORY_ROOT / "scripts"
 # Every script; each must parse --help before connecting.
-SCRIPT_NAMES = ("render_queries", "run_experiments")
+SCRIPT_NAMES = ("run_experiments",)
 
 
 def load(name: str) -> ModuleType:

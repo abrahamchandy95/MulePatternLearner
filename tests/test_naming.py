@@ -37,6 +37,7 @@ from mule_pattern_learner.paths import (
     archive_dir,
     archived_run,
 )
+from mule_pattern_learner.testing.gsql_blocks import FOURIER_QUERY
 from mule_pattern_learner.tigergraph.gsql_text import definitions
 
 # Words no name may contain: the old layout's prefixes and grab-bag modules, and the
@@ -59,8 +60,8 @@ FORBIDDEN = frozenset(
     }
 )
 # The persisted values that keep a forbidden word, and why. The scope's edge types
-# (Entity_In_Training_Scope and its reverse) and the built-in scope id (strict_mule_v2)
-# are persisted too, and hold no forbidden word.
+# (Entity_In_Training_Scope and its reverse) and the split's id ("split") are persisted
+# too, and hold no forbidden word.
 ALLOWED = {
     "Temporal_Training_Scope": "the scope vertex type, part of the graph's schema",
     "temporal_live_step": "the salt of the per-step draws; a new value changes every step",
@@ -215,10 +216,11 @@ def test_query_names_start_with_a_verb_and_retired_names_are_gone() -> None:
 
 def test_the_server_contract_names_every_query_once() -> None:
     # Adapters, fakes and tests take the names from contract.server, and every query a
-    # GSQL file defines has its name there.
+    # GSQL file defines has its name there, but the Fourier subquery, which only tests
+    # name (testing.gsql_blocks).
     names = [value for key, value in vars(server).items() if key.endswith("_QUERY")]
-    assert len(names) == len(set(names))
-    assert set(names) == query_names()
+    assert len(names) == len(set(names)) and FOURIER_QUERY not in names
+    assert {*names, FOURIER_QUERY} == query_names()
 
 
 def test_the_command_line_is_mule_with_seven_commands() -> None:

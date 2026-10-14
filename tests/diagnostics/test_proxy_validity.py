@@ -45,8 +45,7 @@ AUDIT = pd.DataFrame(
 
 def predictions(date: str) -> pd.DataFrame:
     frame = pd.DataFrame(ROWS, columns=["account_id", "observed_label", "score"])
-    frame.insert(1, "group_id", "G" + frame.account_id)
-    frame.insert(2, "date", date)
+    frame.insert(1, "date", date)
     return frame
 
 

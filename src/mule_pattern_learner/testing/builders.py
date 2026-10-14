@@ -1,7 +1,7 @@
 """Builders of test data: configurations, accounts, labels, contexts and messages.
 
 Nothing here opens a connection. There is one configuration builder (unit_config), whose
-datasets are prepared from one source id (UNIT_SOURCE), one payment message (message),
+datasets are prepared from one graph (UNIT_COUNTS), one payment message (message),
 one association (association) and one context row (context); the other builders are
 those with particular values (a deterministic neighbourhood, random synthetic pools).
 recorded_events reads an events.jsonl as the tests compare its records.
@@ -52,13 +52,14 @@ from mule_pattern_learner.contract.graph_schema import (
     ASSOCIATION_TARGETS,
     ASSOCIATIONS,
     HUB_COLUMNS,
+    NO_SPLIT,
     PAYMENT_RELATIONS,
     RAILS,
     SPLIT_PHASE,
     ContextKey,
 )
 from mule_pattern_learner.contract.sampler_plan import PoolPlan, SamplerPlan
-from mule_pattern_learner.contract.server import ANALYTICS_CONTRACT, CONTEXT_CONTRACT
+from mule_pattern_learner.contract.server import CONTEXT_CONTRACT
 from mule_pattern_learner.contract.time_basis import BASIS_ID, fourier64
 from mule_pattern_learner.data import manifest as data_manifest
 from mule_pattern_learner.data.hub_registry import HubRegistry
@@ -91,11 +92,11 @@ from mule_pattern_learner.training import trainer
 if TYPE_CHECKING:
     import pytest
 
-# The source id the test datasets are prepared from.
-UNIT_SOURCE = "unit_fixture"
-# The built-in run, small, in a unit scope, on the CPU.
+# The vertex counts of the graph the test datasets are prepared from, which name it: the
+# accounts of scope_population's default.
+UNIT_COUNTS = {"Account": 200}
+# The built-in run, small, on the CPU.
 UNIT_CHANGES: dict[str, Any] = {
-    "scope": {"id": "unit_scope"},
     "model": {"hidden": 16, "dropout": 0.0},
     "training": {"epochs": 2, "batch_size": 16, "steps_per_epoch": 2},
     "runtime": {"device": "cpu", "threads": 1},
@@ -107,7 +108,7 @@ def unit_config(*changes: Mapping[str, Any], **sections: Any) -> RunConfig:
 
     A table maps sections to the fields it changes, as in RunConfig.with_changes; each
     keyword names a section and its table (applied last). RUNTIME_CHANGES is the runtime
-    tests' table. Tests prepare the run's datasets from UNIT_SOURCE.
+    tests' table. Tests prepare the run's datasets from UNIT_COUNTS.
     """
     config = DEFAULT_CONFIG.with_changes(UNIT_CHANGES)
     for table in (*changes, sections):
@@ -129,11 +130,11 @@ def fixture_accounts(count: int = 1000, date: str = "2024-07-01") -> pd.DataFram
 
 
 def scope_population(count: int = 200) -> list[dict[str, Any]]:
-    """Scope members as the scope population query prints them with include_observed.
+    """Members of the split as the scope population query prints them.
 
     Partitions repeat 1, 1, 1, 2, 3 (train, validation, test): a fixed fixture, which
-    neither follows the split shares a scope records nor hashes the groups as
-    create_training_scope does, so a scope of any shares gives these partitions. Every
+    neither follows the split shares the split records nor hashes the groups as
+    create_training_scope does, so a split of any shares gives these partitions. Every
     seventh account is a revealed mule, discovered on 2024-03-01, so every split has
     revealed mules. Every account was opened on 2024-01-01, before each split's cutoff.
     """
@@ -143,10 +144,8 @@ def scope_population(count: int = 200) -> list[dict[str, Any]]:
         rows.append(
             {
                 "account_id": f"S{i:04}",
-                "first_seen_seq": 5,
                 "first_seen_ts_ms": timestamp("2024-01-01"),
                 "partition": (1, 1, 1, 2, 3)[i % 5],
-                "group_id": f"G{i:04}",
                 "observed_positive": positive,
                 "known_from_ms": timestamp("2024-03-01") if positive else 0,
             }
@@ -174,8 +173,6 @@ def ground_truth_rows(population: Iterable[Mapping[str, Any]]) -> list[dict[str,
                 "account_id": str(row["account_id"]),
                 "is_mule": int(mule),
                 "mule_label_known": True,
-                "is_mule_masked": not revealed,
-                "pu_label": int(revealed),
                 "mule_ring_id": ring,
                 "mule_label_source": source if mule else "phantomledger_role",
             }
@@ -187,12 +184,12 @@ def assigned_accounts() -> pd.DataFrame:
     """fixture_accounts with an ownership group and a split drawn from the group's hash.
 
     Each account has its own owner, so it is its own group; the groups go to train,
-    validation and test in the built-in scope's shares (half, a quarter and a quarter), as
+    validation and test in the built-in split's shares (half, a quarter and a quarter), as
     the scope query places them.
     """
     accounts = fixture_accounts()
-    accounts["group_id"] = "Account:" + accounts.account_id
-    scores = accounts.group_id.map(lambda group: stable_score(str(group), 42, "split"))
+    groups = "Account:" + accounts.account_id
+    scores = groups.map(lambda group: stable_score(str(group), 42, "split"))
     train, validation, _ = DEFAULT_CONFIG.scope.shares
     accounts["split"] = np.where(
         scores < train, "train", np.where(scores < train + validation, "validation", "test")
@@ -204,7 +201,7 @@ def scoped_accounts() -> list[dict[str, Any]]:
     """assigned_accounts as scope population rows, the split as the partition.
 
     The accounts supplied_labels lists are revealed positives, with its discovery times,
-    as the scope population query reports them with include_observed.
+    as the scope population query reports them.
     """
     accounts = assigned_accounts()
     known = supplied_labels().set_index("account_id").known_from_ms
@@ -235,8 +232,6 @@ def message(seq: int, ts: int, parent: ContextKey, **changes: Any) -> dict[str, 
         "node_id": "neighbor",
         "relation": "zelle_out",
         "rail": "zelle",
-        "channel": "digital",
-        "stratum": "recent",
         "event_id": "E" + str(seq),
         "event_seq": seq,
         "event_ts_ms": ts,
@@ -294,8 +289,6 @@ def association(
         "node_id": node_id,
         "relation": relation,
         "rail": "unknown",
-        "channel": "unknown",
-        "stratum": "association",
         "event_id": "",
         "event_seq": parent.cutoff_seq,
         "event_ts_ms": parent.cutoff_ms,
@@ -454,37 +447,26 @@ def payments_context(key: ContextKey) -> dict[str, Any]:
 
 
 def root(i: int, **changes: Any) -> ContextKey:
-    return replace(ContextKey("Account", f"A{i:04}", 1000, 100_000, "scope", 1), **changes)
+    return replace(ContextKey("Account", f"A{i:04}", 1000, 100_000, 1), **changes)
 
 
-def hub_row(account: str, cutoff: int, phase: int = 3, **changes: Any) -> dict[str, Any]:
+def hub_row(account: str, cutoff: int, phase: int = NO_SPLIT, **changes: Any) -> dict[str, Any]:
     return {
         "account_id": account,
         "cutoff_seq": cutoff,
         "visibility_phase": phase,
         "max_visible": 5000,
-        "max_degree": 9000,
-        "reason": "visible_history",
         **changes,
     }
 
 
-def hub_rows(cutoffs: list[int], scope_id: str = "") -> list[dict[str, Any]]:
-    if scope_id:
+def hub_rows(cutoffs: list[int], by_phase: bool = False) -> list[dict[str, Any]]:
+    if by_phase:
         hubs = [hub_row("H1", cutoffs[0], 2), hub_row("H1", cutoffs[0], 3)]
         hubs.append(hub_row("H2", cutoffs[1], 1))
     else:
         hubs = [hub_row("H1", cutoffs[0]), hub_row("H2", cutoffs[1])]
-    return [
-        {
-            "status": "ok",
-            "cutoff_seqs": cutoffs,
-            "threshold": 1024,
-            "scope_id": scope_id,
-            "candidates": 2,
-            "hubs": hubs,
-        }
-    ]
+    return [{"status": "ok", "hubs": hubs}]
 
 
 # The plan and pools of the batch and context source tests.
@@ -522,7 +504,7 @@ def context_rng(key: ContextKey, salt: int = 0) -> np.random.Generator:
 
 
 def payment(
-    key: ContextKey, relation: str, seq: int, peer: str, stratum: str, rng: np.random.Generator
+    key: ContextKey, relation: str, seq: int, peer: str, rng: np.random.Generator
 ) -> dict[str, Any]:
     ts = seq * MS_PER_SEQ
     gap_present = bool(rng.integers(0, 2))
@@ -540,8 +522,6 @@ def payment(
         "peer_first_ms": int(rng.integers(1, ts + 1)),
         "peer_external": bool(rng.integers(0, 2)),
         "peer_deposit": bool(rng.integers(0, 2)),
-        "channel": str(rng.choice(["unknown", "digital", "bank", "p2p", "branch_or_atm", "odd"])),
-        "stratum": stratum,
         "pair_prior_count": int(rng.integers(0, 30)),
         "pair_first_age_seconds": float(rng.integers(0, 10**6)),
         "pair_first_present": bool(rng.integers(0, 2)),
@@ -587,10 +567,9 @@ def synthetic_row(
             count = pool.recent + pool.older + pool.distinct if full else count
             count = min(count, key.cutoff_seq - 1)
             seqs = sorted(rng.choice(np.arange(1, key.cutoff_seq), count, replace=False))[::-1]
-            strata = ["recent"] * pool.recent + ["older"] * pool.older + ["distinct"] * 16
-            for seq, stratum in zip(seqs, strata):
+            for seq in seqs:
                 peer = f"a{int(rng.integers(0, 12))}"
-                messages.append(payment(key, relation, int(seq), peer, stratum, rng))
+                messages.append(payment(key, relation, int(seq), peer, rng))
     for relation in ASSOCIATION_RELATIONS:
         if relation.split("_")[0] != key.node_type:
             continue
@@ -604,10 +583,8 @@ def synthetic_row(
     return context(key, messages, encodings=encodings, features=features)
 
 
-def roots(n: int = 8, cutoff: int = 400, scope: str = "s", phase: int = 1) -> list[ContextKey]:
-    return [
-        ContextKey("Account", f"r{i}", cutoff, cutoff * MS_PER_SEQ, scope, phase) for i in range(n)
-    ]
+def roots(n: int = 8, cutoff: int = 400, phase: int = 1) -> list[ContextKey]:
+    return [ContextKey("Account", f"r{i}", cutoff, cutoff * MS_PER_SEQ, phase) for i in range(n)]
 
 
 def slots(
@@ -645,7 +622,7 @@ def candidate_table(
         for relation, count in counts.items():
             for n in range(count):
                 if relation in PAYMENT_RELATIONS:
-                    m = payment(key, relation, cutoff - 1 - n, f"p{n}", "recent", rng)
+                    m = payment(key, relation, cutoff - 1 - n, f"p{n}", rng)
                 else:
                     m = synthetic_association(key, relation, f"n{n}", rng)
                 messages.append(m)
@@ -672,7 +649,6 @@ def _message(parent: ContextKey, j: int) -> dict[str, Any]:
         node_id=f"P{h % 11}",
         relation=relation,
         rail="zelle" if relation.startswith("zelle") else "ach",
-        stratum=("recent", "older", "distinct")[j % 3],
         event_id=f"E{parent.node_id}.{seq}",
         amount=float(h % 500),
         gap_ms=(h % 50) * 60_000 if gap else 0,
@@ -703,7 +679,6 @@ def fake_context(key: ContextKey) -> dict[str, Any]:
 # The runtime tests' changes to unit_config: a small model without the slot sum, validated
 # on its raw weights, over small pools, with seeds and dates of its own.
 RUNTIME_CHANGES: dict[str, Any] = {
-    "scope": {"id": "unit_scope"},
     "dataset": {"dates": deepcopy(DATES), "seed": 7, "split_seed": 7},
     "sampler": {
         "fanouts": [4, 2],
@@ -741,9 +716,7 @@ def accounts_frame() -> pd.DataFrame:
         rows.append(
             {
                 "account_id": f"A{i:03}",
-                "first_seen_seq": 5,
                 "first_seen_ts_ms": timestamp("2024-01-01"),
-                "group_id": f"G{i:03}",
                 "observed_positive": False,
                 "known_from_ms": 0,
                 "split": split,
@@ -766,28 +739,26 @@ def labels_frame(accounts: pd.DataFrame) -> pd.DataFrame:
 
 
 def hub_registry() -> HubRegistry:
-    """The scoped registry: one hub at the training cutoff in phase 1 (training batches)."""
+    """The registry by phase: one hub at the training cutoff in phase 1 (training batches)."""
     row = {
         "account_id": HUB,
         "cutoff_seq": CUTOFFS["2024-07-01"],
         "visibility_phase": 1,
         "max_visible": 5000,
-        "max_degree": 5000,
-        "reason": "visible_history",
     }
     frame = pd.DataFrame([[row[name] for name in HUB_COLUMNS]], columns=list(HUB_COLUMNS))
-    return HubRegistry(frame, cutoff_seqs=CUTOFFS.values(), threshold=2048, scope_id="unit_scope")
+    return HubRegistry(frame, cutoff_seqs=CUTOFFS.values(), threshold=2048, by_phase=True)
 
 
 def prepared_dataset(
     path: Path,
     config: RunConfig,
     monkeypatch: pytest.MonkeyPatch,
-    source_id: str = UNIT_SOURCE,
+    counts: Mapping[str, int] = UNIT_COUNTS,
 ) -> tuple[DatasetPaths, dict[str, Any], pd.DataFrame]:
     """A prepared dataset in directory path; load_prepared is replaced by its in-memory copy.
 
-    Its manifest records config's dataset settings for the source source_id.
+    Its manifest records config's dataset settings for the graph of these vertex counts.
     """
     dataset = DatasetPaths(path)
     path.mkdir(parents=True, exist_ok=True)
@@ -801,10 +772,8 @@ def prepared_dataset(
         "account_selection": "bounded_internal_deposit_seeds",
         "observed_labels_sha256": file_digest(dataset.observed_labels),
         "source": {
-            "source_id": source_id,
-            "settings": dataset_settings(source_id, config),
-            "scope_id": config.scope.id,
-            "source_counts": {"Account": len(accounts)},
+            "source_counts": dict(counts),
+            "settings": dataset_settings(dict(counts), config),
         },
     }
     dataset.manifest.write_text(json.dumps(manifest))
@@ -940,7 +909,6 @@ def predictions_frame(rng: np.random.Generator, split: str, found: float = FOUND
     return pd.DataFrame(
         {
             "account_id": ids,
-            "group_id": [f"G{i:06d}" for i in range(len(observed))],
             "date": date,
             "observed_label": observed,
             "score": score,
@@ -1152,12 +1120,12 @@ FEATURE_WEIGHT = 25.0
 def feature_frame(seed: int = 0) -> pd.DataFrame:
     """A diagnostic feature table (artifacts.FEATURE_TABLE_COLUMNS, then features).
 
-    Mules have more distinct payers, first-time internal inflows and 30-day inflows than
-    other accounts; the visible event count and the pair history grow with the months a
-    split's cutoff has seen (drift); the account's age is one value per split; the entity
-    flags are the same for every account; the pair window counts are noise. A third of
-    each split's mules, the loudest, are revealed, most mules are in rings of three, and
-    the third train non-mule is rejected, without features.
+    Mules have more distinct payers, first-time internal inflows and Zelle inflows than
+    other accounts; the pool's payments and its pair history grow with the months a
+    split's cutoff has seen (drift); the entity flags are the same for every account; the
+    mean flow delay is noise. A third of each split's mules, the loudest, are revealed,
+    most mules are in rings of three, and the third train non-mule is rejected, without
+    features.
     """
     rng = np.random.default_rng(seed)
     frames = []
@@ -1173,11 +1141,10 @@ def feature_frame(seed: int = 0) -> pd.DataFrame:
             "model__pool_first_in_internal": np.log1p(rng.poisson(0.3 + 1.5 * mule)),
             "messages__mean_amount": rng.normal(4.0 + 0.3 * mule, 1.0),
             "messages__max_pair_prior_count": np.log1p(rng.poisson(0.4 * months, count)),
-            "messages__stratum_distinct": rng.poisson(4 + 2 * mule).astype(np.float64),
-            "account__visible_event_count": rng.poisson(25 * months + 40 * mule).astype(float),
-            "account__30d_in_count": rng.poisson(5 + 3 * mule + loud.clip(0)).astype(float),
-            "account__age_days": np.full(count, 30.5 * months),
-            "message_context__mean_pair_count_7d": rng.gamma(2.0, 1.0, count),
+            "messages__peers": rng.poisson(4 + 2 * mule).astype(np.float64),
+            "messages__events": rng.poisson(25 * months + 40 * mule).astype(float),
+            "messages__relation_zelle_in": rng.poisson(5 + 3 * mule + loud.clip(0)).astype(float),
+            "messages__mean_flow_delay_seconds": rng.gamma(2.0, 1.0, count),
         }
         revealed = np.zeros(count, bool)
         revealed[np.argsort(-np.where(mule == 1, loud, -np.inf))[: mules // 3]] = True
@@ -1197,7 +1164,6 @@ def feature_frame(seed: int = 0) -> pd.DataFrame:
                 "weight": np.where(mule == 1, 1.0, FEATURE_WEIGHT),
                 "rejected": False,
                 "context_contract": CONTEXT_CONTRACT,
-                "analytics_contract": ANALYTICS_CONTRACT,
                 **features,
             }
         )
@@ -1332,7 +1298,7 @@ def write_study_files(study: DiagnosticsPaths, seed: int = 0) -> DiagnosticsPath
 
     features.parquet (feature_frame), every analysis' table (diagnostic_tables) and a
     study.json that records each analysis as written, the built-in run as compared and
-    the built-in reveal's salt and budget.
+    the built-in reveal's salt.
     """
     study.root.mkdir(parents=True, exist_ok=True)
     write_feature_table(study.features, feature_frame(seed))
@@ -1345,7 +1311,7 @@ def write_study_files(study: DiagnosticsPaths, seed: int = 0) -> DiagnosticsPath
         "dataset_id": study.root.name,
         "run": "baseline/seed-42",
         "run_compared": True,
-        "reveal": {"salt": scope.reveal_salt, "budget": scope.reveal_per_split},
+        "reveal": {"salt": scope.reveal_salt},
         "analyses": outcomes,
     }
     write_json(study.study, record)

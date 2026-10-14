@@ -20,7 +20,7 @@ accounts never seen in training.
 ```mermaid
 flowchart LR
   subgraph TG[TigerGraph, before training]
-    S[Scope: partitions of ownership groups]
+    S[Split: partitions of ownership groups]
     C[Cutoffs: calendar dates to event sequences]
     H[Hub registry: accounts with too much history]
     P[Population: internal deposit accounts by partition]
@@ -125,8 +125,8 @@ directory ([Configuration](../reference/configuration.md) has the settings).
 
 - **Checks first:** the dataset's manifest and file hashes; its query hashes and dataset
   settings against the configuration; the installed query texts and endpoints; the
-  frozen-source check (vertex counts, the scope and its unowned rule); and that the
-  context source requests every input the model reads, with its pools, at both hops.
+  frozen-source check (vertex counts, the split's seed and shares, the labels); and that
+  the context source requests every input the model reads, with its pools, at both hops.
 - **Schedule:** drawn up front per epoch from the saved generator (date, roots, step
   seed): up to `training.steps_per_epoch` (100) steps per train cutoff, of which the
   built-in run has one. The line that starts training gives the step count.
@@ -195,7 +195,7 @@ each held-out split ([the audit files](../reference/outputs.md#the-audit-files) 
 metrics):
 
 - **Sample:** every mule of the split's population and 2,000 uniformly sampled
-  non-mules, depending only on the scope, the truth and `dataset.split_seed`, so every
+  non-mules, depending only on the split, the truth and `dataset.split_seed`, so every
   run of a dataset is audited on the same accounts and runs compare account by account.
 - **Metrics** estimate the whole split, each account weighted by 1 / its inclusion
   probability: AP, ROC AUC, precision, recall and F1 at the frozen threshold, and

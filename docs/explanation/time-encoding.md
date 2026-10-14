@@ -70,52 +70,16 @@ right; the `drop_time_encoding` variant measures what the encoding is worth.
 The basis is shared: `encode_fourier64` in GSQL, `contract.time_basis.fourier64` in numpy
 and `batching.time_encoding` in torch. Any payment, Zelle or not, can be encoded, but only
 the messages of a context's pool ever are; nothing materialises encodings for every
-payment. The training query sends only `age_ms` and `gap_ms` per message, and the client
-expands them on the training device, cutting the REST payload by about 70%.
+payment, and none is stored: an age changes with every cutoff, and a gap stays valid only
+while the predecessor history and the split do. The training query sends only `age_ms`
+and `gap_ms` per message, and the client expands them on the training device, cutting
+the REST payload by about 70%.
 
 The first request of every context source, and every 64th after it
 (`transport.encoding_check_every`), also asks TigerGraph for the vectors
-(`emit_encodings`); the run fails if any coordinate differs from the client's by more
-than 1e-5 + 1e-5 x |value| (measured: 3.7e-7). GSQL's trigonometric functions return
-FLOAT, so storing doubles cannot restore the precision lost inside them; integer
-timestamps are subtracted before any conversion to floating point, and coordinates are
-appended in a fixed order, never from concurrent accumulators.
-
-## The pair-gap queries
-
-`encode_zelle_pair_gaps` and `encode_payment_pair_gaps` (in `gsql/analytics/`,
-[Queries](../reference/queries.md) lists their outputs and bounds) compute, for one
-exact pair up to a cutoff, each payment's gap and age with both encodings and the pair's
-counts over the preceding hour, day and week; the payment query keeps rails apart.
-Training never calls them, so only `mule diagnose` installs them. They traverse the
-sender's candidate history, validate the pair, then sort it by sequence, so `max_events`
-(1,000 by default, at most 10,000) bounds what they return and sort, not what they scan.
-An oversized history returns `history_limit_exceeded` with no rows or writes; ambiguous
-roles, mismatched clocks, duplicate sequences within a pair or timestamps decreasing in
-sequence order fail before any write.
-
-```gsql
-// sender, recipient type, recipient id, seed sequence, seed milliseconds,
-// persist, largest pair history
-RUN QUERY encode_zelle_pair_gaps("account-A", "Account", "account-B",
-                                 1000000, 1800000000000, false, 1000)
-
-// An unresolved external recipient: its opaque token id.
-RUN QUERY encode_zelle_pair_gaps("account-A", "Token", "opaque-token-id",
-                                 1000000, 1800000000000, false, 1000)
-
-// The same calculation for another rail, kept apart from the other rails.
-RUN QUERY encode_payment_pair_gaps("account-A", "Account", "account-B",
-                                   1000000, 1800000000000, "ach", false, 1000)
-```
-
-Each row holds the event id, sequence and timestamp, the previous event id,
-`pair_delta_t_ms`, `pair_delta_t_present`, `pair_time_encoding`, `age_ms` and
-`age_time_encoding`; the final object holds `status`, `event_count`, `basis_id`,
-`dimensions`, `persisted`, the cutoffs and the pair counts. Read the final status: an
-error means nothing was calculated or saved, and an empty history is `ok` with no events.
-
-`persist = true` stores the gaps and encodings on the payment vertices ([the pair-gap
-cache](../reference/schema.md#the-pair-gap-cache)). Training never reads them: an age
-changes with every cutoff, so no stored value serves them all, and a gap stays valid only
-while the predecessor history and the scope do; a backfill or another scope changes it.
+(`emit_encodings`) when the source's plan has the time encoding; the run fails if any
+coordinate differs from the client's by more than 1e-5 + 1e-5 x |value| (measured:
+3.7e-7). GSQL's trigonometric functions return FLOAT, so storing doubles cannot restore
+the precision lost inside them; integer timestamps are subtracted before any conversion
+to floating point, and coordinates are appended in a fixed order, never from concurrent
+accumulators.

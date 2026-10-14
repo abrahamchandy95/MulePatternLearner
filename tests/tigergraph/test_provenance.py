@@ -1,4 +1,4 @@
-"""Provenance checks ignore experiment scope vertices and check the labels' reveal."""
+"""Provenance checks ignore the split's vertex and check the split and the labels' reveal."""
 
 from __future__ import annotations
 
@@ -7,38 +7,43 @@ from typing import Any
 import pytest
 
 from mule_pattern_learner.config import DEFAULT_CONFIG
-from mule_pattern_learner.contract.server import CUTOFF_QUERY, GRAPH_NAME
-from mule_pattern_learner.data.manifest import dataset_settings
-from mule_pattern_learner.testing.builders import UNIT_SOURCE, unit_config
+from mule_pattern_learner.contract.server import CUTOFF_QUERY, SCOPE_VERTEX
+from mule_pattern_learner.data.manifest import dataset_settings, recorded_dataset_id
 from mule_pattern_learner.testing.fake_graph import FakeTigerGraph, ready_scope
 from mule_pattern_learner.tigergraph import provenance
 
 
-def test_source_counts_ignore_experiment_scopes() -> None:
-    header = ready_scope("snap")
-    graph = FakeTigerGraph(counts={"Account": 10, "Party": 4}, scopes={"s": header})
-    assert provenance.source_counts(graph) == {"Account": 10, "Party": 4}
-    config = DEFAULT_CONFIG.with_changes({"scope": {"id": "s"}, "dataset": {"split_seed": 42}})
+def test_source_counts_ignore_the_split_and_its_settings_are_rechecked() -> None:
+    graph = FakeTigerGraph(counts={"Account": 10, "Party": 4}, scope=ready_scope())
+    counts = provenance.source_counts(graph)
+    # Creating the split adds a scope vertex, which names no other source.
+    assert counts == provenance.source_counts(FakeTigerGraph(counts=counts)) == graph.counts
+    config = DEFAULT_CONFIG.with_changes({"dataset": {"split_seed": 42}})
     manifest: dict[str, Any] = {
-        "source": {
-            "source_counts": provenance.source_counts(graph),
-            "settings": dataset_settings("snap", config),
-        },
+        "source": {"source_counts": counts, "settings": dataset_settings(counts, config)},
     }
+    dataset_id = recorded_dataset_id(manifest)
     provenance.verify_frozen_source(graph, manifest)
-    graph.scopes["another"] = dict(header)  # another experiment created a scope
-    provenance.verify_frozen_source(graph, manifest)
-    # The scope's unowned rule is rechecked on every streamed run.
+    # The split's seed and shares are rechecked on every streamed run.
     settings = manifest["source"]["settings"]
-    settings["scope"]["unowned"] = "independent"
-    with pytest.raises(ValueError, match="no longer valid.*scope.unowned = 'linked'"):
+    settings["dataset"]["split_seed"] = 7
+    with pytest.raises(ValueError, match="no longer valid.*split seed 42 .* not 7"):
         provenance.verify_frozen_source(graph, manifest)
-    settings["scope"]["unowned"] = "linked"
-    # So is the scope's source.
-    settings["source_id"] = "another"
-    with pytest.raises(ValueError, match="no longer valid.*different source"):
+    settings["dataset"]["split_seed"] = 42
+    settings["scope"]["shares"] = [0.7, 0.15, 0.15]
+    with pytest.raises(ValueError, match=r"no longer valid.*not 42 and \[0.7, 0.15, 0.15\]"):
         provenance.verify_frozen_source(graph, manifest)
-    settings["source_id"] = "snap"
+    settings["scope"]["shares"] = list(config.scope.shares)
+    # And the split itself: one its owner removed, or one never finished, is refused. A
+    # ready dataset is reused without creating a split, so the refusal says to move it.
+    split, graph.scope = graph.scope, None
+    moved = rf"no longer valid: The graph has no split.*move this dataset \(data/{dataset_id}/\)"
+    with pytest.raises(ValueError, match=moved):
+        provenance.verify_frozen_source(graph, manifest)
+    graph.scope = {**ready_scope(), "ready": False}
+    with pytest.raises(ValueError, match=f"no longer valid.*incomplete.*{SCOPE_VERTEX}"):
+        provenance.verify_frozen_source(graph, manifest)
+    graph.scope = split
     graph.counts["Account"] = 11
     with pytest.raises(ValueError, match="counts changed"):
         provenance.verify_frozen_source(graph, manifest)
@@ -58,15 +63,3 @@ def test_source_counts_ignore_experiment_scopes() -> None:
     del settings["scope"]["reveal_salt"]
     with pytest.raises(ValueError, match="no reveal settings"):
         provenance.verify_frozen_source(graph, manifest)
-
-
-def test_the_source_id_comes_from_the_scope_or_the_graph() -> None:
-    counts = {"Account": 10, "Party": 4}
-    header = ready_scope(UNIT_SOURCE)
-    scope_id = unit_config().scope.id
-    scoped = FakeTigerGraph(scopes={scope_id: header})
-    assert provenance.resolve_source_id(scoped, scope_id, counts) == UNIT_SOURCE
-    derived = provenance.resolve_source_id(FakeTigerGraph(), scope_id, counts)
-    assert derived == provenance.derived_source_id(counts)
-    assert derived.startswith(GRAPH_NAME + "_")
-    assert derived != provenance.derived_source_id({**counts, "Account": 11})

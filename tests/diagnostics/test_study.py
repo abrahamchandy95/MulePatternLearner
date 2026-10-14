@@ -22,12 +22,7 @@ from mule_pattern_learner.artifacts import (
 )
 from mule_pattern_learner.config import RunConfig, TransportConfig
 from mule_pattern_learner.contract.graph_schema import PHASE_SPLIT
-from mule_pattern_learner.contract.server import (
-    ANALYTICS_CONTEXT_QUERY,
-    ANALYTICS_QUERY_FILES,
-    TRAINING_QUERY_FILES,
-    TRUTH_QUERY,
-)
+from mule_pattern_learner.contract.server import TRUTH_QUERY
 from mule_pattern_learner.data.manifest import dataset_id
 from mule_pattern_learner.diagnostics import study as diagnostics_study
 from mule_pattern_learner.diagnostics.baselines import baselines
@@ -49,7 +44,7 @@ from mule_pattern_learner.pipeline.connect import Session
 from mule_pattern_learner.pipeline.diagnose import TigerGraphStudyReader
 from mule_pattern_learner.reporting.study_report import ANALYSIS_FIGURES
 from mule_pattern_learner.testing.builders import (
-    UNIT_SOURCE,
+    UNIT_COUNTS,
     reveal_inputs,
     saved_model,
     scope_population,
@@ -60,15 +55,9 @@ from mule_pattern_learner.testing.fake_graph import (
     FakeTigerGraph,
     prepared_graph,
 )
-from mule_pattern_learner.tigergraph.gsql_text import repository_queries
 
 # A problem small enough for a test, as the simulation's own test has it.
 SMALL = Problem(marginal=2_000, test_positives=30, test_negatives=30_000, steps=20, epochs=3)
-
-
-def without_analytics() -> dict[str, str]:
-    """The installed queries of a graph that `mule diagnose` has never run on."""
-    return {name: text for name, (_, text) in repository_queries(TRAINING_QUERY_FILES).items()}
 
 
 def write_proxy(run: RunPaths) -> None:
@@ -85,7 +74,6 @@ def write_proxy(run: RunPaths) -> None:
         frame = pd.DataFrame(
             {
                 "account_id": members.account_id.to_numpy(),
-                "group_id": members.group_id.to_numpy(),
                 "date": date,
                 "observed_label": observed,
                 "score": np.linspace(0.1, 0.4, len(members)) + 0.5 * observed,
@@ -98,13 +86,13 @@ def write_proxy(run: RunPaths) -> None:
 def studied(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> tuple[RunConfig, FakeTigerGraph, DatasetPaths, RunPaths, list[TransportConfig]]:
-    """A fake graph without the analytics queries, a prepared dataset and an audited run."""
+    """A fake graph, a prepared dataset and an audited run."""
     config = unit_config()
     data = tmp_path / "data"
     # The reveal's inputs hold every mule of the graph, which the audits score.
     inputs = reveal_inputs(scope_population(PREPARED_ACCOUNTS))
-    graph, dataset = prepared_graph(data, config, queries=without_analytics(), reveal=inputs)
-    assert dataset == DatasetPaths.of(dataset_id(UNIT_SOURCE, config), data)
+    graph, dataset = prepared_graph(data, config, reveal=inputs)
+    assert dataset == DatasetPaths.of(dataset_id(UNIT_COUNTS, config), data)
     connected: list[TransportConfig] = []
 
     def connect(transport: TransportConfig) -> FakeTigerGraph:
@@ -157,13 +145,8 @@ def test_every_analysis_writes_its_table_then_the_report(
     # One connection, the run's transport, and the truth read once for every analysis.
     assert connected == [config.transport]
     assert graph.names().count(TRUTH_QUERY) == 1
-    # The analytics queries, which the graph lacked, are created and installed, once.
-    analytics = list(repository_queries(ANALYTICS_QUERY_FILES))
-    installs = [write for write in graph.writes if write.startswith("INSTALL QUERY")]
-    assert installs == ["INSTALL QUERY " + ", ".join(analytics)]
-    created = [write for write in graph.writes if "CREATE" in write]
-    assert len(created) == len(ANALYTICS_QUERY_FILES)
-    assert all(ANALYTICS_CONTEXT_QUERY not in write for write in created[1:])
+    # The study reads through the training queries alone: it creates and installs nothing.
+    assert graph.writes == []
     # The feature table and every analysis' long table, with their columns.
     frame = read_feature_table(paths.features)
     assert set(frame.split) == {"train", "validation", "test"}
@@ -175,10 +158,7 @@ def test_every_analysis_writes_its_table_then_the_report(
     assert set(table[table.baseline == "model"].features) == {"baseline/seed-42"}
     record = read_json(paths.study)
     assert record["run"] == "baseline/seed-42" and record["run_compared"] is True
-    assert record["reveal"] == {
-        "salt": config.scope.reveal_salt,
-        "budget": config.scope.reveal_per_split,
-    }
+    assert record["reveal"] == {"salt": config.scope.reveal_salt}
     assert set(record["analyses"]) == set(ANALYSES)
     # The proxy predictions are scored against the graph's truth.
     proxy = read_diagnostic_table(paths.table("proxy_validity"), "proxy_validity")
@@ -212,7 +192,7 @@ def test_a_current_feature_table_is_kept_without_connecting(
     # study.json keeps the outcome of the analysis this call did not run.
     assert set(read_json(paths.study)["analyses"]) == {"features", "univariate", "drift"}
     # A table read with another query text is read again.
-    stale = read_feature_table(paths.features).assign(analytics_contract="analytics_old")
+    stale = read_feature_table(paths.features).assign(context_contract="context_old")
     stale.to_parquet(paths.features, index=False)
     assert study_of(("features",), config, dataset, run)["analyses"]["features"]["status"] == (
         WRITTEN

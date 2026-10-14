@@ -8,8 +8,8 @@ training step. The settings are the `sampler` section
 ## One training batch
 
 `batching.assemble.build_batch` builds a two-hop computation tree for a batch of roots:
-internal deposit accounts at one train cutoff and one scope phase (64 in the built-in
-run, at most 128).
+internal deposit accounts at one train cutoff and one phase of the split (64 in the
+built-in run, at most 128).
 
 ```mermaid
 sequenceDiagram
@@ -121,7 +121,7 @@ Preparation therefore saves the registry of
 in `hubs.parquet`. An Account is a hub at a root's cutoff and phase when its visible
 history in some payment relation (events before that cutoff, visible in that phase)
 exceeds the smaller of the two pools' `max_history`; all-time degree never decides it.
-The registry of `strict_mule_v2` on the reference graph:
+The registry of the reference graph's 70, 15 and 15% split:
 
 | Cutoff | Phase 1 (train) | Phase 2 (validation) | Phase 3 (test) |
 |---|---|---|---|
@@ -132,10 +132,10 @@ The registry of `strict_mule_v2` on the reference graph:
 A hub child is never requested: the batch builds a stub from the connecting message
 (type Account, `is_external` and `is_deposit` from the message, `history_withheld = 1`
 from the `hub_indicator` group, no messages). The lookup uses the earliest cutoff among
-the roots reaching the child and the batch's phase (3 for unscoped roots), so only
-history visible before the prediction time and in that phase counts. A cutoff or phase
-the registry lacks is an error, never a silent "not a hub". In a measured 64-root batch,
-357 of about 960 contexts were stubs.
+the roots reaching the child and the batch's phase (0 for roots without the split), so
+only history visible before the prediction time and in that phase counts. A cutoff or
+phase the registry lacks is an error, never a silent "not a hub". In a measured 64-root
+batch, 357 of about 960 contexts were stubs.
 
 - A non-stub child cannot exceed `max_history`: its cutoff precedes its root's and it
   inherits the root's phase.
@@ -144,8 +144,8 @@ the registry lacks is an error, never a silent "not a hub". In a measured 64-roo
   leaks it.
 - When the registry lists hubs but a model has no `hub_indicator` group, training and
   scoring warn once at the start: such a model cannot tell a stub from a dormant account.
-- Without a scope (`mule score`) the registry is computed unscoped for the requested
-  cutoff.
+- Without the split (`mule score`) the registry counts every event, in phase 0, for the
+  requested cutoff.
 
 ## Bounds
 

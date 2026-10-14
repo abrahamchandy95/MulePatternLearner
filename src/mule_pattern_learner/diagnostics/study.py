@@ -64,7 +64,7 @@ from ..runtime.progress import emit, recording
 from .activity_timing import activity_timing
 from .baselines import baselines
 from .drift import drift
-from .feature_table import AnalyticsFetcher, build_feature_table, current
+from .feature_table import build_feature_table, current
 from .learning_curve import learning_curve
 from .nnpu_simulation import nnpu_simulation
 from .proxy_validity import proxy_validity
@@ -95,15 +95,14 @@ class StudyReader(Protocol):
 
     The reads connect on first use. oracle is the reader of the ground truth, which
     reads it once; contexts a context source of the study's configuration on the
-    dataset's frozen source, which the caller closes; analytics the analytics context
-    fetcher, its queries installed; reveal_inputs the rows the reveal decided from, and
-    reveal_parameters the reveal's parameters with apply off, which need no graph.
+    dataset's frozen source, which the caller closes; reveal_inputs the rows the reveal
+    decided from, and reveal_parameters the reveal's parameters with apply off, which
+    need no graph.
     """
 
     def oracle(self) -> TruthReader: ...
     def scope(self) -> ScopeReader: ...
     def contexts(self) -> ContextReader: ...
-    def analytics(self) -> AnalyticsFetcher: ...
     def reveal_inputs(self) -> list[dict[str, Any]]: ...
     def reveal_parameters(self) -> dict[str, Any]: ...
 
@@ -199,8 +198,7 @@ class Study:
         manifest = read_manifest(self.dataset)
         hubs = load_hub_registry(self.dataset, manifest)
         graph = self.graph
-        truth, scope, analytics = graph.oracle().read(), graph.scope(), graph.analytics()
-        contexts = graph.contexts()
+        truth, scope, contexts = graph.oracle().read(), graph.scope(), graph.contexts()
         failed = True
         try:
             frame = build_feature_table(
@@ -210,7 +208,6 @@ class Study:
                 scope=scope,
                 truth=truth,
                 contexts=contexts,
-                analytics=analytics,
             )
             failed = False
         finally:
@@ -283,10 +280,7 @@ class Study:
             "dataset_id": self.dataset.root.name,
             "run": run_name(self.run),
             "run_compared": self.unusable_run is None,
-            "reveal": {
-                "salt": self.config.scope.reveal_salt,
-                "budget": self.config.scope.reveal_per_split,
-            },
+            "reveal": {"salt": self.config.scope.reveal_salt},
             "analyses": {**former.get("analyses", {}), **self.outcomes},
         }
 

@@ -15,13 +15,7 @@ import re
 import time
 from typing import Any
 
-from ..contract.server import (
-    ANALYTICS_QUERY_FILES,
-    GRAPH_NAME,
-    RETIRED_QUERIES,
-    SCOPE_VERTEX,
-    TRAINING_QUERY_FILES,
-)
+from ..contract.server import GRAPH_NAME, RETIRED_QUERIES, SCOPE_VERTEX, TRAINING_QUERY_FILES
 from ..paths import GSQL_DIR
 from ..runtime.console import plural
 from ..runtime.progress import emit
@@ -34,6 +28,7 @@ from .executor import (
     failure_class,
 )
 from .gsql_text import calls, definitions, normalized, parameter_names, repository_queries
+from .scope import REMOVE_SPLIT
 from .scope_types import (
     SCOPE_TYPES_FILE,
     ScopeTypes,
@@ -77,7 +72,7 @@ def undefined_queries(executor: ConnectionExecutor) -> list[str]:
     `mule install` lists them after dropping the retired ones (drop_retired): what is
     left belongs to someone else, and nothing drops it.
     """
-    defined = repository_queries((*TRAINING_QUERY_FILES, *ANALYTICS_QUERY_FILES))
+    defined = repository_queries(TRAINING_QUERY_FILES)
     return sorted(set(installed_endpoints(executor)) - set(defined))
 
 
@@ -194,6 +189,15 @@ def _on_server(executor: ConnectionExecutor, name: str) -> str | None:
     return definitions(_show_query(executor, name)).get(name)
 
 
+def _server_queries(executor: ConnectionExecutor) -> dict[str, str]:
+    """Every query on the server, installed or only created, with its text (read-only).
+
+    SHOW QUERY takes a glob, so `*` prints every query of the graph, while the endpoint
+    listing names only the installed ones.
+    """
+    return definitions(_show_query(executor, "*"))
+
+
 def _callers_first(names: list[str], texts: dict[str, str]) -> list[str]:
     """names in an order that drops each query before every one of them it calls."""
     ordered, left = [], list(names)
@@ -211,19 +215,20 @@ def scope_dependents(
 ) -> tuple[list[str], list[str]]:
     """The queries a replacement of the scope types drops, callers first, and those it may not.
 
-    The first are the repository's queries (the training, evaluation and analytics
-    files) on the server whose text there names a scope type, with the repository's
-    queries on the server that call them. The second are the installed queries that no
-    repository file defines and that name a scope type or call one of the first: a
+    The first are the repository's queries and the RETIRED_QUERIES on the server whose
+    text there names a scope type, with those of them on the server that call them. The
+    second are the other queries on the server, installed or only created (TigerGraph
+    drops no type that either uses), that name a scope type or call one of the first: a
     replacement would break them, and it never touches them (read-only).
     """
-    repository = repository_queries((*TRAINING_QUERY_FILES, *ANALYTICS_QUERY_FILES))
+    repository = [*repository_queries(TRAINING_QUERY_FILES), *RETIRED_QUERIES]
     texts = {name: text for name in repository if (text := _on_server(executor, name)) is not None}
     using = {name for name, text in texts.items() if uses_scope_types(text, declared)}
     dependents = _with_callers(using, {name: ("", text) for name, text in texts.items()})
+    listed = _server_queries(executor)
     others = []
-    for name in sorted(set(installed_endpoints(executor)) - set(repository)):
-        text = _on_server(executor, name) or ""
+    for name in sorted((set(listed) | set(installed_endpoints(executor))) - set(repository)):
+        text = listed.get(name) or _on_server(executor, name) or ""
         if uses_scope_types(text, declared) or any(calls(text, d) for d in dependents):
             others.append(name)
     return _callers_first([name for name in texts if name in dependents], texts), others
@@ -233,14 +238,16 @@ def replace_scope_types(executor: ConnectionExecutor, schema: ScopeSchema) -> di
     """Replace a graph's outdated scope types with gsql/schema/scope_vertex.gsql's.
 
     It refuses, and changes nothing, while the graph holds a scope vertex (replacing the
-    types would delete every scope), while an edge type that the file does not declare
-    reaches the scope vertex type, or while an installed query that no repository file
-    defines uses the types or calls a query that does. Otherwise it drops the
-    repository's queries that use the types, callers first (scope_dependents), since
+    types would delete the split, which only its owner removes, by hand), while an edge
+    type that the file does not declare reaches the scope vertex type, or while a query on
+    the server, installed or only created, that is neither the repository's nor retired
+    uses the types or calls a query that does. Otherwise it drops the repository's and the
+    retired queries that use the types, callers first (scope_dependents), since
     TigerGraph drops no type a query uses; drops the graph's scope edge type and vertex
-    type in a schema change job; applies scope_vertex.gsql; and checks that the graph's
-    types are now the file's. It returns the differences it found and the queries it
-    dropped, which install then installs again with every other training query.
+    type in a schema change job;
+    applies scope_vertex.gsql; and checks that the graph's types are now the file's. It
+    returns the differences it found and the queries it dropped, which install then
+    installs again with every other training query, the retired ones aside.
     """
     found = schema.found
     if found is None:
@@ -250,10 +257,8 @@ def replace_scope_types(executor: ConnectionExecutor, schema: ScopeSchema) -> di
     if scopes:
         held = plural(scopes, f"{SCOPE_VERTEX} vertex", f"{SCOPE_VERTEX} vertices")
         raise ValueError(
-            f"{outdated}. The graph holds {held}, "
-            "which replacing the types would delete, so nothing was changed. Clear the "
-            "graph's data and load it again, as docs/how-to/set-up-a-graph.md describes, "
-            "then run `mule install` again."
+            f"{outdated}. The graph holds {held}, which replacing the types would delete, so "
+            f"nothing was changed: {REMOVE_SPLIT}, then run `mule install` again."
         )
     if schema.foreign_edges:
         raise ValueError(
@@ -367,7 +372,6 @@ def _unanswered(error: Exception) -> bool:
 def install(
     executor: ConnectionExecutor,
     *,
-    analytics: bool = False,
     replace_scope: bool = False,
     deadline_s: float = INSTALL_DEADLINE_S,
     poll_s: float = 30.0,
@@ -383,12 +387,11 @@ def install(
     the -force flag, since TigerGraph otherwise skips a query it has installed.
 
     A query is stale when SHOW QUERY differs from the repository, its endpoint is
-    missing or disabled, or its endpoint parameters differ (see query_problems);
-    ``analytics`` also installs the analytics queries. Queries that call a stale query
-    (the context query calls the Fourier query) are installed with it. Only the
-    definitions whose text is missing or differs, and the queries that call them, are
-    created again, because CREATE OR REPLACE disables an installed endpoint until the
-    query is installed again. A query whose text is current but whose endpoint is not (a
+    missing or disabled, or its endpoint parameters differ (see query_problems).
+    Queries that call a stale query (the context query calls the Fourier query) are
+    installed with it. Only the definitions whose text is missing or differs, and the
+    queries that call them, are created again, because CREATE OR REPLACE disables an
+    installed endpoint until the query is installed again. A query whose text is current but whose endpoint is not (a
     compilation that has not finished or failed) is only installed, so a run after a
     timeout sends no CREATE for what the last one created.
 
@@ -413,7 +416,7 @@ def install(
     elif scope.state == ABSENT:
         logs["scope_schema"] = _add_scope_types(executor)
     every = "scope_replaced" in logs
-    files = (*TRAINING_QUERY_FILES, *(ANALYTICS_QUERY_FILES if analytics else ()))
+    files = TRAINING_QUERY_FILES
     queries = repository_queries(files)
     problems = query_problems(executor, files)
     stale = set(queries) if every else _with_callers(set(problems), queries)

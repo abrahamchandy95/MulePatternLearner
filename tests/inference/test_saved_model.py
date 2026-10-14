@@ -53,7 +53,7 @@ from mule_pattern_learner.training.trainer import train
 
 FIXTURES = Path(__file__).parent / "fixtures" / "saved_models"
 RELATIVE = 1e-5
-# Test-partition accounts of the fake scope, at the fake graph's test cutoff sequence.
+# Test-partition accounts of the fake split, at the fake graph's test cutoff sequence.
 ACCOUNTS = ("S0004", "S0009", "S0014", "S0019", "S0024", "S0029", "S0034", "S0039")
 SCORES = {
     "baseline": [
@@ -89,7 +89,7 @@ SCORES = {
 }
 
 # The settings the fixtures were prepared and trained with, over the built-in run and
-# then each variant's change, and the source id of the fake graph's data they name.
+# then each variant's change, and the vertex counts of the fake graph they name.
 CHANGES: dict[str, Any] = {
     "dataset": {"seed_limits": {"train": 40, "validation": 16, "test": 16}},
     "model": {"hidden": 8, "heads": 2, "dropout": 0.0},
@@ -98,7 +98,7 @@ CHANGES: dict[str, Any] = {
 }
 BASE = DEFAULT_CONFIG.with_changes(CHANGES)
 SEED = 42
-SOURCE = "load_fixture"
+COUNTS = {"Account": 200}
 # What the baseline fixture gave the dataset's test accounts: every eligible test
 # account at the test cutoff, scored with the dataset's hub registry.
 DATASET_SCORES = {
@@ -139,13 +139,12 @@ def fixture_source(config: RunConfig) -> ContextSource:
 
 
 def prepare_fixture_dataset(dataset: DatasetPaths) -> None:
-    """Prepare the fixtures' dataset from the fake scope of 200 accounts."""
+    """Prepare the fixtures' dataset from the fake split of 200 accounts."""
     executor = FakeTigerGraph(factory=neighbourhood, population=scope_population(200))
     prepare(
         BASE,
-        SOURCE,
         dataset,
-        {"Account": 200},
+        COUNTS,
         TigerGraphObservedLabelReader(),
         scope=TigerGraphScopeReader(executor),
         cutoffs=TigerGraphCutoffReader(executor),
@@ -168,10 +167,7 @@ def write_fixtures(root: Path) -> None:
 
 def fixture_scores(saved: SavedModel) -> list[float]:
     """The model's scores of ACCOUNTS at the test cutoff."""
-    keys = [
-        ContextKey("Account", account, 103, cutoff_ms("2025-01-01"), saved.config.scope.id, 3)
-        for account in ACCOUNTS
-    ]
+    keys = [ContextKey("Account", account, 103, cutoff_ms("2025-01-01"), 3) for account in ACCOUNTS]
     contexts = fixture_source(saved.config)
     try:
         (frame,), rejected = Predictor(saved, contexts).score_keys([keys])
@@ -214,13 +210,13 @@ def test_saved_models_score_as_they_did(name: str) -> None:
 def test_the_built_in_inputs_keep_their_recorded_fingerprints() -> None:
     # What a model trained now records.
     assert contract_fingerprint() == (
-        "51bec43d1cf620b40dac7bee957f129d35f371eef4508f549b473d4768a29b28"
+        "e482e3ca3156122e3c72468306c7bb16bd348a7b3369824ae95feee2ff303bb6"
     )
     assert FeaturePlan().fingerprint() == (
-        "59c1f4e2696fe2665eee40507c7d73e8a4d231643a1e05f63d1e653a7363205c"
+        "2f3eabc82f72d794dc1b07e49a104eaccb3b7237e5e4804327e66bf61f90185b"
     )
     assert FeaturePlan(architecture="summary").fingerprint() == (
-        "a768f5b406749101d592e5d5599261ef77a960e713e09395c0d86c6913861d1f"
+        "619d54a162ec87c1c264c67fd824b1f3364d3b1567c1421d65eca228c1f18198"
     )
 
 
@@ -236,7 +232,8 @@ def test_a_model_of_another_contract_is_refused() -> None:
 
 
 def test_a_model_that_names_a_group_training_does_not_read_is_refused() -> None:
-    # An analytics group is unknown to training, so such a model is refused, not misread.
+    # A group outside the registry is unknown to training, so such a model is refused, not
+    # misread.
     payload = SavedModel.load(FIXTURES / "baseline.pt").payload
     config = payload["config"]
     saved = SavedModel(
@@ -273,7 +270,7 @@ def test_this_code_writes_the_fixtures_again(tmp_path: Path) -> None:
     ):
         pd.testing.assert_frame_equal(pd.read_parquet(have), pd.read_parquet(want))
     recorded = read_manifest(dataset)["source"]["dataset_id"]
-    assert recorded == dataset_id(SOURCE, BASE) == read_manifest(fixture)["source"]["dataset_id"]
+    assert recorded == dataset_id(COUNTS, BASE) == read_manifest(fixture)["source"]["dataset_id"]
     for name in SCORES:
         saved = SavedModel.load(tmp_path / f"{name}.pt")
         kept = SavedModel.load(FIXTURES / f"{name}.pt")

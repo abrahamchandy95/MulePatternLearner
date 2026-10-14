@@ -36,9 +36,9 @@ SCORE_SCHEMA = pa.schema(
 
 
 def query_hubs(reader: HubReader, cutoff_seqs: list[int], sampler: SamplerPlan) -> HubRegistry:
-    """Unscoped hub registry for arbitrary cutoffs, with the saved model's threshold.
+    """Hub registry for arbitrary cutoffs, with the saved model's threshold.
 
-    Scoring arbitrary accounts runs unscoped, so its rows carry visibility phase 3.
+    Scoring arbitrary accounts runs without the split, so its rows carry visibility phase 0.
     """
     return reader.hub_registry(cutoff_seqs, threshold=hub_threshold(sampler))
 
@@ -82,12 +82,12 @@ def score_new_accounts(
     """Score arbitrary existing-in-TigerGraph account IDs without a training manifest.
 
     Inference can use all history available at its cutoff. Strict experiment
-    scoring uses scoped ContextKeys through Predictor instead. IDs that
+    scoring uses ContextKeys in the split's phases through Predictor instead. IDs that
     TigerGraph rejects (missing, not yet visible, over capacity) are not scored:
     they are listed in ``rejected_output``. The result reports rejected roots and
     masked child contexts separately (see ``rejection_summary``). A date before the
     first visible event is refused, since no account could be scored at it.
-    The date's cutoff comes from ``cutoffs``, the unscoped hub registry from
+    The date's cutoff comes from ``cutoffs``, the hub registry without the split from
     ``hub_reader`` (``hubs`` replaces it) and the contexts from ``contexts``, which
     scoring closes; the pipeline opens them on a connection whose installed queries it
     has verified. A terminal shows how many accounts are scored so far, of ``total``

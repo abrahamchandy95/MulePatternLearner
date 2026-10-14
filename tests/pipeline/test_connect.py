@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 
 from mule_pattern_learner.config import DEFAULT_CONFIG, TransportConfig
-from mule_pattern_learner.contract.server import REVEAL_QUERY, SCOPE_POLICY_QUERY
+from mule_pattern_learner.contract.server import REVEAL_QUERY
 from mule_pattern_learner.data.context_cache import ContextCache
 from mule_pattern_learner.data.manifest import dataset_id, dataset_settings, source_fingerprint
 from mule_pattern_learner.paths import DatasetPaths
@@ -39,11 +39,9 @@ def test_the_transport_section_sets_the_source_and_the_retry_budgets(
             seen.update(kwargs)
 
     monkeypatch.setattr(connect, "TigerGraphExecutor", Executor)
+    counts = {"Account": 10}
     manifest = {
-        "source": {
-            "source_counts": {"Account": 10},
-            "settings": dataset_settings("d", DEFAULT_CONFIG),
-        }
+        "source": {"source_counts": counts, "settings": dataset_settings(counts, DEFAULT_CONFIG)}
     }
     transport = {
         "request_batch_size": 32,
@@ -62,7 +60,7 @@ def test_the_transport_section_sets_the_source_and_the_retry_budgets(
     # the frozen source its manifest records.
     assert store.disk is not None
     assert store.disk.cache == ContextCache(
-        UNUSED.contexts, dataset_id("d", DEFAULT_CONFIG), source_fingerprint(manifest)
+        UNUSED.contexts, dataset_id(counts, DEFAULT_CONFIG), source_fingerprint(manifest)
     )
     store.close()
     # mule check's source has none.
@@ -79,8 +77,8 @@ def test_the_transport_section_sets_the_source_and_the_retry_budgets(
 def test_a_resumed_stream_checks_the_frozen_source_before_fetching(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    header = ready_scope("snapshot")
-    graph = FakeTigerGraph(counts={"Account": 10}, scopes={"scope": header})
+    counts = {"Account": 10}
+    graph = FakeTigerGraph(counts=counts, scope=ready_scope())
     budgets: list[tuple[int, int]] = []
 
     def connected(transport: TransportConfig) -> Any:
@@ -90,35 +88,25 @@ def test_a_resumed_stream_checks_the_frozen_source_before_fetching(
     monkeypatch.setattr(connect, "connect", connected)
     config = DEFAULT_CONFIG.with_changes(
         {
-            "scope": {"id": "scope"},
             "dataset": {"split_seed": 42},
             "transport": {"max_query_attempts": 3, "max_outage_s": 60},
         }
     )
     manifest = {
-        "source": {
-            "source_counts": {"Account": 10},
-            "settings": dataset_settings("snapshot", config),
-        },
+        "source": {"source_counts": counts, "settings": dataset_settings(counts, config)},
     }
     backend = connect.open_context_source(UNUSED, manifest, config)
     backend.close()
     assert budgets == [(3, 60)]
-    # The scope's policy, then a dry run of the reveal of the dataset's settings.
-    (policy, (reveal, params)) = graph.calls
-    assert policy == (SCOPE_POLICY_QUERY, {"scope_id": "scope"})
+    # A dry run of the reveal of the dataset's settings, after the split's header.
+    ((reveal, params),) = graph.calls
     assert reveal == REVEAL_QUERY and params["apply"] is False
     assert params == reveal_parameters(config.scope, config.dataset.dates, apply=False)
     # Queries whose installed text differs from the repository's are refused.
-    graph.stale = frozenset({SCOPE_POLICY_QUERY})
+    graph.stale = frozenset({REVEAL_QUERY})
     with pytest.raises(ValueError, match="mule install"):
         connect.open_context_source(UNUSED, manifest, config)
     graph.stale = frozenset()
-    # A scope created with another scope.unowned rule than the configured one is refused.
-    graph.scope_policy = "independent"
-    with pytest.raises(ValueError, match="no longer valid.*scope.unowned = 'independent'"):
-        connect.open_context_source(UNUSED, manifest, config)
-    graph.scope_policy = "linked"
     graph.counts["Account"] += 1
     with pytest.raises(ValueError, match="counts changed"):
         connect.open_context_source(UNUSED, manifest, config)
@@ -135,7 +123,8 @@ def test_a_resumed_stream_checks_the_frozen_source_before_fetching(
     for _ in range(2):
         connect.open_context_source(UNUSED, manifest, config, session=session).close()
     assert budgets == [(3, 90)]
-    assert graph.names() == [SCOPE_POLICY_QUERY, REVEAL_QUERY] * 2
-    graph.scopes["scope"]["ready"] = False
-    with pytest.raises(ValueError, match="no longer valid"):
+    assert graph.names() == [REVEAL_QUERY] * 2
+    assert graph.scope is not None
+    graph.scope["ready"] = False
+    with pytest.raises(ValueError, match="no longer valid.*incomplete"):
         connect.open_context_source(UNUSED, manifest, config)

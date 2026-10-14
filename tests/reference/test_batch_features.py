@@ -14,13 +14,7 @@ from mule_pattern_learner.contract.feature_groups import (
     CORE_GROUPS,
     FeaturePlan,
 )
-from mule_pattern_learner.contract.graph_schema import (
-    CHANNELS,
-    RAILS,
-    RELATIONS,
-    STRATA,
-    ContextKey,
-)
+from mule_pattern_learner.contract.graph_schema import RAILS, RELATIONS, ContextKey
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
 from mule_pattern_learner.reference.batch_features import (
     base_features,
@@ -71,7 +65,7 @@ def reference_batch(
         ("second_", contexts, second, fanouts[1]),
     ):
         arrays[prefix + "edge"] = np.zeros((len(rows), fanout, len(plan.edge_names)), np.float32)
-        for name in ("relation", "rail", "channel", "stratum"):
+        for name in ("relation", "rail"):
             arrays[prefix + name] = np.zeros((len(rows), fanout), dtype=np.int64)
         arrays[prefix + "mask"] = np.zeros((len(rows), fanout), dtype=bool)
         for i, neighbors in enumerate(messages):
@@ -79,11 +73,6 @@ def reference_batch(
                 arrays[prefix + "edge"][i, j] = edge_features(m, plan)
                 arrays[prefix + "relation"][i, j] = RELATIONS.index(m["relation"])
                 arrays[prefix + "rail"][i, j] = RAILS.index(m["rail"])
-                channel = m.get("channel", "unknown")
-                arrays[prefix + "channel"][i, j] = CHANNELS.index(
-                    channel if channel in CHANNELS else "other"
-                )
-                arrays[prefix + "stratum"][i, j] = STRATA.index(m["stratum"])
                 arrays[prefix + "mask"][i, j] = True
                 if prefix == "first_":
                     arrays["neighbor_positions"][i, j] = lookup[child_key(m, keys[i])]

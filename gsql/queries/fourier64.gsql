@@ -7,17 +7,17 @@ USE GRAPH Mule_Pattern_Learner
    Sequential append is intentional: concurrent ACCUM appends scramble axes.
 */
 CREATE OR REPLACE QUERY encode_fourier64(UINT delta_t_ms)
-FOR GRAPH Mule_Pattern_Learner RETURNS (ListAccum<DOUBLE>) SYNTAX V2 {
-  ListAccum<DOUBLE> @@encoding;
-  DOUBLE elapsed_seconds = delta_t_ms / 1000.0;
-  DOUBLE u = log(1.0 + elapsed_seconds) / log(1.0 + 34560000.0);
-  DOUBLE frequency = 0.0;
-  DOUBLE angle = 0.0;
-  FOREACH i IN RANGE[0, 31] DO
-    frequency = 0.125 * pow(16.0, i / 31.0);
-    angle = 6.283185307179586 * frequency * u;
-    @@encoding += sin(angle);
-    @@encoding += cos(angle);
-  END;
-  RETURN @@encoding;
+    FOR GRAPH Mule_Pattern_Learner RETURNS (ListAccum<DOUBLE>) SYNTAX V2 {
+    ListAccum<DOUBLE> @@encoding;
+    DOUBLE elapsed_seconds = delta_t_ms / 1000.0;
+    DOUBLE u = log(1.0 + elapsed_seconds) / log(1.0 + 34560000.0);
+    DOUBLE frequency = 0.0;
+    DOUBLE angle = 0.0;
+    FOREACH i IN RANGE[0, 31] DO
+        frequency = 0.125 * pow(16.0, i / 31.0);
+        angle = 6.283185307179586 * frequency * u;
+        @@encoding += sin(angle);
+        @@encoding += cos(angle);
+    END;
+    RETURN @@encoding;
 }

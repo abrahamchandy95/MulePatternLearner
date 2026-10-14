@@ -23,13 +23,15 @@ CERTAIN = {
 
 
 @pytest.mark.parametrize("salt", [1, 2])
-def test_reveal_model_finds_reports_and_traces_and_reveals_within_budget(salt: int) -> None:
+def test_reveal_model_finds_reports_and_traces_and_reveals_every_discovered_mule(
+    salt: int,
+) -> None:
     params = {
         **tigergraph_reveal.reveal_parameters(*BUILT_IN, apply=False),
         **CERTAIN,
         "salt": salt,
     }
-    result = label_reveal.plan(reveal_inputs(), {**params, "budget": 1})
+    result = label_reveal.plan(reveal_inputs(), params)
     mules = result["mules"]
     assert {name: mules[name]["channel"] for name in "ABD"} == {
         "A": "victim_report",
@@ -37,16 +39,9 @@ def test_reveal_model_finds_reports_and_traces_and_reveals_within_budget(salt: i
         "D": "victim_report",
     }
     assert mules["C"]["t"] == label_reveal.NEVER
-    # E has no split, so it is never eligible, however early it was found.
-    assert mules["E"]["t"] < label_reveal.NEVER and result["eligible"] == {"A", "B", "D"}
-    assert label_reveal.counts_by_split(result, "eligible") == {1: 2, 2: 0, 3: 1}
-    # One of the two train mules fits the budget; the test split's only mule is revealed.
-    assert len(result["revealed"] & {"A", "B"}) == 1 and "D" in result["revealed"]
-    everyone = label_reveal.plan(reveal_inputs(), {**params, "budget": 20})
-    assert everyone["revealed"] == {"A", "B", "D"}
-    # A zero budget (schema-valid) reveals nothing and keeps the eligible set.
-    none = label_reveal.plan(reveal_inputs(), {**params, "budget": 0})
-    assert none["revealed"] == set() and none["eligible"] == {"A", "B", "D"}
+    # E has no split, so it is never revealed, however early it was found.
+    assert mules["E"]["t"] < label_reveal.NEVER and result["revealed"] == {"A", "B", "D"}
+    assert label_reveal.counts_by_split(result) == {1: 2, 2: 0, 3: 1}
 
 
 def test_reveal_model_uses_the_query_defaults_and_monitoring() -> None:
@@ -68,11 +63,11 @@ def test_reveal_model_uses_the_query_defaults_and_monitoring() -> None:
 def dry_run_of(result: dict[str, Any], data_end: int = 10**13) -> dict[str, Any]:
     """What the installed job prints with apply = FALSE when it agrees with the mirror."""
     mules = result["mules"]
-    eligible = label_reveal.counts_by_split(result, "eligible")
+    revealed = label_reveal.counts_by_split(result)
     return {
         "status": "dry_run",
         "data_end_ts_ms": data_end,
-        "eligible": {str(part): n for part, n in eligible.items() if n},
+        "revealed": {str(part): n for part, n in revealed.items() if n},
         "revealed_mules": [
             {
                 "account_id": k,
@@ -97,5 +92,5 @@ def test_a_dry_run_is_compared_with_the_mirror_mule_by_mule() -> None:
         f"{first['account_id']}: GSQL {first['channel']} 1, Python {first['channel']} "
         f"{first['known_ts_ms']}"
     ]
-    counted = {**agreeing, "eligible": {}}
-    assert label_reveal.dry_run_differences(expected, counted)[0].startswith("eligible counts")
+    counted = {**agreeing, "revealed": {}}
+    assert label_reveal.dry_run_differences(expected, counted)[0].startswith("revealed counts")

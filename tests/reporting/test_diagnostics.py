@@ -64,7 +64,7 @@ def test_the_features_are_ranked_on_validation_and_named_by_family(
     ax = drawn(lambda ax: figures.plot_univariate(ax, table, count=4))
     labels = [label.get_text() for label in ax.get_yticklabels()]
     assert labels == [figures.feature_label(name) for name in distance.index[:4]]
-    assert figures.feature_label("account__30d_in_count") == "account: 30d_in_count"
+    assert figures.feature_label("messages__relation_zelle_in") == "messages: relation_zelle_in"
 
 
 def test_the_drift_shows_the_largest_shifts_on_a_symmetric_log_axis(
@@ -157,22 +157,18 @@ def test_the_run_figures_draw_each_audited_split(tables: dict[str, pd.DataFrame]
     assert len(labels) == 6 and all(text.startswith("AP ") for text in labels)
 
 
-def test_the_reveal_spread_marks_the_configured_salt_and_the_budget(
-    tables: dict[str, pd.DataFrame],
-) -> None:
+def test_the_reveal_spread_marks_the_configured_salt(tables: dict[str, pd.DataFrame]) -> None:
     table = tables["reveal_spread"]
-    ax = drawn(lambda ax: figures.plot_reveal_spread(ax, table, budget=20, salt=42))
+    ax = drawn(lambda ax: figures.plot_reveal_spread(ax, table, salt=42))
     assert "50 salts" in ax.get_title()
     names = [label.get_text() for label in ax.get_yticklabels()]
-    assert names[0] == "train: discovered by the cutoff" and names[-1] == "test: revealed"
+    assert names == ["train", "validation", "test"]
     diamonds = [line for line in ax.get_lines() if line.get_marker() == "D"]
     configured = table[table.salt == 42]
-    expected = configured[configured.metric != "mules"].value.tolist()
+    expected = configured[configured.metric == "revealed"].value.tolist()
     assert sorted(xs(line)[0] for line in diamonds) == sorted(expected)
-    budget = [line for line in ax.get_lines() if xs(line) == [20.0, 20.0]]
-    assert budget
-    # Without a configured salt or budget, neither is drawn.
-    plain = drawn(lambda ax: figures.plot_reveal_spread(ax, table, budget=None, salt=None))
+    # Without a configured salt, none is drawn.
+    plain = drawn(lambda ax: figures.plot_reveal_spread(ax, table, salt=None))
     assert not [line for line in plain.get_lines() if line.get_marker() == "D"]
 
 

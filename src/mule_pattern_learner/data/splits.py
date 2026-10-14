@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 
 from ..contract.clock import cutoff_ms, timestamp
-from ..contract.graph_schema import SPLIT_PHASE, ContextKey, context_scope
+from ..contract.graph_schema import SPLIT_PHASE, ContextKey
 from .ports import CutoffReader
 
 
@@ -28,11 +28,11 @@ def marginal_mask(accounts: pd.DataFrame) -> np.ndarray:
 
 
 def sample_keys(accounts: pd.DataFrame, date: str, manifest: dict[str, Any]) -> list[ContextKey]:
+    """The context keys of accounts at date, each in the phase of its split."""
     ms = cutoff_ms(date)
     seq = int(manifest["cutoff_seqs"][date])
-    scope = context_scope(manifest["source"]["scope_id"])
     return [
-        ContextKey("Account", str(row.account_id), seq, ms, scope, SPLIT_PHASE[str(row.split)])
+        ContextKey("Account", str(row.account_id), seq, ms, SPLIT_PHASE[str(row.split)])
         for row in accounts.itertuples(index=False)
     ]
 

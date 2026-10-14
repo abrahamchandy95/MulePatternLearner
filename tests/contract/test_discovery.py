@@ -9,7 +9,6 @@ from mule_pattern_learner.contract.discovery import REVEAL_DEFAULTS, reveal_unif
 from mule_pattern_learner.contract.server import REVEAL_QUERY
 from mule_pattern_learner.paths import GSQL_DIR
 from mule_pattern_learner.tigergraph.gsql_text import definitions
-from mule_pattern_learner.tigergraph.reveal import reveal_budget
 
 REVEAL_FILE = GSQL_DIR / "queries/label_reveal.gsql"
 
@@ -31,11 +30,14 @@ def test_hash_mirror_is_pinned_uniform_and_stream_independent() -> None:
     assert (2147483647 - 1) ** 2 + 1013904223 < 2**63
 
 
-def test_reveal_defaults_are_the_query_defaults() -> None:
+def test_reveal_defaults_are_the_query_defaults_and_constants() -> None:
     query = definitions(REVEAL_FILE.read_text())[REVEAL_QUERY]
-    header = query.split("(", 1)[1].split(") FOR GRAPH", 1)[0]
-    declared = re.findall(r"\b(?:INT|DOUBLE)\s+(\w+)\s*=\s*([-\d.]+)", header)
-    assert {name: float(value) for name, value in declared} == REVEAL_DEFAULTS
-    # The built-in run reveals every discovered mule, which sends the default budget.
-    assert reveal_budget(DEFAULT_CONFIG.scope) == REVEAL_DEFAULTS["budget"]
+    header, body = query.split("(", 1)[1].split(") FOR GRAPH", 1)
+    declared = re.findall(r"\bINT\s+(\w+)\s*=\s*(\d+)", header)
+    # The model's constants, beside the day length, "never" and 2 pi.
+    constants = re.findall(r"^\s*DOUBLE (\w+) = ([\d.]+);", body, re.MULTILINE)
+    model = [
+        (name, value) for name, value in constants if name not in {"day_ms", "never", "two_pi"}
+    ]
+    assert {name: float(value) for name, value in declared + model} == REVEAL_DEFAULTS
     assert DEFAULT_CONFIG.scope.reveal_salt == REVEAL_DEFAULTS["salt"]

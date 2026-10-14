@@ -8,7 +8,7 @@ per-request failures are status rows, account queries page by account id, and th
 queries that write run with one attempt. `call` and `gsql` run on its connection
 (FakeConnection), which answers SHOW QUERY with the installed text, lists the installed
 endpoints, creates, installs and drops queries and reports the schema, the vertex counts
-and the scope headers; every GSQL statement that writes must run with one attempt too.
+and the split's header; every GSQL statement that writes must run with one attempt too.
 It is the one fake executor; a few tests script a connection of their own behind the
 real executor (testing.fake_connection) for a query it does not answer. FakeStore and
 FakeSource stand in for context sources, for
@@ -26,19 +26,12 @@ import threading
 import time
 from typing import Any, Literal
 
-from pyTigerGraph.common.exception import TigerGraphException
-
 from mule_pattern_learner.config import DEFAULT_CONFIG, RunConfig, ScopeConfig
-from mule_pattern_learner.contract.analytics_features import ANALYTICS_GROUPS
 from mule_pattern_learner.contract.bounds import REQUEST_KEYS
 from mule_pattern_learner.contract.feature_groups import FeaturePlan, extraction_plan
 from mule_pattern_learner.contract.graph_schema import PAYMENT_RELATIONS, ContextKey
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
 from mule_pattern_learner.contract.server import (
-    ANALYTICS_CONTEXT_FILE,
-    ANALYTICS_CONTEXT_QUERY,
-    ANALYTICS_CONTRACT,
-    ANALYTICS_QUERY_FILES,
     CONTEXT_QUERY,
     CONTEXT_QUERY_FILE,
     CREATE_SCOPE_QUERY,
@@ -48,7 +41,6 @@ from mule_pattern_learner.contract.server import (
     HUB_QUERY,
     POPULATION_QUERY,
     REVEAL_QUERY,
-    SCOPE_POLICY_QUERY,
     SCOPE_VERTEX,
     TRAINING_QUERY_FILES,
     TRUTH_QUERY,
@@ -58,7 +50,7 @@ from mule_pattern_learner.data.manifest import dataset_id
 from mule_pattern_learner.data.preparation import prepare
 from mule_pattern_learner.paths import GSQL_DIR, DatasetPaths
 from mule_pattern_learner.testing.builders import (
-    UNIT_SOURCE,
+    UNIT_COUNTS,
     context,
     encode,
     fake_context,
@@ -93,22 +85,7 @@ def signature(path: str, name: str) -> frozenset[str]:
 
 
 CONTEXT_PARAMETERS = signature(CONTEXT_QUERY_FILE, CONTEXT_QUERY)
-ANALYTICS_PARAMETERS = signature(ANALYTICS_CONTEXT_FILE, ANALYTICS_CONTEXT_QUERY)
-# The parameters an analytics request must name: the keys, the pool and the scope; the
-# include flags and emit_encodings have defaults.
-ANALYTICS_REQUIRED = frozenset(
-    name for name in ANALYTICS_PARAMETERS if not name.startswith("include_")
-) - {"emit_encodings"}
-# The analytics message fields of a message the fake graph's analytics query prints: the
-# pair window counts and the device and IP ages, none of them seen.
-ANALYTICS_MESSAGE_FIELDS: dict[str, float | bool] = {
-    name: (False if name.endswith("_present") else 0.0)
-    for spec in ANALYTICS_GROUPS.values()
-    if spec.path == "message"
-    for name in spec.names
-}
 HUB_PARAMETERS = signature("queries/hub_accounts.gsql", HUB_QUERY)
-SCOPE_POLICY_PARAMETERS = signature("queries/training_scope.gsql", SCOPE_POLICY_QUERY)
 POPULATION_PARAMETERS = signature("queries/training_scope.gsql", POPULATION_QUERY)
 CREATE_SCOPE_PARAMETERS = signature("queries/training_scope.gsql", CREATE_SCOPE_QUERY)
 FINALIZE_SCOPE_PARAMETERS = signature("queries/training_scope.gsql", FINALIZE_SCOPE_QUERY)
@@ -117,12 +94,17 @@ TRUTH_PARAMETERS = signature("evaluation/ground_truth.gsql", TRUTH_QUERY)
 WRITE_QUERIES = frozenset({CREATE_SCOPE_QUERY, FINALIZE_SCOPE_QUERY})
 # The scope types of a current graph: those gsql/schema/scope_vertex.gsql declares.
 SCOPE_TYPES = declared_scope_types()
-# The scope types of a graph created before the scope vertex recorded its split shares.
+# The scope types of a graph created when it held several splits: each scope vertex keyed
+# by a scope id and recording the source id of the data it split, and each membership
+# edge recording its ownership group.
 EARLIER_SCOPE_TYPES = replace(
     SCOPE_TYPES,
-    vertex_attributes=tuple(
-        (name, kind) for name, kind in SCOPE_TYPES.vertex_attributes if name not in SHARE_ATTRIBUTES
+    vertex_attributes=(
+        ("scope_id", "STRING"),
+        ("source_id", "STRING"),
+        *SCOPE_TYPES.vertex_attributes[1:],
     ),
+    edge_attributes=(*SCOPE_TYPES.edge_attributes, ("group_id", "STRING")),
 )
 
 
@@ -148,7 +130,7 @@ def pool_of(params: dict[str, Any]) -> tuple[int, ...]:
 
 def request_keys(params: dict[str, Any]) -> list[ContextKey]:
     return [
-        ContextKey(*args, params["scope_id"], params["visibility_phase"])
+        ContextKey(*args, params["visibility_phase"])
         for args in zip(
             params["node_types"],
             params["node_ids"],
@@ -166,30 +148,24 @@ class FakeTigerGraph:
     ok context without messages). `statuses` maps a ContextKey or a node ID to a
     per-request status such as history_capacity_exceeded. `hubs` lists
     (account_id, cutoff_seq) pairs that the hub query reports: once at
-    phase 3 for an unscoped call, once per phase 1, 2 and 3 for a scoped one.
+    phase 0 without by_phase, once per phase 1, 2 and 3 with it.
     `last_visible(index, cutoff_ms)` answers the cutoff query.
-    `scope_policy` names the scope.unowned rule the scope policy query reports
-    for every scope (default "linked", the configuration default; policy_counts).
-    `population` holds the rows the scope population query pages through;
-    without include_observed their labels are withheld. `truth` holds the rows the
-    ground-truth query pages through, with its field names (ground_truth_rows).
+    `population` holds the rows the scope population query pages through, with their
+    observed labels. `truth` holds the rows the ground-truth query pages through, with
+    its field names (ground_truth_rows).
     `reveal` holds what the reveal's interpreted inputs query prints (reveal_inputs).
     `other_reveal` is the count of mules whose label another reveal wrote, which the
     reveal's dry run, the label check before a streamed run, reports (default 0: the
     labels are the dataset's reveal's).
-    The analytics context query answers each key with its context row (as the context
-    query would, cut to the requested pool), relabelled with ANALYTICS_CONTRACT, its
-    messages carrying the analytics message fields unseen and its node features joined
-    by `analytics(key)`, the analytics node features of the key (default: none).
 
-    The connection's state: `scopes` maps scope ids to the attributes of their scope
-    vertex, which the scope creation queries add; `counts` are the vertex counts by
+    The connection's state: `scope` holds the attributes of the graph's one scope vertex
+    (None: no split), which the scope creation queries add; `counts` are the vertex counts by
     type (default: the population's accounts); `queries` maps the installed queries to
     their text (default: every repository query), except that `stale` names queries
     whose installed text differs until they are created again; and `scope_types` are
     the schema's scope vertex and edge types (default: SCOPE_TYPES, those
-    gsql/schema/scope_vertex.gsql declares; EARLIER_SCOPE_TYPES lack the split shares;
-    None, neither type). `writes` records the GSQL statements that change it and the
+    gsql/schema/scope_vertex.gsql declares; EARLIER_SCOPE_TYPES those of a graph that held
+    several splits; None, neither type). `writes` records the GSQL statements that change it and the
     install requests, in order.
 
     A context request waits `delay` seconds before it is answered, and `encodings`
@@ -211,13 +187,11 @@ class FakeTigerGraph:
         statuses: dict[ContextKey | str, str] | None = None,
         hubs: Iterable[tuple[str, int]] = (),
         last_visible: Callable[[int, int], int] = lambda index, ms: 100 + index,
-        scope_policy: str = "linked",
         population: Iterable[dict[str, Any]] = (),
         truth: Iterable[dict[str, Any]] = (),
         reveal: list[dict[str, Any]] | None = None,
         other_reveal: int = 0,
-        analytics: Callable[[ContextKey], dict[str, float]] | None = None,
-        scopes: dict[str, dict[str, Any]] | None = None,
+        scope: dict[str, Any] | None = None,
         counts: dict[str, int] | None = None,
         queries: Mapping[str, str] | None = None,
         stale: Iterable[str] = (),
@@ -228,17 +202,15 @@ class FakeTigerGraph:
         answers: Mapping[str, Callable[[dict[str, Any]], list[dict[str, Any]]]] | None = None,
     ) -> None:
         self.rows = rows or {}
-        self.scope_policy = scope_policy
         self.population = sorted(population, key=lambda row: str(row["account_id"]))
         self.truth = sorted(truth, key=lambda row: str(row["account_id"]))
         self.reveal = reveal
         self.other_reveal = other_reveal
-        self.analytics = analytics or no_analytics
         self.factory = factory or context
         self.statuses = statuses or {}
         self.hubs = list(hubs)
         self.last_visible = last_visible
-        self.scopes = {scope_id: dict(header) for scope_id, header in (scopes or {}).items()}
+        self.scope = dict(scope) if scope is not None else None
         self.counts = dict(counts) if counts is not None else {"Account": len(self.population)}
         self.stale = frozenset(stale)
         self.scope_types = scope_types
@@ -266,12 +238,8 @@ class FakeTigerGraph:
             assert options.get("attempts") == 1, f"{name} writes, so it must run once"
         if name == CONTEXT_QUERY:
             return self.context_rows(params)
-        if name == ANALYTICS_CONTEXT_QUERY:
-            return self.analytics_rows(params)
         if name == HUB_QUERY:
             return self.hub_rows(params)
-        if name == SCOPE_POLICY_QUERY:
-            return self.scope_policy_rows(params)
         if name == POPULATION_QUERY:
             return self.population_rows(params)
         if name == TRUTH_QUERY:
@@ -323,12 +291,11 @@ class FakeTigerGraph:
         """
         assert params["apply"] is False and not params.get("force"), params
         assert options.get("attempts") == 1
-        record = f"phantomledger_role;reveal_v1;salt={params['salt']};budget={params['budget']}"
+        record = f"phantomledger_role;reveal_v1;salt={params['salt']};budget=1000"
         status = "revealed_differently" if self.other_reveal else "already_revealed"
         return [
             {
                 "status": status,
-                "known_labels": len(self.population),
                 "revealed_labels": 0,
                 "other_reveal": self.other_reveal,
                 "reveal_record": record,
@@ -350,11 +317,11 @@ class FakeTigerGraph:
         assert set(params) == CONTEXT_PARAMETERS, set(params) ^ CONTEXT_PARAMETERS
         keys = request_keys(params)
         assert REQUEST_KEYS.holds(len(keys))
-        emit = bool(params["emit_encodings"] and params["include_time_encoding"])
+        emit = bool(params["emit_encodings"])
         with self.lock:
             self.requested.extend(keys)
             self.pools[pool_of(params)] += 1
-            self.encoded_requests += int(params["emit_encodings"])
+            self.encoded_requests += int(emit)
             self.active += 1
             self.peak = max(self.peak, self.active)
         try:
@@ -379,73 +346,29 @@ class FakeTigerGraph:
             with self.lock:
                 self.active -= 1
 
-    def analytics_rows(self, params: dict[str, Any]) -> list[dict[str, Any]]:
-        """One row per requested key, as fetch_analytics_context prints it (see the class)."""
-        missing = ANALYTICS_REQUIRED - set(params)
-        assert not missing and set(params) <= ANALYTICS_PARAMETERS, set(params) ^ missing
-        keys = request_keys(params)
-        assert REQUEST_KEYS.holds(len(keys))
-        with self.lock:
-            self.requested.extend(keys)
-        rows = []
-        for index, key in enumerate(keys):
-            status = self.status(key)
-            if status is not None:
-                rows.append({"status": status, "request_index": index})
-                continue
-            row = deepcopy(self.rows[key]) if key in self.rows else self.factory(key)
-            row["messages"] = [
-                {**item, **ANALYTICS_MESSAGE_FIELDS} for item in pooled(row["messages"], params)
-            ]
-            row["features"] = {**row["features"], **self.analytics(key)}
-            row["contract_version"] = ANALYTICS_CONTRACT
-            row["age_encoding"], row["gap_encoding"] = {}, {}
-            rows.append({**row, "request_index": index})
-        return rows
-
     def hub_rows(self, params: dict[str, Any]) -> list[dict[str, Any]]:
         assert set(params) == HUB_PARAMETERS, set(params) ^ HUB_PARAMETERS
         cutoffs = sorted(set(params["cutoff_seqs"]))
         threshold = int(params["threshold"])
-        scope_id = str(params["scope_id"])
-        phases = (1, 2, 3) if scope_id else (3,)
+        by_phase = params["by_phase"]
+        phases = (1, 2, 3) if by_phase else (0,)
         hubs = [
             {
                 "account_id": account,
                 "cutoff_seq": cutoff,
                 "visibility_phase": phase,
                 "max_visible": threshold + 1,
-                "max_degree": threshold + 1,
-                "reason": "visible_history",
             }
             for account, cutoff in self.hubs
             if cutoff in cutoffs
             for phase in phases
         ]
-        return [
-            {
-                "status": "ok",
-                "cutoff_seqs": cutoffs,
-                "threshold": threshold,
-                "scope_id": scope_id,
-                "candidates": len({account for account, _ in self.hubs}),
-                "hubs": hubs,
-            }
-        ]
-
-    def scope_policy_rows(self, params: dict[str, Any]) -> list[dict[str, Any]]:
-        """Membership classes a scope created with `scope_policy` would report."""
-        assert set(params) == SCOPE_POLICY_PARAMETERS, set(params) ^ SCOPE_POLICY_PARAMETERS
-        counts = policy_counts(self.scope_policy)
-        return [{"status": "ok", "scope_id": params["scope_id"], **counts}]
+        return [{"status": "ok", "hubs": hubs}]
 
     def population_rows(self, params: dict[str, Any]) -> list[dict[str, Any]]:
-        """One page of `population` after after_id; labels only with include_observed."""
+        """One page of `population` after after_id."""
         assert set(params) == POPULATION_PARAMETERS, set(params) ^ POPULATION_PARAMETERS
-        labels = bool(params["include_observed"])
-        withheld = {} if labels else {"observed_positive": False, "known_from_ms": 0}
-        rows = [{**row, **withheld} for row in self.population]
-        return [{"status": "ok"}, {"accounts": page(rows, params)}]
+        return [{"status": "ok"}, {"accounts": page(self.population, params)}]
 
     def truth_rows(self, params: dict[str, Any]) -> list[dict[str, Any]]:
         """One page of `truth` after after_id, in the ground-truth query's fields."""
@@ -453,82 +376,73 @@ class FakeTigerGraph:
         return [{"status": "ok"}, {"accounts": page(self.truth, params)}]
 
     def create_scope(self, params: dict[str, Any]) -> list[dict[str, Any]]:
-        """A scope vertex that is not ready yet, with the rule its membership follows.
+        """The scope vertex, not ready yet.
 
         Split shares that are not all positive, or do not add up to 1 within 1e-6, are
-        invalid_parameters, and nothing is written, as create_training_scope refuses them.
+        invalid_parameters, and nothing is written, as create_training_scope refuses them;
+        a graph that has a scope vertex already is scope_already_exists.
         """
-        # max_iterations has a default, which the pipeline keeps.
-        assert set(params) <= CREATE_SCOPE_PARAMETERS, set(params) - CREATE_SCOPE_PARAMETERS
+        assert set(params) == CREATE_SCOPE_PARAMETERS, set(params) ^ CREATE_SCOPE_PARAMETERS
         shares = [params[name] for name in SHARE_ATTRIBUTES]
         if min(shares) <= 0 or not 0.999999 <= sum(shares) <= 1.000001:
             return [{"status": "invalid_parameters"}]
-        if params["scope_id"] in self.scopes:
+        if self.scope is not None:
             return [{"status": "scope_already_exists"}]
-        self.scope_policy = params["unowned_policy"]
-        header = {name: params[name] for name in ("source_id", "split_seed", *SHARE_ATTRIBUTES)}
-        self.scopes[params["scope_id"]] = {"ready": False, **header}
+        header = {name: params[name] for name in ("split_seed", *SHARE_ATTRIBUTES)}
+        self.scope = {"ready": False, **header}
         return [{"status": "ok", "expected_members": len(self.population)}]
 
     def finalize_scope(self, params: dict[str, Any]) -> list[dict[str, Any]]:
-        """Mark a created scope ready once its membership count is the expected one."""
+        """Mark the created split ready once its membership count is the expected one."""
         assert set(params) == FINALIZE_SCOPE_PARAMETERS, set(params) ^ FINALIZE_SCOPE_PARAMETERS
         members = len(self.population)
-        if params["scope_id"] not in self.scopes or params["expected_members"] != members:
+        if self.scope is None or params["expected_members"] != members:
             return [{"status": "invalid_scope"}]
-        self.scopes[params["scope_id"]]["ready"] = True
+        self.scope["ready"] = True
         return [{"status": "ok", "members": members}]
 
 
-# The accounts of the scope prepared_graph builds.
-PREPARED_ACCOUNTS = 200
+# The accounts of the split prepared_graph builds: the graph of UNIT_COUNTS.
+PREPARED_ACCOUNTS = UNIT_COUNTS["Account"]
 
 
-def ready_scope(
-    source_id: str, split_seed: int = 42, scope: ScopeConfig = DEFAULT_CONFIG.scope
-) -> dict[str, Any]:
-    """The attributes of a ready scope vertex: its source, split seed and scope's shares."""
+def ready_scope(split_seed: int = 42, scope: ScopeConfig = DEFAULT_CONFIG.scope) -> dict[str, Any]:
+    """The attributes of a ready scope vertex: its split seed and scope's shares."""
     shares = dict(zip(SHARE_ATTRIBUTES, scope.shares, strict=True))
-    return {"ready": True, "source_id": source_id, "split_seed": split_seed, **shares}
+    return {"ready": True, "split_seed": split_seed, **shares}
 
 
 def prepared_graph(
     data: Path, config: RunConfig, **options: Any
 ) -> tuple[FakeTigerGraph, DatasetPaths]:
-    """A fake graph with a scope and its ground truth, and config's dataset prepared from it.
+    """A fake graph with a split and its ground truth, and config's dataset prepared from it.
 
-    The scope holds PREPARED_ACCOUNTS accounts (scope_population), every label known
+    The split holds PREPARED_ACCOUNTS accounts (scope_population), every label known
     (ground_truth_rows); each context is a deterministic neighbourhood, and N3 is a hub
-    at the three cutoffs. The dataset is prepared in data from UNIT_SOURCE. ``options``
-    are FakeTigerGraph's (statuses, analytics, reveal, ...).
+    at the three cutoffs. The dataset is prepared in data from UNIT_COUNTS. ``options``
+    are FakeTigerGraph's (statuses, reveal, ...).
     """
     population = scope_population(PREPARED_ACCOUNTS)
-    header = ready_scope(UNIT_SOURCE, config.dataset.split_seed, config.scope)
+    header = ready_scope(config.dataset.split_seed, config.scope)
     settings: dict[str, Any] = {
         "factory": neighbourhood,
         "hubs": [("N3", cutoff) for cutoff in (101, 102, 103)],
         "population": population,
         "truth": ground_truth_rows(population),
-        "scopes": {config.scope.id: header},
+        "scope": header,
     }
     graph = FakeTigerGraph(**{**settings, **options})
-    dataset = DatasetPaths.of(dataset_id(UNIT_SOURCE, config), data)
+    dataset = DatasetPaths.of(dataset_id(UNIT_COUNTS, config), data)
     prepare(
         config,
-        UNIT_SOURCE,
         dataset,
-        {"Account": PREPARED_ACCOUNTS},
+        dict(UNIT_COUNTS),
         TigerGraphObservedLabelReader(),
         scope=TigerGraphScopeReader(graph),
         cutoffs=TigerGraphCutoffReader(graph),
         hub_reader=TigerGraphHubReader(graph),
     )
     return graph, dataset
-
-
-def no_analytics(key: ContextKey) -> dict[str, float]:
-    """The analytics node features of a key when a test names none: none."""
-    return {}
 
 
 def page(rows: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
@@ -540,8 +454,7 @@ def page(rows: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, A
 def repository(queries: Mapping[str, str] | None) -> dict[str, str]:
     """The installed text of each query: queries, or every repository query by default."""
     if queries is None:
-        files = (*TRAINING_QUERY_FILES, *ANALYTICS_QUERY_FILES)
-        return {name: text for name, (_, text) in repository_queries(files).items()}
+        return {name: text for name, (_, text) in repository_queries(TRAINING_QUERY_FILES).items()}
     return dict(queries)
 
 
@@ -613,12 +526,13 @@ def schema_attribute(name: str, kind: str) -> dict[str, Any]:
 class FakeConnection:
     """The pyTigerGraph connection of a FakeTigerGraph: schema, counts and queries.
 
-    GSQL runs SHOW QUERY, CREATE OR REPLACE QUERY (which disables the endpoint until the
-    query is installed again), DROP QUERY (refused, as TigerGraph refuses it, while another
-    query calls the query) and the scope schema changes; any other GSQL fails. The
+    GSQL runs SHOW QUERY (`*` shows every query, installed or only created), CREATE OR
+    REPLACE QUERY (which disables the endpoint until the query is installed again), DROP
+    QUERY (refused, as TigerGraph refuses it, while another query calls the query) and
+    the scope schema changes; any other GSQL fails. The
     schema change of gsql/schema/scope_vertex.gsql adds the types it declares, refused
     while the graph has them; a job that drops them is refused while a query on the
-    graph names one, and deletes every scope. installQueries installs at once; the
+    graph names one, and deletes the split. installQueries installs at once; the
     -force flag is recorded. The one interpreted query it runs is the reveal's inputs
     query, which prints the graph's `reveal` rows.
     """
@@ -628,21 +542,21 @@ class FakeConnection:
         self.shown = queries
         self.enabled = dict.fromkeys(queries, True)
 
-    def getVerticesById(self, vertex_type: str, ids: list[str]) -> list[dict[str, Any]]:
+    def getVertices(self, vertex_type: str) -> list[dict[str, Any]]:
         assert vertex_type == SCOPE_VERTEX, vertex_type
-        found = [self.graph.scopes[i] for i in ids if i in self.graph.scopes]
-        if not found:
-            raise TigerGraphException("vertex not found", "601")
-        return [{"attributes": dict(header)} for header in found]
+        scope = self.graph.scope
+        return [] if scope is None else [{"v_id": "split", "attributes": dict(scope)}]
 
     def getVertexCount(self, vertex_type: str, realtime: bool = False) -> dict[str, int]:
         assert vertex_type == "*", vertex_type
-        return {**self.graph.counts, SCOPE_VERTEX: len(self.graph.scopes)}
+        return {**self.graph.counts, SCOPE_VERTEX: int(self.graph.scope is not None)}
 
-    def runInterpretedQuery(self, text: str, params: dict[str, Any]) -> list[dict[str, Any]]:
-        assert text == REVEAL_INPUTS_QUERY and set(params) == {"scope_id"}, text[:80]
+    def runInterpretedQuery(
+        self, text: str, params: dict[str, Any] | None = None
+    ) -> list[dict[str, Any]]:
+        assert text == REVEAL_INPUTS_QUERY and not params, text[:80]
         assert self.graph.reveal is not None, "the fake graph has no reveal inputs"
-        self.graph.calls.append(("reveal inputs", dict(params)))
+        self.graph.calls.append(("reveal inputs", {}))
         return deepcopy(self.graph.reveal)
 
     def getSchema(self, force: bool = False) -> dict[str, Any]:
@@ -676,6 +590,8 @@ class FakeConnection:
     def gsql(self, text: str) -> str:
         if "SHOW QUERY" in text:
             name = text.rsplit(" ", 1)[1]
+            if name == "*":
+                return "\n\n".join(self.text(shown) for shown in self.shown)
             return self.text(name) if name in self.shown else "Query not found"
         self.graph.writes.append(text)
         if "DROP QUERY" in text:
@@ -712,40 +628,8 @@ class FakeConnection:
         if users:
             return f"Failed: the queries {', '.join(users)} use the types to drop."
         graph.scope_types = None
-        graph.scopes.clear()
+        graph.scope = None
         return "Local schema change succeeded."
-
-
-LINKED_COUNTS = {
-    "shared_internal": 0,
-    "shared_external": 40,
-    "independent_internal": 7,
-    "independent_external": 0,
-    "linked_internal": 90,
-    "linked_external": 0,
-    "shared_ledger": 4,
-    "ledger_accounts": 4,
-    "members": 500,
-}
-
-
-def policy_counts(policy: str) -> dict[str, int]:
-    """Membership classes a scope created with `policy` reports."""
-    if policy == "linked":
-        return dict(LINKED_COUNTS)
-    if policy == "shared":
-        return {**LINKED_COUNTS, "independent_internal": 97, "linked_internal": 0}
-    if policy == "independent":
-        return {
-            **LINKED_COUNTS,
-            "shared_external": 0,
-            "independent_external": 40,
-            "independent_internal": 97,
-            "linked_internal": 0,
-            "shared_ledger": 0,
-        }
-    # Any other name: internal customer accounts shared, which no rule does.
-    return {**LINKED_COUNTS, "shared_internal": 97, "linked_internal": 0}
 
 
 class FakeStore:

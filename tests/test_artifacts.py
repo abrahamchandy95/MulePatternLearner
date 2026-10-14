@@ -14,6 +14,7 @@ from mule_pattern_learner.artifacts import (
     AUDIT_COLUMNS,
     DIAGNOSTIC_TABLES,
     EARLIER_EPOCH_COLUMNS,
+    EARLIER_PREDICTION_COLUMNS,
     EPOCH_COLUMNS,
     FEATURE_TABLE_COLUMNS,
     HISTORY_COLUMNS,
@@ -161,7 +162,6 @@ def test_predictions_keep_their_columns_and_json_refuses_nan(tmp_path: Path) -> 
     frame = pd.DataFrame(
         {
             "account_id": ["a"],
-            "group_id": [0],
             "date": ["2024-10-01"],
             "observed_label": [1],
             "score": [0.5],
@@ -173,6 +173,14 @@ def test_predictions_keep_their_columns_and_json_refuses_nan(tmp_path: Path) -> 
     assert tuple(frame.columns) == PREDICTION_COLUMNS
     with pytest.raises(ValueError, match="columns"):
         write_predictions(path, frame[["score", "account_id"]])
+    # Predictions of earlier code, which recorded each account's ownership group, read
+    # without it; any other layout is refused.
+    earlier = frame.assign(group_id="G1")[list(EARLIER_PREDICTION_COLUMNS)]
+    earlier.to_parquet(path, index=False)
+    pd.testing.assert_frame_equal(read_predictions(path), frame)
+    earlier[["group_id", *PREDICTION_COLUMNS]].to_parquet(path, index=False)
+    with pytest.raises(ValueError, match="columns"):
+        read_predictions(path)
     with pytest.raises(ValueError):
         write_json(tmp_path / "metrics.json", {"ap": float("nan")})
     assert not (tmp_path / "metrics.json").exists()

@@ -39,26 +39,18 @@ same mules):
 | Monitoring | A constant proactive hazard from account opening | 0.00045 per day (about 8% by July, 15% by year end) | No public rate exists; a declared assumption, range 7% to 30% a year |
 
 The discovery time is the earliest channel's. The label becomes available at the end of
-that UTC day, with the last sequence at or before it.
+that UTC day, never after the last event's time and never before the account's first
+observation.
 
 ## Which mules are revealed
 
-A mule is eligible for its scope partition's split only if discovered before that
-split's cutoff (train 2024-07-01, validation 2024-10-01, test 2025-01-01). Every
-eligible mule is revealed, as a bank trains on every mule it has confirmed.
-`scope.reveal_per_split` can cap each split instead, for a scarcer label setting: up to
-that many eligible mules are then revealed by stratified Pareto pi-ps sampling (Rosen
-1997), which gives each its intended inclusion probability exactly. The propensity is `0.05 + 0.95 * sigmoid(z)`, with `z` the standardised
-`log(1 + reports received by the cutoff)`: mules with more victim reports are likelier
-to be confirmed, but every eligible mule keeps a positive chance (the positivity
-condition of SAR-aware positive-unlabelled learning; [Bekker, Robberechts and Davis
-2019](https://arxiv.org/abs/1809.03207)).
-
-A mule no channel found by the cutoff is never revealed, so a cap may go unfilled. On the
-200,000-person reference graph, with salt 42, the job found 27, 11 and 23 mules (train,
-validation, test) discovered before the cutoffs, and a cap of 20 revealed 20, 11 and 20.
-That cap, the default until 2026-10-05, revealed 20 in each split of the 300,000-person
-graph, whose validation and test splits hold 101 mules each.
+A mule is revealed exactly when discovered before the cutoff of its partition's split
+(train 2024-07-01, validation 2024-10-01, test 2025-01-01), as a bank trains on every mule
+it has confirmed; nothing caps a split, and a mule no channel found by the cutoff is never
+revealed. On the 200,000-person reference graph, with salt 42, the job found 27, 11 and 23 mules
+(train, validation, test) discovered before the cutoffs. Until 2026-10-05 the reveal
+capped each split at 20 by default, revealing 20, 11 and 20 there and 20 in each split of
+the 300,000-person graph, whose validation and test splits hold 101 mules each.
 
 An earlier offline simulation (written before the job; its script and exports were not
 kept) gives the spread over 1,000 runs with independent random draws: mules discovered
@@ -78,31 +70,38 @@ job updates every mule once per round).
 
 `mule diagnose reveal-spread` replays the method with the job's own hash: it reads the
 job's inputs once (read-only) and runs `reference.label_reveal.plan`, the Python mirror of
-`reveal_mule_labels`, for the salts 0 to 999 at the built-in budget. Per salt and split
-it writes the mules, those discovered before each cutoff and those revealed to the
-study's `reveal_spread.csv`, and its `report.md` prints each one's median and 5th to 95th
-percentile beside the configured salt's outcome (drawn in `reveal_spread.png`).
+`reveal_mule_labels`, for the salts 0 to 999. Per salt and split it writes the mules and
+those revealed (every one discovered before the split's cutoff) to the study's
+`reveal_spread.csv`, and its `report.md` prints the revealed count's median and 5th to
+95th percentile beside the configured salt's outcome (drawn in `reveal_spread.png`).
 `tests/integration/test_label_reveal.py` (marker `graph`) checks the installed job against
 the mirror in a dry run (`apply = FALSE`, `force = TRUE`, so nothing is written even on a
 revealed graph): the revealed set, each revealed mule's channel and availability clock,
-and the eligible count per split.
+and the revealed count per split.
 
 ## What is written
 
 With `apply = TRUE` the job writes every internal Account's label fields
-([Labels](../reference/labels.md#who-writes-the-labels) lists them): discovery clocks as
-a mule's availability, and `is_mule_masked = FALSE` and `pu_label = 1` for a revealed
-mule. External accounts stay unknown, since PhantomLedger does not calibrate external
-mule roles. The label-contract check (`validate_label_contract`) must then report zero
-violations.
+([Labels](../reference/labels.md#who-writes-the-labels) lists them): a mule's discovery
+as its availability, and `pu_label = 1` for a revealed mule. External accounts stay
+unknown, since PhantomLedger does not calibrate external mule roles.
 
 On a graph with this reveal's labels the job changes nothing. Each mule's label source
-records the reveal's version, salt and budget, so labels another reveal wrote (other
-settings, or code from before the budget was recorded) are told apart, and preparation
-reveals again with `force = TRUE`. A prepared dataset keeps its own copy of the labels,
-and the reveal's settings are part of its id. The audits read which mules were revealed
-from the graph, so before a run reads it a dry run with the dataset's settings must find
-the dataset's labels there; a run whose labels were replaced is refused.
+records the reveal's version and salt, as
+`phantomledger_role;reveal_v1;salt=42;budget=1000` plus its outcome: the record earlier
+code wrote, whose `budget=1000` was its setting for no cap, kept byte for byte so the
+labels it wrote count as this reveal's. That setting still capped each split at 1,000, so
+a graph it revealed with more than 1,000 eligible mules in a split carries capped labels
+under the same record (the recorded runs had at most 39 per split). Labels another reveal
+wrote (another salt, a capped reveal, or code from before the budget was recorded) are
+told apart, and preparation reveals again with `force = TRUE`. So does the run that
+creates the split, since the labels follow the partitions of the split before: an
+identical split gets identical labels, as the `reveal` event's mules revealed per split
+shows. Labels on a graph with no internal mule are another source's and stay. A prepared
+dataset keeps its own copy of the labels, and the reveal's salt is part of its id. The
+audits read which mules were revealed from the graph, so before a run reads it a dry run
+with the dataset's settings must find the dataset's labels there; a run whose labels were
+replaced is refused.
 
 ## Limitations
 

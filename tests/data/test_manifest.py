@@ -10,15 +10,12 @@ from typing import Any
 import pytest
 
 from mule_pattern_learner.contract.feature_groups import CORE_GROUPS
+from mule_pattern_learner.contract.fingerprints import fingerprint
 from mule_pattern_learner.contract.server import QUERY_FILES
 from mule_pattern_learner.data import manifest as data_manifest
 from mule_pattern_learner.data.preparation import prepare
 from mule_pattern_learner.paths import DatasetPaths
-from mule_pattern_learner.testing.builders import (
-    UNIT_SOURCE,
-    scoped_accounts,
-    unit_config,
-)
+from mule_pattern_learner.testing.builders import UNIT_COUNTS, scoped_accounts, unit_config
 from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
 from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffReader
 from mule_pattern_learner.tigergraph.hubs import TigerGraphHubReader
@@ -26,38 +23,40 @@ from mule_pattern_learner.tigergraph.labels import TigerGraphObservedLabelReader
 from mule_pattern_learner.tigergraph.scope import TigerGraphScopeReader
 
 
-def test_the_dataset_id_covers_only_the_dataset_settings() -> None:
+def test_the_dataset_id_covers_only_the_graph_and_the_dataset_settings() -> None:
     base = unit_config()
-    settings = data_manifest.dataset_settings("source", base)
+    counts = {"Account": 10, "Party": 4}
+    settings = data_manifest.dataset_settings(counts, base)
     assert tuple(settings) == data_manifest.DATASET_SETTINGS
-    identity = data_manifest.dataset_id("source", base)
+    # The graph's vertex counts name the data loaded into it; the split has no id.
+    assert settings["source"] == fingerprint(counts)
+    assert set(settings["scope"]) == {"shares", "reveal_salt"}
+    identity = data_manifest.dataset_id(counts, base)
     same: list[dict[str, Any]] = [
         {"training": {"learning_rate": 0.5, "epochs": 3, "seed": 1}, "model": {"hidden": 8}},
         {"transport": {"request_batch_size": 4, "max_outage_s": 60}},
-        {"scope": {"unowned": "linked", "create": False}},
+        {"scope": {"create": False}},
         {"sampler": {"association_slots": 1, "fanouts": [8, 2]}},  # selection, not pools
         # A dataset stores no contexts, so feature groups and architecture do not count.
         {"features": list(CORE_GROUPS), "model": {"architecture": "summary"}},
     ]
     for change in same:
-        assert data_manifest.dataset_id("source", base.with_changes(change)) == identity, change
+        assert data_manifest.dataset_id(counts, base.with_changes(change)) == identity, change
     different: list[dict[str, Any]] = [
         {"dataset": {"split_seed": 1}},
         {"dataset": {"seed": 1}},
         {"dataset": {"dates": {"test": ["2025-02-01"]}}},
         {"dataset": {"seed_limits": {"train": 10}}},
-        {"scope": {"id": "other_scope"}},
-        {"scope": {"unowned": "independent"}},
-        {"scope": {"unowned": "shared"}},
-        # The reveal settings decide the labels a dataset reads.
-        {"scope": {"reveal_per_split": 20}},
+        # The reveal's salt decides the labels a dataset reads.
         {"scope": {"reveal_salt": 7}},
         {"sampler": {"children": {"recent": 2}}},
+        {"scope": {"train_share": 0.7, "validation_share": 0.15, "test_share": 0.15}},
     ]
     for change in different:
-        assert data_manifest.dataset_id("source", base.with_changes(change)) != identity, change
-    assert data_manifest.dataset_id("other_source", base) != identity
-    manifest = {"source": {"source_id": "source", "settings": settings}}
+        assert data_manifest.dataset_id(counts, base.with_changes(change)) != identity, change
+    # Another load of the graph, of other counts, is another dataset.
+    assert data_manifest.dataset_id({**counts, "Account": 11}, base) != identity
+    manifest = {"source": {"source_counts": counts, "settings": settings}}
     changed = base.with_changes({"dataset": {"split_seed": 1}})
     assert data_manifest.dataset_mismatches(changed, manifest) == ["dataset.split_seed"]
     # A manifest without settings differs in all of them.
@@ -67,8 +66,8 @@ def test_the_dataset_id_covers_only_the_dataset_settings() -> None:
 
 
 def test_a_dataset_names_the_reveal_it_read_and_earlier_ones_are_refused() -> None:
-    config = unit_config().with_changes({"scope": {"reveal_per_split": 20, "reveal_salt": 7}})
-    manifest = {"source": {"settings": data_manifest.dataset_settings("source", config)}}
+    config = unit_config().with_changes({"scope": {"reveal_salt": 7}})
+    manifest = {"source": {"settings": data_manifest.dataset_settings(UNIT_COUNTS, config)}}
     scope, dates = data_manifest.prepared_reveal(manifest)
     # scope.create names no dataset, so the scope has its default.
     assert replace(scope, create=config.scope.create) == config.scope
@@ -88,7 +87,6 @@ def test_a_dataset_records_its_query_files_by_path_and_passes_its_own_check(
     dataset = DatasetPaths(tmp_path / "dataset")
     manifest = prepare(
         config,
-        UNIT_SOURCE,
         dataset,
         {"Account": len(population)},
         TigerGraphObservedLabelReader(),
@@ -108,22 +106,31 @@ def test_a_manifest_names_its_dataset_and_the_frozen_source_it_was_prepared_from
     population = scoped_accounts()
     executor = FakeTigerGraph({}, population=population)
     config = unit_config(dataset={"seed_limits": {"train": 10, "validation": 10, "test": 10}})
+    counts = {"Account": len(population)}
     manifest = prepare(
         config,
-        UNIT_SOURCE,
         DatasetPaths(tmp_path / "dataset"),
-        {"Account": len(population)},
+        counts,
         TigerGraphObservedLabelReader(),
         scope=TigerGraphScopeReader(executor),
         cutoffs=TigerGraphCutoffReader(executor),
         hub_reader=TigerGraphHubReader(executor),
     )
-    # The dataset id of its recorded settings is the one its directory is named by.
-    assert data_manifest.recorded_dataset_id(manifest) == data_manifest.dataset_id(
-        UNIT_SOURCE, config
+    # The dataset id of its recorded settings is the one its directory is named by, and
+    # the manifest records no scope id or source id.
+    recorded = data_manifest.recorded_dataset_id(manifest)
+    assert recorded == data_manifest.dataset_id(counts, config)
+    assert set(manifest["source"]) == {
+        "source_counts",
+        "query_hashes",
+        "dataset_id",
+        "settings",
+    }
+    assert data_manifest.prepared_source(manifest) == data_manifest.PreparedSource(
+        counts=counts, split_seed=42, shares=(0.5, 0.25, 0.25)
     )
-    # The frozen source is named by the counts and the scope the graph is checked
-    # against, so other counts name another source of the same dataset id.
+    # The frozen source is named by the counts and the split the graph is checked
+    # against, so other counts name another source of the same recorded dataset id.
     source = data_manifest.source_fingerprint(manifest)
     changed = deepcopy(manifest)
     changed["source"]["source_counts"]["Account"] += 1

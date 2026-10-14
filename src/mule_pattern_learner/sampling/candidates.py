@@ -16,18 +16,30 @@ import numpy as np
 import torch
 
 from ..contract.fingerprints import stable_hash
-from ..contract.graph_schema import PAYMENT_RELATIONS, RELATION_INDEX, RELATIONS, ContextKey
+from ..contract.graph_schema import (
+    NO_SPLIT,
+    PAYMENT_RELATIONS,
+    RELATION_INDEX,
+    RELATIONS,
+    ContextKey,
+)
 from ..contract.sampler_plan import SamplerPlan
 
 # Relations whose code (their position in RELATIONS) is below PAYMENT_COUNT are payments.
 PAYMENT_COUNT = len(PAYMENT_RELATIONS)
 NUM_RELATIONS = len(RELATIONS)
 _MASK64 = (1 << 64) - 1
+# What a context's evaluation draw hashes after its clocks in place of a split's name:
+# this, the built-in run's former scope id, with the phase, or "" and 3 without a split,
+# as when a graph could hold several splits. So the evaluation and scoring draws of
+# finished runs stay the same, and the key scheme keeps its SELECTION_KEYS_VERSION.
+SPLIT_DRAW_SALT = "strict_mule_v3"
 
 
 def context_hash(key: ContextKey) -> int:
-    fields = (key.node_type, key.node_id, key.cutoff_seq, key.cutoff_ms)
-    return stable_hash("\x1f".join(map(str, (*fields, key.scope_id, key.visibility_phase))))
+    split = ("", 3) if key.visibility_phase == NO_SPLIT else (SPLIT_DRAW_SALT, key.visibility_phase)
+    fields = (key.node_type, key.node_id, key.cutoff_seq, key.cutoff_ms, *split)
+    return stable_hash("\x1f".join(map(str, fields)))
 
 
 def splitmix64(values: np.ndarray | np.integer[Any] | int) -> np.ndarray:

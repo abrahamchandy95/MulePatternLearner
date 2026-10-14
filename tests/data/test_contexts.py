@@ -89,7 +89,7 @@ def test_per_request_failures_become_none_and_are_counted() -> None:
     store.close()
 
 
-def test_hop_pools_and_flags_are_sent_and_lru_is_keyed_by_hop() -> None:
+def test_hop_pools_are_sent_and_lru_is_keyed_by_hop() -> None:
     plan = FeaturePlan(("entity_meta", "message_core", "time_encoding"), "tgat")
     server = payments_graph()
     # Every pool parameter differs by hop, the history bound too.
@@ -104,9 +104,8 @@ def test_hop_pools_and_flags_are_sent_and_lru_is_keyed_by_hop() -> None:
     assert {k: first[k] for k in sampler.query_params(1)} == sampler.query_params(1)
     assert {k: second[k] for k in sampler.query_params(2)} == sampler.query_params(2)
     assert (first["max_history"], second["max_history"]) == (2048, 1024)
-    for flags, hop in ((first, 1), (second, 2)):
-        assert {k: v for k, v in flags.items() if k.startswith("include_")} == plan.query_flags(hop)
-    assert first["include_time_encoding"] and not first["include_flow_timing"]
+    # The query computes every group, so no request names the plan's.
+    assert not [k for call in (first, second) for k in call if k.startswith("include_")]
     assert (1, key) in store.memory.rows and (2, key) in store.memory.rows
     with pytest.raises(ValueError, match="hop"):
         store.fetch([key], hop=3)
@@ -130,8 +129,8 @@ def test_sources_count_requested_distinct_and_cached_contexts() -> None:
     assert counts.seen == {context_hash(key, 1) for key in keys} | {context_hash(keys[0], 2)}
     store.close()
     # The hash is the same in every process, so a resumed run can restore it.
-    key = ContextKey("Account", "A1", 7, 8, "scope", 2)
-    assert context_hash(key, 1) == 7462442381914773116
+    key = ContextKey("Account", "A1", 7, 8, 2)
+    assert context_hash(key, 1) == 7355079359892101029
     assert 0 <= context_hash(key, 2) < 2**63 and context_hash(key, 2) != context_hash(key, 1)
     # Each context of a batch is asked for once: the roots it pins are not counted again.
     roots = [ContextKey("Account", f"R{i:02}", 100, 1000) for i in range(8)]
@@ -359,6 +358,16 @@ def test_encoding_spot_checks_follow_the_cadence_and_are_stripped() -> None:
     assert store.diagnostics["encoding_checks"] == 3
     assert all(row and row["age_encoding"] == {} == row["gap_encoding"] for row in rows)
     store.close()
+    # A plan without the time encoding keeps the cadence but never asks for vectors.
+    server = payments_graph()
+    untimed = FeaturePlan(tuple(g for g in CORE_PLAN.groups if g != "time_encoding"), "tgat")
+    with ContextSource(
+        TigerGraphContextFetcher(server), plan=untimed, sampler=SMALL_SAMPLER, request_batch_size=1, concurrency=1,
+        encoding_check_every=3,
+    ) as store:  # fmt: skip
+        store.fetch([root(i) for i in range(4)])
+    assert not any(call["emit_encodings"] for call in context_calls(server))
+    assert server.encoded_requests == 0
 
 
 def test_corrupted_or_missing_spot_check_vectors_fail() -> None:
@@ -424,18 +433,20 @@ def test_hops_use_their_own_pools_and_only_spot_checks_carry_encodings() -> None
     first = next(params for name, params in executor.calls if name == CONTEXT_QUERY)
     assert first["emit_encodings"] is True and "include_hub_indicator" not in first
     children = [p for n, p in executor.calls if n == CONTEXT_QUERY][1:]
-    assert all(not p["emit_encodings"] and p["include_time_encoding"] for p in children)
+    assert not any(p["emit_encodings"] for p in children)
 
 
-def test_same_context_in_two_scopes_or_hops_is_never_shared() -> None:
-    key = ContextKey("Account", "a", 100, 1000, "strict", 1)
+def test_same_context_in_two_phases_or_hops_is_never_shared() -> None:
+    key = ContextKey("Account", "a", 100, 1000, 1)
     executor = FakeTigerGraph()
     store = ContextSource(TigerGraphContextFetcher(executor), plan=CORE_PLAN, sampler=SMALL_SAMPLER)
     store.fetch([key], hop=1)
     store.fetch([key], hop=2)
     store.fetch([replace(key, visibility_phase=2)], hop=1)
+    # Without the split (phase 0) the context sees more, so it is another context too.
+    store.fetch([replace(key, visibility_phase=0)], hop=1)
     store.fetch([key], hop=1)
-    assert store.database_calls == 3
+    assert store.database_calls == 4
     store.close()
     bad = deepcopy(context(key))
     bad["features"]["history_withheld"] = 1

@@ -175,12 +175,7 @@ def study_drawings(files: StudyFiles) -> dict[str, tuple[Drawing, tuple[float, f
         reveal = files.record.get("reveal", {})
         drawings["reveal_spread"] = (
             one(
-                partial(
-                    plot_reveal_spread,
-                    table=tables["reveal_spread"],
-                    budget=reveal.get("budget"),
-                    salt=reveal.get("salt"),
-                )
+                partial(plot_reveal_spread, table=tables["reveal_spread"], salt=reveal.get("salt"))
             ),
             PANEL,
         )
@@ -273,14 +268,13 @@ def baselines_section(home: Reported, frame: pd.DataFrame) -> list[str]:
     return [
         "## Baselines",
         "",
-        "How well does a table of the account's own activity rank mules, with no neighbour, "
-        "association or pool input (the question of the retired no_graph control)? The PU "
+        "How well does a table of the account's own activity rank mules, without the model's "
+        "attention over its neighbours (the question of the retired no_graph control)? The PU "
         "baselines are fitted at the train cutoff on the revealed train mules, against every "
-        "other sampled train account weighted to the population; `account` reads only the "
-        "account's own history, which no model reads, `model` the root's own model inputs, "
-        "`messages` its candidate pool, and `all` everything. Each is scored on the hidden "
-        "mules, the split's revealed mules removed from the ranking, and in the last two "
-        f"columns on every mule. In parentheses: the ring-clustered {INTERVAL:.0%} interval.",
+        "other sampled train account weighted to the population; `model` reads the root's own "
+        "model inputs, `messages` its candidate pool, and `all` both. Each is scored on the "
+        "hidden mules, the split's revealed mules removed from the ranking, and in the last "
+        f"two columns on every mule. In parentheses: the ring-clustered {INTERVAL:.0%} interval.",
         "",
         *table(header, rows),
         "",
@@ -590,27 +584,24 @@ def reveal_section(home: Reported, frame: pd.DataFrame, record: Mapping[str, Any
         mine = frame[frame.split == split]
         if mine.empty:
             continue
-        cells = [split, number(_int(_value(mine, metric="mules")))]
-        for metric in ("eligible", "revealed"):
-            values = mine[mine.metric == metric].value.to_numpy(np.float64)
-            low, middle, high = (f"{q:g}" for q in np.percentile(values, [5, 50, 95]))
-            configured = _value(mine, metric=metric, salt=salt) if salt is not None else None
-            cells += [f"{middle} ({low} to {high})", number(_int(configured))]
-        rows.append(cells)
-    header = ["Split", "Mules", "Discovered by the cutoff", f"Salt {salt}", "Revealed"]
-    header.append(f"Salt {salt}")
-    budget = reveal.get("budget", "n/a")
-    revealed = (
-        "Every mule discovered by its split's cutoff is revealed."
-        if budget is None
-        else f"The budget is {budget} mules per split."
-    )
+        values = mine[mine.metric == "revealed"].value.to_numpy(np.float64)
+        low, middle, high = (f"{q:g}" for q in np.percentile(values, [5, 50, 95]))
+        configured = _value(mine, metric="revealed", salt=salt) if salt is not None else None
+        rows.append(
+            [
+                split,
+                number(_int(_value(mine, metric="mules"))),
+                f"{middle} ({low} to {high})",
+                number(_int(configured)),
+            ]
+        )
+    header = ["Split", "Mules", "Revealed", f"Salt {salt}"]
     return [
         "## The label reveal over salts",
         "",
-        f"The reveal's mirror replayed for {frame.salt.nunique():,} salts: the median over "
-        "salts and, in parentheses, its 5th to 95th percentile, beside the configured salt's "
-        f"outcome. {revealed}",
+        f"The reveal's mirror replayed for {frame.salt.nunique():,} salts: the mules revealed, "
+        "every one discovered by its split's cutoff, as the median over salts and, in "
+        "parentheses, its 5th to 95th percentile, beside the configured salt's outcome.",
         "",
         *table(header, rows),
         "",

@@ -3,26 +3,25 @@
 The graph `Mule_Pattern_Learner` from `gsql/schema/schema.gsql` (TigerGraph 4.2.5): 8 vertex
 types and 19 directed edge types, 12 event participations and 7 valid-time associations,
 each with a named reverse (38 edge types in the catalog). `gsql/schema/scope_vertex.gsql`
-adds the experiment scope. Supervision fields: [Labels](labels.md). Creating and loading:
-[Set up a graph](../how-to/set-up-a-graph.md).
+adds the graph's split ([The split](#the-split)). Supervision fields: [Labels](labels.md).
+Creating and loading: [Set up a graph](../how-to/set-up-a-graph.md).
 
 ## Vertex types
 
 | Vertex | Contents |
 |---|---|
-| `Party` | Stable id, party type, first-seen sequence and time |
-| `Account` | Stable id, account type, external flag, first-seen clocks, and the ten supervision fields of the label contract |
-| `Token` | Tokenised id, first-seen clocks, token kind (`phone`, `email`, `handle`) and network |
-| `Address` | Tokenised address id, first-seen clocks, country code |
-| `Device`, `IP` | Opaque ids and first-seen clocks; a Device also has a device type |
-| `Zelle_Transfer` | One Zelle payment: transfer id, event time, milliseconds and sequence, amount and its presence flag, currency, channel, the transfer's fraud label fields, and the optional pair-gap cache |
-| `Payment_Transaction` | One payment on another rail, with the same event clock, amount, currency, rail (`payment_rail`), channel and pair-gap cache |
+| `Party` | Stable id, first-seen sequence and time |
+| `Account` | Stable id, account type, external flag, first-seen clocks, and six supervision fields ([The Account attributes](labels.md#the-account-attributes)) |
+| `Token` | Tokenised id and first-seen clocks |
+| `Address` | Tokenised address id and first-seen clocks |
+| `Device`, `IP` | Opaque ids and first-seen clocks |
+| `Zelle_Transfer` | One Zelle payment: transfer id, event milliseconds and sequence, amount and its presence flag, currency, and the transfer's fraud label fields |
+| `Payment_Transaction` | One payment on another rail, with the same event clock, amount, currency and rail (`payment_rail`) |
 
 - A Zelle payment is a `Zelle_Transfer` only, never also a `Payment_Transaction`.
 - An unknown external account gets no invented Account: keep the token the payment used
   and omit the unknown account role. Known account roles and used tokens can coexist.
-- Zelle routing tokens have network `zelle`. Namespace and normalise opaque token ids
-  consistently before loading.
+- Namespace and normalise opaque token ids consistently before loading.
 - A party's contact token proves no enrolment or account ownership. Conflicting confirmed
   Zelle enrolments across accounts need their own validation.
 - Entity metadata is its value at first observation, never overwritten.
@@ -39,9 +38,10 @@ edges are the model's payment relations: `Account_Initiated_Transaction` (`payme
 `Account_Received_Transaction` (`payment_in`), `Account_Sent_Zelle_Transfer`
 (`zelle_out`), `Account_Received_Zelle_Transfer` (`zelle_in`).
 
-- The context query requires per event exactly one sending account, and at most one
-  recipient account and one recipient token with at least one of the two. A recorded
-  recipient Account takes precedence over its routing token.
+- The context query assumes per event exactly one sending account, at most one recipient
+  account and one recipient token with at least one of the two, and role edges whose
+  clocks equal the event's; it no longer checks them, as no check fired on the reference
+  data. A recorded recipient Account takes precedence over its routing token.
 - On the reference graph every payment has one From and one To account and no token
   edges; every Zelle transfer has one edge of each of the four roles.
 - `Transfer_Used_Device` is one observation; `Account_Uses_Device` is an association
@@ -62,9 +62,9 @@ edges are the model's payment relations: `Account_Initiated_Transaction` (`payme
 | `Party_Has_Address` | `Address_Used_By_Party` |
 
 These fourteen are the model's association relations. Each edge has
-`DISCRIMINATOR(valid_from_seq UINT)`, `valid_to_seq` (0 while open), `confidence` and
-`source_system`; its key is edge type, endpoints and start sequence, so repeated tenures of
-one pair never overwrite each other. Every traversal, in either direction:
+`DISCRIMINATOR(valid_from_seq UINT)` and `valid_to_seq` (0 while open); its key is edge
+type, endpoints and start sequence, so repeated tenures of one pair never overwrite each
+other. Every traversal, in either direction:
 
 ```gsql
 WHERE rel.valid_from_seq <= @@seed_seq
@@ -98,38 +98,28 @@ WHERE rel.valid_from_seq <= @@seed_seq
   knowledge-safe backtest needs arrival or discovery history, or frozen extracts, and two
   corrections of one tenure with the same start would need a new key design.
 
-## The pair-gap cache
+## The split
 
-Optional attributes of both payment types, filled by the pair queries of `gsql/analytics/`
-with `persist = true`: `pair_delta_t_ms`, `pair_delta_t_present`, `pair_time_encoding`
-(empty when missing, else 64 coordinates), `time_encoding_basis_id`,
-`pair_previous_event_id`, `pair_sender_id`, `pair_recipient_type`, `pair_recipient_id`.
-Training never reads these derived caches: it recomputes every gap at its cutoff, and
-ages depend on the cutoff, so they are never stored. A late payment or a corrected role
-leaves its pairs' cached gaps stale until the pair query runs again.
-
-## The experiment scope
-
-`scope_vertex.gsql` adds the vertex type `Temporal_Training_Scope` (`scope_id`,
-`source_id`, `split_seed`, `train_share`, `validation_share`, `test_share`, `ready`) and
-the edge `Entity_In_Training_Scope` from Account and Party (`partition`, `group_id`;
-reverse `Training_Scope_Has_Entity`), keeping experiment membership apart from the
-business data.
+`scope_vertex.gsql` adds the vertex type `Temporal_Training_Scope` (`id`, `split_seed`,
+`train_share`, `validation_share`, `test_share`, `ready`) and the edge
+`Entity_In_Training_Scope` from Account and Party (`partition`; reverse
+`Training_Scope_Has_Entity`), keeping the graph's one train, validation and test split
+apart from the business data: one vertex, `"split"`, and one membership edge per Account
+and Party.
 
 - `mule install` applies it when the graph lacks the type, or replaces a differing type
   while the graph holds no scope vertex ([Queries](queries.md#the-scope-types)).
-- A scope records its partition's shares. Every run refuses a scope whose shares differ
-  from its settings, or which records none.
-- The type keeps its name as part of the graph's schema. The built-in run's scope id is
-  `strict_mule_v3`.
+- The split records its seed and shares. Every run refuses a split whose seed or shares
+  differ from its settings, or which records none; nothing deletes a split but its owner.
+- The type keeps its name as part of the graph's schema.
 
 ## Jobs
 
 - `schema.gsql` and `scope_vertex.gsql` run and drop their schema change jobs,
   `create_payment_schema` and `add_training_scope`.
-- `account_loading.gsql` creates the loading job `load_accounts`, which stays installed
-  and which no command runs ([Labels](labels.md#loading-accounts)). The data producer
-  loads the other types.
+- `loading.gsql` creates the loading job `load_graph`, which loads every vertex and edge
+  type from PhantomLedger's export by column name, stays installed and is run by a person,
+  never a command ([Set up a graph](../how-to/set-up-a-graph.md#2-load-the-data)).
 - `ALTER ... ADD ATTRIBUTE` cannot change a discriminator, so changing an association's
   identity means replacing and reloading it.
 - Never run `schema.gsql` on a populated graph: a new schema means a new graph, loaded
@@ -137,7 +127,7 @@ business data.
 
 ## The reference graph
 
-Counted on 24 September 2026 (the scope vertices are experiment metadata):
+Counted on 24 September 2026 (scope vertices are experiment metadata):
 
 | Vertex type | Count | Role |
 |---|---|---|
@@ -149,7 +139,7 @@ Counted on 24 September 2026 (the scope vertices are experiment metadata):
 | `Device` | 374,192 | Devices seen on payments and tenures |
 | `IP` | 1,311,576 | IP addresses seen on payments and tenures |
 | `Address` | 196,409 | Party addresses |
-| `Temporal_Training_Scope` | 2 | `strict_mule_v1` and `strict_mule_v2` |
+| `Temporal_Training_Scope` | 2 | Two splits, from when a graph held several; one now |
 
 - Events run from 2024-01-01 to 2024-12-31, about 8.4 to 11.0 million payments a month,
   every amount present and every currency USD. The data is a PhantomLedger simulator

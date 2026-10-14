@@ -1,11 +1,13 @@
 """The scope's vertex and edge types, as gsql/schema/scope_vertex.gsql declares them and a graph has them.
 
 `mule install` compares the two (installer.scope_schema): a graph without the types gets
-them from the file, and one whose types differ, such as a graph created before the scope
-vertex recorded its split shares, has them replaced while it holds no scope vertex. Each
-type is compared by its attributes' names and types in order, the vertex type's primary
-id first, since create_training_scope inserts a scope by position; the edge type also by
-the vertex types it connects and its reverse edge. Defaults are not compared. A graph's
+them from the file, and one whose types differ, such as a graph created when it held
+several splits, each keyed by a scope id and recording a source id, or one whose
+membership edges record an ownership group, has them replaced while it holds no scope
+vertex (its owner removes those by hand). Each type is compared
+by its attributes' names and types in order, the vertex type's primary id first, since
+create_training_scope inserts the split by position; the edge type also by the vertex
+types it connects and its reverse edge. Defaults are not compared. A graph's
 types are read from TigerGraph's schema (getSchema), whose types this module reads by the
 names the file declares and no other.
 """

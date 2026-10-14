@@ -1,15 +1,15 @@
 """The graph as the queries see it: node types, relations, splits and context keys.
 
-Nothing here reads the graph. The values name vertex and edge types, the rails and
-channels of payment messages, the sampling strata, the split phases of the frozen
-scope, the columns of a hub row and the Account columns of the loading contract.
+Nothing here reads the graph. The values name vertex and edge types, the rails of
+payment messages, the phases of the graph's one split, the columns of a hub row and the
+Account columns of the loading contract.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .bounds import ID_BYTES, SCOPE_ID_BYTES
+from .bounds import ID_BYTES
 
 NODE_TYPES = ("Account", "Token", "Party", "Device", "IP", "Address")
 ASSOCIATIONS = (
@@ -38,8 +38,10 @@ RELATIONS = PAYMENT_RELATIONS + ASSOCIATION_RELATIONS
 # The position of each relation in RELATIONS: its code in candidate tables and batches.
 RELATION_INDEX = {name: i for i, name in enumerate(RELATIONS)}
 RAILS = ("unknown", "zelle", "ach", "card", "cash", "check", "internal")
-# The scope visibility phase of each split; unscoped contexts use phase 3.
+# The visibility phase of each split: a context of phase p sees the entities and events
+# of the graph's split in partitions 1 to p. Phase 0 is no split: it sees every one.
 SPLIT_PHASE = {"train": 1, "validation": 2, "test": 3}
+NO_SPLIT = 0
 SPLITS = tuple(SPLIT_PHASE)
 # The splits held out from training: the proxy predicts them and the audits cover them.
 HELD_OUT_SPLITS: tuple[str, ...] = ("validation", "test")
@@ -51,71 +53,40 @@ class ContextKey:
     """History is seq < cutoff_seq AND timestamp <= cutoff_ms.
 
     Association visibility uses seed_seq=cutoff_seq-1. A calendar cutoff is
-    converted to the preceding millisecond before its sequence is resolved.
+    converted to the preceding millisecond before its sequence is resolved. The
+    visibility phase is that of a split (SPLIT_PHASE), or NO_SPLIT for scoring.
     """
 
     node_type: str
     node_id: str
     cutoff_seq: int
     cutoff_ms: int
-    scope_id: str = ""
-    visibility_phase: int = 3
+    visibility_phase: int = NO_SPLIT
 
     def __post_init__(self) -> None:
-        if len(self.node_id.encode()) > ID_BYTES or len(self.scope_id.encode()) > SCOPE_ID_BYTES:
-            raise ValueError("Entity/scope ID exceeds the transport limit")
-        if self.visibility_phase not in PHASE_SPLIT:
-            raise ValueError("Visibility phase must be train=1, validation=2 or test=3")
+        if len(self.node_id.encode()) > ID_BYTES:
+            raise ValueError("Entity ID exceeds the transport limit")
+        if self.visibility_phase != NO_SPLIT and self.visibility_phase not in PHASE_SPLIT:
+            raise ValueError("Visibility phase must be no split=0, train=1, validation=2 or test=3")
         if self.node_type not in NODE_TYPES or not self.node_id:
             raise ValueError("Unsupported or empty entity")
         if not 0 < self.cutoff_seq < 2**63 or not 0 < self.cutoff_ms < 2**63:
             raise ValueError("Cutoff clocks must be positive signed-64-bit values")
 
-    @property
-    def batch_phase(self) -> int:
-        """The phase of a batch of this root: its own when scoped, 3 when unscoped."""
-        return self.visibility_phase if self.scope_id else 3
 
-
-# Unknown categorical values have a dedicated bucket, never an observed category.
-# The loaded data only carries digital, branch_or_atm, bank and unknown, 1:1 with rail.
-CHANNELS = (
-    "unknown",
-    "digital",
-    "branch_or_atm",
-    "bank",
-    "p2p",
-    "atm_withdrawal",
-    "card_purchase",
-    "online",
-    "mobile",
-    "branch",
-    "other",
-)
-STRATA = ("recent", "older", "distinct", "association")
-# Every run keeps its splits in disjoint scope partitions (strict inductive); outputs
-# record it so their performance claims say what they cover.
+# Every run keeps its splits in disjoint partitions of the graph's split (strict
+# inductive); outputs record it so their performance claims say what they cover.
 EVALUATION_PROTOCOL = "strict_inductive"
 
 
-def context_scope(scope_id: object) -> str:
-    """The scope id of every context of a dataset; strict inductive splits need one."""
-    if not isinstance(scope_id, str) or not scope_id:
-        raise ValueError("Strict inductive sampling requires a frozen TigerGraph scope id")
-    return scope_id
-
-
 # The columns of a hub row, in order, as the hub query prints them and the prepared hub
-# registry stores them, each with its type. A hub is listed for one reason only.
+# registry stores them, each with its type.
 HUB_COLUMNS: dict[str, type[int] | type[str]] = {
     "account_id": str,
     "cutoff_seq": int,
     "visibility_phase": int,
     "max_visible": int,
-    "max_degree": int,
-    "reason": str,
 }
-HUB_REASONS = ("visible_history",)
 
 # The columns of the oracle's truth table (tigergraph.oracle, evaluation.truth), read from
 # the ground-truth query. is_mule is 1 or 0, and -1 where the label is not known; ring_id
@@ -124,8 +95,11 @@ HUB_REASONS = ("visible_history",)
 TRUTH_COLUMNS = ("account_id", "is_mule", "ring_id", "label_source")
 
 
-# Account CSV/PSV input columns (gsql/schema/account_loading.gsql): five
-# account facts, then the ten supervision fields of the label contract.
+# The columns of PhantomLedger's Account file, in order, as account_header of
+# gsql/schema/loading.gsql names them: five account facts, then ten supervision fields.
+# The job loads each Account attribute from its same-named column and skips the four the
+# schema keeps no attribute for (is_mule_masked, both mule_label_effective clocks and
+# mule_label_available_seq).
 ACCOUNT_LOAD_COLUMNS = [
     "id",
     "account_type",

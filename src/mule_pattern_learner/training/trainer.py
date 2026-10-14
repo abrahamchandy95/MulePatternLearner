@@ -161,7 +161,7 @@ def train(
     differences = dataset_mismatches(config, manifest)
     if differences:
         raise ValueError(f"Training settings differ from the prepared dataset: {differences}")
-    identity = dataset_id(manifest["source"]["source_id"], config)
+    identity = dataset_id(manifest["source"]["source_counts"], config)
     if started:
         check_run_dataset(run, state, identity, manifest_digest(dataset))
     # The source requests this model's groups; its hop-2 flags follow the architecture.

@@ -1,8 +1,9 @@
-"""Experiment scopes: creation, the unowned-account rule and the policy query."""
+"""The graph's one split: its creation, its checks and its queries."""
 
 from __future__ import annotations
 
 from dataclasses import replace
+import re
 from typing import Any
 
 import pytest
@@ -11,147 +12,163 @@ from mule_pattern_learner.config import ScopeConfig
 from mule_pattern_learner.contract.server import (
     CREATE_SCOPE_QUERY,
     FINALIZE_SCOPE_QUERY,
-    SCOPE_POLICY_QUERY,
+    POPULATION_QUERY,
+    SCOPE_VERTEX,
 )
 from mule_pattern_learner.paths import GSQL_DIR
-from mule_pattern_learner.testing.builders import UNIT_SOURCE, scope_population, unit_config
-from mule_pattern_learner.testing.fake_graph import FakeTigerGraph, policy_counts, ready_scope
+from mule_pattern_learner.testing.builders import scope_population, unit_config
+from mule_pattern_learner.testing.fake_graph import FakeTigerGraph, ready_scope
+from mule_pattern_learner.testing.gsql_blocks import flat
 from mule_pattern_learner.tigergraph import gsql_text, scope
 
 
-def ensure(server: FakeTigerGraph, config: ScopeConfig) -> None:
-    """ensure_scope for the unit snapshot and the built-in split seed."""
-    scope.ensure_scope(server, config, source_id=UNIT_SOURCE, split_seed=42)
+def ensure(server: FakeTigerGraph, config: ScopeConfig) -> bool:
+    """ensure_scope with the built-in split seed: whether it created the split."""
+    return scope.ensure_scope(server, config, split_seed=42)
 
 
-def test_missing_scope_is_created_unless_forbidden() -> None:
+def test_missing_split_is_created_unless_forbidden() -> None:
     config = unit_config().scope
-    # A graph of three accounts without the scope; the fake refuses a write that could
-    # run twice, so the creation queries run with one attempt.
-    server = FakeTigerGraph(scope_policy="independent", population=scope_population(3))
-    with pytest.raises(ValueError, match="scope.create is false"):
+    # A graph of three accounts without a split; the fake refuses a write that could run
+    # twice, so the creation queries run with one attempt.
+    server = FakeTigerGraph(population=scope_population(3))
+    with pytest.raises(ValueError, match="no split and scope.create is false"):
         ensure(server, replace(config, create=False))
     assert not server.calls
-    ensure(server, config)
-    assert server.names() == [CREATE_SCOPE_QUERY, FINALIZE_SCOPE_QUERY, SCOPE_POLICY_QUERY]
+    assert ensure(server, config) is True
+    assert server.names() == [CREATE_SCOPE_QUERY, FINALIZE_SCOPE_QUERY]
+    # The split seed and the shares (the scope's settings) are all the creation sends:
+    # the graph's one split is named by no id.
     _, create = server.calls[0]
-    assert create["unowned_policy"] == "linked"
-    assert (create["source_id"], create["split_seed"]) == (UNIT_SOURCE, 42)
-    # The split shares are the scope's settings, sent as the query's parameters.
-    shares = (create["train_share"], create["validation_share"], create["test_share"])
-    assert shares == config.shares == (0.5, 0.25, 0.25)
-    assert "shared_unowned" not in create
-    assert server.calls[1][1] == {"scope_id": "unit_scope", "expected_members": 3}
-    # The scope vertex records them beside the source and the split seed.
-    assert server.scopes["unit_scope"] == {
-        "ready": True,
-        "source_id": UNIT_SOURCE,
+    assert create == {
         "split_seed": 42,
         "train_share": 0.5,
         "validation_share": 0.25,
         "test_share": 0.25,
     }
+    assert config.shares == (0.5, 0.25, 0.25)
+    assert server.calls[1][1] == {"expected_members": 3}
+    # The scope vertex records them beside the split seed.
+    assert server.scope == {
+        "ready": True,
+        "split_seed": 42,
+        "train_share": 0.5,
+        "validation_share": 0.25,
+        "test_share": 0.25,
+    }
+    # The next run uses the split it finds, reading only its header, and creates none.
+    assert ensure(server, config) is False
+    assert server.names() == [CREATE_SCOPE_QUERY, FINALIZE_SCOPE_QUERY]
     other = replace(config, train_share=0.7, validation_share=0.15, test_share=0.15)
-    server = FakeTigerGraph(scope_policy="independent", population=scope_population(3))
+    server = FakeTigerGraph(population=scope_population(3))
     ensure(server, other)
-    assert server.scopes["unit_scope"]["train_share"] == 0.7
-    for policy in ("independent", "shared"):
-        server = FakeTigerGraph(scope_policy="independent", population=scope_population(3))
-        ensure(server, replace(config, unowned=policy))
-        assert server.calls[0][1]["unowned_policy"] == policy
+    assert server.scope is not None and server.scope["train_share"] == 0.7
 
 
-def test_invalid_split_shares_create_no_scope() -> None:
+def test_invalid_split_shares_or_a_second_split_create_nothing() -> None:
     # The fake graph refuses them as create_training_scope does: a share that is not
     # positive, or shares that do not add up to 1.
-    params = {
-        "scope_id": "unit_scope",
-        "source_id": UNIT_SOURCE,
-        "split_seed": 42,
-        "unowned_policy": "linked",
-    }
+    params = {"split_seed": 42}
     queries = gsql_text.definitions((GSQL_DIR / "queries/training_scope.gsql").read_text())
-    create = queries[CREATE_SCOPE_QUERY]
-    assert "OR train_share <= 0 OR validation_share <= 0 OR test_share <= 0" in create
+    create = flat(queries[CREATE_SCOPE_QUERY])
+    assert "IF train_share <= 0 OR validation_share <= 0 OR test_share <= 0" in create
     assert "OR train_share + validation_share + test_share < 0.999999" in create
     assert "OR train_share + validation_share + test_share > 1.000001" in create
     for shares in ((0.5, 0.5, 0.0), (0.6, 0.25, 0.25), (0.5, 0.25, 0.2), (1.2, -0.1, -0.1)):
         server = FakeTigerGraph(population=scope_population(3))
         named = dict(zip(scope.SHARE_ATTRIBUTES, shares, strict=True))
         rows = server.run(CREATE_SCOPE_QUERY, {**params, **named}, attempts=1)
-        assert rows == [{"status": "invalid_parameters"}] and server.scopes == {}, shares
-    server = FakeTigerGraph(population=scope_population(3))
+        assert rows == [{"status": "invalid_parameters"}] and server.scope is None, shares
     named = dict(zip(scope.SHARE_ATTRIBUTES, (0.5, 0.25, 0.25), strict=True))
+    server = FakeTigerGraph(population=scope_population(3))
     assert server.run(CREATE_SCOPE_QUERY, {**params, **named}, attempts=1)[0]["status"] == "ok"
+    # A graph holds one split: any scope vertex, ready or not, refuses another.
+    assert 'IF Scopes.size() > 0 THEN PRINT "scope_already_exists" AS status;' in create
+    for found in (ready_scope(), {**ready_scope(), "ready": False}):
+        server = FakeTigerGraph(population=scope_population(3), scope=found)
+        rows = server.run(CREATE_SCOPE_QUERY, {**params, **named}, attempts=1)
+        assert rows == [{"status": "scope_already_exists"}] and server.scope == found
 
 
-def existing(header: dict[str, Any], policy: str) -> FakeTigerGraph:
-    """A graph whose unit scope has this header and was created under this rule."""
-    return FakeTigerGraph(scope_policy=policy, scopes={"unit_scope": header})
+def existing(header: dict[str, Any]) -> FakeTigerGraph:
+    """A graph whose split has this header."""
+    return FakeTigerGraph(scope=header)
 
 
-def test_existing_scope_must_have_the_configured_unowned_policy() -> None:
-    header = ready_scope(UNIT_SOURCE)
+class SeveralSplits:
+    """A connection to a graph that holds two scope vertices, as one of several splits did."""
+
+    def getVertices(self, vertex_type: str) -> list[dict[str, Any]]:
+        assert vertex_type == SCOPE_VERTEX
+        return [{"v_id": name, "attributes": ready_scope()} for name in ("one", "two")]
+
+
+def test_an_existing_split_must_be_ready_and_have_the_configured_partition() -> None:
+    header = ready_scope()
     config = unit_config().scope
-    for policy in ("independent", "shared", "linked"):
-        assert scope.inferred_scope_policy(policy_counts(policy)) == policy
-        server = FakeTigerGraph(scope_policy=policy, scopes={"unit_scope": header})
-        ensure(server, replace(config, unowned=policy))
-        assert server.names() == [SCOPE_POLICY_QUERY]
-    assert scope.inferred_scope_policy(policy_counts("no_rule")) is None
-    # Without unowned external accounts a linked scope is still recognised by its links.
-    no_external = {**policy_counts("linked"), "shared_external": 0, "independent_external": 0}
-    assert scope.inferred_scope_policy(no_external) == "linked"
-    alone = {**no_external, "linked_internal": 0, "shared_ledger": 0}
-    assert scope.inferred_scope_policy(alone) == "independent"
-    # Bank ledger accounts are shared exactly when external accounts are: all or none.
-    assert scope.inferred_scope_policy({**alone, "shared_ledger": 4}) == "shared"
-    for ledger_shared in (0, 3):  # a linked scope that left some ledger books partitioned
-        mixed = {**policy_counts("linked"), "shared_ledger": ledger_shared}
-        assert scope.inferred_scope_policy(mixed) is None
-    # Linking without sharing the external accounts is no rule.
-    unshared = {**policy_counts("linked"), "shared_external": 0, "independent_external": 3}
-    assert scope.inferred_scope_policy(unshared) is None
-    partly = {**policy_counts("shared"), "independent_external": 1}
-    assert scope.inferred_scope_policy(partly) is None
-    # A scope created with "independent", under the default "linked" configuration.
-    with pytest.raises(ValueError, match=r"created with scope.unowned = 'independent'.*set a new"):
-        ensure(existing(header, "independent"), config)
-    with pytest.raises(ValueError, match="matches no scope.unowned rule"):
-        ensure(existing(header, "no_rule"), config)
-    with pytest.raises(ValueError, match="different source"):
-        ensure(existing({**header, "split_seed": 7}, "linked"), config)
-    with pytest.raises(ValueError, match="different source"):
-        ensure(existing({**header, "source_id": "another"}, "linked"), config)
-    # A scope of other shares, or of the earlier schema that recorded none (its accounts
-    # split 70, 15 and 15%), is another partition, never reused.
-    earlier = {k: v for k, v in header.items() if not k.endswith("_share")}
-    for found in ({**header, "train_share": 0.7, "test_share": 0.05}, earlier):
-        with pytest.raises(ValueError, match=r"split shares .* Set a new scope.id"):
-            ensure(existing(found, "linked"), config)
-    with pytest.raises(ValueError, match="lacks"):
-        lacking = FakeTigerGraph(
-            answers={SCOPE_POLICY_QUERY: lambda p: [{"status": "ok", "members": 3}]}
-        )
-        scope.scope_policy_counts(lacking, "s")
+    ensure(existing(header), config)
+    # The owner removes a split by hand: every refusal says how, and nothing deletes it.
+    removal = f"delete the {SCOPE_VERTEX} vertices by hand"
+    unready = existing({**header, "ready": False})
+    with pytest.raises(ValueError, match=f"split is incomplete.*{removal}"):
+        ensure(unready, config)
+    assert unready.scope is not None and not unready.writes
+    with pytest.raises(ValueError, match=rf"split seed 7 and the shares .* not 42 .*{removal}"):
+        ensure(existing({**header, "split_seed": 7}), config)
+    # A split of other shares, or one whose vertex records none, is another partition,
+    # never reused.
+    unshared = {k: v for k, v in header.items() if not k.endswith("_share")}
+    for found in ({**header, "train_share": 0.7, "test_share": 0.05}, unshared):
+        with pytest.raises(ValueError, match=r"shares \[.*\], not 42 and \[0.5, 0.25, 0.25\]"):
+            ensure(existing(found), config)
+    # A graph that holds more than one scope vertex does not hold exactly one split.
+    several = existing(header)
+    several.client.conn = SeveralSplits()
+    with pytest.raises(ValueError, match=f"holds 2 {SCOPE_VERTEX} vertices, not one split"):
+        scope.scope_header(several)
+    assert scope.scope_header(FakeTigerGraph()) is None
 
 
-def test_scope_policy_query_prints_what_the_client_reads() -> None:
+def test_the_scope_queries_name_the_one_split_and_print_what_the_client_reads() -> None:
     text = (GSQL_DIR / "queries/training_scope.gsql").read_text()
     queries = gsql_text.definitions(text)
-    assert SCOPE_POLICY_QUERY in queries
-    query = queries[SCOPE_POLICY_QUERY]
-    assert gsql_text.parameter_names(query) == {"scope_id"}
-    for name in (*scope.SCOPE_POLICY_COUNTS, "members"):
-        assert f"AS {name}" in query, name
+    assert set(queries) == {CREATE_SCOPE_QUERY, POPULATION_QUERY, FINALIZE_SCOPE_QUERY}
+    # No query takes a scope id or a source id: each reads the graph's one split.
+    assert gsql_text.parameter_names(queries[FINALIZE_SCOPE_QUERY]) == {"expected_members"}
     create = gsql_text.parameter_names(queries[CREATE_SCOPE_QUERY])
-    assert "unowned_policy" in create and "shared_unowned" not in create
-    assert set(scope.SHARE_ATTRIBUTES) <= create
-    # The scope vertex records the shares the query inserts.
-    schema = (GSQL_DIR / "schema/scope_vertex.gsql").read_text()
+    assert create == {*scope.SHARE_ATTRIBUTES, "split_seed"}
+    assert gsql_text.parameter_names(queries[POPULATION_QUERY]) == {"after_id", "batch_size"}
+    assert "scope_id" not in text and "source_id" not in text
+    population = flat(queries[POPULATION_QUERY])
+    assert "ReadyScope = SELECT r FROM Scopes:r WHERE r.ready;" in population
+    assert 'IF ReadyScope.size() != 1 THEN PRINT "scope_not_ready"' in population
+    finalize = flat(queries[FINALIZE_SCOPE_QUERY])
+    assert "IF Scopes.size() != 1 OR expected_members == 0 THEN" in finalize
+    assert "IF e.partition < 1 OR e.partition > 3 THEN @@invalid += 1 END;" in finalize
+    # Each prints only what the client reads.
+    assert 'PRINT "ok" AS status, Entities.size() AS expected_members;' in flat(
+        queries[CREATE_SCOPE_QUERY]
+    )
+    printed = population.split("PRINT Accounts[", 1)[1]
+    assert re.findall(r" AS (\w+)", printed) == [
+        "account_id",
+        "first_seen_ts_ms",
+        "partition",
+        "observed_positive",
+        "known_from_ms",
+        "accounts",
+    ]
+    # The scope vertex records the shares the query inserts, under the split's fixed id,
+    # and every membership edge points at it and records only its partition.
+    schema = flat((GSQL_DIR / "schema/scope_vertex.gsql").read_text())
+    assert "PRIMARY_ID id STRING, split_seed UINT," in schema and "source_id" not in schema
+    assert "partition INT DEFAULT 0 ) WITH" in schema and "group_id" not in schema
     for name in scope.SHARE_ATTRIBUTES:
-        assert f"    {name} DOUBLE,\n" in schema
+        assert f" {name} DOUBLE," in schema
+    insert = flat(queries[CREATE_SCOPE_QUERY])
     assert (
-        "INSERT INTO Temporal_Training_Scope VALUES (\n"
-        "    scope_id, source_id, split_seed, train_share, validation_share, test_share, FALSE);"
-    ) in queries[CREATE_SCOPE_QUERY]
+        "INSERT INTO Temporal_Training_Scope VALUES ( "
+        '"split", split_seed, train_share, validation_share, test_share, FALSE);'
+    ) in insert
+    assert insert.count(" Temporal_Training_Scope,") == 1
+    assert insert.count('"split" Temporal_Training_Scope,') == 1

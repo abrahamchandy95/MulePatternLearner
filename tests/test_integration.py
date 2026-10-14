@@ -124,9 +124,8 @@ def test_the_isolation_source_requests_what_the_fixture_checks_and_the_model_rea
     # The values the fixture asserts on: first-hop root features and message fields.
     checked = {"is_deposit", "amount", "gap_present", "pair_prior_count", "pair_first_present"}
     assert checked <= set(plan.node_names + plan.edge_names)
-    flags = plan.query_flags(1)
     for group in ("entity_meta", "time_encoding", "pair_history"):
-        assert flags["include_" + group], group
+        assert group in plan.groups, group
     # The model it trains and the predictor that scores it read nothing the source skips.
     fetcher = TigerGraphContextFetcher(FakeTigerGraph())
     with ContextSource(fetcher, plan=plan, sampler=config.sampler, capacity=0) as source:

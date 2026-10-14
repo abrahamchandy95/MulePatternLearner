@@ -19,43 +19,41 @@ from .observed_labels import ORACLE_COLUMNS
 from .ports import ScopeReader
 
 
-def scope_accounts(
-    scope: ScopeReader, scope_id: str, *, include_observed: bool
-) -> Iterator[dict[str, Any]]:
-    """The scope's accounts in account order, page by page from the scope reader.
+def scope_accounts(scope: ScopeReader) -> Iterator[dict[str, Any]]:
+    """The split's accounts in account order, page by page from the scope reader.
 
-    The one pager of the scope population: the seed reservoirs and the ground-truth audit
-    both read it here. Rows carry observed labels only with include_observed.
+    The one pager of the split's population: the seed reservoirs and the ground-truth
+    audit both read it here. Rows carry the observed labels.
     """
-    for page in scope.population_pages(scope_id, include_observed=include_observed):
+    for page in scope.population_pages():
         yield from page
 
 
 def select_accounts(
-    scope: ScopeReader, scope_id: str, dataset: DatasetConfig
+    scope: ScopeReader, dataset: DatasetConfig
 ) -> tuple[pd.DataFrame, dict[str, int]]:
     """Keep uniform hash reservoirs plus observed positives, never all account IDs.
 
     The reservoirs hold dataset.seed_limits accounts per split, ranked by a hash seeded
     with dataset.seed. in_marginal records membership in the label-blind reservoir.
     Positives retained outside it belong only to the separately sampled positive pool,
-    not the nnPU marginal. Full graph neighborhoods are filtered server-side by scope,
-    not by this statistical seed sample. The observed positives are the accounts revealed
-    in the graph (pu_label), which the scope population reports with include_observed.
+    not the nnPU marginal. Full graph neighborhoods are filtered server-side by the
+    split, not by this statistical seed sample. The observed positives are the accounts
+    revealed in the graph (pu_label), which the split's population reports.
     """
     limits, seed = dataset.seed_limits, dataset.seed
     heaps: dict[str, list[tuple[float, str, dict[str, Any]]]] = {s: [] for s in SPLITS}
     positives: dict[str, dict[str, Any]] = {}
     counts: Counter[str] = Counter()
-    for row in scope_accounts(scope, scope_id, include_observed=True):
+    for row in scope_accounts(scope):
         if ORACLE_COLUMNS & set(row):
             raise ValueError("Oracle fields cannot enter population metadata")
         account = row["account_id"]
         if not isinstance(account, str) or len(account.encode()) > ID_BYTES:
             raise ValueError("Account pagination/ID violates the transport contract")
-        # Server-assigned scope partitions are the visibility phases of the splits.
+        # The server-assigned partitions are the visibility phases of the splits.
         if row["partition"] not in PHASE_SPLIT:
-            raise ValueError("Unassigned account in frozen scope")
+            raise ValueError("Unassigned account in the graph's split")
         split = PHASE_SPLIT[row.pop("partition")]
         row["split"] = split
         counts[split] += 1
@@ -76,7 +74,7 @@ def select_accounts(
     selected = dict(positives)
     selected.update({row["account_id"]: row for heap in heaps.values() for _, _, row in heap})
     if not selected:
-        raise ValueError("No eligible scoped accounts")
+        raise ValueError("No eligible accounts in the split")
     return pd.DataFrame(selected.values()).sort_values("account_id").reset_index(drop=True), dict(
         counts
     )

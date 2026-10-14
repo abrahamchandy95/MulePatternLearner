@@ -71,8 +71,8 @@ def test_score_new_writes_only_ok_rows_and_lists_rejected_ids(
     assert result["rejection_events_by_status"] == {"missing_entity": len(rejected_ids)}
     hub_call = next(p for name, p in executor.calls if name == HUB_QUERY)
     assert hub_call["cutoff_seqs"] == [30_000] and hub_call["threshold"] == 2048
-    # Scoring arbitrary accounts is unscoped: phase-3 rows over all visible history.
-    assert hub_call["scope_id"] == ""
+    # Scoring arbitrary accounts sees no split: phase-0 rows over all visible history.
+    assert hub_call["by_phase"] is False
     assert source.closed and not (tmp_path / "scores.parquet.pending").exists()
 
 
@@ -173,9 +173,9 @@ def test_new_account_scoring_needs_neither_training_dataset_nor_labels(tmp_path:
     assert all(len(v) == 48 for v in frame.embedding)
     assert not (tmp_path / "new.parquet.pending").exists()
     assert not {"is_mule", "known_positive", "pu_label"} & set(frame.columns)
-    # Unscoped context requests with the model's pools.
+    # Context requests without the split (phase 0), with the model's pools.
     requests = [params for name, params in executor.calls if name == CONTEXT_QUERY]
-    assert requests and all(p["scope_id"] == "" and p["per_relation"] == 1 for p in requests)
+    assert requests and all(p["visibility_phase"] == 0 and p["per_relation"] == 1 for p in requests)
     # The hub registry was computed for the requested cutoff only (one past the last event).
     hubs = [params for name, params in executor.calls if name == HUB_QUERY]
     assert [params["cutoff_seqs"] for params in hubs] == [[100]]

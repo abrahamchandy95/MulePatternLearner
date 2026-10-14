@@ -15,13 +15,10 @@ import pytest
 import requests
 
 from mule_pattern_learner.contract.server import (
-    ANALYTICS_CONTEXT_QUERY,
-    ANALYTICS_QUERY_FILES,
     CONTEXT_QUERY,
     CREATE_SCOPE_QUERY,
     CUTOFF_QUERY,
     FINALIZE_SCOPE_QUERY,
-    FOURIER_QUERY,
     GRAPH_NAME,
     HUB_QUERY,
     POPULATION_QUERY,
@@ -29,7 +26,6 @@ from mule_pattern_learner.contract.server import (
     RETIRED_QUERIES,
     REVEAL_QUERY,
     REVEAL_UNIFORMS_QUERY,
-    SCOPE_POLICY_QUERY,
     SCOPE_VERTEX,
     TRAINING_QUERY_FILES,
 )
@@ -46,6 +42,7 @@ from mule_pattern_learner.testing.fake_graph import (
     ready_scope,
     retired_query,
 )
+from mule_pattern_learner.testing.gsql_blocks import FOURIER_QUERY
 from mule_pattern_learner.tigergraph import gsql_text, installer
 from mule_pattern_learner.tigergraph.executor import TransientQueryError
 from mule_pattern_learner.tigergraph.scope_types import (
@@ -377,22 +374,19 @@ def test_the_retired_queries_are_listed_before_the_queries_they_call(
         installer.drop_retired(graph)
 
 
-def test_the_analytics_queries_are_installed_only_when_asked_for() -> None:
-    # A graph with every training query installed and no analytics query.
-    graph = FakeTigerGraph(queries=installed_repository())
-    analytics = list(gsql_text.repository_queries(ANALYTICS_QUERY_FILES))
-    logs = installer.install(graph)
-    assert logs["installed"] == [] and graph.writes == []
-    assert not set(analytics) & set(installer.installed_endpoints(graph))
-    # With analytics, exactly those are created and installed, and the training queries
-    # stay as they were; a second install finds them in place.
-    logs = installer.install(graph, analytics=True)
-    assert logs["installed"] == analytics
-    assert [w for w in graph.writes if w.startswith("INSTALL")] == [
-        "INSTALL QUERY " + ", ".join(analytics)
-    ]
-    graph.writes.clear()
-    assert installer.install(graph, analytics=True)["installed"] == [] and graph.writes == []
+# How the scope types of a graph that held several splits differ from the file's: its
+# vertex type is keyed by a scope id, and its membership edges record a group.
+GROUPED = (
+    "Entity_In_Training_Scope has the attributes (partition INT, group_id STRING), not "
+    "(partition INT)"
+)
+EARLIER_DIFFERENCES = [
+    "Temporal_Training_Scope has the attributes (scope_id STRING, source_id STRING, "
+    "split_seed UINT, train_share DOUBLE, validation_share DOUBLE, test_share DOUBLE, "
+    "ready BOOL), not (id STRING, split_seed UINT, train_share DOUBLE, "
+    "validation_share DOUBLE, test_share DOUBLE, ready BOOL)",
+    GROUPED,
+]
 
 
 def test_the_scope_types_are_read_from_the_file_and_the_graph_alike() -> None:
@@ -400,8 +394,7 @@ def test_the_scope_types_are_read_from_the_file_and_the_graph_alike() -> None:
     assert SCOPE_TYPES == ScopeTypes(
         vertex=SCOPE_VERTEX,
         vertex_attributes=(
-            ("scope_id", "STRING"),
-            ("source_id", "STRING"),
+            ("id", "STRING"),
             ("split_seed", "UINT"),
             ("train_share", "DOUBLE"),
             ("validation_share", "DOUBLE"),
@@ -409,25 +402,30 @@ def test_the_scope_types_are_read_from_the_file_and_the_graph_alike() -> None:
             ("ready", "BOOL"),
         ),
         edge="Entity_In_Training_Scope",
-        edge_attributes=(("partition", "INT"), ("group_id", "STRING")),
+        edge_attributes=(("partition", "INT"),),
         endpoints=(("Account", SCOPE_VERTEX), ("Party", SCOPE_VERTEX)),
         reverse_edge="Training_Scope_Has_Entity",
     )
     # TigerGraph's schema gives them back as they were declared.
     assert graph_scope_types(graph_schema(SCOPE_TYPES), SCOPE_TYPES) == SCOPE_TYPES
     assert graph_scope_types(graph_schema(None), SCOPE_TYPES) is None
-    # A graph created before the scope vertex recorded its split shares.
+    # A graph created when it held several splits, each keyed by a scope id, whose
+    # membership edges record a group; and one whose edges only record a group.
     earlier = graph_scope_types(graph_schema(EARLIER_SCOPE_TYPES), SCOPE_TYPES)
     assert earlier is not None
-    assert scope_type_differences(earlier, SCOPE_TYPES) == [
-        "Temporal_Training_Scope lacks train_share, validation_share, test_share"
-    ]
+    assert scope_type_differences(earlier, SCOPE_TYPES) == EARLIER_DIFFERENCES
+    grouped = replace(SCOPE_TYPES, edge_attributes=EARLIER_SCOPE_TYPES.edge_attributes)
+    assert scope_type_differences(grouped, SCOPE_TYPES) == [GROUPED]
+    # A type that lacks some declared attributes, and has no others, is named by those.
+    unshared = tuple(a for a in SCOPE_TYPES.vertex_attributes if not a[0].endswith("_share"))
+    assert scope_type_differences(
+        replace(SCOPE_TYPES, vertex_attributes=unshared), SCOPE_TYPES
+    ) == ["Temporal_Training_Scope lacks train_share, validation_share, test_share"]
     # Any other difference is named with both lists, an edge's endpoints and reverse edge
     # as they are, and a missing edge type as missing.
-    retyped = replace(SCOPE_TYPES, edge_attributes=(("partition", "UINT"), ("group_id", "STRING")))
+    retyped = replace(SCOPE_TYPES, edge_attributes=(("partition", "UINT"),))
     assert scope_type_differences(retyped, SCOPE_TYPES) == [
-        "Entity_In_Training_Scope has the attributes (partition UINT, group_id STRING), not "
-        "(partition INT, group_id STRING)"
+        "Entity_In_Training_Scope has the attributes (partition UINT), not (partition INT)"
     ]
     rewired = replace(
         SCOPE_TYPES, endpoints=(("Account", SCOPE_VERTEX),), reverse_edge="Scope_Has_Entity"
@@ -454,15 +452,18 @@ SCOPE_QUERIES = [
     CREATE_SCOPE_QUERY,
     POPULATION_QUERY,
     FINALIZE_SCOPE_QUERY,
-    SCOPE_POLICY_QUERY,
     HUB_QUERY,
     REVEAL_QUERY,
-    ANALYTICS_CONTEXT_QUERY,
 ]
+# A retired query that names a scope type, as the code before installed it.
+RETIRED_POLICY = (
+    "CREATE QUERY summarize_scope_policy() FOR GRAPH Mule_Pattern_Learner SYNTAX V2 "
+    "{ S = {Temporal_Training_Scope.*}; PRINT S; }"
+)
 
 
 def outdated_graph(**options: Any) -> FakeTigerGraph:
-    """A graph whose scope types predate the split shares, every repository query installed."""
+    """A graph whose scope types are those of several splits, every repository query installed."""
     return FakeTigerGraph(scope_types=EARLIER_SCOPE_TYPES, **options)
 
 
@@ -470,28 +471,30 @@ def test_mule_install_replaces_outdated_scope_types_while_no_scope_uses_them(
     tmp_path: Path,
 ) -> None:
     other = retired_query("match_parties")
-    graph = outdated_graph(queries={**installer_repository(), "match_parties": other})
+    retired = {"summarize_scope_policy": RETIRED_POLICY}
+    graph = outdated_graph(queries={**installed_repository(), **retired, "match_parties": other})
     # TigerGraph drops no type that a query uses, and neither does the fake graph.
     assert graph.gsql(drop_job(EARLIER_SCOPE_TYPES), attempts=1).startswith("Failed")
     assert graph.scope_types == EARLIER_SCOPE_TYPES
     graph.writes.clear()
     # The other commands refuse the outdated types and say what to run.
-    with pytest.raises(ValueError, match=r"lacks train_share.*Run `mule install`"):
+    with pytest.raises(ValueError, match=r"has the attributes \(scope_id.*Run `mule install`"):
         installer.install(graph)
     assert graph.writes == []
     events = tmp_path / "events.jsonl"
     with recording(events):
         logs = installer.install(graph, replace_scope=True)
     replaced = logs["scope_replaced"]
-    assert replaced["differences"] == [
-        "Temporal_Training_Scope lacks train_share, validation_share, test_share"
-    ]
-    assert replaced["dropped"] == SCOPE_QUERIES
+    assert replaced["differences"] == EARLIER_DIFFERENCES
+    # The retired query that uses the types is dropped with the repository's, never
+    # installed again.
+    dropped = [*SCOPE_QUERIES, "summarize_scope_policy"]
+    assert replaced["dropped"] == dropped
     assert graph.scope_types == SCOPE_TYPES
     # The queries that use the types are dropped first, then the types are dropped and
     # added again, and every training query is created where it was dropped and installed,
     # whatever its text, with the -force flag.
-    drops = [f"USE GRAPH {GRAPH_NAME}\nDROP QUERY {name}" for name in SCOPE_QUERIES]
+    drops = [f"USE GRAPH {GRAPH_NAME}\nDROP QUERY {name}" for name in dropped]
     assert graph.writes[: len(drops)] == drops
     schema_changes = graph.writes[len(drops) : len(drops) + 2]
     assert schema_changes == [
@@ -506,19 +509,15 @@ def test_mule_install_replaces_outdated_scope_types_while_no_scope_uses_them(
     assert logs["installed"] == logs["verified"] == names
     assert graph.writes[-1] == "INSTALL QUERY -FORCE " + ", ".join(names)
     created = [w for w in graph.writes if "CREATE OR REPLACE QUERY" in w]
-    assert {name for text in created for name in gsql_text.definitions(text)} == set(
-        SCOPE_QUERIES[:-1]
-    )
-    # The analytics context waits for `mule diagnose`; the other analytics queries and the
-    # query of someone else's are untouched.
-    endpoints = installer.installed_endpoints(graph)
-    assert ANALYTICS_CONTEXT_QUERY not in endpoints and "match_parties" in endpoints
-    assert {"encode_zelle_pair_gaps", "encode_payment_pair_gaps"} <= set(endpoints)
+    assert {name for text in created for name in gsql_text.definitions(text)} == set(SCOPE_QUERIES)
+    # The query of someone else's is untouched.
+    installed = installer.installed_endpoints(graph)
+    assert "match_parties" in installed and "summarize_scope_policy" not in installed
     # The console says what it does before and after.
     recorded = [e for e in recorded_events(events) if e["event"] == "scope_types"]
     assert recorded == [
-        {"event": "scope_types", "replacing": replaced["differences"], "dropping": SCOPE_QUERIES},
-        {"event": "scope_types", "replaced": replaced["differences"], "dropped": SCOPE_QUERIES},
+        {"event": "scope_types", "replacing": replaced["differences"], "dropping": dropped},
+        {"event": "scope_types", "replaced": replaced["differences"], "dropped": dropped},
     ]
     # A second run finds the types and the queries in place, and does nothing.
     graph.writes.clear()
@@ -528,30 +527,62 @@ def test_mule_install_replaces_outdated_scope_types_while_no_scope_uses_them(
 
 
 def test_outdated_scope_types_are_kept_while_anything_uses_them() -> None:
-    # A scope of the earlier types: replacing them would delete it.
-    old = {k: v for k, v in ready_scope("source").items() if not k.endswith("_share")}
-    graph = outdated_graph(scopes={"strict_mule_v2": old})
+    # A split of the earlier types: replacing them would delete it, which only its owner
+    # does, by hand, as the refusal says.
+    old = {"scope_id": "strict_mule_v3", "source_id": "Mule_Pattern_Learner_1a2b", **ready_scope()}
+    graph = outdated_graph(scope=old)
     schema = installer.scope_schema(graph)
     assert schema.state == installer.OUTDATED and installer.scope_vertices(graph, schema) == 1
     with pytest.raises(
-        ValueError, match=r"lacks train_share.*holds 1 Temporal_Training_Scope vertex.*nothing"
+        ValueError,
+        match=r"\(scope_id STRING.*holds 1 Temporal_Training_Scope vertex.*nothing was changed: "
+        r"delete the Temporal_Training_Scope vertices by hand, which deletes their membership "
+        r"edges with them .*, then run `mule install` again",
     ):
         installer.install(graph, replace_scope=True)
     assert graph.writes == [] and graph.scope_types == EARLIER_SCOPE_TYPES
+    assert graph.scope == old
     assert set(installer.installed_endpoints(graph)) >= set(SCOPE_QUERIES)
     # A query of someone else's that names a scope type, or calls a query that does.
     uses = "CREATE QUERY match_scopes() FOR GRAPH Mule_Pattern_Learner SYNTAX V2 { "
     uses += "S = {Temporal_Training_Scope.*}; PRINT S; }"
     calls = retired_query("match_parties", calls=HUB_QUERY)
     graph = outdated_graph(
-        queries={**installer_repository(), "match_scopes": uses, "match_parties": calls}
+        queries={**installed_repository(), "match_scopes": uses, "match_parties": calls}
     )
     with pytest.raises(ValueError, match=r"queries match_parties, match_scopes.*nothing"):
         installer.install(graph, replace_scope=True)
     assert graph.writes == [] and graph.scope_types == EARLIER_SCOPE_TYPES
+    # TigerGraph drops no type that a created query uses either, installed or not.
+    graph = outdated_graph(queries={**installed_repository(), "match_scopes": uses})
+    graph.client.conn.enabled["match_scopes"] = False
+    assert "match_scopes" not in installer.installed_endpoints(graph)
+    with pytest.raises(ValueError, match=r"queries match_scopes, which no repository"):
+        installer.install(graph, replace_scope=True)
+    assert graph.writes == [] and graph.scope_types == EARLIER_SCOPE_TYPES
 
 
-def installer_repository() -> dict[str, str]:
-    """Every query the repository defines, training and analytics, as installed."""
-    files = (*TRAINING_QUERY_FILES, *ANALYTICS_QUERY_FILES)
-    return {name: text for name, (_, text) in gsql_text.repository_queries(files).items()}
+# The deleted analytics queries as an install that timed out may leave them: the context
+# query, which names a scope type, only created, and the pair-gap queries installed, each
+# calling the Fourier query.
+ANALYTICS = {
+    "fetch_analytics_context": (
+        "CREATE QUERY fetch_analytics_context(INT unused = 0) FOR GRAPH Mule_Pattern_Learner "
+        "SYNTAX V2 { S = {Temporal_Training_Scope.*}; PRINT S; }"
+    ),
+    "encode_zelle_pair_gaps": retired_query("encode_zelle_pair_gaps", calls=FOURIER_QUERY),
+    "encode_payment_pair_gaps": retired_query("encode_payment_pair_gaps", calls=FOURIER_QUERY),
+}
+
+
+def test_mule_install_drops_the_analytics_queries_installed_or_only_created() -> None:
+    assert RETIRED_QUERIES[-3:] == tuple(ANALYTICS)
+    graph = outdated_graph(queries={**installed_repository(), **ANALYTICS})
+    graph.client.conn.enabled["fetch_analytics_context"] = False
+    # The replacement drops the context query, which uses the scope types, with the
+    # repository's; once all are installed, the retired pair-gap queries go.
+    logs = installer.install(graph, replace_scope=True)
+    assert logs["scope_replaced"]["dropped"] == [*SCOPE_QUERIES, "fetch_analytics_context"]
+    assert installer.drop_retired(graph) == ["encode_zelle_pair_gaps", "encode_payment_pair_gaps"]
+    assert not set(ANALYTICS) & set(graph.client.conn.shown)
+    assert installer.undefined_queries(graph) == []

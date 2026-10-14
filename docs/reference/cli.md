@@ -13,9 +13,9 @@ deterministic workspace) unless already set. `RUN` defaults to the built-in run,
 | [`mule train`](#mule-train) | Trains the built-in run, resumes it, or reports it if complete | [Preparation](#preparation), then two rounds of context requests per step, less what the context cache holds | Preparation's |
 | [`mule evaluate [RUN]`](#mule-evaluate-run) | Ground-truth audits of a run's model on validation and test | Reads the ground truth, pages the validation and test populations, requests the audit samples' contexts | No |
 | [`mule report [RUN]`](#mule-report-run) | Redraws the figures and `report.md` of a run, suite or diagnostic study | None | No |
-| [`mule score ACCOUNTS [DATE]`](#mule-score-accounts-date) | Scores the accounts in a file with the built-in run's model | Resolves the cutoff, builds an unscoped hub registry, requests the accounts' contexts | No |
+| [`mule score ACCOUNTS [DATE]`](#mule-score-accounts-date) | Scores the accounts in a file with the built-in run's model | Resolves the cutoff, builds a hub registry without the split, requests the accounts' contexts | No |
 | [`mule check`](#mule-check) | Read-only readiness, then one training batch's digests and first loss | Reads the schema and query catalog, then one batch's contexts | No |
-| [`mule diagnose [ANALYSIS]`](#mule-diagnose-analysis) | The diagnostic study of the built-in run's dataset | Preparation, installing the analytics queries where their text differs, then the truth, the populations, both context queries for every split's audit sample, the reveal's inputs | Preparation's; the analytics queries |
+| [`mule diagnose [ANALYSIS]`](#mule-diagnose-analysis) | The diagnostic study of the built-in run's dataset | Preparation, then the truth, the populations, the context query for every split's audit sample, the reveal's inputs | Preparation's |
 | [`mule install`](#mule-install) | Installs the queries whose text differs, drops the retired ones | Creates and compiles the stale training queries and their callers, replaces an outdated scope vertex type, drops the retired names | The query catalog; the scope vertex type if missing or outdated |
 
 ## The console
@@ -54,12 +54,13 @@ recorded query hashes must match the repository's). A stopped preparation resume
 1. Install the stale training queries and their callers
    ([Installation](queries.md#installation)); retired names stay for `mule install`.
    Writes the query catalog, and the scope vertex type if missing.
-2. If `scope.id` does not exist, create the scope: every Account and Party partitioned
-   into train, validation and test. Writes one scope vertex and one membership edge per
-   Account and Party.
-3. On a graph without known labels, or with another reveal's, reveal every mule a bank
-   would have discovered by each split's cutoff, by simulating each mule's discovery.
-   Writes every internal Account's label fields.
+2. If the graph has no split, create it: every Account and Party partitioned into train,
+   validation and test. Writes one scope vertex and one membership edge per Account and
+   Party. A split of other settings is refused, never changed.
+3. On a graph without known labels, with another reveal's, or with this reveal's when
+   the run has just created the split, reveal every mule a bank would have discovered by
+   each split's cutoff, by simulating each mule's discovery. Writes every internal
+   Account's label fields.
 4. Page the population, resolve the cutoffs, build the hub registry (no writes).
 
 ## mule train
@@ -130,9 +131,9 @@ Scores the accounts in file `ACCOUNTS` (one id per line) with the built-in run's
 visible, over capacity) in `scores/<file stem>_<date>_rejected.txt`. Existing outputs are
 refused before connecting.
 
-It reads as an operational scorer would: history visible before the date, no experiment
-scope, a hub registry for that cutoff (a date before the graph's first visible event is
-refused). It needs no training dataset or label, but the installed queries must be the
+It reads as an operational scorer would: history visible before the date, no split
+(phase 0), a hub registry for that cutoff (a date before the graph's first visible event
+is refused). It needs no training dataset or label, but the installed queries must be the
 repository's. The graph need not be the frozen source, so there is no context cache. The
 summary gives the accounts scored and where, rejections by status, and child contexts
 left out; the run's `events.jsonl` keeps the whole result, root and child rejections
@@ -155,8 +156,8 @@ item gives the batch's roots, context requests and seconds, the step's `loss` an
 showing the same digest and loss on one machine and device built the same batch and step.
 
 It ends "Ready to train.", or "Not ready" with what to do (`mule install`, then
-`mule train`, after clearing and reloading the graph's data when scopes use an outdated
-scope vertex type) and exits 1. It never writes to the graph or prepares a dataset. The
+`mule train`, after deleting the scope vertices by hand when they use an outdated scope
+vertex type) and exits 1. It never writes to the graph or prepares a dataset. The
 full report replaces `results/check.json`
 ([Outputs](outputs.md#the-report-of-mule-check-resultscheckjson)).
 
@@ -169,11 +170,10 @@ Runs the diagnostic study of the built-in run's dataset into
 `activity-timing`, `proxy-validity`, `reveal-spread`, `nnpu-simulation`
 
 After [preparation](#preparation) it writes the feature table, a long table per analysis,
-`study.json`, `events.jsonl`, the figures and `report.md`. Only this command installs the
-analytics queries (where their text differs). It shows a line per finished analysis
-(written, kept or skipped, with rows and seconds). An analysis missing its inputs (no
-built-in run on this dataset, or no audit) is skipped with its reason; the summary names
-it, and the incomplete study exits 1.
+`study.json`, `events.jsonl`, the figures and `report.md`. It shows a line per finished
+analysis (written, kept or skipped, with rows and seconds). An analysis missing its
+inputs (no built-in run on this dataset, or no audit) is skipped with its reason; the
+summary names it, and the incomplete study exits 1.
 [Run the diagnostics](../how-to/run-diagnostics.md) describes each analysis.
 
 ## mule install
@@ -193,7 +193,6 @@ replaced the scope vertex type, and which installed queries no repository file d
 | Script | What it does |
 |---|---|
 | `python scripts/run_experiments.py [SUITE or VARIANT ...]` | Trains, audits and compares the control experiments: the `controls` suite by default, or the suites and variants named; `--help` lists them with their questions and changes, without connecting. Shows the run matrix, a line per finished run and the top of the comparison; exits 1 unless every run is trained and audited ([Run the control experiments](../how-to/run-control-experiments.md)) |
-| `python scripts/render_queries.py` | Regenerates `gsql/queries/training_context.gsql` and `gsql/analytics/analytics_context.gsql` from `tigergraph.render`, naming the contract to set when a text changed; `--check` only compares, exiting 1 when one differs |
 
 ## Tests that need the graph or a GPU
 
@@ -201,6 +200,7 @@ Deselected by default; the suite never connects unless a marker selects these.
 
 | Command | What it checks |
 |---|---|
-| `python -m pytest -m graph` | Read-only, against the graph in `.env`: the installed context query (text, time encodings, cutoff boundary), both context queries' features against the Python reference (the analytics one once installed), a dry run of the label reveal against its Python mirror |
+| `python -m pytest -m graph` | Read-only, against the graph in `.env`: the installed context query (text, time encodings, cutoff boundary), every field of its rows against the Python reference, a dry run of the label reveal against its Python mirror |
+| `python -m pytest -m graph tests/integration/test_context_query.py --baseline-context-query PATH` | Also runs an earlier text of the context query (`PATH`) and the current one under `INTERPRET` for the split's first accounts and up to 16 of their children of each node type, in every phase and three pools, and checks that both return the same rows: statuses, node features, every message field in order and the Fourier vectors. The earlier text reads the payments' `channel`, so it needs a graph loaded with the earlier schema, such as the owner's |
 | `python -m pytest -m cuda` | The cuGraph sampler on a CUDA host: probe, exact counts, strict cutoffs, uniform inclusion, determinism, then one real batch per backend from the prepared dataset and a deterministic step run twice |
 | `python -m pytest -m graph_write --allow-graph-writes` | Scope isolation: writes fixture vertices and edges with a random prefix, checks that held-out and future data change no training input, deletes exactly those. Vertex counts change meanwhile, so never run it during training |

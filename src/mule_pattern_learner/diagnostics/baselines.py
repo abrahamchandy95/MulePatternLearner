@@ -1,13 +1,12 @@
 """Baselines that rank mules from the feature table alone, beside the model's audits.
 
 They answer the question of the retired no_graph control: how well does a table of the
-account's own activity rank mules, with no neighbour, association or pool input? The
-`account` baseline reads only the account's own history, which the analytics query
-computes and no model reads. The others read the root's own model inputs (`model`: the
-entity flags, the hub flag and the pool counts, what the no_attention control sees),
-the summaries of its candidate pool (`messages`), and everything (`all`). The
-`attributes` floor reads the root's entity attributes alone, which are the same for
-every scored account, so it ranks at chance.
+account's own activity rank mules, without the model's attention over its neighbours?
+The baselines read the root's own model inputs (`model`: the entity flags, the hub flag
+and the pool counts, what the no_attention control sees), the summaries of its
+candidate pool (`messages`), and both (`all`). The `attributes` floor reads the root's
+entity attributes alone, which are the same for every scored account, so it ranks at
+chance.
 
 Each baseline is a logistic regression and a gradient-boosted tree with fixed settings,
 trained at the train cutoff as the model is, PU-style: the revealed train mules are
@@ -59,17 +58,12 @@ COLUMNS = DIAGNOSTIC_TABLES["baselines"]
 KINDS = ("lr", "hgb")
 # The feature families each baseline reads.
 BASELINE_FAMILIES = {
-    "account": ("account",),
     "model": ("model",),
     "messages": ("messages",),
     "all": FAMILIES,
 }
 # The entity attributes of the floor.
 ATTRIBUTES = ("type_", "is_external", "is_deposit", "history_withheld")
-# The account's age at the cutoff is nearly the same for every account of a split (almost
-# all were first seen in the first days of the data), so it encodes the cutoff, not the
-# account: no model reads it.
-CUTOFF_COLUMNS = frozenset({"account__age_days"})
 # The single features ranked without training.
 SINGLE_FEATURES = 5
 
@@ -133,11 +127,9 @@ def fit_scores(
 
 
 def model_columns(frame: pd.DataFrame, families: Sequence[str]) -> list[str]:
-    """The inputs a baseline of these families reads: varying on train, not the cutoff."""
+    """The inputs a baseline of these families reads: those that vary on train."""
     chosen = set(families)
-    return [
-        name for name in varying(frame) if family_of(name) in chosen and name not in CUTOFF_COLUMNS
-    ]
+    return [name for name in varying(frame) if family_of(name) in chosen]
 
 
 def attribute_columns(frame: pd.DataFrame) -> list[str]:

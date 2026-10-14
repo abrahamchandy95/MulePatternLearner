@@ -68,6 +68,7 @@ from mule_pattern_learner.testing.builders import (
     write_run_files,
 )
 from mule_pattern_learner.testing.fake_graph import FakeTigerGraph, ready_scope
+from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
 from mule_pattern_learner.tigergraph.executor import (
     TigerGraphUnavailableError,
     TransientQueryError,
@@ -88,23 +89,19 @@ DROP = VARIANTS["drop_time_encoding"]
 POPULATION = 200
 
 
-def suite_graph(
-    monkeypatch: pytest.MonkeyPatch, before: Any = None
-) -> tuple[FakeTigerGraph, list[TransportConfig]]:
+def suite_graph(monkeypatch: pytest.MonkeyPatch) -> tuple[FakeTigerGraph, list[TransportConfig]]:
     """The fake graph behind the suite's session, and the connections the session opened.
 
-    Its queries are installed, its scope ready and its known mules revealed, and it holds
+    Its queries are installed, its split ready and its known mules revealed, and it holds
     the ground truth. A use case that connects other than through the session fails.
     """
     population = scope_population(POPULATION)
-    header = ready_scope("suite_fixture")
     graph = FakeTigerGraph(
         factory=neighbourhood,
         hubs=[("N3", cutoff) for cutoff in (101, 102, 103)],
         population=population,
         truth=ground_truth_rows(population),
-        scopes={BASE.scope.id: header},
-        before=before,
+        scope=ready_scope(BASE.dataset.split_seed, BASE.scope),
     )
     connections: list[TransportConfig] = []
 
@@ -119,7 +116,7 @@ def suite_graph(
     for module in (pipeline_prepare, pipeline_evaluate):
         monkeypatch.setattr(module, "connect", elsewhere)
 
-    def revealed(*args: object) -> None:
+    def revealed(*args: object, **kwargs: object) -> None:
         return None
 
     monkeypatch.setattr(pipeline_prepare, "ensure_revealed_labels", revealed)
@@ -273,14 +270,23 @@ def test_a_selection_variant_trains_audits_and_compares_on_the_fakes(
         assert f"| runs selected on the proxy {rule} | n/a | 2 |" in text
 
 
+def fail_untimed_contexts(monkeypatch: pytest.MonkeyPatch, error: Exception) -> None:
+    """Context requests of sources without the time encoding, the variant's, raise error."""
+    real = TigerGraphContextFetcher.request
+
+    def request(self: TigerGraphContextFetcher, keys: Any, *, plan: Any, **options: Any) -> Any:
+        if "time_encoding" not in plan.groups:
+            raise error
+        return real(self, keys, plan=plan, **options)
+
+    monkeypatch.setattr(TigerGraphContextFetcher, "request", request)
+
+
 def test_a_variant_that_fails_on_its_own_fails_alone(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def untimed(name: str, params: dict[str, Any]) -> None:
-        if name == CONTEXT_QUERY and not params["include_time_encoding"]:
-            raise ValueError("this variant's own failure")
-
-    suite_graph(monkeypatch, untimed)
+    suite_graph(monkeypatch)
+    fail_untimed_contexts(monkeypatch, ValueError("this variant's own failure"))
     results = tmp_path / "results"
     result = run_suite(
         (DROP.name,), base=BASE, seeds=(42,), results=results, data=tmp_path / "data"
@@ -353,11 +359,9 @@ def test_a_run_whose_figures_fail_is_complete_and_the_suite_fails(
 def test_an_outage_stops_the_suite_and_the_tables_say_so(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def outage(name: str, params: dict[str, Any]) -> None:
-        if name == CONTEXT_QUERY and not params["include_time_encoding"]:
-            raise TigerGraphUnavailableError("fetch_training_context failed: unavailable")
-
-    graph, _ = suite_graph(monkeypatch, outage)
+    graph, _ = suite_graph(monkeypatch)
+    outage = TigerGraphUnavailableError("fetch_training_context failed: unavailable")
+    fail_untimed_contexts(monkeypatch, outage)
     data, results = tmp_path / "data", tmp_path / "results"
     result = suite(results, data)
     assert result["status"] == STOPPED and "unavailable" in result["stopped_by"]

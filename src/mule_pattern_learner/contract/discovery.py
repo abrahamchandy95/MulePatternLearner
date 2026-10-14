@@ -2,28 +2,23 @@
 
 The reveal (gsql/queries/label_reveal.gsql) simulates when a bank would have discovered
 each mule from uniforms its draw query returns. reveal_uniforms is that query's modular
-mixer, exactly, and REVEAL_DEFAULTS are the defaults the reveal query declares (a test
-compares them with the GSQL). tigergraph.reveal runs the job with a run's budget and
-salt; the job's Python mirror (reference.label_reveal) reads both from here, so the
-mirror needs no adapter.
+mixer, exactly, and REVEAL_DEFAULTS are the reveal query's salt default and model
+constants (a test compares them with the GSQL). tigergraph.reveal runs the job with a
+run's salt; the job's Python mirror (reference.label_reveal) reads both from here, so
+the mirror needs no adapter.
 """
 
 from __future__ import annotations
 
-# The defaults the reveal query declares. A run sends the budget and salt
-# (tigergraph.reveal.reveal_parameters); the model parameters stay the query's own. The
-# budget's default, the most the reveal takes per split, is what a run sends to reveal
-# every discovered mule.
+# The reveal query's salt default and the constants of its discovery model. A run sends
+# the salt (tigergraph.reveal.reveal_parameters); the model constants are the query's own.
 REVEAL_DEFAULTS: dict[str, float] = {
-    "budget": 1000,
     "salt": 42,
     "p_report": 0.65,
     "p_action_first": 0.5,
     "p_action_later": 0.7,
     "proactive_per_day": 0.00045,
     "trace_probability": 0.25,
-    "propensity_slope": 1.0,
-    "propensity_floor": 0.05,
 }
 _PRIME = 2147483647
 

@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 import torch
 
-from mule_pattern_learner.artifacts import write_json, write_run_config
+from mule_pattern_learner.artifacts import read_json, read_run_config, write_json, write_run_config
 from mule_pattern_learner.config import DEFAULT_CONFIG
 from mule_pattern_learner.paths import RunPaths
 from mule_pattern_learner.training import trainer
@@ -119,6 +119,22 @@ def test_a_complete_run_is_reported_only_for_its_own_settings(tmp_path: Path) ->
     with pytest.raises(ValueError, match="training.learning_rate"):
         load_resume_state(changed, run)
     assert {path: path.stat().st_mtime_ns for path in written} == written
+    # A run of earlier code recorded a scope id: it reads, but as of other settings.
+    earlier = read_json(run.config)
+    earlier["config"]["scope"]["id"] = "strict_mule_v3"
+    write_json(run.config, earlier)
+    assert read_run_config(run.config) == DEFAULT_CONFIG
+    with pytest.raises(ValueError, match=r"other settings: \['scope.id'\]"):
+        completed_run(DEFAULT_CONFIG, run)
+    # So does one that recorded the retired unowned rule and reveal cap, even at the
+    # values this code hard-wires: its fingerprint and dataset covered them.
+    del earlier["config"]["scope"]["id"]
+    earlier["config"]["scope"] |= {"unowned": "linked", "reveal_per_split": None}
+    write_json(run.config, earlier)
+    assert read_run_config(run.config) == DEFAULT_CONFIG
+    retired = r"other settings: \['scope.reveal_per_split', 'scope.unowned'\]"
+    with pytest.raises(ValueError, match=retired):
+        completed_run(DEFAULT_CONFIG, run)
     # A complete run without its config.json is an error that names the run.
     run.config.unlink()
     with pytest.raises(ValueError, match="Cannot read the configuration of the run in"):

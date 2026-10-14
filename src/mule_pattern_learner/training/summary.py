@@ -88,7 +88,7 @@ def prediction_frame(
     frames = []
     offset = 0
     for sample in samples:
-        frame = accounts.iloc[sample.indices][["account_id", "group_id"]].copy()
+        frame = accounts.iloc[sample.indices][["account_id"]].copy()
         frame["date"] = sample.date
         frame["observed_label"] = sample.labels.astype(np.int64)
         frame["score"] = scores[offset : offset + len(sample.indices)]

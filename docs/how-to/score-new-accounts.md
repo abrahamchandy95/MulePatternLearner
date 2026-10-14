@@ -22,7 +22,7 @@ result: `rejected` (roots not scored), `rejected_roots_by_status`, `rejected_chi
 
 ## What the scores mean
 
-- **History as an operational scorer sees it:** no experiment scope, training dataset or
+- **History as an operational scorer sees it:** no split (phase 0), training dataset or
   label; the hub registry is computed for the date.
 - **Rejected accounts are not scored:** an id missing, not yet visible at the date or over
   the history cap goes to the rejected file.

@@ -1,0 +1,146 @@
+/* The loading job of PhantomLedger's mule-temporal export: one comma-separated file per
+   table, with a header line, as `\copy ... WITH (FORMAT csv, HEADER true)` writes it, named
+   after its table (Party.csv for party_csv). Each DEFINE HEADER names a table's columns in
+   the export's order, and every attribute is loaded from its same-named column (an edge's
+   endpoints from from_id and to_id); a column the schema keeps no attribute for is
+   skipped. TigerGraph reads a column name from a file's own header line only from a file
+   the job names when it is created, so the names are declared here and HEADER="true"
+   skips each file's header line. The reverse edges come from REVERSE_EDGE and are not
+   loaded. Account ids must be identical to the ids on event and association endpoints. */
+USE GRAPH Mule_Pattern_Learner
+CREATE LOADING JOB load_graph FOR GRAPH Mule_Pattern_Learner {
+    DEFINE HEADER party_header = "id", "party_type", "first_seen_seq", "first_seen_ts_ms";
+    DEFINE HEADER account_header = "id", "account_type", "is_external", "first_seen_seq",
+      "first_seen_ts_ms", "is_mule", "mule_label_known", "is_mule_masked", "pu_label",
+      "mule_label_effective_seq", "mule_label_effective_ts_ms",
+      "mule_label_available_seq", "mule_label_available_ts_ms",
+      "mule_ring_id", "mule_label_source";
+    DEFINE HEADER token_header = "token_id", "first_seen_seq", "first_seen_ts_ms",
+      "token_kind", "token_network";
+    DEFINE HEADER device_header = "id", "device_type", "first_seen_seq", "first_seen_ts_ms";
+    DEFINE HEADER ip_header = "id", "first_seen_seq", "first_seen_ts_ms";
+    DEFINE HEADER address_header = "address_id", "first_seen_seq", "first_seen_ts_ms",
+      "country_code";
+    DEFINE HEADER payment_transaction_header = "transaction_id", "amount", "currency",
+      "payment_rail", "channel", "event_time", "event_ts_ms", "event_seq", "amount_present";
+    DEFINE HEADER zelle_transfer_header = "transfer_id", "event_time", "event_ts_ms",
+      "event_seq", "amount", "amount_present", "currency", "channel", "fraud_label",
+      "label_known", "label_available_seq", "label_available_ts_ms";
+    /* The seven association tables, and the twelve participation tables. */
+    DEFINE HEADER association_header = "from_id", "to_id", "valid_from_seq", "valid_to_seq",
+      "confidence", "source_system";
+    DEFINE HEADER participation_header = "from_id", "to_id", "event_ts_ms", "event_seq";
+
+    DEFINE FILENAME party_csv;
+    DEFINE FILENAME account_csv;
+    DEFINE FILENAME token_csv;
+    DEFINE FILENAME device_csv;
+    DEFINE FILENAME ip_csv;
+    DEFINE FILENAME address_csv;
+    DEFINE FILENAME payment_transaction_csv;
+    DEFINE FILENAME zelle_transfer_csv;
+    DEFINE FILENAME party_owns_account_csv;
+    DEFINE FILENAME party_uses_token_csv;
+    DEFINE FILENAME token_bound_to_account_csv;
+    DEFINE FILENAME party_uses_device_csv;
+    DEFINE FILENAME account_uses_device_csv;
+    DEFINE FILENAME party_uses_ip_csv;
+    DEFINE FILENAME party_has_address_csv;
+    DEFINE FILENAME transfer_from_account_csv;
+    DEFINE FILENAME transfer_to_account_csv;
+    DEFINE FILENAME transfer_from_token_csv;
+    DEFINE FILENAME transfer_to_token_csv;
+    DEFINE FILENAME transfer_used_device_csv;
+    DEFINE FILENAME transfer_used_ip_csv;
+    DEFINE FILENAME transaction_from_account_csv;
+    DEFINE FILENAME transaction_to_account_csv;
+    DEFINE FILENAME transaction_from_token_csv;
+    DEFINE FILENAME transaction_to_token_csv;
+    DEFINE FILENAME transaction_used_device_csv;
+    DEFINE FILENAME transaction_used_ip_csv;
+
+    LOAD party_csv TO VERTEX Party VALUES ($"id", $"first_seen_seq", $"first_seen_ts_ms")
+      USING HEADER="true", SEPARATOR=",", USER_DEFINED_HEADER="party_header";
+    /* The schema declares is_mule last, while the file has it sixth. */
+    LOAD account_csv TO VERTEX Account VALUES (
+      $"id", $"account_type", $"is_external", $"first_seen_seq", $"first_seen_ts_ms",
+      $"mule_label_known", $"pu_label", $"mule_label_available_ts_ms",
+      $"mule_ring_id", $"mule_label_source", $"is_mule"
+    ) USING HEADER="true", SEPARATOR=",", USER_DEFINED_HEADER="account_header";
+    LOAD token_csv TO VERTEX Token VALUES ($"token_id", $"first_seen_seq", $"first_seen_ts_ms")
+      USING HEADER="true", SEPARATOR=",", USER_DEFINED_HEADER="token_header";
+    LOAD device_csv TO VERTEX Device VALUES ($"id", $"first_seen_seq", $"first_seen_ts_ms")
+      USING HEADER="true", SEPARATOR=",", USER_DEFINED_HEADER="device_header";
+    LOAD ip_csv TO VERTEX IP VALUES ($"id", $"first_seen_seq", $"first_seen_ts_ms")
+      USING HEADER="true", SEPARATOR=",", USER_DEFINED_HEADER="ip_header";
+    LOAD address_csv TO VERTEX Address VALUES (
+      $"address_id", $"first_seen_seq", $"first_seen_ts_ms"
+    ) USING HEADER="true", SEPARATOR=",", USER_DEFINED_HEADER="address_header";
+    LOAD payment_transaction_csv TO VERTEX Payment_Transaction VALUES (
+      $"transaction_id", $"amount", $"currency", $"payment_rail", $"event_ts_ms",
+      $"event_seq", $"amount_present"
+    ) USING HEADER="true", SEPARATOR=",", USER_DEFINED_HEADER="payment_transaction_header";
+    LOAD zelle_transfer_csv TO VERTEX Zelle_Transfer VALUES (
+      $"transfer_id", $"event_ts_ms", $"event_seq", $"amount", $"amount_present",
+      $"currency", $"fraud_label", $"label_known", $"label_available_ts_ms"
+    ) USING HEADER="true", SEPARATOR=",", USER_DEFINED_HEADER="zelle_transfer_header";
+
+    LOAD party_owns_account_csv TO EDGE Party_Owns_Account VALUES (
+      $"from_id", $"to_id", $"valid_from_seq", $"valid_to_seq"
+    ) USING HEADER="true", SEPARATOR=",", USER_DEFINED_HEADER="association_header";
+    LOAD party_uses_token_csv TO EDGE Party_Uses_Token VALUES (
+      $"from_id", $"to_id", $"valid_from_seq", $"valid_to_seq"
+    ) USING HEADER="true", SEPARATOR=",", USER_DEFINED_HEADER="association_header";
+    LOAD token_bound_to_account_csv TO EDGE Token_Bound_To_Account VALUES (
+      $"from_id", $"to_id", $"valid_from_seq", $"valid_to_seq"
+    ) USING HEADER="true", SEPARATOR=",", USER_DEFINED_HEADER="association_header";
+    LOAD party_uses_device_csv TO EDGE Party_Uses_Device VALUES (
+      $"from_id", $"to_id", $"valid_from_seq", $"valid_to_seq"
+    ) USING HEADER="true", SEPARATOR=",", USER_DEFINED_HEADER="association_header";
+    LOAD account_uses_device_csv TO EDGE Account_Uses_Device VALUES (
+      $"from_id", $"to_id", $"valid_from_seq", $"valid_to_seq"
+    ) USING HEADER="true", SEPARATOR=",", USER_DEFINED_HEADER="association_header";
+    LOAD party_uses_ip_csv TO EDGE Party_Uses_IP VALUES (
+      $"from_id", $"to_id", $"valid_from_seq", $"valid_to_seq"
+    ) USING HEADER="true", SEPARATOR=",", USER_DEFINED_HEADER="association_header";
+    LOAD party_has_address_csv TO EDGE Party_Has_Address VALUES (
+      $"from_id", $"to_id", $"valid_from_seq", $"valid_to_seq"
+    ) USING HEADER="true", SEPARATOR=",", USER_DEFINED_HEADER="association_header";
+
+    LOAD transfer_from_account_csv TO EDGE Transfer_From_Account VALUES (
+      $"from_id", $"to_id", $"event_ts_ms", $"event_seq"
+    ) USING HEADER="true", SEPARATOR=",", USER_DEFINED_HEADER="participation_header";
+    LOAD transfer_to_account_csv TO EDGE Transfer_To_Account VALUES (
+      $"from_id", $"to_id", $"event_ts_ms", $"event_seq"
+    ) USING HEADER="true", SEPARATOR=",", USER_DEFINED_HEADER="participation_header";
+    LOAD transfer_from_token_csv TO EDGE Transfer_From_Token VALUES (
+      $"from_id", $"to_id", $"event_ts_ms", $"event_seq"
+    ) USING HEADER="true", SEPARATOR=",", USER_DEFINED_HEADER="participation_header";
+    LOAD transfer_to_token_csv TO EDGE Transfer_To_Token VALUES (
+      $"from_id", $"to_id", $"event_ts_ms", $"event_seq"
+    ) USING HEADER="true", SEPARATOR=",", USER_DEFINED_HEADER="participation_header";
+    LOAD transfer_used_device_csv TO EDGE Transfer_Used_Device VALUES (
+      $"from_id", $"to_id", $"event_ts_ms", $"event_seq"
+    ) USING HEADER="true", SEPARATOR=",", USER_DEFINED_HEADER="participation_header";
+    LOAD transfer_used_ip_csv TO EDGE Transfer_Used_IP VALUES (
+      $"from_id", $"to_id", $"event_ts_ms", $"event_seq"
+    ) USING HEADER="true", SEPARATOR=",", USER_DEFINED_HEADER="participation_header";
+    LOAD transaction_from_account_csv TO EDGE Transaction_From_Account VALUES (
+      $"from_id", $"to_id", $"event_ts_ms", $"event_seq"
+    ) USING HEADER="true", SEPARATOR=",", USER_DEFINED_HEADER="participation_header";
+    LOAD transaction_to_account_csv TO EDGE Transaction_To_Account VALUES (
+      $"from_id", $"to_id", $"event_ts_ms", $"event_seq"
+    ) USING HEADER="true", SEPARATOR=",", USER_DEFINED_HEADER="participation_header";
+    LOAD transaction_from_token_csv TO EDGE Transaction_From_Token VALUES (
+      $"from_id", $"to_id", $"event_ts_ms", $"event_seq"
+    ) USING HEADER="true", SEPARATOR=",", USER_DEFINED_HEADER="participation_header";
+    LOAD transaction_to_token_csv TO EDGE Transaction_To_Token VALUES (
+      $"from_id", $"to_id", $"event_ts_ms", $"event_seq"
+    ) USING HEADER="true", SEPARATOR=",", USER_DEFINED_HEADER="participation_header";
+    LOAD transaction_used_device_csv TO EDGE Transaction_Used_Device VALUES (
+      $"from_id", $"to_id", $"event_ts_ms", $"event_seq"
+    ) USING HEADER="true", SEPARATOR=",", USER_DEFINED_HEADER="participation_header";
+    LOAD transaction_used_ip_csv TO EDGE Transaction_Used_IP VALUES (
+      $"from_id", $"to_id", $"event_ts_ms", $"event_seq"
+    ) USING HEADER="true", SEPARATOR=",", USER_DEFINED_HEADER="participation_header";
+}

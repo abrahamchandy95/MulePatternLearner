@@ -16,7 +16,7 @@ def pool_activity(context: dict[str, Any]) -> dict[str, float]:
 
     These are counts over the payment messages of the context's own candidate pool,
     at most `recent + older + distinct` per relation (`PoolPlan`), not over the account's
-    whole history; the `distinct` stratum favours new counterparties. TigerGraph returns
+    whole history; the pool's `distinct` part favours new counterparties. TigerGraph returns
     the messages strictly before the context cutoff and computes their pair and flow
     fields there over the whole visible history, so every value is cutoff-safe. A
     first-time inflow has no earlier payment in its directed pair

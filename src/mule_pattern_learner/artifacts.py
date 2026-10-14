@@ -67,7 +67,10 @@ EPOCH_COLUMNS: tuple[str, ...] = (
 # the runs of the first control experiments stay complete (docs/architecture.md).
 EARLIER_EPOCH_COLUMNS = tuple(name for name in EPOCH_COLUMNS if name != "validation_pu_risk")
 # predictions/<split>.parquet: the scored observed-label rows of a split (float64 scores).
-PREDICTION_COLUMNS = ("account_id", "group_id", "date", "observed_label", "score")
+PREDICTION_COLUMNS = ("account_id", "date", "observed_label", "score")
+# The columns of predictions written while the split stored a group_id per account, which
+# read_predictions reads without it, so the finished runs before 2026-10-09 still report.
+EARLIER_PREDICTION_COLUMNS = ("account_id", "group_id", "date", "observed_label", "score")
 # audit/<split>.parquet: the scored accounts of a split's audit sample, with their truth,
 # the probability that the sample includes each one, whether the graph revealed the
 # account's label before the split's cutoff, and its ring and label source (-1 and the
@@ -296,7 +299,10 @@ def write_predictions(path: Path, frame: pd.DataFrame) -> None:
 
 
 def read_predictions(path: Path) -> pd.DataFrame:
+    """A split's predictions; one written with a group_id (EARLIER_PREDICTION_COLUMNS) drops it."""
     frame = pd.read_parquet(path)
+    if tuple(frame.columns) == EARLIER_PREDICTION_COLUMNS:
+        frame = frame.drop(columns="group_id")
     if tuple(frame.columns) != PREDICTION_COLUMNS:
         raise ValueError(f"{path} has the columns {list(frame.columns)}")
     return frame
@@ -421,7 +427,7 @@ DIAGNOSTIC_TEXT = (
 # features.parquet: the diagnostic feature table (diagnostics.feature_table), one row per
 # sampled account with these columns first, then its features, each named
 # <family>__<name>. weight is 1 / inclusion_probability, and rejected marks an account
-# TigerGraph rejected, whose features are missing. The two contracts name the query texts
+# TigerGraph rejected, whose features are missing. context_contract names the query text
 # the features were read with.
 FEATURE_TABLE_COLUMNS = (
     "account_id",
@@ -435,7 +441,6 @@ FEATURE_TABLE_COLUMNS = (
     "weight",
     "rejected",
     "context_contract",
-    "analytics_contract",
 )
 
 

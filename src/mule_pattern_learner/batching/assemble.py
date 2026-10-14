@@ -22,7 +22,7 @@ import torch
 
 from ..contract.bounds import FANOUT
 from ..contract.feature_groups import CLIENT_GROUPS, FEATURE_GROUPS, FeaturePlan
-from ..contract.graph_schema import ContextKey
+from ..contract.graph_schema import NO_SPLIT, ContextKey
 from ..contract.sampler_plan import SamplerPlan
 from ..sampling.backend import batch_backend, select_resampled
 from ..sampling.candidates import CandidateTable
@@ -40,12 +40,13 @@ _CLIENT_NAMES = frozenset(n for group in CLIENT_GROUPS for n in FEATURE_GROUPS[g
 class HubLookup(Protocol):
     """Hub status from history visible before the root cutoff (see data/hub_registry.py).
 
-    `phase` is the batch's visibility phase (1 train, 2 validation, 3 test); unscoped
-    batches (`mule score`) use 3. Positional-only, so implementations may name them freely.
+    `phase` is the batch's visibility phase (1 train, 2 validation, 3 test); batches
+    without a split (`mule score`) use 0. Positional-only, so implementations may name
+    them freely.
     """
 
     def is_stub(
-        self, node_type: str, node_id: str, root_cutoff_seq: int, phase: int = 3, /
+        self, node_type: str, node_id: str, root_cutoff_seq: int, phase: int = NO_SPLIT, /
     ) -> bool: ...
 
 
@@ -55,8 +56,7 @@ def child_key(message: dict[str, Any], parent: ContextKey | None = None) -> Cont
         message["node_id"],
         int(message["event_seq"]),
         int(message["event_ts_ms"]),
-        parent.scope_id if parent else "",
-        parent.visibility_phase if parent else 3,
+        parent.visibility_phase if parent else NO_SPLIT,
     )
 
 
@@ -78,7 +78,6 @@ def _stub_row(key: ContextKey, message: dict[str, Any]) -> dict[str, Any]:
         "node_id": key.node_id,
         "cutoff_seq": key.cutoff_seq,
         "cutoff_ms": key.cutoff_ms,
-        "scope_id": key.scope_id,
         "visibility_phase": key.visibility_phase,
         "status": "stub",
         "features": {
@@ -145,8 +144,8 @@ def build_batch(
 
     Hub status of a child and of an outermost peer is looked up at the earliest
     cutoff among the roots that reach it, so it only uses history visible before
-    every such prediction time, and in the batch's visibility phase (3 when the
-    roots are unscoped), so it only counts events visible in that phase.
+    every such prediction time, and in the batch's visibility phase (0 when the
+    roots have no split), so it only counts events visible in that phase.
 
     `sampler_backend` is the run's `resolve_backend` result. Training resolves it
     once on the main thread and passes it here, so every batch of a run samples with
@@ -160,9 +159,9 @@ def build_batch(
     if mode not in ("train", "eval"):
         raise ValueError("Batch mode must be train or eval")
     limits.validate(len(roots), fanouts, plan, sampler)
-    if len({(key.scope_id, key.visibility_phase) for key in roots}) != 1:
-        raise ValueError("A batch must have one visibility scope and phase")
-    phase = roots[0].batch_phase
+    if len({key.visibility_phase for key in roots}) != 1:
+        raise ValueError("A batch must have one visibility phase")
+    phase = roots[0].visibility_phase
     device = torch.device(device)
     backend = batch_backend(sampler, device, mode, sampler_backend)
     counts: dict[str, Any] = {"roots": len(roots), "sampler_backend": backend}
@@ -260,7 +259,7 @@ def build_batch(
         shape = (len(selected), fanout)
         arrays[prefix + "edge"] = np.zeros((*shape, len(plan.edge_names)), dtype=np.float32)
         arrays[prefix + "edge"][index_i, index_j] = block["edge"]
-        for name in ("relation", "rail", "channel", "stratum"):
+        for name in ("relation", "rail"):
             arrays[prefix + name] = np.zeros(shape, dtype=np.int64)
             arrays[prefix + name][index_i, index_j] = block[name]
         arrays[prefix + "mask"] = np.zeros(shape, dtype=bool)

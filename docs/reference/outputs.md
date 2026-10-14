@@ -10,32 +10,32 @@ summary ([Command line](cli.md)); the full records are here.
 
 ## A prepared dataset: `data/<dataset id>/`
 
-The dataset id fingerprints the dataset settings, the source id (identity of the loaded
-data, recorded on the scope) among them
+The dataset id fingerprints the dataset settings, the fingerprint of the graph's vertex
+counts (the identity of the loaded data) among them
 ([Configuration](configuration.md#which-settings-matter-where)); runs and audits with
 those settings share the directory. Each preparation stage is recorded in the manifest
 when done, so an interrupted preparation resumes.
 
 | File | Content |
 |---|---|
-| `manifest.json` | `source` (source id, vertex counts, hashes of the query files preparation ran, dataset id, dataset settings, scope id), `status` (`preparing`, then `ready`), `created_at_utc`, each parquet file's sha256, each split's population, observed positives per split (`known_mules`), each date's cutoff sequence (`cutoff_seqs`), the hub registry's threshold, scope and counts |
-| `accounts.parquet` | Seed reservoirs and observed positives: `account_id`, `first_seen_seq`, `first_seen_ts_ms`, `group_id`, `observed_positive`, `known_from_ms`, `split`, `in_marginal` (in its split's label-blind reservoir; positives kept outside it are not) |
+| `manifest.json` | `source` (vertex counts, hashes of the query files preparation ran, dataset id, dataset settings), `status` (`preparing`, then `ready`), `created_at_utc`, each parquet file's sha256, each split's population, observed positives per split (`known_mules`), each date's cutoff sequence (`cutoff_seqs`), the hub registry's threshold, `hub_by_phase` and counts |
+| `accounts.parquet` | Seed reservoirs and observed positives: `account_id`, `first_seen_ts_ms`, `observed_positive`, `known_from_ms`, `split`, `in_marginal` (in its split's label-blind reservoir; positives kept outside it are not) |
 | `observed_labels.parquet` | `account_id`, `known_positive`, `known_from_ms`: revealed positives and discovery times ([Labels](labels.md#what-training-reads)) |
-| `hubs.parquet` | Hub registry: `account_id`, `cutoff_seq`, `visibility_phase`, `max_visible`, `max_degree`, `reason` |
-| `events.jsonl` | Each connected preparation's events: scope found or created, label reveal, hub counts, and the ready dataset's `dataset` event |
+| `hubs.parquet` | Hub registry: `account_id`, `cutoff_seq`, `visibility_phase`, `max_visible` |
+| `events.jsonl` | Each connected preparation's events: split found or created, label reveal, hub counts, and the ready dataset's `dataset` event |
 | `contexts/` | The context cache on disk: one gzip JSON file per context, `<first two hex digits>/<name>.json.gz`, holding TigerGraph's row |
 
 At the built-in settings: at most 24,000 reservoir accounts plus the observed positives
 (at most 40,000); accounts and labels are each capped at 100,000 rows. Training,
 `mule check` and the audits check the files against the manifest's hashes and the query
 files against the repository's. Every reader of the dataset's graph (training, audits,
-diagnostics) first checks its vertex counts and scope against the recorded ones (the
+diagnostics) first checks its vertex counts and split against the recorded ones (the
 frozen-source check).
 
 **The context cache:**
 
-- Entry name: fingerprint of the hop, context key, feature flags and candidate pool
-  requested at that hop, `CONTEXT_CONTRACT`, dataset id and frozen source.
+- Entry name: fingerprint of the hop, context key, candidate pool requested at that hop,
+  feature groups the source validates, `CONTEXT_CONTRACT`, dataset id and frozen source.
 - Lookup is memory, cache, then TigerGraph; every returned row is kept, so later runs of
   the dataset (another seed, a variant requesting the same groups, the audits) request no
   context an earlier one read.
@@ -65,7 +65,7 @@ frozen-source check).
 | `history.csv` | train | One row per log interval (`runtime.log_every_steps`) |
 | `epochs.csv` | train | One row per epoch |
 | `events.jsonl` | train, evaluate, score | Every event of the commands that worked on the run ([events.jsonl and the console](#eventsjsonl-and-the-console)) |
-| `predictions/validation.parquet`, `predictions/test.parquet` | train | Proxy scores: `account_id`, `group_id`, `date`, `observed_label`, `score` |
+| `predictions/validation.parquet`, `predictions/test.parquet` | train | Proxy scores: `account_id`, `date`, `observed_label`, `score` |
 | `metrics.json` | train | The record of a complete run |
 | `audit/<split>.json`, `audit/<split>.parquet`, `audit/<split>_rejected.txt` | evaluate | Ground-truth audit of `validation` and `test` |
 | `scores/<accounts stem>_<date>.parquet`, `scores/<accounts stem>_<date>_rejected.txt` | score | Scores of a file's accounts; ids TigerGraph rejected |
@@ -131,7 +131,7 @@ labels, not the ground truth.
 - `audit/<split>.json`: `split`, `purpose` (`decisions` for validation, `reporting` for
   test), `date`, `selection` (`model.pt`'s `selected_on`), `population_accounts`,
   `hidden_metrics`, `hidden_intervals`, `metrics`, `intervals`, `constants`,
-  `revealed_positives`, `hidden_positives`, rejection counts, `scope`, `model_changed`.
+  `revealed_positives`, `hidden_positives`, rejection counts, `model_changed`.
 
 | Key | Content |
 |---|---|
@@ -242,16 +242,16 @@ audit AP.
 
 | File | Content |
 |---|---|
-| `features.parquet` | Feature table, one row per sampled account per split: `account_id`, `split`, `date`, `is_mule`, `revealed`, `ring_id`, `label_source`, `inclusion_probability`, `weight` (1 / `inclusion_probability`), `rejected`, `context_contract`, `analytics_contract`, then a column per feature, `<family>__<name>` |
+| `features.parquet` | Feature table, one row per sampled account per split: `account_id`, `split`, `date`, `is_mule`, `revealed`, `ring_id`, `label_source`, `inclusion_probability`, `weight` (1 / `inclusion_probability`), `rejected`, `context_contract`, then a column per feature, `<family>__<name>` |
 | `<analysis>.csv` | One long table per analysis, named with underscores (`learning_curve.csv`) |
-| `study.json` | Dataset, run compared, reveal salt and budget, each analysis' last outcome (`written`, `kept`, or `skipped` with reason) |
+| `study.json` | Dataset, run compared, reveal salt, each analysis' last outcome (`written`, `kept`, or `skipped` with reason) |
 | `events.jsonl` | Every `mule diagnose` event: each analysis' outcome (`diagnose`), feature table splits (`feature_table`), retries, warnings |
 | `plots/<figure>.png` | Figures |
 | `report.md` | Tables, linking the figures |
 
-Feature families: `model` (root's model inputs), `messages` (hop-1 pool summaries),
-`account` (analytics query's account history), `message_context`. Each table is long: key
-columns, then `metric` and `value`; a key not applying to a row is empty.
+Feature families: `model` (root's model inputs), `messages` (hop-1 pool summaries). Each
+table is long: key columns, then `metric` and `value`; a key not applying to a row is
+empty.
 
 | Table | Columns | Figures |
 |---|---|---|
@@ -278,6 +278,8 @@ columns, then `metric` and `value`; a key not applying to a row is empty.
 - `proxy_validity.csv` subsets: `hidden` and `revealed` from the run's audit samples
   (which hold every hidden mule), weighted to the population; `all`, the proxy
   predictions, unweighted.
+- `reveal_spread.csv` metrics, per salt and split: `mules` and `revealed` (every mule
+  discovered by the split's cutoff).
 
 ## The archive: `results/archive/`
 

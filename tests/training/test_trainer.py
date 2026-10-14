@@ -42,7 +42,7 @@ from mule_pattern_learner.model.tgat import TGAT
 from mule_pattern_learner.paths import DatasetPaths, RunPaths
 from mule_pattern_learner.testing.builders import (
     RUNTIME_CHANGES,
-    UNIT_SOURCE,
+    UNIT_COUNTS,
     assigned_accounts,
     hub_registry,
     neighbourhood,
@@ -245,7 +245,7 @@ def test_the_run_records_its_settings_provenance_and_epochs(
     assert set(provenance["versions"]) == set(PACKAGES) and provenance["versions"]["torch"]
     assert (provenance["device"], provenance["sampler_backend"]) == ("cpu", "torch")
     assert (provenance["threads"], provenance["deterministic"]) == (1, True)
-    assert provenance["dataset_id"] == dataset_id(UNIT_SOURCE, config) == result["dataset_id"]
+    assert provenance["dataset_id"] == dataset_id(UNIT_COUNTS, config) == result["dataset_id"]
     # The metrics hold no history: its intervals and epochs have their own files.
     assert "history" not in json.loads(run.metrics.read_text())
     assert result["proxy_unlabeled_limit"] == config.training.proxy_unlabeled_limit
@@ -297,10 +297,11 @@ def test_resume_refuses_a_dataset_other_than_the_runs(
     assert RunPaths(tmp_path / "checkpointed").resume.exists()
     # Stopped before its first checkpoint: config.json names the dataset.
     assert not RunPaths(tmp_path / "early").resume.exists()
-    ours = dataset_id(UNIT_SOURCE, config)
+    ours = dataset_id(UNIT_COUNTS, config)
     # The graph was reloaded and a new dataset prepared for the same settings.
-    other, _, _ = prepared_dataset(tmp_path / "other", config, monkeypatch, "another_source")
-    theirs = dataset_id("another_source", config)
+    reloaded = {"Account": 201}
+    other, _, _ = prepared_dataset(tmp_path / "other", config, monkeypatch, reloaded)
+    theirs = dataset_id(reloaded, config)
     for name in ("checkpointed", "early"):
         with pytest.raises(ValueError, match=f"another dataset: dataset id {ours} .given {theirs}"):
             trainer.train(
@@ -816,7 +817,6 @@ def prepared(
     executor = FakeTigerGraph(population=scoped_accounts(), before=frozen_labels(dataset), **kwargs)
     prepare(
         config,
-        UNIT_SOURCE,
         dataset,
         {"Account": 1000},
         TigerGraphObservedLabelReader(),

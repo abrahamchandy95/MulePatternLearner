@@ -1,12 +1,11 @@
-"""Reveal the known mules in the graph, through the Account label contract.
+"""Reveal the known mules in the graph, through the Account labels.
 
 A fresh PhantomLedger load masks every mule, so training would have no positives.
 Preparing a dataset calls the reveal query (gsql/queries/label_reveal.gsql), which
 simulates when a bank would have discovered each mule (victim reports, network tracing,
-monitoring; see docs/explanation/label-reveal.md) and reveals the mules discovered
-before each split's cutoff: every one, or at most `scope.reveal_per_split` per split.
-Training then reads only the revealed positives and their discovery clocks; ground
-truth stays in the graph for the oracle audit.
+monitoring; see docs/explanation/label-reveal.md) and reveals every mule discovered
+before its split's cutoff. Training then reads only the revealed positives and their
+discovery clocks; ground truth stays in the graph for the oracle audit.
 """
 
 from __future__ import annotations
@@ -14,34 +13,26 @@ from __future__ import annotations
 from typing import Any
 
 from ..config import ScopeConfig, SplitDates
-from ..contract.bounds import REVEAL_PER_SPLIT
 from ..contract.clock import timestamp
-from ..contract.graph_schema import SPLIT_PHASE
 from ..contract.server import REVEAL_QUERY
 from ..runtime.progress import emit
 from .executor import QueryExecutor, merged_rows
-from .labels import validate_supervision
 
 # The reveal's statuses for a graph that has known labels: written by the configured
-# reveal, or by another one (other settings, or code that recorded no budget).
+# reveal, or by another one (another salt, a capped reveal, or code that recorded no
+# budget).
 CURRENT, DIFFERENT = "already_revealed", "revealed_differently"
-
-
-def reveal_budget(scope: ScopeConfig) -> int:
-    """The most mules the reveal makes known per split: the cap, or the bound for none."""
-    if scope.reveal_per_split is None:
-        return REVEAL_PER_SPLIT.high
-    return scope.reveal_per_split
+# How a `reveal` event names the configured reveal's labels revealed again for a split
+# the run created.
+NEW_SPLIT = "revealed for the new split"
 
 
 def reveal_parameters(scope: ScopeConfig, dates: SplitDates, *, apply: bool) -> dict[str, Any]:
-    """Query parameters: the scope, each split's latest cutoff, the budget and the salt."""
+    """Query parameters: each split's latest cutoff and the salt."""
     return {
-        "scope_id": scope.id,
         "train_cutoff_ms": max(timestamp(d) for d in dates.train),
         "validation_cutoff_ms": max(timestamp(d) for d in dates.validation),
         "test_cutoff_ms": max(timestamp(d) for d in dates.test),
-        "budget": reveal_budget(scope),
         "salt": scope.reveal_salt,
         "apply": apply,
     }
@@ -81,75 +72,44 @@ def verify_labels(executor: QueryExecutor, scope: ScopeConfig, dates: SplitDates
 
 
 def ensure_revealed_labels(
-    executor: QueryExecutor, scope: ScopeConfig, dates: SplitDates
+    executor: QueryExecutor, scope: ScopeConfig, dates: SplitDates, *, new_split: bool = False
 ) -> dict[str, Any]:
-    """Make the graph's labels the configured reveal's, then check the label contract.
+    """Make the graph's labels the configured reveal's.
 
     A graph without known labels is revealed; one whose labels the configured reveal
-    wrote is kept; one whose labels another reveal wrote (other settings, or code that
-    recorded no budget) is revealed again, which a `reveal` event records with the count
-    of mules whose label differed. Datasets prepared from the former labels no longer
-    match the graph, and every run of them is refused (tigergraph.provenance).
-    Without a cap, a split with more discovered mules than the reveal can take is an
-    error, never a silent cap. Prints the reveal plan (mules, eligible and revealed per
-    split, and channels) or the existing label counts.
+    wrote is kept; one whose labels another reveal wrote (another salt, a capped reveal,
+    or code that recorded no budget) is revealed again, which a `reveal` event records
+    with the count of mules whose label differed. Datasets prepared from the former
+    labels no longer match the graph, and every run of them is refused
+    (tigergraph.provenance). Prints the mules revealed per split, or how many labels the
+    graph had revealed.
+
+    After the run created the split (``new_split``), labels the configured reveal wrote
+    are revealed again with force, since they followed the partitions of the split
+    before; an identical split gets identical labels. Labels another source wrote, on a
+    graph with no internal mule, are kept as always.
     """
     result = run_reveal(executor, scope, dates)
     replaced: dict[str, Any] = {}
-    if result.get("status") == DIFFERENT:
+    status = result.get("status")
+    if status == DIFFERENT:
         replaced = {
             "other_reveal": result.get("other_reveal"),
             "reveal_record": result.get("reveal_record"),
         }
         result = run_reveal(executor, scope, dates, force=True)
+    renewed = new_split and status == CURRENT and bool(result.get("mules"))
+    if renewed:
+        result = run_reveal(executor, scope, dates, force=True)
     status = result.get("status")
     if status not in ("ok", CURRENT):
         raise ValueError(f"TigerGraph rejected the label reveal: {result}")
     if status == CURRENT:
-        summary = {
-            "labels": "already revealed",
-            "known_labels": result.get("known_labels"),
-            "revealed_labels": result.get("revealed_labels"),
-        }
+        summary = {"labels": "already revealed", "revealed_labels": result.get("revealed_labels")}
     else:
-        summary = {
-            "labels": "revealed again" if replaced else "revealed now",
-            **{
-                key: result.get(key)
-                for key in (
-                    "version",
-                    "budget",
-                    "reveal_record",
-                    "mules",
-                    "eligible",
-                    "revealed",
-                    "eligible_by_channel",
-                    "revealed_by_channel",
-                )
-            },
-        }
+        labels = "revealed again" if replaced else NEW_SPLIT if renewed else "revealed now"
+        summary = {"labels": labels, "revealed": result.get("revealed")}
         if replaced:
             summary["replaced"] = replaced
-        budget = reveal_budget(scope)
-        eligible = {
-            split: int(result.get("eligible", {}).get(str(part), 0))
-            for split, part in SPLIT_PHASE.items()
-        }
-        if scope.reveal_per_split is None:
-            over = {split: count for split, count in eligible.items() if count > budget}
-            if over:
-                raise ValueError(
-                    f"More mules were discovered by the cutoff than the reveal takes ({budget} "
-                    f"per split): {over}; the reveal revealed only {budget} of them"
-                )
-        else:
-            short = {split: count for split, count in eligible.items() if count < budget}
-            if short:
-                # Never filled with mules no discovery channel had found by the cutoff.
-                summary["shortfall_discovered_by_cutoff"] = short
-    audit = validate_supervision(executor)
-    summary["contract"] = {
-        key: audit.get(key) for key in ("known_labels", "true_mules", "revealed_positives")
-    }
     emit({"event": "reveal", **summary})
     return summary

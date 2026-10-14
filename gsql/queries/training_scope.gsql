@@ -1,85 +1,53 @@
 USE GRAPH Mule_Pattern_Learner
 
-/* Frozen experiment partition; never reads truth or changes business attributes.
-   Whole ownership components share a partition, including closed tenures.
-   Internal IDs are used only to seed a source-specific partition, not model inputs.
-   New/reloaded graphs require a new scope/source ID.
-   A seeded hash of each component places it in one of 10000 buckets; the bucket's
-   middle, as a share of them, below train_share is train (1), below train_share +
-   validation_share validation (2), and otherwise test (3). The shares are positive,
-   add up to 1 and are recorded on the scope vertex; the client sends whole numbers of
-   buckets, so no middle lies near a boundary.
-   unowned_policy places the unowned Accounts: those whose ownership component contains
-   no Party (they have no ownership edge, so each is its own singleton component).
-   - "independent": every component, owned or not, gets its own hash partition and
-     group_id to_string(component). It reproduces scopes built by the original query,
-     which had no unowned rule.
-   - "shared": unowned EXTERNAL accounts (counterparties outside the bank) and unowned
-     bank ledger accounts (internal, account_type "gl": the bank's own income books that
-     fee and interest postings credit) are shared infrastructure: partition 1 (visible in
-     every phase) and group_id "shared:<component>". Other unowned INTERNAL accounts keep
-     their independent hash partition and are never shared.
-   - "linked": external and ledger accounts as in "shared". An unowned internal
-     (non-ledger) account whose distinct
-     counterparties among OWNED internal deposit accounts (the other Account endpoint of
-     any Payment_Transaction or Zelle_Transfer, all time, label blind) are exactly one
-     account D takes D's ownership component, so it gets D's partition and group_id.
-     This runs after the components are final and never feeds the min propagation.
-     Other unowned internal accounts keep their independent hash partition.
-   Any other value is invalid_parameters. Components that contain a Party keep exactly
-   the same component, hash partition and group_id under every policy: the component
-   labels and the hash expression do not depend on the policy, and only unowned accounts
-   are ever moved. summarize_scope_policy reads the policy back from stored membership. */
+/* Splits every Account and Party into train (1), validation (2) and test (3) by ownership
+   group, so one owner's accounts never span two splits; a seeded hash of each group picks
+   its split by the shares. A graph holds one split, the vertex "split". Reads no labels. */
 CREATE OR REPLACE QUERY create_training_scope(
-  STRING scope_id, STRING source_id, DOUBLE train_share, DOUBLE validation_share,
-  DOUBLE test_share, UINT split_seed = 42, INT max_iterations = 100,
-  STRING unowned_policy = "independent"
+    DOUBLE train_share,
+    DOUBLE validation_share,
+    DOUBLE test_share,
+    UINT split_seed = 42
 ) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
-  MinAccum<UINT> @component;
-  OrAccum @shared;
-  /* Linking: on an event, its owned deposit endpoints; on an unowned internal account,
-     the union over its events. min == max means exactly one distinct counterparty. */
-  OrAccum @link_found;
-  MinAccum<INT> @link_min;
-  MaxAccum<INT> @link_max;
-  MinAccum<UINT> @link_component;
-  SetAccum<UINT> @@party_components;
-  OrAccum @@changed;
-  SumAccum<INT> @@shared_accounts, @@linked_accounts;
-  INT iteration = 0;
-  IF scope_id == "" OR source_id == "" OR max_iterations < 1
-     OR train_share <= 0 OR validation_share <= 0 OR test_share <= 0
-     OR train_share + validation_share + test_share < 0.999999
-     OR train_share + validation_share + test_share > 1.000001
-     OR (unowned_policy != "independent" AND unowned_policy != "shared"
-         AND unowned_policy != "linked") THEN
-    PRINT "invalid_parameters" AS status; RETURN;
-  END;
-  Scopes = {Temporal_Training_Scope.*};
-  Existing = SELECT r FROM Scopes:r WHERE r.scope_id == scope_id;
-  IF Existing.size() > 0 THEN PRINT "scope_already_exists" AS status; RETURN; END;
-  Entities = {Account.*, Party.*};
-  Accounts = {Account.*};
-  Init = SELECT s FROM Entities:s POST-ACCUM s.@component = getvid(s);
-  @@changed = TRUE;
-  WHILE @@changed AND iteration < max_iterations DO
-    @@changed = FALSE;
-    Propagate = SELECT t FROM Entities:s -((Party_Owns_Account>|Account_Owned_By_Party>):e)- :t
-      ACCUM IF s.@component < t.@component THEN
-        t.@component += s.@component, @@changed += TRUE
-      END;
-    iteration = iteration + 1;
-  END;
-  IF @@changed THEN PRINT "ownership_components_did_not_converge" AS status; RETURN; END;
-  IF unowned_policy != "independent" THEN
+    MinAccum<UINT> @component;
+    OrAccum @shared;
+    /* Linking: on an event, its owned deposit endpoints; on an unowned internal account,
+       the union over its events. min == max means exactly one distinct counterparty. */
+    OrAccum @link_found;
+    MinAccum<INT> @link_min;
+    MaxAccum<INT> @link_max;
+    MinAccum<UINT> @link_component;
+    SetAccum<UINT> @@party_components;
+    OrAccum @@changed;
+    INT iteration = 0;
+    IF train_share <= 0 OR validation_share <= 0 OR test_share <= 0
+       OR train_share + validation_share + test_share < 0.999999
+       OR train_share + validation_share + test_share > 1.000001 THEN
+        PRINT "invalid_parameters" AS status; RETURN;
+    END;
+    Scopes = {Temporal_Training_Scope.*};
+    IF Scopes.size() > 0 THEN PRINT "scope_already_exists" AS status; RETURN; END;
+    Entities = {Account.*, Party.*};
+    Accounts = {Account.*};
+    Init = SELECT s FROM Entities:s POST-ACCUM s.@component = getvid(s);
+    @@changed = TRUE;
+    WHILE @@changed AND iteration < 100 DO
+        @@changed = FALSE;
+        Propagate = SELECT t FROM Entities:s -((Party_Owns_Account>|Account_Owned_By_Party>):e)- :t
+          ACCUM IF s.@component < t.@component THEN
+            t.@component += s.@component, @@changed += TRUE
+          END;
+        iteration = iteration + 1;
+    END;
+    IF @@changed THEN PRINT "ownership_components_did_not_converge" AS status; RETURN; END;
+    /* Unowned accounts: external and "gl" ledger ones are shared (partition 1); an internal
+       one with one distinct owned internal deposit counterparty joins that account's group. */
     Parties = {Party.*};
     PartyComponents = SELECT p FROM Parties:p ACCUM @@party_components += p.@component;
     SharedAccounts = SELECT a FROM Accounts:a
       WHERE (a.is_external OR a.account_type == "gl")
         AND NOT @@party_components.contains(a.@component)
-      ACCUM a.@shared += TRUE, @@shared_accounts += 1;
-  END;
-  IF unowned_policy == "linked" THEN
+      ACCUM a.@shared += TRUE;
     Linkable = SELECT a FROM Accounts:a
       WHERE NOT a.is_external AND a.account_type != "gl"
         AND NOT @@party_components.contains(a.@component);
@@ -113,129 +81,58 @@ CREATE OR REPLACE QUERY create_training_scope(
         a.@link_component += t.@link_component;
     Linked = SELECT a FROM Linkable:a
       WHERE a.@link_found AND a.@link_min == a.@link_max
-      POST-ACCUM a.@component = a.@link_component, @@linked_accounts += 1;
-  END;
-  INSERT INTO Temporal_Training_Scope VALUES (
-    scope_id, source_id, split_seed, train_share, validation_share, test_share, FALSE);
-  Membership = SELECT s FROM Entities:s
-    ACCUM IF s.@shared THEN
-        INSERT INTO Entity_In_Training_Scope VALUES (
-          s, scope_id Temporal_Training_Scope, 1, "shared:" + to_string(s.@component))
-      ELSE
-        INSERT INTO Entity_In_Training_Scope VALUES (
-          s, scope_id Temporal_Training_Scope,
-          CASE WHEN ((((s.@component % 2147483647) * 1103515245 + split_seed) % 2147483647) % 10000 + 0.5) / 10000 < train_share THEN 1
+      POST-ACCUM a.@component = a.@link_component;
+    INSERT INTO Temporal_Training_Scope VALUES (
+      "split", split_seed, train_share, validation_share, test_share, FALSE);
+    Membership = SELECT s FROM Entities:s
+      ACCUM INSERT INTO Entity_In_Training_Scope VALUES (
+          s, "split" Temporal_Training_Scope,
+          CASE WHEN s.@shared THEN 1
+               WHEN ((((s.@component % 2147483647) * 1103515245 + split_seed) % 2147483647) % 10000 + 0.5) / 10000 < train_share THEN 1
                WHEN ((((s.@component % 2147483647) * 1103515245 + split_seed) % 2147483647) % 10000 + 0.5) / 10000 < train_share + validation_share THEN 2
-               ELSE 3 END,
-          to_string(s.@component))
-      END;
-  PRINT "ok" AS status, scope_id AS scope_id, unowned_policy AS unowned_policy,
-    iteration AS iterations, Entities.size() AS expected_members,
-    @@shared_accounts AS shared_accounts, @@linked_accounts AS linked_accounts;
+               ELSE 3 END);
+    PRINT "ok" AS status, Entities.size() AS expected_members;
 }
 
-/* include_observed = TRUE maps only the label contract's revealed positive: withheld
-   labels and label knowledge never leave. */
+/* The split's internal deposit accounts, by id. observed_positive and known_from_ms are
+   the revealed label (pu_label 1) and its discovery time; no other label leaves. */
 CREATE OR REPLACE QUERY list_scope_accounts(
-  STRING scope_id, STRING after_id = "", INT batch_size = 10000,
-  BOOL include_observed = FALSE
+    STRING after_id = "",
+    INT batch_size = 10000
 ) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
-  MaxAccum<INT> @partition;
-  MaxAccum<STRING> @group;
-  OrAccum @positive;
-  MaxAccum<UINT> @known_ms;
-  IF batch_size < 1 OR batch_size > 10000 THEN PRINT "invalid_batch_size" AS status; RETURN; END;
-  Scopes = {Temporal_Training_Scope.*};
-  ReadyScope = SELECT r FROM Scopes:r WHERE r.scope_id == scope_id AND r.ready;
-  IF ReadyScope.size() != 1 THEN PRINT "scope_not_ready" AS status; RETURN; END;
-  Accounts = SELECT a FROM ReadyScope:r -(Training_Scope_Has_Entity>:e)- Account:a
-    WHERE a.id > after_id AND a.account_type == "deposit" AND NOT a.is_external
-    ACCUM a.@partition += e.partition, a.@group += e.group_id
-    ORDER BY a.id ASC LIMIT batch_size;
-  IF include_observed THEN
+    MaxAccum<INT> @partition;
+    OrAccum @positive;
+    MaxAccum<UINT> @known_ms;
+    IF batch_size < 1 OR batch_size > 10000 THEN PRINT "invalid_batch_size" AS status; RETURN; END;
+    Scopes = {Temporal_Training_Scope.*};
+    ReadyScope = SELECT r FROM Scopes:r WHERE r.ready;
+    IF ReadyScope.size() != 1 THEN PRINT "scope_not_ready" AS status; RETURN; END;
+    Accounts = SELECT a FROM ReadyScope:r -(Training_Scope_Has_Entity>:e)- Account:a
+      WHERE a.id > after_id AND a.account_type == "deposit" AND NOT a.is_external
+      ACCUM a.@partition += e.partition
+      ORDER BY a.id ASC LIMIT batch_size;
     Labels = SELECT a FROM Accounts:a
-      WHERE a.pu_label == 1 AND a.is_mule == 1 AND a.mule_label_known AND NOT a.is_mule_masked
+      WHERE a.pu_label == 1
       ACCUM a.@positive += TRUE, a.@known_ms += a.mule_label_available_ts_ms;
-  END;
-  PRINT "ok" AS status;
-  PRINT Accounts[Accounts.id AS account_id, Accounts.first_seen_seq AS first_seen_seq,
-    Accounts.first_seen_ts_ms AS first_seen_ts_ms, Accounts.@partition AS partition,
-    Accounts.@group AS group_id, Accounts.@positive AS observed_positive,
-    Accounts.@known_ms AS known_from_ms] AS accounts;
+    PRINT "ok" AS status;
+    PRINT Accounts[Accounts.id AS account_id, Accounts.first_seen_ts_ms AS first_seen_ts_ms,
+      Accounts.@partition AS partition, Accounts.@positive AS observed_positive,
+      Accounts.@known_ms AS known_from_ms] AS accounts;
 }
 
 /* A separate query sees committed membership writes and verifies completeness. */
-CREATE OR REPLACE QUERY finalize_training_scope(STRING scope_id, UINT expected_members)
-FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
-  SumAccum<UINT> @@members;
-  SumAccum<UINT> @@invalid;
-  Scopes = {Temporal_Training_Scope.*};
-  Selected = SELECT r FROM Scopes:r WHERE r.scope_id == scope_id;
-  IF Selected.size() != 1 OR expected_members == 0 THEN PRINT "invalid_scope" AS status; RETURN; END;
-  Members = SELECT a FROM Selected:r -(Training_Scope_Has_Entity>:e)- :a
-    ACCUM @@members += 1,
-      IF e.partition < 1 OR e.partition > 3 OR e.group_id == "" THEN @@invalid += 1 END;
-  IF @@members != expected_members OR @@invalid > 0 THEN
-    PRINT "incomplete_membership" AS status, @@members AS members; RETURN;
-  END;
-  Mark = SELECT r FROM Selected:r POST-ACCUM r.ready = TRUE;
-  PRINT "ok" AS status, @@members AS members;
-}
-
-/* Read-only: how a ready scope placed its unowned member Accounts. An Account is unowned
-   when it has no Account_Owned_By_Party edge; it is then its own ownership component, so
-   its component id is getvid(account). Its membership group_id names the rule used:
-   - shared: group_id starts with "shared:" (partition 1, visible in every phase);
-   - independent: group_id == to_string(getvid(account)), its own component's hash;
-   - linked: any other group_id, the component of the one owned deposit account it
-     transacts with.
-   Counts are split by internal/external. Infer the scope's unowned_policy:
-   - independent: shared_internal + shared_external + linked_internal + linked_external
-     == 0 (also scopes built by the original query, which had no unowned rule);
-   - shared: shared_external > 0, independent_external == 0, shared_internal == 0 and
-     linked_internal + linked_external == 0;
-   - linked: as shared, but linked_internal > 0 (shared_external is 0 when the scope has
-     no unowned external accounts).
-   shared_internal > 0 (or linked_external > 0) is none of the three policies:
-   shared_internal comes from the older rule that shared every unowned account.
-   Policies that write identical membership cannot be told apart and need not be: without
-   unowned external accounts all three agree, and shared equals linked when no internal
-   account has exactly one owned deposit counterparty. */
-CREATE OR REPLACE QUERY summarize_scope_policy(STRING scope_id)
-FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
-  MaxAccum<STRING> @group;
-  OrAccum @classified;
-  SumAccum<INT> @@members, @@unowned;
-  SumAccum<INT> @@shared_internal, @@shared_external, @@independent_internal,
-    @@independent_external, @@linked_internal, @@linked_external;
-  SumAccum<INT> @@shared_ledger, @@ledger_accounts;
-  Scopes = {Temporal_Training_Scope.*};
-  ReadyScope = SELECT r FROM Scopes:r WHERE r.scope_id == scope_id AND r.ready;
-  IF ReadyScope.size() != 1 THEN PRINT "scope_not_ready" AS status; RETURN; END;
-  Members = SELECT v FROM ReadyScope:r -(Training_Scope_Has_Entity>:e)- :v
-    ACCUM @@members += 1;
-  Unowned = SELECT a FROM ReadyScope:r -(Training_Scope_Has_Entity>:e)- Account:a
-    WHERE a.outdegree("Account_Owned_By_Party") == 0
-    ACCUM a.@group += e.group_id, @@unowned += 1,
-      IF a.account_type == "gl" AND NOT a.is_external THEN @@ledger_accounts += 1 END;
-  Shared = SELECT a FROM Unowned:a
-    WHERE a.@group LIKE "shared:%"
-    ACCUM a.@classified += TRUE,
-      IF a.is_external THEN @@shared_external += 1
-      ELSE IF a.account_type == "gl" THEN @@shared_ledger += 1
-      ELSE @@shared_internal += 1 END;
-  Independent = SELECT a FROM Unowned:a
-    WHERE a.@group == to_string(getvid(a))
-    ACCUM a.@classified += TRUE,
-      IF a.is_external THEN @@independent_external += 1 ELSE @@independent_internal += 1 END;
-  Linked = SELECT a FROM Unowned:a
-    WHERE NOT a.@classified
-    ACCUM IF a.is_external THEN @@linked_external += 1 ELSE @@linked_internal += 1 END;
-  PRINT "ok" AS status, scope_id AS scope_id, @@members AS members,
-    @@unowned AS unowned_accounts,
-    @@shared_internal AS shared_internal, @@shared_external AS shared_external,
-    @@independent_internal AS independent_internal,
-    @@independent_external AS independent_external,
-    @@linked_internal AS linked_internal, @@linked_external AS linked_external,
-    @@shared_ledger AS shared_ledger, @@ledger_accounts AS ledger_accounts;
+CREATE OR REPLACE QUERY finalize_training_scope(UINT expected_members)
+    FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+    SumAccum<UINT> @@members;
+    SumAccum<UINT> @@invalid;
+    Scopes = {Temporal_Training_Scope.*};
+    IF Scopes.size() != 1 OR expected_members == 0 THEN PRINT "invalid_scope" AS status; RETURN; END;
+    Members = SELECT a FROM Scopes:r -(Training_Scope_Has_Entity>:e)- :a
+      ACCUM @@members += 1,
+        IF e.partition < 1 OR e.partition > 3 THEN @@invalid += 1 END;
+    IF @@members != expected_members OR @@invalid > 0 THEN
+        PRINT "incomplete_membership" AS status, @@members AS members; RETURN;
+    END;
+    Mark = SELECT r FROM Scopes:r POST-ACCUM r.ready = TRUE;
+    PRINT "ok" AS status, @@members AS members;
 }

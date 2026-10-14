@@ -95,7 +95,7 @@ class BatchLimits:
 class BatchIndex:
     """Dense [0,N) IDs for this batch only; equal keys reuse the same slot.
 
-    The stable key uses vertex type + public ID + clocks + scope/phase. TigerGraph
+    The stable key uses vertex type + public ID + clocks + phase. TigerGraph
     internal IDs never become tensor offsets. Equal text IDs of different types,
     or an account at different historical times, remain distinct.
     """

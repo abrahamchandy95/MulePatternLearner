@@ -1,10 +1,8 @@
 """The context query's request protocol: requests, bisection and validation.
 
-render.py renders the query; this module is its client side. It validates every
-returned context against its key, clocks and the feature contract, and splits a
-multi-key request that TigerGraph times out on. The analytics query's client
-(analytics_query.py) shares the checks (check_context), the handling of a call's rows
-(indexed_rows) and the bisection (bisected).
+gsql/queries/training_context.gsql is the query; this module is its client side. It
+validates every returned context against its key, clocks and the feature contract, and
+splits a multi-key request that TigerGraph times out on.
 """
 
 from __future__ import annotations
@@ -18,7 +16,7 @@ import numpy as np
 
 from ..contract.bounds import REQUEST_KEYS
 from ..contract.feature_groups import CLIENT_GROUPS, FEATURE_GROUPS, FeaturePlan
-from ..contract.graph_schema import CHANNELS, NODE_TYPES, RAILS, RELATIONS, STRATA, ContextKey
+from ..contract.graph_schema import NODE_TYPES, RAILS, RELATIONS, ContextKey
 from ..contract.sampler_plan import SamplerPlan
 from ..contract.server import CONTEXT_CONTRACT, CONTEXT_QUERY
 from ..contract.time_basis import BASIS_ID, fourier64
@@ -28,15 +26,7 @@ from .executor import CONVERSION_ERRORS, QueryExecutor, ServerTimeoutError, erro
 # Per-request statuses: the query continues with the next request and the
 # client receives None for that key. Every other non-ok status is call-level.
 PER_REQUEST_STATUSES = frozenset(
-    {
-        "invalid_request",
-        "missing_entity",
-        "invisible_entity",
-        "history_capacity_exceeded",
-        "nonmonotonic_pair_clock",
-        "invalid_payment_fields",
-        "invalid_event_roles",
-    }
+    {"missing_entity", "invisible_entity", "history_capacity_exceeded"}
 )
 # Node features TigerGraph may return; client groups (hub_indicator) never come from it.
 KNOWN_NODE_FEATURES = frozenset(
@@ -83,64 +73,28 @@ def validate_context(
     hop: int = 1,
     *,
     require_encodings: bool = False,
-) -> int:
+) -> None:
     """Check one context against its key, clocks and the feature contract.
 
     Encodings are optional. When age_encoding is present (or required for a
     spot-check request), every vector is compared with the shared fourier64
-    basis in one vectorized call. Returns the number of messages whose channel
-    is outside CHANNELS; those are allowed and mapped to "other" downstream.
-    """
-    return check_context(
-        key,
-        row,
-        sampler,
-        hop,
-        contract=CONTEXT_CONTRACT,
-        query=CONTEXT_QUERY,
-        node_features=KNOWN_NODE_FEATURES,
-        numeric=numeric_fields(plan.groups),
-        flow="flow_timing" in plan.groups,
-        require_encodings=require_encodings and "time_encoding" in plan.groups,
-    )
-
-
-def check_context(
-    key: ContextKey,
-    row: dict[str, Any],
-    sampler: SamplerPlan,
-    hop: int,
-    *,
-    contract: str,
-    query: str,
-    node_features: frozenset[str],
-    numeric: tuple[tuple[str, str], ...],
-    flow: bool,
-    require_encodings: bool,
-) -> int:
-    """Check one context row of a context query against its key, clocks and contract.
-
-    ``contract`` is what the query's rows print and ``query`` its name, ``node_features``
-    the node features it may return and ``numeric`` the (group, field) message fields
-    that must be finite and nonnegative; ``flow`` checks the flow fields' consistency.
-    validate_context checks the training query's rows, and
-    analytics_query.validate_analytics_context those of the analytics query. Returns the
-    number of messages whose channel is outside CHANNELS.
+    basis in one vectorized call.
     """
     if any(row.get(name) != value for name, value in asdict(key).items()):
         raise ValueError("Returned context differs from requested entity/cutoff")
-    if row.get("contract_version") != contract:
-        raise ValueError(f"Missing current feature contract; install the current {query}")
+    if row.get("contract_version") != CONTEXT_CONTRACT:
+        raise ValueError(f"Missing current feature contract; install the current {CONTEXT_QUERY}")
     if row.get("basis_id") != BASIS_ID:
         raise ValueError("Fourier basis mismatch")
     messages: list[dict[str, Any]] = row["messages"]
     if len(messages) > sampler.response_bound(hop):
         raise ValueError("Query response exceeds the neighborhood bound")
     features: dict[str, Any] = row["features"]
-    if set(features) - node_features:
+    if set(features) - KNOWN_NODE_FEATURES:
         raise ValueError("Unknown node feature in response")
     if features and not _finite_nonnegative(list(features.values())):
         raise ValueError("Features must be finite and nonnegative")
+    numeric = numeric_fields(plan.groups)
     if numeric and messages:
         table = [[message.get(name) for _, name in numeric] for message in messages]
         if not _finite_nonnegative(table):
@@ -148,17 +102,13 @@ def check_context(
                 for group, name in numeric:
                     if not _finite_nonnegative([message.get(name)]):
                         raise ValueError(f"Missing or invalid {group} field: {name}")
-    unknown_channels = 0
+    flow = "flow_timing" in plan.groups
     events: list[dict[str, Any]] = []
     for message in messages:
-        if message.get("stratum", "recent") not in STRATA:
-            raise ValueError("Unknown sampling stratum")
         if message["node_type"] not in NODE_TYPES or message["relation"] not in RELATIONS:
             raise ValueError("Unknown entity or relation in neighborhood")
         if message["rail"] not in RAILS:
             raise ValueError("Unknown payment rail")
-        if message.get("channel", "unknown") not in CHANNELS:
-            unknown_channels += 1
         if flow:
             if message["flow_present"] and message["flow_censored"]:
                 raise ValueError("Observed forward event cannot be censored")
@@ -182,9 +132,8 @@ def check_context(
             raise ValueError("Association context changed the cutoff")
     age_map: dict[str, Any] = row.get("age_encoding") or {}
     gap_map: dict[str, Any] = row.get("gap_encoding") or {}
-    if age_map or gap_map or require_encodings:
+    if age_map or gap_map or (require_encodings and "time_encoding" in plan.groups):
         _check_encodings(events, age_map, gap_map)
-    return unknown_channels
 
 
 def _finite_nonnegative(values: list[Any]) -> bool:
@@ -231,30 +180,31 @@ def query_context_rows(
     diagnostics: Counter[str] | None = None,
     timeout_retries: int = 1,
 ) -> list[dict[str, Any]]:
-    """One REST call; validated ok rows or per-request status rows, in key order."""
+    """One REST call; validated ok rows or per-request status rows, in key order.
+
+    The query computes every group; only a plan with the time encoding asks it for the
+    Fourier vectors of a spot check (``emit_encodings``).
+    """
     params = {
         **batch_params(batch),
         **sampler.query_params(hop),
-        "emit_encodings": emit_encodings,
-        **plan.query_flags(hop),
-        "scope_id": batch[0].scope_id,
-        "visibility_phase": batch[0].visibility_phase,
+        "emit_encodings": emit_encodings and "time_encoding" in plan.groups,
     }
     result = executor.run(CONTEXT_QUERY, params, timeout_retries=timeout_retries)
 
-    def check(key: ContextKey, row: dict[str, Any]) -> int:
-        return validate_context(key, row, plan, sampler, hop, require_encodings=emit_encodings)
+    def check(key: ContextKey, row: dict[str, Any]) -> None:
+        validate_context(key, row, plan, sampler, hop, require_encodings=emit_encodings)
 
-    rows = indexed_rows(result, batch, check, diagnostics)
+    rows = indexed_rows(result, batch, check)
     if diagnostics is not None and emit_encodings:
         diagnostics["encoding_checks"] += 1
     return rows
 
 
 def batch_params(batch: list[ContextKey]) -> dict[str, Any]:
-    """The key parameters of one context request: the entities and cutoffs, their scope."""
-    if not batch or len({(k.scope_id, k.visibility_phase) for k in batch}) != 1:
-        raise ValueError("Query batch must have one visibility scope and phase")
+    """The key parameters of one context request: the entities, cutoffs and their phase."""
+    if not batch or len({k.visibility_phase for k in batch}) != 1:
+        raise ValueError("Query batch must have one visibility phase")
     if len(batch) > REQUEST_KEYS.high:
         raise ValueError(f"A context request carries at most {REQUEST_KEYS.high} keys")
     return {
@@ -262,20 +212,19 @@ def batch_params(batch: list[ContextKey]) -> dict[str, Any]:
         "node_ids": [key.node_id for key in batch],
         "cutoff_seqs": [key.cutoff_seq for key in batch],
         "cutoff_times": [key.cutoff_ms for key in batch],
+        "visibility_phase": batch[0].visibility_phase,
     }
 
 
 def indexed_rows(
     result: list[dict[str, Any]],
     batch: list[ContextKey],
-    check: Callable[[ContextKey, dict[str, Any]], int],
-    diagnostics: Counter[str] | None = None,
+    check: Callable[[ContextKey, dict[str, Any]], None],
 ) -> list[dict[str, Any]]:
     """One call's rows in key order: ok rows checked by ``check``, others per-request statuses.
 
     Every request index must be answered exactly once; a status outside
-    PER_REQUEST_STATUSES, or a call-level status, is an error. ``check`` returns the
-    messages whose channel is unknown, which ``diagnostics`` counts.
+    PER_REQUEST_STATUSES, or a call-level status, is an error.
     """
     indexed: dict[int, dict[str, Any]] = {}
     for row in result:
@@ -294,9 +243,7 @@ def indexed_rows(
         row = indexed[index]
         status = row.get("status")
         if status == "ok":
-            unknown = check(key, row)
-            if diagnostics is not None and unknown:
-                diagnostics["unknown_channel"] += unknown
+            check(key, row)
         elif status not in PER_REQUEST_STATUSES:
             raise ValueError(f"Unknown per-request status from TigerGraph: {row}")
         rows.append(row)

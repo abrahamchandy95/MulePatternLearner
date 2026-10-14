@@ -24,7 +24,7 @@ def test_observed_labels_have_no_oracle_and_preserve_split_isolation() -> None:
         bad = supplied_labels().assign(**{field: 1})
         with pytest.raises(ValueError, match="Oracle"):
             align_observed_labels(a, bad)
-    assert {"mule_label_source", "is_mule_masked"} <= ORACLE_COLUMNS
+    assert "mule_label_source" in ORACLE_COLUMNS
     assert set(TRUTH_COLUMNS) - ORACLE_COLUMNS == {"account_id"}
     with pytest.raises(ValueError, match="discovery"):
         align_observed_labels(a, supplied_labels().assign(known_from_ms=0))

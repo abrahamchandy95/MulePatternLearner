@@ -123,7 +123,7 @@ def check_variants(variants: Sequence[Variant], base: RunConfig, seeds: Sequence
     run's dataset (one dataset id), and no two variants may share a fingerprint. The
     error names the variant.
     """
-    expected = dataset_id("", base)
+    expected = dataset_id({}, base)
     for variant in variants:
         for seed in seeds:
             try:
@@ -133,7 +133,7 @@ def check_variants(variants: Sequence[Variant], base: RunConfig, seeds: Sequence
                 build_model(config.model, plan, config.sampler.fanouts[0])
             except (TypeError, ValueError) as error:
                 raise ValueError(f"Variant {variant.name} does not build: {error}") from error
-            if dataset_id("", config) != expected:
+            if dataset_id({}, config) != expected:
                 raise ValueError(
                     f"Variant {variant.name} changes dataset settings; every variant of a "
                     "suite trains on the base run's dataset"

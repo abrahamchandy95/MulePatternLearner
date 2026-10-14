@@ -24,6 +24,7 @@ from mule_pattern_learner.artifacts import (
     read_json,
 )
 from mule_pattern_learner.config import DEFAULT_CONFIG, RunConfig, TransportConfig
+from mule_pattern_learner.contract.server import GRAPH_NAME
 from mule_pattern_learner.paths import (
     DATA_DIR,
     REPOSITORY_ROOT,
@@ -41,11 +42,17 @@ from mule_pattern_learner.testing.builders import (
     recorded_events,
     scope_population,
 )
-from mule_pattern_learner.testing.fake_graph import FakeTigerGraph, ready_scope
+from mule_pattern_learner.testing.fake_graph import (
+    EARLIER_SCOPE_TYPES,
+    SCOPE_TYPES,
+    FakeTigerGraph,
+    ready_scope,
+)
 from mule_pattern_learner.tigergraph.executor import (
     TigerGraphUnavailableError,
     TransientQueryError,
 )
+from mule_pattern_learner.tigergraph.scope_types import scope_type_differences
 
 COMMANDS = ("install", "train", "evaluate", "score", "report", "diagnose", "check")
 
@@ -511,7 +518,13 @@ def test_a_count_of_one_reads_in_the_singular_in_the_checklist() -> None:
 
 def test_an_outdated_scope_type_says_how_it_differs_and_what_to_run() -> None:
     saved = Path("results/check.json")
-    differences = ["Temporal_Training_Scope lacks train_share, validation_share, test_share"]
+    # The scope types of a graph that held several splits, each keyed by a scope id, whose
+    # membership edges record a group.
+    differences = scope_type_differences(EARLIER_SCOPE_TYPES, SCOPE_TYPES)
+    vertex, edge = differences
+    assert vertex.startswith("Temporal_Training_Scope has the attributes (scope_id STRING")
+    assert edge.startswith("Entity_In_Training_Scope has the attributes (partition INT, group_id")
+    difference = f"{vertex}; {edge}"
     outdated = {"scope_schema": "outdated", "scope_outdated": {"differences": differences}}
     replaceable = (
         NOT_READY
@@ -526,32 +539,32 @@ def test_an_outdated_scope_type_says_how_it_differs_and_what_to_run() -> None:
     )
     shown = cli.check_summary(replaceable, saved)
     assert (
-        "  [ ] scope vertex type outdated: Temporal_Training_Scope lacks train_share, "
-        "validation_share, test_share; `mule install` replaces it\n"
+        f"  [ ] scope vertex type outdated: {difference}; `mule install` replaces it\n"
     ) in shown
     assert "Not ready: run `mule install`, then `mule train`.\n" in shown
-    # Scopes use it, so the graph's data is cleared and loaded again first.
+    # Scope vertices use it, so their owner removes them by hand first.
+    removal = (
+        "delete the Temporal_Training_Scope vertices by hand, which deletes their membership "
+        'edges with them (pyTigerGraph: delVertices("Temporal_Training_Scope"); RESTPP: '
+        f"DELETE /graph/{GRAPH_NAME}/vertices/Temporal_Training_Scope, /restpp/graph/... "
+        "with a token through port 14240 or TigerGraph Cloud)"
+    )
     used = replaceable | {
         "scope_outdated": {"differences": differences, "scopes": 2},
         "problems": [
             "the scope vertex type is outdated and the graph holds 2 scope vertices, which "
-            "`mule install` refuses to delete; clear the graph's data and load it again "
-            "(docs/how-to/set-up-a-graph.md), then `mule install` replaces it",
+            f"`mule install` refuses to delete; {removal}, then `mule install` replaces it",
             *NOT_READY["problems"][1:],
         ],
     }
     shown = cli.check_summary(used, saved)
-    assert "; the graph holds 2 scope vertices, so clear the graph's data and load it " in shown
-    assert (
-        "Not ready: clear the graph's data and load it again, then run `mule install`, then "
-        "`mule train`.\n"
-    ) in shown
+    assert f"; the graph holds 2 scope vertices, so {removal} first\n" in shown
+    assert f"Not ready: {removal}, then run `mule install`, then `mule train`.\n" in shown
     # What `mule install` says once it replaced the type.
     replaced = {"differences": differences, "dropped": ["q1", "q2"], "output": ""}
     assert cli.install_summary(INSTALLED | {"scope_replaced": replaced}).startswith(
-        "Replaced the scope vertex type (Temporal_Training_Scope lacks train_share, "
-        "validation_share, test_share), after dropping the 2 queries that used it\n3 training "
-        "queries installed"
+        f"Replaced the scope vertex type ({difference}), after dropping the 2 queries that "
+        "used it\n3 training queries installed"
     )
 
 
@@ -653,21 +666,20 @@ def test_train_prepares_then_trains_or_resumes_the_baseline_run(
 def train_on_fakes(home: Path, monkeypatch: pytest.MonkeyPatch) -> RunPaths:
     """`mule train` of a small run on the fake graph, from home into home/results/.
 
-    The fake graph's queries are installed and it holds the built-in run's scope with its
+    The fake graph's queries are installed and it holds the built-in run's split with its
     known mules revealed, so preparation only reads. Every step is logged.
     """
-    scope = DEFAULT_CONFIG.scope.id
     graph = FakeTigerGraph(
         factory=neighbourhood,
         hubs=[("N3", cutoff) for cutoff in (101, 102, 103)],
         population=scope_population(200),
-        scopes={scope: ready_scope("console_fixture")},
+        scope=ready_scope(),
     )
 
     def connect(transport: TransportConfig) -> FakeTigerGraph:
         return graph
 
-    def revealed(*args: Any) -> None:
+    def revealed(*args: Any, **kwargs: Any) -> None:
         return None
 
     for module in (pipeline_prepare, pipeline_connect):

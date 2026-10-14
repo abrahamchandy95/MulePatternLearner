@@ -1,4 +1,4 @@
-"""Preparation against the graph: reuse of a ready dataset, the source id, first-run steps."""
+"""Preparation against the graph: reuse of a ready dataset, the graph's counts, first-run steps."""
 
 from __future__ import annotations
 
@@ -17,10 +17,7 @@ from mule_pattern_learner.data.manifest import dataset_id, dataset_settings, que
 from mule_pattern_learner.paths import DatasetPaths
 from mule_pattern_learner.pipeline import connect as pipeline_connect
 from mule_pattern_learner.pipeline import prepare as pipeline_prepare
-from mule_pattern_learner.testing.builders import (
-    UNIT_SOURCE,
-    unit_config,
-)
+from mule_pattern_learner.testing.builders import unit_config
 from mule_pattern_learner.testing.fake_graph import (
     EARLIER_SCOPE_TYPES,
     SCOPE_TYPES,
@@ -30,8 +27,10 @@ from mule_pattern_learner.testing.fake_graph import (
 from mule_pattern_learner.tigergraph.gsql_text import repository_queries
 from mule_pattern_learner.tigergraph.installer import retired_installed
 
-# The source id an earlier preparation recorded, which the graph no longer derives.
-PREPARED_SOURCE = "unit_snapshot"
+# The vertex counts of the graph record_graph_steps stands in for, and those of an earlier
+# load of it, which name another dataset.
+GRAPH_COUNTS = {"Account": 10}
+EARLIER_COUNTS = {"Account": 9}
 
 
 @pytest.fixture
@@ -46,18 +45,18 @@ def write_manifest(
     config: RunConfig,
     hashes: dict[str, Any],
     status: str = "ready",
-    source_id: str = PREPARED_SOURCE,
+    counts: dict[str, int] = EARLIER_COUNTS,
 ) -> tuple[DatasetPaths, dict[str, Any]]:
-    """A manifest in the directory of config's dataset of source_id under data."""
+    """A manifest in the directory of config's dataset of a graph of these counts under data."""
     manifest = {
         "status": status,
         "source": {
-            "source_id": source_id,
+            "source_counts": dict(counts),
             "query_hashes": dict(hashes),
-            "settings": dataset_settings(source_id, config),
+            "settings": dataset_settings(counts, config),
         },
     }
-    dataset = DatasetPaths.of(dataset_id(source_id, config), data)
+    dataset = DatasetPaths.of(dataset_id(counts, config), data)
     dataset.root.mkdir(parents=True, exist_ok=True)
     dataset.manifest.write_text(json.dumps(manifest))
     return dataset, manifest
@@ -128,7 +127,7 @@ def test_mule_install_drops_the_retired_queries_once_every_query_is_installed(
 def test_only_mule_install_replaces_outdated_scope_types(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # A graph whose scope types predate the split shares, and no scope uses them.
+    # A graph whose scope types are those of several splits, and no scope vertex uses them.
     graph = FakeTigerGraph(scope_types=EARLIER_SCOPE_TYPES)
 
     def connect(transport: TransportConfig) -> FakeTigerGraph:
@@ -148,8 +147,13 @@ def test_only_mule_install_replaces_outdated_scope_types(
     )
 
 
-def record_graph_steps(monkeypatch: pytest.MonkeyPatch, steps: list[str]) -> None:
-    """Replace the graph steps of prepare_dataset by entries in steps."""
+def record_graph_steps(
+    monkeypatch: pytest.MonkeyPatch, steps: list[str], *, created: bool = False
+) -> None:
+    """Replace the graph steps of prepare_dataset by entries in steps.
+
+    The split step finds the graph's split, or creates it when ``created``.
+    """
 
     def connect(transport: TransportConfig) -> Any:
         return SimpleNamespace()
@@ -158,29 +162,31 @@ def record_graph_steps(monkeypatch: pytest.MonkeyPatch, steps: list[str]) -> Non
         steps.append("install")
 
     def source_counts(executor: Any) -> dict[str, int]:
-        return {"Account": 10}
+        return dict(GRAPH_COUNTS)
 
-    def resolve_source_id(executor: Any, scope_id: str, counts: dict[str, int]) -> str:
-        steps.append(f"resolve {scope_id}")
-        return UNIT_SOURCE
+    def ensure_scope(executor: Any, scope: ScopeConfig, *, split_seed: int) -> bool:
+        steps.append(f"split {split_seed} {scope.shares}")
+        return created
 
-    def ensure_scope(executor: Any, scope: ScopeConfig, *, source_id: str, split_seed: int) -> None:
-        steps.append(f"scope {scope.id} {source_id} {split_seed}")
-
-    def ensure_revealed_labels(executor: Any, scope: ScopeConfig, dates: SplitDates) -> None:
-        steps.append("reveal")
+    def ensure_revealed_labels(
+        executor: Any, scope: ScopeConfig, dates: SplitDates, *, new_split: bool
+    ) -> None:
+        steps.append("reveal for the new split" if new_split else "reveal")
 
     def prepare(
-        config: RunConfig, source_id: str, dataset: DatasetPaths, *args: Any, **kwargs: Any
+        config: RunConfig,
+        dataset: DatasetPaths,
+        source_counts: dict[str, int],
+        *args: Any,
+        **kwargs: Any,
     ) -> dict[str, Any]:
-        steps.append(f"prepare {source_id} {dataset.root.name}")
+        steps.append(f"prepare {dataset.root.name} {source_counts}")
         return {"status": "ready"}
 
     for stand_in in (
         connect,
         install,
         source_counts,
-        resolve_source_id,
         ensure_scope,
         ensure_revealed_labels,
         prepare,
@@ -188,23 +194,44 @@ def record_graph_steps(monkeypatch: pytest.MonkeyPatch, steps: list[str]) -> Non
         monkeypatch.setattr(pipeline_prepare, stand_in.__name__, stand_in)
 
 
-def test_first_preparation_creates_the_scope_and_reveals_labels(
+def test_first_preparation_creates_the_split_and_reveals_labels(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     steps: list[str] = []
-    record_graph_steps(monkeypatch, steps)
+    record_graph_steps(monkeypatch, steps, created=True)
     config = unit_config()
     data = tmp_path / "data"
-    identity = dataset_id(UNIT_SOURCE, config)
+    # The dataset is named by the graph's counts, read before the split is created.
+    identity = dataset_id(GRAPH_COUNTS, config)
     assert pipeline_prepare.prepare_dataset(config, data) == DatasetPaths.of(identity, data)
-    # The reveal draws its splits from the scope partitions, so the scope comes first.
+    # The reveal draws its splits from the split's partitions, so the split comes first,
+    # and a split the run created has its labels revealed again.
     assert steps == [
         "install",
-        "resolve unit_scope",
-        f"scope unit_scope {UNIT_SOURCE} 42",
-        "reveal",
-        f"prepare {UNIT_SOURCE} {identity}",
+        "split 42 (0.5, 0.25, 0.25)",
+        "reveal for the new split",
+        f"prepare {identity} {GRAPH_COUNTS}",
     ]
+
+
+def test_counts_that_change_during_preparation_refuse_the_dataset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The counts name the dataset before the split exists, so a load during preparation
+    # would leave a dataset named by counts the graph no longer has.
+    steps: list[str] = []
+    record_graph_steps(monkeypatch, steps)
+    reads = iter([GRAPH_COUNTS, {"Account": 11}])
+
+    def source_counts(executor: Any) -> dict[str, int]:
+        return dict(next(reads))
+
+    monkeypatch.setattr(pipeline_prepare, "source_counts", source_counts)
+    config = unit_config()
+    with pytest.raises(ValueError, match="Graph counts changed"):
+        pipeline_prepare.prepare_dataset(config, tmp_path / "data")
+    dataset = DatasetPaths.of(dataset_id(GRAPH_COUNTS, config), tmp_path / "data")
+    assert data_manifest.read_manifest(dataset)["status"] == "source_changed"
 
 
 def test_a_session_prepares_on_its_connection_and_connects_once(
@@ -238,43 +265,55 @@ def test_a_session_prepares_on_its_connection_and_connects_once(
     assert session.connected and connected == [config.transport]
 
 
-def test_a_dataset_being_prepared_keeps_its_source_id(
+def test_a_dataset_being_prepared_is_resumed_only_on_the_graph_it_names(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fixed_hashes: dict[str, str]
 ) -> None:
     config = unit_config()
     data = tmp_path / "data"
-    dataset, _ = write_manifest(data, config, fixed_hashes, status="preparing")
+    dataset, _ = write_manifest(data, config, fixed_hashes, "preparing", GRAPH_COUNTS)
     steps: list[str] = []
     record_graph_steps(monkeypatch, steps)
     assert pipeline_prepare.prepare_dataset(config, data) == dataset
     assert steps == [
         "install",
-        f"scope unit_scope {PREPARED_SOURCE} 42",
+        "split 42 (0.5, 0.25, 0.25)",
         "reveal",
-        f"prepare {PREPARED_SOURCE} {dataset.root.name}",
+        f"prepare {dataset.root.name} {GRAPH_COUNTS}",
     ]
+    # One of an earlier load of the graph is left as it is, and the graph's own dataset
+    # is prepared beside it.
+    earlier, _ = write_manifest(tmp_path / "other", config, fixed_hashes, "preparing")
+    steps.clear()
+    current = pipeline_prepare.prepare_dataset(config, tmp_path / "other")
+    assert current == DatasetPaths.of(dataset_id(GRAPH_COUNTS, config), tmp_path / "other")
+    assert current != earlier and steps[-1] == f"prepare {current.root.name} {GRAPH_COUNTS}"
 
 
-def test_datasets_of_several_sources_read_the_source_id_from_the_graph(
+def test_datasets_of_several_loads_are_told_apart_by_the_graphs_counts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fixed_hashes: dict[str, str]
 ) -> None:
-    # After a reload the old source's dataset stays beside the new one's.
+    # After a reload the old load's dataset stays beside the new one's.
     config = unit_config()
     data = tmp_path / "data"
     write_manifest(data, config, fixed_hashes)
-    current, _ = write_manifest(data, config, fixed_hashes, source_id=UNIT_SOURCE)
+    current, _ = write_manifest(data, config, fixed_hashes, counts=GRAPH_COUNTS)
     assert len(pipeline_prepare.find_datasets(config, data)) == 2
     steps: list[str] = []
     record_graph_steps(monkeypatch, steps)
     assert pipeline_prepare.prepare_dataset(config, data) == current
-    assert steps[:2] == ["install", "resolve unit_scope"]
+    assert steps == [
+        "install",
+        "split 42 (0.5, 0.25, 0.25)",
+        "reveal",
+        f"prepare {current.root.name} {GRAPH_COUNTS}",
+    ]
 
 
 def test_ready_pipeline_reuses_cache_without_connecting(tmp_path: Path) -> None:
     from mule_pattern_learner.pipeline.prepare import find_datasets, prepare_dataset
 
     c = unit_config()
-    dataset, _ = write_manifest(tmp_path, c, query_hashes(), source_id=UNIT_SOURCE)
+    dataset, _ = write_manifest(tmp_path, c, query_hashes(), counts=GRAPH_COUNTS)
     with patch("mule_pattern_learner.pipeline.prepare.connect") as client:
         assert prepare_dataset(c, tmp_path) == dataset
         # Model settings may change; dataset settings may not, and nothing connects.

@@ -11,7 +11,7 @@ import pandas as pd
 from ..artifacts import atomic_write, file_digest
 from ..config import RunConfig, ScopeConfig, SplitDates, as_json, differing_settings
 from ..contract.fingerprints import fingerprint
-from ..contract.graph_schema import SPLITS, context_scope
+from ..contract.graph_schema import SPLITS
 from ..contract.sampler_plan import sampler_pools
 from ..contract.server import QUERY_FILES
 from ..paths import GSQL_DIR, DatasetPaths
@@ -19,7 +19,7 @@ from .observed_labels import ORACLE_COLUMNS, read_bounded_parquet
 
 # The settings a dataset is prepared from (dataset_settings). Training compares exactly
 # these; model, optimisation, transport and runtime settings may change between runs.
-DATASET_SETTINGS = ("source_id", "scope", "dataset", "sampler_pools")
+DATASET_SETTINGS = ("source", "scope", "dataset", "sampler_pools")
 
 
 def read_manifest(dataset: DatasetPaths) -> dict[str, Any]:
@@ -64,25 +64,21 @@ def check_query_hashes(manifest: dict[str, Any], dataset: DatasetPaths) -> None:
         )
 
 
-def dataset_settings(source_id: str, config: RunConfig) -> dict[str, Any]:
+def dataset_settings(source_counts: dict[str, int], config: RunConfig) -> dict[str, Any]:
     """What preparation reads, as JSON values: the input of the dataset id.
 
-    The source id names the data loaded into the graph. The scope's id, its rule for
-    accounts no party owns and its split shares decide the split partitions, its reveal
-    settings (reveal_per_split, reveal_salt) the labels the dataset reads, the dataset
-    section gives the cutoffs and seed reservoirs, and sampler_pools is what TigerGraph
-    returns per hop. scope.create only allows the first run to create a missing scope,
-    so it names no other dataset. Feature groups are not a dataset setting: a dataset
-    stores no contexts, and the source requests each training model's groups, so
-    variants of any groups and architecture share one dataset.
+    source, the fingerprint of the graph's vertex counts, names the data loaded into the
+    graph. The scope's split shares decide the split's partitions, its reveal salt the
+    labels the dataset reads, the dataset section gives the cutoffs and seed reservoirs,
+    and sampler_pools is what TigerGraph returns per hop. scope.create only allows the first
+    run to create the split, so it names no other dataset. Feature groups are not a
+    dataset setting: a dataset stores no contexts, and the source requests each training
+    model's groups, so variants of any groups and architecture share one dataset.
     """
     settings = {
-        "source_id": source_id,
+        "source": fingerprint(source_counts),
         "scope": {
-            "id": config.scope.id,
-            "unowned": config.scope.unowned,
             "shares": list(config.scope.shares),
-            "reveal_per_split": config.scope.reveal_per_split,
             "reveal_salt": config.scope.reveal_salt,
         },
         "dataset": as_json(config.dataset),
@@ -92,9 +88,9 @@ def dataset_settings(source_id: str, config: RunConfig) -> dict[str, Any]:
     return settings
 
 
-def dataset_id(source_id: str, config: RunConfig) -> str:
+def dataset_id(source_counts: dict[str, int], config: RunConfig) -> str:
     """The fingerprint of the dataset's settings (dataset_settings)."""
-    return fingerprint(dataset_settings(source_id, config))
+    return fingerprint(dataset_settings(source_counts, config))
 
 
 def recorded_settings(manifest: dict[str, Any]) -> dict[str, Any]:
@@ -114,15 +110,11 @@ def recorded_dataset_id(manifest: dict[str, Any]) -> str:
 class PreparedSource:
     """The graph a dataset was prepared from, as its manifest records it.
 
-    The vertex counts and the scope: its id, its rule for accounts no party owns, the
-    source id it names, and the split seed and the train, validation and test shares of
-    its partitions.
+    The vertex counts and the split: the split seed and the train, validation and test
+    shares of its partitions.
     """
 
     counts: dict[str, int]
-    scope_id: str
-    unowned: str
-    source_id: str
     split_seed: int
     shares: tuple[float, float, float]
 
@@ -143,9 +135,6 @@ def prepared_source(manifest: dict[str, Any]) -> PreparedSource:
     train, validation, test = settings["scope"]["shares"]
     return PreparedSource(
         counts=dict(manifest["source"]["source_counts"]),
-        scope_id=settings["scope"]["id"],
-        unowned=settings["scope"]["unowned"],
-        source_id=settings["source_id"],
         split_seed=settings["dataset"]["split_seed"],
         shares=(float(train), float(validation), float(test)),
     )
@@ -161,20 +150,17 @@ def prepared_reveal(manifest: dict[str, Any]) -> tuple[ScopeConfig, SplitDates]:
     scope = settings["scope"]
     if "reveal_salt" not in scope:
         raise ValueError(
-            "The dataset records no reveal settings (scope.reveal_per_split and "
-            "scope.reveal_salt): it was prepared by earlier code, from labels revealed with "
-            "at most 20 mules per split. Move it aside; `mule train` prepares a new one"
+            "The dataset records no reveal settings (scope.reveal_salt): it was prepared by "
+            "earlier code, from labels revealed with at most 20 mules per split. Move it "
+            "aside; `mule train` prepares a new one"
         )
     train, validation, test = scope["shares"]
     dates = settings["dataset"]["dates"]
     return (
         ScopeConfig(
-            id=scope["id"],
-            unowned=scope["unowned"],
             train_share=train,
             validation_share=validation,
             test_share=test,
-            reveal_per_split=scope["reveal_per_split"],
             reveal_salt=scope["reveal_salt"],
         ),
         SplitDates(**{split: tuple(dates[split]) for split in SPLITS}),
@@ -185,7 +171,7 @@ def source_fingerprint(manifest: dict[str, Any]) -> str:
     """The fingerprint of the graph a dataset was prepared from (prepared_source).
 
     tigergraph.provenance.verify_frozen_source checks the graph against these
-    counts and this scope before a run reads it, so the fingerprint names the frozen
+    counts and this split before a run reads it, so the fingerprint names the frozen
     source whose contexts the dataset's disk tier keeps.
     """
     return fingerprint(asdict(prepared_source(manifest)))
@@ -194,14 +180,14 @@ def source_fingerprint(manifest: dict[str, Any]) -> str:
 def dataset_mismatches(config: RunConfig, manifest: dict[str, Any]) -> list[str]:
     """The dataset settings in which config differs from those the dataset records.
 
-    The source id is the dataset's own. A manifest that records no settings differs in
-    all of them.
+    The source (its vertex counts) is the dataset's own. A manifest that records no
+    settings differs in all of them.
     """
     source = manifest.get("source", {})
     recorded = source.get("settings")
-    if not isinstance(recorded, dict) or not source.get("source_id"):
+    if not isinstance(recorded, dict) or not source.get("source_counts"):
         return list(DATASET_SETTINGS)
-    return differing_settings(dataset_settings(source["source_id"], config), recorded)
+    return differing_settings(dataset_settings(source["source_counts"], config), recorded)
 
 
 def load_prepared(dataset: DatasetPaths) -> tuple[dict[str, Any], pd.DataFrame]:
@@ -226,5 +212,4 @@ def load_prepared(dataset: DatasetPaths) -> tuple[dict[str, Any], pd.DataFrame]:
     )
     if ORACLE_COLUMNS & set(accounts.columns):
         raise ValueError("Oracle columns are forbidden in prepared training metadata")
-    context_scope(manifest["source"].get("scope_id"))
     return manifest, accounts

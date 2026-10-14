@@ -13,7 +13,12 @@ import torch
 from mule_pattern_learner.batching import assemble
 from mule_pattern_learner.batching.assemble import build_batch, build_root_batch, child_key
 from mule_pattern_learner.contract.feature_groups import CORE_GROUPS, FeaturePlan
-from mule_pattern_learner.contract.graph_schema import HUB_COLUMNS, RELATIONS, ContextKey
+from mule_pattern_learner.contract.graph_schema import (
+    HUB_COLUMNS,
+    NO_SPLIT,
+    RELATIONS,
+    ContextKey,
+)
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
 from mule_pattern_learner.contract.server import CONTEXT_QUERY
 from mule_pattern_learner.data.contexts import ContextSource
@@ -46,7 +51,9 @@ class Hubs:
         self.stubs = set(stubs)
         self.calls: list[tuple[str, str, int, int]] = []
 
-    def is_stub(self, node_type: str, node_id: str, root_cutoff_seq: int, phase: int = 3) -> bool:
+    def is_stub(
+        self, node_type: str, node_id: str, root_cutoff_seq: int, phase: int = NO_SPLIT
+    ) -> bool:
         self.calls.append((node_type, node_id, root_cutoff_seq, phase))
         return node_type == "Account" and node_id in self.stubs
 
@@ -170,20 +177,18 @@ def test_hub_children_become_local_stubs_and_mark_outer_peers() -> None:
 
 
 @pytest.mark.parametrize(
-    ("scope", "phase", "expected"),
-    [("s", 1, 1), ("s", 2, 2), ("s", 3, 3), ("", 3, 3), ("", 1, 3)],
-    ids=["train", "validation", "test", "unscoped", "unscoped-phase-ignored"],
+    "phase", [1, 2, 3, NO_SPLIT], ids=["train", "validation", "test", "no-split"]
 )
-def test_hub_lookups_use_the_batch_visibility_phase(scope: str, phase: int, expected: int) -> None:
+def test_hub_lookups_use_the_batch_visibility_phase(phase: int) -> None:
     sampler = replace(POOLED, fanouts=(8, 4))
     plan = FeaturePlan(CORE_GROUPS, "tgat")
     store = FakeStore(sampler)
-    keys = roots(4, scope=scope, phase=phase)
+    keys = roots(4, phase=phase)
     hubs = Hubs()
     build_batch(store, keys, plan=plan, sampler=sampler, hubs=hubs)
     # Children (stub decision) and outer peers (history_withheld) are both looked up.
     assert len(hubs.calls) > len(_first_children(store, keys, sampler))
-    assert {p for *_, p in hubs.calls} == {expected}
+    assert {p for *_, p in hubs.calls} == {phase}
 
 
 def test_rejected_children_are_masked_and_rejected_roots_raise() -> None:
@@ -269,18 +274,18 @@ def test_recursive_context_keeps_same_neighbor_at_two_different_event_times() ->
 
 
 def hub_registry(
-    *accounts: str, cutoff: int = 100, scope_id: str = "", phase: int = 3
+    *accounts: str, cutoff: int = 100, by_phase: bool = False, phase: int = NO_SPLIT
 ) -> HubRegistry:
-    """A registry whose accounts are hubs at one cutoff and phase (3 when unscoped)."""
+    """A registry whose accounts are hubs at one cutoff and phase (0 without the split)."""
     frame = pd.DataFrame(
-        [[account, cutoff, phase, 5000, 5000, "visible_history"] for account in accounts],
+        [[account, cutoff, phase, 5000] for account in accounts],
         columns=list(HUB_COLUMNS),
     )
-    return HubRegistry(frame, cutoff_seqs=[cutoff], threshold=2048, scope_id=scope_id)
+    return HubRegistry(frame, cutoff_seqs=[cutoff], threshold=2048, by_phase=by_phase)
 
 
 def test_one_hub_or_rejected_child_no_longer_aborts_the_batch() -> None:
-    root = ContextKey("Account", "root", 100, 1000, "strict", 1)
+    root = ContextKey("Account", "root", 100, 1000, 1)
     messages = [
         message(90, 900, root, node_id="hub", relation="zelle_out"),
         message(80, 800, root, node_id="busy", relation="payment_out", rail="ach"),
@@ -299,7 +304,7 @@ def test_one_hub_or_rejected_child_no_longer_aborts_the_batch() -> None:
             [root],
             plan=CORE_PLAN,
             sampler=replace(SMALL_SAMPLER, fanouts=(8, 2)),
-            hubs=hub_registry("hub", scope_id="strict", phase=1),
+            hubs=hub_registry("hub", by_phase=True, phase=1),
             stats=stats,
         )
         assert dict(source.rejections) == {"history_capacity_exceeded": 1}
@@ -380,8 +385,8 @@ def test_eval_batches_draw_root_hops_independently(monkeypatch: pytest.MonkeyPat
         assert prefixes <= len(keys) // 4, (mode, prefixes)
 
 
-def test_scope_follows_recursive_events_and_cache_never_crosses_scope() -> None:
-    a = ContextKey("Account", "a", 100, 1000, "strict", 1)
+def test_the_phase_follows_recursive_events_and_cache_never_crosses_phases() -> None:
+    a = ContextKey("Account", "a", 100, 1000, 1)
     msg = message(90, 900, a)
     source = FakeTigerGraph({a: context(a, [msg])})
     backend = ContextSource(
@@ -389,10 +394,12 @@ def test_scope_follows_recursive_events_and_cache_never_crosses_scope() -> None:
     )
     build_batch(backend, [a], plan=FeaturePlan(), sampler=SamplerPlan(fanouts=(2, 2)))
     assert child_key(msg, a) in source.requested
-    assert all(key.scope_id == "strict" and key.visibility_phase == 1 for key in source.requested)
-    previous = backend.database_calls
-    backend.fetch([replace(a, visibility_phase=3)])
-    assert backend.database_calls > previous
+    assert all(key.visibility_phase == 1 for key in source.requested)
+    # The same context in another phase, or without the split, is another request.
+    for phase in (3, NO_SPLIT):
+        previous = backend.database_calls
+        backend.fetch([replace(a, visibility_phase=phase)])
+        assert backend.database_calls > previous, phase
     with pytest.raises(ValueError, match="differs"):
         validate_context(
             a, context(replace(a, visibility_phase=3)), plan=FeaturePlan(), sampler=SamplerPlan()

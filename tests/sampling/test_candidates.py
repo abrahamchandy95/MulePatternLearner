@@ -13,13 +13,19 @@ import torch
 
 from mule_pattern_learner.batching.assemble import build_batch
 from mule_pattern_learner.contract.feature_groups import CORE_GROUPS, FeaturePlan
+from mule_pattern_learner.contract.fingerprints import stable_hash
 from mule_pattern_learner.contract.graph_schema import (
     ASSOCIATION_RELATIONS,
     PAYMENT_RELATIONS,
     ContextKey,
 )
 from mule_pattern_learner.sampling.backend import select_resampled
-from mule_pattern_learner.sampling.candidates import CandidateTable, selection_keys, splitmix64
+from mule_pattern_learner.sampling.candidates import (
+    CandidateTable,
+    context_hash,
+    selection_keys,
+    splitmix64,
+)
 from mule_pattern_learner.testing.builders import (
     POOLED_RESAMPLE,
     RESAMPLE,
@@ -109,13 +115,13 @@ def test_candidates_must_be_strictly_before_the_context_cutoff() -> None:
     key = ContextKey("Account", "a", 100, 1000)
     rng = context_rng(key)
     ok = [
-        payment(key, "zelle_out", 99, "p", "recent", rng),
+        payment(key, "zelle_out", 99, "p", rng),
         synthetic_association(key, "Account_Uses_Device", "d", rng),
     ]
     table = CandidateTable.build([key], [{"messages": ok}])
     assert table.time_key.tolist() == [198, 199] and table.seed_time.tolist() == [200]
     for seq in (100, 101):
-        bad = payment(key, "zelle_in", seq, "p", "recent", rng)
+        bad = payment(key, "zelle_in", seq, "p", rng)
         with pytest.raises(ValueError, match="strictly before"):
             CandidateTable.build([key], [{"messages": [*ok, bad]}])
 
@@ -191,6 +197,19 @@ def test_eval_keys_mix_the_hop_and_keep_hop_one_draws() -> None:
     second = select_resampled(table, hop=2, sampler=POOLED_RESAMPLE, fanout=4, mode="eval")
     prefixes = sum(_is_prefix(table, a, b) for a, b in zip(first, second, strict=True))
     assert prefixes <= len(keys) // 4, prefixes
+
+
+def test_eval_draws_hash_contexts_as_when_a_graph_held_several_splits() -> None:
+    # The text a split's context hashed then (its scope id and phase), or an unsplit one
+    # ("" and 3), so finished runs' evaluation and scoring draws stay the same.
+    def hashed(*split: object) -> int:
+        return stable_hash("\x1f".join(map(str, ("Account", "A1", 5, 7, *split))))
+
+    for phase in (1, 2, 3):
+        assert context_hash(ContextKey("Account", "A1", 5, 7, phase)) == hashed(
+            "strict_mule_v3", phase
+        )
+    assert context_hash(ContextKey("Account", "A1", 5, 7)) == hashed("", 3)
 
 
 def _ids(table: CandidateTable, slots: np.ndarray) -> list[list[str]]:

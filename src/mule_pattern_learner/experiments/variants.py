@@ -9,11 +9,11 @@ of the baseline is the run `mule train` makes.
 
 Training reads only the built-in run's feature groups (the owner's decision in
 docs/architecture.md), so a variant drops groups or changes the model, the loss or the training, and
-never adds a group: a group comes back into training only by moving it into the training
+never adds a group: a group comes back into training only by adding it to the training
 query on purpose. The account-activity table the retired no_graph control asked about is
-a question for the diagnostics baselines, over the analytics features. The data are
-synthetic, so the suites study the method (the loss, model selection, the evaluation,
-ensembling); a drop says what this generator's mules carry, not which inputs to delete.
+a question for the diagnostics baselines. The data are synthetic, so the suites study
+the method (the loss, model selection, the evaluation, ensembling); a drop says what
+this generator's mules carry, not which inputs to delete.
 
 Nothing here loads torch, so scripts/run_experiments.py lists the suites and variants
 under --help without it; experiments.runner.run_suite trains and compares them.

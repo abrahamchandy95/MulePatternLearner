@@ -256,9 +256,9 @@ def _scope_types(record: Mapping[str, Any]) -> str:
 
 
 def _scope(record: Mapping[str, Any]) -> str | None:
-    # A scope found in place, or the end of its creation, adds nothing to read.
+    # A split found in place, or the end of its creation, adds nothing to read.
     if record.get("creating"):
-        return f"Creating scope {record['scope']} on TigerGraph..."
+        return "Creating the graph's train, validation and test split on TigerGraph..."
     return None
 
 
@@ -273,9 +273,8 @@ def _reveal(record: Mapping[str, Any]) -> str:
     )
     if record["labels"] == "revealed again":
         line += ", replacing the labels of another reveal"
-    short = record.get("shortfall_discovered_by_cutoff")
-    if short:
-        line += f"; fewer than the budget were discovered by the cutoff of {', '.join(short)}"
+    elif record["labels"] == "revealed for the new split":
+        line += ", again for the new split"
     return line
 
 

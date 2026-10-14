@@ -44,9 +44,6 @@ def test_sections_refuse_values_outside_their_ranges() -> None:
         (lambda: RuntimeConfig(deterministic="yes"), "runtime.deterministic"),
         (lambda: RuntimeConfig(deterministic=1), "runtime.deterministic"),  # pyright: ignore[reportArgumentType]
         (lambda: RuntimeConfig(max_rejected_root_fraction=1.5), "max_rejected_root_fraction"),
-        (lambda: ScopeConfig(unowned="all"), "scope.unowned"),
-        (lambda: ScopeConfig(id=""), "scope.id"),
-        (lambda: ScopeConfig(reveal_per_split=1001), "scope.reveal_per_split"),
         (lambda: ScopeConfig(train_share=0.6), "must add up to 1"),
         (lambda: ScopeConfig(test_share=0.0, validation_share=0.5), "scope.test_share"),
         (
@@ -68,8 +65,6 @@ def test_sections_refuse_values_outside_their_ranges() -> None:
     for build, name in bad:
         with pytest.raises(ValueError, match=name):
             build()
-    for policy in ("independent", "shared", "linked"):
-        assert ScopeConfig(unowned=policy).unowned == policy
     assert RuntimeConfig(deterministic="strict").deterministic == "strict"
     for weight in ("prior", "balanced", 0.5):
         assert LossConfig(positive_weight=weight).positive_weight == weight
@@ -105,6 +100,16 @@ def test_tables_map_to_configurations_and_back() -> None:
         DEFAULT_CONFIG.with_changes({"training": {"learnig_rate": 0.1}})
     with pytest.raises(ValueError, match=r"Unknown configuration key\(s\): sampler.roots.recnt"):
         RunConfig.from_dict({"sampler": {"roots": {"recnt": 2}}})
+    # A graph holds one split, which always links unowned accounts, and the reveal
+    # reveals every discovered mule: no setting names a split, a rule or a cap, and a
+    # recorded table's are left out.
+    retired = {"id": "strict_mule_v3", "unowned": "independent", "reveal_per_split": 20}
+    for name, value in retired.items():
+        with pytest.raises(ValueError, match=rf"Unknown configuration key\(s\): scope.{name}"):
+            DEFAULT_CONFIG.with_changes({"scope": {name: value}})
+    recorded = DEFAULT_CONFIG.to_dict()
+    recorded["scope"].update(retired)
+    assert RunConfig.from_dict(recorded) == DEFAULT_CONFIG
     with pytest.raises(ValueError, match="Pool older"):
         RunConfig.from_dict({"sampler": {"children": {"older": 99}}})
     with pytest.raises(ValueError, match="scope must be a table"):
@@ -116,12 +121,17 @@ def test_the_built_in_run_keeps_its_settings() -> None:
     # without this literal; the configuration reference is edited with the code, so it
     # cannot pin them. The settings the golden run overrides are spelled out.
     assert DEFAULT_CONFIG.fingerprint() == (
-        "7a409c3314d48d1bf095ca2f941bf0c72a19114a32e0748b22d47590c51e2007"
+        "00dc0acec2ceabba0340ead8432e3dfdba41715f828146540f77112b3bcc349b"
+    )
+    # With the retired scope.unowned and scope.reveal_per_split back at the values every
+    # run had, it is the fingerprint the built-in run had before they were retired.
+    earlier = DEFAULT_CONFIG.results_view()
+    earlier["scope"] |= {"unowned": "linked", "reveal_per_split": None}
+    assert fingerprint(earlier) == (
+        "7710efaa4aa824548c3c6a2005018321d1fabcadc862023c825cc6803841133a"
     )
     scope = DEFAULT_CONFIG.scope
-    assert (scope.id, scope.shares) == ("strict_mule_v3", (0.5, 0.25, 0.25))
-    # Every mule a bank would have discovered by the cutoff is revealed.
-    assert (scope.reveal_per_split, scope.reveal_salt) == (None, 42)
+    assert (scope.shares, scope.reveal_salt) == ((0.5, 0.25, 0.25), 42)
     training = DEFAULT_CONFIG.training
     assert (training.epochs, training.steps_per_epoch, training.patience) == (30, 100, 6)
     assert training.batch_size == 64 and DEFAULT_CONFIG.model.dropout == 0.15

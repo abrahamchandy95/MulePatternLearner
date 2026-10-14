@@ -21,7 +21,7 @@ mule check
 On a new machine it ends "Not ready" and says to run `mule train`, which is expected. Once
 a dataset exists it also runs one training step, proving the graph, queries and device
 before an hour of training ([mule check](../reference/cli.md#mule-check)). To prepare the
-dataset without training (it installs, creates the scope and reveals on a fresh graph, and
+dataset without training (it installs, creates the split and reveals on a fresh graph, and
 only reads where they are in place; about 6 minutes on the reference graph):
 
 ```bash
@@ -93,41 +93,49 @@ the rest are drawn ([mule report](../reference/cli.md#mule-report-run)).
 
 ## On the CUDA host
 
-A host that trained with earlier code starts from scratch ([Datasets and models of earlier
-code](#datasets-and-models-of-earlier-code)): leave `data/` and `results/` empty or moved
-aside, except `results/archive/` (the archived diagnostic study, never read). The earlier
-code's own folders are covered in [Starting again on the CUDA
-host](../../README.md#starting-again-on-the-cuda-host).
+A host that trained with earlier code, on a graph that code built, upgrades in this order.
+This code reads no dataset or model earlier code wrote ([Datasets and models of earlier
+code](#datasets-and-models-of-earlier-code)), and the graph keeps its data: never run
+`gsql/schema/schema.gsql` or `gsql/schema/loading.gsql` on it, since it was built with the
+earlier schema, whose attributes they do not match.
 
-1. **Environment:** Linux x86_64, Python 3.12 to 3.14, an NVIDIA driver for CUDA 12
-   (525.60 or newer) or CUDA 13 (580.65 or newer).
-2. **Code:** `git switch main && git pull`, or clone.
-3. **torch and cuGraph:** reinstall after the pull, as [Setup](../../README.md#setup)
-   says, so `mule` and the extras match the code: CUDA 12 takes the cu129 torch wheel and
-   the `cuda12` extra (from pypi.nvidia.com), CUDA 13 the cu130 wheel and `cuda13` (from
-   pypi.org).
-4. **`.env`:** copy it, nothing else. Settings are built in, known mules are in TigerGraph
-   and the run prepares its own dataset.
-5. **cuGraph on the GPU:**
+1. **Stop** every job of the earlier code on every machine: it calls the query names
+   `mule install` drops.
+2. **Code:** `git switch main && git pull`, or clone. On Linux x86_64 with Python 3.12 to
+   3.14 and an NVIDIA driver for CUDA 12 (525.60 or newer) or CUDA 13 (580.65 or newer),
+   reinstall torch and the extras as [Setup](../../README.md#setup) says: the cu129 wheel
+   and `cuda12` (from pypi.nvidia.com), or the cu130 wheel and `cuda13` (from pypi.org).
+   Copy `.env`, nothing else: settings are built in and known mules are in TigerGraph.
+3. **Outputs:** move `results/` and `data/` aside, keeping `results/archive/` (the
+   archived diagnostic study, never read).
+4. **`mule check`** reports the outdated scope types, the stale and retired queries and no
+   dataset, and ends "Not ready".
+5. **Delete the split** by hand ([After the data
+   changes](set-up-a-graph.md#after-the-data-changes) has the request); its membership
+   edges go with it.
+6. **`mule install`** replaces the scope types, drops the retired queries
+   ([Queries](../reference/queries.md#the-retired-names)) and installs every training
+   query: about 50 minutes, within a 90-minute wait. If the wait runs out, rerun it once
+   `mule check` lists no stale training query.
+7. **`mule check`** lists no stale or retired query and ends "Not ready" only for the
+   missing dataset.
+8. **`mule train`** creates the split again, identical on the same loaded graph (same
+   seed, shares and rule, and TigerGraph's internal ids), reveals the labels again for it
+   ("again for the new split"), prepares the dataset (about 6 minutes) and trains (about an
+   hour). The labels are unchanged when the `reveal` event of
+   `data/<dataset id>/events.jsonl` gives the mules revealed per split of the earlier run's
+   (`{"1": 39, "2": 21, "3": 38}` on the 300,000-person graph):
+   `grep '"event": "reveal"' data/*/events.jsonl`.
+9. **cuGraph on the GPU:**
    `python -m pytest -m cuda tests/integration/test_cugraph_sampler.py` (skips where
    cuGraph cannot run; the last test needs the prepared dataset).
-6. **`mule check`** ends "Not ready" until the first `mule train` on a graph with the old
-   query names: renamed queries stale, old names listed as retired, no dataset.
-7. **`mule train`:** the first run installs the renamed queries beside the old names
-   (about 50 minutes, within a 90-minute wait), prepares the dataset (about 6 minutes) and
-   trains (about an hour). If the wait runs out, rerun once `mule check` lists no stale
-   training queries. `mule check` then ends "Ready to train.", old names still listed as
-   retired.
-8. **Drop the old names:** stop every job of the earlier code on every machine (it calls
-   them), then `mule install` drops them, callers first
-   ([Queries](../reference/queries.md#the-retired-names)).
-9. **`mule evaluate`, then `mule report`.**
-10. **Control experiments:** `python scripts/run_experiments.py`, then
+10. **`mule evaluate`, then `mule report`.**
+11. **Control experiments:** `python scripts/run_experiments.py`, then
     `python scripts/run_experiments.py methods` ([Run the control
     experiments](run-control-experiments.md)).
-11. **`mule diagnose`:** its first run installs the analytics queries; then
-    `python -m pytest -m graph` checks them ([Run the diagnostics](run-diagnostics.md)).
-12. **Cache cap:** set `contract.bounds.CONTEXT_CACHE_ENTRIES` to about five times the
+12. **`mule diagnose`:** the diagnostic study of the built-in run's dataset ([Run the
+    diagnostics](run-diagnostics.md)).
+13. **Cache cap:** set `contract.bounds.CONTEXT_CACHE_ENTRIES` to about five times the
     baseline's `contexts.distinct` (in its `metrics.json`). The cache holds the baseline's
     contexts once, once more per variant dropping a server-side group (`drop_entity_meta`,
     `drop_time_encoding`, `drop_pair_history`, `drop_flow_timing`), since runs share
@@ -176,12 +184,12 @@ evaluate_run(run)
 
 This code reads only what it writes:
 
-- **A dataset** is found by its settings' id in `data/<dataset id>/`. One kept elsewhere
-  or recording no dataset settings is ignored, and `mule train` prepares a new one (about
-  6 minutes). One from other query texts ("was built from different GSQL sources"), or
-  from earlier code's 70, 15 and 15% scope split ("records no scope shares"), is refused:
-  run `mule install` (for the first), move the directory aside (with its `contexts/`;
-  nothing deletes it) and run `mule train`.
+- **A dataset** is found by its settings' id in `data/<dataset id>/`. One kept elsewhere,
+  recording no dataset settings, or of code that named a scope id, is ignored, and
+  `mule train` prepares a new one (about 6 minutes). One from other query texts ("was
+  built from different GSQL sources"), or from earlier code's 70, 15 and 15% split
+  ("records no scope shares"), is refused: run `mule install` (for the first), move the
+  directory aside (with its `contexts/`; nothing deletes it) and run `mule train`.
 - **A model** must record `SavedModel.FORMAT` and this code's contract fingerprint; an
   earlier `model.pt` is refused, so train again.
 
@@ -190,12 +198,11 @@ This code reads only what it writes:
 | Message | Fix |
 |---|---|
 | `Installed query differs from repository source or is not installed` | `mule install`; it recompiles only the stale queries |
-| `Queries [...] are still not installed after ...s` | The 90-minute wait ran out; the server may still be compiling. Once it has finished (`mule check` lists no stale training queries; the GSQL shell's `ls` shows the analytics queries installed), rerun the command (`mule install`, `mule train`, `mule diagnose` or the experiments script); it installs only what is stale |
-| `The graph's scope types differ from gsql/schema/scope_vertex.gsql: ...` | The `Temporal_Training_Scope` type predates the file (for example without split shares). `mule install` replaces it if the graph holds no scope vertex; otherwise clear and reload the data first ([Reuse a graph](set-up-a-graph.md#reuse-a-graph)) |
+| `Queries [...] are still not installed after ...s` | The 90-minute wait ran out; the server may still be compiling. Once it has finished (`mule check` lists no stale training queries), rerun the command (`mule install`, `mule train`, `mule diagnose` or the experiments script); it installs only what is stale |
+| `The graph's scope types differ from gsql/schema/scope_vertex.gsql: ...` | The scope types predate the file (for example a `Temporal_Training_Scope` keyed by a scope id, or a membership edge with `group_id`). `mule install` replaces them if the graph holds no scope vertex; otherwise delete those by hand first, as the message says ([After the data changes](set-up-a-graph.md#after-the-data-changes)); the next `mule train` creates the split again, with the same partitions on the same loaded graph |
 | `Prepared dataset ... was built from different GSQL sources` | Query files changed after preparation: install, then move the dataset aside |
 | `Graph counts changed; freeze the source and prepare a new dataset` | The graph changed after preparation: freeze it, prepare a new dataset |
-| `Scope ... was created with scope.unowned = ...` | The scope used another rule: use the stored rule or a new `scope.id` |
-| `Account label contract violated after the reveal` | Run `validate_label_contract` ([Labels](../reference/labels.md)) |
+| `The graph's split has the split seed ...` | The split has other settings: configure the split's, or delete the split by hand (and move aside the dataset the message names, if it names one) and let `mule train` create the configured one ([After the data changes](set-up-a-graph.md#after-the-data-changes)) |
 | `TigerGraph rejected ... training roots so far` or `validation: TigerGraph rejected ... roots` | Rejected roots beyond the limit, or a rejected observed positive; see the statuses ([When TigerGraph rejects roots](#when-tigergraph-rejects-roots)) |
 | `The run in ... is complete with other settings` | Move the finished run aside |
 | `Resumed configuration differs from the run` | Move the interrupted run aside, or resume it with its own settings |

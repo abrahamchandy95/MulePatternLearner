@@ -18,7 +18,7 @@ from ..contract.feature_groups import (
     POOL_INTERNAL_FEATURES,
     FeaturePlan,
 )
-from ..contract.graph_schema import CHANNELS, RAILS, RELATION_INDEX, STRATA
+from ..contract.graph_schema import RAILS, RELATION_INDEX
 from .pool_counts import pool_activity
 
 # Columns kept as they are; every other column gets log1p.
@@ -31,8 +31,6 @@ NODE_NAMES = frozenset(
 )
 _POOL_NAMES = frozenset(POOL_ACTIVITY_FEATURES + POOL_INTERNAL_FEATURES)
 _RAIL = {name: i for i, name in enumerate(RAILS)}
-_CHANNEL = {name: i for i, name in enumerate(CHANNELS)}
-_STRATUM = {name: i for i, name in enumerate(STRATA)}
 
 
 def _log_columns(names: Sequence[str]) -> np.ndarray:
@@ -109,14 +107,6 @@ def base_matrix(
     return values.astype(np.float32)
 
 
-def _stratum(message: dict[str, Any]) -> int:
-    name = message.get("stratum", "recent" if message["event_id"] else "association")
-    try:
-        return _STRATUM[name]
-    except KeyError:
-        raise ValueError(f"Unknown sampling stratum {name!r}") from None
-
-
 def edge_block(messages: Sequence[dict[str, Any]], plan: FeaturePlan) -> dict[str, np.ndarray]:
     """Edge features and categorical codes for many messages, by column.
 
@@ -137,15 +127,10 @@ def edge_block(messages: Sequence[dict[str, Any]], plan: FeaturePlan) -> dict[st
         rail = [_RAIL[m["rail"]] for m in messages]
     except KeyError as error:
         raise ValueError(f"Unknown relation or rail {error.args[0]!r}") from None
-    other = _CHANNEL["other"]
     block = {
         "edge": values.astype(np.float32),
         "relation": np.asarray(relation, dtype=np.int64),
         "rail": np.asarray(rail, dtype=np.int64),
-        "channel": np.asarray(
-            [_CHANNEL.get(m.get("channel", "unknown"), other) for m in messages], dtype=np.int64
-        ),
-        "stratum": np.asarray([_stratum(m) for m in messages], dtype=np.int64),
     }
     if "time_encoding" in plan.groups:
         gap_on = event & _column(messages, "gap_present", bool)

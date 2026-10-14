@@ -465,23 +465,15 @@ def plot_proxy_validity(ax: Axes, table: pd.DataFrame) -> Axes:
     return ax
 
 
-def plot_reveal_spread(
-    ax: Axes, table: pd.DataFrame, *, budget: int | None, salt: int | None
-) -> Axes:
-    """Per split, the mules a bank would have discovered by the cutoff and those revealed.
+def plot_reveal_spread(ax: Axes, table: pd.DataFrame, *, salt: int | None) -> Axes:
+    """Per split, the mules revealed: those a bank would have discovered by the cutoff.
 
     Over the replayed salts: the 5th to 95th percentile as a bar, the median as a dot, and
-    the configured salt's outcome as an ink diamond. Each split's tick is its mules; the
-    dashed line is the reveal's budget per split.
+    the configured salt's outcome as an ink diamond. Each split's tick is its mules.
     """
-    names, rows = [], []
-    for split in SPLITS:
-        for metric, what in (("eligible", "discovered by the cutoff"), ("revealed", "revealed")):
-            names.append(f"{split}: {what}")
-            rows.append((split, metric))
-    y = _names(ax, names)
-    for position, (split, metric) in zip(y, rows, strict=True):
-        found = table[(table.split == split) & (table.metric == metric)]
+    y = _names(ax, list(SPLITS))
+    for position, split in zip(y, SPLITS, strict=True):
+        found = table[(table.split == split) & (table.metric == "revealed")]
         if not len(found):
             continue
         colour = COLOURS[split]
@@ -509,10 +501,8 @@ def plot_reveal_spread(
                 color=colour,
                 linestyle="none",
             )
-    if budget is not None:
-        ax.axvline(budget, color=MUTED, linestyle="--", linewidth=1.0)
     ax.set_xlim(left=0)
-    ax.set_xlabel("Mules")
+    ax.set_xlabel("Mules revealed")
     entries = [
         ("5th to 95th percentile over salts", {"color": MUTED, "linewidth": 5, "alpha": 0.45}),
         ("median over salts", _dot(MUTED)),
@@ -529,8 +519,6 @@ def plot_reveal_spread(
     ]
     if salt is not None:
         entries.insert(2, (f"the configured salt ({salt})", _dot(BASELINE, marker="D")))
-    if budget is not None:
-        entries.append((f"budget per split ({budget})", {"color": MUTED, "linestyle": "--"}))
     legend_below(ax, *_legend(entries))
     ax.set_title(f"The label reveal replayed over {table.salt.nunique():,} salts")
     return ax

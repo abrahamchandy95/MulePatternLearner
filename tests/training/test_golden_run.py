@@ -1,11 +1,12 @@
 """Golden run: the built-in training profile on the fakes, pinned to recorded numbers.
 
-The run prepares a strict-inductive dataset from the fake scope, with labels revealed in
+The run prepares a strict-inductive dataset from the fake split, with labels revealed in
 the graph as the built-in run reads them, then trains 2 epochs of 4 steps on the CPU
 with the built-in feature groups, slot sum, balanced positive weight and weight
 average. The literals at the end record its first training batch, every step's loss
 and objective, each epoch's validation AP, the selected epoch, the threshold picked on
-validation, the test AP, the sha256 of the rendered context query and the rows of the
+validation, the test AP, the sha256 of the context query's text, normalised (comments,
+whitespace and case outside string literals aside), and the rows of the
 prepared accounts and observed labels. A refactoring leaves every one of them
 unchanged. A commit that changes one on purpose says so and pastes the new values,
 which the failing assertion prints as Python source.
@@ -55,13 +56,13 @@ from mule_pattern_learner.artifacts import read_epochs, read_history, read_json
 from mule_pattern_learner.batching.assemble import RootBatch, tensor_digests
 from mule_pattern_learner.config import DEFAULT_CONFIG, RunConfig
 from mule_pattern_learner.contract.feature_groups import extraction_plan
-from mule_pattern_learner.contract.server import CONTEXT_QUERY
+from mule_pattern_learner.contract.server import CONTEXT_QUERY, CONTEXT_QUERY_FILE
 from mule_pattern_learner.data.context_cache import ContextCache
 from mule_pattern_learner.data.contexts import ContextSource, build_context_source
 from mule_pattern_learner.data.manifest import read_manifest
 from mule_pattern_learner.data.preparation import prepare
 from mule_pattern_learner.evaluation.audit import audit, audit_inputs
-from mule_pattern_learner.paths import DatasetPaths, RunPaths
+from mule_pattern_learner.paths import GSQL_DIR, DatasetPaths, RunPaths
 from mule_pattern_learner.pipeline.check import first_step
 from mule_pattern_learner.testing.builders import (
     ground_truth_rows,
@@ -71,10 +72,10 @@ from mule_pattern_learner.testing.builders import (
 from mule_pattern_learner.testing.fake_graph import FakeTigerGraph
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
 from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffReader
+from mule_pattern_learner.tigergraph.gsql_text import normalized
 from mule_pattern_learner.tigergraph.hubs import TigerGraphHubReader
 from mule_pattern_learner.tigergraph.labels import TigerGraphObservedLabelReader
 from mule_pattern_learner.tigergraph.oracle import TigerGraphTruthReader
-from mule_pattern_learner.tigergraph.render import render_context_query
 from mule_pattern_learner.tigergraph.scope import TigerGraphScopeReader
 from mule_pattern_learner.training import trainer
 from mule_pattern_learner.training.schedule import step_seed
@@ -88,9 +89,7 @@ GOLDEN_CHANGES: dict[str, Any] = {
     "training": {"epochs": 2, "steps_per_epoch": 4, "batch_size": 16},
     "runtime": {"device": "cpu", "threads": 1, "log_every_steps": 1},
 }
-# The source id of the fake graph's data.
-GOLDEN_SOURCE = "golden_fixture"
-# Accounts in the fake scope, and its three split cutoffs (FakeTigerGraph.last_visible).
+# Accounts in the fake split, and its three split cutoffs (FakeTigerGraph.last_visible).
 POPULATION = 200
 CUTOFF_SEQS = (101, 102, 103)
 
@@ -126,7 +125,6 @@ def prepare_golden(directory: Path) -> tuple[RunConfig, DatasetPaths, FakeTigerG
     dataset = DatasetPaths(directory / "dataset")
     prepare(
         config,
-        GOLDEN_SOURCE,
         dataset,
         {"Account": POPULATION},
         TigerGraphObservedLabelReader(),
@@ -187,7 +185,9 @@ def golden_run(directory: Path) -> Observed:
         validation_ap=result["validation_proxy"]["average_precision"],
         threshold=result["validation_proxy"]["threshold"],
         test_ap=result["observed_label_proxy"]["test"]["average_precision"],
-        query_sha256=hashlib.sha256(render_context_query().encode()).hexdigest(),
+        query_sha256=hashlib.sha256(
+            normalized((GSQL_DIR / CONTEXT_QUERY_FILE).read_text()).encode()
+        ).hexdigest(),
     )
 
 
@@ -280,7 +280,7 @@ def run_differences(observed: Observed) -> list[str]:
     if not close(observed.test_ap, GOLDEN_TEST_AP):
         problems.append(f"test AP {observed.test_ap}")
     if observed.query_sha256 != GOLDEN_QUERY_SHA256:
-        problems.append(f"rendered context query sha256 {observed.query_sha256}")
+        problems.append(f"context query sha256 {observed.query_sha256}")
     return problems
 
 
@@ -351,7 +351,8 @@ def frame_digest(frame: pd.DataFrame) -> str:
 def test_the_golden_settings_select_the_recorded_accounts(tmp_path: Path) -> None:
     # The dataset's accounts and observed labels feed every other literal. They were
     # recorded with the code of commit f203226, the last before the layered restructure,
-    # which prepared the same rows.
+    # which prepared the same rows; the accounts since lost the first_seen_seq and
+    # group_id columns, which the population query no longer prints.
     _, dataset, _ = prepare_golden(tmp_path)
     files = {"accounts": dataset.accounts, "observed_labels": dataset.observed_labels}
     for name, (rows, digest) in GOLDEN_DATASET.items():
@@ -448,11 +449,6 @@ def test_the_golden_run_audits_validation_and_test(tmp_path: Path) -> None:
 
 # Golden literals, recorded on macOS arm64 (torch 2.12, CPU). Floating tensors keep no sha256.
 GOLDEN_BATCH = {
-    "first_channel": {
-        "dtype": "int64",
-        "shape": [16, 16],
-        "sha256": "631bce7e17744e6042328642018387ad7ea8f15c41696609807938422d743b43",
-    },
     "first_edge": {
         "dtype": "float32",
         "shape": [16, 16, 142],
@@ -476,11 +472,6 @@ GOLDEN_BATCH = {
         "shape": [16, 16],
         "sha256": "54fcc45d700af1bdbfffa63e5420f9ec2e5cdd43160bfa3df73f084b26705f51",
     },
-    "first_stratum": {
-        "dtype": "int64",
-        "shape": [16, 16],
-        "sha256": "c1c01d1935f62b8c41d1a08181fa8a3644c60e59a4e55b82f2afeb275e28d124",
-    },
     "neighbor_positions": {
         "dtype": "int64",
         "shape": [16, 16],
@@ -490,11 +481,6 @@ GOLDEN_BATCH = {
         "dtype": "int64",
         "shape": [16],
         "sha256": "80cc42a62fa32b0eeb4adf1ee097e5b7898344ac437283690faf74e38b6c049f",
-    },
-    "second_channel": {
-        "dtype": "int64",
-        "shape": [59, 4],
-        "sha256": "e0f67333cb960fffd19a018fdb0292e21643e50b62e5eb710cfe58624ddabec6",
     },
     "second_edge": {
         "dtype": "float32",
@@ -518,11 +504,6 @@ GOLDEN_BATCH = {
         "dtype": "int64",
         "shape": [59, 4],
         "sha256": "80891153bd481822469a6019dc465925ba647fa0f5bcfe5659df6adac858c309",
-    },
-    "second_stratum": {
-        "dtype": "int64",
-        "shape": [59, 4],
-        "sha256": "7db7237b6d90804bfb6ed0835cec260800baf202d40becbeac137fb18fa0dafe",
     },
     "second_x": {
         "dtype": "float32",
@@ -565,10 +546,10 @@ GOLDEN_SELECTED_EPOCH = 1
 GOLDEN_VALIDATION_AP = 0.5037878787878788
 GOLDEN_THRESHOLD = 0.515523720606384
 GOLDEN_TEST_AP = 0.46891534391534384
-GOLDEN_QUERY_SHA256 = "21f15c377763febab0e169563284d98eab9958492bf7f68053efb4cb7552f6d2"
+GOLDEN_QUERY_SHA256 = "61a1708971ffd1244b2c9be7d30994404adb8cccdad4b574ea67258c2dc045d3"
 # Rows and frame_digest of the prepared accounts.parquet and observed_labels.parquet.
 GOLDEN_DATASET = {
-    "accounts": (123, "bdfe8b31ed8e0561638d9459c87b9e4dddc2a0cf09d3aad971a25fa2a0650062"),
+    "accounts": (123, "58f2e821f2f3f7659507095399886bca2f4c6cd4f65504b7a8c16028365786fe"),
     "observed_labels": (123, "ceda44c0fbb4040d251dc1832061724f9b4a335006b6e94f1ec0c4ddabe0f118"),
 }
 # The audits of the golden run (test_the_golden_run_audits_validation_and_test). Each split's

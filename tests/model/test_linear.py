@@ -64,10 +64,10 @@ def test_the_linear_model_is_one_layer_of_the_roots_own_inputs() -> None:
 def test_wide_and_deep_adds_a_linear_layer_of_the_roots_inputs_to_the_graph_models_logit() -> None:
     plan = WIDE.feature_plan()
     assert not plan.root_only
-    # The graph model's inputs, contexts and query flags at both hops.
+    # The graph model's inputs, and the groups its context source checks.
     built_in = DEFAULT_CONFIG.feature_plan()
-    for hop in (1, 2):
-        assert plan.query_flags(hop) == built_in.query_flags(hop)
+    assert plan.groups == built_in.groups
+    assert extraction_plan(plan).groups == extraction_plan(built_in).groups
     torch.manual_seed(0)
     graph = build_model(DEFAULT_CONFIG.model, built_in, FANOUT, dropout=0.0)
     torch.manual_seed(0)

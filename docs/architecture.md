@@ -14,7 +14,7 @@ script `mule` (built-in settings) drives it, plus a control experiments script.
 
 ```mermaid
 flowchart LR
-  TG[("TigerGraph: queries, scope, label contract")] --> P[prepare_dataset]
+  TG[("TigerGraph: queries, split, label contract")] --> P[prepare_dataset]
   P --> D[("data/dataset id: manifest, accounts, observed labels, hubs")] --> T[train_run]
   TG --> T
   T <--> C[(context cache in data/dataset id)]
@@ -28,11 +28,11 @@ flowchart LR
    `gsql/evaluation/`, adds the scope vertex type if missing or replaces it if outdated,
    then drops the retired names; a preparation that connects installs the same way and
    drops nothing ([Installation](reference/queries.md#installation)).
-2. **Scope and reveal.** On a fresh graph the first preparation creates the frozen scope
-   (ownership groups partitioned into train, validation and test). Preparing a dataset
-   reveals every mule a bank would have discovered by each split's cutoff, replacing
-   labels another reveal wrote ([Label reveal](explanation/label-reveal.md)).
-3. **Prepare.** `pipeline.prepare.prepare_dataset` pages the scope population into
+2. **Split and reveal.** On a fresh graph the first preparation creates the graph's one
+   split (ownership groups partitioned into train, validation and test). Preparing a
+   dataset reveals every mule a bank would have discovered by each split's cutoff,
+   replacing labels another reveal wrote ([Label reveal](explanation/label-reveal.md)).
+3. **Prepare.** `pipeline.prepare.prepare_dataset` pages the split's population into
    label-blind seed reservoirs plus the revealed positives, resolves the cutoffs and
    builds the hub registry into `data/<dataset id>/`; training requests contexts itself.
 4. **Train.** `pipeline.train.train_run` checks the dataset's frozen source, reads
@@ -68,7 +68,7 @@ contract                                         definitions shared with GSQL
 
 | Package | Responsibility |
 |---|---|
-| `contract` | What GSQL and client share, no I/O, no torch: query names, `CONTEXT_CONTRACT` and the retired names (`server`), graph types, relations and splits (`graph_schema`), training feature groups (`feature_groups`) and analytics ones (`analytics_features`), the sampler plan, every numeric bound (`bounds`), the time basis, fingerprints, clocks, the reveal's draws, the frozen salts |
+| `contract` | What GSQL and client share, no I/O, no torch: query names, `CONTEXT_CONTRACT` and the retired names (`server`), graph types, relations and splits (`graph_schema`), training feature groups (`feature_groups`), the sampler plan, every numeric bound (`bounds`), the time basis, fingerprints, clocks, the reveal's draws, the frozen salts |
 | `config`, `paths` | Settings as frozen dataclasses, `DEFAULT_CONFIG` the built-in run; where datasets and results go and every file's name |
 | `artifacts`, `metrics` | Every file's columns, reading and writing, the one atomic write and file digest; pure ranking metrics, curves, review budgets, bootstrap intervals |
 | `runtime` | Device and determinism, the one bounded worker pool, `emit` (each event's one structured record) and its console line (`console`) |
@@ -80,7 +80,7 @@ contract                                         definitions shared with GSQL
 | `training` | Trainer, schedule, objective, weight average, resume state, history, summary |
 | `evaluation` | The truth port, the audit sample, the ground-truth audit |
 | `reporting` | Every figure and `report.md`, from saved files only; the only importer of matplotlib |
-| `tigergraph` | The only code that speaks REST or GSQL: connection, retrying executor, installer, query renderer, one adapter per port |
+| `tigergraph` | The only code that speaks REST or GSQL: connection, retrying executor, installer, query text checks, one adapter per port |
 | `pipeline` | The commands' use cases (prepare, train, evaluate, score, check, the study and its graph reads); the only place adapters are built |
 | `experiments` | Variants, suite runner, comparison tables |
 | `diagnostics` | The study's feature table and analyses, on ports `pipeline.diagnose` fills |
@@ -99,7 +99,7 @@ contract                                         definitions shared with GSQL
   `pipeline.connect.Session` and a `pipeline.evaluate.SharedTruth` on it. From
   `tigergraph` the runner imports only `TigerGraphUnavailableError` (the outage that stops
   a suite) and the summary of an error.
-- **Graph writes** (install, scope creation, reveal) happen only in `pipeline.prepare`,
+- **Graph writes** (install, split creation, reveal) happen only in `pipeline.prepare`,
   `pipeline.diagnose` and `tigergraph`; `data.preparation` gets read ports only.
 - **Metrics are pure and sit low**, so training, evaluation, experiments, diagnostics and
   reporting share one implementation.
@@ -120,27 +120,24 @@ or `Executor`. An adapter is `<Technology><Port>`; a fake is `Fake<Technology>`.
 | `ObservedLabelReader` | `data.ports` | `tigergraph.labels.TigerGraphObservedLabelReader` | the fake graph's population |
 | `TruthReader` | `evaluation.truth` | `tigergraph.oracle.TigerGraphTruthReader`, `evaluation.truth.ParquetTruthReader`, and `pipeline.evaluate.SharedTruth`, which reads the graph's truth once for a suite | `testing.builders.ground_truth_rows` behind `FakeTigerGraph` |
 | `ContextReader` | `data.contexts` | `data.contexts.ContextSource`, the one source that streams contexts | `testing.fake_graph.FakeSource`, `FakeStore` |
-| `AnalyticsFetcher` | `diagnostics.feature_table` | `tigergraph.analytics_query.TigerGraphAnalyticsFetcher` | the adapter on `FakeTigerGraph` |
 | `StudyReader` | `diagnostics.study` | `pipeline.diagnose.TigerGraphStudyReader` | |
 | `QueryExecutor`, `ConnectionExecutor` | `tigergraph.executor` | `TigerGraphExecutor`: failure classes, retry and outage budgets, paging | `testing.fake_graph.FakeTigerGraph` |
 
 - **One fake executor.** `FakeTigerGraph` answers the repository's queries as the GSQL
   does; its connection answers `SHOW QUERY`, the endpoint listing, the schema, vertex
-  counts and scope headers, and creates, installs and drops queries. The tests run the
-  real adapters on it; the executor protocols belong to `tigergraph`, since only adapters
-  run queries. A few `tigergraph` tests script a pyTigerGraph connection behind the real
-  executor (`testing.fake_connection`) for what the fake does not answer: the installer's
-  compilation, the label reveal and the label-contract check.
+  counts and the split's header, and creates, installs and drops queries. The tests run
+  the real adapters on it; the executor protocols belong to `tigergraph`, since only
+  adapters run queries. A few `tigergraph` tests script a pyTigerGraph connection behind
+  the real executor (`testing.fake_connection`) for what the fake does not answer: the
+  installer's compilation and the label reveal.
 - **The pipeline composes the study.** `diagnostics` may import neither `pipeline` nor
   `tigergraph`, even indirectly (the contract "Use cases reach TigerGraph only through
   ports"), so `pipeline.diagnose.diagnose_built_in` prepares the dataset
   (`pipeline.prepare.prepare_dataset`) on a `pipeline.connect.Session` and hands
   `diagnostics.study.diagnose` a `pipeline.diagnose.TigerGraphStudyReader` on it, the
   study's only graph access: `oracle()` (a `TruthReader`, read once), `scope()`,
-  `contexts()` (with the dataset's disk tier), `analytics()`, `reveal_inputs()`,
-  `reveal_parameters()`. It checks the frozen source on its first read and installs the
-  analytics queries before handing out their fetcher, so only `mule diagnose` installs
-  them.
+  `contexts()` (with the dataset's disk tier), `reveal_inputs()`, `reveal_parameters()`.
+  It checks the frozen source on its first read and installs nothing.
 - **A suite shares one connection.** `pipeline.connect.Session` opens it when a use case
   first needs the graph; `prepare_dataset`, `train_run` and `evaluate_run` accept it, and
   each still checks the frozen source.
@@ -155,7 +152,6 @@ ignores an import.
 | Layers run one way | The stack above: one way down, independent siblings |
 | Use cases reach TigerGraph only through ports | Training, evaluation, data, batching, inference, sampling, model, reporting and diagnostics import neither `tigergraph` nor pyTigerGraph, so every use case runs on a fake |
 | Training never reads ground truth | Training's packages, `config`, the training context fetcher (`tigergraph.context_query`) and the pipeline's preparing, training, checking and scoring modules never import `evaluation`, `diagnostics` or `tigergraph.oracle` |
-| Training never reads the analytics features | The same modules never import `contract.analytics_features` |
 | Only reporting draws | No other package imports matplotlib; pipeline, command line, experiments and diagnostics call `reporting` |
 | Reporting reads files, not models or the graph | `reporting` imports neither torch nor `model`, `inference` or `training` |
 | Fakes stay out of the package | No package imports `testing` |
@@ -171,11 +167,11 @@ module imports `matplotlib.pyplot`.
 The model trains only on the revealed mules, as a bank's would; two things keep the ground
 truth (`is_mule`) out of reach:
 
-- **Queries.** The population query exports only the revealed positive (`pu_label == 1`
-  with `is_mule == 1`, `mule_label_known` and not `is_mule_masked`) and its discovery
-  time, when preparation asks. No feature, cutoff or hub query reads a label attribute,
-  and the tests check the rendered context queries for oracle names; only the reveal
-  (once, before training), the label-contract check and the oracle export read the truth.
+- **Queries.** The population query exports only the revealed positive (`pu_label == 1`,
+  which the reveal writes only for a known mule it revealed) and its discovery time. No
+  feature, cutoff or hub query reads a label attribute, and the tests check the context
+  query file for oracle names; only the reveal (before training) and the oracle export
+  read the truth.
 - **Imports.** `tigergraph.oracle`, `evaluation` and `diagnostics` are unreachable from
   training by contract, and the label interface refuses oracle columns. The audits read
   truth only after the model and threshold are fixed.
@@ -185,17 +181,17 @@ contract, with no change to model or loss ([Labels](reference/labels.md)).
 [Leakage and scaling](explanation/leakage-and-scaling.md) covers time, held-out groups and
 selection.
 
-## The training query and the analytics queries
+## The training query
 
 `fetch_training_context` computes only what the model reads: the built-in run's
 server-side groups (`entity_meta`, `message_core`, `time_encoding`, `pair_history`,
-`flow_timing`) and each message's channel and sampling stratum; the client computes the hub
-indicator and pool counts. `fetch_analytics_context`, rendered by the same
-`tigergraph.render` from `contract.analytics_features`, computes every group for analysis.
-Each prints a contract derived from its text (`CONTEXT_CONTRACT`, `ANALYTICS_CONTRACT`): a
-render test keeps the constants equal to the texts, the client refuses rows of another
-contract, saved models record it and the context cache names entries with it, so a changed
-query is never read as the old one ([Features](reference/features.md)).
+`flow_timing`), for every model alike; a context source validates the groups of its
+plan, and the client computes the hub indicator and pool counts. It is a hand-written
+GSQL file; tests keep its parameters and bounds equal to the Python contracts. It prints
+a contract derived from its text (`CONTEXT_CONTRACT`): a test keeps the constant equal to
+the text, the client refuses rows of another contract, saved models record it and the
+context cache names entries with it, so a changed query is never read as the old one
+([Features](reference/features.md)).
 
 ## Configuration
 
@@ -244,9 +240,9 @@ constants, which are not run configuration.
 | Ports and adapters | See [Ports and adapters](#ports-and-adapters) | `ScopeReader`, `TigerGraphScopeReader`, `FakeTigerGraph` |
 | Functions | Verbs for use cases and factories; `*_curve` returns arrays, `bootstrap_*` intervals, `plot_*` draws | `prepare_dataset`, `train_run`, `capture_curve`, `plot_capture` |
 | Constants | UPPER_CASE, defined once | `BUILT_IN_GROUPS`, `GRAPH_NAME` |
-| Settings | Section-qualified snake_case, units as suffixes | `scope.id`, `loss.positive_weight`, `transport.max_outage_s` |
+| Settings | Section-qualified snake_case, units as suffixes | `scope.reveal_salt`, `loss.positive_weight`, `transport.max_outage_s` |
 | Variants | "Variant", never "arm": `baseline`, `no_<mechanism>`, `drop_<group>`, or a control's own name | `no_attention`, `drop_pair_history`, `prior_weight` |
-| Concepts | One name each: **dataset**, what preparation stages; **source id**, the identity of the data loaded into the graph; **audit**, the ground-truth report, written by `evaluate`; a context source parameter is always `contexts` | |
+| Concepts | One name each: **dataset**, what preparation stages; **split**, the graph's one partition into train, validation and test (its vertex type keeps the name `Temporal_Training_Scope`, its settings the section `scope`); **audit**, the ground-truth report, written by `evaluate`; a context source parameter is always `contexts` | |
 | Runs and figures | `results/<variant>/seed-<n>/`; run and suite figures `plots/<topic>_<figure>.png`; a study's named for what they show, after the analysis that draws them where it draws one | `audit_capture.png`, `learning_curve.png`, `ring_coverage.png` |
 | GSQL | A file after the responsibility its queries share; a query verb first, no prefix | `hub_accounts.gsql` defines `list_hub_accounts` |
 | Tests | `tests/<package>/test_<module>.py`; graph and GPU checks in `tests/integration/`; repository-wide checks (names, import contracts, links, scripts) at the top of `tests/`; markers `graph`, `graph_write`, `cuda` | `tests/sampling/test_cugraph_sampler.py` |
@@ -256,8 +252,8 @@ constants, which are not run configuration.
 code defines, the command line, run paths and GSQL query names, not prose. No name holds a
 `FORBIDDEN` word except persisted values of the graph and the seeded draws, each listed
 with its reason in `ALLOWED`: the `Temporal_Training_Scope` vertex type and the salts
-`temporal_live_step` and `marginal_cohort`. The scope's edge types and the built-in scope
-id are persisted too and hold no such word. The queries' names from before the rename
+`temporal_live_step` and `marginal_cohort`. The scope's edge types and the split's id are
+persisted too and hold no such word. The queries' names from before the rename
 appear only in `contract.server.RETIRED_QUERIES`, which `mule install` drops. Another
 library's names stay its own: the code calls pylibcugraph's sampler by its name, and the
 tests' imitation of pylibcugraph gives its names as keywords.
@@ -270,16 +266,21 @@ The owner's decisions:
 |---|---|
 | **Commands take no options.** Inputs come from the built-in settings and the latest run; `RUN` defaults to `results/baseline/seed-42` | `mule train` always trains the one reproducible run; a run's settings are the code's or a `RunConfig` in its `config.json` |
 | **One model** (layered layout, approved 2026-09-27): `TGAT`; `SummaryMLP`, `LinearModel` and `WideAndDeep` only for the controls. Deleted: the variant axis, the `single` architecture, feature groups only earlier models read, the `recent` and `stratified` samplers, SQLite storage, the `shared_history` protocol, the label file | The built-in run used none, and each was a second path to keep correct |
-| **Training keeps only the built-in run's feature groups** (2026-09-28). The training query shrank from 1,833 to 1,282 lines, a message from 34 fields to 27; the other ten groups moved to the analytics query. A group returns only when moved into the training query on purpose, with a new contract | The training query computes nothing no model reads |
-| **Queries are named after their responsibility**, verb first, no prefix; only used ones remain: pipeline in `gsql/queries/`, oracle in `gsql/evaluation/`, analysis in `gsql/analytics/` | The graph is dedicated |
+| **Training keeps only the built-in run's feature groups** (2026-09-28). The training query shrank from 1,833 to 1,282 lines, a message from 34 fields to 27; the other ten groups moved to the analytics query (deleted on 2026-10-09). A group returns only when added to the training query on purpose, with a new contract | The training query computes nothing no model reads |
+| **Queries are named after their responsibility**, verb first, no prefix; only used ones remain: pipeline in `gsql/queries/`, oracle in `gsql/evaluation/` | The graph is dedicated |
+| **No analytics queries** (2026-10-09). The analytics context query and the pair-gap queries are deleted, with the payment attributes only they wrote; the diagnostics read the training query alone, without the `account` feature family and baseline | Training never called them, their install timed out after 5,402 s on the CUDA host, and no current result uses them |
 | **Only `mule install` drops the retired names**: once every query is installed, those on the fixed list `contract.server.RETIRED_QUERIES`, callers first, never another, with no option; other commands' installs leave them | A fixed list cannot drop someone else's query. Pre-rename code calls the old names and nothing can tell whether such a job runs elsewhere, so the owner runs `mule install` once none runs anywhere |
 | **Decisions use the validation audit; test is for reporting** | Choosing on test makes the reported number optimistic, and the pool groups were already designed after reading test-split mules |
 | **The hidden mules lead, and decisions use their validation AP** (2026-10-04). Every audit ranks them against the non-mules with the revealed mules removed (as an investigator removes known cases), beside every mule's metrics; the run report, `mule evaluate`, suite comparisons and the diagnostics show them first; a suite ranks, compares and ensembles by their validation AP | The model exists to find mules nobody knows on the scoring date. On the reference graph the built-in run ranked revealed mules far better than hidden ones, so every mule's AP mostly measured the reveal |
 | **Every run reads the graph's labels** (2026-09-28): one label path, no label file or table reader; tests serve labels through the fake graph | The model trains only on the revealed positives (`pu_label`) |
-| **The reveal makes every discovered mule known, and its settings name the dataset** (2026-10-05, replacing the 2026-09-28 decision that they act once). `scope.reveal_per_split` defaults to none: each split reveals every mule a bank would have discovered by its cutoff. Of the scope, `scope.id`, `scope.unowned`, the split shares and the reveal settings name a dataset; `scope.create` does not. Preparing a dataset replaces labels another reveal wrote, and a run refuses a graph whose labels are not its dataset's | A bank trains on every mule it has confirmed: the cap of 20 left 20 train mules on the 300,000-person graph, whose train split holds about 200. A reveal that can change must name the labels a dataset read |
+| **The reveal makes every discovered mule known, and its settings name the dataset** (2026-10-05, replacing the 2026-09-28 decision that they act once). `scope.reveal_per_split` defaults to none: each split reveals every mule a bank would have discovered by its cutoff. Of the scope, `scope.unowned`, the split shares and the reveal settings name a dataset; `scope.create` does not. Preparing a dataset replaces labels another reveal wrote, and a run refuses a graph whose labels are not its dataset's | A bank trains on every mule it has confirmed: the cap of 20 left 20 train mules on the 300,000-person graph, whose train split holds about 200. A reveal that can change must name the labels a dataset read |
+| **A graph holds one split** (2026-10-09, replacing a scope per id). The `Temporal_Training_Scope` vertex `"split"` and one membership edge per Account and Party; no query, setting or file names a scope id or a source id. A context's phase is 0 without the split (`mule score`) or 1 to 3 within it; a dataset is named by the graph's vertex counts. A split of other settings is refused, and only its owner deletes one, by hand | Every run used the one built-in scope, so its id, and the source id it recorded, were parameters nothing varied. The split's hash never read either, so a split's partitions are unchanged, and the evaluation draws hash the built-in id in its place (`sampling.candidates.SPLIT_DRAW_SALT`), so a finished run's scores are too. A run that recorded `scope.id` still reports, but is of other settings |
+| **The GSQL holds only what something reads** (2026-10-09, replacing what the 2026-10-05 decision says of `scope.reveal_per_split` and `scope.unowned`). The split always links unowned accounts (the former `linked` rule) and the reveal reveals every discovered mule, so both settings are retired like `scope.id`. Deleted: `summarize_scope_policy`, `validate_label_contract`, the reveal's capped sampling and tuning parameters (now constants), the hub query's echoes, `max_degree` and `reason`, the membership edge's `group_id` and the schema attributes no query read. The reveal's label record stays byte for byte | Every run since 62191b4 used `linked` and no cap (the 300,000-person reference run of [the reference runs](research/reference-run.md) capped each split at 20), so the split, the revealed labels and the model's inputs are unchanged. The GSQL is the deliverable, and its owner wants nothing in it that nothing needs |
+| **The context query takes no group flags and keeps no unread output or unfired check** (2026-10-09). Gone: the `include_*` parameters, `diagnostics`, the message `channel` and `stratum` (with the payments' `channel` attribute), and the checks `invalid_request`, `invalid_payment_fields`, `invalid_event_roles` and `nonmonotonic_pair_clock`; its repeated blocks are folded, from 1,282 lines to 659 | Only drop variants turned a flag off: `drop_time_encoding` changed only the spot check's vectors, which a source still asks for only with the time encoding, and the others never ran. Batches read only their plan's columns and no removed check fired on the data, so every model input, ties included, is unchanged |
 | **Control experiments are a script with names only**: `python scripts/run_experiments.py [SUITE or VARIANT ...]`, no flags; suite `controls` by default, seeds in code, variants in `experiments/variants.py`, complete runs kept, mismatched runs moved to `results/archive/`, never deleted, tables and figures always written | The owner asked for a script; with seeds in code and nothing in `/tmp`, every suite repeats from the commit |
 | **Only what this code writes is read** (2026-10-03, replacing the 2026-09-28 decision to keep converting earlier saved settings until the new baseline run was audited). `SavedModel` reads only its own `FORMAT` and contract; a dataset is used only if its recorded settings and query texts are this code's; nothing converts earlier settings, contracts or datasets; the saved-model test's fixtures are models this code saved | The owner retrains from scratch, and each conversion was a second path to keep correct |
 | **One exception** (2026-10-04): an `epochs.csv` from before the validation nnPU risk was recorded is read with exactly its earlier columns, the risk missing; a resume state saved then continues with that column empty in its earlier epochs. The payload is the same: the kept epoch's value under the selection rule sits in the validation AP's old slot. Any other column set is refused | It keeps the first control experiments' runs complete and resumable |
+| **A second exception** (2026-10-09): predictions written while the split stored a `group_id` are read with exactly those earlier columns, and the `group_id` dropped. Any other column set is refused | The finished runs of the 300,000-person experiments still report |
 | **One branch, `main`, the same on both remotes** (2026-09-27 and 2026-09-28): the layered code replaced the old `main` by a fast-forward; `origin` and `learner` hold the same `main`; nothing is pushed and no branch deleted without the owner's confirmation | The earlier history stays in `main` |
 
 Other choices:

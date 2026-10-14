@@ -30,16 +30,19 @@ config = DEFAULT_CONFIG.with_changes({"training": {"epochs": 3}, "model": {"slot
   `sampler.backend`. `config.json` records it, a resumed run must match it, and a complete
   run of another fingerprint is never overwritten. `training.selection` joined later, so
   its built-in value, `"validation_ap"`, is left out (older runs keep their fingerprint);
-  any other rule is included.
-- **The dataset settings** name the prepared dataset: the source id (read from the graph,
-  never configured), `scope.id`, `scope.unowned`, the split shares (`scope.train_share`,
+  any other rule is included. A recorded `config.json` or `model.pt` holding a retired
+  setting (`config.RETIRED_SETTINGS`: `scope.id`, `scope.unowned`,
+  `scope.reveal_per_split`) still reads, but its run counts as one of other settings,
+  whatever the value, so it is neither resumed nor reported as complete.
+- **The dataset settings** name the prepared dataset: the graph's vertex counts (read
+  from the graph, never configured), the split shares (`scope.train_share`,
   `scope.validation_share`, `scope.test_share`), the whole `dataset` section, and the
   candidate pools (`sampler.roots`, `sampler.children`). Their fingerprint is the dataset
   id, naming `data/<dataset id>/`. Runs sharing them share a dataset; every other setting,
   the feature groups and training seed included, may differ between its runs.
-- **`scope.reveal_per_split` and `scope.reveal_salt`** decide the labels a dataset
-  reads, so they name it too; changing them reveals the labels again when the next
-  dataset is prepared. **`scope.create`** names no dataset.
+- **`scope.reveal_salt`** decides the labels a dataset reads, so it names it too;
+  changing it reveals the labels again when the next dataset is prepared.
+  **`scope.create`** names no dataset.
 - **`transport` and `runtime`** never change a run's numbers, except that
   `runtime.device`, `runtime.threads` and `runtime.deterministic` can change
   floating-point results. `config.json` records the starting values; a resumed segment
@@ -47,22 +50,21 @@ config = DEFAULT_CONFIG.with_changes({"training": {"epochs": 3}, "model": {"slot
 
 ## scope
 
-The frozen experiment scope the splits come from, and the label reveal of its datasets.
+The graph's one train, validation and test split, and the label reveal of its datasets.
+The split is created once; a graph whose split has other settings is refused
+([The scope queries](queries.md#create_training_scope)).
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `scope.id` | `"strict_mule_v3"` | The `Temporal_Training_Scope` vertex sampled in (at most 256 bytes); a new partition or graph load needs a new id |
-| `scope.create` | `true` | The first run creates a missing scope; `false` forbids that write |
-| `scope.unowned` | `"linked"` | Where accounts no party owns go: `"independent"`, `"shared"` or `"linked"` ([the scope queries](queries.md#create_training_scope)) |
+| `scope.create` | `true` | The first run creates the split when the graph has none; `false` forbids that write |
 | `scope.train_share` | `0.5` | Share of ownership groups in train: positive, a whole number of 1/10,000, the three shares adding up to 1 |
 | `scope.validation_share` | `0.25` | The same in validation |
 | `scope.test_share` | `0.25` | The same in test |
-| `scope.reveal_per_split` | `null` | Known mules revealed per split, among those a bank would have discovered before the cutoff: `null` reveals every one, a number (0 to 1,000) caps each split |
 | `scope.reveal_salt` | `42` | Seed of the reveal's deterministic draws |
 
 ## dataset
 
-What preparation stages inside the scope: split cutoffs and seed reservoirs.
+What preparation stages inside the split: split cutoffs and seed reservoirs.
 
 | Setting | Default | Meaning |
 |---|---|---|
@@ -73,7 +75,7 @@ What preparation stages inside the scope: split cutoffs and seed reservoirs.
 | `dataset.seed_limits.validation` | `2000` | The same for validation |
 | `dataset.seed_limits.test` | `2000` | The same for test |
 | `dataset.seed` | `42` | Seed of the reservoirs' hash ranks |
-| `dataset.split_seed` | `42` | Seed of the scope's split partition, and of the audit and proxy samples |
+| `dataset.split_seed` | `42` | Seed of the graph's split, and of the audit and proxy samples |
 
 ## sampler
 
@@ -147,8 +149,7 @@ the graph model needs `message_core`.
 
 ## transport
 
-How contexts are requested, and the retry budgets. They never change results, so a
-resumed run may change them.
+How contexts are requested, and the retry budgets.
 
 | Setting | Default | Meaning |
 |---|---|---|
@@ -158,10 +159,6 @@ resumed run may change them.
 | `transport.encoding_check_every` | `64` | Every n-th context request also asks for the Fourier vectors, checked against the client's |
 | `transport.max_query_attempts` | `6` | Attempts that count per query (1 to 20) |
 | `transport.max_outage_s` | `900` | Seconds one operation keeps retrying while TigerGraph is unavailable (0 to 86,400) |
-
-The defaults were measured best: on the reference graph a 64-root batch took about 11
-seconds at 8 contexts per request and 16 in parallel, against about 20 at 16 and 8, and
-22 at 4 and 16.
 
 ## runtime
 

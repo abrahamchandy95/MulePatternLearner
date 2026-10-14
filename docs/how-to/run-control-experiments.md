@@ -50,7 +50,8 @@ figures failed after its numbers were saved stays in the tables with its error;
 
 Run the script again to finish: complete runs of the same settings are kept, so a suite
 trained with fewer seeds than `experiments.variants.SEEDS` holds trains only the new ones.
-A run of another scope id differs in its settings, though ([Cost](#cost)).
+A run of earlier code that recorded a scope id is of other settings, though, and trains
+again ([Cost](#cost)).
 
 The data are synthetic, so the suites study the method (the loss, how a run chooses its
 weights, how it is evaluated, whether seeds are worth combining), not which inputs to
@@ -102,8 +103,8 @@ baseline's dataset.
   whenever the baseline stopped sooner.
 - **No variant adds a group**: variants only drop groups or change the model, loss or
   training, since training reads only the built-in groups. How well a table of the
-  account's own activity ranks mules, with no neighbour input, is for the diagnostics
-  baselines ([Run the diagnostics](run-diagnostics.md)).
+  account's own activity ranks mules, without the model's attention over its neighbours,
+  is for the diagnostics baselines ([Run the diagnostics](run-diagnostics.md)).
 
 ## Cost
 
@@ -111,8 +112,8 @@ The `controls` suite is 90 runs: 70 graph runs and 20 cheap `no_attention` and `
 runs, which fetch no children. A graph run takes about 3 seconds a step on the CUDA host
 while it requests contexts from TigerGraph, about an hour with early stopping, and far
 less once the context cache holds them. Over the first three seeds each variant's runs
-averaged 0.00 to 0.25 hours. Since the built-in scope became `strict_mule_v3`, of other
-split shares, every `strict_mule_v2` run is archived and trained again: the next
+averaged 0.00 to 0.25 hours. Every run of earlier code records a scope id (`scope.id`,
+gone since a graph holds one split), so it is archived and trained again: the next
 `controls` suite trains all 90.
 
 The plan gives two numbers for the runs it trains:

@@ -27,13 +27,13 @@ def test_batch_limits_bound_candidate_pools_before_fetching() -> None:
     BatchLimits().validate(120, (16, 4), FeaturePlan(), replace(wide, children=PoolPlan()))
 
 
-def test_batch_ids_are_dense_per_type_cutoff_and_scope_and_never_global() -> None:
-    a = ContextKey("Account", "999999999999999999999999", 100, 1000, "experiment", 1)
+def test_batch_ids_are_dense_per_type_cutoff_and_phase_and_never_global() -> None:
+    a = ContextKey("Account", "999999999999999999999999", 100, 1000, 1)
     other_type = replace(a, node_type="Token")
     other_time = replace(a, cutoff_seq=90)
-    other_scope = replace(a, scope_id="another")
-    index = BatchIndex([a, a, other_type, other_time, other_scope])
-    assert [index[k] for k in (a, other_type, other_time, other_scope)] == [0, 1, 2, 3]
+    other_phase = replace(a, visibility_phase=0)
+    index = BatchIndex([a, a, other_type, other_time, other_phase])
+    assert [index[k] for k in (a, other_type, other_time, other_phase)] == [0, 1, 2, 3]
     assert BatchIndex([other_type])[other_type] == 0
     with pytest.raises(BatchCapacityError):
         BatchIndex([a, other_type], capacity=1)

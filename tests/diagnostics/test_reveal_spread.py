@@ -20,13 +20,9 @@ def test_each_salt_replays_the_mirror_of_the_reveal_per_split() -> None:
     for salt in range(3):
         expected = plan(reveal_inputs(), {**params, "salt": salt})
         rows = table[table.salt == salt]
-        for metric in ("eligible", "revealed"):
-            found = rows[rows.metric == metric].set_index("split").value
-            counts = counts_by_split(expected, metric)
-            assert found.to_dict() == {
-                "train": counts[1],
-                "validation": counts[2],
-                "test": counts[3],
-            }
+        assert set(rows.metric) == {"mules", "revealed"}
+        found = rows[rows.metric == "revealed"].set_index("split").value
+        counts = counts_by_split(expected)
+        assert found.to_dict() == {"train": counts[1], "validation": counts[2], "test": counts[3]}
     # The replayed salts hold the configured one.
     assert DEFAULT_CONFIG.scope.reveal_salt in SALTS

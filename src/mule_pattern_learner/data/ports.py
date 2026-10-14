@@ -42,14 +42,9 @@ class ContextFetcher(Protocol):
 
 
 class ScopeReader(Protocol):
-    """The accounts of a frozen scope, in pages in account order.
+    """The accounts of the graph's split, in pages in account order, with observed labels."""
 
-    Rows carry observed labels only with include_observed.
-    """
-
-    def population_pages(
-        self, scope_id: str, *, include_observed: bool
-    ) -> Iterable[list[dict[str, Any]]]: ...
+    def population_pages(self) -> Iterable[list[dict[str, Any]]]: ...
 
 
 class CutoffReader(Protocol):
@@ -59,18 +54,18 @@ class CutoffReader(Protocol):
 
 
 class HubReader(Protocol):
-    """The hub registry of root cutoffs: per phase with a scope, unscoped without one."""
+    """The hub registry of root cutoffs: per phase of the split by_phase, else phase 0."""
 
     def hub_registry(
-        self, cutoff_seqs: Iterable[int], *, threshold: int, scope_id: str = ""
+        self, cutoff_seqs: Iterable[int], *, threshold: int, by_phase: bool = False
     ) -> HubRegistry: ...
 
 
 class ObservedLabelReader(Protocol):
     """Known positives and their discovery times; zero means unlabeled.
 
-    The labels are those revealed in the graph, which the scope population reports
-    with include_observed; ``metadata`` holds its rows.
+    The labels are those revealed in the graph, which the scope population reports;
+    ``metadata`` holds its rows.
     """
 
     def read(self, metadata: pd.DataFrame) -> pd.DataFrame: ...

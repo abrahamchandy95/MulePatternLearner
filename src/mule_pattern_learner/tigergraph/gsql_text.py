@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 
 from ..paths import GSQL_DIR
@@ -14,11 +15,24 @@ def normalized(source: str) -> str:
     """The text compared and hashed: no comments or whitespace, lower case outside strings.
 
     So two texts that differ only in comments, whitespace or the case of their keywords
-    and names are the same query, and derive the same contract (tigergraph.render).
+    and names are the same query, and derive the same contract (query_contract).
     """
     source = COMMENTS.sub("", source)
     tokens = re.findall(r'"(?:\\.|[^"\\])*"|[^\s"]+', source)
     return "".join(token if token.startswith('"') else token.lower() for token in tokens)
+
+
+def query_contract(prefix: str, text: str, printed: str) -> str:
+    """The contract a context query's text names: prefix and 12 hex digits of its hash.
+
+    The hash is the sha256 of the text normalised, with the contract the query prints
+    (`printed`, a string literal) left out, so the value covers the whole query but
+    itself, and comments, whitespace and case outside string literals do not count.
+    contract.server's CONTEXT_CONTRACT is the contract of the context query file; a test
+    keeps the two equal.
+    """
+    text = text.replace(f'"{printed}"', '""')
+    return prefix + hashlib.sha256(normalized(text).encode()).hexdigest()[:12]
 
 
 def definitions(source: str) -> dict[str, str]:

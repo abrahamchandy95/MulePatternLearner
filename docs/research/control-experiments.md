@@ -81,9 +81,9 @@ model's steadiness, a seed ensemble is the way to use it.
 
 ## The follow-up
 
-- **Ten seeds**, 42 to 51. Complete runs of the same settings are kept, but the scope id is a
-  setting of every run and the built-in scope is now `strict_mule_v3` (other split shares), so
-  every `strict_mule_v2` run trains again: `controls` trains all 90 runs.
+- **Ten seeds**, 42 to 51. Complete runs of the same settings are kept, but every earlier
+  run records a scope id, a setting gone since a graph holds one split, so every run trains
+  again: `controls` trains all 90 runs.
 - **The `methods` suite** (`python scripts/run_experiments.py methods`): how to choose a
   model when a handful of mules are known (the proxy ROC AUC, which counts where every known
   mule ranks; the run's own nnPU risk on the validation sample; or not at all: ten epochs, the

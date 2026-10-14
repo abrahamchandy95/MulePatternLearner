@@ -87,25 +87,24 @@ def test_minimal_command_and_run_defaults(tmp_path: Path) -> None:
         assert not session.connected
 
 
-# The source id of the fake graph's data, and its accounts.
-FAKE_SOURCE = "end_to_end_fixture"
+# The accounts of the fake graph, and its vertex counts, which name its data.
 POPULATION = 200
+FAKE_COUNTS = {"Account": POPULATION}
 
 
 def fake_graph(monkeypatch: pytest.MonkeyPatch) -> FakeTigerGraph:
     """The fake graph behind every connection of the pipeline.
 
-    Its queries are installed and it holds the built-in run's frozen scope of FAKE_SOURCE,
-    whose known mules are revealed (the reveal is a no-op), so preparation only reads.
+    Its queries are installed and it holds the built-in run's split, whose known mules
+    are revealed (the reveal is a no-op), so preparation only reads.
     """
-    scope = DEFAULT_CONFIG.scope.id
-    header = ready_scope(FAKE_SOURCE)
     executor = FakeTigerGraph(
         factory=neighbourhood,
         hubs=[("N3", cutoff) for cutoff in (101, 102, 103)],
         statuses={"N5": "history_capacity_exceeded"},
         population=scope_population(POPULATION),
-        scopes={scope: header},
+        counts=FAKE_COUNTS,
+        scope=ready_scope(),
     )
 
     def connect(transport: TransportConfig) -> FakeTigerGraph:
@@ -149,7 +148,7 @@ def test_train_then_audit_write_exactly_the_files_of_the_run_and_dataset_tables(
     # The dataset is data/<dataset id>/, and nothing else is written there: its tables,
     # the events of its preparation, and its context cache with one entry for every
     # distinct context the run requested.
-    identity = dataset_id(FAKE_SOURCE, config)
+    identity = dataset_id(FAKE_COUNTS, config)
     prepared = {
         f"{identity}/manifest.json",
         f"{identity}/accounts.parquet",
@@ -159,7 +158,7 @@ def test_train_then_audit_write_exactly_the_files_of_the_run_and_dataset_tables(
     }
     tables, cached = dataset_files(data)
     assert result["dataset_id"] == identity and tables == prepared
-    # The preparation's events are the dataset's: the scope it found, the hubs, the dataset.
+    # The preparation's events are the dataset's: the split it found, the hubs, the dataset.
     recorded = read_events(DatasetPaths.of(identity, data).events)
     assert [event["event"] for event in recorded] == ["scope", "hubs", "dataset"]
     assert recorded[-1]["status"] == "prepared" and recorded[-1]["known_mules"]["train"] > 0

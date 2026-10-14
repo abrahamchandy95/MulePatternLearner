@@ -28,7 +28,7 @@ from ..contract.bounds import (
     QUERY_CONCURRENCY,
     REQUEST_KEYS,
 )
-from ..contract.feature_groups import FeaturePlan
+from ..contract.feature_groups import CLIENT_GROUPS, FeaturePlan
 from ..contract.fingerprints import hash64
 from ..contract.graph_schema import ContextKey
 from ..contract.sampler_plan import SamplerPlan
@@ -93,8 +93,8 @@ def _resolve(
 
 def context_hash(key: ContextKey, hop: int) -> int:
     """A 63-bit hash of one context, the same in every process (fits an int64 tensor)."""
-    parts = (key.node_type, key.node_id, key.cutoff_seq, key.cutoff_ms, key.scope_id)
-    return hash64(hop, *parts, key.visibility_phase) >> 1
+    parts = (key.node_type, key.node_id, key.cutoff_seq, key.cutoff_ms, key.visibility_phase)
+    return hash64(hop, *parts) >> 1
 
 
 @dataclass
@@ -167,7 +167,7 @@ class ContextSource:
     (hop, ContextKey). Given a dataset's context cache (``cache``), ``disk`` is its
     context_cache.DiskTier: a context memory lacks is read from disk before it is
     requested, and every row TigerGraph returns is written there as it came, so a later
-    source of the same dataset, feature flags and pools requests it no more while its
+    source of the same dataset, feature groups and pools requests it no more while its
     entry lasts. Rows read from disk are served exactly as requested ones, and both go
     into the LRU. Several batch-builder threads may call fetch concurrently: they share
     one request pool of `concurrency` workers, and a lock guards the LRU and counters.
@@ -395,15 +395,17 @@ class ContextOpener(Protocol):
 
 
 def check_coverage(contexts: ContextReader, plan: FeaturePlan, sampler: SamplerPlan) -> None:
-    """The source must request every input the model reads, with the model's pools."""
+    """The source must check every group the model reads from TigerGraph, with its pools.
+
+    TigerGraph returns every group; a source validates those its plan names and spot-checks
+    the Fourier vectors only when its plan has the time encoding (message_core is always
+    checked and the client groups are the client's own).
+    """
     source_plan, source_sampler = contexts.plan, contexts.sampler
-    # A model of the root's own inputs never fetches children, so only its first hop
-    # matters.
-    for hop in (1,) if plan.root_only else (1, 2):
-        have = source_plan.query_flags(hop)
-        missing = sorted(k for k, v in plan.query_flags(hop).items() if v and not have.get(k))
-        if missing:
-            raise ValueError(f"Context source does not request {missing} at hop {hop}")
+    served = set(plan.groups) - CLIENT_GROUPS - {"message_core"}
+    missing = sorted(served - set(source_plan.groups))
+    if missing:
+        raise ValueError(f"Context source does not check {missing}")
     if (source_sampler.roots, source_sampler.children) != (sampler.roots, sampler.children):
         raise ValueError("Context source candidate pools differ from the model sampler")
 

@@ -1,4 +1,4 @@
-"""Seed reservoirs read the scope population with the labels revealed in the graph."""
+"""Seed reservoirs read the split's population with the labels revealed in the graph."""
 
 from __future__ import annotations
 
@@ -19,7 +19,6 @@ def population_row(account: str, positive: bool, known: int) -> dict[str, Any]:
     return {
         "account_id": account,
         "partition": 1,
-        "group_id": "g",
         "first_seen_ts_ms": 1,
         "observed_positive": positive,
         "known_from_ms": known,
@@ -31,9 +30,10 @@ def test_the_population_is_read_with_the_labels_revealed_in_the_graph() -> None:
 
     graph = FakeTigerGraph(population=[population_row("A1", True, 5)])
     config = unit_config()
-    frame, _ = select_accounts(TigerGraphScopeReader(graph), config.scope.id, config.dataset)
-    seen = [params["include_observed"] for _, params in graph.calls]
-    assert graph.names() == [POPULATION_QUERY] and seen == [True]
+    frame, _ = select_accounts(TigerGraphScopeReader(graph), config.dataset)
+    # The graph's one split: the query names no scope, only the page.
+    params = {"after_id": "", "batch_size": 10000}
+    assert graph.calls == [(POPULATION_QUERY, params)]
     assert frame.in_marginal.tolist() == [True]
     assert frame.observed_positive.tolist() == [True] and frame.known_from_ms.tolist() == [5]
 
@@ -46,7 +46,6 @@ def test_bounded_seed_reservoir_does_not_enrich_the_nnpu_marginal() -> None:
         {
             "account_id": f"A{i:05}",
             "partition": i % 3 + 1,
-            "group_id": str(i),
             "first_seen_ts_ms": 1,
             "observed_positive": i < len(known),
             "known_from_ms": int(i < len(known)),
@@ -59,11 +58,11 @@ def test_bounded_seed_reservoir_does_not_enrich_the_nnpu_marginal() -> None:
         seed_limits=SeedLimits(10, 10, 10),
         seed=42,
     )
-    selected, counts = select_accounts(TigerGraphScopeReader(graph), "strict", dataset)
+    selected, counts = select_accounts(TigerGraphScopeReader(graph), dataset)
     # Two pages of 10,000 accounts, with the labels revealed in the graph.
-    assert [(name, p["after_id"], p["include_observed"]) for name, p in graph.calls] == [
-        (POPULATION_QUERY, "", True),
-        (POPULATION_QUERY, "A09999", True),
+    assert [(name, p["after_id"]) for name, p in graph.calls] == [
+        (POPULATION_QUERY, ""),
+        (POPULATION_QUERY, "A09999"),
     ]
     assert sum(counts.values()) == len(rows)
     assert len(selected) <= 33 and selected.in_marginal.sum() == 30

@@ -62,7 +62,7 @@ class MemoryTier:
     """The bounded in-memory LRU of the rows a ContextSource serves.
 
     It is keyed by (hop, ContextKey), because roots and children use different
-    candidate pools and feature flags. put keeps the new rows, then marks every key of
+    candidate pools. put keeps the new rows, then marks every key of
     the fetch it holds as the most recent, in the fetch's key order, so recency does
     not depend on thread timing; only then are the least recent rows beyond
     ``capacity`` dropped. A capacity of 0 keeps nothing.
@@ -102,7 +102,7 @@ class ContextCache:
 
     ``dataset_id`` is the dataset's id, and ``source`` the fingerprint of the frozen
     source its manifest records (data.manifest.source_fingerprint): the vertex counts and
-    the scope that tigergraph.provenance.verify_frozen_source checks against the graph
+    the split that tigergraph.provenance.verify_frozen_source checks against the graph
     before a source opens the cache. Both name every entry, so that check is what
     invalidates the cache: once the graph's counts change, a run stops before it reads
     an entry, and a dataset prepared again from the changed graph never finds the old
@@ -152,8 +152,9 @@ class DiskTier:
     """The disk tier of a ContextSource: TigerGraph's rows, compressed, one file per context.
 
     An entry is named by the sha256 of what its row depends on: the hop and ContextKey,
-    the group flags and candidate pool the source requests at that hop, the
-    CONTEXT_CONTRACT and the cache's dataset id and frozen source. It holds the row as
+    the candidate pool the source requests at that hop, the groups it validates rows
+    against (its plan's), the CONTEXT_CONTRACT and the cache's dataset id and frozen
+    source. It holds the row as
     the ContextFetcher returned it (its request position and any Fourier vectors of a
     spot check included) beside its own name, as gzip-compressed JSON in
     <directory>/<first two hex digits>/<name>.json.gz, written atomically through a
@@ -171,7 +172,7 @@ class DiskTier:
     def __init__(self, cache: ContextCache, *, plan: FeaturePlan, sampler: SamplerPlan) -> None:
         self.cache, self.plan, self.sampler = cache, plan, sampler
         self._requests = {
-            hop: {"flags": plan.query_flags(hop), "pools": fingerprint(sampler.query_params(hop))}
+            hop: {"groups": sorted(plan.groups), "pools": fingerprint(sampler.query_params(hop))}
             for hop in (1, 2)
         }
         self._lock = threading.Lock()

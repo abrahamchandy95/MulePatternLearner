@@ -24,13 +24,8 @@ from mule_pattern_learner.data.manifest import dataset_id
 from mule_pattern_learner.data.preparation import prepare
 from mule_pattern_learner.paths import DatasetPaths, check_report
 from mule_pattern_learner.pipeline import check as pipeline_check
-from mule_pattern_learner.testing.builders import (
-    UNIT_SOURCE,
-    neighbourhood,
-    scoped_accounts,
-    unit_config,
-)
-from mule_pattern_learner.testing.fake_graph import EARLIER_SCOPE_TYPES, FakeTigerGraph
+from mule_pattern_learner.testing.builders import neighbourhood, scoped_accounts, unit_config
+from mule_pattern_learner.testing.fake_graph import EARLIER_SCOPE_TYPES, FakeTigerGraph, ready_scope
 from mule_pattern_learner.tigergraph import gsql_text
 from mule_pattern_learner.tigergraph.context_query import TigerGraphContextFetcher
 from mule_pattern_learner.tigergraph.cutoffs import TigerGraphCutoffReader
@@ -44,12 +39,12 @@ CONFIG = unit_config(training={"batch_size": 32}, sampler={"fanouts": [8, 2]})
 def prepared(data: Path, config: RunConfig) -> tuple[DatasetPaths, FakeTigerGraph]:
     """config's dataset of the fake graph, prepared in its directory under data."""
     fake = FakeTigerGraph(factory=neighbourhood, hubs=[("N3", 101)], population=scoped_accounts())
-    dataset = DatasetPaths.of(dataset_id(UNIT_SOURCE, config), data)
+    counts = {"Account": 1000}
+    dataset = DatasetPaths.of(dataset_id(counts, config), data)
     prepare(
         config,
-        UNIT_SOURCE,
         dataset,
-        {"Account": 1000},
+        counts,
         TigerGraphObservedLabelReader(),
         scope=TigerGraphScopeReader(fake),
         cutoffs=TigerGraphCutoffReader(fake),
@@ -137,11 +132,12 @@ def test_a_graph_that_is_not_ready_is_reported_without_a_batch(
 def test_an_outdated_scope_type_is_reported_with_what_to_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Scope types that predate the split shares: `mule install` replaces them while no
-    # scope vertex uses them, and refuses while one does.
+    # Scope types of a graph that held several splits, each keyed by a scope id:
+    # `mule install` replaces them while no scope vertex uses them, and refuses while one
+    # does, which its owner removes by hand.
     graphs = [
         FakeTigerGraph(scope_types=EARLIER_SCOPE_TYPES),
-        FakeTigerGraph(scope_types=EARLIER_SCOPE_TYPES, scopes={"strict_mule_v2": {}}),
+        FakeTigerGraph(scope_types=EARLIER_SCOPE_TYPES, scope=ready_scope()),
     ]
 
     def checked(graph: FakeTigerGraph) -> dict[str, Any]:
@@ -154,13 +150,24 @@ def test_an_outdated_scope_type_is_reported_with_what_to_run(
         return report
 
     reports = [checked(graph) for graph in graphs]
-    differences = ["Temporal_Training_Scope lacks train_share, validation_share, test_share"]
+    differences = [
+        "Temporal_Training_Scope has the attributes (scope_id STRING, source_id STRING, "
+        "split_seed UINT, train_share DOUBLE, validation_share DOUBLE, test_share DOUBLE, "
+        "ready BOOL), not (id STRING, split_seed UINT, train_share DOUBLE, "
+        "validation_share DOUBLE, test_share DOUBLE, ready BOOL)",
+        "Entity_In_Training_Scope has the attributes (partition INT, group_id STRING), not "
+        "(partition INT)",
+    ]
     for report, scopes in zip(reports, (0, 1), strict=True):
         assert report["status"] == "not_ready" and report["scope_schema"] == "outdated"
         assert report["scope_outdated"] == {"differences": differences, "scopes": scopes}
     empty, used = (report["problems"][0] for report in reports)
     assert empty == "the scope vertex type is outdated; `mule install` replaces it"
-    assert used.startswith(
+    assert used == (
         "the scope vertex type is outdated and the graph holds 1 scope vertex, which "
-        "`mule install` refuses to delete; clear the graph's data and load it again"
+        "`mule install` refuses to delete; delete the Temporal_Training_Scope vertices by "
+        "hand, which deletes their membership edges with them (pyTigerGraph: "
+        'delVertices("Temporal_Training_Scope"); RESTPP: DELETE '
+        f"/graph/{GRAPH_NAME}/vertices/Temporal_Training_Scope, /restpp/graph/... with a "
+        "token through port 14240 or TigerGraph Cloud), then `mule install` replaces it"
     )

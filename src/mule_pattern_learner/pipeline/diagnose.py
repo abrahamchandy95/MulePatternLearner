@@ -2,9 +2,7 @@
 
 Only the pipeline builds adapters, so diagnose_built_in composes the study: it prepares
 the dataset and hands diagnostics.study.diagnose a TigerGraphStudyReader, which builds
-the adapters on one connection. It is the only reader that installs the analytics
-queries (installer.install with analytics=True, when their text differs); `mule install`
-and `mule train` never do.
+the adapters on one connection. It installs nothing beyond what preparation installs.
 """
 
 from __future__ import annotations
@@ -18,9 +16,7 @@ from ..data.manifest import read_manifest
 from ..diagnostics.study import analyses, diagnose
 from ..evaluation.truth import TruthReader
 from ..paths import DatasetPaths
-from ..tigergraph.analytics_query import TigerGraphAnalyticsFetcher
 from ..tigergraph.executor import ConnectionExecutor
-from ..tigergraph.installer import install
 from ..tigergraph.oracle import TigerGraphRevealInputReader
 from ..tigergraph.provenance import verify_frozen_source
 from ..tigergraph.reveal import reveal_parameters
@@ -55,9 +51,7 @@ class TigerGraphStudyReader:
     still the frozen source the dataset was prepared from; every read after uses that
     connection. The oracle reads the truth once (pipeline.evaluate.SharedTruth). The
     context source is the configuration's, with the dataset's disk tier, which the
-    training runs and audits of the dataset share. The analytics fetcher comes after the
-    analytics queries are installed where their text differs. The reveal's parameters
-    need no graph.
+    training runs and audits of the dataset share. The reveal's parameters need no graph.
     """
 
     def __init__(self, config: RunConfig, dataset: DatasetPaths, session: Session) -> None:
@@ -66,7 +60,6 @@ class TigerGraphStudyReader:
         self.session = session
         self._verified: ConnectionExecutor | None = None
         self._truth = SharedTruth(session)
-        self._installed: dict[str, Any] | None = None
 
     def executor(self) -> ConnectionExecutor:
         """The session's connection, once its source is checked to be the frozen one."""
@@ -89,14 +82,8 @@ class TigerGraphStudyReader:
         cache = ContextCache.of(self.dataset, read_manifest(self.dataset))
         return context_source(executor, self.config, cache)
 
-    def analytics(self) -> TigerGraphAnalyticsFetcher:
-        executor = self.executor()
-        if self._installed is None:
-            self._installed = install(executor, analytics=True)
-        return TigerGraphAnalyticsFetcher(executor)
-
     def reveal_inputs(self) -> list[dict[str, Any]]:
-        return TigerGraphRevealInputReader(self.executor()).read(self.config.scope.id)
+        return TigerGraphRevealInputReader(self.executor()).read()
 
     def reveal_parameters(self) -> dict[str, Any]:
         return reveal_parameters(self.config.scope, self.config.dataset.dates, apply=False)

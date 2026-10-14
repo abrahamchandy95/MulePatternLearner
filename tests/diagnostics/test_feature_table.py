@@ -1,9 +1,7 @@
-"""The diagnostic feature table on the fake graph, against the batching code and the mirror.
+"""The diagnostic feature table on the fake graph, against the batching code.
 
-The feature table's own check: for the same keys, the training families equal what
-batching.features computes from the training query's rows, and the account family what
-reference.gsql_features.account_features computes from each account's payment history,
-which the fake graph's analytics query serves.
+The feature table's own check: for the same keys, its families equal what
+batching.features computes from the training query's rows.
 """
 
 from __future__ import annotations
@@ -17,17 +15,14 @@ import pytest
 
 from mule_pattern_learner.batching.features import edge_block, node_matrix
 from mule_pattern_learner.config import RunConfig
-from mule_pattern_learner.contract.analytics_features import ANALYTICS_GROUPS
-from mule_pattern_learner.contract.clock import timestamp
 from mule_pattern_learner.contract.feature_groups import extraction_plan
-from mule_pattern_learner.contract.graph_schema import SPLIT_PHASE, ContextKey
-from mule_pattern_learner.contract.server import ANALYTICS_CONTRACT, CONTEXT_CONTRACT
+from mule_pattern_learner.contract.graph_schema import SPLIT_PHASE
+from mule_pattern_learner.contract.server import CONTEXT_CONTRACT
 from mule_pattern_learner.data.hub_registry import load_hub_registry
 from mule_pattern_learner.data.manifest import read_manifest
 from mule_pattern_learner.data.splits import sample_keys
 from mule_pattern_learner.diagnostics import feature_table
 from mule_pattern_learner.diagnostics.feature_table import (
-    ACCOUNT_FEATURES,
     FEATURE_SPLITS,
     build_feature_table,
     current,
@@ -37,10 +32,6 @@ from mule_pattern_learner.diagnostics.feature_table import (
     usable,
 )
 from mule_pattern_learner.pipeline.connect import context_source
-from mule_pattern_learner.reference.gsql_features import (
-    MIRRORED_ACCOUNT_GROUPS,
-    account_features,
-)
 from mule_pattern_learner.testing.builders import (
     ground_truth_rows,
     scope_population,
@@ -51,45 +42,12 @@ from mule_pattern_learner.testing.fake_graph import (
     FakeTigerGraph,
     prepared_graph,
 )
-from mule_pattern_learner.tigergraph.analytics_query import TigerGraphAnalyticsFetcher
 from mule_pattern_learner.tigergraph.context_query import query_context_rows
 from mule_pattern_learner.tigergraph.oracle import TigerGraphTruthReader
 from mule_pattern_learner.tigergraph.scope import TigerGraphScopeReader
 
-FIRST_SEEN = timestamp("2024-01-01")
-# The account every query rejects.
+# The account the context query rejects.
 REJECTED = "S0003"
-HOUR = 3_600_000
-
-
-def history(account: str) -> list[dict[str, Any]]:
-    """A payment history of the account for the mirror: a mix of both directions and rails."""
-    number = int(account[1:])
-    events = []
-    for j in range(12):
-        incoming = (number + j) % 3 != 0
-        stem = "zelle" if j % 2 else "payment"
-        # Events every 17 hours before the last cutoff, and one after it.
-        ts = timestamp("2025-01-01") - (j * 17 + number % 5) * HOUR
-        events.append(
-            {
-                "event_id": f"{account}.{j}",
-                "event_seq": 1 + 8 * j,
-                "event_ts_ms": ts,
-                "relation": f"{stem}_{'in' if incoming else 'out'}",
-                "node_type": "Token" if j == 5 else "Account",
-                "node_id": f"P{(number + j) % 4}",
-                "rail": "zelle" if stem == "zelle" else "ach",
-                "currency": "EUR" if j == 7 else "USD",
-                "amount": float(10 + 7 * j + number),
-                "amount_present": j != 4,
-            }
-        )
-    return events
-
-
-def mirrored(key: ContextKey) -> dict[str, float]:
-    return account_features(history(key.node_id), key, FIRST_SEEN)
 
 
 @pytest.fixture(scope="module")
@@ -98,9 +56,7 @@ def built(
 ) -> tuple[RunConfig, FakeTigerGraph, dict[str, Any], pd.DataFrame]:
     config = unit_config()
     data = tmp_path_factory.mktemp("data")
-    graph, dataset = prepared_graph(
-        data, config, analytics=mirrored, statuses={REJECTED: "history_capacity_exceeded"}
-    )
+    graph, dataset = prepared_graph(data, config, statuses={REJECTED: "history_capacity_exceeded"})
     manifest = read_manifest(dataset)
     contexts = context_source(graph, config)
     try:
@@ -111,7 +67,6 @@ def built(
             scope=TigerGraphScopeReader(graph),
             truth=TigerGraphTruthReader(graph).read(),
             contexts=contexts,
-            analytics=TigerGraphAnalyticsFetcher(graph),
         )
     finally:
         contexts.close()
@@ -140,8 +95,7 @@ def test_each_split_holds_its_audit_sample_with_truth_and_weights(
     plan = config.feature_plan()
     assert current(table, plan)
     assert set(table.context_contract) == {CONTEXT_CONTRACT}
-    assert set(table.analytics_contract) == {ANALYTICS_CONTRACT}
-    stale = table.assign(analytics_contract="analytics_old")
+    stale = table.assign(context_contract="context_old")
     assert not current(stale, plan) and not current(table.iloc[:0], plan)
     # A table of other columns, from older code or another plan, is not current either.
     assert not current(table.drop(columns="messages__peers"), plan)
@@ -184,26 +138,10 @@ def test_the_training_families_equal_the_batching_features_of_the_same_keys(
     assert usable(table)["messages__mean_amount"].nunique() > 1
 
 
-def test_the_account_family_equals_the_mirror_and_rejected_accounts_have_no_features(
+def test_rejected_accounts_have_no_features(
     built: tuple[RunConfig, FakeTigerGraph, dict[str, Any], pd.DataFrame],
 ) -> None:
-    config, _, manifest, table = built
-    names = {n for group in MIRRORED_ACCOUNT_GROUPS for n in ANALYTICS_GROUPS[group].names}
-    compared = 0
-    for split in FEATURE_SPLITS:
-        rows = usable(table[table.split == split])
-        (date,) = config.dataset.dates[split]
-        for key, (_, row) in zip(sample_keys(rows, date, manifest), rows.iterrows(), strict=True):
-            expected = mirrored(key)
-            for name in ACCOUNT_FEATURES:
-                value = expected.get(name, 0.0) if name in names else 0.0
-                assert row[f"account__{name}"] == pytest.approx(value), (key.node_id, name)
-            compared += 1
-    assert compared == len(table) - 1
-    assert table["account__7d_in_count"].nunique() > 1
-    # The fake graph's messages carry no pair window counts or device and IP ages.
-    context = feature_columns(table, ["message_context"])
-    assert context and (usable(table)[context] == 0).all().all()
+    _, _, _, table = built
     (rejected,) = table.index[table.account_id == REJECTED]
     assert table.rejected.tolist().count(True) == 1 and table.rejected[rejected]
     assert table.loc[rejected, feature_columns(table)].isna().all()

@@ -1,9 +1,9 @@
 """A Python mirror of the label reveal job (reveal_mule_labels).
 
-`plan` recomputes the job's discovery channel, discovery time, eligibility and
-revealed set for every internal mule from the rows the reveal's inputs query prints
-(tigergraph.oracle.REVEAL_INPUTS_QUERY), with the job's own hash
-(contract.discovery.reveal_uniforms) and parameter defaults
+`plan` recomputes the job's discovery channel and discovery time for every internal
+mule, and the mules it reveals (every one discovered before its split's cutoff), from
+the rows the reveal's inputs query prints (tigergraph.oracle.REVEAL_INPUTS_QUERY), with
+the job's own hash (contract.discovery.reveal_uniforms) and constants
 (contract.discovery.REVEAL_DEFAULTS). It reads nothing itself:
 tests/integration/test_label_reveal.py compares it with a dry run of the installed
 job (dry_run_differences), and diagnostics.reveal_spread runs it over many salts.
@@ -38,15 +38,15 @@ def available_ms(mule: dict[str, Any], data_end_ms: int) -> int:
 
 
 def plan(inputs: list[dict[str, Any]], params: dict[str, Any]) -> dict[str, Any]:
-    """The job's reveal for query parameters `params` (absent ones take its defaults).
+    """The job's reveal for query parameters `params`, and its constants unless they say.
 
-    Returns every mule (split `part`, discovery time `t`, `channel`, reports seen by
-    the cutoff), the eligible and the revealed account IDs. A mule that sent no event
-    gets its internal vertex ID as draw key in the job; the inputs cannot show that ID,
-    so such a mule keeps the query's sentinel key here.
+    Returns every mule (split `part`, discovery time `t`, `channel`) and the revealed
+    account IDs: every mule discovered before its split's cutoff. A mule that sent no
+    event gets its internal vertex ID as draw key in the job; the inputs cannot show that
+    ID, so such a mule keeps the query's sentinel key here.
     """
     p = {**REVEAL_DEFAULTS, **params}
-    salt, budget = int(p["salt"]), int(p["budget"])
+    salt = int(p["salt"])
     cutoffs = {1: p["train_cutoff_ms"], 2: p["validation_cutoff_ms"], 3: p["test_cutoff_ms"]}
     mules: dict[str, dict[str, Any]] = {}
     for row in inputs[0]["M"]:
@@ -92,7 +92,6 @@ def plan(inputs: list[dict[str, Any]], params: dict[str, Any]) -> dict[str, Any]
         for when, action, confirm in reports:
             if action < (p["p_action_first"] if when <= first else p["p_action_later"]):
                 react = min(react, when + confirm * DAY)
-        m["seen"] = sum(1 for r in reports if r[0] < m["cutoff"])
         pro = NEVER
         if p["proactive_per_day"] > 0:
             u_pro = reveal_uniforms(m["key"], salt + 1000, 1)[0]
@@ -123,50 +122,14 @@ def plan(inputs: list[dict[str, Any]], params: dict[str, Any]) -> dict[str, Any]
                     candidate = min(candidate, found + lognormal(30.0, 1.0, u[1], u[2]) * DAY)
             if candidate < mules[b]["t"]:
                 mules[b]["t"], mules[b]["channel"] = candidate, "network_trace"
-    eligible = {k: m for k, m in mules.items() if 1 <= m["part"] <= 3 and m["t"] < m["cutoff"]}
-    revealed: set[str] = set()
-    for part in (1, 2, 3):
-        group = {k: m for k, m in eligible.items() if m["part"] == part}
-        if not group:
-            continue
-        ev = {k: math.log(1 + m["seen"]) for k, m in group.items()}
-        mean = sum(ev.values()) / len(ev)
-        var = sum(v * v for v in ev.values()) / len(ev) - mean * mean
-        w: dict[str, float] = {}
-        for k, v in ev.items():
-            z = (v - mean) / math.sqrt(var) if var > 1e-12 else 0.0
-            w[k] = p["propensity_floor"] + (1 - p["propensity_floor"]) / (
-                1 + math.exp(-p["propensity_slope"] * z)
-            )
-        quota_total = min(budget, len(group))
-        if quota_total == 0:
-            continue
-        capped: dict[str, float] = {}
-        while True:
-            free = {k: v for k, v in w.items() if k not in capped}
-            total = sum(free.values())
-            new = {
-                k: 1.0 for k, v in free.items() if (quota_total - len(capped)) * v / total >= 1.0
-            }
-            if not new:
-                lam = {
-                    **{k: (quota_total - len(capped)) * v / total for k, v in free.items()},
-                    **capped,
-                }
-                break
-            capped.update(new)
-        q: dict[str, float] = {}
-        for k in group:
-            u = reveal_uniforms(mules[k]["key"], salt + 2000, 1)[0]
-            q[k] = -1.0 if lam[k] >= 1.0 else u * (1 - lam[k]) / (lam[k] * (1 - u))
-        revealed |= set(sorted(group, key=lambda k: q[k])[:quota_total])
-    return {"mules": mules, "eligible": set(eligible), "revealed": revealed}
+    revealed = {k for k, m in mules.items() if 1 <= m["part"] <= 3 and m["t"] < m["cutoff"]}
+    return {"mules": mules, "revealed": revealed}
 
 
-def counts_by_split(result: dict[str, Any], accounts: str) -> dict[int, int]:
-    """Per scope partition 1..3, how many of result[accounts] ("eligible" or "revealed")."""
+def counts_by_split(result: dict[str, Any]) -> dict[int, int]:
+    """Per scope partition 1..3, how many mules plan's result reveals."""
     return {
-        part: sum(1 for k in result[accounts] if result["mules"][k]["part"] == part)
+        part: sum(1 for k in result["revealed"] if result["mules"][k]["part"] == part)
         for part in PHASE_SPLIT
     }
 
@@ -176,8 +139,8 @@ def dry_run_differences(expected: dict[str, Any], dry_run: dict[str, Any]) -> li
 
     ``dry_run`` is the job's merged output with apply = FALSE: its revealed mules with
     their discovery channel and availability clock (``known_ts_ms``), the data end
-    and the eligible mules per split. The job's map has no entry for a split without
-    eligible mules.
+    and the revealed mules per split. The job's map has no entry for a split without
+    revealed mules.
     """
     actual = {row["account_id"]: row for row in dry_run["revealed_mules"]}
     failures: list[str] = []
@@ -197,8 +160,8 @@ def dry_run_differences(expected: dict[str, Any], dry_run: dict[str, Any]) -> li
                 f"{account}: GSQL {row['channel']} {row['known_ts_ms']}, "
                 f"Python {mule['channel']} {known}"
             )
-    eligible = counts_by_split(expected, "eligible")
-    gsql_eligible = {part: int(dry_run["eligible"].get(str(part), 0)) for part in eligible}
-    if eligible != gsql_eligible:
-        failures.append(f"eligible counts differ: GSQL {gsql_eligible}, Python {eligible}")
+    revealed = counts_by_split(expected)
+    gsql_revealed = {part: int(dry_run["revealed"].get(str(part), 0)) for part in revealed}
+    if revealed != gsql_revealed:
+        failures.append(f"revealed counts differ: GSQL {gsql_revealed}, Python {revealed}")
     return failures

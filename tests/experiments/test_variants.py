@@ -28,6 +28,7 @@ from mule_pattern_learner.experiments.variants import (
 from mule_pattern_learner.model.build import build_model
 from mule_pattern_learner.paths import BASELINE_VARIANT, RunPaths
 from mule_pattern_learner.pipeline.train import BASELINE_RUN
+from mule_pattern_learner.testing.builders import UNIT_COUNTS
 from mule_pattern_learner.training.trainer import check_limits
 
 # The settings no variant may change: the seeds of the dataset and of the reveal.
@@ -47,7 +48,7 @@ def test_each_variant_builds_offline_on_the_baseline_dataset(variant: Variant) -
         requested = tuple(g for g in config.features if g not in CLIENT_GROUPS)
         assert extraction_plan(plan).groups == requested
         # Every variant and seed trains on the baseline's dataset.
-        assert dataset_id("source", config) == dataset_id("source", DEFAULT_CONFIG)
+        assert dataset_id(UNIT_COUNTS, config) == dataset_id(UNIT_COUNTS, DEFAULT_CONFIG)
     # A variant changes results-relevant settings, never a seed, and says which.
     assert not set(variant.changes()) & set(SEED_SETTINGS)
     assert bool(variant.changes()) is (variant is not BASELINE)
@@ -121,8 +122,8 @@ def test_the_methods_suite_changes_the_selection_and_the_prior_on_the_baseline_d
     # suite's offline check requires.
     for seed in SEEDS:
         configs = [v.config(DEFAULT_CONFIG, seed) for v in SUITES["methods"]]
-        assert {dataset_id("source", config) for config in configs} == {
-            dataset_id("source", DEFAULT_CONFIG)
+        assert {dataset_id(UNIT_COUNTS, config) for config in configs} == {
+            dataset_id(UNIT_COUNTS, DEFAULT_CONFIG)
         }
         assert len({config.fingerprint() for config in configs}) == len(configs)
     # The questions are asked for real use, and the prior's say what to expect.

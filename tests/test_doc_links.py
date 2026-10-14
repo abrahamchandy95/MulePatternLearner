@@ -40,7 +40,7 @@ SPAN = re.compile(r"(`+)(.+?)\1", re.S)
 # The word after a command; a closing bracket ends it, as in a diagram's [mule train].
 COMMAND = re.compile(r"(?:(?<![\w./-])mule|python -m mule_pattern_learner)[ \t]+([^\s`\])]+)")
 DIAGNOSE = re.compile(r"(?<![\w./-])mule[ \t]+diagnose[ \t]+([^\s`\])]+)")
-SCRIPT = re.compile(r"scripts/(run_experiments|render_queries)\.py([^\n`#]*)")
+SCRIPT = re.compile(r"scripts/(run_experiments)\.py([^\n`#]*)")
 MARKER = re.compile(r"pytest\b[^\n`#]*?-m[ \t]+([\w\"']+)")
 REPOSITORY_PATH = re.compile(r"(?<![\w./<-])(?:src|gsql|scripts|tests|docs)/[\w./-]*")
 DOTTED = re.compile(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+")
@@ -125,7 +125,7 @@ def test_the_commands_in_the_guides_are_the_command_lines() -> None:
     )
     project = tomllib.loads((REPOSITORY_ROOT / "pyproject.toml").read_text())
     markers = {line.split(":")[0] for line in project["tool"]["pytest"]["ini_options"]["markers"]}
-    options = {"run_experiments": {"--help", "-h"}, "render_queries": {"--check", "--help", "-h"}}
+    options = {"run_experiments": {"--help", "-h"}}
     names = set(SUITES) | set(VARIANTS)
     problems = []
     for guide in guides():

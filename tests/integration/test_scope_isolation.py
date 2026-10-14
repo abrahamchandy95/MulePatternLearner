@@ -1,10 +1,12 @@
 """Held-out and future data never change training inputs, on the graph itself.
 
 This WRITES to TigerGraph, so it runs only with --allow-graph-writes: it upserts
-UUID-prefixed fixture vertices and edges, then deletes exactly those. Existing business
-data and labels are never modified, but vertex counts change while it runs, so never
-run it during a training run (verify_frozen_source would see the drift). Run it after
-the training queries are installed.
+UUID-prefixed fixture vertices and edges, then deletes exactly those. Its accounts and
+parties join the graph's one split (a fixture split when the graph has none) until their
+deletion deletes their membership edges. Existing business data, labels and memberships
+are never modified, but vertex counts change while it runs, so never run it during a
+training run (verify_frozen_source would see the drift). Run it after the training
+queries are installed.
 """
 
 from __future__ import annotations
@@ -28,7 +30,7 @@ from mule_pattern_learner.contract.feature_groups import (
     contract_fingerprint,
     extraction_plan,
 )
-from mule_pattern_learner.contract.graph_schema import ContextKey
+from mule_pattern_learner.contract.graph_schema import NO_SPLIT, ContextKey
 from mule_pattern_learner.contract.sampler_plan import SamplerPlan
 from mule_pattern_learner.contract.server import GRAPH_NAME, SCOPE_VERTEX
 from mule_pattern_learner.contract.time_basis import BASIS_ID
@@ -85,6 +87,12 @@ class TemporaryVertices:
         self.conn.upsertVertex(kind, key, attrs)
         return key
 
+    def join(self, kind: str, entity: str, split: str, partition: int) -> None:
+        """A fixture entity's membership of the split, which its deletion deletes."""
+        assert entity.startswith(self.prefix)
+        attrs = {"partition": partition}
+        self.conn.upsertEdge(kind, entity, "Entity_In_Training_Scope", SCOPE_VERTEX, split, attrs)
+
     def link(
         self, a_type: str, a: str, edge: str, b_type: str, b: str, attrs: dict[str, Any]
     ) -> None:
@@ -94,7 +102,7 @@ class TemporaryVertices:
                 f"USE GRAPH {GRAPH_NAME}\nINTERPRET QUERY () FOR GRAPH {GRAPH_NAME} {{ "
                 f"INSERT INTO {edge} VALUES ({json.dumps(a)} {a_type}, "
                 f"{json.dumps(b)} {b_type}, {attrs['valid_from_seq']}, "
-                f'{attrs["valid_to_seq"]}, 1.0, ""); PRINT "ok" AS status; }}'
+                f'{attrs["valid_to_seq"]}); PRINT "ok" AS status; }}'
             )
             result = str(self.conn.gsql(query))
             if '"ok"' not in result or "Error" in result:
@@ -135,6 +143,16 @@ class TemporaryVertices:
             assert not any(self.exists(kind, key) for key in ids), "Fixture cleanup incomplete"
 
 
+def the_split(vertices: TemporaryVertices) -> str:
+    """The id of the graph's one ready split, or of a fixture split when it has none."""
+    rows: list[dict[str, Any]] = vertices.conn.getVertices(SCOPE_VERTEX)
+    if not rows:
+        return vertices.put(SCOPE_VERTEX, "split", ready_scope())
+    if len(rows) > 1 or not rows[0]["attributes"]["ready"]:
+        pytest.skip("the graph does not hold exactly one ready split; `mule check` says why")
+    return str(rows[0]["v_id"])
+
+
 @pytest.fixture
 def vertices(graph: TigerGraphExecutor) -> Iterator[TemporaryVertices]:
     fixture = TemporaryVertices(graph.client.conn)
@@ -150,7 +168,6 @@ def test_held_out_and_future_data_never_change_training_inputs(
     config = model_config()
     plan, sampler = config.feature_plan(), config.sampler
     put, link, payment = vertices.put, vertices.link, vertices.payment
-    scope = vertices.prefix + "scope"
     association = {"valid_from_seq": 1, "valid_to_seq": 0}
     # The predictor below reads from this source, so it requests the model's inputs too.
     with ContextSource(
@@ -163,7 +180,7 @@ def test_held_out_and_future_data_never_change_training_inputs(
             assert not missing, f"Fixture contexts rejected {dict(source.rejections)}: {missing}"
             return [row for row in rows if row is not None]
 
-        put(SCOPE_VERTEX, "scope", ready_scope(vertices.prefix))
+        split = the_split(vertices)
         entities = {}
         for kind, name in [
             ("Account", "a"),
@@ -179,14 +196,7 @@ def test_held_out_and_future_data_never_change_training_inputs(
                 attrs.update(account_type="deposit", is_external=False)
             entities[name] = put(kind, name, attrs)
             if kind in ("Account", "Party"):
-                link(
-                    kind,
-                    entities[name],
-                    "Entity_In_Training_Scope",
-                    SCOPE_VERTEX,
-                    scope,
-                    {"partition": 3 if name in ("b", "q") else 1, "group_id": name},
-                )
+                vertices.join(kind, entities[name], split, 3 if name in ("b", "q") else 1)
         a, b, c = (entities[n] for n in ("a", "b", "c"))
         link("Party", entities["p"], "Party_Owns_Account", "Account", a, association)
         link("Party", entities["q"], "Party_Owns_Account", "Account", b, association)
@@ -198,7 +208,7 @@ def test_held_out_and_future_data_never_change_training_inputs(
         payment("p2", 40, a, c, "Payment_Transaction")
         payment("t1", 50, a, entities["token"], target="Token")
         keys = [
-            ContextKey(kind, entities[name], 1000, BASE + 100000, scope, 1)
+            ContextKey(kind, entities[name], 1000, BASE + 100000, 1)
             for kind, name in [("Account", "a"), ("Token", "token"), ("Device", "device")]
         ]
         baseline = fetch_all(keys)
@@ -241,12 +251,12 @@ def test_held_out_and_future_data_never_change_training_inputs(
         assert fetch_all(keys) == baseline, (
             "Hidden mutation/future event or association changed training inputs"
         )
-        shared = fetch_all([replace(key, scope_id="", visibility_phase=3) for key in keys])
+        shared = fetch_all([replace(key, visibility_phase=NO_SPLIT) for key in keys])
         assert shared[0]["messages"] != baseline[0]["messages"], (
             "Fixture did not exercise exclusion"
         )
         # A held-out root is a per-request rejection: None, counted by status.
-        rejected = source.fetch([ContextKey("Account", b, 1000, BASE + 100000, scope, 1)])
+        rejected = source.fetch([ContextKey("Account", b, 1000, BASE + 100000, 1)])
         assert rejected == [None] and source.rejections["invisible_entity"], (
             "Held-out account accepted as a training root"
         )

@@ -1,15 +1,11 @@
 # Features
 
-What the model reads, and what the analytics query computes beside it. Reasons:
-[Feature design](../explanation/feature-design.md); the Fourier coordinates:
-[Time encoding](../explanation/time-encoding.md).
+What the model reads. Reasons: [Feature design](../explanation/feature-design.md); the
+Fourier coordinates: [Time encoding](../explanation/time-encoding.md).
 
 - Training keeps only the built-in run's groups, the registry
   `contract.feature_groups.FEATURE_GROUPS`. `fetch_training_context` computes those
   TigerGraph supplies; the client computes the rest.
-- Every other group is analytics, `contract.analytics_features.ANALYTICS_GROUPS`,
-  computed only by `fetch_analytics_context` for `mule diagnose`. No training module may
-  import it (the import contract "Training never reads the analytics features").
 - Model columns follow the registry's order, whatever order a configuration lists them in.
 - Labels, masks, ring ids and learned account embeddings are never features.
 
@@ -65,9 +61,8 @@ only, in its summary branch; children and stubs hold zeros. Every count gets `lo
 
 The first-time and pass-through tests read the per-message `pair_*` and `flow_*` fields,
 which the query computes over the account's whole visible history, so the counts are
-cutoff-safe. The
-bands, 24 hours and 50 to 100 percent are `FIRST_INFLOW_BANDS`, `PASS_THROUGH_SECONDS`
-and `PASS_THROUGH_RATIO` of `contract.feature_groups`.
+cutoff-safe. The bands, 24 hours and 50 to 100 percent are `FIRST_INFLOW_BANDS`,
+`PASS_THROUGH_SECONDS` and `PASS_THROUGH_RATIO` of `contract.feature_groups`.
 
 ## The model's inputs
 
@@ -78,8 +73,8 @@ For B roots and N distinct contexts of a built-in run batch:
 | `x` | N x 24 | The 9 node columns (`entity_meta` and `history_withheld`), then the 15 pool counts (roots only; other contexts hold zeros) |
 | `first_edge` | B x 16 x 142 | The hop-1 message columns: `amount`, `amount_present`, `is_event`, `gap_present`, 64 age and 64 pair-gap coordinates, 3 pair-history and 7 flow-timing values |
 | `second_edge` | N x 4 x 142 | The hop-2 message columns |
-| `second_x` | N x 4 x 9 | The node columns of the outermost counterparties, from the connecting message (`peer_external`, `peer_deposit`) |
-| `*_relation`, `*_rail`, `*_channel`, `*_stratum` | slot indices | Categorical codes; the model embeds the relation and the rail |
+| `second_x` | N x 4 x 9 | The 9 node columns of each hop-2 message's counterparty, from that message: the type from `node_type`, `is_external` and `is_deposit` from `peer_external` and `peer_deposit`, and `history_withheld` 1 for a hub |
+| `*_relation`, `*_rail` | slot indices | Categorical codes the model embeds |
 | `*_mask`, `root_positions`, `neighbor_positions` | | Padding masks and batch-local positions |
 
 Positions are batch-local: the same account at two cutoffs is two contexts, and there is
@@ -88,18 +83,17 @@ no global id table. Without the pool groups `x` is N x 9.
 ## What the training query returns
 
 `fetch_training_context` returns one row per requested context. An `ok` row holds
-`request_index`, `contract_version` (`CONTEXT_CONTRACT`), `basis_id`, the request key
-(`node_type`, `node_id`, `cutoff_seq`, `cutoff_ms`, `scope_id`, `visibility_phase`),
-`diagnostics` (counts of non-USD and visible participations, never model inputs),
+`status` (`ok`), `request_index`, `contract_version` (`CONTEXT_CONTRACT`), `basis_id`, the request key
+(`node_type`, `node_id`, `cutoff_seq`, `cutoff_ms`, `visibility_phase`),
 `features` (node features), `messages` (the candidate pool), and `age_encoding` and
 `gap_encoding` (empty unless the request asked for the Fourier vectors). A rejected
 request gets only `status` and `request_index`; [Queries](queries.md) lists the statuses.
 
-Each message has 27 fields:
+Each message has 25 fields, each of which batches read:
 
 | Fields | Content |
 |---|---|
-| `node_type`, `node_id`, `relation`, `rail`, `channel`, `event_id`, `event_seq`, `event_ts_ms`, `stratum` | The counterparty, the relation and rail, the event, and the sampling stratum (`recent`, `older`, `distinct` or `association`) |
+| `node_type`, `node_id`, `relation`, `rail`, `event_id`, `event_seq`, `event_ts_ms` | The counterparty, the relation and rail, and the event |
 | `amount`, `amount_present` | The payload |
 | `age_ms`, `gap_ms`, `gap_present` | The age at the cutoff and the gap since the pair's previous event |
 | `pair_prior_count`, `pair_first_age_seconds`, `pair_first_present` | Pair history |
@@ -107,34 +101,8 @@ Each message has 27 fields:
 | `peer_first_ms`, `peer_external`, `peer_deposit` | The counterparty's first observation and flags |
 
 Association messages carry the tenure's target with the parent's cutoff clocks and no
-payment time. Every message carries its channel and stratum, which no model reads (the
-loaded data's channels map one to one onto rails).
-
-## The analytics groups
-
-`fetch_analytics_context` takes the training query's parameters plus one `include_*` flag
-per group TigerGraph computes (14), computes the training groups exactly as the training
-query does, and adds these hypotheses and analysis controls, which no model reads:
-
-| Group | Kind | Columns | Meaning |
-|---|---|---|---|
-| `entity_age` | node | `age_days` | Age at the cutoff since the entity's first observation |
-| `history_support` | summary | `visible_event_count`, `history_lt_5_events` | Visible USD payment participations, and whether there are fewer than five (a self-transfer counts in both directions) |
-| `rolling_windows` | summary | 40: `<window>_<field>` for the windows `1h`, `1d`, `7d`, `30d` | Per window, incoming and outgoing payment count, amount sum, missing-amount count, Zelle count and distinct counterparties (`out_count`, `in_count`, `out_amount`, `in_amount`, `out_missing`, `in_missing`, `out_zelle`, `in_zelle`, `out_unique`, `in_unique`) |
-| `amount_ratios` | summary | `1d_out_in_amount_ratio`, `7d_out_in_amount_ratio` | `min(outgoing / max(incoming, 1.0), 100.0)` over the window's sums; needs `rolling_windows` |
-| `recency` | summary | `out_recency_days`, `in_recency_days`, `out_recency_present`, `in_recency_present` | Days since the most recent outgoing and incoming payment, across counterparties |
-| `association_counts` | summary | 28: `<relation>_active`, `<relation>_ended` | Active and ended tenures of each of the 14 association relations (7 families, both directions); repeated tenures count separately |
-| `decayed_activity` | summary | 16: `decay_<half-life>_<direction>_<count or amount>` | Incoming and outgoing counts and amounts, each weighted by `2**(-age / half_life)` for the half-lives `1d`, `7d`, `30d`, `90d` |
-| `identity_order` | summary | 6: `<relation>_starts_last10`, `<relation>_ends_last10` | Starts and ends of owner, token and device tenures since the tenth most recent payment: an order, not a duration |
-| `pair_window_counts` | message | `pair_count_1h`, `pair_count_1d`, `pair_count_7d` | Earlier payments of the same pair within each window before the message (age less than the window) |
-| `device_ip_context` | message | `device_age_seconds`, `device_present`, `ip_age_seconds`, `ip_present` | Age of the device and IP the payment used, at the payment; the youngest eligible observation when there are several |
-
-- The windows, half-lives, ratio bounds and identity relations are constants of
-  `contract.analytics_features`.
-- Its rows print `ANALYTICS_CONTRACT` instead of `CONTEXT_CONTRACT`.
-- `reference.gsql_features` mirrors the account aggregates a payment history determines
-  (not association counts or identity order, which need the root's associations), and
-  `pytest -m graph` compares the mirror with the installed query.
+payment time. The query computes every field whatever the model; a model reads those of
+its groups.
 
 ## Fingerprints
 
