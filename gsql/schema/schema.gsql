@@ -1,0 +1,183 @@
+/*
+The graph of PhantomLedger's mule-temporal export, for TigerGraph 4.2.5: the single copy of
+the DDL (docs/design.md, "The graph"). Fresh-graph DDL, run by a person and never on a
+populated graph; loading.gsql loads it.
+
+One clock: UTC epoch milliseconds, 0 for none. A link (the seven associations) holds from
+valid_from_ms until valid_to_ms, 0 while open, and DISCRIMINATOR(valid_from_ms) keeps
+repeated links of one pair. Every event edge repeats its payment's event_ts_ms.
+
+split is written by MulePatternLearner (write_split): -1 until written and for accounts
+no customer owns, 0 for a customer used in training, 1 for a held-out customer.
+Supervision (discovered_ms, discovery_channel, mule_onset_ms) is read only by
+read_supervision, and the answer key (is_mule, mule_ring_id, mule_layer, mule_flow,
+mule_last_ms) only by read_answer_key: neither is ever a feature. is_mule is -1 when
+unknown, so an account with no loaded truth is never read as normal.
+*/
+
+CREATE GRAPH Mule_Pattern_Learner ()
+USE GRAPH Mule_Pattern_Learner
+
+CREATE SCHEMA_CHANGE JOB create_schema FOR GRAPH Mule_Pattern_Learner {
+
+  ADD VERTEX Party (
+    PRIMARY_ID id STRING,
+    joined_ms UINT,
+    split INT DEFAULT -1
+  ) WITH PRIMARY_ID_AS_ATTRIBUTE="true", STATS="OUTDEGREE_BY_EDGETYPE";
+
+  ADD VERTEX Account (
+    PRIMARY_ID id STRING,
+    account_type STRING DEFAULT "unknown",
+    is_external BOOL DEFAULT "false",
+    opened_ms UINT,
+    closed_ms UINT DEFAULT 0,
+    split INT DEFAULT -1,
+    discovered_ms UINT DEFAULT 0,
+    discovery_channel STRING DEFAULT "",
+    mule_onset_ms UINT DEFAULT 0,
+    is_mule INT DEFAULT -1,
+    mule_ring_id INT DEFAULT -1,
+    mule_layer STRING DEFAULT "",
+    mule_flow STRING DEFAULT "",
+    mule_last_ms UINT DEFAULT 0
+  ) WITH PRIMARY_ID_AS_ATTRIBUTE="true", STATS="OUTDEGREE_BY_EDGETYPE";
+
+  ADD VERTEX Token (
+    PRIMARY_ID id STRING
+  ) WITH PRIMARY_ID_AS_ATTRIBUTE="true", STATS="OUTDEGREE_BY_EDGETYPE";
+
+  ADD VERTEX Device (
+    PRIMARY_ID id STRING
+  ) WITH PRIMARY_ID_AS_ATTRIBUTE="true", STATS="OUTDEGREE_BY_EDGETYPE";
+
+  ADD VERTEX IP (
+    PRIMARY_ID id STRING
+  ) WITH PRIMARY_ID_AS_ATTRIBUTE="true", STATS="OUTDEGREE_BY_EDGETYPE";
+
+  ADD VERTEX Address (
+    PRIMARY_ID id STRING
+  ) WITH PRIMARY_ID_AS_ATTRIBUTE="true", STATS="OUTDEGREE_BY_EDGETYPE";
+
+  ADD VERTEX Payment_Transaction (
+    PRIMARY_ID id STRING,
+    amount DOUBLE,
+    payment_rail STRING DEFAULT "unknown",
+    event_ts_ms UINT
+  ) WITH PRIMARY_ID_AS_ATTRIBUTE="true", STATS="OUTDEGREE_BY_EDGETYPE";
+
+  ADD VERTEX Zelle_Transfer (
+    PRIMARY_ID id STRING,
+    amount DOUBLE,
+    event_ts_ms UINT
+  ) WITH PRIMARY_ID_AS_ATTRIBUTE="true", STATS="OUTDEGREE_BY_EDGETYPE";
+
+  /* The identity and ownership links. */
+
+  ADD DIRECTED EDGE Party_Owns_Account (
+    FROM Party, TO Account,
+    DISCRIMINATOR(valid_from_ms UINT),
+    valid_to_ms UINT DEFAULT 0
+  ) WITH REVERSE_EDGE="Account_Owned_By_Party";
+
+  ADD DIRECTED EDGE Party_Uses_Token (
+    FROM Party, TO Token,
+    DISCRIMINATOR(valid_from_ms UINT),
+    valid_to_ms UINT DEFAULT 0
+  ) WITH REVERSE_EDGE="Token_Used_By_Party";
+
+  ADD DIRECTED EDGE Token_Bound_To_Account (
+    FROM Token, TO Account,
+    DISCRIMINATOR(valid_from_ms UINT),
+    valid_to_ms UINT DEFAULT 0
+  ) WITH REVERSE_EDGE="Account_Bound_From_Token";
+
+  ADD DIRECTED EDGE Party_Uses_Device (
+    FROM Party, TO Device,
+    DISCRIMINATOR(valid_from_ms UINT),
+    valid_to_ms UINT DEFAULT 0
+  ) WITH REVERSE_EDGE="Device_Used_By_Party";
+
+  ADD DIRECTED EDGE Account_Uses_Device (
+    FROM Account, TO Device,
+    DISCRIMINATOR(valid_from_ms UINT),
+    valid_to_ms UINT DEFAULT 0
+  ) WITH REVERSE_EDGE="Device_Used_By_Account";
+
+  ADD DIRECTED EDGE Party_Uses_IP (
+    FROM Party, TO IP,
+    DISCRIMINATOR(valid_from_ms UINT),
+    valid_to_ms UINT DEFAULT 0
+  ) WITH REVERSE_EDGE="IP_Used_By_Party";
+
+  ADD DIRECTED EDGE Party_Has_Address (
+    FROM Party, TO Address,
+    DISCRIMINATOR(valid_from_ms UINT),
+    valid_to_ms UINT DEFAULT 0
+  ) WITH REVERSE_EDGE="Address_Used_By_Party";
+
+  /* A payment's sender, receiver and the token, device and IP observed on it. */
+
+  ADD DIRECTED EDGE Transfer_From_Account (
+    FROM Zelle_Transfer, TO Account,
+    event_ts_ms UINT
+  ) WITH REVERSE_EDGE="Account_Sent_Zelle_Transfer";
+
+  ADD DIRECTED EDGE Transfer_To_Account (
+    FROM Zelle_Transfer, TO Account,
+    event_ts_ms UINT
+  ) WITH REVERSE_EDGE="Account_Received_Zelle_Transfer";
+
+  ADD DIRECTED EDGE Transfer_From_Token (
+    FROM Zelle_Transfer, TO Token,
+    event_ts_ms UINT
+  ) WITH REVERSE_EDGE="Token_Sent_Transfer";
+
+  ADD DIRECTED EDGE Transfer_To_Token (
+    FROM Zelle_Transfer, TO Token,
+    event_ts_ms UINT
+  ) WITH REVERSE_EDGE="Token_Received_Transfer";
+
+  ADD DIRECTED EDGE Transfer_Used_Device (
+    FROM Zelle_Transfer, TO Device,
+    event_ts_ms UINT
+  ) WITH REVERSE_EDGE="Device_Used_By_Transfer";
+
+  ADD DIRECTED EDGE Transfer_Used_IP (
+    FROM Zelle_Transfer, TO IP,
+    event_ts_ms UINT
+  ) WITH REVERSE_EDGE="IP_Used_By_Transfer";
+
+  ADD DIRECTED EDGE Transaction_From_Account (
+    FROM Payment_Transaction, TO Account,
+    event_ts_ms UINT
+  ) WITH REVERSE_EDGE="Account_Initiated_Transaction";
+
+  ADD DIRECTED EDGE Transaction_To_Account (
+    FROM Payment_Transaction, TO Account,
+    event_ts_ms UINT
+  ) WITH REVERSE_EDGE="Account_Received_Transaction";
+
+  ADD DIRECTED EDGE Transaction_From_Token (
+    FROM Payment_Transaction, TO Token,
+    event_ts_ms UINT
+  ) WITH REVERSE_EDGE="Token_Sent_Transaction";
+
+  ADD DIRECTED EDGE Transaction_To_Token (
+    FROM Payment_Transaction, TO Token,
+    event_ts_ms UINT
+  ) WITH REVERSE_EDGE="Token_Received_Transaction";
+
+  ADD DIRECTED EDGE Transaction_Used_Device (
+    FROM Payment_Transaction, TO Device,
+    event_ts_ms UINT
+  ) WITH REVERSE_EDGE="Device_Used_By_Transaction";
+
+  ADD DIRECTED EDGE Transaction_Used_IP (
+    FROM Payment_Transaction, TO IP,
+    event_ts_ms UINT
+  ) WITH REVERSE_EDGE="IP_Observed_In_Transaction";
+}
+
+RUN SCHEMA_CHANGE JOB create_schema
+DROP JOB create_schema
