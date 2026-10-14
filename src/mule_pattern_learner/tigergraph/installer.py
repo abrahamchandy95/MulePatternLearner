@@ -1,0 +1,238 @@
+"""Install the queries of gsql/ on the graph, and check that the installed ones are current.
+
+A query is current when SHOW QUERY gives the repository's text (comments, whitespace and
+case outside string literals aside) and its REST endpoint is enabled with the same
+parameters. install creates and installs only the queries that are not. Every write runs
+once through the executor, so it is never repeated behind the caller's back. The schema and
+the loading job (gsql/schema/) are run by a person, on a fresh graph.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+import hashlib
+import re
+import time
+from typing import Any
+
+from ..paths import GSQL_DIR
+from .executor import (
+    AVAILABILITY,
+    SERVER_TIMEOUT,
+    ConnectionExecutor,
+    TransientQueryError,
+    failure_class,
+)
+from .queries import GRAPH_NAME, QUERY_FILES
+
+# GSQL comments, which neither a compared text nor a version includes.
+COMMENTS = re.compile(r"/\*.*?\*/|//[^\n]*|#[^\n]*", re.S)
+# Parameters an endpoint lists beyond the query's own.
+BUILTIN_PARAMETERS = frozenset({"query", "read_committed"})
+# How long the install request may wait for compilation before the endpoints are polled.
+INSTALL_DEADLINE_S = 60 * 60.0
+# The problems of query_problems that only a new CREATE resolves.
+MISSING = "is missing on the server"
+DIFFERS = "differs from the repository"
+
+
+def normalized(text: str) -> str:
+    """A query's text as compared and hashed: no comments or whitespace, and lower case
+    outside string literals."""
+    tokens = re.findall(r'"(?:\\.|[^"\\])*"|[^\s"]+', COMMENTS.sub("", text))
+    return "".join(token if token.startswith('"') else token.lower() for token in tokens)
+
+
+def text_version(prefix: str, definition: str, printed: str) -> str:
+    """The version a query prints: prefix and 12 hex digits of the sha256 of its definition.
+
+    The definition is normalized, with the printed version (a string literal) left out, so
+    the version covers the whole query but itself and no comment or layout changes it.
+    """
+    text = definition.replace(f'"{printed}"', '""')
+    return prefix + hashlib.sha256(normalized(text).encode()).hexdigest()[:12]
+
+
+def definitions(text: str) -> dict[str, str]:
+    """Each query a GSQL text defines, by name: from QUERY to its closing brace.
+
+    CREATE and OR REPLACE are left out, so a file and SHOW QUERY compare equal whichever
+    of the two the server echoes.
+    """
+    starts = list(re.finditer(r"CREATE\s+(?:OR\s+REPLACE\s+)?(QUERY\s+(\w+))", text, re.I))
+    found: dict[str, str] = {}
+    for index, match in enumerate(starts):
+        end = starts[index + 1].start() if index + 1 < len(starts) else len(text)
+        body = text[match.start(1) : end].split("USE GRAPH")[0]
+        found[match[2]] = body[: body.rfind("}") + 1]
+    return found
+
+
+def parameter_names(definition: str) -> list[str]:
+    """The parameter names of `QUERY name(TYPE a, TYPE b = default, ...)`, in order."""
+    match = re.search(r"QUERY\s+\w+\s*\(", definition, re.I)
+    if match is None:
+        raise ValueError("A query definition has no parameter list")
+    depth, quoted, current, parts = 1, False, "", list[str]()
+    for char in definition[match.end() :]:
+        if quoted:
+            quoted = char != '"'
+        elif char == '"':
+            quoted = True
+        elif char in "(<":
+            depth += 1
+        elif char in ")>":
+            depth -= 1
+            if depth == 0:
+                break
+        elif char == "," and depth == 1:
+            parts.append(current)
+            current = ""
+            continue
+        current += char
+    else:
+        raise ValueError("A query's parameter list is not closed")
+    parts.append(current)
+    return [part.split("=", 1)[0].split()[-1] for part in parts if part.strip()]
+
+
+def repository_queries() -> dict[str, str]:
+    """Every query the code installs, by name: its definition in its file under gsql/."""
+    found: dict[str, str] = {}
+    for name, relative in QUERY_FILES.items():
+        defined = definitions((GSQL_DIR / relative).read_text())
+        if list(defined) != [name]:
+            raise ValueError(f"gsql/{relative} must define the query {name} and no other")
+        found[name] = defined[name]
+    return found
+
+
+def installed_endpoints(executor: ConnectionExecutor) -> dict[str, dict[str, Any]]:
+    """The graph's installed-query endpoints by query name, with `enabled` and `parameters`."""
+    raw = executor.call(lambda conn: conn.getInstalledQueries(), what="getInstalledQueries")
+    if not isinstance(raw, dict):
+        raise ValueError("TigerGraph did not list the installed queries")
+    prefix = f"GET /query/{GRAPH_NAME}/"
+    return {
+        str(endpoint)[len(prefix) :]: info
+        for endpoint, info in raw.items()
+        if str(endpoint).startswith(prefix) and isinstance(info, dict)
+    }
+
+
+def query_problems(executor: ConnectionExecutor) -> dict[str, list[str]]:
+    """Per query that is not current, why: its text is missing or differs, or its endpoint
+    is not enabled or has other parameters (read-only).
+
+    SHOW QUERY also shows a query that is created but not installed, so the endpoint is
+    checked apart from the text.
+    """
+    endpoints = installed_endpoints(executor)
+    problems: dict[str, list[str]] = {}
+    for name, source in repository_queries().items():
+        shown = executor.gsql(f"USE GRAPH {GRAPH_NAME}\nSHOW QUERY {name}", what="SHOW QUERY")
+        actual = definitions(shown).get(name)
+        if actual is None:
+            problems[name] = [MISSING]
+            continue
+        issues: list[str] = []
+        if normalized(actual) != normalized(source):
+            issues.append(DIFFERS)
+        endpoint = endpoints.get(name)
+        if endpoint is None or endpoint.get("enabled") is not True:
+            issues.append("is not installed")
+        elif set(endpoint.get("parameters", {})) - BUILTIN_PARAMETERS != set(
+            parameter_names(source)
+        ):
+            issues.append("has other parameters than the repository")
+        if issues:
+            problems[name] = issues
+    return problems
+
+
+def verify(executor: ConnectionExecutor) -> None:
+    """Raise unless every query is installed, enabled and the repository's text."""
+    problems = query_problems(executor)
+    if problems:
+        raise ValueError(
+            "The installed queries are not the repository's: "
+            + "; ".join(f"{name} {issue}" for name, issues in problems.items() for issue in issues)
+            + ". Run `mule install`."
+        )
+
+
+def _created(output: str) -> bool:
+    return "Successfully created queries" in output and not re.search(
+        r"[1-9]\d* syntax error|(?:Type Check|Semantic Check|Syntax) Error", output, re.I
+    )
+
+
+def _failed(status: Any) -> bool:
+    if not isinstance(status, dict):
+        return False
+    message = str(status.get("message", "")).upper()
+    return status.get("error") in (True, "true") or "FAILED" in message
+
+
+def _unanswered(error: Exception) -> bool:
+    """Whether the install request failed because the client stopped waiting, so the
+    server may still be compiling. The executor wraps the client's error, its cause."""
+    cause = error.__cause__ if isinstance(error, TransientQueryError) else error
+    return failure_class(cause or error) in (AVAILABILITY, SERVER_TIMEOUT)
+
+
+def install(
+    executor: ConnectionExecutor,
+    *,
+    deadline_s: float = INSTALL_DEADLINE_S,
+    poll_s: float = 30.0,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+) -> list[str]:
+    """Create and install every query that is not current; the names it installed.
+
+    Only a query whose text is missing or differs is created again, since CREATE OR
+    REPLACE disables an installed endpoint until it is installed again; one whose text is
+    current but whose endpoint is not (a compilation that did not finish) is only
+    installed. The install request waits up to deadline_s. When the client stops waiting
+    first, the endpoint listing is polled every poll_s seconds until the queries are
+    enabled, and verify decides whether the install worked.
+    """
+    if executor.graph_name != GRAPH_NAME:
+        raise ValueError(f"The queries are for the graph {GRAPH_NAME}, not {executor.graph_name}")
+    queries = repository_queries()
+    problems = query_problems(executor)
+    stale = [name for name in queries if name in problems]
+    if not stale:
+        return []
+    changed = [name for name in stale if {MISSING, DIFFERS} & set(problems[name])]
+    if changed:
+        text = "\n\n".join(f"CREATE OR REPLACE {queries[name]}" for name in changed)
+        output = executor.gsql(f"USE GRAPH {GRAPH_NAME}\n{text}\n", what="CREATE QUERY", attempts=1)
+        if not _created(output):
+            raise RuntimeError(output)
+    started = clock()
+    try:
+        with executor.client.request_timeout(read_s=deadline_s):
+            status = executor.call(
+                lambda conn: conn.installQueries(stale), what="installQueries", attempts=1
+            )
+    except Exception as error:
+        if not _unanswered(error):
+            raise
+    else:
+        if _failed(status):
+            raise RuntimeError(f"Query installation failed: {status}")
+    while True:
+        endpoints = installed_endpoints(executor)
+        pending = [name for name in stale if endpoints.get(name, {}).get("enabled") is not True]
+        if not pending:
+            break
+        if clock() - started > deadline_s:
+            raise TimeoutError(
+                f"The queries {pending} are still not installed after {deadline_s:.0f} s. The "
+                "server may still be compiling: once it has finished, install again."
+            )
+        sleep(poll_s)
+    verify(executor)
+    return stale

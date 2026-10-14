@@ -1,0 +1,854 @@
+USE GRAPH Mule_Pattern_Learner
+
+/* The model's input. For seed accounts at one as-of time t (as_of_ms), each seed's typed
+   2-hop subgraph as of t: its nodes with features and its edges with durations, computed
+   here from what existed before t. docs/design.md ("The subgraph query" and its "Response
+   format") is the contract; the reference graph of the tests implements it in Python.
+
+   Visibility: a payment counts when window_start <= event_ts_ms < t and both its accounts
+   are visible; a link when valid_from_ms <= t. Unless held_out_visible, an account or
+   party of split 1 is invisible, with every payment and link that reaches it.
+   Expansion: the seeds (hop 0), then the counterparties of their payments that are not
+   hubs (hop 1) follow every relation from an account; the seed's owner adds its accounts,
+   and each identity node of a seed that is not a hub adds other customers' deposit
+   accounts. Every cap keeps the newest first, ties by id.
+   Reads no supervision and no answer key. */
+CREATE OR REPLACE QUERY fetch_subgraphs(
+    LIST<STRING> seed_ids,
+    UINT as_of_ms,
+    BOOL held_out_visible,
+    INT seed_payments,
+    INT other_payments,
+    INT siblings,
+    INT enrolled_devices,
+    INT enrolled_ips,
+    INT addresses,
+    INT sent_devices,
+    INT sent_ips,
+    INT reverse_accounts,
+    INT identity_accounts,
+    INT hub_threshold,
+    INT lookback_days
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+    /* Candidates of the per-node caps. */
+    TYPEDEF TUPLE<UINT ts, STRING id, BOOL zelle, STRING other> PayPick;
+    TYPEDEF TUPLE<UINT start_ms, STRING id, UINT end_ms> LinkPick;
+    TYPEDEF TUPLE<UINT last_ms, STRING id, UINT first_ms, INT uses> SentPick;
+    TYPEDEF TUPLE<
+        INT seed,
+        UINT ts,
+        STRING account_id,
+        STRING node_id,
+        STRING relation,
+        UINT other_ms,
+        INT uses
+    > Reverse;
+    TYPEDEF TUPLE<INT seed, STRING node_id, STRING relation> Slot;
+    /* A link or a sent-from edge of one seed's subgraph, before its durations. */
+    TYPEDEF TUPLE<
+        INT seed,
+        STRING relation,
+        STRING from_id,
+        STRING to_id,
+        UINT start_ms,
+        UINT end_ms
+    > Link;
+    TYPEDEF TUPLE<
+        INT seed,
+        STRING relation,
+        STRING from_id,
+        STRING to_id,
+        UINT first_ms,
+        UINT last_ms,
+        INT uses
+    > Sent;
+    /* The printed rows. */
+    TYPEDEF TUPLE<
+        STRING id,
+        STRING account_type,
+        BOOL is_external,
+        UINT age_ms,
+        BOOL token_present,
+        UINT token_age_ms,
+        INT in_7d,
+        INT in_30d,
+        INT in_365d,
+        INT out_7d,
+        INT out_30d,
+        INT out_365d,
+        DOUBLE amount_in_30d,
+        DOUBLE amount_out_30d,
+        INT counterparties_in_30d,
+        INT counterparties_out_30d,
+        INT first_inflows_7d,
+        INT first_inflows_30d,
+        DOUBLE passed_on_30d,
+        BOOL last_in_present,
+        UINT since_last_in_ms,
+        BOOL last_out_present,
+        UINT since_last_out_ms,
+        BOOL closed
+    > AccountRow;
+    TYPEDEF TUPLE<STRING id, UINT age_ms, INT open_accounts, INT closed_accounts> PartyRow;
+    TYPEDEF TUPLE<
+        STRING id,
+        UINT age_ms,
+        INT parties_now,
+        INT parties_ever,
+        INT accounts,
+        INT new_parties_30d,
+        BOOL observed_only,
+        BOOL hub
+    > IdentityRow;
+    TYPEDEF TUPLE<
+        STRING id,
+        STRING from_id,
+        STRING to_id,
+        DOUBLE amount,
+        STRING rail,
+        UINT age_ms,
+        BOOL gap_present,
+        UINT gap_ms,
+        UINT pair_age_ms,
+        INT prior_count,
+        BOOL first_in_pair,
+        BOOL next_outflow_present,
+        UINT next_outflow_ms
+    > PaymentRow;
+    TYPEDEF TUPLE<
+        STRING from_id,
+        STRING to_id,
+        UINT since_start_ms,
+        BOOL active,
+        UINT since_end_ms,
+        UINT held_ms
+    > LinkRow;
+    TYPEDEF TUPLE<
+        STRING from_id,
+        STRING to_id,
+        UINT since_first_ms,
+        UINT since_last_ms,
+        INT uses
+    > SentRow;
+
+    /* An expanded account's picks, per relation. */
+    HeapAccum<PayPick>(seed_payments, ts DESC, id ASC) @seed_out, @seed_in;
+    HeapAccum<PayPick>(other_payments, ts DESC, id ASC) @other_out, @other_in;
+    HeapAccum<LinkPick>(1, start_ms DESC, id ASC) @owner_pick;
+    HeapAccum<LinkPick>(enrolled_devices, start_ms DESC, id ASC) @device_pick;
+    HeapAccum<LinkPick>(enrolled_ips, start_ms DESC, id ASC) @ip_pick;
+    HeapAccum<LinkPick>(addresses, start_ms DESC, id ASC) @address_pick;
+    HeapAccum<LinkPick>(siblings, start_ms DESC, id ASC) @sibling_pick;
+    HeapAccum<SentPick>(sent_devices, last_ms DESC, id ASC) @sent_device_pick;
+    HeapAccum<SentPick>(sent_ips, last_ms DESC, id ASC) @sent_ip_pick;
+    /* An account's uses of a device or IP on its own payments, by node id. */
+    MapAccum<STRING, MinAccum<UINT>> @device_first, @ip_first, @reverse_device_first,
+      @reverse_ip_first;
+    MapAccum<STRING, MaxAccum<UINT>> @device_last, @ip_last, @reverse_device_last,
+      @reverse_ip_last;
+    MapAccum<STRING, SumAccum<INT>> @device_uses, @ip_uses, @reverse_device_uses,
+      @reverse_ip_uses;
+    OrAccum @forwarded, @blocked, @hub, @observed, @passed;
+    /* Hub counts, and the features. */
+    SetAccum<VERTEX<Party>> @owners, @owner, @parties_now, @parties_ever;
+    SetAccum<VERTEX<Account>> @linked_accounts, @open_accounts, @closed_accounts,
+      @counterparties_in, @counterparties_out;
+    MapAccum<STRING, MinAccum<UINT>> @party_first, @first_from;
+    MinAccum<UINT> @first_use, @token_from, @next_out, @prior_first;
+    MaxAccum<UINT> @last_in, @last_out, @prior_last;
+    MaxAccum<STRING> @owner_id, @sender_id, @receiver_id, @rail;
+    SumAccum<INT> @in_7d, @in_30d, @in_365d, @out_7d, @out_30d, @out_365d, @first_7d,
+      @first_30d, @new_parties, @prior_count, @sender_degree, @receiver_degree;
+    SumAccum<DOUBLE> @amount_in_30d, @amount_out_30d, @passed_on_30d;
+    ListAccum<UINT> @out_30d_times;
+    SetAccum<INT> @seeds;
+
+    /* Which seeds' subgraphs hold a node or payment, by id; the roles of hop-1 nodes. */
+    ListAccum<STRING> @@seed_list;
+    MapAccum<STRING, SetAccum<INT>> @@expand_for, @@accounts_in, @@parties_in, @@devices_in,
+      @@ips_in, @@addresses_in, @@transactions_in, @@transfers_in;
+    MapAccum<STRING, SetAccum<INT>> @@hop1, @@owner_of, @@device_of, @@ip_of, @@address_of;
+    MapAccum<INT, MaxAccum<STRING>> @@seed_owner;
+    SetAccum<STRING> @@ids, @@found, @@problem;
+    SetAccum<Link> @@links;
+    SetAccum<Sent> @@sent;
+    ListAccum<Reverse> @@reverse;
+    HeapAccum<Reverse>(1, seed ASC, ts DESC, account_id ASC, node_id ASC, relation ASC)
+      @@reverse_order;
+    MapAccum<Slot, SumAccum<INT>> @@taken;
+    MapAccum<INT, SetAccum<STRING>> @@kept;
+    MapAccum<INT, ListAccum<AccountRow>> @@account_rows;
+    MapAccum<INT, ListAccum<PartyRow>> @@party_rows;
+    MapAccum<INT, ListAccum<IdentityRow>> @@device_rows, @@ip_rows, @@address_rows;
+    MapAccum<INT, ListAccum<PaymentRow>> @@payment_rows;
+    MapAccum<INT, ListAccum<LinkRow>> @@owned_by, @@enrolled_on_device, @@enrolled_on_ip,
+      @@at_address;
+    MapAccum<INT, ListAccum<SentRow>> @@sent_from_device, @@sent_from_ip;
+
+    UINT day_ms = 86400000;
+    UINT window_start = 0;
+    UINT since_7d = 0;
+    UINT since_30d = 0;
+    UINT since_365d = 0;
+    INT hop = 0;
+    BOOL active = FALSE;
+    UINT since_end = 0;
+    UINT held = 0;
+    Reverse candidate;
+    Slot slot;
+    LinkRow link_row;
+
+    @@seed_list = seed_ids;
+    IF @@seed_list.size() < 1 OR seed_payments < 1 OR other_payments < 1 OR siblings < 1
+       OR enrolled_devices < 1 OR enrolled_ips < 1 OR addresses < 1 OR sent_devices < 1
+       OR sent_ips < 1 OR reverse_accounts < 1 OR identity_accounts < 1 OR hub_threshold < 1
+       OR lookback_days < 30 OR lookback_days > 3650
+       OR as_of_ms < 365 * day_ms OR as_of_ms < lookback_days * day_ms THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+    window_start = as_of_ms - lookback_days * day_ms;
+    since_7d = as_of_ms - 7 * day_ms;
+    since_30d = as_of_ms - 30 * day_ms;
+    since_365d = as_of_ms - 365 * day_ms;
+
+    /* The seeds: distinct accounts, each open by t and visible. */
+    FOREACH i IN RANGE[0, @@seed_list.size() - 1] DO
+        @@ids += @@seed_list.get(i);
+        @@expand_for += (@@seed_list.get(i) -> i);
+        @@accounts_in += (@@seed_list.get(i) -> i);
+    END;
+    IF @@ids.size() != @@seed_list.size() THEN
+        PRINT "duplicate_seed" AS status;
+        RETURN;
+    END;
+    Seeds = to_vertex_set(@@ids, "Account");
+    Found = SELECT s FROM Seeds:s ACCUM @@found += s.id;
+    IF Seeds.size() != @@ids.size() THEN
+        FOREACH seed_id IN @@ids DO
+            IF NOT @@found.contains(seed_id) THEN @@problem += seed_id; END;
+        END;
+        PRINT "unknown_seed" AS status, @@problem AS seeds;
+        RETURN;
+    END;
+    Invisible = SELECT s FROM Seeds:s
+      WHERE s.opened_ms > as_of_ms OR (NOT held_out_visible AND s.split == 1)
+      ACCUM @@problem += s.id;
+    IF Invisible.size() > 0 THEN
+        PRINT "invisible_seed" AS status, @@problem AS seeds;
+        RETURN;
+    END;
+
+    /* Hop 0 expands the seeds and hop 1 the counterparties of their payments that are not
+       hubs. A relation's picks are taken once per account; @@expand_for names the seeds
+       each expansion adds its edges and nodes to. */
+    Expanding = Seeds;
+    WHILE hop < 2 DO
+        IF hop == 1 THEN
+            @@ids.clear();
+            FOREACH (account_id, marks) IN @@hop1 DO @@ids += account_id; END;
+            Hop1 = to_vertex_set(@@ids, "Account");
+            /* A counterparty is a hub when more visible parties than hub_threshold own the
+               other accounts of its visible payments. One with no more payments than that
+               in all time cannot be one, so it is not counted. */
+            Busy = SELECT c FROM Hop1:c
+              WHERE c.outdegree("Account_Initiated_Transaction")
+                + c.outdegree("Account_Received_Transaction")
+                + c.outdegree("Account_Sent_Zelle_Transfer")
+                + c.outdegree("Account_Received_Zelle_Transfer") > hub_threshold;
+            BusyOwners = SELECT q FROM Busy:c
+              -((Account_Initiated_Transaction>|Account_Received_Transaction>
+                |Account_Sent_Zelle_Transfer>|Account_Received_Zelle_Transfer>):e1)-
+              (Payment_Transaction|Zelle_Transfer):p
+              -((Transaction_From_Account>|Transaction_To_Account>
+                |Transfer_From_Account>|Transfer_To_Account>):e2)-
+              Account:b -(Account_Owned_By_Party>:o)- Party:q
+              WHERE p.event_ts_ms >= window_start AND p.event_ts_ms < as_of_ms AND b != c
+                AND (held_out_visible OR b.split != 1) AND o.valid_from_ms <= as_of_ms
+              ACCUM c.@owners += q;
+            Hubs = SELECT c FROM Busy:c
+              WHERE c.@owners.size() > hub_threshold
+              POST-ACCUM c.@hub += TRUE;
+            Expanding = SELECT c FROM Hop1:c WHERE NOT c.@hub;
+            @@expand_for.clear();
+            FOREACH (account_id, marks) IN @@hop1 DO
+                @@expand_for += (account_id -> marks);
+            END;
+        END;
+
+        /* Payments: the newest per direction whose other account is visible. */
+        IF hop == 0 THEN
+            SeedOut = SELECT b FROM Expanding:a
+              -((Account_Initiated_Transaction>|Account_Sent_Zelle_Transfer>):e1)-
+              (Payment_Transaction|Zelle_Transfer):p
+              -((Transaction_To_Account>|Transfer_To_Account>):e2)- Account:b
+              WHERE p.event_ts_ms >= window_start AND p.event_ts_ms < as_of_ms
+                AND (held_out_visible OR b.split != 1)
+              ACCUM a.@seed_out += PayPick(p.event_ts_ms, p.id, p.type == "Zelle_Transfer", b.id);
+            SeedIn = SELECT b FROM Expanding:a
+              -((Account_Received_Transaction>|Account_Received_Zelle_Transfer>):e1)-
+              (Payment_Transaction|Zelle_Transfer):p
+              -((Transaction_From_Account>|Transfer_From_Account>):e2)- Account:b
+              WHERE p.event_ts_ms >= window_start AND p.event_ts_ms < as_of_ms
+                AND (held_out_visible OR b.split != 1)
+              ACCUM a.@seed_in += PayPick(p.event_ts_ms, p.id, p.type == "Zelle_Transfer", b.id);
+        ELSE
+            OtherOut = SELECT b FROM Expanding:a
+              -((Account_Initiated_Transaction>|Account_Sent_Zelle_Transfer>):e1)-
+              (Payment_Transaction|Zelle_Transfer):p
+              -((Transaction_To_Account>|Transfer_To_Account>):e2)- Account:b
+              WHERE p.event_ts_ms >= window_start AND p.event_ts_ms < as_of_ms
+                AND (held_out_visible OR b.split != 1)
+              ACCUM a.@other_out += PayPick(p.event_ts_ms, p.id, p.type == "Zelle_Transfer", b.id);
+            OtherIn = SELECT b FROM Expanding:a
+              -((Account_Received_Transaction>|Account_Received_Zelle_Transfer>):e1)-
+              (Payment_Transaction|Zelle_Transfer):p
+              -((Transaction_From_Account>|Transfer_From_Account>):e2)- Account:b
+              WHERE p.event_ts_ms >= window_start AND p.event_ts_ms < as_of_ms
+                AND (held_out_visible OR b.split != 1)
+              ACCUM a.@other_in += PayPick(p.event_ts_ms, p.id, p.type == "Zelle_Transfer", b.id);
+        END;
+
+        /* The other relations from an account: its owner, the devices, IPs and addresses
+           of its owner, and the devices and IPs observed on its own visible payments. */
+        IF NOT held_out_visible THEN
+            HiddenReceivers = SELECT b FROM Expanding:a
+              -((Account_Initiated_Transaction>|Account_Sent_Zelle_Transfer>):e1)-
+              (Payment_Transaction|Zelle_Transfer):p
+              -((Transaction_To_Account>|Transfer_To_Account>):e2)- Account:b
+              WHERE NOT a.@forwarded AND p.event_ts_ms >= window_start
+                AND p.event_ts_ms < as_of_ms AND b.split == 1
+              ACCUM p.@blocked += TRUE;
+        END;
+        Owners = SELECT q FROM Expanding:a -(Account_Owned_By_Party>:o)- Party:q
+          WHERE NOT a.@forwarded AND o.valid_from_ms <= as_of_ms
+          ACCUM a.@owner_pick += LinkPick(o.valid_from_ms, q.id, o.valid_to_ms);
+        EnrolledDevices = SELECT d FROM Expanding:a -(Account_Owned_By_Party>:o)- Party:q
+          -(Party_Uses_Device>:l)- Device:d
+          WHERE NOT a.@forwarded AND o.valid_from_ms <= as_of_ms AND l.valid_from_ms <= as_of_ms
+          ACCUM a.@device_pick += LinkPick(l.valid_from_ms, d.id, l.valid_to_ms);
+        EnrolledIps = SELECT d FROM Expanding:a -(Account_Owned_By_Party>:o)- Party:q
+          -(Party_Uses_IP>:l)- IP:d
+          WHERE NOT a.@forwarded AND o.valid_from_ms <= as_of_ms AND l.valid_from_ms <= as_of_ms
+          ACCUM a.@ip_pick += LinkPick(l.valid_from_ms, d.id, l.valid_to_ms);
+        Addresses = SELECT d FROM Expanding:a -(Account_Owned_By_Party>:o)- Party:q
+          -(Party_Has_Address>:l)- Address:d
+          WHERE NOT a.@forwarded AND o.valid_from_ms <= as_of_ms AND l.valid_from_ms <= as_of_ms
+          ACCUM a.@address_pick += LinkPick(l.valid_from_ms, d.id, l.valid_to_ms);
+        SentDevices = SELECT d FROM Expanding:a
+          -((Account_Initiated_Transaction>|Account_Sent_Zelle_Transfer>):e1)-
+          (Payment_Transaction|Zelle_Transfer):p
+          -((Transaction_Used_Device>|Transfer_Used_Device>):u)- Device:d
+          WHERE NOT a.@forwarded AND p.event_ts_ms >= window_start AND p.event_ts_ms < as_of_ms
+            AND NOT p.@blocked
+          ACCUM a.@device_first += (d.id -> p.event_ts_ms),
+            a.@device_last += (d.id -> p.event_ts_ms),
+            a.@device_uses += (d.id -> 1);
+        SentIps = SELECT d FROM Expanding:a
+          -((Account_Initiated_Transaction>|Account_Sent_Zelle_Transfer>):e1)-
+          (Payment_Transaction|Zelle_Transfer):p
+          -((Transaction_Used_IP>|Transfer_Used_IP>):u)- IP:d
+          WHERE NOT a.@forwarded AND p.event_ts_ms >= window_start AND p.event_ts_ms < as_of_ms
+            AND NOT p.@blocked
+          ACCUM a.@ip_first += (d.id -> p.event_ts_ms),
+            a.@ip_last += (d.id -> p.event_ts_ms),
+            a.@ip_uses += (d.id -> 1);
+        Ranked = SELECT a FROM Expanding:a
+          WHERE NOT a.@forwarded
+          POST-ACCUM
+            FOREACH (node_id, last_ms) IN a.@device_last DO
+                a.@sent_device_pick += SentPick(last_ms, node_id, a.@device_first.get(node_id),
+                  a.@device_uses.get(node_id))
+            END,
+            FOREACH (node_id, last_ms) IN a.@ip_last DO
+                a.@sent_ip_pick += SentPick(last_ms, node_id, a.@ip_first.get(node_id),
+                  a.@ip_uses.get(node_id))
+            END,
+            a.@forwarded += TRUE;
+
+        /* Each pick joins the subgraphs of the seeds the account is expanded for. */
+        Picked = SELECT a FROM Expanding:a
+          POST-ACCUM
+            IF hop == 0 THEN
+                FOREACH x IN a.@seed_out DO
+                    IF x.zelle THEN @@transfers_in += (x.id -> @@expand_for.get(a.id))
+                    ELSE @@transactions_in += (x.id -> @@expand_for.get(a.id)) END,
+                    @@accounts_in += (x.other -> @@expand_for.get(a.id)),
+                    IF x.other != a.id THEN @@hop1 += (x.other -> @@expand_for.get(a.id)) END
+                END,
+                FOREACH x IN a.@seed_in DO
+                    IF x.zelle THEN @@transfers_in += (x.id -> @@expand_for.get(a.id))
+                    ELSE @@transactions_in += (x.id -> @@expand_for.get(a.id)) END,
+                    @@accounts_in += (x.other -> @@expand_for.get(a.id)),
+                    IF x.other != a.id THEN @@hop1 += (x.other -> @@expand_for.get(a.id)) END
+                END
+            ELSE
+                FOREACH x IN a.@other_out DO
+                    IF x.zelle THEN @@transfers_in += (x.id -> @@expand_for.get(a.id))
+                    ELSE @@transactions_in += (x.id -> @@expand_for.get(a.id)) END,
+                    @@accounts_in += (x.other -> @@expand_for.get(a.id))
+                END,
+                FOREACH x IN a.@other_in DO
+                    IF x.zelle THEN @@transfers_in += (x.id -> @@expand_for.get(a.id))
+                    ELSE @@transactions_in += (x.id -> @@expand_for.get(a.id)) END,
+                    @@accounts_in += (x.other -> @@expand_for.get(a.id))
+                END
+            END,
+            FOREACH x IN a.@owner_pick DO
+                @@parties_in += (x.id -> @@expand_for.get(a.id)),
+                FOREACH i IN @@expand_for.get(a.id) DO
+                    @@links += Link(i, "owned_by", a.id, x.id, x.start_ms, x.end_ms),
+                    IF hop == 0 THEN @@owner_of += (x.id -> i), @@seed_owner += (i -> x.id) END
+                END
+            END,
+            FOREACH x IN a.@device_pick DO
+                @@devices_in += (x.id -> @@expand_for.get(a.id)),
+                IF hop == 0 THEN @@device_of += (x.id -> @@expand_for.get(a.id)) END,
+                FOREACH i IN @@expand_for.get(a.id) DO
+                    @@links += Link(i, "enrolled_on_device", a.id, x.id, x.start_ms, x.end_ms)
+                END
+            END,
+            FOREACH x IN a.@ip_pick DO
+                @@ips_in += (x.id -> @@expand_for.get(a.id)),
+                IF hop == 0 THEN @@ip_of += (x.id -> @@expand_for.get(a.id)) END,
+                FOREACH i IN @@expand_for.get(a.id) DO
+                    @@links += Link(i, "enrolled_on_ip", a.id, x.id, x.start_ms, x.end_ms)
+                END
+            END,
+            FOREACH x IN a.@address_pick DO
+                @@addresses_in += (x.id -> @@expand_for.get(a.id)),
+                IF hop == 0 THEN @@address_of += (x.id -> @@expand_for.get(a.id)) END,
+                FOREACH i IN @@expand_for.get(a.id) DO
+                    @@links += Link(i, "at_address", a.id, x.id, x.start_ms, x.end_ms)
+                END
+            END,
+            FOREACH x IN a.@sent_device_pick DO
+                @@devices_in += (x.id -> @@expand_for.get(a.id)),
+                IF hop == 0 THEN @@device_of += (x.id -> @@expand_for.get(a.id)) END,
+                FOREACH i IN @@expand_for.get(a.id) DO
+                    @@sent += Sent(i, "sent_from_device", a.id, x.id, x.first_ms, x.last_ms, x.uses)
+                END
+            END,
+            FOREACH x IN a.@sent_ip_pick DO
+                @@ips_in += (x.id -> @@expand_for.get(a.id)),
+                IF hop == 0 THEN @@ip_of += (x.id -> @@expand_for.get(a.id)) END,
+                FOREACH i IN @@expand_for.get(a.id) DO
+                    @@sent += Sent(i, "sent_from_ip", a.id, x.id, x.first_ms, x.last_ms, x.uses)
+                END
+            END;
+        hop = hop + 1;
+    END;
+
+    /* The seed's owner adds its newest accounts; the seed's own ownership is already in. */
+    @@ids.clear();
+    FOREACH (party_id, marks) IN @@owner_of DO @@ids += party_id; END;
+    SeedOwners = to_vertex_set(@@ids, "Party");
+    OwnedBySeedOwners = SELECT b FROM SeedOwners:q -(Party_Owns_Account>:o)- Account:b
+      WHERE o.valid_from_ms <= as_of_ms
+      ACCUM q.@sibling_pick += LinkPick(o.valid_from_ms, b.id, o.valid_to_ms);
+    SiblingsPicked = SELECT q FROM SeedOwners:q
+      POST-ACCUM
+        FOREACH x IN q.@sibling_pick DO
+            FOREACH i IN @@owner_of.get(q.id) DO
+                IF x.id != @@seed_list.get(i) THEN
+                    @@accounts_in += (x.id -> i),
+                    @@links += Link(i, "owned_by", x.id, q.id, x.start_ms, x.end_ms)
+                END
+            END
+        END;
+
+    /* Device, IP and Address features, and hubs. A node's visible parties are those with a
+       visible link to it; its owners are those parties and the owners of the visible
+       accounts observed sending from it. */
+    @@ids.clear();
+    FOREACH (node_id, marks) IN @@devices_in DO @@ids += node_id; END;
+    Devices = to_vertex_set(@@ids, "Device");
+    @@ids.clear();
+    FOREACH (node_id, marks) IN @@ips_in DO @@ids += node_id; END;
+    Ips = to_vertex_set(@@ids, "IP");
+    @@ids.clear();
+    FOREACH (node_id, marks) IN @@addresses_in DO @@ids += node_id; END;
+    Places = to_vertex_set(@@ids, "Address");
+    Identity = Devices UNION Ips UNION Places;
+    LinkedParties = SELECT q FROM Identity:n
+      -((Device_Used_By_Party>|IP_Used_By_Party>|Address_Used_By_Party>):l)- Party:q
+      WHERE l.valid_from_ms <= as_of_ms AND (held_out_visible OR q.split != 1)
+      ACCUM n.@first_use += l.valid_from_ms,
+        n.@parties_ever += q,
+        n.@owners += q,
+        n.@party_first += (q.id -> l.valid_from_ms),
+        IF l.valid_to_ms == 0 OR l.valid_to_ms > as_of_ms THEN n.@parties_now += q END;
+    LinkedAccounts = SELECT b FROM Identity:n
+      -((Device_Used_By_Party>|IP_Used_By_Party>|Address_Used_By_Party>):l)- Party:q
+      -(Party_Owns_Account>:o)- Account:b
+      WHERE l.valid_from_ms <= as_of_ms AND o.valid_from_ms <= as_of_ms
+        AND (held_out_visible OR q.split != 1)
+      ACCUM n.@linked_accounts += b;
+    Observations = SELECT p FROM Identity:n
+      -((Device_Used_By_Transaction>|Device_Used_By_Transfer>
+        |IP_Observed_In_Transaction>|IP_Used_By_Transfer>):u)-
+      (Payment_Transaction|Zelle_Transfer):p
+      WHERE p.event_ts_ms >= window_start AND p.event_ts_ms < as_of_ms;
+    IF NOT held_out_visible THEN
+        HiddenObserved = SELECT b FROM Observations:p
+          -((Transaction_To_Account>|Transfer_To_Account>):r)- Account:b
+          WHERE b.split == 1
+          ACCUM p.@blocked += TRUE;
+    END;
+    Senders = SELECT b FROM Observations:p
+      -((Transaction_From_Account>|Transfer_From_Account>):f)- Account:b
+      WHERE NOT p.@blocked AND (held_out_visible OR b.split != 1);
+    SenderOwners = SELECT q FROM Senders:b -(Account_Owned_By_Party>:o)- Party:q
+      WHERE o.valid_from_ms <= as_of_ms
+      ACCUM b.@owner += q, b.@owner_id += q.id;
+    Observed = SELECT b FROM Identity:n
+      -((Device_Used_By_Transaction>|Device_Used_By_Transfer>
+        |IP_Observed_In_Transaction>|IP_Used_By_Transfer>):u)-
+      (Payment_Transaction|Zelle_Transfer):p
+      -((Transaction_From_Account>|Transfer_From_Account>):f)- Account:b
+      WHERE p.event_ts_ms >= window_start AND p.event_ts_ms < as_of_ms AND NOT p.@blocked
+        AND (held_out_visible OR b.split != 1)
+      ACCUM n.@first_use += p.event_ts_ms,
+        n.@linked_accounts += b,
+        n.@observed += TRUE,
+        n.@owners += b.@owner;
+    IdentityCounted = SELECT n FROM Identity:n
+      POST-ACCUM
+        FOREACH (party_id, first_ms) IN n.@party_first DO
+            IF first_ms >= since_30d THEN n.@new_parties += 1 END
+        END,
+        IF n.@owners.size() > hub_threshold THEN n.@hub += TRUE END;
+    DeviceRows = SELECT n FROM Devices:n
+      POST-ACCUM FOREACH i IN @@devices_in.get(n.id) DO
+          @@device_rows += (i -> IdentityRow(n.id,
+            CASE WHEN n.@first_use <= as_of_ms THEN as_of_ms - n.@first_use ELSE 0 END,
+            n.@parties_now.size(), n.@parties_ever.size(), n.@linked_accounts.size(),
+            n.@new_parties, n.@observed AND n.@parties_ever.size() == 0, n.@hub))
+      END;
+    IpRows = SELECT n FROM Ips:n
+      POST-ACCUM FOREACH i IN @@ips_in.get(n.id) DO
+          @@ip_rows += (i -> IdentityRow(n.id,
+            CASE WHEN n.@first_use <= as_of_ms THEN as_of_ms - n.@first_use ELSE 0 END,
+            n.@parties_now.size(), n.@parties_ever.size(), n.@linked_accounts.size(),
+            n.@new_parties, n.@observed AND n.@parties_ever.size() == 0, n.@hub))
+      END;
+    AddressRows = SELECT n FROM Places:n
+      POST-ACCUM FOREACH i IN @@addresses_in.get(n.id) DO
+          @@address_rows += (i -> IdentityRow(n.id,
+            CASE WHEN n.@first_use <= as_of_ms THEN as_of_ms - n.@first_use ELSE 0 END,
+            n.@parties_now.size(), n.@parties_ever.size(), n.@linked_accounts.size(),
+            n.@new_parties, n.@observed AND n.@parties_ever.size() == 0, n.@hub))
+      END;
+
+    /* Each identity node of a seed that is not a hub adds other customers' visible deposit
+       accounts: those enrolled on it or living at it (one candidate per link) and those
+       observed sending from it (one per account). */
+    @@ids.clear();
+    FOREACH (node_id, marks) IN @@device_of DO @@ids += node_id; END;
+    SeedDevices = to_vertex_set(@@ids, "Device");
+    @@ids.clear();
+    FOREACH (node_id, marks) IN @@ip_of DO @@ids += node_id; END;
+    SeedIps = to_vertex_set(@@ids, "IP");
+    @@ids.clear();
+    FOREACH (node_id, marks) IN @@address_of DO @@ids += node_id; END;
+    SeedPlaces = to_vertex_set(@@ids, "Address");
+    DeviceUsers = SELECT b FROM SeedDevices:n -(Device_Used_By_Party>:l)- Party:q
+      -(Party_Owns_Account>:o)- Account:b
+      WHERE NOT n.@hub AND l.valid_from_ms <= as_of_ms AND o.valid_from_ms <= as_of_ms
+        AND b.account_type == "deposit" AND (held_out_visible OR b.split != 1)
+      ACCUM FOREACH i IN @@device_of.get(n.id) DO
+          IF q.id != @@seed_owner.get(i) THEN
+              @@reverse += Reverse(i, l.valid_from_ms, b.id, n.id, "enrolled_on_device",
+                l.valid_to_ms, 0)
+          END
+      END;
+    IpUsers = SELECT b FROM SeedIps:n -(IP_Used_By_Party>:l)- Party:q
+      -(Party_Owns_Account>:o)- Account:b
+      WHERE NOT n.@hub AND l.valid_from_ms <= as_of_ms AND o.valid_from_ms <= as_of_ms
+        AND b.account_type == "deposit" AND (held_out_visible OR b.split != 1)
+      ACCUM FOREACH i IN @@ip_of.get(n.id) DO
+          IF q.id != @@seed_owner.get(i) THEN
+              @@reverse += Reverse(i, l.valid_from_ms, b.id, n.id, "enrolled_on_ip",
+                l.valid_to_ms, 0)
+          END
+      END;
+    Residents = SELECT b FROM SeedPlaces:n -(Address_Used_By_Party>:l)- Party:q
+      -(Party_Owns_Account>:o)- Account:b
+      WHERE NOT n.@hub AND l.valid_from_ms <= as_of_ms AND o.valid_from_ms <= as_of_ms
+        AND b.account_type == "deposit" AND (held_out_visible OR b.split != 1)
+      ACCUM FOREACH i IN @@address_of.get(n.id) DO
+          IF q.id != @@seed_owner.get(i) THEN
+              @@reverse += Reverse(i, l.valid_from_ms, b.id, n.id, "at_address",
+                l.valid_to_ms, 0)
+          END
+      END;
+    DeviceSenders = SELECT b FROM SeedDevices:n
+      -((Device_Used_By_Transaction>|Device_Used_By_Transfer>):u)-
+      (Payment_Transaction|Zelle_Transfer):p
+      -((Transaction_From_Account>|Transfer_From_Account>):f)- Account:b
+      WHERE NOT n.@hub AND p.event_ts_ms >= window_start AND p.event_ts_ms < as_of_ms
+        AND NOT p.@blocked AND b.account_type == "deposit"
+        AND (held_out_visible OR b.split != 1)
+      ACCUM b.@reverse_device_first += (n.id -> p.event_ts_ms),
+        b.@reverse_device_last += (n.id -> p.event_ts_ms),
+        b.@reverse_device_uses += (n.id -> 1);
+    IpSenders = SELECT b FROM SeedIps:n
+      -((IP_Observed_In_Transaction>|IP_Used_By_Transfer>):u)-
+      (Payment_Transaction|Zelle_Transfer):p
+      -((Transaction_From_Account>|Transfer_From_Account>):f)- Account:b
+      WHERE NOT n.@hub AND p.event_ts_ms >= window_start AND p.event_ts_ms < as_of_ms
+        AND NOT p.@blocked AND b.account_type == "deposit"
+        AND (held_out_visible OR b.split != 1)
+      ACCUM b.@reverse_ip_first += (n.id -> p.event_ts_ms),
+        b.@reverse_ip_last += (n.id -> p.event_ts_ms),
+        b.@reverse_ip_uses += (n.id -> 1);
+    ObservedSenders = DeviceSenders UNION IpSenders;
+    SenderCandidates = SELECT b FROM ObservedSenders:b
+      WHERE b.@owner_id != ""
+      POST-ACCUM
+        FOREACH (node_id, last_ms) IN b.@reverse_device_last DO
+            FOREACH i IN @@device_of.get(node_id) DO
+                IF b.@owner_id != @@seed_owner.get(i) THEN
+                    @@reverse += Reverse(i, last_ms, b.id, node_id, "sent_from_device",
+                      b.@reverse_device_first.get(node_id), b.@reverse_device_uses.get(node_id))
+                END
+            END
+        END,
+        FOREACH (node_id, last_ms) IN b.@reverse_ip_last DO
+            FOREACH i IN @@ip_of.get(node_id) DO
+                IF b.@owner_id != @@seed_owner.get(i) THEN
+                    @@reverse += Reverse(i, last_ms, b.id, node_id, "sent_from_ip",
+                      b.@reverse_ip_first.get(node_id), b.@reverse_ip_uses.get(node_id))
+                END
+            END
+        END;
+    /* Per seed, newest first: at most reverse_accounts edges per node and relation, and
+       at most identity_accounts distinct accounts in all. */
+    IF @@reverse.size() > 0 THEN
+        @@reverse_order.resize(@@reverse.size());
+        FOREACH item IN @@reverse DO @@reverse_order += item; END;
+    END;
+    WHILE @@reverse_order.size() > 0 DO
+        candidate = @@reverse_order.pop();
+        slot = Slot(candidate.seed, candidate.node_id, candidate.relation);
+        IF @@taken.get(slot) < reverse_accounts
+           AND (@@kept.get(candidate.seed).contains(candidate.account_id)
+                OR @@kept.get(candidate.seed).size() < identity_accounts) THEN
+            @@taken += (slot -> 1);
+            @@kept += (candidate.seed -> candidate.account_id);
+            @@accounts_in += (candidate.account_id -> candidate.seed);
+            IF candidate.relation == "sent_from_device" OR candidate.relation == "sent_from_ip" THEN
+                @@sent += Sent(candidate.seed, candidate.relation, candidate.account_id,
+                  candidate.node_id, candidate.other_ms, candidate.ts, candidate.uses);
+            ELSE
+                @@links += Link(candidate.seed, candidate.relation, candidate.account_id,
+                  candidate.node_id, candidate.ts, candidate.other_ms);
+            END;
+        END;
+    END;
+
+    /* Link durations: a link that ended by t shows how long ago and how long it held. */
+    FOREACH item IN @@links DO
+        active = item.end_ms == 0 OR item.end_ms > as_of_ms;
+        IF active THEN
+            since_end = 0;
+            held = as_of_ms - item.start_ms;
+        ELSE
+            since_end = as_of_ms - item.end_ms;
+            held = item.end_ms - item.start_ms;
+        END;
+        link_row = LinkRow(item.from_id, item.to_id, as_of_ms - item.start_ms, active,
+          since_end, held);
+        IF item.relation == "owned_by" THEN
+            @@owned_by += (item.seed -> link_row);
+        ELSE IF item.relation == "enrolled_on_device" THEN
+            @@enrolled_on_device += (item.seed -> link_row);
+        ELSE IF item.relation == "enrolled_on_ip" THEN
+            @@enrolled_on_ip += (item.seed -> link_row);
+        ELSE
+            @@at_address += (item.seed -> link_row);
+        END;
+    END;
+    FOREACH item IN @@sent DO
+        IF item.relation == "sent_from_device" THEN
+            @@sent_from_device += (item.seed -> SentRow(item.from_id, item.to_id,
+              as_of_ms - item.first_ms, as_of_ms - item.last_ms, item.uses));
+        ELSE
+            @@sent_from_ip += (item.seed -> SentRow(item.from_id, item.to_id,
+              as_of_ms - item.first_ms, as_of_ms - item.last_ms, item.uses));
+        END;
+    END;
+
+    /* Account features, over each account's visible payments in the window. */
+    @@ids.clear();
+    FOREACH (account_id, marks) IN @@accounts_in DO @@ids += account_id; END;
+    Accounts = to_vertex_set(@@ids, "Account");
+    Outflows = SELECT b FROM Accounts:a
+      -((Account_Initiated_Transaction>|Account_Sent_Zelle_Transfer>):e1)-
+      (Payment_Transaction|Zelle_Transfer):p
+      -((Transaction_To_Account>|Transfer_To_Account>):e2)- Account:b
+      WHERE p.event_ts_ms >= window_start AND p.event_ts_ms < as_of_ms
+        AND (held_out_visible OR b.split != 1)
+      ACCUM a.@last_out += p.event_ts_ms,
+        IF p.event_ts_ms >= since_365d THEN a.@out_365d += 1 END,
+        IF p.event_ts_ms >= since_30d THEN
+            a.@out_30d += 1,
+            a.@amount_out_30d += p.amount,
+            a.@counterparties_out += b,
+            a.@out_30d_times += p.event_ts_ms
+        END,
+        IF p.event_ts_ms >= since_7d THEN a.@out_7d += 1 END;
+    Inflows = SELECT b FROM Accounts:a
+      -((Account_Received_Transaction>|Account_Received_Zelle_Transfer>):e1)-
+      (Payment_Transaction|Zelle_Transfer):p
+      -((Transaction_From_Account>|Transfer_From_Account>):e2)- Account:b
+      WHERE p.event_ts_ms >= window_start AND p.event_ts_ms < as_of_ms
+        AND (held_out_visible OR b.split != 1)
+      ACCUM a.@last_in += p.event_ts_ms,
+        a.@first_from += (b.id -> p.event_ts_ms),
+        IF p.event_ts_ms >= since_365d THEN a.@in_365d += 1 END,
+        IF p.event_ts_ms >= since_30d THEN
+            a.@in_30d += 1,
+            a.@amount_in_30d += p.amount,
+            a.@counterparties_in += b
+        END,
+        IF p.event_ts_ms >= since_7d THEN a.@in_7d += 1 END;
+    /* An inflow is first-time when no earlier visible payment of the same sender reached
+       the account in the window; it is passed on when the account sent a payment within
+       24 hours from it. */
+    RecentInflows = SELECT b FROM Accounts:a
+      -((Account_Received_Transaction>|Account_Received_Zelle_Transfer>):e1)-
+      (Payment_Transaction|Zelle_Transfer):p
+      -((Transaction_From_Account>|Transfer_From_Account>):e2)- Account:b
+      WHERE p.event_ts_ms >= since_30d AND p.event_ts_ms < as_of_ms
+        AND (held_out_visible OR b.split != 1)
+      ACCUM
+        IF p.event_ts_ms == a.@first_from.get(b.id) THEN
+            a.@first_30d += 1,
+            IF p.event_ts_ms >= since_7d THEN a.@first_7d += 1 END
+        END,
+        FOREACH out_ms IN a.@out_30d_times DO
+            IF out_ms >= p.event_ts_ms AND out_ms <= p.event_ts_ms + day_ms THEN
+                p.@passed += TRUE
+            END
+        END;
+    PassedOn = SELECT p FROM Accounts:a
+      -((Account_Received_Transaction>|Account_Received_Zelle_Transfer>):e1)-
+      (Payment_Transaction|Zelle_Transfer):p
+      WHERE p.event_ts_ms >= since_30d AND p.event_ts_ms < as_of_ms AND p.@passed
+      ACCUM a.@passed_on_30d += p.amount;
+    Tokens = SELECT k FROM Accounts:a -(Account_Bound_From_Token>:l)- Token:k
+      WHERE l.valid_from_ms <= as_of_ms
+      ACCUM a.@token_from += l.valid_from_ms;
+    AccountRows = SELECT a FROM Accounts:a
+      POST-ACCUM FOREACH i IN @@accounts_in.get(a.id) DO
+          @@account_rows += (i -> AccountRow(a.id, a.account_type, a.is_external,
+            CASE WHEN a.opened_ms <= as_of_ms THEN as_of_ms - a.opened_ms ELSE 0 END,
+            a.@token_from <= as_of_ms,
+            CASE WHEN a.@token_from <= as_of_ms THEN as_of_ms - a.@token_from ELSE 0 END,
+            a.@in_7d, a.@in_30d, a.@in_365d, a.@out_7d, a.@out_30d, a.@out_365d,
+            a.@amount_in_30d, a.@amount_out_30d,
+            a.@counterparties_in.size(), a.@counterparties_out.size(),
+            a.@first_7d, a.@first_30d, a.@passed_on_30d,
+            a.@last_in > 0, CASE WHEN a.@last_in > 0 THEN as_of_ms - a.@last_in ELSE 0 END,
+            a.@last_out > 0, CASE WHEN a.@last_out > 0 THEN as_of_ms - a.@last_out ELSE 0 END,
+            a.closed_ms != 0 AND a.closed_ms <= as_of_ms))
+      END;
+
+    /* Party features: its accounts opened by t, open or closed at t. */
+    @@ids.clear();
+    FOREACH (party_id, marks) IN @@parties_in DO @@ids += party_id; END;
+    Parties = to_vertex_set(@@ids, "Party");
+    PartyAccounts = SELECT b FROM Parties:q -(Party_Owns_Account>:o)- Account:b
+      WHERE o.valid_from_ms <= as_of_ms
+      ACCUM
+        IF b.closed_ms != 0 AND b.closed_ms <= as_of_ms THEN q.@closed_accounts += b
+        ELSE q.@open_accounts += b END;
+    PartyRows = SELECT q FROM Parties:q
+      POST-ACCUM FOREACH i IN @@parties_in.get(q.id) DO
+          @@party_rows += (i -> PartyRow(q.id,
+            CASE WHEN q.joined_ms <= as_of_ms THEN as_of_ms - q.joined_ms ELSE 0 END,
+            q.@open_accounts.size(), q.@closed_accounts.size()))
+      END;
+
+    /* Payment edge features. A payment's pair is its sender and receiver; its history is
+       read from whichever of the two has fewer payments in that direction. */
+    @@ids.clear();
+    FOREACH (payment_id, marks) IN @@transactions_in DO @@ids += payment_id; END;
+    Transactions = to_vertex_set(@@ids, "Payment_Transaction");
+    @@ids.clear();
+    FOREACH (payment_id, marks) IN @@transfers_in DO @@ids += payment_id; END;
+    Transfers = to_vertex_set(@@ids, "Zelle_Transfer");
+    TransactionSeeds = SELECT p FROM Transactions:p
+      POST-ACCUM p.@rail += p.payment_rail, p.@seeds += @@transactions_in.get(p.id);
+    TransferSeeds = SELECT p FROM Transfers:p
+      POST-ACCUM p.@rail += "zelle", p.@seeds += @@transfers_in.get(p.id);
+    Payments = Transactions UNION Transfers;
+    PaymentSenders = SELECT a FROM Payments:p
+      -((Transaction_From_Account>|Transfer_From_Account>):f)- Account:a
+      ACCUM p.@sender_id += a.id,
+        p.@sender_degree += a.outdegree("Account_Initiated_Transaction")
+          + a.outdegree("Account_Sent_Zelle_Transfer");
+    PaymentReceivers = SELECT a FROM Payments:p
+      -((Transaction_To_Account>|Transfer_To_Account>):r)- Account:a
+      ACCUM p.@receiver_id += a.id,
+        p.@receiver_degree += a.outdegree("Account_Received_Transaction")
+          + a.outdegree("Account_Received_Zelle_Transfer");
+    BySender = SELECT p FROM Payments:p WHERE p.@sender_degree <= p.@receiver_degree;
+    ByReceiver = SELECT p FROM Payments:p WHERE p.@sender_degree > p.@receiver_degree;
+    SenderHistory = SELECT q FROM BySender:p
+      -((Transaction_From_Account>|Transfer_From_Account>):f)- Account:s
+      -((Account_Initiated_Transaction>|Account_Sent_Zelle_Transfer>):e)-
+      (Payment_Transaction|Zelle_Transfer):q
+      -((Transaction_To_Account>|Transfer_To_Account>):r)- Account:b
+      WHERE b.id == p.@receiver_id AND q.event_ts_ms >= window_start
+        AND q.event_ts_ms < p.event_ts_ms
+      ACCUM p.@prior_count += 1, p.@prior_first += q.event_ts_ms,
+        p.@prior_last += q.event_ts_ms;
+    ReceiverHistory = SELECT q FROM ByReceiver:p
+      -((Transaction_To_Account>|Transfer_To_Account>):r)- Account:b
+      -((Account_Received_Transaction>|Account_Received_Zelle_Transfer>):e)-
+      (Payment_Transaction|Zelle_Transfer):q
+      -((Transaction_From_Account>|Transfer_From_Account>):f)- Account:s
+      WHERE s.id == p.@sender_id AND q.event_ts_ms >= window_start
+        AND q.event_ts_ms < p.event_ts_ms
+      ACCUM p.@prior_count += 1, p.@prior_first += q.event_ts_ms,
+        p.@prior_last += q.event_ts_ms;
+    NextOutflows = SELECT q FROM Payments:p
+      -((Transaction_To_Account>|Transfer_To_Account>):r)- Account:b
+      -((Account_Initiated_Transaction>|Account_Sent_Zelle_Transfer>):e)-
+      (Payment_Transaction|Zelle_Transfer):q
+      -((Transaction_To_Account>|Transfer_To_Account>):r2)- Account:c
+      WHERE q.event_ts_ms >= p.event_ts_ms AND q.event_ts_ms < as_of_ms
+        AND (held_out_visible OR c.split != 1)
+      ACCUM p.@next_out += q.event_ts_ms;
+    PaymentRows = SELECT p FROM Payments:p
+      POST-ACCUM FOREACH i IN p.@seeds DO
+          @@payment_rows += (i -> PaymentRow(p.id, p.@sender_id, p.@receiver_id, p.amount,
+            p.@rail, as_of_ms - p.event_ts_ms,
+            p.@prior_count > 0,
+            CASE WHEN p.@prior_count > 0 THEN p.event_ts_ms - p.@prior_last ELSE 0 END,
+            CASE WHEN p.@prior_count > 0 THEN p.event_ts_ms - p.@prior_first ELSE 0 END,
+            p.@prior_count, p.@prior_count == 0,
+            p.@next_out < as_of_ms,
+            CASE WHEN p.@next_out < as_of_ms THEN p.@next_out - p.event_ts_ms ELSE 0 END))
+      END;
+
+    PRINT "ok" AS status, "subgraphs-40d794a3cd10" AS version, as_of_ms AS as_of_ms,
+      held_out_visible AS held_out_visible;
+    FOREACH i IN RANGE[0, @@seed_list.size() - 1] DO
+        PRINT @@seed_list.get(i) AS seed,
+          @@account_rows.get(i) AS accounts,
+          @@party_rows.get(i) AS parties,
+          @@device_rows.get(i) AS devices,
+          @@ip_rows.get(i) AS ips,
+          @@address_rows.get(i) AS addresses,
+          @@payment_rows.get(i) AS pays,
+          @@owned_by.get(i) AS owned_by,
+          @@enrolled_on_device.get(i) AS enrolled_on_device,
+          @@enrolled_on_ip.get(i) AS enrolled_on_ip,
+          @@at_address.get(i) AS at_address,
+          @@sent_from_device.get(i) AS sent_from_device,
+          @@sent_from_ip.get(i) AS sent_from_ip;
+    END;
+}
