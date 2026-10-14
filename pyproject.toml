@@ -119,5 +119,14 @@ forbidden_modules = ["pandas", "pyarrow", "requests", "pyTigerGraph"]
 name = "Training never reads the answer key"
 type = "forbidden"
 # Indirect imports count too, so nothing training imports from data may import it either.
-source_modules = ["mule_pattern_learner.training", "mule_pattern_learner.data.*"]
+# Each module is its own source, so the __init__ of training and of data are checked as
+# well as every module below them. This stops only imports: tests/data/test_examples.py
+# checks that building the examples never runs read_answer_key.
+as_packages = false
+source_modules = [
+    "mule_pattern_learner.training",
+    "mule_pattern_learner.training.**",
+    "mule_pattern_learner.data",
+    "mule_pattern_learner.data.**",
+]
 forbidden_modules = ["mule_pattern_learner.data.answer_key"]

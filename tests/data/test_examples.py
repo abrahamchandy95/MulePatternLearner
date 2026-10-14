@@ -10,6 +10,7 @@ Quy has no payments, and X_CASH and G_FEES belong to no customer.
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import Any
 
 import pandas as pd
 import pytest
@@ -28,7 +29,12 @@ from mule_pattern_learner.data.examples import (
 from mule_pattern_learner.data.grid import DAY_MS, windows
 from mule_pattern_learner.testing.reference_graph import ReferenceGraph
 from mule_pattern_learner.testing.world import Mule, T, WorldBuilder, standard_world
-from mule_pattern_learner.tigergraph.queries import Phase
+from mule_pattern_learner.tigergraph.queries import (
+    LIST_POPULATION,
+    READ_ANSWER_KEY,
+    READ_SUPERVISION,
+    Phase,
+)
 
 D = DAY_MS
 CONFIG = DEFAULT_CONFIG.data
@@ -40,6 +46,36 @@ MIA_DAYS = [-56, -49, -42, -35, -28, -21, -14, -7]
 TEST_DAYS = list(range(98, 183, 7))
 # The training customers' accounts open at T.
 OPEN_AT_T = ["A_ANN", "A_ANN_CARD", "A_BEN", "A_MAX", "A_QUY", "A_ROY", "A_SUE", "A_VIC"]
+
+
+class _NoAnswerKey:
+    """The reference graph, refusing read_answer_key and keeping the names of the queries
+    it ran. The import contracts stop only imports of data.answer_key, while any code may
+    import the query's name from tigergraph.queries."""
+
+    def __init__(self, graph: ReferenceGraph) -> None:
+        self.graph = graph
+        self.ran: set[str] = set()
+
+    def run(
+        self,
+        name: str,
+        params: dict[str, Any],
+        *,
+        timeout_s: float | None = None,
+        attempts: int | None = None,
+        timeout_retries: int = 1,
+    ) -> list[dict[str, Any]]:
+        if name == READ_ANSWER_KEY:
+            raise AssertionError(f"{READ_ANSWER_KEY} ran outside evaluation")
+        self.ran.add(name)
+        return self.graph.run(
+            name,
+            params,
+            timeout_s=timeout_s,
+            attempts=attempts,
+            timeout_retries=timeout_retries,
+        )
 
 
 def _dated(examples: pd.DataFrame) -> pd.DataFrame:
@@ -146,6 +182,17 @@ def test_the_unlabelled_are_a_fixed_draw_of_so_many_per_positive() -> None:
     draws = {tuple(_accounts(examples, day, UNLABELLED)) for day in MIA_DAYS}
     assert len(draws) > 1
     assert not _training(graph, replace(config, seed=1)).equals(examples)
+
+
+def test_training_and_validation_read_supervision_and_never_the_answer_key() -> None:
+    graph = _NoAnswerKey(standard_world().graph())
+    window = windows(NO_GAP)
+    assert not training_examples(graph, window.training, NO_GAP).empty
+    assert not validation_examples(graph, window.validation, NO_GAP).empty
+    assert graph.ran == {READ_SUPERVISION, LIST_POPULATION}
+    # The guard itself: reading the answer key through it fails.
+    with pytest.raises(AssertionError, match=READ_ANSWER_KEY):
+        read_answer_key(graph)
 
 
 def test_validation_ranks_the_revealed_mules_active_each_date_among_the_others() -> None:
