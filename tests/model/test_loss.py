@@ -229,3 +229,51 @@ def test_badly_scored_positives_keep_their_gradient_in_float32() -> None:
     loss, _ = _call(NonNegativePULoss(prior=0.001, positive_weight=0.999), logits, targets)
     (grad,) = torch.autograd.grad(loss, logits)
     assert grad[0].item() == pytest.approx(-(0.999 + 0.001) * _sigmoid(-20.0), rel=1e-4)
+
+
+def _weighted(
+    loss: NonNegativePULoss, f: Tensor, t: Tensor, w: Tensor | None
+) -> tuple[Tensor, Tensor]:
+    return cast("tuple[Tensor, Tensor]", loss(f, t, w))
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_unit_weights_are_the_unweighted_loss(dtype: torch.dtype) -> None:
+    for case in loss_cases():
+        loss = NonNegativePULoss(case["prior"], positive_weight=case["positive_weight"])
+        logits = case["logits"].to(dtype)
+        ones = torch.ones(len(logits), dtype=dtype)
+        plain = _weighted(loss, logits, case["targets"], None)
+        unit = _weighted(loss, logits, case["targets"], ones)
+        for left, right in zip(plain, unit, strict=True):
+            torch.testing.assert_close(left, right, rtol=0, atol=0)
+
+
+def test_a_whole_weight_counts_as_that_many_copies_of_the_example() -> None:
+    f = torch.tensor([2.0, -1.0, 0.5, -0.5, 1.5], dtype=torch.float64)
+    t = torch.tensor([1, 0, 0, 1, 0])
+    weights = torch.tensor([3.0, 1.0, 2.0, 1.0, 4.0], dtype=torch.float64)
+    copies = weights.long()
+    loss = NonNegativePULoss(prior=0.3)
+    weighted = _weighted(loss, f, t, weights)
+    repeated = _weighted(loss, f.repeat_interleave(copies), t.repeat_interleave(copies), None)
+    for left, right in zip(weighted, repeated, strict=True):
+        torch.testing.assert_close(left, right)
+
+
+def test_each_group_is_a_weighted_mean_however_little_it_weighs() -> None:
+    """Weights that add up to less than 1, as a mule's share of its dates does, still give
+    the group's weighted mean; a group that weighs nothing adds nothing."""
+    f = torch.tensor([2.0, -0.5, 0.5, -1.0], dtype=torch.float64)
+    t = torch.tensor([1, 1, 0, 0])
+    loss = NonNegativePULoss(prior=0.3)
+    small = torch.tensor([0.1, 0.3, 0.05, 0.15], dtype=torch.float64)
+    _, objective = _weighted(loss, f, t, small)
+    l_pos, l_neg = [1 - _sigmoid(x) for x in f.tolist()], [_sigmoid(x) for x in f.tolist()]
+    r_pos = (0.1 * l_pos[0] + 0.3 * l_pos[1]) / 0.4
+    r_pos_neg = (0.1 * l_neg[0] + 0.3 * l_neg[1]) / 0.4
+    r_unl = (0.05 * l_neg[2] + 0.15 * l_neg[3]) / 0.2
+    assert objective.item() == pytest.approx(0.3 * r_pos + r_unl - 0.3 * r_pos_neg)
+    no_positive_weight = torch.tensor([0.0, 0.0, 0.05, 0.15], dtype=torch.float64)
+    _, objective = _weighted(loss, f, t, no_positive_weight)
+    assert objective.item() == pytest.approx(r_unl)

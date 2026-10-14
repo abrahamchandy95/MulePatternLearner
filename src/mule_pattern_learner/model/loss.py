@@ -27,6 +27,10 @@ class NonNegativePULoss(Module):
         R_p^-   = (1/n_p) * sum_{i in P} l_neg_i           # positives, as negative
         R_u^-   = (1/n_u) * sum_{i in U} l_neg_i           # unlabeled, as negative
 
+    With example weights w each risk is the weighted mean over its group instead:
+    n_p and n_u become the groups' total weights and each l_i is multiplied by w_i. Unit
+    weights, the default, give the risks above exactly.
+
         positive_risk = pi * R_p^+
         negative_risk = R_u^-  -  pi * R_p^-     # unbiased estimate of the
                                                  # negatives-as-negative risk
@@ -66,7 +70,8 @@ class NonNegativePULoss(Module):
             and keep hidden truth sealed. Must be in (0, 1).
 
     Convention: targets t use +1 for revealed positives and 0 for unlabeled
-    (matching pu_label in this project). f are raw logits, shape [N].
+    (matching pu_label in this project). f are raw logits, shape [N], and the optional
+    weights w are non-negative, shape [N].
     """
 
     _prior: float
@@ -110,14 +115,19 @@ class NonNegativePULoss(Module):
         return torch.sigmoid(logits)
 
     @override
-    def forward(self, logits: Tensor, targets: Tensor) -> tuple[Tensor, Tensor]:
-        # logits: [N] raw scores f_i ; targets: [N] in {0 unlabeled, 1 positive}
-        positive = (targets == 1).to(logits.dtype)  # [N] 1.0 at positives
-        unlabeled = (targets == 0).to(logits.dtype)  # [N] 1.0 at unlabeled
+    def forward(
+        self, logits: Tensor, targets: Tensor, weights: Tensor | None = None
+    ) -> tuple[Tensor, Tensor]:
+        # logits: [N] raw scores f_i ; targets: [N] in {0 unlabeled, 1 positive} ;
+        # weights: [N] example weights w_i, 1 each when not given
+        unit = torch.ones_like(logits) if weights is None else weights.to(logits.dtype)
+        positive = (targets == 1).to(logits.dtype) * unit  # [N] w_i at positives
+        unlabeled = (targets == 0).to(logits.dtype) * unit  # [N] w_i at unlabeled
 
-        # guard against empty groups in a batch (avoid divide-by-zero)
-        n_positive = torch.clamp(positive.sum(), min=1.0)
-        n_unlabeled = torch.clamp(unlabeled.sum(), min=1.0)
+        # guard against empty groups in a batch (avoid divide-by-zero): a group that
+        # weighs nothing adds nothing, so dividing it by 1 leaves it 0
+        n_positive = _total(positive)
+        n_unlabeled = _total(unlabeled)
 
         l_pos = self._surrogate_pos(logits)  # [N]
         l_neg = self._surrogate_neg(logits)  # [N]
@@ -148,3 +158,10 @@ class NonNegativePULoss(Module):
         )
 
         return train_loss, objective
+
+
+def _total(weights: Tensor) -> Tensor:
+    """The sum of weights, or 1 when it is 0. With unit weights the sum is a count, so this
+    equals clamping it at 1."""
+    total = weights.sum()
+    return torch.where(total > 0, total, torch.ones_like(total))
