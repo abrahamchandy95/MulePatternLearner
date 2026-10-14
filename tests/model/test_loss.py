@@ -249,31 +249,22 @@ def test_unit_weights_are_the_unweighted_loss(dtype: torch.dtype) -> None:
             torch.testing.assert_close(left, right, rtol=0, atol=0)
 
 
-def test_a_whole_weight_counts_as_that_many_copies_of_the_example() -> None:
-    f = torch.tensor([2.0, -1.0, 0.5, -0.5, 1.5], dtype=torch.float64)
-    t = torch.tensor([1, 0, 0, 1, 0])
-    weights = torch.tensor([3.0, 1.0, 2.0, 1.0, 4.0], dtype=torch.float64)
-    copies = weights.long()
+def test_each_group_is_its_weighted_sum_over_its_count_in_the_batch() -> None:
+    """Weights scale each example's loss, and each group's sum is divided by how many
+    examples of the group the batch holds, not by what they weigh: a positive of small
+    weight alone in its group adds that small weight, not the whole positive risk."""
+    f = torch.tensor([2.0, -0.5, 0.5, -1.0, 0.0], dtype=torch.float64)
+    t = torch.tensor([1, 1, 0, 0, 0])
     loss = NonNegativePULoss(prior=0.3)
-    weighted = _weighted(loss, f, t, weights)
-    repeated = _weighted(loss, f.repeat_interleave(copies), t.repeat_interleave(copies), None)
-    for left, right in zip(weighted, repeated, strict=True):
-        torch.testing.assert_close(left, right)
-
-
-def test_each_group_is_a_weighted_mean_however_little_it_weighs() -> None:
-    """Weights that add up to less than 1, as a mule's share of its dates does, still give
-    the group's weighted mean; a group that weighs nothing adds nothing."""
-    f = torch.tensor([2.0, -0.5, 0.5, -1.0], dtype=torch.float64)
-    t = torch.tensor([1, 1, 0, 0])
-    loss = NonNegativePULoss(prior=0.3)
-    small = torch.tensor([0.1, 0.3, 0.05, 0.15], dtype=torch.float64)
-    _, objective = _weighted(loss, f, t, small)
+    weights = torch.tensor([0.1, 3.0, 0.05, 0.15, 2.0], dtype=torch.float64)
+    _, objective = _weighted(loss, f, t, weights)
     l_pos, l_neg = [1 - _sigmoid(x) for x in f.tolist()], [_sigmoid(x) for x in f.tolist()]
-    r_pos = (0.1 * l_pos[0] + 0.3 * l_pos[1]) / 0.4
-    r_pos_neg = (0.1 * l_neg[0] + 0.3 * l_neg[1]) / 0.4
-    r_unl = (0.05 * l_neg[2] + 0.15 * l_neg[3]) / 0.2
+    r_pos = (0.1 * l_pos[0] + 3.0 * l_pos[1]) / 2
+    r_pos_neg = (0.1 * l_neg[0] + 3.0 * l_neg[1]) / 2
+    r_unl = (0.05 * l_neg[2] + 0.15 * l_neg[3] + 2.0 * l_neg[4]) / 3
     assert objective.item() == pytest.approx(0.3 * r_pos + r_unl - 0.3 * r_pos_neg)
-    no_positive_weight = torch.tensor([0.0, 0.0, 0.05, 0.15], dtype=torch.float64)
-    _, objective = _weighted(loss, f, t, no_positive_weight)
+    _, objective = _weighted(loss, f[:1], t[:1], weights[:1])
+    assert objective.item() == pytest.approx(0.1 * (0.3 * l_pos[0] - 0.3 * l_neg[0]))
+    # A group the batch does not hold adds nothing.
+    _, objective = _weighted(loss, f[2:], t[2:], weights[2:])
     assert objective.item() == pytest.approx(r_unl)

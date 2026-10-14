@@ -17,11 +17,13 @@ from typing import Any
 import pandas as pd
 import pytest
 import torch
+from torch_geometric.data import HeteroData
 
 from mule_pattern_learner.config import DEFAULT_CONFIG, TrainingConfig
 from mule_pattern_learner.data.examples import training_examples, validation_examples
 from mule_pattern_learner.data.grid import windows
 from mule_pattern_learner.data.supervision import read_supervision
+from mule_pattern_learner.model.loss import NonNegativePULoss
 from mule_pattern_learner.subgraph.build import LAYOUTS
 from mule_pattern_learner.subgraph.fetch import fetch
 from mule_pattern_learner.testing.reference_graph import DAY_MS
@@ -42,6 +44,7 @@ from mule_pattern_learner.training.trainer import (
     fingerprint,
     load,
     save,
+    scaled,
     scores,
     since_confirmed,
     train,
@@ -154,6 +157,44 @@ def test_a_confirmation_counts_from_the_discovery_at_or_before_the_as_of_time() 
         "A_VIC": 0,
         "X_CASH": -1,
     }
+
+
+def test_each_labels_weights_are_scaled_to_a_mean_of_1() -> None:
+    training, _ = _batches()
+    label = torch.cat([batch.label for batch in training])
+    weight = torch.cat([batch.weight for batch in training])
+    rescaled = torch.cat([batch.weight for batch in scaled(training)])
+    for value in (0, 1):
+        assert float(rescaled[label == value].mean()) == pytest.approx(1)
+        ratio = rescaled[label == value] / weight[label == value]
+        assert torch.allclose(ratio, ratio[0])
+
+
+def test_two_mules_weigh_the_same_however_many_dates_they_span() -> None:
+    """1000 mules positive on 1 date and 100 on 26, each weighing 1 in all as
+    data.examples weighs them, with 15 unlabelled per positive sharing its weight, in
+    random batches of 128 as batches makes them, shuffled four ways. Once train scales
+    the weights, the loss pulls a mule of 26 dates up as hard in all as a mule of 1,
+    whatever else shares their batches; dividing by a batch's weight of positives
+    instead made it 2.4 times as hard."""
+    dates = torch.tensor([1] * 1000 + [26] * 100)
+    mule = torch.repeat_interleave(torch.arange(len(dates)), dates)  # each positive's mule
+    share = 1 / dates[mule].double()
+    label = torch.cat([torch.ones_like(mule), torch.zeros(15 * len(mule), dtype=torch.long)])
+    weight = torch.cat([share, share.repeat_interleave(15) / 15])
+    loss = NonNegativePULoss(0.01)
+    pull = torch.zeros(len(dates), dtype=torch.float64)
+    generator = torch.Generator().manual_seed(0)
+    for _ in range(4):
+        chunks = torch.randperm(len(label), generator=generator).split(128)
+        made = [Batch((), HeteroData(), label[chunk], weight[chunk], None) for chunk in chunks]
+        for batch, chunk in zip(scaled(made), chunks, strict=True):
+            logits = torch.zeros(len(chunk), dtype=torch.float64, requires_grad=True)
+            step, _ = loss(logits, batch.label, batch.weight)
+            (gradient,) = torch.autograd.grad(step, logits)
+            positive = batch.label == 1
+            pull.index_add_(0, mule[chunk[positive]], -gradient[positive])
+    assert float(pull[1000:].mean() / pull[:1000].mean()) == pytest.approx(1, abs=0.03)
 
 
 def test_a_short_training_run_lowers_the_loss() -> None:

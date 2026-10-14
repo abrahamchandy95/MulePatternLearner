@@ -10,6 +10,11 @@ for at most max_epochs epochs, stopping once patience epochs bring no better val
 score (training.selection). Each prior keeps its best epoch, and the model of the prior
 whose best epoch scores highest is the one trained; an earlier epoch or prior wins a tie.
 
+Before training, the weights of each label are scaled to a mean of 1 over the training
+batches (scaled), because the loss divides each label's weighted sum by its count in the
+batch (model.loss). An example then counts by its weight whatever shares its batch, so each
+mule keeps the equal share data.examples gives it however many dates it spans.
+
 model.pt holds the weights under the contract lock (docs/design.md, "The subgraph query"):
 the version of fetch_subgraphs the model was trained on and a fingerprint of the feature
 layout it reads. load refuses a model of another version or layout, whose features would
@@ -156,6 +161,24 @@ def batches(
     return made
 
 
+def scaled(batches: Sequence[Batch]) -> list[Batch]:
+    """batches with the weights of each label divided by their mean over all of batches,
+    so that each label's weights have a mean of 1, as model.loss expects."""
+    label = torch.cat([batch.label for batch in batches])
+    weight = torch.cat([batch.weight for batch in batches])
+    positive, unlabelled = (_mean(weight[label == value]) for value in (1, 0))
+    return [
+        replace(batch, weight=batch.weight / torch.where(batch.label == 1, positive, unlabelled))
+        for batch in batches
+    ]
+
+
+def _mean(weights: Tensor) -> float:
+    """The mean of weights, or 1 when there are none (a NaN mean) or they weigh nothing."""
+    mean = float(weights.mean())
+    return mean if mean > 0 else 1.0
+
+
 @dataclass(frozen=True)
 class Epoch:
     """One epoch of one prior: the mean training loss of its steps and the validation
@@ -205,6 +228,7 @@ def train(
         raise ValueError("The training batches' confirmations do not match label_inputs")
     if any((batch.since_confirmed_ms is not None) != label_inputs for batch in validation):
         raise ValueError("The validation batches' confirmations do not match label_inputs")
+    training = scaled(training)
     nodes, edges = dimensions()
     history: list[Epoch] = []
     chosen: _Best | None = None
