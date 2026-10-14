@@ -84,9 +84,9 @@ def test_a_negative_duration_is_an_error() -> None:
 
 def test_a_duration_must_be_integer_milliseconds() -> None:
     with pytest.raises(TypeError, match="integer milliseconds"):
-        encode_reference(np.array([1.5]))  # pyright: ignore[reportArgumentType]
+        encode_reference(np.array([1.5]))
     with pytest.raises(TypeError, match="integer milliseconds"):
-        encode_reference(np.array([True]))  # pyright: ignore[reportArgumentType]
+        encode_reference(np.array([True]))
     for wrong in (torch.tensor([1.5]), torch.tensor([True])):
         with pytest.raises(TypeError, match="integer milliseconds"):
             encode(wrong)
