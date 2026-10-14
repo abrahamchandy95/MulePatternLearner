@@ -3,7 +3,8 @@
 No server compiles them here, so these tests hold the files to the design and to the Python
 that calls them: the types and attributes of the design's graph table, the 27 tables of
 PhantomLedger loaded by name, every attribute a query reads declared on its type, labels
-read only where the design allows, and parameters and printed fields equal to the Python
+read only where the design allows, held-out customers seen only when the phase allows,
+nothing from after the as-of time, and parameters and printed fields equal to the Python
 request builders and dataclasses.
 """
 
@@ -137,6 +138,23 @@ TABLES = {
 }
 
 
+PAYMENTS = {"Payment_Transaction", "Zelle_Transfer"}
+LINKS = {*ASSOCIATIONS, *(reverse for _, _, reverse in ASSOCIATIONS.values())}
+# The edges between a payment and its sender, and its receiver, both ways.
+SENDER_EDGES = {
+    name
+    for edge in ("Transaction_From_Account", "Transfer_From_Account")
+    for name in (edge, EVENTS[edge][2])
+}
+RECEIVER_EDGES = {
+    name
+    for edge in ("Transaction_To_Account", "Transfer_To_Account")
+    for name in (edge, EVENTS[edge][2])
+}
+# The test that hides the held-out customers (split 1) unless held_out_visible.
+VISIBLE = "(held_out_visible OR {}.split != 1)"
+
+
 def _declared(body: str) -> dict[str, str]:
     """Attribute name to its declaration, from a type's parenthesized body."""
     found: dict[str, str] = {}
@@ -233,50 +251,87 @@ def _types(source: str, sets: dict[str, set[str]]) -> set[str]:
     return names
 
 
-def _aliases(statement: str, sets: dict[str, set[str]]) -> dict[str, set[str]]:
-    """The aliases a SELECT's pattern declares, with their types."""
-    pattern = re.split(r"\b(?:WHERE|ACCUM|POST-ACCUM|ORDER BY|LIMIT)\b", statement)[0]
-    aliases: dict[str, set[str]] = {}
-    for source, alias in re.findall(r"-\((\(?[\w>| ]+\)?)\s*:\s*(\w+)\)-", pattern):
-        aliases[alias] = _types(source, sets)
-    vertices = re.sub(r"-\((\(?[\w>| ]+\)?)\s*:\s*(\w+)\)-", " ", pattern)
-    for source, alias in re.findall(r"(\([\w| ]+\)|\w+)\s*:\s*(\w+)", vertices):
-        aliases[alias] = _types(source, sets)
-    return aliases
+EDGE_STEP = re.compile(r"-\((\(?[\w>| ]+\)?)\s*:\s*(\w+)\)-")
+type Step = tuple[str, set[str]]
+
+
+def _chain(select: str, sets: dict[str, set[str]]) -> tuple[list[Step], list[Step]]:
+    """A SELECT's pattern in order: its vertex steps, the first its source, and the edge
+    steps between them, each (alias, types)."""
+    pattern = re.split(r"\b(?:WHERE|ACCUM|POST-ACCUM|ORDER BY|LIMIT)\b", select)[0]
+    parts = EDGE_STEP.split(pattern)
+    vertices: list[Step] = []
+    for text in parts[::3]:
+        found = re.fullmatch(r"\s*(\([\w| ]+\)|\w+)\s*:\s*(\w+)\s*", text)
+        assert found is not None, f"unknown pattern step {text!r}"
+        vertices.append((found[2], _types(found[1], sets)))
+    edges = [
+        (alias, _types(source, sets))
+        for source, alias in zip(parts[1::3], parts[2::3], strict=True)
+    ]
+    return vertices, edges
+
+
+def _scopes(definition: str) -> list[tuple[str, dict[str, set[str]]]]:
+    """Each statement of a query, with the types of the vertex set variables before it.
+
+    A variable takes its types from to_vertex_set, a SELECT's chosen alias, a UNION or
+    another variable.
+    """
+    sets: dict[str, set[str]] = {}
+    scoped: list[tuple[str, dict[str, set[str]]]] = []
+    for statement in _statements(definition):
+        scoped.append((statement, dict(sets)))
+        assigned = re.match(r"(\w+) = (.*)", statement)
+        if assigned is None:
+            continue
+        target, value = assigned[1], assigned[2]
+        select = re.match(r"SELECT (\w+) FROM (.*)", value)
+        made = re.match(r'to_vertex_set\(.*, "(\w+)"\)$', value)
+        if select is not None:
+            sets[target] = dict(_chain(select[2], sets)[0])[select[1]]
+        elif made is not None:
+            sets[target] = {made[1]}
+        elif re.fullmatch(r"\w+( UNION \w+)*", value) and value.split()[0] in sets:
+            sets[target] = set().union(*(sets[name] for name in value.split(" UNION ")))
+    return scoped
 
 
 def _reads(definition: str) -> list[tuple[str, str, set[str]]]:
     """Every attribute read of a query: (alias, attribute, the alias's types).
 
-    Vertex set variables take their types from to_vertex_set, a SELECT's chosen alias, a
-    UNION or another variable. A name.field whose name is no alias is a tuple's field,
-    and the field must be one a TYPEDEF declares.
+    A name.field whose name is no alias is a tuple's field, and the field must be one a
+    TYPEDEF declares.
     """
     tuple_fields = {field for fields in _tuples(definition).values() for field in fields}
-    sets: dict[str, set[str]] = {}
     reads: list[tuple[str, str, set[str]]] = []
-    for statement in _statements(definition):
+    for statement, sets in _scopes(definition):
         aliases = dict(sets)
-        assigned = re.match(r"(\w+) = (.*)", statement)
         select = re.search(r"\bSELECT (\w+) FROM (.*)", statement)
         if select is not None:
-            aliases.update(_aliases(select[2], sets))
+            vertices, edges = _chain(select[2], sets)
+            aliases.update(vertices + edges)
         for name, attribute in re.findall(r"(?<![@\w])(\w+)\.(\w+)\b(?!\s*\()", statement):
             if name in aliases:
                 reads.append((name, attribute, aliases[name]))
             else:
                 assert attribute in tuple_fields, f"{name}.{attribute} reads an unknown alias"
-        if assigned is None:
-            continue
-        target, value = assigned[1], assigned[2]
-        made = re.match(r'to_vertex_set\(.*, "(\w+)"\)$', value)
-        if select is not None:
-            sets[target] = aliases[select[1]]
-        elif made is not None:
-            sets[target] = {made[1]}
-        elif re.fullmatch(r"\w+( UNION \w+)*", value) and value.split()[0] in sets:
-            sets[target] = set().union(*(sets[name] for name in value.split(" UNION ")))
     return reads
+
+
+def _selects(definition: str) -> list[tuple[str, list[Step], list[Step], set[str]]]:
+    """Each SELECT of a query: its statement, its pattern's vertex and edge steps, and the
+    conjuncts of its WHERE clause."""
+    found: list[tuple[str, list[Step], list[Step], set[str]]] = []
+    for statement, sets in _scopes(definition):
+        select = re.search(r"\bSELECT \w+ FROM (.*)", statement)
+        if select is None:
+            continue
+        where = re.search(r" WHERE (.*?)(?= (?:POST-ACCUM|ACCUM|ORDER BY|LIMIT)\b|$)", statement)
+        conjuncts = set(_conjuncts(where[1])) if where else set[str]()
+        vertices, edges = _chain(select[1], sets)
+        found.append((statement, vertices, edges, conjuncts))
+    return found
 
 
 def test_every_attribute_a_query_reads_is_declared_on_its_type() -> None:
@@ -289,15 +344,54 @@ def test_every_attribute_a_query_reads_is_declared_on_its_type() -> None:
                 assert attribute in declared, f"{name}: {alias}.{attribute} is not on {kind}"
 
 
+def _vertex_sets(definition: str) -> set[str]:
+    """The names of a query's vertex set variables, wherever they are assigned."""
+    names: set[str] = set()
+    for statement in _statements(definition):
+        found = re.search(
+            r"\b(\w+) = (?:SELECT\b|to_vertex_set\(|(\w+)(?: UNION \w+)*$)", statement
+        )
+        if found is not None and (found[2] is None or found[2] in names):
+            names.add(found[1])
+    return names
+
+
+def _printed_sets(definition: str) -> list[tuple[str, str | None]]:
+    """Each vertex set a PRINT prints: its name and its projection, or None when the whole
+    set is printed, with every attribute. Printing its size is no print of it."""
+    names = _vertex_sets(definition)
+    printed: list[tuple[str, str | None]] = []
+    for statement in _statements(definition):
+        start = re.search(r"\bPRINT\b", statement)
+        if start is None:
+            continue
+        text = re.sub(r'"(?:\\.|[^"\\])*"', '""', statement[start.start() :])
+        for name, projection in re.findall(r"\b(\w+)\[([^\[\]]*)\]", text):
+            if name in names:
+                printed.append((name, projection))
+        rest = re.sub(r"\b\w+\[[^\[\]]*\]|\b\w+\.size\(\)", " ", text)
+        printed.extend((name, None) for name in re.findall(r"\w+", rest) if name in names)
+    return printed
+
+
 def test_only_the_supervision_and_answer_key_queries_read_labels() -> None:
+    """A query reads a label by its name, or by printing a whole vertex set, which carries
+    every attribute. So a query prints a vertex set only through a projection, and the
+    projections, like the rest of the text, name only the labels the query may read."""
+    labels = {READ_SUPERVISION: SUPERVISION, READ_ANSWER_KEY: SUPERVISION | ANSWER_KEY}
+    # What each of the two prints at least.
+    printed_labels = {READ_SUPERVISION: SUPERVISION, READ_ANSWER_KEY: ANSWER_KEY}
     for name, definition in QUERIES.items():
+        printed = _printed_sets(definition)
+        whole = [vertex_set for vertex_set, projection in printed if projection is None]
+        assert not whole, f"{name} prints all of {whole}"
         words = set(re.findall(r"\w+", COMMENTS.sub("", definition)))
-        if name == READ_ANSWER_KEY:
-            assert words & ANSWER_KEY
-        elif name == READ_SUPERVISION:
-            assert words & SUPERVISION and not words & ANSWER_KEY
-        else:
-            assert not words & (SUPERVISION | ANSWER_KEY), name
+        projected = {
+            word for _, projection in printed for word in re.findall(r"\w+", projection or "")
+        }
+        forbidden = (SUPERVISION | ANSWER_KEY) - labels.get(name, set())
+        assert not words & forbidden and not projected & forbidden, name
+        assert printed_labels.get(name, set()) <= projected, name
 
 
 def _conjuncts(condition: str) -> list[str]:
@@ -333,6 +427,88 @@ def test_read_supervision_always_applies_its_cutoff() -> None:
     for statement in statements:
         if statement not in selects and set(re.findall(r"\w+", statement)) & SUPERVISION:
             assert statement.startswith(f"PRINT {result}[")
+
+
+def test_the_population_and_supervision_see_only_the_phases_customers() -> None:
+    customer = "({0}.split == 0 OR (held_out_visible AND {0}.split == 1))"
+    for name in (LIST_POPULATION, READ_SUPERVISION):
+        [(_, [(alias, types)], _, conjuncts)] = _selects(QUERIES[name])
+        assert types == {"Account"} and customer.format(alias) in conjuncts, name
+        if name == LIST_POPULATION:
+            open_at_t = {
+                f"{alias}.opened_ms <= as_of_ms",
+                f"({alias}.closed_ms == 0 OR {alias}.closed_ms > as_of_ms)",
+            }
+            assert open_at_t <= conjuncts
+
+
+def test_the_subgraph_query_reaches_only_visible_customers() -> None:
+    """Unless held_out_visible, no account or party of split 1 reaches a subgraph or a feature.
+
+    The seeds are checked, and a pattern's source is a set of visible nodes. Every other
+    account a pattern binds is tested with VISIBLE, and so is every party but an account's
+    owner (write_split gives an account its owner's split). A payment whose pattern binds
+    only one of its accounts checks the other: a receiver through @blocked, which marks the
+    payments to hidden accounts, and a sender through @passed, which only an inflow from a
+    visible sender gets. Only the selections that set @blocked bind hidden accounts.
+    """
+    definition = QUERIES[FETCH_SUBGRAPHS]
+    seeds = (
+        r"\w+ = SELECT (\w+) FROM Seeds:\1 WHERE \1\.opened_ms > as_of_ms "
+        r"OR \(NOT held_out_visible AND \1\.split == 1\) "
+    )
+    assert any(re.match(seeds, statement) for statement in _statements(definition))
+    for statement, vertices, edges, conjuncts in _selects(definition):
+        blocker = statement.startswith("IF NOT held_out_visible THEN ") and statement.endswith(
+            ".@blocked += TRUE"
+        )
+        for index, (alias, types) in enumerate(vertices[1:], 1):
+            where = f"{statement[:50]}...: {alias}"
+            owner = vertices[index - 1][1] == {"Account"} and edges[index - 1][1] == {
+                "Account_Owned_By_Party"
+            }
+            if types == {"Account"} or (types == {"Party"} and not owner):
+                hidden = blocker and f"{alias}.split == 1" in conjuncts
+                assert hidden or VISIBLE.format(alias) in conjuncts, where
+            elif types <= PAYMENTS:
+                bound = [
+                    edges[edge][1]
+                    for edge, vertex in ((index - 1, index - 1), (index, index + 1))
+                    if vertex < len(vertices) and vertices[vertex][1] == {"Account"}
+                ]
+                if len(bound) == 1:
+                    assert bound[0] <= SENDER_EDGES | RECEIVER_EDGES, where
+                    other = "NOT {}.@blocked" if bound[0] <= SENDER_EDGES else "{}.@passed"
+                    assert other.format(alias) in conjuncts, where
+
+
+def test_the_subgraph_query_sees_only_what_existed_before_its_time() -> None:
+    """Payments with window_start <= event_ts_ms < t, and links with valid_from_ms <= t.
+
+    A payment may instead be bounded by another payment of its pattern (a pair's earlier
+    payments, a receiver's later outflows), and from below by since_30d, inside the window.
+    A pattern's source is a set selected so before.
+    """
+    definition = QUERIES[FETCH_SUBGRAPHS]
+    windows = {
+        "window_start = as_of_ms - lookback_days * day_ms",
+        "since_30d = as_of_ms - 30 * day_ms",
+    }
+    assert windows <= set(_statements(definition))
+    for statement, vertices, edges, conjuncts in _selects(definition):
+        payments = [alias for alias, types in vertices if types <= PAYMENTS]
+        for alias, types in vertices[1:]:
+            if types <= PAYMENTS:
+                others = [f"{other}.event_ts_ms" for other in payments if other != alias]
+                upper = {f"{alias}.event_ts_ms < {bound}" for bound in ["as_of_ms", *others]}
+                lower = {
+                    f"{alias}.event_ts_ms >= {bound}"
+                    for bound in ["window_start", "since_30d", *others]
+                }
+                assert upper & conjuncts and lower & conjuncts, f"{statement[:50]}...: {alias}"
+        for alias, types in edges:
+            if types <= LINKS:
+                assert f"{alias}.valid_from_ms <= as_of_ms" in conjuncts, f"{statement[:50]}..."
 
 
 def test_the_subgraph_query_prints_the_version_of_its_text() -> None:

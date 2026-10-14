@@ -7,7 +7,9 @@ USE GRAPH Mule_Pattern_Learner
 
    Visibility: a payment counts when window_start <= event_ts_ms < t and both its accounts
    are visible; a link when valid_from_ms <= t. Unless held_out_visible, an account or
-   party of split 1 is invisible, with every payment and link that reaches it.
+   party of split 1 is invisible, with every payment and link that reaches it. Every
+   account a pattern binds, and every party but an account's owner, is tested even where
+   it cannot be hidden, so the rule shows in each SELECT and a text test checks it.
    Expansion: the seeds (hop 0), then the counterparties of their payments that are not
    hubs (hop 1) follow every relation from an account; a seed's owners add their accounts,
    and each identity node of a seed that is not a hub adds other customers' deposit
@@ -446,7 +448,7 @@ CREATE OR REPLACE QUERY fetch_subgraphs(
     FOREACH (party_id, marks) IN @@owner_of DO @@ids += party_id; END;
     SeedOwners = to_vertex_set(@@ids, "Party");
     OwnedBySeedOwners = SELECT b FROM SeedOwners:q -(Party_Owns_Account>:o)- Account:b
-      WHERE o.valid_from_ms <= as_of_ms
+      WHERE o.valid_from_ms <= as_of_ms AND (held_out_visible OR b.split != 1)
       ACCUM q.@sibling_pick += LinkPick(o.valid_from_ms, b.id, o.valid_to_ms);
     SiblingsPicked = SELECT q FROM SeedOwners:q
       POST-ACCUM
@@ -484,7 +486,7 @@ CREATE OR REPLACE QUERY fetch_subgraphs(
       -((Device_Used_By_Party>|IP_Used_By_Party>|Address_Used_By_Party>):l)- Party:q
       -(Party_Owns_Account>:o)- Account:b
       WHERE l.valid_from_ms <= as_of_ms AND o.valid_from_ms <= as_of_ms
-        AND (held_out_visible OR q.split != 1)
+        AND (held_out_visible OR q.split != 1) AND (held_out_visible OR b.split != 1)
       ACCUM n.@linked_accounts += b;
     Observations = SELECT p FROM Identity:n
       -((Device_Used_By_Transaction>|Device_Used_By_Transfer>
@@ -557,7 +559,8 @@ CREATE OR REPLACE QUERY fetch_subgraphs(
     DeviceUsers = SELECT b FROM SeedDevices:n -(Device_Used_By_Party>:l)- Party:q
       -(Party_Owns_Account>:o)- Account:b
       WHERE NOT n.@hub AND l.valid_from_ms <= as_of_ms AND o.valid_from_ms <= as_of_ms
-        AND b.account_type == "deposit" AND (held_out_visible OR b.split != 1)
+        AND b.account_type == "deposit" AND (held_out_visible OR q.split != 1)
+        AND (held_out_visible OR b.split != 1)
       ACCUM FOREACH i IN @@device_of.get(n.id) DO
           IF NOT @@seed_owners.get(i).contains(q.id) THEN
               @@reverse += Reverse(i, l.valid_from_ms, b.id, n.id, "enrolled_on_device",
@@ -567,7 +570,8 @@ CREATE OR REPLACE QUERY fetch_subgraphs(
     IpUsers = SELECT b FROM SeedIps:n -(IP_Used_By_Party>:l)- Party:q
       -(Party_Owns_Account>:o)- Account:b
       WHERE NOT n.@hub AND l.valid_from_ms <= as_of_ms AND o.valid_from_ms <= as_of_ms
-        AND b.account_type == "deposit" AND (held_out_visible OR b.split != 1)
+        AND b.account_type == "deposit" AND (held_out_visible OR q.split != 1)
+        AND (held_out_visible OR b.split != 1)
       ACCUM FOREACH i IN @@ip_of.get(n.id) DO
           IF NOT @@seed_owners.get(i).contains(q.id) THEN
               @@reverse += Reverse(i, l.valid_from_ms, b.id, n.id, "enrolled_on_ip",
@@ -577,7 +581,8 @@ CREATE OR REPLACE QUERY fetch_subgraphs(
     Residents = SELECT b FROM SeedPlaces:n -(Address_Used_By_Party>:l)- Party:q
       -(Party_Owns_Account>:o)- Account:b
       WHERE NOT n.@hub AND l.valid_from_ms <= as_of_ms AND o.valid_from_ms <= as_of_ms
-        AND b.account_type == "deposit" AND (held_out_visible OR b.split != 1)
+        AND b.account_type == "deposit" AND (held_out_visible OR q.split != 1)
+        AND (held_out_visible OR b.split != 1)
       ACCUM FOREACH i IN @@address_of.get(n.id) DO
           IF NOT @@seed_owners.get(i).contains(q.id) THEN
               @@reverse += Reverse(i, l.valid_from_ms, b.id, n.id, "at_address",
@@ -762,7 +767,7 @@ CREATE OR REPLACE QUERY fetch_subgraphs(
     FOREACH (party_id, marks) IN @@parties_in DO @@ids += party_id; END;
     Parties = to_vertex_set(@@ids, "Party");
     PartyAccounts = SELECT b FROM Parties:q -(Party_Owns_Account>:o)- Account:b
-      WHERE o.valid_from_ms <= as_of_ms
+      WHERE o.valid_from_ms <= as_of_ms AND (held_out_visible OR b.split != 1)
       ACCUM
         IF b.closed_ms != 0 AND b.closed_ms <= as_of_ms THEN q.@closed_accounts += b
         ELSE q.@open_accounts += b END;
@@ -788,11 +793,13 @@ CREATE OR REPLACE QUERY fetch_subgraphs(
     Payments = Transactions UNION Transfers;
     PaymentSenders = SELECT a FROM Payments:p
       -((Transaction_From_Account>|Transfer_From_Account>):f)- Account:a
+      WHERE (held_out_visible OR a.split != 1)
       ACCUM p.@sender_id += a.id,
         p.@sender_degree += a.outdegree("Account_Initiated_Transaction")
           + a.outdegree("Account_Sent_Zelle_Transfer");
     PaymentReceivers = SELECT a FROM Payments:p
       -((Transaction_To_Account>|Transfer_To_Account>):r)- Account:a
+      WHERE (held_out_visible OR a.split != 1)
       ACCUM p.@receiver_id += a.id,
         p.@receiver_degree += a.outdegree("Account_Received_Transaction")
           + a.outdegree("Account_Received_Zelle_Transfer");
@@ -805,6 +812,7 @@ CREATE OR REPLACE QUERY fetch_subgraphs(
       -((Transaction_To_Account>|Transfer_To_Account>):r)- Account:b
       WHERE b.id == p.@receiver_id AND q.event_ts_ms >= window_start
         AND q.event_ts_ms < p.event_ts_ms
+        AND (held_out_visible OR s.split != 1) AND (held_out_visible OR b.split != 1)
       ACCUM p.@prior_count += 1, p.@prior_first += q.event_ts_ms,
         p.@prior_last += q.event_ts_ms;
     ReceiverHistory = SELECT q FROM ByReceiver:p
@@ -814,6 +822,7 @@ CREATE OR REPLACE QUERY fetch_subgraphs(
       -((Transaction_From_Account>|Transfer_From_Account>):f)- Account:s
       WHERE s.id == p.@sender_id AND q.event_ts_ms >= window_start
         AND q.event_ts_ms < p.event_ts_ms
+        AND (held_out_visible OR b.split != 1) AND (held_out_visible OR s.split != 1)
       ACCUM p.@prior_count += 1, p.@prior_first += q.event_ts_ms,
         p.@prior_last += q.event_ts_ms;
     NextOutflows = SELECT q FROM Payments:p
@@ -822,7 +831,7 @@ CREATE OR REPLACE QUERY fetch_subgraphs(
       (Payment_Transaction|Zelle_Transfer):q
       -((Transaction_To_Account>|Transfer_To_Account>):r2)- Account:c
       WHERE q.event_ts_ms >= p.event_ts_ms AND q.event_ts_ms < as_of_ms
-        AND (held_out_visible OR c.split != 1)
+        AND (held_out_visible OR b.split != 1) AND (held_out_visible OR c.split != 1)
       ACCUM p.@next_out += q.event_ts_ms;
     PaymentRows = SELECT p FROM Payments:p
       POST-ACCUM FOREACH i IN p.@seeds DO
@@ -836,7 +845,7 @@ CREATE OR REPLACE QUERY fetch_subgraphs(
             CASE WHEN p.@next_out < as_of_ms THEN p.@next_out - p.event_ts_ms ELSE 0 END))
       END;
 
-    PRINT "ok" AS status, "subgraphs-7f185ca8af14" AS version, as_of_ms AS as_of_ms,
+    PRINT "ok" AS status, "subgraphs-881857fb2594" AS version, as_of_ms AS as_of_ms,
       held_out_visible AS held_out_visible;
     FOREACH i IN RANGE[0, @@seed_list.size() - 1] DO
         PRINT @@seed_list.get(i) AS seed,
