@@ -2,8 +2,8 @@
 parameters of a request, and their responses parsed into plain dataclasses.
 
 docs/design.md, "Response format" under "The subgraph query", is the format of
-fetch_subgraphs. read_answer_key is parsed in evaluation.answer_key, the only code that
-reads the answer key.
+fetch_subgraphs. read_answer_key is parsed in data.answer_key, the only code that reads
+the answer key.
 """
 
 from __future__ import annotations

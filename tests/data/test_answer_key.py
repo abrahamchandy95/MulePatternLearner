@@ -1,4 +1,5 @@
-"""The answer key's pages, as read_answer_key prints them, parsed for evaluation."""
+"""The answer key's pages, as read_answer_key prints them, parsed for evaluation, and the
+answer key of the reference graph's world read into a frame."""
 
 from __future__ import annotations
 
@@ -6,7 +7,12 @@ from typing import Any
 
 import pytest
 
-from mule_pattern_learner.evaluation.answer_key import AnswerKeyRow, parse_answer_key
+from mule_pattern_learner.data.answer_key import (
+    AnswerKeyRow,
+    parse_answer_key,
+    read_answer_key,
+)
+from mule_pattern_learner.testing.world import HOUR_MS, standard_world
 
 DAY = 86_400_000
 T = 1_719_792_000_000
@@ -66,3 +72,32 @@ def test_a_page_parses_with_unknown_truth_kept_unknown() -> None:
 def test_an_invalid_truth_is_refused(change: dict[str, Any]) -> None:
     with pytest.raises(ValueError):
         parse_answer_key([{**PAGE[0], **change}])
+
+
+def test_the_answer_key_of_a_world_is_one_typed_row_per_account() -> None:
+    graph = standard_world().graph()
+    truth = read_answer_key(graph)
+    assert list(truth.account_id) == sorted(graph.accounts)
+    assert list(truth.columns) == [
+        "account_id",
+        "is_mule",
+        "mule_ring_id",
+        "mule_layer",
+        "mule_flow",
+        "mule_onset_ms",
+        "mule_last_ms",
+        "discovered_ms",
+    ]
+    assert {str(dtype) for dtype in truth.dtypes} == {"str", "int64"}
+    mia = truth.set_index("account_id").loc["A_MIA"]
+    assert tuple(mia) == (
+        1,
+        0,
+        "first_layer",
+        "pass_through",
+        T - 60 * DAY,
+        T - 10 * DAY + 2 * HOUR_MS,
+        T - 5 * DAY,
+    )
+    assert set(truth.account_id[truth.is_mule == 1]) == {"A_MIA", "A_MAX", "A_ROY", "A_SUE"}
+    assert list(truth.account_id[truth.is_mule == -1]) == ["X_CASH"]

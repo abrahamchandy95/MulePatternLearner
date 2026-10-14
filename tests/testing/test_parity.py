@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 
 from mule_pattern_learner.config import DEFAULT_CONFIG
-from mule_pattern_learner.evaluation.answer_key import AnswerKeyRow, parse_answer_key
+from mule_pattern_learner.data.answer_key import AnswerKeyRow, parse_answer_key
 from mule_pattern_learner.testing.reference_graph import DAY_MS, ReferenceGraph, canonical
 from mule_pattern_learner.tigergraph.connection import ConnectionSettings
 from mule_pattern_learner.tigergraph.executor import (

@@ -1,5 +1,5 @@
-"""The answer key as read_answer_key returns it, a page at a time: evaluation reads it, and
-no other code does."""
+"""The answer key, through read_answer_key: evaluation reads it, and no other code does.
+Training never imports this module, as an import contract of pyproject.toml checks."""
 
 from __future__ import annotations
 
@@ -7,7 +7,11 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from ..tigergraph.queries import parse_row
+import pandas as pd
+
+from ..tigergraph.executor import QueryExecutor, account_pages
+from ..tigergraph.queries import READ_ANSWER_KEY, parse_row
+from .frames import frame
 
 MULE_LAYERS = frozenset({"", "first_layer", "onward_layer"})
 MULE_FLOWS = frozenset({"", "pass_through", "collector", "cash_out", "received_only"})
@@ -40,3 +44,9 @@ def parse_answer_key(page: Sequence[Mapping[str, Any]]) -> list[AnswerKeyRow]:
         ):
             raise ValueError(f"read_answer_key returned an invalid truth for {row.account_id}")
     return rows
+
+
+def read_answer_key(executor: QueryExecutor) -> pd.DataFrame:
+    """Every account's truth, one row each by account, with the fields of AnswerKeyRow."""
+    pages = account_pages(executor, READ_ANSWER_KEY, {})
+    return frame(AnswerKeyRow, [row for page in pages for row in parse_answer_key(page)])

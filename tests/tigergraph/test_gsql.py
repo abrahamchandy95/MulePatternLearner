@@ -14,7 +14,7 @@ from dataclasses import fields
 import re
 
 from mule_pattern_learner.config import DEFAULT_CONFIG
-from mule_pattern_learner.evaluation.answer_key import AnswerKeyRow
+from mule_pattern_learner.data.answer_key import AnswerKeyRow
 from mule_pattern_learner.paths import GSQL_DIR
 from mule_pattern_learner.tigergraph.installer import (
     COMMENTS,

@@ -1,6 +1,6 @@
 """The reference graph on the standard world (testing.world) and on small worlds built here.
 
-Every answer goes through the parsers of tigergraph.queries and evaluation.answer_key, so it
+Every answer goes through the parsers of tigergraph.queries and data.answer_key, so it
 has the format the GSQL prints. The values are worked out by hand from docs/design.md.
 """
 
@@ -15,7 +15,7 @@ import pandas as pd
 import pytest
 
 from mule_pattern_learner.config import DEFAULT_CONFIG, SubgraphConfig
-from mule_pattern_learner.evaluation.answer_key import AnswerKeyRow, parse_answer_key
+from mule_pattern_learner.data.answer_key import AnswerKeyRow, parse_answer_key
 from mule_pattern_learner.testing.reference_graph import DAY_MS, TABLES, ReferenceGraph
 from mule_pattern_learner.testing.world import (
     HOUR_MS,

@@ -1,1 +1,1 @@
-"""Evaluation against the answer key: the only code that reads it."""
+"""Evaluation against the answer key, which data.answer_key reads for it alone."""
