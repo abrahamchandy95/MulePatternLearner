@@ -7,7 +7,7 @@ Max and Roy, found after T, on the dates they were active.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import replace
 from functools import cache
 import math
@@ -79,17 +79,28 @@ def _world() -> tuple[pd.DataFrame, pd.DataFrame, dict[int, SubgraphBatch], dict
     return training, validation, subgraphs, discovered
 
 
-def _batches(*, labels: bool = False) -> tuple[list[Batch], list[Batch]]:
-    training, validation, subgraphs, discovered = _world()
-    found = discovered if labels else None
+def _batches(
+    *, labels: bool = False, discovered: Mapping[str, int] | None = None
+) -> tuple[list[Batch], list[Batch]]:
+    """The training and validation batches, with the confirmations of discovered, or of
+    the mules revealed, when labels."""
+    training, validation, subgraphs, revealed = _world()
+    found = (revealed if discovered is None else discovered) if labels else None
     return (
         batches(training, subgraphs, size=SHORT.batch_size, discovered=found, shuffle=0),
         batches(validation, subgraphs, size=64, discovered=found),
     )
 
 
-def _trained(config: TrainingConfig = SHORT, *, seed: int = 0, labels: bool = False) -> Trained:
-    return train(*_batches(labels=labels), MODEL, config, label_inputs=labels, seed=seed)
+def _trained(
+    config: TrainingConfig = SHORT,
+    *,
+    seed: int = 0,
+    labels: bool = False,
+    discovered: Mapping[str, int] | None = None,
+) -> Trained:
+    made = _batches(labels=labels, discovered=discovered)
+    return train(*made, MODEL, config, label_inputs=labels, seed=seed)
 
 
 def _same_weights(left: Trained, right: Trained) -> bool:
@@ -199,16 +210,47 @@ def test_two_mules_weigh_the_same_however_many_dates_they_span() -> None:
     assert float(pull[1000:].mean() / pull[:1000].mean()) == pytest.approx(1, abs=0.03)
 
 
-def test_a_short_training_run_lowers_the_loss() -> None:
+def test_a_short_training_run_lowers_the_loss_and_learns_from_the_graph() -> None:
+    """A falling loss alone is no evidence: the head's bias lowers it with the graph
+    layers cut off. The trained model also scores the training positives above the
+    unlabelled, which a model that ignores its input cannot."""
     config = replace(SHORT, max_epochs=8, patience=8)
-    losses = [epoch.loss for epoch in _trained(config).history]
+    trained = _trained(config)
+    losses = [epoch.loss for epoch in trained.history]
     assert len(losses) == 8 and all(math.isfinite(loss) for loss in losses)
     assert losses[-1] < losses[0]
+    training, _ = _batches()
+    score = scores(trained.model, training)
+    label = torch.cat([batch.label for batch in training])
+    weight = torch.cat([batch.weight for batch in training])
+
+    def mean(value: int) -> float:
+        on = label == value
+        return float((score[on] * weight[on]).sum() / weight[on].sum())
+
+    assert mean(1) > mean(0)
 
 
-def test_training_is_deterministic_under_a_seed() -> None:
+def _confirmed_long_ago() -> dict[str, int]:
+    """Every account of the subgraphs confirmed at the start of time, so the label inputs
+    of training read confirmations (the revealed mules are found after every training
+    date) and the masks drawn while training change the scores."""
+    _, _, subgraphs, _ = _world()
+    return {
+        node.id: 1
+        for batch in subgraphs.values()
+        for subgraph in batch.subgraphs
+        for node in subgraph.accounts
+    }
+
+
+@pytest.mark.parametrize("labels", [False, True])
+def test_training_is_deterministic_under_a_seed(labels: bool) -> None:
     config = replace(SHORT, priors=(0.003, 0.01))
-    first, again, other = _trained(config), _trained(config), _trained(config, seed=1)
+    found = _confirmed_long_ago() if labels else None
+    first, again, other = (
+        _trained(config, seed=seed, labels=labels, discovered=found) for seed in (0, 0, 1)
+    )
     assert (first.prior, first.epoch, first.history) == (again.prior, again.epoch, again.history)
     assert _same_weights(first, again)
     assert not _same_weights(first, other)
