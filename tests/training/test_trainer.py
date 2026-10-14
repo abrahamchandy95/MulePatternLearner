@@ -19,7 +19,7 @@ import pytest
 import torch
 from torch_geometric.data import HeteroData
 
-from mule_pattern_learner.config import DEFAULT_CONFIG, TrainingConfig
+from mule_pattern_learner.config import DEFAULT_CONFIG, SubgraphConfig, TrainingConfig
 from mule_pattern_learner.data.examples import training_examples, validation_examples
 from mule_pattern_learner.data.grid import windows
 from mule_pattern_learner.data.supervision import read_supervision
@@ -54,6 +54,7 @@ from mule_pattern_learner.training.trainer import (
 D = DAY_MS
 DATA = replace(DEFAULT_CONFIG.data, maturity_gap_days=0)
 MODEL = DEFAULT_CONFIG.model
+SUBGRAPH = DEFAULT_CONFIG.subgraph
 # A few epochs of one prior, so the tests stay short.
 SHORT = replace(DEFAULT_CONFIG.training, max_epochs=3, patience=3, priors=(0.01,), batch_size=32)
 
@@ -263,8 +264,8 @@ def test_label_input_training_needs_batches_with_confirmations() -> None:
 def test_a_saved_model_loads_back_the_same(tmp_path: Path, labels: bool) -> None:
     trained = _trained(replace(SHORT, max_epochs=2), labels=labels)
     path = tmp_path / MODEL_FILE
-    save(trained, path)
-    loaded = load(path)
+    save(trained, path, SUBGRAPH)
+    loaded = load(path, SUBGRAPH)
     assert (loaded.prior, loaded.epoch, loaded.history) == (
         trained.prior,
         trained.epoch,
@@ -283,31 +284,31 @@ def _rewritten(path: Path, **changes: object) -> None:
 
 def test_the_contract_lock_refuses_a_model_of_another_query_version(tmp_path: Path) -> None:
     path = tmp_path / MODEL_FILE
-    save(_trained(replace(SHORT, max_epochs=1)), path)
+    save(_trained(replace(SHORT, max_epochs=1)), path, SUBGRAPH)
     assert torch.load(path, weights_only=True)["version"] == SUBGRAPH_VERSION
     _rewritten(path, version="subgraphs-000000000000")
     with pytest.raises(ValueError, match="fetch_subgraphs 'subgraphs-000000000000'"):
-        load(path)
+        load(path, SUBGRAPH)
 
 
 def test_the_contract_lock_refuses_a_model_of_another_feature_layout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     path = tmp_path / MODEL_FILE
-    save(_trained(replace(SHORT, max_epochs=1)), path)
+    save(_trained(replace(SHORT, max_epochs=1)), path, SUBGRAPH)
     # The code now lays the accounts out without one of their counts.
     account = LAYOUTS[AccountNode]
     fewer = replace(account, counts=account.counts[1:])
     monkeypatch.setattr(trainer, "LAYOUTS", LAYOUTS | {AccountNode: fewer})
     with pytest.raises(ValueError, match="another feature layout"):
-        load(path)
+        load(path, SUBGRAPH)
     monkeypatch.undo()
-    load(path)
+    load(path, SUBGRAPH)
     # The label inputs are part of the layout.
     assert fingerprint(True) != fingerprint(False)
     _rewritten(path, fingerprint=fingerprint(True))
     with pytest.raises(ValueError, match="another feature layout"):
-        load(path)
+        load(path, SUBGRAPH)
 
 
 def test_the_fingerprint_holds_what_each_column_means_not_only_its_name(
@@ -327,3 +328,14 @@ def test_the_fingerprint_holds_what_each_column_means_not_only_its_name(
     monkeypatch.undo()
     monkeypatch.setattr(trainer, "COUNT_TRANSFORM", "log")
     assert fingerprint(False) != before
+
+
+def test_the_contract_lock_refuses_a_model_of_other_subgraph_settings(tmp_path: Path) -> None:
+    """A model trained on a year of payments reads in_365d, gap_ms or pair_age_ms with
+    that year's meaning, so it is not scored on subgraphs of 180 days."""
+    path = tmp_path / MODEL_FILE
+    save(_trained(replace(SHORT, max_epochs=1)), path, SUBGRAPH)
+    shorter = SubgraphConfig(lookback_days=180)
+    with pytest.raises(ValueError, match=r"other settings, \{'lookback_days': 365\}"):
+        load(path, shorter)
+    load(path, SUBGRAPH)

@@ -16,9 +16,10 @@ batch (model.loss). An example then counts by its weight whatever shares its bat
 mule keeps the equal share data.examples gives it however many dates it spans.
 
 model.pt holds the weights under the contract lock (docs/design.md, "The subgraph query"):
-the version of fetch_subgraphs the model was trained on and a fingerprint of the feature
-layout it reads. load refuses a model of another version or layout, whose features would
-not mean what it learned.
+the version of fetch_subgraphs the model was trained on, a fingerprint of the feature
+layout it reads, and the subgraph settings its batches were fetched with. load refuses a
+model of another version, layout or settings, whose features would not mean what it
+learned.
 """
 
 from __future__ import annotations
@@ -37,7 +38,7 @@ from torch import Tensor
 from torch.optim import Adam
 from torch_geometric.data import HeteroData
 
-from ..config import ModelConfig, TrainingConfig
+from ..config import ModelConfig, SubgraphConfig, TrainingConfig
 from ..model.hetero import LABEL_WIDTH, EdgeType, HeteroModel
 from ..model.loss import NonNegativePULoss
 from ..model.time_encoding import FREQUENCIES, SCALE
@@ -309,13 +310,15 @@ def _copy(model: HeteroModel) -> dict[str, Tensor]:
     return {name: value.detach().clone() for name, value in model.state_dict().items()}
 
 
-def save(trained: Trained, path: Path) -> None:
-    """Writes trained to path (MODEL_FILE in a run's directory) under the contract lock."""
+def save(trained: Trained, path: Path, subgraph: SubgraphConfig) -> None:
+    """Writes trained, whose batches were fetched with the settings subgraph, to path
+    (MODEL_FILE in a run's directory) under the contract lock."""
     model = trained.model
     torch.save(
         {
             "version": SUBGRAPH_VERSION,
             "fingerprint": fingerprint(model.label_inputs),
+            "subgraph": asdict(subgraph),
             "label_inputs": model.label_inputs,
             "model": asdict(model.config),
             "prior": trained.prior,
@@ -330,9 +333,10 @@ def save(trained: Trained, path: Path) -> None:
     )
 
 
-def load(path: Path, device: torch.device | str = "cpu") -> Trained:
+def load(path: Path, subgraph: SubgraphConfig, device: torch.device | str = "cpu") -> Trained:
     """The model saved at path, on device, refused when it was built for another version of
-    fetch_subgraphs or another feature layout than this code's."""
+    fetch_subgraphs or another feature layout than this code's, or on subgraphs fetched
+    with other settings than subgraph, the ones its scores will be fetched with."""
     stored = torch.load(path, map_location=device, weights_only=True)
     if stored["version"] != SUBGRAPH_VERSION:
         raise ValueError(
@@ -342,6 +346,14 @@ def load(path: Path, device: torch.device | str = "cpu") -> Trained:
     label_inputs: bool = stored["label_inputs"]
     if stored["fingerprint"] != fingerprint(label_inputs):
         raise ValueError(f"{path} reads another feature layout than this code's: train it again")
+    settings: dict[str, int] = stored["subgraph"]
+    ours = asdict(subgraph)
+    if settings != ours:
+        other = {name: value for name, value in settings.items() if ours.get(name) != value}
+        raise ValueError(
+            f"{path} was trained on subgraphs fetched with other settings, {other}: fetch "
+            "with them or train it again"
+        )
     nodes, edges = dimensions()
     config = ModelConfig(**stored["model"])
     model = HeteroModel(nodes, edges, config, label_inputs=label_inputs).to(device)

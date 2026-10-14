@@ -176,7 +176,10 @@ in all time than the threshold is not counted.
   it was held; for observed links, time since first and last use and use counts.
 
 **The contract lock.** The query prints a version, and the model file stores it with a
-fingerprint of the feature layout. Scoring refuses a model built for another version.
+fingerprint of the feature layout and the subgraph settings it was trained on (the caps,
+`hub_threshold` and `lookback_days`). Scoring refuses a model built for another version,
+layout or settings: with another lookback, features such as `in_365d` or `gap_ms` would
+mean something else.
 
 ### Response format
 
