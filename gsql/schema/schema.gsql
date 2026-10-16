@@ -7,12 +7,11 @@ One clock: UTC epoch milliseconds, 0 for none. A link (the seven associations) h
 valid_from_ms until valid_to_ms, 0 while open, and DISCRIMINATOR(valid_from_ms) keeps
 repeated links of one pair. Every event edge repeats its payment's event_ts_ms.
 
-split is written by MulePatternLearner (write_split): -1 until written and for accounts
-no customer owns, 0 for a customer used in training, 1 for a held-out customer.
-Supervision (discovered_ms, discovery_channel, mule_onset_ms) is read only by
-read_supervision, and the answer key (is_mule, mule_ring_id, mule_layer, mule_flow,
-mule_last_ms) only by read_answer_key: neither is ever a feature. is_mule is -1 when
-unknown, so an account with no loaded truth is never read as normal.
+MulePatternLearner writes nothing to the graph. Supervision (discovered_ms,
+discovery_channel, mule_onset_ms, mule_last_ms) is read only by read_supervision and
+read_answer_key, and the answer key (is_mule, mule_ring_id, mule_layer, mule_flow) only by
+read_answer_key: neither is ever a feature. is_mule is -1 when unknown, so an account with
+no loaded truth is never read as normal.
 */
 
 CREATE GRAPH Mule_Pattern_Learner ()
@@ -22,8 +21,7 @@ CREATE SCHEMA_CHANGE JOB create_schema FOR GRAPH Mule_Pattern_Learner {
 
   ADD VERTEX Party (
     PRIMARY_ID id STRING,
-    joined_ms UINT,
-    split INT DEFAULT -1
+    joined_ms UINT
   ) WITH PRIMARY_ID_AS_ATTRIBUTE="true", STATS="OUTDEGREE_BY_EDGETYPE";
 
   ADD VERTEX Account (
@@ -32,15 +30,14 @@ CREATE SCHEMA_CHANGE JOB create_schema FOR GRAPH Mule_Pattern_Learner {
     is_external BOOL DEFAULT "false",
     opened_ms UINT,
     closed_ms UINT DEFAULT 0,
-    split INT DEFAULT -1,
     discovered_ms UINT DEFAULT 0,
     discovery_channel STRING DEFAULT "",
     mule_onset_ms UINT DEFAULT 0,
+    mule_last_ms UINT DEFAULT 0,
     is_mule INT DEFAULT -1,
     mule_ring_id INT DEFAULT -1,
     mule_layer STRING DEFAULT "",
-    mule_flow STRING DEFAULT "",
-    mule_last_ms UINT DEFAULT 0
+    mule_flow STRING DEFAULT ""
   ) WITH PRIMARY_ID_AS_ATTRIBUTE="true", STATS="OUTDEGREE_BY_EDGETYPE";
 
   ADD VERTEX Token (
