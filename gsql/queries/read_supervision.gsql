@@ -1,22 +1,22 @@
 USE GRAPH Mule_Pattern_Learner
 
-/* The supervision a bank holds before cutoff_ms: each account of a customer the phase sees
-   that was discovered before the cutoff (0 < discovered_ms < cutoff_ms), with when and how
-   it was discovered and its mule_onset_ms. The only query that reads supervision for
-   training; it reads nothing of the answer key. */
+/* The mules a bank has found by known_by_ms (docs/design.md, "Who may read what"): every
+   account with 0 < discovered_ms <= known_by_ms, with when and how it was found and the
+   dates of its activity, which an investigation reads from the account's history. The only
+   query besides read_answer_key that reads supervision; it reads nothing of the answer
+   key. */
 CREATE OR REPLACE QUERY read_supervision(
-    UINT cutoff_ms,
-    BOOL held_out_visible
+    UINT known_by_ms
 ) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
-    IF cutoff_ms == 0 THEN
+    IF known_by_ms == 0 THEN
         PRINT "invalid_parameters" AS status;
         RETURN;
     END;
     Discovered = SELECT a FROM Account:a
-      WHERE a.discovered_ms > 0 AND a.discovered_ms < cutoff_ms
-        AND (a.split == 0 OR (held_out_visible AND a.split == 1));
-    PRINT "ok" AS status;
+      WHERE a.discovered_ms > 0 AND a.discovered_ms <= known_by_ms;
+    PRINT "ok" AS status, "read_supervision-599751cd6a84" AS version;
     PRINT Discovered[Discovered.id AS account_id, Discovered.discovered_ms AS discovered_ms,
       Discovered.discovery_channel AS discovery_channel,
-      Discovered.mule_onset_ms AS mule_onset_ms] AS accounts;
+      Discovered.mule_onset_ms AS mule_onset_ms,
+      Discovered.mule_last_ms AS mule_last_ms] AS accounts;
 }

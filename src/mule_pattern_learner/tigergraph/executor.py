@@ -30,6 +30,12 @@ class ServerTimeoutError(TransientQueryError):
     """TigerGraph exceeded its query timeout on every allowed attempt of one request."""
 
 
+class ResponseTooLarge(RuntimeError):
+    """TigerGraph refused a query's response for its size (the RESPONSE-LIMIT header, set
+    from size_limit). It is never retried, since the same request would be refused again;
+    the caller splits the request (docs/design.md, "Response size")."""
+
+
 class TigerGraphUnavailableError(TransientQueryError):
     """TigerGraph stayed unavailable until an operation's retries ran out: an outage.
 
@@ -60,6 +66,9 @@ _AVAILABILITY_MESSAGE = re.compile(
 )
 _TIMEOUT_MESSAGE = re.compile(r"timed? ?out|timeout", re.IGNORECASE)
 _DETERMINISTIC_MESSAGE = re.compile(r"cannot parse json|out of memory", re.IGNORECASE)
+# How a refusal for the response's size reads. No server has confirmed the wording yet: the
+# bench counts these refusals, so a miss shows there.
+_TOO_LARGE_MESSAGE = re.compile(r"response.?(?:size|limit)|size limit", re.IGNORECASE)
 
 
 def looks_like_html(text: str) -> bool:
@@ -100,6 +109,11 @@ def _http_class(error: Any) -> str | None:
     if looks_like_html(body):
         return AVAILABILITY  # a gateway error page, not a query error
     return _message_class(message) or DETERMINISTIC
+
+
+def response_too_large(error: BaseException) -> bool:
+    """Whether TigerGraph refused a response for its size."""
+    return _TOO_LARGE_MESSAGE.search(_failure_text(error)[0]) is not None
 
 
 def failure_class(error: BaseException) -> str | None:
@@ -486,14 +500,22 @@ class TigerGraphExecutor:
         """Run an installed query. Pass attempts=1 for queries that write.
 
         timeout_retries=0 raises ServerTimeoutError on the first server timeout,
-        for callers that split the request instead of repeating it.
+        for callers that split the request instead of repeating it. A response refused for
+        its size raises ResponseTooLarge at once.
         """
         timeout_ms = int(1000 * (self.timeout_s if timeout_s is None else timeout_s))
 
         def operation(conn: TigerGraphConnection) -> list[dict[str, Any]]:
-            result: Any = conn.runInstalledQuery(
-                name, params, usePost=True, timeout=timeout_ms, sizeLimit=self.size_limit
-            )
+            try:
+                result: Any = conn.runInstalledQuery(
+                    name, params, usePost=True, timeout=timeout_ms, sizeLimit=self.size_limit
+                )
+            except Exception as error:
+                if response_too_large(error):
+                    raise ResponseTooLarge(
+                        f"{name} answered more than {self.size_limit} bytes"
+                    ) from error
+                raise
             if not isinstance(result, list):
                 raise ValueError(f"{name} returned {type(result).__name__}, not a result list")
             return result

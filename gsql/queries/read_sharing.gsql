@@ -1,0 +1,141 @@
+USE GRAPH Mule_Pattern_Learner
+
+/* Every customer's device and IP co-users on one date (docs/design.md, "Shared devices and
+   IPs"), a page of customers at a time by id: one row per customer of the page with a
+   co-user, and the page's last id, "" when the page is empty.
+
+   A customer shares a device or IP that is not a leaf when it has a link to it active at
+   some time in the last 30 days, or one of its accounts sent a payment observed on it in
+   the last 30 days. Its sharing start there is the earliest of its links' starts and its
+   first observed use in the lookback, a link start that is not known counting as
+   window_start. Two customers sharing a node are co-users; on that node they began sharing
+   at the later of their starts, and on a kind of node at the earliest of those.
+
+   Visibility follows docs/design.md, "Time", as in read_leaves. A link's start is known when
+   it is after its customer joined and after window_start. */
+CREATE OR REPLACE QUERY read_sharing(
+    UINT as_of_ms,
+    INT lookback_days,
+    SET<VERTEX<Device>> hub_devices,
+    SET<VERTEX<Device>> crowd_devices,
+    SET<VERTEX<IP>> hub_ips,
+    SET<VERTEX<IP>> crowd_ips,
+    STRING after_id,
+    INT batch_size
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+    TYPEDEF TUPLE<
+        STRING party_id,
+        INT device_co_users,
+        INT ip_co_users,
+        INT new_device_co_users_30d,
+        INT new_ip_co_users_30d
+    > SharingRow;
+    MaxAccum<UINT> @last_close;
+    OrAccum @stays, @leaf;
+    SumAccum<UINT> @left_ms;
+    /* On a node: each customer's sharing start, and the customers that share it at t. */
+    MapAccum<STRING, MinAccum<UINT>> @start_of;
+    SetAccum<STRING> @sharers;
+    SetAccum<STRING> @@page;
+    MaxAccum<STRING> @@last_id;
+    /* Per customer of the page, each co-user and when they began sharing. */
+    MapAccum<STRING, MapAccum<STRING, MinAccum<UINT>>> @@device_pairs, @@ip_pairs;
+    ListAccum<SharingRow> @@rows;
+    UINT day_ms = 86400000;
+    UINT window_start = 0;
+    UINT since_30d = 0;
+
+    IF lookback_days < 30 OR lookback_days > 3650 OR as_of_ms <= lookback_days * day_ms
+       OR batch_size < 1 OR batch_size > 10000 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+    window_start = as_of_ms - lookback_days * day_ms;
+    since_30d = as_of_ms - 30 * day_ms;
+
+    /* Exits count every account whose ownership began before t, whatever its end. */
+    Customers = SELECT q FROM Party:q -(Party_Owns_Account>:o)- Account:b
+      WHERE o.valid_from_ms < as_of_ms
+      ACCUM q.@last_close += b.closed_ms,
+        IF b.closed_ms == 0 OR b.closed_ms > as_of_ms THEN q.@stays += TRUE END
+      POST-ACCUM IF NOT q.@stays THEN q.@left_ms = q.@last_close END;
+    Leaves = {hub_devices, crowd_devices, hub_ips, crowd_ips};
+    Leaves = SELECT n FROM Leaves:n POST-ACCUM n.@leaf += TRUE;
+
+    Page = SELECT q FROM Party:q WHERE q.id > after_id ORDER BY q.id ASC LIMIT batch_size;
+    Page = SELECT q FROM Page:q POST-ACCUM @@page += q.id, @@last_id += q.id;
+
+    /* The nodes the page's customers share, then every customer's sharing on them. */
+    Linked = SELECT n FROM Page:q -((Party_Uses_Device>|Party_Uses_IP>):l)- (Device|IP):n
+      WHERE NOT n.@leaf AND l.valid_from_ms < as_of_ms
+        AND (l.valid_to_ms == 0 OR l.valid_to_ms > since_30d
+             OR (q.@left_ms > 0 AND l.valid_to_ms >= q.@left_ms));
+    Used = SELECT n FROM Page:q -(Party_Owns_Account>:o)- Account:b
+      -((Account_Initiated_Transaction>|Account_Sent_Zelle_Transfer>):e)-
+      (Payment_Transaction|Zelle_Transfer):p
+      -((Transaction_Used_Device>|Transfer_Used_Device>
+        |Transaction_Used_IP>|Transfer_Used_IP>):u)- (Device|IP):n
+      WHERE NOT n.@leaf AND p.event_ts_ms >= since_30d AND p.event_ts_ms < as_of_ms
+        AND o.valid_from_ms < as_of_ms
+        AND (o.valid_to_ms == 0 OR o.valid_to_ms > window_start
+             OR (q.@left_ms > 0 AND o.valid_to_ms >= q.@left_ms));
+    Shared = Linked UNION Used;
+    LinkShares = SELECT n FROM Shared:n -((Device_Used_By_Party>|IP_Used_By_Party>):l)- Party:q
+      WHERE l.valid_from_ms < as_of_ms
+        AND (l.valid_to_ms == 0 OR l.valid_to_ms > window_start
+             OR (q.@left_ms > 0 AND l.valid_to_ms >= q.@left_ms))
+      ACCUM
+        n.@start_of += (q.id -> CASE WHEN l.valid_from_ms > q.joined_ms
+          AND l.valid_from_ms > window_start THEN l.valid_from_ms ELSE window_start END),
+        IF l.valid_to_ms == 0 OR l.valid_to_ms > since_30d
+           OR (q.@left_ms > 0 AND l.valid_to_ms >= q.@left_ms) THEN
+            n.@sharers += q.id
+        END;
+    UseShares = SELECT n FROM Shared:n
+      -((Device_Used_By_Transaction>|Device_Used_By_Transfer>
+        |IP_Observed_In_Transaction>|IP_Used_By_Transfer>):u)-
+      (Payment_Transaction|Zelle_Transfer):p
+      -((Transaction_From_Account>|Transfer_From_Account>):f)- Account:b
+      -(Account_Owned_By_Party>:o)- Party:q
+      WHERE p.event_ts_ms >= window_start AND p.event_ts_ms < as_of_ms
+        AND o.valid_from_ms < as_of_ms
+        AND (o.valid_to_ms == 0 OR o.valid_to_ms > window_start
+             OR (q.@left_ms > 0 AND o.valid_to_ms >= q.@left_ms))
+      ACCUM n.@start_of += (q.id -> p.event_ts_ms),
+        IF p.event_ts_ms >= since_30d THEN n.@sharers += q.id END;
+
+    Pairs = SELECT n FROM Shared:n
+      POST-ACCUM
+        FOREACH m IN n.@sharers DO
+            IF @@page.contains(m) THEN
+                FOREACH c IN n.@sharers DO
+                    IF c != m AND n.type == "Device" THEN
+                        @@device_pairs += (m -> (c -> CASE
+                          WHEN n.@start_of.get(c) > n.@start_of.get(m) THEN n.@start_of.get(c)
+                          ELSE n.@start_of.get(m) END))
+                    ELSE IF c != m THEN
+                        @@ip_pairs += (m -> (c -> CASE
+                          WHEN n.@start_of.get(c) > n.@start_of.get(m) THEN n.@start_of.get(c)
+                          ELSE n.@start_of.get(m) END))
+                    END
+                END
+            END
+        END;
+    Rows = SELECT q FROM Page:q
+      POST-ACCUM
+        INT new_devices = 0,
+        INT new_ips = 0,
+        FOREACH (c, start_ms) IN @@device_pairs.get(q.id) DO
+            IF start_ms >= since_30d THEN new_devices = new_devices + 1 END
+        END,
+        FOREACH (c, start_ms) IN @@ip_pairs.get(q.id) DO
+            IF start_ms >= since_30d THEN new_ips = new_ips + 1 END
+        END,
+        IF @@device_pairs.get(q.id).size() > 0 OR @@ip_pairs.get(q.id).size() > 0 THEN
+            @@rows += SharingRow(q.id, @@device_pairs.get(q.id).size(),
+              @@ip_pairs.get(q.id).size(), new_devices, new_ips)
+        END;
+
+    PRINT "ok" AS status, "read_sharing-74d20a32f238" AS version, @@last_id AS last_id,
+      @@rows AS rows;
+}

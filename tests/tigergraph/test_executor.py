@@ -17,6 +17,7 @@ from mule_pattern_learner.tigergraph.executor import (
     AVAILABILITY,
     DETERMINISTIC,
     SERVER_TIMEOUT,
+    ResponseTooLarge,
     ServerTimeoutError,
     TigerGraphExecutor,
     TigerGraphUnavailableError,
@@ -438,6 +439,22 @@ def test_permanent_errors_and_writes_are_not_retried() -> None:
     with pytest.raises(TransientQueryError):
         executor(conn).run("write_q", {}, attempts=1)
     assert len(conn.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        TigerGraphException("The response size 70000000 exceeds the size limit 64000000"),
+        http_error(500, {"error": True, "message": "Response size exceeds RESPONSE-LIMIT"}),
+    ],
+)
+def test_a_response_refused_for_its_size_raises_at_once(error: BaseException) -> None:
+    conn = FakeConn([error, [{"status": "ok"}]])
+    tg = executor(conn, size_limit=64_000_000)
+    with pytest.raises(ResponseTooLarge, match="more than 64000000 bytes"):
+        tg.run(QUERY, {"seed_ids": ["A1", "A2"]})
+    assert len(conn.calls) == 1 and not tg.sleeps
+    assert conn.calls[0][2]["sizeLimit"] == 64_000_000
 
 
 def test_worker_threads_share_one_backoff() -> None:

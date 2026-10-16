@@ -1,27 +1,31 @@
 USE GRAPH Mule_Pattern_Learner
 
-/* The accounts on one date, a page at a time by id: every account open at as_of_ms
-   (opened_ms <= as_of_ms, and closed_ms 0 or after it) of a customer the phase sees. A
-   customer is a party write_split gave a split: 0, and 1 too when held_out_visible.
-   Reads no label. */
+/* The population of one date, a page at a time by id (docs/design.md, "Examples"): every
+   account open at t (opened_ms < t, and closed_ms 0 or after t) that is not external and
+   whose ownership link is active at t, with its owner, its type and when it opened (for
+   evaluation's groups, never a feature). An open account's owner has not left, so its link
+   end is its own. Reads no label. */
 CREATE OR REPLACE QUERY list_population(
     UINT as_of_ms,
-    BOOL held_out_visible,
     STRING after_id,
     INT batch_size
 ) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+    MaxAccum<STRING> @owner_id;
     IF as_of_ms == 0 OR batch_size < 1 OR batch_size > 10000 THEN
         PRINT "invalid_parameters" AS status;
         RETURN;
     END;
-    Page = SELECT a FROM Account:a
+    Page = SELECT a FROM Account:a -(Account_Owned_By_Party>:o)- Party:q
       WHERE a.id > after_id
-        AND (a.split == 0 OR (held_out_visible AND a.split == 1))
-        AND a.opened_ms <= as_of_ms
+        AND NOT a.is_external
+        AND a.opened_ms < as_of_ms
         AND (a.closed_ms == 0 OR a.closed_ms > as_of_ms)
+        AND o.valid_from_ms < as_of_ms
+        AND (o.valid_to_ms == 0 OR o.valid_to_ms > as_of_ms)
+      ACCUM a.@owner_id += q.id
       ORDER BY a.id ASC
       LIMIT batch_size;
-    PRINT "ok" AS status;
-    PRINT Page[Page.id AS account_id, Page.account_type AS account_type,
-      Page.opened_ms AS opened_ms, Page.split AS split] AS accounts;
+    PRINT "ok" AS status, "list_population-32bcf503f34d" AS version;
+    PRINT Page[Page.id AS account_id, Page.@owner_id AS owner_id,
+      Page.account_type AS account_type, Page.opened_ms AS opened_ms] AS accounts;
 }
