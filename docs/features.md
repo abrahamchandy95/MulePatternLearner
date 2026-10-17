@@ -43,7 +43,9 @@ enrolled on (kept), S_s the devices and IPs seen on s's payments (kept).
      (deduplicated by payment), its customer, its owner-enrolment edges to its customer's kept
      devices and IPs, and its seen edges.
 4. **Hop-2 accounts:** the other ends of hop-1's payments. They get rows (flag-only if hubs)
-   and are not expanded.
+   and are not expanded: no customer, no owner-enrolment and no seen edges, since those would
+   sit three hops from s (see the design's
+   [B5 section](design.md#read_shared_identity-b5-the-device-and-ip-graph)).
 5. **Other accounts of C_s:** up to 8 that exist at t with a visible ownership link, open or
    closed, most recently active first (latest payment in the lookback), then accounts with no
    payment in the lookback, ties by account id. They get rows and are not expanded. They are
@@ -55,11 +57,14 @@ enrolled on (kept), S_s the devices and IPs seen on s's payments (kept).
    every account of C_s in the subgraph.
 7. **Seen devices and IPs:** for s (S_s) and for each expanded hop-1 account, the devices and
    IPs seen on its payments sent in the lookback, up to 8 of each, latest use first, ties by
-   node id. Leaves seen this way stay as flag-only nodes.
+   node id. Leaves seen this way stay as flag-only nodes. B5 tests each device and IP for a
+   leaf inline, by the crowd rule, and the leaf's row comes from `read_hubs` (see the design's
+   [`read_hubs`](design.md#read_hubs)).
 8. **Co-users of s's devices and IPs.** From each non-leaf node N in D_s or S_s:
    - Candidates are the customers counted in N's `customers_90d` other than C_s: a visible
      enrolment link to N, or a deposit account that exists at t, with visible ownership, that
-     sent a payment seen on N in the lookback. One candidate per customer.
+     sent a payment seen on N in the lookback (the one account rule of the design's
+     [Shared rules](design.md#shared-rules)). One candidate per customer.
    - Up to 48 per scored account are kept, ordered by their newest evidence on any of s's
      nodes (the later of a known link start and the latest seen use; neither counts as
      `t - 90 d`), ties by customer id. No order reads a link end.
@@ -125,7 +130,7 @@ GSQL form is in the design's [B1 section](design.md#read_money_flow-b1-velocity)
 
 | Col | Feature | Query | Definition as of t | Temporal | Kind | Encoding | Width | Leak guard |
 |---|---|---|---|---|---|---|---|---|
-| 1 | `is_external` | read_payment_events | the account belongs to another bank (export attribute) | no | structure | flag | 1 | a static attribute, 0 on every scored account; Gates (the share of victims at the same bank) |
+| 1 | `is_external` | read_payment_events | the account belongs to another bank (export attribute) | no | structure | flag | 1 | a static attribute, 0 on every scored account; Gates (the external-share lifts) |
 | 2 | `hub` | read_hubs | account hub at t | no | structure | flag | 1 | Before t; Same rule for all |
 | 3 | `hub_customers_90d` | read_hubs | on a hub row, distinct customers owning the other accounts of its payments in `[t - 90 d, t)`; 0 on other rows | yes | structure | log1p count | 1 | Before t; the all-time prefilter changes cost, never an answer |
 | 4 to 6 | `in_amount_7d`, `_30d`, `_90d` | read_money_flow | cents received in the last 7, 30, 90 days (all payments, uncapped) | yes | behaviour | log1p dollars | 3 | Before t; Lookback; Gates |
@@ -169,7 +174,9 @@ each relation that sends messages into its type, `log(1 + the number of edges of
 ending at the node in the example's subgraph)`. They are counted when the batch is built,
 from the edge lists the queries returned and after any ablation switch, because they describe
 the batch's own structure rather than a value of the graph; the same caps and rules build every
-subgraph, so they mean the same for every example.
+subgraph, so they mean the same for every example. This is the one count Python makes, an
+exception to the design's standing rule that is put to the owner; the alternative is for B4
+and B5 to print each node's counts per relation, with the ablation switches recounting.
 
 | Node | Relations counted (edges arriving) | Width |
 |---|---|---|
@@ -197,7 +204,7 @@ subgraph, so they mean the same for every example.
 | Col | Feature | Definition as of t | Temporal | Kind | Encoding | Width | Leak guard |
 |---|---|---|---|---|---|---|---|
 | 1 | `customers_30d` | customers sharing it under the sharing rule | no | structure | log1p count | 1 | Before t; No link ends as values; Same rule for all |
-| 2 | `customers_90d` | distinct customers with a visible enrolment link to it or owning a deposit account that exists at t and sent a payment seen on it in the lookback (the hub measure) | yes | structure | log1p count | 1 | Before t; Lookback |
+| 2 | `customers_90d` | distinct customers with a visible enrolment link to it or owning (visible ownership) a deposit account that exists at t and sent a payment seen on it in the lookback (the hub measure) | yes | structure | log1p count | 1 | Before t; Lookback |
 | 3, 4 | `new_customers_7d`, `_30d` | customers whose sharing start on it is in the last 7 or 30 days | yes | structure change | log1p count | 2 | Known starts; Gates |
 | 5 | `accounts_seen_30d` | distinct accounts seen sending payments on it in the last 30 days | yes | behaviour | log1p count | 1 | Gates |
 | 6 | `payments_seen_30d` | payments seen on it in the last 30 days | yes | behaviour | log1p count | 1 | Gates |
@@ -207,7 +214,10 @@ subgraph, so they mean the same for every example.
 | 10 to 12 | degree columns | see [Degree columns](#degree-columns) | no | structure | log1p count | 3 | Same rule for all |
 
 A leaf's row fills only `customers_90d`, `observed_only`, `crowd`, `hub` and its degrees; the
-rest are 0. A non-leaf node has at most 8 customers.
+rest are 0. Its first four values come from `read_hubs`' cached output, joined by node id when
+the batch is built; B5 only says the node is a leaf. A non-leaf node has at most 8 customers,
+since the crowd measure, `customers_90d` and the sharing rule count customers by one account
+rule.
 
 ## Payment edges: 401 attributes
 
@@ -245,11 +255,13 @@ Two relations carry these fields:
 
 - `enrolled_on_device`, `enrolled_on_ip` (customer to node) and their reverses: C_s's kept
   links, and co-user customers' links to s's nodes.
-- `owner_enrolled_on_device`, `owner_enrolled_on_ip` (account to node) and their reverses: the
-  same links copied onto the accounts of the subgraph whose customer holds them (s, the other
-  accounts of C_s, expanded hop-1 accounts, co-users' accounts), with caps counted per
-  customer, so every account of one customer has the same set. This puts a co-user's account
-  two hops from s.
+- `owner_enrolled_on_device`, `owner_enrolled_on_ip` (account to node) and their reverses: an
+  account's customer's kept links, copied onto the account, for s, the other accounts of C_s
+  and every expanded hop-1 account; and for a co-user's account, its customer's links to s's
+  nodes only, which puts it two hops from s. Caps are counted per customer, so every account
+  of one customer has the same set. Hop-2 accounts and hub accounts get none: their nodes
+  would sit three hops from s, beyond two layers, and the owner's wording "every subgraph
+  account" is pending his confirmation of this exception.
 
 | Attr | Feature | Definition as of t | Temporal | Kind | Encoding | Width | Leak guard |
 |---|---|---|---|---|---|---|---|
@@ -267,7 +279,7 @@ read `valid_to_ms` against t (see the design's
 | Attr | Feature | Definition as of t | Temporal | Kind | Encoding | Width | Leak guard |
 |---|---|---|---|---|---|---|---|
 | 1 | `uses_90d` | payments it sent in the lookback seen on the node | yes | behaviour | log1p count | 1 | Lookback; Gates |
-| 2 | `since_first_use` | t minus the first of them | yes | behaviour | presence (always 1) + 64 Fourier | 65 | Lookback (the first use within 90 days, never a date of record); Clock |
+| 2 | `since_first_use` | t minus the first of them, present only when that first use is a known start (an account the customer owns sent an earlier payment in the lookback not seen on the node); absent otherwise | yes | behaviour | presence + 64 Fourier | 65 | Lookback; Known starts (for a joiner it would be time since its first activity); Clock |
 | 3 | `since_last_use` | t minus the last of them | yes | behaviour | presence (always 1) + 64 Fourier | 65 | as above |
 
 Width 131. Stored before encoding: 5.
@@ -407,9 +419,10 @@ switch.
 
 ## Generator gates each feature depends on
 
-A reported run refuses a world unless every entry below that reaches a feature has passed its
-gate on that world or on its gate world (see the design's [Gates](design.md#gates)). Entry ids
-are those of the shortcut dossier, `generator_shortcuts_2026-10-17.md`.
+A reported result is refused unless every entry below that reaches a feature has passed its
+gate on that world or on its gate world, as PhantomLedger's gate record for the world shows
+(see the design's [Gates](design.md#gates)). Entry ids are those of the shortcut dossier,
+`generator_shortcuts_2026-10-17.md`.
 
 **Timing and clocks** (every one reaches the durations measured to t through the clock):
 
@@ -490,17 +503,22 @@ are those of the shortcut dossier, `generator_shortcuts_2026-10-17.md`.
 | Entry | Cue | Features it reaches |
 |---|---|---|
 | S-LIFE-1 | no history before the window | Known starts, `mule prepare`'s lookback check |
-| S-LIFE-2 | laundering-free warm-up (settled: a 365-day burn-in) | none beyond the burn-in check |
+| S-LIFE-2 | laundering-free warm-up (settled: a burn-in, its length pending the owner) | positives per Monday, the label rate: the burn-in and the stationarity gates (with the representative start, pending the owner) keep the weekly active-ring count flat |
 | S-LIFE-3 | ring activity anchored to the window's edges | `age`, `pair_age`, positives per Monday |
 | S-LIFE-4 | no purpose-opened mule accounts, and short ordinary dormancy (7 to 45 days) | `accounts_owned`, newness from counts (`in_90d` against `in_30d`), new payers, `pair_age`, `since_first_use` |
 | S-LIFE-5 | closure only at death, almost no arrivals | `accounts_owned`, the population, the newness lift |
 | S-LIFE-6 | ring rows outside a member's membership dropped | labels, joiner mules' counts |
 | S-LIFE-7 | positional ring budget cut | `held_share` 1 on received-only mules, `flow_present`, `left_*`, empty tenures |
 | S-LIFE-8 | a ring stops at its first member's death | `since_last_in`, `since_last_out` jumping together across members, `internal_amount_30d` |
-| S-LIFE-9 | rings never form or end | `new_link_share_30d`, `since_start` of ring links |
+| S-LIFE-9 | rings never form or end | `new_link_share_30d`, `since_start` of ring links, positives per Monday |
 | S-IDN-1 to S-IDN-5 | label completeness, dates, range, roles, masking | labels and evaluation only; S-IDN-2 settled (identification closes nothing) |
 
-**Shortcuts noted but not yet researched**, which reach features:
+**Shortcuts noted but not yet researched**, which reach features. None has a gate yet, so
+until each is given a world check with a stated ceiling, or the owner accepts it as an
+ungated risk, no reported result passes. The checks proposed: an hour distance of ATO drain
+pushes against legitimate rows under 0.05, as for impostor pushes; a lift of shared community
+membership across rings for multi-ring reuse; and, for origin C, a lift gate in the table
+after this one.
 
 | Residual | Features it reaches |
 |---|---|
@@ -513,20 +531,42 @@ are those of the shortcut dossier, `generator_shortcuts_2026-10-17.md`.
 | no legitimate second jobs | `new_external_payers_*` |
 | the attacker clock of ATO drains | `age` |
 
-**Gates MulePatternLearner adds**, each a check on every world with its ceiling declared
-before the run. The ones that read `is_mule` are evaluation code, run by `mule audit`:
+## Gates the features add
 
-| Gate | Why |
-|---|---|
-| no ring tenure has a quiet stretch longer than 21 days, and tenures are built from attempted payments | keeps the visible and current tests decided by the past |
-| links made at sign-up start exactly at `joined_ms` (export contract and loader check) | otherwise every joiner's first device reads new |
-| no exported payment comes before its accounts open | every account node exists at t |
-| payment ids are pseudonyms whose order does not follow event time | subgraph cap ties are class-free |
-| no payment between two external accounts | a bank cannot see them |
-| the `is_mule` lift of "no payment in the first 60 days of the lookback, some after" among scored account-Mondays stays under its ceiling, and the share of customers new to the bank within a year is at least 0.033 | account newness rebuilt from behaviour must be as strong as in reality, not more |
-| the `is_mule` lift of "an internal move to an account of the same owner within 1 hour of a non-payroll credit", and the distance between mule and ordinary same-owner move amounts, stay under their ceilings | the same-owner move residual and own-account move sizes |
-| the `is_mule` lift of "a link to a node shared with another customer, started in the last 14 days" stays under its ceiling | every ring tenure is followed by ring money in PhantomLedger |
-| the share of victims at the same bank is pinned in the dossier | `is_external` and the internal or external split of new payers |
-| the clock probe | durations measured to t |
-| on development worlds only: no positive is an account hub, and the share of ring devices and IPs that are leaves on their ring's active Mondays is near 0 | hub handling and the crowd threshold must not hide mule evidence |
-| on development worlds only: busy ordinary accounts' card spending does not fill `left_15m` to `left_1d` | else the dwell shares count transfer and cash outflows only |
+Each gate is a check on every world, with one owner and one definition here. A ceiling is
+declared before any development world is generated, from research where it exists and
+otherwise by the owner (see the design's [Gates](design.md#gates)); a development world must
+meet it, never set it. A lift compares P(true mule | the cue) with P(true mule) among scored
+account-Mondays.
+
+**PhantomLedger's world checks**, reported as pass or fail in its gate record:
+
+| Gate | Ceiling | Why |
+|---|---|---|
+| every `Party_Uses_Device` and `Party_Uses_IP` tenure built from uses, ring or ordinary, has no quiet stretch longer than 21 days (a ring tenure's lead counts as quiet) and ends at most one day after its last use; tenures are derived from every simulated use, burn-in included | none: an invariant | keeps the visible and current tests decided by the past for every party link |
+| no exported payment comes before its accounts open | invariant | every account node exists at t |
+| payment ids are pseudonyms whose order does not follow event time; among payments sharing a second, the chance that a laundering row's id sorts before a legitimate row's lies within its binomial band of 0.5 | invariant | subgraph cap ties carry no class |
+| no payment between two external accounts | invariant | a bank cannot see them |
+| no exported time at or before 1970-01-01 00:00 UTC, while times stay UINT (pending the owner) | invariant | the times are UINT milliseconds, 0 for none |
+| the lift of "no payment in the first 60 days of the lookback, some after", and the share of customers new to the bank within a year | the lift at most 10, the top of the 5 to 10 times band found in reality; the share at least 0.033 | account newness rebuilt from behaviour must be as strong as in reality, not more |
+| the lift of "an internal move to an account of the same owner within 1 hour of a non-payroll credit", and the distance between mule and ordinary same-owner move amounts | declared by the owner | the same-owner move residual and own-account move sizes |
+| the lift of "a link to a node shared with another customer, started in the last 14 days" | declared by the owner | every ring tenure is followed by ring money in PhantomLedger |
+| the lift, between mules and matched ordinary receivers, of the external share of new payers; and between mules and matched ordinary senders, of the external share of onward P2P value | declared by the owner | `is_external` and the internal or external split of new payers rest on a declared share of victims at the same bank |
+| the lift of "joined within 90 days, one device, no payment outside the ring" between origin C accounts and their legitimate look-alikes | declared by the owner | "new and quiet" must not be a mule-only marker |
+
+Sign-up links starting exactly at `joined_ms` and zero self-payments stay PhantomLedger's own
+checks; the loader only reports them, and no feature depends on them, since the
+[known-start rule](design.md#time) reads a joiner's first link as unknown either way and no
+query reads a self-payment.
+
+**MulePatternLearner's checks**, run by `mule audit` (evaluation code) and read only by
+`mule evaluate`:
+
+| Check | Bound | Why |
+|---|---|---|
+| the clock probe | upper end of the ROC AUC interval below 0.55 | durations measured to t |
+| the identified share of true mules by onset month | each month within its binomial band around the pooled share | the [identification horizon](design.md#identification-horizon) |
+| the label checks of the design's [Checks on every world](design.md#checks-on-every-world) | every one | labels as the design reads them |
+| on development worlds only: the [feature audit](design.md#the-feature-audit) | ROC AUC within (0.05, 0.95) and no near-pure region | a leak or shortcut stops the run |
+| on development worlds only: no positive is an account hub, and the share of ring devices and IPs that are leaves on their ring's active Mondays is near 0 | no positive a hub; the leaf share reported and judged near 0 | hub handling and the crowd threshold must not hide mule evidence |
+| on development worlds only: busy ordinary accounts' card spending does not fill `left_15m` to `left_1d` | reported; if it does, the dwell shares count transfer and cash outflows only | the short dwell shares must measure pass-through, not shopping |
