@@ -5,5 +5,5 @@ from __future__ import annotations
 from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-# The GSQL of the graph: its schema and loading job, and the queries the code installs.
+# The GSQL of the graph: its schema, and the queries the code installs.
 GSQL_DIR = REPOSITORY_ROOT / "gsql"

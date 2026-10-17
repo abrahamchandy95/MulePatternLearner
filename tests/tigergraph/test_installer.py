@@ -1,14 +1,18 @@
-"""The installer, on a fake server that keeps query texts and endpoints like TigerGraph."""
+"""The installer, on a fake server that keeps query texts and endpoints like TigerGraph, and
+on three small queries in a temporary gsql/ folder, so the tests do not depend on which
+queries the repository holds."""
 
 from __future__ import annotations
 
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any
 
 import pytest
 import requests
 
+from mule_pattern_learner.tigergraph import installer
 from mule_pattern_learner.tigergraph.installer import (
     definitions,
     install,
@@ -17,9 +21,66 @@ from mule_pattern_learner.tigergraph.installer import (
     repository_queries,
     verify,
 )
-from mule_pattern_learner.tigergraph.queries import FETCH_SUBGRAPHS, GRAPH_NAME, QUERY_FILES
+from mule_pattern_learner.tigergraph.queries import GRAPH_NAME
 
-QUERIES = repository_queries()
+LIST_ITEMS = "list_items"
+READ_ITEMS = "read_items"
+READ_ANSWERS = "read_answers"
+# Each query of the temporary folder: its file under gsql/ and its text.
+FILES = {
+    LIST_ITEMS: (
+        "queries/list_items.gsql",
+        """USE GRAPH Mule_Pattern_Learner
+
+/* Lists accounts a page at a time. */
+CREATE OR REPLACE QUERY list_items(
+    UINT t_ms,
+    INT page = 10000
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+    IF t_ms == 0 OR page < 1 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+    PRINT "ok" AS status;
+}
+""",
+    ),
+    READ_ITEMS: (
+        "queries/read_items.gsql",
+        """USE GRAPH Mule_Pattern_Learner
+
+CREATE OR REPLACE QUERY read_items(
+    UINT t_ms,
+    SET<VERTEX<Account>> hubs
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+    PRINT "ok" AS status, hubs.size() AS hubs;
+}
+""",
+    ),
+    READ_ANSWERS: (
+        "evaluation/read_answers.gsql",
+        """USE GRAPH Mule_Pattern_Learner
+
+CREATE OR REPLACE QUERY read_answers(STRING after_id) FOR GRAPH Mule_Pattern_Learner {
+    PRINT "ok" AS status;
+}
+""",
+    ),
+}
+NAMES = list(FILES)
+
+
+@pytest.fixture(autouse=True)
+def query_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A gsql/ folder holding the three queries, installed as the repository's."""
+    for relative, text in FILES.values():
+        (tmp_path / relative).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / relative).write_text(text)
+    monkeypatch.setattr(installer, "GSQL_DIR", tmp_path)
+    monkeypatch.setattr(
+        installer, "QUERY_FILES", {name: relative for name, (relative, _) in FILES.items()}
+    )
+    return tmp_path
 
 
 class FakeConn:
@@ -119,15 +180,37 @@ class FakeExecutor:
 
 def _current() -> FakeServer:
     """A server holding every repository query, installed, as SHOW QUERY reprints it."""
-    texts = {name: f"CREATE {' '.join(text.split())}" for name, text in QUERIES.items()}
-    return FakeServer(texts, set(QUERIES))
+    queries = repository_queries()
+    texts = {name: f"CREATE {' '.join(text.split())}" for name, text in queries.items()}
+    return FakeServer(texts, set(queries))
+
+
+def test_the_repository_queries_are_read_from_their_files() -> None:
+    queries = repository_queries()
+    assert list(queries) == NAMES
+    assert queries[READ_ANSWERS] == (
+        "QUERY read_answers(STRING after_id) FOR GRAPH Mule_Pattern_Learner {\n"
+        '    PRINT "ok" AS status;\n}'
+    )
+    assert parameter_names(queries[LIST_ITEMS]) == ["t_ms", "page"]
+    assert parameter_names(queries[READ_ITEMS]) == ["t_ms", "hubs"]
+
+
+def test_a_file_must_define_its_query_and_no_other(query_folder: Path) -> None:
+    relative, text = FILES[READ_ITEMS]
+    (query_folder / relative).write_text(text.replace("read_items(", "read_other("))
+    with pytest.raises(ValueError, match="must define the query read_items and no other"):
+        repository_queries()
+    (query_folder / relative).write_text(text + FILES[READ_ANSWERS][1])
+    with pytest.raises(ValueError, match="must define the query read_items and no other"):
+        repository_queries()
 
 
 def test_a_fresh_graph_gets_every_query_created_and_installed() -> None:
     server = FakeServer()
     executor = FakeExecutor(server)
-    assert install(executor) == list(QUERY_FILES)
-    assert server.created == [list(QUERY_FILES)] and server.installs == [list(QUERY_FILES)]
+    assert install(executor) == NAMES
+    assert server.created == [NAMES] and server.installs == [NAMES]
     verify(executor)
 
 
@@ -139,19 +222,17 @@ def test_current_queries_are_left_alone() -> None:
 
 def test_only_a_changed_query_is_created_again() -> None:
     server = _current()
-    server.texts[FETCH_SUBGRAPHS] = server.texts[FETCH_SUBGRAPHS].replace(
-        "seed_payments < 1", "seed_payments < 2"
-    )
-    assert install(FakeExecutor(server)) == [FETCH_SUBGRAPHS]
-    assert server.created == [[FETCH_SUBGRAPHS]]
-    assert definitions(server.texts[FETCH_SUBGRAPHS]) == {FETCH_SUBGRAPHS: QUERIES[FETCH_SUBGRAPHS]}
+    server.texts[LIST_ITEMS] = server.texts[LIST_ITEMS].replace("page < 1", "page < 2")
+    assert install(FakeExecutor(server)) == [LIST_ITEMS]
+    assert server.created == [[LIST_ITEMS]]
+    assert definitions(server.texts[LIST_ITEMS]) == {LIST_ITEMS: repository_queries()[LIST_ITEMS]}
 
 
 def test_a_query_whose_compilation_did_not_finish_is_installed_without_a_create() -> None:
     server = _current()
-    server.enabled.discard("write_split")
-    assert install(FakeExecutor(server)) == ["write_split"]
-    assert server.created == [] and server.installs == [["write_split"]]
+    server.enabled.discard(READ_ITEMS)
+    assert install(FakeExecutor(server)) == [READ_ITEMS]
+    assert server.created == [] and server.installs == [[READ_ITEMS]]
 
 
 def test_an_install_the_client_stops_waiting_for_is_awaited_on_the_endpoints() -> None:
@@ -195,15 +276,15 @@ def test_a_failed_create_or_install_raises_with_what_tigergraph_said() -> None:
 
 def test_verify_names_every_query_that_is_not_current() -> None:
     server = _current()
-    server.texts["list_population"] = server.texts["list_population"].replace("10000", "20000")
-    server.extra_parameters["read_supervision"] = ["cutoff"]
-    del server.texts["read_answer_key"]
+    server.texts[LIST_ITEMS] = server.texts[LIST_ITEMS].replace("10000", "20000")
+    server.extra_parameters[READ_ITEMS] = ["cutoff"]
+    del server.texts[READ_ANSWERS]
     with pytest.raises(ValueError) as refused:
         verify(FakeExecutor(server))
     message = str(refused.value)
-    assert "list_population differs from the repository" in message
-    assert "read_supervision has other parameters" in message
-    assert "read_answer_key is missing on the server" in message
+    assert "list_items differs from the repository" in message
+    assert "read_items has other parameters" in message
+    assert "read_answers is missing on the server" in message
 
 
 def test_install_refuses_another_graph() -> None:

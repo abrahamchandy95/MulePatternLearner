@@ -1,4 +1,5 @@
-"""Account-level mule detection on TigerGraph: `mule` trains, audits and scores the model."""
+"""Money-mule accounts found on TigerGraph: a temporal heterogeneous graph neural network
+ranks a bank's accounts every Monday (docs/design.md). `mule` runs each step."""
 
 from importlib.metadata import version
 

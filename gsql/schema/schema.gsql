@@ -1,18 +1,32 @@
 /*
-The graph of PhantomLedger's mule-temporal export, for TigerGraph 4.2.5: the single copy of
-the DDL (docs/design.md, "The graph"). Fresh-graph DDL, run by a person and never on a
-populated graph; loading.gsql loads it.
+The graph of PhantomLedger's mule-temporal export, for TigerGraph 4.2.5: one type per table
+of the 22-table export contract (docs/design.md, "The export contract"), each with exactly
+its table's columns as attributes, in the table's column order. This file is the master
+copy of the DDL. The loader (tf_gnn_loader_v2, gsql/mule_temporal/schema.gsql) and
+PhantomLedger (schemas/mule_temporal.gsql) keep byte copies of it, pinned to a commit of
+this repository.
 
-One clock: UTC epoch milliseconds, 0 for none. A link (the seven associations) holds from
-valid_from_ms until valid_to_ms, 0 while open, and DISCRIMINATOR(valid_from_ms) keeps
-repeated links of one pair. Every event edge repeats its payment's event_ts_ms.
+How it runs: `mule-load push` runs it on an empty graph from the statement after CREATE
+GRAPH, byte for byte, and checks the live schema against it exactly otherwise. Where the
+graph does not exist yet, a person runs the whole file once in the GSQL editor.
 
-split is written by MulePatternLearner (write_split): -1 until written and for accounts
-no customer owns, 0 for a customer used in training, 1 for a held-out customer.
-Supervision (discovered_ms, discovery_channel, mule_onset_ms) is read only by
-read_supervision, and the answer key (is_mule, mule_ring_id, mule_layer, mule_flow,
-mule_last_ms) only by read_answer_key: neither is ever a feature. is_mule is -1 when
-unknown, so an account with no loaded truth is never read as normal.
+One clock: UTC epoch milliseconds in UINT, 0 for none. A link (the five link types) holds
+from valid_from_ms until valid_to_ms, 0 while open, and DISCRIMINATOR(valid_from_ms UINT)
+keeps repeated links of one pair apart. Every event edge (the ten payment role types)
+repeats its payment's event_ts_ms.
+
+MulePatternLearner writes nothing to the graph and has no loading job: loading is the
+loader's alone, and it fills every attribute from the export, so none stays at the default
+written out below.
+
+The label columns of Account, and who may read them:
+  pu_label (the bank identified the account as a mule): read_labels only.
+  mule_onset_ms, mule_last_ms (the activity period): read_labels, which prints them only
+    for pu_label 1, and read_answer_key.
+  is_mule (the truth), mule_ring_id (the ring of its first landing payment, -1 for none):
+    read_answer_key only, for evaluation.
+is_mule and pu_label are 1, 0 for any other internal account, and -1 exactly on external
+accounts. No feature query reads any of them.
 */
 
 CREATE GRAPH Mule_Pattern_Learner ()
@@ -22,24 +36,19 @@ CREATE SCHEMA_CHANGE JOB create_schema FOR GRAPH Mule_Pattern_Learner {
 
   ADD VERTEX Party (
     PRIMARY_ID id STRING,
-    joined_ms UINT,
-    split INT DEFAULT -1
+    joined_ms UINT DEFAULT 0
   ) WITH PRIMARY_ID_AS_ATTRIBUTE="true", STATS="OUTDEGREE_BY_EDGETYPE";
 
   ADD VERTEX Account (
     PRIMARY_ID id STRING,
-    account_type STRING DEFAULT "unknown",
+    account_type STRING DEFAULT "",
     is_external BOOL DEFAULT "false",
-    opened_ms UINT,
+    opened_ms UINT DEFAULT 0,
     closed_ms UINT DEFAULT 0,
-    split INT DEFAULT -1,
-    discovered_ms UINT DEFAULT 0,
-    discovery_channel STRING DEFAULT "",
-    mule_onset_ms UINT DEFAULT 0,
     is_mule INT DEFAULT -1,
+    pu_label INT DEFAULT -1,
     mule_ring_id INT DEFAULT -1,
-    mule_layer STRING DEFAULT "",
-    mule_flow STRING DEFAULT "",
+    mule_onset_ms UINT DEFAULT 0,
     mule_last_ms UINT DEFAULT 0
   ) WITH PRIMARY_ID_AS_ATTRIBUTE="true", STATS="OUTDEGREE_BY_EDGETYPE";
 
@@ -55,24 +64,20 @@ CREATE SCHEMA_CHANGE JOB create_schema FOR GRAPH Mule_Pattern_Learner {
     PRIMARY_ID id STRING
   ) WITH PRIMARY_ID_AS_ATTRIBUTE="true", STATS="OUTDEGREE_BY_EDGETYPE";
 
-  ADD VERTEX Address (
-    PRIMARY_ID id STRING
-  ) WITH PRIMARY_ID_AS_ATTRIBUTE="true", STATS="OUTDEGREE_BY_EDGETYPE";
-
   ADD VERTEX Payment_Transaction (
     PRIMARY_ID id STRING,
-    amount DOUBLE,
-    payment_rail STRING DEFAULT "unknown",
-    event_ts_ms UINT
+    amount DOUBLE DEFAULT 0,
+    payment_rail STRING DEFAULT "",
+    event_ts_ms UINT DEFAULT 0
   ) WITH PRIMARY_ID_AS_ATTRIBUTE="true", STATS="OUTDEGREE_BY_EDGETYPE";
 
   ADD VERTEX Zelle_Transfer (
     PRIMARY_ID id STRING,
-    amount DOUBLE,
-    event_ts_ms UINT
+    amount DOUBLE DEFAULT 0,
+    event_ts_ms UINT DEFAULT 0
   ) WITH PRIMARY_ID_AS_ATTRIBUTE="true", STATS="OUTDEGREE_BY_EDGETYPE";
 
-  /* The identity and ownership links. */
+  /* The links: ownership, and enrolment on a token, a device or an IP. */
 
   ADD DIRECTED EDGE Party_Owns_Account (
     FROM Party, TO Account,
@@ -98,85 +103,64 @@ CREATE SCHEMA_CHANGE JOB create_schema FOR GRAPH Mule_Pattern_Learner {
     valid_to_ms UINT DEFAULT 0
   ) WITH REVERSE_EDGE="Device_Used_By_Party";
 
-  ADD DIRECTED EDGE Account_Uses_Device (
-    FROM Account, TO Device,
-    DISCRIMINATOR(valid_from_ms UINT),
-    valid_to_ms UINT DEFAULT 0
-  ) WITH REVERSE_EDGE="Device_Used_By_Account";
-
   ADD DIRECTED EDGE Party_Uses_IP (
     FROM Party, TO IP,
     DISCRIMINATOR(valid_from_ms UINT),
     valid_to_ms UINT DEFAULT 0
   ) WITH REVERSE_EDGE="IP_Used_By_Party";
 
-  ADD DIRECTED EDGE Party_Has_Address (
-    FROM Party, TO Address,
-    DISCRIMINATOR(valid_from_ms UINT),
-    valid_to_ms UINT DEFAULT 0
-  ) WITH REVERSE_EDGE="Address_Used_By_Party";
-
-  /* A payment's sender, receiver and the token, device and IP observed on it. */
-
-  ADD DIRECTED EDGE Transfer_From_Account (
-    FROM Zelle_Transfer, TO Account,
-    event_ts_ms UINT
-  ) WITH REVERSE_EDGE="Account_Sent_Zelle_Transfer";
-
-  ADD DIRECTED EDGE Transfer_To_Account (
-    FROM Zelle_Transfer, TO Account,
-    event_ts_ms UINT
-  ) WITH REVERSE_EDGE="Account_Received_Zelle_Transfer";
-
-  ADD DIRECTED EDGE Transfer_From_Token (
-    FROM Zelle_Transfer, TO Token,
-    event_ts_ms UINT
-  ) WITH REVERSE_EDGE="Token_Sent_Transfer";
-
-  ADD DIRECTED EDGE Transfer_To_Token (
-    FROM Zelle_Transfer, TO Token,
-    event_ts_ms UINT
-  ) WITH REVERSE_EDGE="Token_Received_Transfer";
-
-  ADD DIRECTED EDGE Transfer_Used_Device (
-    FROM Zelle_Transfer, TO Device,
-    event_ts_ms UINT
-  ) WITH REVERSE_EDGE="Device_Used_By_Transfer";
-
-  ADD DIRECTED EDGE Transfer_Used_IP (
-    FROM Zelle_Transfer, TO IP,
-    event_ts_ms UINT
-  ) WITH REVERSE_EDGE="IP_Used_By_Transfer";
+  /* The payment roles: a payment's sender and receiver, the tokens a Zelle transfer is
+     addressed by, and the device and IP seen on it. */
 
   ADD DIRECTED EDGE Transaction_From_Account (
     FROM Payment_Transaction, TO Account,
-    event_ts_ms UINT
+    event_ts_ms UINT DEFAULT 0
   ) WITH REVERSE_EDGE="Account_Initiated_Transaction";
 
   ADD DIRECTED EDGE Transaction_To_Account (
     FROM Payment_Transaction, TO Account,
-    event_ts_ms UINT
+    event_ts_ms UINT DEFAULT 0
   ) WITH REVERSE_EDGE="Account_Received_Transaction";
-
-  ADD DIRECTED EDGE Transaction_From_Token (
-    FROM Payment_Transaction, TO Token,
-    event_ts_ms UINT
-  ) WITH REVERSE_EDGE="Token_Sent_Transaction";
-
-  ADD DIRECTED EDGE Transaction_To_Token (
-    FROM Payment_Transaction, TO Token,
-    event_ts_ms UINT
-  ) WITH REVERSE_EDGE="Token_Received_Transaction";
 
   ADD DIRECTED EDGE Transaction_Used_Device (
     FROM Payment_Transaction, TO Device,
-    event_ts_ms UINT
+    event_ts_ms UINT DEFAULT 0
   ) WITH REVERSE_EDGE="Device_Used_By_Transaction";
 
   ADD DIRECTED EDGE Transaction_Used_IP (
     FROM Payment_Transaction, TO IP,
-    event_ts_ms UINT
+    event_ts_ms UINT DEFAULT 0
   ) WITH REVERSE_EDGE="IP_Observed_In_Transaction";
+
+  ADD DIRECTED EDGE Transfer_From_Account (
+    FROM Zelle_Transfer, TO Account,
+    event_ts_ms UINT DEFAULT 0
+  ) WITH REVERSE_EDGE="Account_Sent_Zelle_Transfer";
+
+  ADD DIRECTED EDGE Transfer_To_Account (
+    FROM Zelle_Transfer, TO Account,
+    event_ts_ms UINT DEFAULT 0
+  ) WITH REVERSE_EDGE="Account_Received_Zelle_Transfer";
+
+  ADD DIRECTED EDGE Transfer_From_Token (
+    FROM Zelle_Transfer, TO Token,
+    event_ts_ms UINT DEFAULT 0
+  ) WITH REVERSE_EDGE="Token_Sent_Transfer";
+
+  ADD DIRECTED EDGE Transfer_To_Token (
+    FROM Zelle_Transfer, TO Token,
+    event_ts_ms UINT DEFAULT 0
+  ) WITH REVERSE_EDGE="Token_Received_Transfer";
+
+  ADD DIRECTED EDGE Transfer_Used_Device (
+    FROM Zelle_Transfer, TO Device,
+    event_ts_ms UINT DEFAULT 0
+  ) WITH REVERSE_EDGE="Device_Used_By_Transfer";
+
+  ADD DIRECTED EDGE Transfer_Used_IP (
+    FROM Zelle_Transfer, TO IP,
+    event_ts_ms UINT DEFAULT 0
+  ) WITH REVERSE_EDGE="IP_Used_By_Transfer";
 }
 
 RUN SCHEMA_CHANGE JOB create_schema

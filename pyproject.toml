@@ -85,13 +85,14 @@ force-sort-within-sections = true
 root_package = "mule_pattern_learner"
 include_external_packages = true
 
-# The import rules of docs/design.md for the packages that exist so far, each holding
+# The import rules of docs/design.md ("Package layout" and the leak rules), each holding
 # without exceptions; tests/test_import_contracts.py runs them. The layers are exhaustive,
-# so every new top-level module must be placed in one. data.answer_key reads the answer
-# key for evaluation: neither training nor the rest of data imports it, and nothing below
-# data can. subgraph sits beside data and neither imports the other, so subgraph cannot
-# reach the answer key either. testing (the reference graph and the test world) sits beside
-# cli at the top, so only the tests import it.
+# so every new top-level module must be placed in one; a layer in parentheses is optional
+# until its module exists. A layer imports only the layers below it, and the modules of
+# one layer, split by "|", never import each other. evaluation, the only package that
+# reads the answer key for a result, sits above everything that builds examples, batches
+# or models, and testing (the reference graph and parity, which may read every column)
+# beside the commands at the top.
 
 [[tool.importlinter.contracts]]
 name = "Layers run one way"
@@ -101,13 +102,13 @@ containers = ["mule_pattern_learner"]
 exhaustive = true
 exhaustive_ignores = ["__main__"]
 layers = [
-    "cli | testing",
+    "cli | testing | (bench)",
     "evaluation",
-    "training",
+    "training | (comparisons)",
     "data | subgraph",
     "tigergraph | model",
     "runtime | metrics",
-    "config | paths",
+    "config | paths | contract",
 ]
 
 [[tool.importlinter.contracts]]
@@ -117,17 +118,16 @@ source_modules = ["mule_pattern_learner.model"]
 forbidden_modules = ["pandas", "pyarrow", "requests", "pyTigerGraph"]
 
 [[tool.importlinter.contracts]]
-name = "Training never reads the answer key"
+name = "Nothing that builds examples, batches or models reads evaluation or testing"
 type = "forbidden"
-# Indirect imports count too, so nothing training imports from data may import it either.
-# Each module is its own source, so the __init__ of training and of data are checked as
-# well as every module below them. This stops only imports: tests/data/test_examples.py
-# checks that building the examples never runs read_answer_key.
-as_packages = false
+# Indirect imports count too, so nothing these packages import may import either. A
+# forbidden contract refuses a module that does not exist, so comparisons joins the list
+# with its package; until then nothing of it can import anything.
 source_modules = [
-    "mule_pattern_learner.training",
-    "mule_pattern_learner.training.**",
+    "mule_pattern_learner.tigergraph",
     "mule_pattern_learner.data",
-    "mule_pattern_learner.data.**",
+    "mule_pattern_learner.subgraph",
+    "mule_pattern_learner.model",
+    "mule_pattern_learner.training",
 ]
-forbidden_modules = ["mule_pattern_learner.data.answer_key"]
+forbidden_modules = ["mule_pattern_learner.evaluation", "mule_pattern_learner.testing"]

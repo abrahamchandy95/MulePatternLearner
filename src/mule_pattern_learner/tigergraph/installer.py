@@ -3,8 +3,8 @@
 A query is current when SHOW QUERY gives the repository's text (comments, whitespace and
 case outside string literals aside) and its REST endpoint is enabled with the same
 parameters. install creates and installs only the queries that are not. Every write runs
-once through the executor, so it is never repeated behind the caller's back. The schema and
-the loading job (gsql/schema/) are run by a person, on a fresh graph.
+once through the executor, so it is never repeated behind the caller's back. The schema
+(gsql/schema/) is not installed here: the loader creates it on an empty graph.
 """
 
 from __future__ import annotations

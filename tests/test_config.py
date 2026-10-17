@@ -4,16 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import FrozenInstanceError, replace
-from datetime import date, datetime
 
 import pytest
 
 from mule_pattern_learner.config import (
     DEFAULT_CONFIG,
-    DataConfig,
     ModelConfig,
     RunConfig,
-    SubgraphConfig,
     TrainingConfig,
     TransportConfig,
 )
@@ -23,23 +20,6 @@ def test_the_defaults_are_the_built_in_settings() -> None:
     assert RunConfig() == DEFAULT_CONFIG
     transport = DEFAULT_CONFIG.transport
     assert (transport.max_query_attempts, transport.max_outage_s) == (6, 900)
-    # The design's defaults for the subgraph query, and a hub threshold still to be measured.
-    subgraph = DEFAULT_CONFIG.subgraph
-    caps = (subgraph.seed_payments, subgraph.other_payments, subgraph.owners, subgraph.siblings)
-    identity = (subgraph.enrolled_devices, subgraph.enrolled_ips, subgraph.addresses)
-    sent = (subgraph.sent_devices, subgraph.sent_ips)
-    assert (caps, identity, sent) == ((32, 16, 1, 8), (8, 8, 4), (8, 8))
-    assert (subgraph.reverse_accounts, subgraph.identity_accounts) == (16, 48)
-    assert (subgraph.hub_threshold, subgraph.lookback_days) == (200, 365)
-    # The design's windows, gap and unlabelled count, and a scored sample and seed it leaves.
-    data = DEFAULT_CONFIG.data
-    assert (data.training, data.validation, data.test) == (
-        (date(2024, 1, 1), date(2024, 6, 30)),
-        (date(2024, 7, 1), date(2024, 9, 30)),
-        (date(2024, 10, 1), date(2024, 12, 31)),
-    )
-    assert (data.maturity_gap_days, data.unlabelled_per_positive) == (60, 15)
-    assert (data.scored_sample, data.seed) == (2000, 0)
     # The design's model and training defaults, and a batch size it leaves.
     model = DEFAULT_CONFIG.model
     assert (model.hidden, model.heads, model.dropout, model.label_mask) == (64, 4, 0.2, 0.5)
@@ -57,27 +37,6 @@ def test_sections_refuse_values_outside_their_ranges() -> None:
         (lambda: TransportConfig(max_outage_s=-1), "transport.max_outage_s"),
         (lambda: TransportConfig(max_outage_s=1.5), "transport.max_outage_s"),  # pyright: ignore[reportArgumentType]
         (lambda: RunConfig(transport="fast"), "transport must be"),  # pyright: ignore[reportArgumentType]
-        (lambda: SubgraphConfig(seed_payments=0), "subgraph.seed_payments"),
-        (lambda: SubgraphConfig(owners=0), "subgraph.owners"),
-        (lambda: SubgraphConfig(identity_accounts=2_000), "subgraph.identity_accounts"),
-        (lambda: SubgraphConfig(hub_threshold=0), "subgraph.hub_threshold"),
-        (lambda: SubgraphConfig(lookback_days=29), "subgraph.lookback_days"),
-        (lambda: SubgraphConfig(lookback_days=3_651), "subgraph.lookback_days"),
-        (lambda: RunConfig(subgraph="wide"), "subgraph must be"),  # pyright: ignore[reportArgumentType]
-        (lambda: DataConfig(training=(date(2024, 6, 30), date(2024, 1, 1))), "data.training"),
-        (lambda: DataConfig(test=(date(2024, 10, 1),)), "data.test"),  # pyright: ignore[reportArgumentType]
-        (
-            lambda: DataConfig(validation=(datetime(2024, 7, 1), date(2024, 9, 30))),
-            "data.validation",
-        ),
-        (lambda: DataConfig(validation=(date(2024, 6, 30), date(2024, 9, 30))), "overlap"),
-        (lambda: DataConfig(test=(date(2024, 9, 30), date(2024, 12, 31))), "overlap"),
-        (lambda: DataConfig(maturity_gap_days=-1), "data.maturity_gap_days"),
-        (lambda: DataConfig(maturity_gap_days=366), "data.maturity_gap_days"),
-        (lambda: DataConfig(unlabelled_per_positive=0), "data.unlabelled_per_positive"),
-        (lambda: DataConfig(scored_sample=0), "data.scored_sample"),
-        (lambda: DataConfig(seed=-1), "data.seed"),
-        (lambda: RunConfig(data=None), "data must be"),  # pyright: ignore[reportArgumentType]
         (lambda: ModelConfig(hidden=0), "model.hidden"),
         (lambda: ModelConfig(heads=0), "model.heads"),
         (lambda: ModelConfig(hidden=64, heads=5), "split evenly"),

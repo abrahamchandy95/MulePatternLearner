@@ -1,4 +1,4 @@
-"""mule has the design's six commands, and each is a stub that exits with status 1."""
+"""mule has the design's nine commands, and each is a stub that exits with status 1."""
 
 from __future__ import annotations
 
@@ -15,7 +15,17 @@ from mule_pattern_learner.paths import REPOSITORY_ROOT
 def test_mule_is_the_command_line_with_the_designs_commands() -> None:
     project = tomllib.loads((REPOSITORY_ROOT / "pyproject.toml").read_text())
     assert project["project"]["scripts"] == {"mule": "mule_pattern_learner.cli:main"}
-    names = ("install", "prepare", "fetch", "train", "evaluate", "score")
+    names = (
+        "install",
+        "parity",
+        "prepare",
+        "fetch",
+        "audit",
+        "train",
+        "evaluate",
+        "score",
+        "bench",
+    )
     assert tuple(cli.COMMANDS) == names
 
 
