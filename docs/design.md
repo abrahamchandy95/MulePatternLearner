@@ -1,1040 +1,1283 @@
 # MulePatternLearner design
 
-The specification the code on branch `redesign` builds. It was agreed with the owner in
-October 2026 and revised on October 17 to follow the owner's direction: the model learns
-from behaviour over time and from graph structure (shared devices and IPs, payment flows,
-communities), never from metadata such as when an account was first seen. The research
-behind the decisions is in the owner's research folder
-(`MulePatternLearner-backup-2026-10-14/research/`). Values marked *default* are starting
-points the owner may change; everything else is decided.
+The specification the code builds. Every decision in it was agreed with the owner in the
+grilling session of 2026-10-17, and it replaces the October 17 revision of
+this file (commits 5637d9c and ed62329), which was written before that session. Nothing here
+is built yet.
 
-## Changes in the October 17 revision
+- [The features](features.md) is part of this design: every number that reaches the model in
+  a batch, with its exact definition, encoding, width, leak guard and the generator gates it
+  depends on. This file says why each query and field exists; that one says exactly what
+  each is.
+- [Future design work](future_design.md) holds what the owner has raised but not decided.
+- The research behind the decisions lives in PhantomLedger's `docs/research/` folder, where
+  the dossiers move from the owner's research folder: the generator shortcut dossier
+  (`generator_shortcuts_2026-10-17.md`, 63 shortcuts with their fixes, its implementation
+  plan and the citation checks), the realism and burst dossiers
+  (`generator_realism_2026-10-15.md`, `mule_bursts_2026-10-15.md`), the mule activity research
+  (`mule_activity_2026-10-17.md`), and the checked customer lifecycle and GSQL dwell research
+  of 2026-10-17.
 
-Features:
+## Standing rules
 
-- Every feature is behaviour of the data or graph structure. The ages from a first sighting
-  (account, party, token, device, IP and address) are gone, and so is the age of a link that
-  began when its customer joined: `opened_ms` and `joined_ms` only decide what exists on a
-  date and which link starts are shown. `account_type` is the one attribute kept that is not
-  behaviour, until the owner decides.
-- No feature depends on when the data starts or when a customer joined: a link's start is
-  shown only when the link was added after its customer joined and within the lookback, and
-  links that ended before the lookback are not visible.
-- Short-term behaviour is added: per-payment gaps since the sender's previous payment and the
-  receiver's previous receipt, the most payments in any hour and any day, the shortest gap
-  between inflows, and money passed on within an hour.
-- New payees are added beside new payers, both counted as distinct accounts, with a year's
-  distinct counterparties to measure growth.
-- Connectivity change is added: each customer's new device and IP links, each device's and
-  IP's new users, and each account's device and IP co-users and how many of them are new.
-- A community block per seed is added: a bounded device-and-IP community computed in the
-  query as of t.
-- Token and Address leave the model; Device and IP stay. The `at_address` relation goes.
-- Closure is no longer a feature: the account's closed flag, the party's open and closed
-  account counts and the ownership edge's end are gone, and a link end caused by its customer
-  leaving the bank is not shown. The `owned_by` edge has no features.
-- Hubs (billers, ledgers, very busy devices and IPs) and crowds (large devices and IPs no
-  customer is enrolled on, such as carrier NAT and public terminals) are leaves whose rows
-  hold only their flags; small devices and IPs no customer is enrolled on are expanded like
-  any other, so a ring device no member enrolled still links the ring. A new query,
-  `read_leaves`, finds them once per date, and another, `read_sharing`, counts every
-  customer's co-users once per date.
-- Amounts are integer cents, every time boundary is strictly before t, and the category
-  values are listed.
-
-Splits and labels:
-
-- A split by account replaces the customer hold-out: each account belongs to one of
-  training, validation and test (50%, 25%, 25% by a seeded hash), and every account is
-  visible as a neighbour in every phase. The split is not written on the graph, so
-  `write_split`, the `split` attributes and `held_out_visible` go.
-- A mule is positive while it is active: from its first ring payment to a week after its
-  last, not until its discovery; `mule_last_ms` moves from the answer key to supervision.
-- Labels are read after the activity they label, on a rolling origin: a selection run trains
-  on labels read when validation begins and chooses the prior and the epochs; the final run
-  trains on labels read when the test begins, with those choices.
-- Validation's dates, like training's, end the maturity gap before their labels are read,
-  and selection pools recall over the dates.
-- A revealed mule is never an unlabelled example; its dates outside its activity are
-  dropped, and it stays confirmed for its neighbours on every later date.
-- Validation and test rank a true mule only on the dates it is active; test also reports
-  early warning in the four weeks before a mule's onset.
-- The maturity gap is estimated from training's revealed mules (right-truncated), never
-  below 60 days.
-- A sparse-label series keeps a seeded share of the revealed mules (100%, 50%, 25% and
-  10%) and holds everything else fixed.
-- The population of a date is the open accounts a customer owns; external and ledger
-  accounts are never examples. Every draw takes the accounts with the lowest seeded hashes,
-  so draws nest when what they draw from changes.
-
-Model, training and evaluation:
-
-- nnPU weights the positive risk by 1 minus the prior by default (balanced); the textbook
-  weight stays a setting. The prior grid is scaled from the revealed active share, and the
-  correction term counts positives per date, as the unlabelled draw does.
-- The five seeds vary the model only.
-- The label-input confirmations come from supervision, joined in training; the query adds
-  the ownership edge of every account of a seed's owner it reaches.
-- New comparisons: trees with hand-made graph features, and ablations of the GNN without the
-  community block, without devices and IPs, with the seed alone, without link ends, without
-  year-long counts and without `account_type`.
-- New groups: test mules of rings that gave training no positive, and test accounts that are
-  in no training subgraph, in place of the never-seen customers.
-- Test dates score a sample of 5,000 other accounts (validation 2,000).
-- The subgraph cache is keyed by the loaded world's identity, holds one file per request,
-  and no longer depends on the phase.
-- A `parity` command checks every query on a live TigerGraph against the reference graph,
-  and no query runs for real until its version has passed. A `bench` command measures cost
-  at growing world sizes, and a recommended training architecture is written down.
+| Rule | Where it comes from |
+|---|---|
+| Leaks are absolutely not allowed. | The owner |
+| TigerGraph and GSQL are the main deliverable and Python the additional one. TigerGraph computes every number the model reads; Python only joins rows by id, encodes them and builds tensors. | The owner: "our whole deliverable is TigerGraph and GSQL with the python as an additional deliverable" |
+| Query names start with a verb. | The owner's standing rule, confirmed on 2026-10-17 |
+| Commands take no options; dates and settings live in config. | The same |
+| GSQL computes nothing that nothing reads. | The same |
+| Every table and every column PhantomLedger exports is loaded, so the schema holds every exported column and the export holds nothing the schema lacks. | The owner: "when I look at the uploaded data, i dont want to see missing fields in the load data page" |
+| PhantomLedger gets no new flags. It simulates the whole universe of behaviour, and a use case only decides what its label means. | The owner: "we are defining the behavior of the mule usecase now"; "we code in behavoir of the whole universe" |
+| Every behaviour in PhantomLedger is backed by research, or declared as a choice, in its citation ledger. | The owner: "every line in phantomledger is research backed" |
+| One branch, `main`, the same on both remotes; nothing is pushed without the owner's confirmation; `redesign` is merged into `main` at that push. | The owner's standing rule, confirmed on 2026-10-17 |
 
 ## What we are testing
 
-A temporal heterogeneous graph neural network finds money-mule accounts that a bank has not
-found yet, from what accounts do over time and how they are connected: payments, their
-speed and order, and devices and IPs shared with other customers. It must work on accounts
-it never trained on and on rings none of whose members it trained on, keep working when
-only a small share of mules is labelled, and beat models without graph context given the
-same information. How often it flags a mule before its first ring payment, from the devices
-and IPs it shares with active mules, is reported apart, as early warning.
+A temporal heterogeneous graph neural network learns the behaviour of money-mule accounts
+from what accounts do over time and how they are connected: their payments with their speed
+and order, their owners, and the devices and IPs they share with other customers. On every
+Monday it ranks a bank's accounts by how likely each is to be acting as a mule.
+
+- **Behaviour, not detection.** The owner's framing (2026-10-16): a model trained today can
+  learn from a period long past, whose identified mules are all known by now, so "the date
+  of discovery adds unnecessary complexity". Training uses a period whose identified mules
+  are all in, and nothing reads when a mule was found.
+- **Sparse labels.** Only some mules are identified by the bank (the owner: "we cannot go
+  back to pretending it was fully labeled"). Training is positive-unlabelled, with the nnPU
+  loss.
+- **Inductive.** The model has no per-account embedding and no memory, so it scores accounts
+  it never saw, including accounts opened after training. Training, selection and test use
+  three independent worlds that share no account, ring, device or IP.
+- **What success means.** In the test world every true mule is scored on every Monday it is
+  active, beside every ordinary account, and should rank high. The owner: "we need to
+  score every one of the true mules that were hidden from the model. the model needs to be
+  able to identify all of them, or atleast score them high. if not, we need to investigate
+  why. maybe theres a bug, or we are missing some features that need to be added." The
+  headline group is mules in rings the bank never surfaced, found from behaviour and shared
+  devices alone. Short-lived mules must never be missed (the owner: "these are most
+  important").
+- **What the graph adds.** The GNN is compared with XGBoost given the same information, and
+  ablations measure what neighbours, devices and IPs, the community block and per-payment
+  timing add.
+- **Early warning.** How often a mule is flagged on the Monday before its first ring payment,
+  from the devices and IPs it shares and from its neighbours, is reported apart.
+- **The scored unit is an account at a date.** The owner: "we want to detect mule
+  accounts. not customers." Customer, device, IP and community features describe the
+  account's surroundings; they never turn the model into a customer score.
 
 ## The data
 
-PhantomLedger (`../PhantomLedger`, use case `mule-temporal`) simulates one US bank. Every
-behaviour that matters here is backed by published research and recorded in PhantomLedger's
-citation ledger, `docs/fraud_model_audit.md`, including the declared choices where no
-research gives a number. The design is built for this data:
+### PhantomLedger's mule use case
 
-- A mule is an **account** that receives proceeds of crime. The label comes from what the
-  account did: `mule_onset_ms` is its first ring payment received, `mule_last_ms` its last
-  ring payment received or sent after it became a mule. Columns record where it sat in the
-  chain (`mule_layer`) and what it did with the money (`mule_flow`).
-- Discovery is simulated inside PhantomLedger in time order: victim reports, bank
-  monitoring from the first laundering payment, and tracing downstream along the money. Only
-  mules are discovered. On the day a mule is found its customer is offboarded, so nothing it
-  would have done later exists.
-- Ordinary customers also open and close accounts and leave the bank all year, so neither a
-  late opening nor a closure marks a mule.
-- Rings share devices and IPs while they operate; ordinary sharing happens inside real
-  households.
+PhantomLedger (`../PhantomLedger`, use case `mule-temporal`) simulates one US bank. It
+simulates the whole universe of behaviour, criminal flows included; the mule use case only
+decides which accounts its label calls mules:
 
-**Timeline (default).** One world covers 2023-01-01 to 2024-12-31. 2023 is a warm-up with
-no laundering: it is loaded so every example has a year of history, and it is never scored.
+- A mule is an internal account that ring money landed in, where the money's chain starts
+  with a victim payment. Drug-cash structuring and organizers moving their own
+  money (the bipartite, cycle and invoice playbooks) stay in the world as real criminal
+  flows and are unlabelled in this use case, because a mule moves victims' money.
+- Account-takeover drops and impostor payees become mules with no ring (`mule_ring_id` -1)
+  once PhantomLedger's scam payees step lands.
+- PhantomLedger also decides which mules the bank identifies (see
+  [Identification](#identification-as-phantomledger-defines-it)).
 
-**Worlds.** Development uses one 30,000-person world. Reported numbers come from three
-independent 300,000-person worlds (different seeds), plus one sensitivity world in which
-ring members share devices and IPs at 10% instead of the declared 70% and 60%. The bench
-also runs on 100,000-person worlds, and the parity check on a 5,000-person world.
+### Worlds and calendar
 
-**What PhantomLedger must still provide.** Its money flow and behaviour labels are done.
-Until discovery lands no mule has a discovery date, so training cannot run; reported numbers
-wait for every item:
+| Item | Decision | Reason |
+|---|---|---|
+| Worlds | Three independent worlds from different seeds: one trains, one selects, one tests. Reported runs rotate the roles (A/B/C, B/C/A, C/A/B); development uses one rotation. | Every test account, ring, device and IP is new to the model, which is "mule accounts created after the GNN was trained", with no split machinery. Rotation gives three test numbers and a spread across worlds. |
+| Sizes | Development worlds have 30,000 people, reported worlds 300,000. Development worlds use other seeds, never those of A, B or C. | Thresholds and caps are tuned on development worlds only and frozen before the reported worlds are generated. |
+| Burn-in | 365 days are simulated with laundering running and are not exported. The burn-in is defined in the use case, not a flag. | The scored year starts in steady state: rings mid-life, device tenures open. Rings born at a constant rate and living about 730 days reach only about 12% of steady state by the first scored Monday without it. |
+| Export window | 455 days: 90 days of history only, then 365 scored days holding 52 Mondays. Laundering may run from day 0. There is no laundering-free warm-up. The window may grow if research shows a need. | Every scored Monday has a full 90-day lookback, for mules and ordinary accounts alike, and nobody loads a year nobody reads (the owner: "we would have our window of 365 days + 90 days"). |
+| Scored Mondays | The 52 Mondays from the first Monday at or after day 90 of the export, at 00:00 UTC, listed in config. | The calendar is the same in every world. Which calendar does not matter, since no feature reads the clock. |
+| Scoring frequency | Weekly, on Mondays, everywhere. Daily scoring is a later option once the benchmark shows its cost (see [future design work](future_design.md)). | A mule active Tuesday to Thursday is still scored the next Monday with its whole burst in view. |
 
-- Discovery and offboarding: `discovered_ms` set to the midnight that ends the discovery's
-  UTC day, `discovery_channel` one of `victim_report`, `monitoring` and `trace`, only for
-  accounts with `is_mule` 1, the whole customer closed that day with every link ending at
-  the same instant as its accounts close, and no later activity, so
-  `mule_last_ms <= discovered_ms`.
-- Ordinary opening, closing and leaving all year, shipped with discovery, with the same
-  link ends when a customer leaves; mule accounts that are opened for the ring; ring bursts
-  kept after their members join.
-- Households for ordinary device, IP and address sharing, with ring organizers in them like
-  everyone else, and link starts that do not differ in pattern between households and rings.
-- Scam payees and account-takeover drops as accounts with a mule role or external accounts.
-- A setting that starts laundering after the warm-up.
-- Card cash-outs on the `card` rail. Today they export as `unknown`, while every
-  legitimate card purchase is `card`, which would make the rail a mule marker.
-- Camouflage payments only while a ring member is recruited. Today they run all year, so a
-  year of counts marks ring membership.
+### What PhantomLedger must provide
+
+Each item is research-backed or declared in PhantomLedger's citation ledger, follows the
+shortcut dossier's implementation plan as amended by the owner's answers, and is checked by
+a gate (see [Gates](#gates)).
+
+| Area | What the world must do |
+|---|---|
+| Shortcuts | Every one of the dossier's 63 shortcuts that a model could exploit is fixed with research-backed behaviour or declared. The owner: "get rid of all the shortcuts". |
+| Mule activity | One active period per account per ring; a second episode only through a second ring (0.06 of mule persons). Victims over the account's life are the sum of today's per-burst draws, so credits per mule stay about the same. The first victim arrives at onset plus the recruitment lag; later victims after a renewal gap LogNormal with median 2 days and sigma 1.3, kept to [10 minutes, 21 days], all declared choices. The active period belongs to the account and is shared by every playbook. Long quiet belongs before the first misuse. No source supports quiet gaps of weeks to months between bursts in one account (`mule_activity_2026-10-17.md`, committed as PhantomLedger 77e0c61). |
+| Ring devices and IPs | They belong only to controller-operated accounts (online handover and organizers' own ring accounts), about 12% of mules instead of 70%. A tenure starts at the first attempted ring payment minus a lead (median 1 day, at most 14 days) and is built from attempted payments; no ring tenure has a quiet stretch longer than 21 days. A controller who logs in and never pays out is not generated, since no research gives a rate. |
+| Usage edges | Every observed device and IP, carrier networks, public terminals and hotspots included, gets usage edges at the declared coverage; `read_hubs` marks the big ones as crowds. |
+| Onward money | A declared 0.6 of mules' onward value goes to accounts at other banks, following RUSI's direction. The share of victims at the same bank is pinned in the dossier. |
+| Identification | The mechanism of [Identification](#identification-as-phantomledger-defines-it), written as `pu_label` only. Identification closes nothing. |
+| Customer lifecycle | One research-backed change: relationship starts backdated years before the data by the customer's age (the owner: a world of 2030 to 2031 must not have its first account opened in 2030); each account's own opening date; small-business and other secondary accounts; device, IP and token starts; ordinary openings and closures all year; mule account origins; no exported row before its account opens. |
+| Lifecycle numbers | New to the bank: at least 0.033 of customers a year, a floor (NAFBS 2024: 3.3% of US adults have held their primary account under a year; 0.014 at 60 and over), by age, so that about 0.8% or more of customers joined in the last 90 days on any date. Closures from ordinary churn and death only: charge-off about 0.06 of accounts a year, switch-outs 0.02 to 0.03 a year. Small-business accounts for 0.045 of adults (adults only), mostly owners without employees, with owner transfers in both directions. One mule account per customer at one bank, a second with chance 0.02 (UK 2025: 1.02 accounts per offboarded customer). |
+| Mule origins | Three: the mule's own established account; an account the person opens for the purpose; and, new, accounts a controller opens under a stolen or synthetic identity (about 0.10 of mule accounts, declared, below Experian's bound of about 0.23), run from the controller's devices, with legitimate look-alikes (new, quiet, single-device customers) so that "new and quiet" is not a mule-only marker. |
+| Device and IP link lives | The phone keeps its 40 months; a web device is keyed on a cookie or login token (its life uncited); home IPs are a two-class mixture of about 0.4 static lines and spells of one to four months, so 30% to 40% of home-IP links start inside a 90-day lookback. Legitimate new links must be common, or "new link" becomes mule-only. |
+| Export | The contract under [The graph](#the-graph). Payment ids are exported as BLAKE2b pseudonyms like entity ids, not row numbers. No self-payments. Links made at sign-up start exactly at `joined_ms`. A NaN amount fails the export. |
+| Clocks | The Clocks step (no rows stamped at second 0, no same-second couplings, victim, mule and organizer clocks like their holders' own, legitimate night ATM use, the account-takeover clock, legitimate rails on every day of the month) must pass before a reported run, because durations measured to t carry the clock of their event. |
+| Rails | Card cash-outs on rail `card` and own-account moves on rail `internal`, so that the `unknown` rail is honest. |
+
+Data for PhantomLedger's research: the Federal Reserve's 2025 Diary of Consumer Payment Choice
+(`dcpc-2025-public-csv.zip`, 2.9 MB, downloaded with the owner's approval into the research
+folder's `data/dcpc_2025/`) anchors the hour-of-day profiles. The RBIH mule data on Kaggle is
+optional and the owner's to download. The NAFBS and SCF tenure files are to be located, with
+file, source and size shown to the owner before any download.
+
+**Expected label counts.** Ring births are calibrated so identified mule customers come to
+about 25 per 10,000 customers per scored year: about 75 in a 30,000-person world and 750 in a
+300,000-person one. The identified share of true mules is then measured and reported, not set.
+Development worlds test the pipeline; priors, epochs and features are not chosen from them
+except where this design says so.
+
+### Gates
+
+A value is only as honest as PhantomLedger's behaviour. [Generator gates each feature depends
+on](features.md#generator-gates-each-feature-depends-on) maps every dossier entry to the
+features its cue reaches, and adds gates of its own. A reported run refuses a world unless:
+
+- every PhantomLedger gate mapped to a feature passed on it or on its gate world, from
+  PhantomLedger's gate report for that world (`mule prepare` checks it);
+- `mule audit` passed on it: the clock probe shows chance and the gates that need the answer
+  key (the newness, same-owner move and recent shared link lifts) stay under the ceilings
+  declared before the run (`mule train` checks it);
+- the [feature audit](#the-feature-audit) passed on the development rotation for the same
+  query versions and settings (`mule train` checks it).
+
+Development worlds run with a warning, and their results are marked development only.
 
 ## The graph
 
-Same vertex and edge types as before; attributes cut to what is used. One millisecond clock
-everywhere; no sequence numbers. The single copy of the DDL is `gsql/schema/schema.gsql`;
-PhantomLedger's export matches it.
+### The export contract
 
-| Type | Attributes |
+PhantomLedger's mule use case exports exactly these 22 tables, and `tf_gnn_loader_v2` loads
+every table and every column of them. One UTC millisecond clock, 0 for none. Each link holds
+from `valid_from_ms` until `valid_to_ms` (0 while open), and `DISCRIMINATOR(valid_from_ms)`
+keeps repeated links of one pair. Every event edge repeats its payment's `event_ts_ms`.
+
+| Table | Columns | Read by |
+|---|---|---|
+| `Party` | `id`, `joined_ms` | `joined_ms` only in the known-start test |
+| `Account` | `id`, `account_type`, `is_external`, `opened_ms`, `closed_ms`, `is_mule`, `pu_label`, `mule_ring_id`, `mule_onset_ms`, `mule_last_ms` | see [Who may read what](#who-may-read-what) |
+| `Device`, `IP` | `id` | the identity queries |
+| `Token` | `id` | loaded only |
+| `Payment_Transaction` | `id`, `amount`, `payment_rail`, `event_ts_ms` | every behaviour query |
+| `Zelle_Transfer` | `id`, `amount`, `event_ts_ms` | every behaviour query (rail `zelle`) |
+| `Party_Owns_Account` | `from_id`, `to_id`, `valid_from_ms`, `valid_to_ms` | ownership |
+| `Party_Uses_Device`, `Party_Uses_IP` | the same | enrolment |
+| `Party_Uses_Token`, `Token_Bound_To_Account` | the same | loaded only |
+| `Transaction_From_Account`, `Transaction_To_Account`, `Transfer_From_Account`, `Transfer_To_Account` | `from_id`, `to_id`, `event_ts_ms` | sender and receiver |
+| `Transaction_Used_Device`, `Transaction_Used_IP`, `Transfer_Used_Device`, `Transfer_Used_IP` | the same | devices and IPs seen on payments |
+| `Transfer_From_Token`, `Transfer_To_Token` | the same | loaded only |
+
+`account_type` is `deposit`, `credit`, `brokerage`, `gl` (the bank's ledgers) or `unknown`;
+`payment_rail` is `ach`, `card`, `cash`, `check`, `internal` or `unknown`. Every account has at
+most one owner and one ownership tenure; the loader refuses otherwise, since a second tenure
+filled two device cap slots in the rebuild.
+
+**Token** stays in the export because Zelle addresses money by the recipient's token: an
+email or US mobile number enrolled once and resolved by Early Warning's directory to a
+deposit account (CFPB v. Early Warning Services, 2024; New York v. Early Warning Services,
+2025). The money still moves between the two deposit accounts, and in PhantomLedger each token
+copies one account and never moves, so no query reads it; Zelle use shows as the rail. Its
+enrolment is backdated with the accounts. Token re-registration is in
+[future design work](future_design.md).
+
+**Left out of the export**, each for its reason:
+
+| Left out | Reason |
 |---|---|
-| Party | id, joined_ms |
-| Account | id, account_type, is_external, opened_ms, closed_ms; supervision: discovered_ms, discovery_channel, mule_onset_ms, mule_last_ms; answer key: is_mule (-1 unknown), mule_ring_id, mule_layer, mule_flow |
-| Token, Device, IP, Address | id |
-| Payment_Transaction | id, amount, payment_rail, event_ts_ms |
-| Zelle_Transfer | id, amount, event_ts_ms |
-| 7 identity and ownership links | valid_from_ms, valid_to_ms (0 while open) |
-| Payment role and observation edges | event_ts_ms |
+| `mule_layer`, `mule_flow`, `discovered_ms`, `discovery_channel` | Noise for this design (the owner). `mule_flow` is PhantomLedger's after-the-fact tag of what a mule did with the money, so as a column it would be the answer; the discovery fields belong to a detection model this design does not build. |
+| `Address`, `Party_Has_Address` | Rings share none, and PhantomLedger's address tokens collide between strangers by chance. Address returns only once households exist (see [future design work](future_design.md)). |
+| `Account_Uses_Device` | A copy of the owner's device links; no query reads it. The owner-enrolment relation is built in the query from the customer's links. |
+| `Transaction_From_Token`, `Transaction_To_Token` | PhantomLedger never fills them. |
+| `device_type`, `country_code`, `fraud_label`, the audit ledger's `is_fraud` | Never in the contract. |
 
-Everything comes from PhantomLedger; MulePatternLearner writes nothing to the graph. Each
-account has at most one owner (PhantomLedger never writes joint accounts).
+### Schema and loading
 
-**What the model reads.** Party, Account, Device and IP; both payment types with their
-sender, receiver and observed device and IP; `Party_Owns_Account`, `Party_Uses_Device` and
-`Party_Uses_IP`. `joined_ms`, `opened_ms` and `closed_ms` are read only to decide what
-exists on a date, when a customer left, and which link starts are shown; none is a feature.
-Token, Address, `Account_Uses_Device` (a copy of the owner's device links), the token links
-and the token roles of payments are loaded but not read. A token is one opaque handle per
-account, never shared or rebound, so it carries no graph signal; Zelle shows as the payment
-rail `zelle`. Device and IP sharing is the identity signal for this proof of concept.
-Addresses are left out: rings share none, and PhantomLedger's address tokens today collide
-between strangers by chance. They can return once households exist, if an ablation shows
-that telling households from rings needs them.
+`gsql/schema/schema.gsql` is the single copy of the DDL, for TigerGraph 4.2.5. The loader keeps
+a byte-identical copy (a test compares them) and loads every table by header name with one
+command. MulePatternLearner writes nothing to the graph.
 
-**Who may read what.**
+Before loading, the loader refuses an export with: a repeated id; a dangling edge end; a
+repeated link of one pair and start, which `DISCRIMINATOR(valid_from_ms)` would merge; a
+payment without exactly one sender and one receiver; an event edge time unlike its payment's;
+a payment before either of its accounts opens; a payment between two external accounts; an
+account with two owners or two ownership tenures; a link made at sign-up that does not start
+at `joined_ms`; payment ids whose order follows event time. It counts self-payments, which
+must be 0.
 
-- *Supervision* (`discovered_ms`, `discovery_channel`, `mule_onset_ms`, `mule_last_ms`) is
-  what a bank knows after an investigation: when the account was found and the dates of its
-  suspicious activity, which an investigation reads from the account's history. Training
-  and validation read it only through `read_supervision`, which returns the mules
-  discovered by a date.
-- *Answer key* (`is_mule`, ring, layer, flow) is read only by evaluation, through
-  `read_answer_key`. That query also returns every account's `mule_onset_ms`,
-  `mule_last_ms` and `discovered_ms`, discovered or not, because evaluation needs the
-  active dates of the test mules nobody found.
-- `read_supervision` and `read_answer_key` are the only queries that read supervision
-  fields, and `read_answer_key` the only one that reads the answer key.
-- Neither is ever a feature. The one exception is the label-input variant, which reads
-  whether a neighbour was confirmed by t (its `discovered_ms`). `is_mule` defaults to -1, so
-  an account with no loaded truth is unknown, never normal.
+### Who may read what
+
+| Columns | Meaning | Read only by |
+|---|---|---|
+| `pu_label` | the bank identified the account as a mule (1) or not (0) | `read_labels` (training, selection, and evaluation's groups) |
+| `mule_onset_ms`, `mule_last_ms` | the account's first and last ring payment: the activity period an investigation records | `read_labels`, which prints them only for `pu_label` 1; `read_answer_key` |
+| `is_mule` | the truth: 1 mule, 0 not, -1 external (unknown) | `read_answer_key` (evaluation) |
+| `mule_ring_id` | the ring of the account's first landing payment, -1 for none | `read_answer_key` (evaluation: ring groups and ring-resampled uncertainty) |
+| `opened_ms`, `closed_ms`, `joined_ms` | dates of record | existence, the scored population and the known-start test; `opened_ms` is printed only by `read_answer_key`, for an evaluation group |
+| `account_type` | the product | the scored population and the deposit-only co-user accounts; never a feature |
+| `is_external` | another bank's account | a feature on neighbours |
 
 ## Time
 
-Every example is an (account, as-of time t) pair, with t a Monday at 00:00 UTC. Everything
-the model sees existed strictly before t, within a lookback of 365 days (*default*):
+Every example is an (account, t) pair, with t a Monday at 00:00 UTC. The lookback is 90 days:
+it sees the current burst and the account's ordinary life around it, which needs a few months.
 
-- **Events** count when `t - lookback <= event_ts_ms < t`. Payments in the same second have
-  no order: none is another's predecessor, and all of them count in a window.
-- **Windows.** "In the last N days" means `t - N days <= x < t`, for an event's time and for
-  a link's start alike. "Within w of a time x" means from x, inclusive, to `x + w`,
-  exclusive. A link is "active at some time in the last 30 days" when
-  `[valid_from_ms, valid_to_ms)` meets `[t - 30 days, t)`.
-- **Links** are visible when `valid_from_ms < t` and they had not ended before the lookback
-  began (`valid_to_ms` is 0 or after `t - lookback`). A link is active at t when
-  `valid_to_ms` is 0 or after t: PhantomLedger's tenures are half-open,
-  `[valid_from_ms, valid_to_ms)`. A link that ended by t stays visible as a past fact with
-  the time since it ended, because ring links are short and dropping them would erase the
-  evidence. An end after t is invisible.
-- **A customer's exit.** A customer has left by t when every account it owns has
-  `0 < closed_ms <= t`; it left at the latest of those times. An end of one of its links at
-  or after the time it left comes from the bank's offboarding or the customer's departure,
-  not from its use of a device, so it is not shown: such a link reads as never ended, on
-  every later date. Ends before it left stay.
-- **Link starts.** A link's start is *known* when the link began after its customer joined
-  (`valid_from_ms > joined_ms`) and after the lookback start. A link that began when its
-  customer joined is its enrolment, which dates the customer, not its behaviour; one that
-  began before the lookback is older than anything else the model sees. Neither shows its
-  start: durations from it are absent, and it never counts as new.
-- **Existence.** An account exists at t when `opened_ms < t`; it is open at t when
-  `closed_ms` is also 0 or after t.
-- **Confirmations** (label-input variant only) count when `discovered_ms <= t`, on every
-  later date. Since `discovered_ms` is the midnight that ends the day of discovery, a mule
-  found on a Sunday reads as confirmed on the Monday. The time since a confirmation is cut
-  at the lookback, like every duration from a start.
-- **Labels read at a date L** are the mules with `0 < discovered_ms <= L`, the mules a bank
-  has found by then.
-- **Activity.** A mule is active at t when `mule_onset_ms < t <= mule_last_ms + 7 days`
-  (*default* 7) and it was not discovered by t (`discovered_ms` is 0 or after t). Since
-  events must be before t, its first ring payment is visible on every date it is active.
-  The week after its last ring payment gives every mule at least one active Monday, the
-  first after its onset, unless it was discovered before that Monday.
+**Bounds.** Every boundary is strictly before t (an event at t would leak, and
+PhantomLedger starts about one ring tenure in seven exactly on a Monday 00:00).
 
-**No feature depends on when the data starts or when a customer joined.** Every duration is
-relative: to t, or between two events. One that runs from a start (a pair's first payment, a
-node's first observed use, a confirmation) never reaches back past the lookback start, and a
-link start is shown only when it is known. The warm-up is as long as the lookback, so on
-every as-of date the lookback lies inside the data (`prepare` checks it). PhantomLedger
-clamps customers who joined before the data to its start, and their links start on that day;
-such links read like links older than the lookback, and a customer who joined last month
-reads like one who joined years ago, until its behaviour differs. No absolute time reaches
-the model, so a model trained in 2024 scores 2027 the same way.
+- A payment counts when `t - 90 d <= ts < t`. "Last w" means `t - w <= ts < t`. "Within w of
+  x" means `[x, x + w)`.
+- A link (ownership, device or IP enrolment) is **visible** when `valid_from_ms < t` and
+  (`valid_to_ms = 0` or `valid_to_ms > t - 90 d`).
+- A link is **current** when `valid_from_ms < t` and (`valid_to_ms = 0` or
+  `valid_to_ms > t - 30 d`): held at some time in the last 30 days.
+- No other comparison reads `valid_to_ms`. A link end is never a value, an order or a test
+  against t, because PhantomLedger plans a ring tenure's end from the ring's future payments,
+  so "still active at t" would say whether more ring payments are coming.
+- An account exists at t when `opened_ms < t`, and is open at t when it exists and
+  (`closed_ms = 0` or `closed_ms >= t`). Openness is used only to choose the scored
+  population.
 
-**Every duration is Fourier-encoded.** The basis is fixed: u = log1p(seconds) / log1p(10
-years), 32 log-spaced frequencies from 0.125 to 2 cycles per unit of u, sine and cosine, 64
-numbers per duration, computed on the GPU, with a presence bit when a duration can be
-absent. It resolves a second (u = 0.035), a minute (0.21), an hour (0.42), a day (0.58) and
-a year (0.88), so timing from seconds to months reaches the model. TigerGraph computes the
-durations themselves.
+**Known starts.** A date of record dates the customer or the data, never its behaviour:
 
-## Features
+- A link's start is known when `valid_from_ms > joined_ms` and `valid_from_ms > t - 90 d`. A
+  start at sign-up dates the customer; one before the lookback dates the data, and once
+  `joined_ms` is backdated a clamped link would pass "after joining" and its age would measure
+  the calendar.
+- A first seen use of a device or IP is a known start when, in the lookback, an account the
+  customer owns sent an earlier payment that was not seen on that node. Otherwise it is only
+  the start of the customer's activity in the lookback, which dates the customer.
+- An unknown start shows no time since start, never counts as new, and counts as `t - 90 d`
+  wherever a sharing start is needed.
 
-A feature is either **behaviour** (what an account or customer did: its payments, their
-amounts, speed and order) or **graph structure** (who is linked to whom through payments,
-owners, devices and IPs, and how those links change). Both kinds come in a temporal form
-(over windows before t, or as durations) and a non-temporal form (the state of the graph at
-t). TigerGraph computes every feature as of t from what is visible; Python only joins the
-per-date tables to the rows by id and encodes:
+**Ties.** Payments in one second have no order, because PhantomLedger's row order sorts
+by fraud flag and ring id within a second.
 
-- categories one-hot over their values: `account_type` is `deposit`, `credit`,
-  `brokerage`, `gl` or `unknown`; `rail` is `ach`, `card`, `cash`, `check`, `internal`,
-  `unknown` or `zelle` (a `Zelle_Transfer`'s rail is `zelle`);
-- flags 0 or 1;
-- counts as log1p, and amounts, printed as integer cents, as log1p of dollars;
-- shares (numbers in [0, 1]) as they are;
-- durations as a presence bit and the 64 Fourier numbers.
+- Every count, window, burst, gap, B1 walk and community value is order-free: swapping the
+  ids of same-second payments changes no B1, B2, B3 or B6 value.
+- A gap is to the latest strictly earlier payment. Windows are anchored at payments, never at
+  clock bins.
+- The time-ordered caps keep whole seconds: when a list is cut, b is the second of the newest
+  payment left out, and only payments after b are kept.
+- Subgraph caps order by activity, newest first, and break ties within one second by the
+  payment id, which is a pseudonym. Other ties (customers, devices, IPs, accounts) break by
+  their pseudonymous ids.
 
-**Left out, and why.**
+**Caps.** Recorded in the model's contract lock, tuned and frozen on development worlds:
 
-- First-seen ages of accounts, customers, tokens, devices, IPs and addresses, and the age of
-  a link that began when its customer joined. PhantomLedger clamps them to the data start,
-  so they measure the window, not the customer; and the owner rules out an account's age
-  even where it would be real.
-- Closure: the account's closed flag, the customer's open and closed accounts, the
-  ownership edge's end, and link ends caused by a customer's exit (see "Time"). A closure is
-  the bank's action, not mule behaviour; once PhantomLedger offboards found mules it would
-  mark caught neighbours.
-- The clock of day and the second within a minute. PhantomLedger schedules many rows on
-  whole minutes and at fixed UTC hours, choices of the generator in one naive time zone.
-- Tokens and addresses, as said under "The graph".
+| Cap | Value | What it bounds |
+|---|---|---|
+| Time-ordered lists | 256 per list | B1's inflows and outflows of the last 30 days; B2's first-payment times of new payers; B3's payments per direction of the last 30 days |
+| Scored account's payments | 32 each way | B4 |
+| Expanded counterparty's payments | 16 each way | B4 |
+| Other accounts of the scored account's customer | 8 | B4 |
+| Devices and IPs | 8 of each per kind of link, per customer (enrolment) and per account (seen) | B5 |
+| Co-user candidates | 48 per scored account | B5 |
+| Community members | 64 | B6 |
 
-The other ends of identity links stay (since a link ended, how long it was held): a
-customer stopping use of a device is behaviour, ordinary devices turn over in
-PhantomLedger, and ring links end soon after a ring's payments. A customer that left still
-goes silent: its payments stop. That cannot be hidden, and until ordinary customers also
-leave in PhantomLedger it is rarer for them than for caught mules; it is listed under the
-limitations, and evaluation measures it (see "Evaluation").
+Without a cap on both directions, an account with thousands of outflows overflows a
+fixed-capacity heap and breaks parity with the reference.
 
-`account_type` is not behaviour: it is what kind of product the account is. It stays until
-the owner decides, because it shapes which payments an account can make, and an ablation
-measures what the model takes from it.
+**Money.** Every amount is integer cents, `floor(amount x 100 + 0.5)`, and every sum and share
+is computed in cents in INT, never mixed with UINT: float sums flipped the sixth decimal in 3%
+to 35% of large sums and failed parity though both answers were right. Dollars appear only at
+encoding. Every unsigned time subtraction is guarded.
 
-### The feature table
+**Self-payments.** A payment with the same account at both ends is read by no query.
 
-"Last N days" follows "Time". Every count is over visible payments and links. *Hub*,
-*crowd* and *leaf* are defined under "Hubs, crowds and leaves" below; *shares*, *co-user*
-and a *known* start under "Shared devices and IPs" below and "Time" above. The row of a hub
-account that is not a seed, and a leaf's row, hold only their ids and flags (`account_type`
-and `is_external` included): every other field is 0 and every presence flag false.
+**No clock.** No feature reads the time of day, day of week, day of month or second of the
+minute, the Monday's index or days since the data start. A model that reads a
+simulator's clock habits learns the simulator, and this also keeps the model calendar-free
+across worlds: one trained on one year scores another the same way.
 
-| Where | Feature | Temporal | Kind | How TigerGraph computes it, as of t |
-|---|---|---|---|---|
-| Account | `account_type` (5 one-hot) | no | attribute | the account's attribute, kept until the owner decides |
-| Account | `is_external` | no | structure | the account's attribute |
-| Account | `hub` | no | structure | the account is a counterparty hub (from `read_leaves`) |
-| Account | `in_7d`, `in_30d`, `in_365d` | yes | behaviour | payments received in the last 7, 30 and 365 days |
-| Account | `out_7d`, `out_30d`, `out_365d` | yes | behaviour | payments sent in the last 7, 30 and 365 days |
-| Account | `amount_in_7d`, `amount_in_30d`, `amount_out_7d`, `amount_out_30d` | yes | behaviour | sum in cents of the amounts received and sent in the last 7 and 30 days |
-| Account | `counterparties_in_30d`, `counterparties_in_365d`, `counterparties_out_30d`, `counterparties_out_365d` | yes | structure | distinct accounts it received from and sent to in the last 30 and 365 days |
-| Account | `new_payers_7d`, `new_payers_30d` | yes | structure change | distinct senders whose earliest payment to it in the lookback is in the last 7 or 30 days |
-| Account | `new_payees_7d`, `new_payees_30d` | yes | structure change | distinct receivers whose earliest payment from it in the lookback is in the last 7 or 30 days |
-| Account | `burst_in_1h`, `burst_in_24h` | yes | behaviour | the most payments received within 1 hour or 24 hours of x, x the time of one of them, over its newest `recent_payments` received in the last 30 days |
-| Account | `burst_out_1h`, `burst_out_24h` | yes | behaviour | the same over payments sent |
-| Account | `burst_new_payers_24h` | yes | behaviour | the most new payers of the last 30 days whose first payment falls within 24 hours of one of them, over the newest `recent_payments` of those first payments |
-| Account | `passed_on_1h`, `passed_on_24h` | yes | behaviour | sum in cents of its newest `recent_payments` inflows of the last 30 days that it followed, within 1 hour or 24 hours, by one of its newest `recent_payments` payments sent |
-| Account | `shortest_in_gap_ms` (present with at least two inflows) | yes | behaviour | the shortest time between consecutive payments among its newest `recent_payments` received in the last 30 days |
-| Account | `since_last_in_ms`, `since_last_out_ms` (each with presence) | yes | behaviour | t minus its latest payment received, and sent, in the lookback |
-| Account | `device_co_users`, `ip_co_users` | no | structure | its owner's co-users on devices, and on IPs (from `read_sharing`, joined by owner) |
-| Account | `new_device_co_users_30d`, `new_ip_co_users_30d` | yes | structure change | those co-users whose sharing with its owner began at a known start in the last 30 days |
-| Party | `accounts` | no | structure | accounts it owns that exist at t, open or closed |
-| Party | `devices_now`, `ips_now` | no | structure | devices and IPs it has a link to that is active at t |
-| Party | `new_devices_7d`, `new_devices_30d`, `new_ips_7d`, `new_ips_30d` | yes | structure change | its device and IP links whose known start is in the last 7 or 30 days |
-| Device, IP | `leaf`, `observed_only` | no | structure | the node is a leaf; no customer has a visible link to it |
-| Device, IP | `parties_now` | no | structure | customers with a link to it active at t |
-| Device, IP | `parties_lookback` | no | structure | customers with a visible link to it |
-| Device, IP | `new_parties_7d`, `new_parties_30d` | yes | structure change | customers whose earliest visible link to it has a known start in the last 7 or 30 days |
-| Device, IP | `accounts` | no | structure | accounts that exist at t owned by its linked customers, and accounts observed sending from it in the lookback |
-| Device, IP | `payments_7d`, `payments_30d` | yes | behaviour | payments observed on it in the last 7 and 30 days |
-| Device, IP | `senders_30d` | yes | structure | distinct accounts observed sending from it in the last 30 days |
-| `pays` edge | `amount` | no | behaviour | the payment's amount in cents |
-| `pays` edge | `rail` (7 one-hot) | no | behaviour | `payment_rail`, or `zelle` |
-| `pays` edge | `age_ms` | yes | behaviour | t minus the payment's time |
-| `pays` edge | `prior_count`, `first_in_pair` | yes | structure | payments of the same sender to the same receiver earlier in the lookback, and whether there are none |
-| `pays` edge | `gap_ms`, `pair_age_ms` (present when `prior_count` > 0) | yes | behaviour | time since the latest and the earliest of those earlier payments |
-| `pays` edge | `next_outflow_ms` (with presence) | yes | behaviour | time to the receiver's earliest payment sent at or after it, before t; absent when the receiver is a hub |
-| `pays` edge | `sender_gap_ms` (with presence) | yes | behaviour | time since the sender's latest earlier payment sent to anyone in the lookback; absent when the sender is a hub |
-| `pays` edge | `receiver_gap_ms` (with presence) | yes | behaviour | time since the receiver's latest earlier payment received from anyone in the lookback; absent when the receiver is a hub |
-| `enrolled_on_device`, `enrolled_on_ip` edges | `start_known`, `since_start_ms`, `held_ms` (both present with a known start) | yes | structure change (relationship age) | whether the link's start is known; t minus it; from it to the link's end, or to t while active |
-| `enrolled_on_device`, `enrolled_on_ip` edges | `active`, `since_end_ms` (present when not active) | yes | structure change | whether the link is active at t, and t minus its end |
-| `owned_by` edge | none | no | structure | the edge itself |
-| `sent_from_device`, `sent_from_ip` edges | `uses` | yes | behaviour | the account's payments observed on the node in the lookback |
-| `sent_from_device`, `sent_from_ip` edges | `since_first_ms`, `since_last_ms` | yes | behaviour | t minus the first and the last of them |
-| Community of the seed | `parties`, `capped` | no | structure | members of the seed's community, and whether the cap left a candidate out |
-| Community of the seed | `nodes`, `links` | no | structure | devices and IPs shared by at least two members, and member-node sharing pairs on them |
-| Community of the seed | `new_links_30d` | yes | structure change | those pairs whose sharing start is known and in the last 30 days |
-| Community of the seed | `accounts` | no | structure | accounts the members own that exist at t |
-| Community of the seed | `internal_payments_30d`, `internal_amount_30d` | yes | behaviour | payments in the last 30 days between accounts of two different members, and their sum in cents |
-| Community of the seed | `external_payments_30d` | yes | behaviour | the members' payments in the last 30 days whose other account no member owns |
-| Community of the seed | `density` | no | structure | `links / (parties * nodes)`, 0 with no nodes |
-| Community of the seed | `isolation` | yes | structure | `internal / (internal + external)` payments of the last 30 days, 0 with none |
-| Account (label-input variant) | `confirmed`, time since confirmation | yes | label input | joined in training from supervision (see "The model") |
+## Labels
 
-Every account in a seed's subgraph that is not a hub carries the account features, so a
-hop-2 neighbour's behaviour and sharing reach the seed. The per-payment gaps, bursts,
-pass-on within an hour, new payees and co-users are what a pass-through mule does in
-minutes and hours: by value, PhantomLedger's mules pass on 28% of a credit within 15
-minutes, 53% within an hour and 86% within a day, and nearly every victim is a first-time
-payer. `recent_payments` (*default* 256 per direction) bounds the work of the time-ordered
-features; a mule rarely makes that many payments in 30 days.
+### Identification as PhantomLedger defines it
 
-### Hubs, crowds and leaves
+Identification is defined once, in PhantomLedger's mule use case, with no new flag, and written
+as `pu_label` only: no channel column and no uniform alternative. It works
+on two levels. In some rings no member is ever surfaced; in rings that surface, a victim's
+report identifies the account that received its money, tracing along the money finds some
+onward accounts and organizers, and monitoring flags a few. The numbers come from the shortcut
+dossier's identification step:
 
-- An account is a **counterparty hub** when more than `hub_threshold` distinct customers own
-  the other accounts of its payments in the lookback (billers, merchants, the bank's
-  ledgers); accounts with no owner are not counted. One with no more payments than that in
-  all time cannot be one and is not tested.
-- A device or IP is **observed-only** when it appears on a visible payment but no customer
-  has a visible link to it.
-- A device or IP that is not observed-only is a **hub** when more than `hub_threshold`
-  distinct customers have a visible link to it or own accounts observed sending from it in
-  the lookback. An observed-only one is a **crowd** when more than `observed_threshold`
-  distinct customers own accounts observed sending from it in the lookback: carrier NAT
-  lines and public terminals, which link strangers.
-- Hubs and crowds are **leaves**: each stays in the subgraph with a row of its flags only,
-  is not expanded, and counts for neither co-users nor communities. A seed is the one
-  exception: it is always expanded and its own row is always full, even when it is a hub,
-  because it is the account being scored.
+| Channel | Rule |
+|---|---|
+| Victim report | One draw per deceived victim's case: p 0.53 for authorised scams (PSR 2024; range 0.31 to 0.56), 0.67 for account takeover. Only a deceived victim reports, never a ring participant or a structuring depositor. |
+| Bank action | The first reported case on a mule account is acted on with p 0.5, each later one with 0.7. An acted-on case identifies every internal mule account the victim paid in it. |
+| Monitoring | A hazard on laundering-active days, fitted so monitoring finds a quarter of identified mules (declared). |
+| Trace | Downstream along ring payments from each identified account: 0.25 in the first round, then 0.10, up to four rounds (declared). |
+| Same customer | Every mule account of a customer with an identified account is identified. |
 
-`read_leaves` finds every hub and crowd once per date (see "Date tables"). `hub_threshold`
-is 200 (*default*), above the largest ring PhantomLedger can make (about 105 device
-holders) and far above ordinary groups (2 to 6). `observed_threshold` is 8 (*default*),
-below carrier NAT (about 96 people a line) and the average public terminal (24 people), and
-above an observed-only ring device or IP: one that no holder has on file has almost always
-two or three holders, since each holder lacks it on file with chance 0.28 for a device and
-0.39 for an IP. A small observed-only node is expanded like any other, so a ring device no
-member enrolled still links the ring. `mule bench` reports the exact distribution of
-distinct customers per account, device and IP, by enrolled and observed-only, and the share
-of positive examples that are hubs, which must be 0, so the owner can set both thresholds.
+- **Fully hidden rings** arise from the mechanism (no acted-on report and no member found by
+  monitoring) and are measured and reported. If their share turns out near zero, a declared
+  share is revisited. The owner: "we need to be able to hide a proportion of entire
+  rings (so the whole ring remains hidden in a few cases). this is why we need the GNN to be
+  able to identify a few members of these mules".
+- **No identification through shared devices or IPs**: labels would then lean on the
+  very evidence the GNN is tested on and inflate its results.
+- **No identified non-mules**: every `pu_label` 1 is a true mule. Real offboarding lists
+  hold some; this is a stated limitation.
+- **Identification closes nothing**. Closures come only from ordinary churn and death,
+  independent of mule status, so closure or silence caused by a catch never exists in the
+  world. The owner: "i just don't want the act of "closing" or inactivity to leak into the GNN
+  model. Therefore, it doesn't close." There is no exit-hiding rule and no link-ends ablation;
+  a test shows a caught neighbour reads exactly like an uncaught one.
 
-### Shared devices and IPs
+### The sparse labels are the pu_labels
 
-A customer **shares** a device or IP at t when the node is not a leaf and the customer has a
-link to it active at some time in the last 30 days, or one of its accounts sent a payment
-observed on it in the last 30 days. Thirty days keeps a ring's links in view on the dates
-after its last payment, since ring tenures end a few days after it.
+The owner: "Sparse labels is the pu_labels. we dont know as much as the ground truth
+mules ... once we compute pu_labels, that's our sparse labels, these would contains some hidden
+rings as well." There is no sparse-label series that thins them further. `mule prepare`
+measures and reports the identified share, and the identified share by onset quarter, since
+identification after the money moved would label late mules less often.
 
-Its **sharing start** on the node is the earliest of its links' starts and its first
-observed use in the lookback; it is known unless it is a link start that is not known (see
-"Time"). Two customers that share the same node are **co-users**; on that node their
-sharing began at the later of their two sharing starts, and a pair that shares several
-nodes of a kind began sharing at the earliest of those. A start that is not known counts as
-the lookback start, so it is never new.
+### Positives, dropped Mondays and the activity period
 
-`device_co_users`, `ip_co_users` and their new counts follow this rule for an account's
-owner, so they carry the sharing of accounts whose own devices and IPs are not in the
-subgraph (hop-2 accounts and those reached through an identity node). `read_sharing`
-computes them once per date for every customer (see "Date tables").
+- A **positive** is an identified mule (`pu_label` 1) on a Monday t on which it is active:
+  `mule_onset_ms < t <= mule_last_ms + 7 days`, and it is in the scored population that
+  Monday. Since events must be before t, its first ring payment is in view on every positive
+  Monday, and the week after its last payment gives every mule at least one positive Monday.
+- Its other Mondays are **dropped**, never unlabelled, because ring participants carry ring
+  signatures outside their activity.
+- Labels follow mule activity, not the catch: an investigation reads the account's whole
+  history and records the activity's date range (a US SAR has a field for it), which is why
+  `mule_onset_ms` and `mule_last_ms` are the only label attributes besides `is_mule` and
+  `pu_label`. With PhantomLedger's activity model the range carries almost no silent
+  weeks.
+- Boundary tests: an onset exactly at t is not positive; `mule_last_ms + 7 days` exactly at t
+  is.
 
-### The community of a seed
+### No label inputs
 
-The owner asked for "clustered connections with isolated communities". A global algorithm
-(TigerGraph's connected components, Louvain or label propagation) runs on the whole graph
-with no as-of time, so it would carry future ring members into training, and hubs and crowds
-would merge strangers. The community is therefore local, bounded and computed inside
-`fetch_subgraphs` for each seed as of t:
+No feature says whether any account is known or caught, and there is no rule ranker and no
+trees-with-links control. The owner: "we don't want the knowledge of caught mules to
+affect some scores." Guilt by association is a later experiment (see
+[future design work](future_design.md)). Graph-structure features, device and IP sharing above
+all, are computed identically for every account whatever its label; no feature is ever
+conditioned on `pu_label` or any label. The owner: "if you link devices only to pu_label
+== 1, this leaks data and may dilute the effectiveness."
 
-1. The members start as the seed's owners (round 0).
-2. Round 1's candidates are the customers, not yet members, that share a node with a round-0
-   member; round 2's are those that share a node with a member kept in round 1. A customer
-   belongs to the first round that reaches it, and there is no third round.
-3. A candidate's sharing time is the latest, over the nodes it shares with members kept in
-   the previous round, of the later of its sharing start and that member's.
-4. Each round keeps its candidates newest sharing time first, ties by party id, until the
-   community holds `community_parties` members (*default* 64). `capped` says whether a
-   candidate of either round was left out.
+### Checks on every world
 
-The measures are those of the feature table. A ring holding a device and an IP gives a small,
-dense community whose links began recently and whose members pay each other; an ordinary
-group gives older links and little money inside. The work per seed is at most the kept
-members, times the nodes each shares, times `hub_threshold`, and the measures read 30 days
-of the members' payments. The block is per seed, so it is printed once per seed and goes to
-the model's head (see "The model"). Whether it adds anything to what two message-passing
-layers already see is measured by an ablation (see "Experiments").
+`mule prepare` refuses a world where: a `pu_label` 1 account has `is_mule` other than 1 or
+`mule_onset_ms` 0; `read_labels` sees a row without `0 < mule_onset_ms <= mule_last_ms`; an
+`is_mule` 1 account lacks its activity dates or a ring value (a ring id or -1); a scorable
+account lacks truth; a truth join shares a column other than the account id. It counts
+`is_mule` 1 by `account_type` and owner presence and reports any mule outside the scored
+population as a mule never scored: the agreed population assumes every mule is an owned
+deposit account, and this checks it on every world. External accounts have `is_mule` -1 and
+`pu_label` 0.
 
-## Splits and labels
+## Worlds, examples and weights
 
-**Runs and dates (defaults).** Labels are read after the activity they label, on a rolling
-origin. V, the selection run's labels read date, is 00:00 UTC of 2024-06-01; R, the final
-run's, is 00:00 UTC of 2024-10-01, the first day of the test. "Revealed at L" means read at L
-(see "Time") and kept by `revealed_share`.
+### The scored population
 
-| Run | Examples of | As-of dates (Mondays) | Labels |
+On each Monday t the **scorable accounts** are the internal deposit accounts open at t with a
+visible ownership link: owned by a customer. Ring money moves between deposit accounts. Other
+accounts (credit cards, brokerage, the bank's ledgers, other banks' accounts) appear only as
+neighbours. `account_type` chooses the population and is not a feature: the rail on each
+payment says what kind of payment it was.
+
+### Training world
+
+| Kind | Which | Weight |
+|---|---|---|
+| Positive | each identified mule active at t (see [Positives](#positives-dropped-mondays-and-the-activity-period)) | 1 divided by its number of active Mondays, so every mule counts once however long it ran |
+| Dropped | identified mules on their other Mondays | none |
+| Unlabelled | a uniform keyed draw of the other scorable accounts of that Monday: 15 per positive and at least 500. Hidden mules can be drawn; identified mules never | the number of accounts it was drawn from divided by the number drawn, so each Monday's draw stands for that Monday's scorable population |
+
+- The draw takes the accounts with the lowest keyed blake2b hash of (account id, Monday), so
+  it is uniform and nests: when a few accounts join or leave the pool, the rest of the draw and
+  their cached rows stay. Hash outputs are pinned by a golden test.
+- Each label's weights are then divided by their mean over all training batches, once, since
+  the loss divides each label's weighted sum by its count in the batch. Without it a 26-date
+  mule pulled 2.4 to 3.9 times as hard as a 1-date one.
+- `mule prepare` reports the per-Monday ratio of positive to unlabelled weight, positives and
+  weight per Monday (if identified mules cluster in some months, seasonal spending could act
+  as a clock), and the identified active share. It refuses a selection world with fewer than
+  5 identified active mules.
+
+### Selection world
+
+Scored whole: every scorable account on every Monday. Only `pu_label` is read, as a bank
+would: the positives are the identified mules active that Monday, and identified mules'
+inactive Mondays are left out of the ranking. Hidden mules are ranked like anyone else.
+The answer key never chooses the model: if every true mule were scored in selection, the
+truth would pick the epoch and prior.
+
+### Test world
+
+Scored whole: every scorable account on every Monday. Every true mule is scored on every Monday
+of its activity and on its early-warning Monday, beside every normal account.
+The answer key is read only after scoring. True mules on Mondays outside their activity are
+left out of the rankings, being neither mule nor clean; their scores before onset count as
+early warning and after activity are reported apart.
+
+### If whole-world scoring is too slow
+
+`mule bench` decides on the 30,000-person worlds, before any 300,000-person world is
+generated. If a fallback is needed it is written per world:
+
+- **Selection world:** every identified mule on its active Mondays, plus a uniform keyed sample
+  of every other scorable account, hidden mules included at the same rate, each weighted by the
+  inverse of its chance of inclusion, so that no sampled account stands for more than about 10.
+  The answer key is never read.
+- **Test world:** every true mule on its active and early-warning Mondays, plus a uniform
+  weighted sample of the rest under the same bound. Evaluation builds this list after
+  selection is frozen and fetches it through the fetch code, which never imports evaluation;
+  the cache stores rows only, never why an account was chosen. One account's subgraph and
+  score never depend on its batch, so the list cannot change a feature or a score.
+
+Scoring one Monday in four was rejected: most mule lives are under 30 days, so it would catch a
+short-lived mule's active Monday with chance about 1 in 4. The old 2,000-account sample,
+each standing for about 60 accounts, made PR AUC fragile.
+
+## The queries
+
+Each query has one job, and its reason is what it extracts that the model needs (the owner:
+"each query must have a dedicated scope of what behavior we want to extract from the dataset
+and pass into the model. you need justification for each query as to why we need it"). The
+lookback is 90 days and no query reads clock time.
+
+| Query | Job | Runs | Prints |
 |---|---|---|---|
-| Selection | the training split | 2024-01-01 to the maturity gap before V | mules revealed at V |
-| Selection | the validation split | V to the maturity gap before R | mules revealed at R |
-| Final | the training split | 2024-01-01 to the maturity gap before R | mules revealed at R |
-| Final | the test split | R to 2024-12-31 | the full answer key |
+| `list_accounts` | the scorable accounts at t | once per (world, Monday) | account id and owner id |
+| `read_labels` | the identified mules and their activity period | once per world | accounts with `pu_label` 1 and their `mule_onset_ms`, `mule_last_ms` |
+| `read_answer_key` | the truth | evaluation only; fetch and train refuse it | `is_mule`, `mule_ring_id`, the activity period, `opened_ms` |
+| `read_hubs` | the accounts, devices and IPs too connected to expand | once per (world, Monday) | account hubs, device and IP crowds and hubs, each with its measure |
+| `read_world` | the loaded world's identity | once per world | counts and sums (see [Cache](#cache)) |
+| `profile_hubs` | the distributions behind the hub and crowd thresholds | `mule bench` only | histograms |
+| `read_money_flow` (B1) | velocity | per (world, Monday, account), cached | the velocity columns, and one row per tracked inflow lot |
+| `read_counterparties` (B2) | who pays it and whom it pays | per (world, Monday, account), cached | the counterparty columns |
+| `read_activity_change` (B3) | the account against its own past | per (world, Monday, account), cached | the activity columns |
+| `read_payment_events` (B4) | the payment graph | per scored account | the subgraph's accounts with `is_external`, payment edges and their fields, ownership edges |
+| `read_shared_identity` (B5) | the device and IP graph | per scored account; node rows cached per (world, Monday, node) | customer, device and IP rows; enrolment, owner-enrolment and seen edges |
+| `read_community` (B6) | how the account's network formed | per scored account | the community block |
 
-With 60-day gaps that is 14 training Mondays (to 2024-04-01) and 9 validation Mondays
-(2024-06-03 to 2024-07-29) for the selection run, and 31 training Mondays (to 2024-07-29)
-and 13 test Mondays (2024-10-07 to 2024-12-30) for the final run. The validation window
-starts in June so that about two months of Mondays remain after the gap.
+B1 to B3 run on every account of every subgraph, not only the scored one, so a neighbour's
+behaviour reaches the score. They are computed on demand for the accounts the batches
+need and cached per (world, Monday, account), so an account shared by many subgraphs costs
+once. A hub that is not the scored account gets a flag-only row and no B1 to B3.
 
-The selection run is validated only on dates after its labels were read, as the final run is
-tested only on dates after its own: no model is ever scored on a date earlier than the
-labels it trained on. The final run reads its labels as late as a bank could before the
-test, so a mule active in June but found in September is a training positive, and every
-mule it labels was offboarded before any test date. The selection run chooses the prior and
-the number of epochs (see "Training"); the final run is never validated.
+### Shared rules
 
-**The maturity gap.** A run's dates end the maturity gap before their labels are read,
-because a mule whose activity began just before that date has had no time to be found: in
-training it would sit among the unlabelled, and in validation the late dates would hold only
-the mules found fastest. The gap before a date L is the delay within which the estimate
-finds 90% of mules, from onset to discovery, estimated from the training split's mules
-revealed at L, never from the answer key or another split, and never less than 60 days
-(*default*). Revealed mules are only those found by L, so their delays are right-truncated,
-not right-censored; the estimate is the product-limit estimator for right-truncated data
-(Lynden-Bell). The 60-day floor binds when discovery is fast. `prepare` reports both gaps,
-and refuses when a run's dates hold no Monday or validation's dates hold fewer than
-`min_validation_mules` (*default* 5) distinct revealed mules, so no run fails later for want
-of them.
+**Hubs and crowds** (`read_hubs`, one rule for every account):
 
-**By account.** Each account belongs to exactly one split: the 64-bit blake2b hash of its id,
-keyed by the data seed and the word `split`, falls in the training split's first 50%, the
-validation split's next 25%, or the test split's last 25% (*default* shares). No account is
-an example in more than one split. The split is computed in Python and never written on the
-graph, so no query writes, and one customer's accounts can fall in different splits.
+| Kind | Rule | Examples |
+|---|---|---|
+| Account hub | more than 200 distinct customers own the other accounts of its payments in `[t - 90 d, t)`; ownerless counterparties are not counted; an account with at most 200 payments in all time skips the test, since it cannot pass it | billers, merchants, ledgers |
+| Crowd | a device or IP with more than 8 distinct customers in the lookback, registered or not: those with a visible enrolment link to it plus the owners of deposit accounts that exist at t and sent a payment seen on it in the lookback | carrier networks, public terminals |
+| Device or IP hub | more than 200 such customers | |
 
-Every account is visible in every run as a neighbour: its payments, its owner, its devices
-and IPs, and its features. Only its labels are kept to its own split: the training split's
-revealed mules are training positives, and other splits' accounts are never training
-examples. A test account is scored from its relationships with accounts the model trained
-on; sharing devices, IPs and other identity with several mules is the evidence the model is
-meant to use, so a neighbour that was a training positive is not leakage. The model has no
-per-account parameters, so having seen an account as a neighbour does not let it remember
-that account.
+- Leaves are the account hubs and the crowds (device and IP hubs among them). A leaf stays in
+  the subgraph as a flagged node with its kind and measure, so it never looks like an empty
+  account (the old identical stubs filled 6.4 of a root's 16 slots). It is never expanded,
+  never counted as sharing and never in a community. The scored account is always expanded
+  and keeps its full row, even when it is a hub.
+- Why: otherwise one biller or carrier IP floods every subgraph, and "shares an IP with 5,000
+  people" means nothing. 200 sits above the largest ring PhantomLedger makes (at most 150
+  members); 8 sits above
+  households (2 to 6) and below public terminals (at least about 15 users) and carrier lines
+  (about 90 to 128). The crowd counts registered and unregistered customers alike: once
+  every observed endpoint has usage edges, terminals and carrier lines count as registered,
+  and expanding them would make about 8,000 sharing pairs per carrier line.
+- Both thresholds are checked against the bench histograms on development worlds built after
+  PhantomLedger's households and ring timing steps, counting customers, never accounts, and
+  frozen before any reported run. On development worlds, read from the answer key in
+  evaluation: no positive is an account hub, and the share of ring devices and IPs that are
+  leaves on their ring's active Mondays is near 0.
 
-A ring's members fall in all three splits, so most test mules belong to rings the model
-trained on. Evaluation therefore reports, as groups of their own, the test mules of **new
-rings** (no mule of the ring was a training positive) and the test accounts **never in
-training** (in no training example's subgraph); see "Evaluation".
+**Sharing a device or IP.** A customer shares a device or IP that is not a leaf when it has a
+current enrolment link to it, or an account it owns (visible ownership) sent a payment seen on
+it in `[t - 30 d, t)`. Its sharing start there is the earliest of its link starts and its first
+seen use in the lookback, each counted as `t - 90 d` when unknown. Two **co-users** began
+sharing a node at the later of their two starts, and began sharing at all at the earliest of
+those over the nodes they share. A pair, a link or a customer is new over w when its sharing
+start is at or after `t - w`. Co-users are counted as customers before any cap, because each
+owned account copies its owner's links and a person holds several accounts. Thirty days keeps
+a ring's links in view after its last payment.
 
-**Labels from mule activity.** A mule is positive while it is active (see "Time"), from
-just after its first ring payment to a week after its last, not from when it was caught.
-Supervision therefore holds `mule_onset_ms` and `mule_last_ms` for each discovered mule: an
-investigation that catches an account reads its whole history, as a suspicious activity
-report records the date range of the activity. `read_supervision` refuses a row unless
-`0 < mule_onset_ms <= mule_last_ms <= discovered_ms`, because only mules are discovered, a
-mule is found only for what it has done, and nothing happens after offboarding. Quiet weeks
-between a mule's bursts lie inside its activity and are positive: PhantomLedger exports no
-per-burst clocks, and real mule accounts are reused. The catch decides only when the account
-stops existing: an account closed by t is no example on t.
+### `list_accounts`
 
-**A caught mule stays a mule.** Practice works forward from the catch and dates the
-activity separately: a Cifas marker is kept for six years from its filing, a bank exits the
-customer, and production AML systems time their positives on the activity's start and end.
-None relabels the account's earlier life, and doing so would teach the model who was caught,
-not what mules do. So "permanently" means:
+Prints the scorable accounts of t with their owner, a page at a time by strictly increasing
+id. Examples must come from accounts that existed at t, or the future leaks in. It prints no
+`opened_ms`: a date of record in every world's cache is one edit away from a feature.
 
-- A revealed mule is never an unlabelled example, on any date. It is positive on the dates
-  it is active and dropped on every other date: before its onset, and between a week after
-  its last activity and its discovery.
-- For the label-input variant it stays confirmed for its neighbours on every later date,
-  with the time since its confirmation (cut at the lookback), so the model can learn how a
-  confirmation's weight fades.
-- The label belongs to the account that carried the money, where the behaviour is. The
-  customer's other accounts are labelled by their own behaviour; in PhantomLedger a mule's
-  own second deposit account that the money reached is a mule itself.
-- Evaluation removes a mule from every date's ranking once it is discovered, since a bank
-  does not alert on an account it has already caught.
+### `read_labels`
 
-**Hidden labels come from discovery, not from masking.** On any date only the mules found
-by the labels read date are known; the rest are unlabelled, which is the positive-unlabelled
-setting the nnPU loss needs. Discovery is not random (victim reports find the busiest mules
-first), which violates nnPU's "selected completely at random" assumption; we report this as
-a limitation, and the full-answer-key test measures its effect.
+Prints every account with `pu_label` 1 and its `mule_onset_ms` and `mule_last_ms`, paged by id,
+and refuses a row unless `0 < mule_onset_ms <= mule_last_ms`. It is the only training signal
+and the only reader of `pu_label`; it prints the dates only through a selection filtered on
+`pu_label` 1, so a hidden mule's dates never leave the graph. Evaluation also reads it, for the
+test world's groups.
 
-**Sparse labels.** `revealed_share` (*default* 1) keeps a share of the revealed mules: a
-mule is kept when the 64-bit blake2b hash of its account id, keyed by the data seed, the
-word `revealed` and `revealed_key` (*default* 0), falls in the lowest `revealed_share` of
-its range. For one key the kept sets are nested (every mule kept at 10% is kept at 25%), and
-they are independent of the account split. A dropped mule is unrevealed everywhere: it is
-no positive, it may be drawn as unlabelled, and it is not confirmed for the label-input
-variant. Below a share of 1, everything that is not a label stays as at 1: the runs' dates
-and maturity gaps, each training date's unlabelled count and weight, and each seed's prior
-and number of epochs (see "Experiments"). Test always uses the full answer key.
+### `read_answer_key`
 
-## Examples
+Under `gsql/evaluation/`. Prints every internal account's `is_mule`, `mule_ring_id`,
+`mule_onset_ms`, `mule_last_ms` and `opened_ms` (for the group of accounts opened within 90
+days of t), paged by id. Only the evaluation package imports its reader, and the fetch executor
+refuses to run it. Evaluation needs the activity dates of every mule, hidden ones included, to
+build its groups and early warning.
 
-**The population of a date** is every account open at t (see "Time") that is not external
-and whose owner's ownership link is active at t. External accounts and the bank's ledger
-accounts (no owner) are never examples, so no account with `is_mule` -1 is ever ranked.
-Each set of examples takes the accounts of its split.
+### `read_hubs`
 
-**Draws.** Every draw on a date takes the accounts with the lowest 64-bit blake2b hash of
-their id and the date, keyed by the data seed and the word `draw`, among the accounts it may
-draw. A draw is therefore uniform, depends only on what it draws from, and nests: when a few
-accounts join or leave what it draws from, the rest of the draw stays, and so do their
-cached subgraphs.
+Prints the Monday's account hubs, crowds and device and IP hubs with their measure (distinct
+customers over 90 days), under the rules above. Fetch passes the hub lists to B4 to B6 as
+`SET<VERTEX>` parameters. A hub needs to be known before a subgraph is built, and the test
+reads a hub's whole lookback, so it runs once per Monday rather than once per request.
 
-**Training** (a run with labels read at L):
+### `read_world`
 
-- *Positives.* On each date, the training split's mules revealed at L that are active that
-  date. Each mule carries a total weight of 1, shared equally among its dates.
-- *Unlabelled.* On each date, a draw from the training split's population, leaving out every
-  mule revealed at L, of 15 accounts (*default*) per positive that date at `revealed_share`
-  1, accounts with no payments included. Together they weigh what that date's positives
-  weigh at `revealed_share` 1, so the date cannot give the answer away.
-- *Dropped.* A mule revealed at L on every date it is not active.
+Prints what identifies the loaded world, for the cache key and the lookback check (see
+[Cache](#cache)). It reads no label.
 
-**Validation and test.** On each date:
+### `profile_hubs`
 
-- every account of the split active that date is positive, with weight 1: the mules revealed
-  at R for validation, the answer key's `is_mule` 1 for test;
-- a true mule (revealed at R, for validation) that is not active that date, or that was
-  discovered by t, is not ranked that date;
-- the other accounts are a draw of 2,000 for validation and 5,000 for test (*defaults*),
-  each weighted by the accounts it stands for.
+For `mule bench` only: exact whole-world histograms of distinct customers per account, device
+and IP at a 90-day lookback, devices and IPs split into registered and observed-only, so the
+owner can set the two thresholds.
 
-**Early warning** (test only). On each test date, every test-split mule of the answer key
-whose onset is in the next four weeks (`mule_onset_ms - 28 days < t <= mule_onset_ms`) and
-that was not discovered by t is scored too, apart from the ranking: its first ring payment
-has not happened, so only its links and its neighbours can flag it.
+### `read_money_flow` (B1): velocity
 
-## The subgraph query
+**Job.** Match each account's recent money in to the money out that followed it, last in,
+first out, and say how fast it left (the owner: "money going in vs coming out - for this
+behavior that gives us velocity, we need to figure out how to give this in as a feature and
+how to encode this as a time").
 
-One installed GSQL query, `fetch_subgraphs`, takes a batch of seed accounts that share one
-as-of time t, the subgraph settings and the date's leaves. It returns, for each seed, a typed
-2-hop subgraph as of t (nodes by type with TigerGraph-computed features, edges by relation
-with theirs) and the seed's community block. Python joins the date's co-user counts and turns
-a batch into one PyG `HeteroData`.
+**Mule behaviour.** A mule forwards 90% to 95% of what arrives and keeps 5% to 10%. By value,
+in PhantomLedger 0.30 leaves within 15 minutes, 0.57 within an hour and 0.95 within a day; in
+RUSI's UK bank data 0.28, 0.53 and at least 0.85, by transfer 0.72, card 0.18 and cash 0.10.
 
-The subgraph is not a static snapshot: every payment is its own edge with its age and its
-gaps, and every identity link carries its start and end, so the attention reads when things
-happened and in what order, as temporal graph attention does with a time encoding on its
-edges.
+**Ordinary look-alike.** A direct-deposit split moves 10% to 35% of a salary 5 to 30 minutes
+later; paycheck-to-paycheck spending leaves over days; bills go right after payday.
 
-A node reached by two paths appears once in a seed's subgraph, so cycles (Z, device, A,
-payment, Z) are visible. Nodes are not merged across the seeds of a batch: each seed's
-subgraph is a component of its own, so a seed's score never depends on its batch, at the
-cost of copying shared neighbours. Seeds are grouped by as-of date so each node's features
-are computed once per request.
+**Why a query, not the GNN alone.** Matching money in to money out walks hundreds of payments
+in time order; attention over 16 sampled edges cannot do it.
 
-**Relations** (each has a reverse, so two layers carry hop-2 information to the seed; caps
-are *defaults*):
+**How velocity reaches the model.** Both as a dwell curve per account and as a dwell per
+incoming payment. The per-payment dwell puts the timing on the event itself, so the GNN sees
+which payer's money moved and how fast; the curve gives the account's whole speed in a few
+numbers. Both encode velocity as time, not as a ratio: ratios of money out to money in over
+windows lose order, and a saver paying a big bill at month end would look like a mule.
 
-| Relation | Cap per node |
+**Last in, first out.** An outflow spends the money that arrived most recently, which is
+what passing money through means. First in, first out would say victim money "waited" until
+the owner's old salary was used up, and hide the pass-through.
+
+**How it runs.** The newest 256 inflows and the newest 256 outflows of the last 30 days, within
+a whole-second span (exact walk in [The features](features.md#account-node-309-columns)).
+Inflows of one second form one lot, so same-second order never matters. Only outflows before t
+count: an inflow received less than w before t shows only what left by t, and the payment's
+age on its edge tells the model how much of its curve it could see. On development
+worlds, a check confirms that busy ordinary accounts' card spending does not fill the short
+dwell shares; if it does, the dwell shares count transfer and cash outflows only.
+
+**In GSQL.** The owner chose to write the walk in TigerGraph: "we need to try b". It is
+plain GSQL, with no user-defined function and no subquery: local scalars, FOREACH and WHILE in
+POST-ACCUM over ListAccums an earlier SELECT filled, heaps ordered (ts DESC, id DESC) with
+explicit capacities, and a suffix-minimum early stop. Lot k occupies cents `[L, L + c)` of a
+running level and still holds `max(0, min(lowest level since k, L + c) - L)` cents; each fall
+of that minimum inside its band is a piece that left at that outflow's time. A global OrAccum
+records a heap that did not iterate in order, and the query then stops with a status. A port
+of this sketch matched full-history last-in, first-out matching in 20,000 random worlds with no
+mismatch. The Python reference is an independent explicit stack of lots written from the
+specification. The walk is compiled and verified on a live TigerGraph; its worst account (an
+account later emptied by a sweep, up to about 32,896 steps; a retaining mule about n + m) is
+measured by `mule bench`.
+
+**Fields** (definitions in [The features](features.md#account-node-309-columns)):
+
+| Field | Why |
 |---|---|
-| Account sent payment to Account (one edge per payment) | 32 newest per direction for a seed, 16 for others |
-| Account owned by Party; Party owns Account (siblings) | 1; 8 |
-| Account enrolled on Device (through its owner) | 8; reverse 16 other customers' deposit accounts |
-| Account enrolled on IP (through its owner) | 8; reverse 16 |
-| Account sent from Device (observed on its own sent payments) | 8; reverse 16 |
-| Account sent from IP (observed on its own sent payments) | 8; reverse 16 |
+| `in_amount_7d`, `_30d`, `_90d`; `out_amount_7d`, `_30d`, `_90d` | the scale of the flow; a mule moves victim-sized sums in and out within days, a salary account over a month, and 7 against 90 days shows the change |
+| `flow_present` | tells "nothing came in" from "everything left after 7 days" |
+| `left_15m`, `left_1h`, `left_6h`, `left_1d`, `left_3d`, `left_7d` | the velocity curve: a mule's jumps near 1 within a day, a salary split's sits at 0.1 to 0.35, ordinary spending leaves over days |
+| `held_share` | a mule keeps a small cut; savers and salary accounts hold most |
+| `median_dwell` | the curve's centre as a time: seconds for a pass-through, weeks for spending |
+| `left_by_transfer`, `left_by_card`, `left_by_cash` | onward transfer and cash-out against ordinary card spending |
+| per incoming payment `dwell_tracked`, `left_24h`, `dwell`, on its B4 edge | which payer's money moved and how fast; replaces "delay to the receiver's next outflow", which matched any unrelated purchase |
 
-At most 48 hop-2 accounts reached through identity per seed, and 64 community members.
+Transfer means `ach`, `check`, `internal` and `zelle`; `unknown` counts in the denominator
+only.
 
-**The contract lock.** Every query prints a version, and the model file stores the subgraph
-query's with a fingerprint of the feature layout (the community block, the label inputs and
-any ablation included) and the subgraph settings it was trained on (the caps,
-`community_parties`, `hub_threshold`, `observed_threshold`, `recent_payments` and
-`lookback_days`). Scoring refuses a model built for another version, layout or settings:
-with another lookback, features such as `in_365d` or `gap_ms` would mean something else.
+### `read_counterparties` (B2): who pays it and whom it pays
 
-### Response format
+**Job.** Count the account's payers and payees, how new they are, and where its money goes.
 
-The reference graph of the tests produces exactly this, and `tigergraph/queries.py` parses
-it.
+**Mule behaviour.** Fan-in from first-time payers: victims, about 2.6 a burst and up to 30.
+Fan-out to one fixed onward account (a pinned primary; a secondary with chance 0.12) in pieces
+of about USD 660.
 
-**Request.** `seed_ids` (distinct accounts) share one `as_of_ms`, t: callers group seeds by
-date. The caps, `community_parties`, `recent_payments` and `lookback_days` come from config
-under the names of the fields below, and the date's leaves from `read_leaves`:
-`hub_accounts`, `hub_devices`, `crowd_devices`, `hub_ips` and `crowd_ips`. There is no
-phase: every customer is visible.
+**Ordinary look-alike.** A landlord (the same tenants monthly), a business (many payers by
+card), family transfers, a new job's payroll (one new external payer), a new tenant (one new
+payer a month).
 
-**Rows.** A refused request prints one row, `{"status": reason}`: `invalid_parameters`,
-`duplicate_seed`, or `unknown_seed` and `invisible_seed` (not existing at t) with the
-offending `seeds`. Otherwise the first row is `{"status": "ok", "version", "as_of_ms",
-"work"}`, then one row per seed in request order with `seed`, the node lists `accounts`,
-`parties`, `devices`, `ips`, the object `community`, and the edge lists `pays`, `owned_by`,
-`enrolled_on_device`, `enrolled_on_ip`, `sent_from_device`, `sent_from_ip`, each edge from
-an account. `work` counts what the request read (payments, identity nodes, community
-candidates) for the bench; the reference graph does not mirror it and parity ignores it.
-Lists are unordered; a node appears once, the seed is among the accounts, and both ends of
-every edge are nodes of the same subgraph. Durations are milliseconds and never negative;
-one whose presence flag is false is 0. Amounts are integer cents,
-`floor(amount * 100 + 0.5)`, summed as integers. The row of a hub account that is not a
-seed, and a leaf's row, follow "The feature table". Python adds the reverse edges. Inside the
-query every per-seed mark is kept in an accumulator keyed by the seed, never in a vertex flag
-that two seeds of a request could share.
+**Why a query, not the GNN alone.** "How many new payers in 24 hours" is a count, and attention
+averages rather than counts.
 
-**Visibility** follows "Time". A device or IP is observed on the visible payments an account
-sent.
+**Internal and external payers.** A bank knows which payers are its own customers, and
+it matters more now that 0.6 of onward value leaves the bank. New payers are split by the
+payer's `is_external`. The dossier pins the share of victims at the same bank, or the split
+would learn a generator choice. "New" means the first payment in the lookback: a payer older
+than 90 days that pays again reads new, for everyone alike.
 
-**Expansion.** Every cap keeps the newest first, ties broken by id.
-
-- The seeds, then each counterparty of a seed's payments that is not a hub (hop 1), expand:
-  their sent and received payments (`seed_payments` per direction for a seed,
-  `other_payments` otherwise), one edge each, whose other account becomes a node; their
-  owners (their `owners` latest ownership links); their owners' links to devices and IPs
-  (`enrolled_devices`, `enrolled_ips` by start, one edge per link); and the devices and IPs
-  observed on their own payments (`sent_devices`, `sent_ips` by last use, one edge per
-  node).
-- Each owner of a seed adds its `siblings` newest accounts by ownership start. Every account
-  of the subgraph that a seed's owner owns carries its `owned_by` edge, however it was
-  reached, so the label-input variant can always tell it apart.
-- Each device or IP a seed reached that is not a leaf adds other customers' deposit accounts
-  (owned by a party that is not an owner of the seed): those whose owner links to it, one
-  candidate per link, and those observed sending from it, one per account. Per seed,
-  candidates are taken newest first (link start or last use), ties by account, node and
-  relation: at most `reverse_accounts` per node and relation, and at most
-  `identity_accounts` distinct accounts.
-- The community of each seed is built as "The community of a seed" says.
-
-**Node fields.**
-
-| List | Fields |
+| Field | Why |
 |---|---|
-| `accounts` | `id`, `owner_id` (its owner, `""` with none; for the join, not a feature), `account_type`, `is_external`, `hub`; `in_7d`, `in_30d`, `in_365d`, `out_7d`, `out_30d`, `out_365d`; `amount_in_7d`, `amount_in_30d`, `amount_out_7d`, `amount_out_30d`; `counterparties_in_30d`, `counterparties_in_365d`, `counterparties_out_30d`, `counterparties_out_365d`; `new_payers_7d`, `new_payers_30d`, `new_payees_7d`, `new_payees_30d`; `burst_in_1h`, `burst_in_24h`, `burst_out_1h`, `burst_out_24h`, `burst_new_payers_24h`; `passed_on_1h`, `passed_on_24h`; `shortest_in_gap_present`, `shortest_in_gap_ms`; `last_in_present`, `since_last_in_ms`, `last_out_present`, `since_last_out_ms` |
-| `parties` | `id`, `accounts`, `devices_now`, `ips_now`, `new_devices_7d`, `new_devices_30d`, `new_ips_7d`, `new_ips_30d` |
-| `devices`, `ips` | `id`, `leaf`, `observed_only`, `parties_now`, `parties_lookback`, `new_parties_7d`, `new_parties_30d`, `accounts`, `payments_7d`, `payments_30d`, `senders_30d` |
-| `community` (one object) | `parties`, `capped`, `nodes`, `links`, `new_links_30d`, `accounts`, `internal_payments_30d`, `internal_amount_30d`, `external_payments_30d`, `density`, `isolation` |
+| `payers_30d`, `payees_30d` | breadth: fan-in from many victims, fan-out to few onward accounts; a landlord or small business also has many payers |
+| `new_internal_payers_7d`, `_30d`; `new_external_payers_7d`, `_30d` | victims are first-time payers; the internal and external split is what a bank knows |
+| `new_payees_7d`, `_30d` | new onward accounts; a new merchant or biller is a hub and shows in `hub_payee_share_30d` |
+| `new_payer_share_30d` | a mule's money comes from strangers, a landlord's from repeat tenants |
+| `max_new_payers_24h` | a burst of victims, against a seller's sale day or a group collection |
+| `top_payee_share_30d` | a mule forwards to one fixed account; a saver's sweep to its own savings shows as the same customer through the ownership edge |
+| `hub_payee_share_30d` | ordinary money goes to merchants and billers, mule money to people |
 
-**Edge fields.**
+### `read_activity_change` (B3): the account against its own past
 
-| Lists | Fields |
+**Job.** Compare the account's recent activity with its own previous weeks.
+
+**Mule behaviour.** An account becomes active suddenly: in PhantomLedger's adopted activity
+model each mule account has one active period per ring, with victims arriving minutes to hours
+apart within a session and about every two days across the period (renewal gap median 2 days,
+kept to 10 minutes to 21 days); 0.695 of mule lives are under 30 days.
+
+**Ordinary look-alike.** Dormancy wake-ups (about 35% of accounts a year), holiday spending,
+payday bill runs.
+
+**Why a query, not the GNN alone.** It compares the account with its own past, which needs all
+of its 90 days, not a capped sample. The model reads the change from 7 days against 90 as a
+difference of logs.
+
+| Field | Why |
 |---|---|
-| `pays` | `id` (the payment), `from_id` (sender), `to_id` (receiver), `amount`, `rail`, `age_ms`; `prior_count`, `first_in_pair`, `gap_present`, `gap_ms`, `pair_age_ms`; `next_outflow_present`, `next_outflow_ms`; `sender_gap_present`, `sender_gap_ms`, `receiver_gap_present`, `receiver_gap_ms` |
-| `owned_by` | `from_id`, `to_id` |
-| `enrolled_on_device`, `enrolled_on_ip` | `from_id`, `to_id`; `start_known`, `since_start_ms`, `held_ms`; `active`, `since_end_ms` |
-| `sent_from_device`, `sent_from_ip` | `from_id`, `to_id`, `since_first_ms`, `since_last_ms`, `uses` |
+| `in_7d`, `in_30d`, `in_90d`; `out_7d`, `out_30d`, `out_90d` | payment counts, whose 7-day against 90-day difference shows a sudden start |
+| `burst_in_1h`, `burst_in_24h`, `burst_out_1h`, `burst_out_24h` | victim sessions and a mule's pieces, against payday bill runs; windows anchored at payments, never clock hours |
+| `shortest_in_gap` | the seconds-level rhythm of victim payments, against split salary credits |
+| `since_last_in`, `since_last_out` | how long it has been quiet: bursts against dormancy |
 
-The query reads no supervision and no answer key: the label-input variant's confirmations
-are joined in Python (see "The model").
+**Account newness from behaviour.** Ninety days of payments can show that an account is
+new (every payer new, `in_90d` equal to `in_30d`) though `opened_ms` is never read. That is
+behaviour a bank sees, not the first-seen time the owner ruled out, so it stays. Scoring only
+accounts older than 90 days would lose the short-lived, purpose-opened mules the owner called
+most important. PhantomLedger's lifecycle keeps the cue as strong as in reality and no
+stronger: a gate holds the `is_mule` lift of "no payment in the first 60 days of the lookback,
+some after" under its ceiling (today it is a 37 to 85 times marker against 5 to 10 times in
+reality).
 
-### Date tables
+### `read_payment_events` (B4): the payment graph
 
-Two queries compute, once per as-of date, what every request of the date would otherwise
-repeat. Both are cached by (world identity, date, settings), and both follow "Time".
+**Job.** Build the payment edges around the scored account, one edge per payment, each with
+its own timing.
 
-- `read_leaves(as_of_ms, lookback_days, hub_threshold, observed_threshold)` prints the ids of
-  the date's hub accounts, hub devices, crowd devices, hub IPs and crowd IPs. `fetch` passes
-  them to every request of the date.
-- `read_sharing(as_of_ms, lookback_days, the four device and IP leaf lists, after_id,
-  batch_size)` prints, a page at a time by party id, one row per customer with a co-user:
-  `party_id`, `device_co_users`, `ip_co_users`, `new_device_co_users_30d`,
-  `new_ip_co_users_30d`. A customer with no row has none. Python joins them to each account
-  row by `owner_id`.
+**Mule behaviour.** Order and pairing: a victim pays (a first contact), the mule forwards
+within minutes, an onward account collects; paths run victim to mule to batch-mate to
+organizer.
 
-### Other queries
+**Ordinary look-alike.** Ordinary money chains (parent to student to school), rent (a repeat
+payment), a new merchant (a first contact, usually a hub).
 
-- `list_population(as_of_ms, after_id, batch_size)`: the date's population a page at a time
-  by id, with `account_id`, `owner_id`, `account_type` and `opened_ms` (for evaluation's
-  groups, never a feature). Reads no label.
-- `read_supervision(known_by_ms)`: every account with `0 < discovered_ms <= known_by_ms`,
-  with `discovered_ms`, `discovery_channel`, `mule_onset_ms` and `mule_last_ms`.
-- `read_world()`: what identifies the loaded world (see "Scaling").
-- `profile_hubs(as_of_ms, lookback_days, buckets)`: for the bench, histograms of the exact
-  measures behind the hub and crowd tests, over every account, device and IP of the world,
-  with devices and IPs split into enrolled and observed-only.
-- `read_answer_key(after_id, batch_size)`, under `gsql/evaluation/`: every account's
-  `is_mule`, ring, layer, flow, `mule_onset_ms`, `mule_last_ms` and `discovered_ms`, for
-  evaluation only.
+**Why a query, not the GNN alone.** These are the edges the GNN passes messages over. Money
+passed on within 15 minutes, a burst from new payers and a victim paying in escalating amounts
+exist only at the level of single payments; one edge per pair with totals would erase them.
+
+**Structure.** The scored account's newest 32 payments each way; each expanded counterparty's
+newest 16 each way (hubs not expanded); up to 8 other accounts of the scored account's
+customer, most recently active first. The full composition of an example's subgraph is in
+[The features](features.md#what-one-examples-subgraph-holds).
+
+| Field | Why |
+|---|---|
+| `amount`, `rail` | size and kind of payment: victim-sized credits, onward pieces of about USD 660, Zelle and ATM cash-out against card spending and ordinary P2P |
+| `age` | recency and order of the events around the account |
+| `pair_prior_count`, `pair_gap`, `pair_age` (its absent bit is "first in pair") | first contact against an established relationship: victims are first contacts, the onward account a repeat; rent is a repeat |
+| `sender_gap`, `receiver_gap` | rapid repeat payments and a mule's fast pieces, against a business's steady flow |
+| `dwell_tracked`, `left_24h`, `dwell` (from B1) | velocity on the event itself |
+
+### `read_shared_identity` (B5): the device and IP graph
+
+**Job.** Build the customer's devices and IPs, those seen on payments, and who else uses each
+node and since when, as enrolment, owner-enrolment and seen edges with customer, device and IP
+rows.
+
+**Mule behaviour.** Controller-operated accounts, about 12% of mules, hold the ring's device
+and IP from shortly before the first ring payment (median lead 1 day). A ring device nobody
+registered still shows on members' payments: a holder lacks it on file with chance 0.28 for a
+device and 0.39 for an IP. Controller-opened accounts under stolen or synthetic identities run
+from the controller's devices.
+
+**Ordinary look-alike.** Households of 2 to 6 share devices and IPs, with old links that
+started together; carrier networks and public Wi-Fi are crowds; a new phone, a new browser or
+a move adds a new link.
+
+**Why a query, not the GNN alone.** The device and IP edges plus who else uses each node and
+since when. Counting a customer's co-users across all its devices, and when each pair began
+sharing, reads nodes and links the subgraph does not hold.
+
+**Both kinds of link.** Enrolment (the customer registered it) and seen (it appeared on
+the account's own payments), because a ring device no member registered still shows on their
+payments.
+
+**Every account gets owner-enrolment edges.** Each account in a subgraph gets edges to
+its customer's kept devices and IPs, so an account with no payments that shares a device with
+an active mule reads the mule account's behaviour within two layers: the owner's Account Z
+(2026-10-14), which must be scored differently from a payment-less account that shares
+nothing. The alternative, a third layer, was rejected.
+
+**Link ends.** `active`, `since_end` and `held`, agreed earlier in the session, are dropped,
+and the "now" counts become 30-day counts: PhantomLedger plans a ring tenure's end from the
+ring's future payments, so they read the future. `since_last_seen`, the time since the
+customer's accounts last used the node on a payment, replaces them with observed evidence.
+
+**Deposit-only co-user accounts.** Accounts reached through a shared device or IP are deposit
+accounts only, one candidate per customer, deduplicated by customer before the caps.
+The cap of 16 other customers per node was dropped: a node with more than 8 customers is a
+crowd and never expanded, so a non-leaf node has at most 7 other customers.
+
+| Where | Field | Why |
+|---|---|---|
+| enrolment edge (customer and owner-enrolment) | `since_start` (only with a known start) | ring tenures are recent; links made at sign-up date the customer, not behaviour |
+| enrolment edge | `since_last_seen` | a controller's device on file is used in bursts; the observed stand-in for the dropped link end |
+| seen edge | `uses_90d`, `since_first_use`, `since_last_use` | a ring device nobody registered still shows on members' payments, used briefly and recently; a new phone looks alike but has no co-users |
+| device or IP node | `customers_30d`, `customers_90d` | how shared it is; households share small numbers, carrier lines and terminals are leaves |
+| device or IP node | `new_customers_7d`, `_30d` | ring tenures arrive staggered and recently; household members arrive together and long ago |
+| device or IP node | `accounts_seen_30d`, `payments_seen_30d` | activity on the endpoint |
+| device or IP node | `observed_only`, `crowd`, `hub` | a ring device nobody registered; the kind of leaf |
+| customer node | `accounts_owned` | a recruited mule's second account or a purpose-opened one, against small-business and secondary accounts; counts open and closed accounts alike, since counting open ones only would rebuild closure |
+| customer node | `devices_30d`, `ips_30d` | how many endpoints a customer uses; busy families |
+| customer node | `new_devices_30d`, `new_ips_30d` | a ring handover adds a device or IP shortly before the first ring payment, against a new phone or a move |
+| customer node | `co_users`, `new_co_users_30d` | its sharing across all its devices in one number; rings form fast, households are old |
+| customer node | `co_users_both` | a ring shares a device and an IP. In PhantomLedger today only rings do, which is a shortcut; once households land, families share both too and it must separate a family from a ring |
+
+### `read_community` (B6): how the mule network formed
+
+**Job.** Find the cluster of customers around the scored account's owner, as of t, and measure
+its size, density, how recently its links formed, the money moving inside it and how cut off
+it is. It answers the owner's "formation of mule networks" and "clustered connections with
+isolated communities" (2026-10-16).
+
+**Mule behaviour.** A ring is a small, dense cluster formed recently that pays itself; its
+victims and onward accounts surround a mule account through payments.
+
+**Ordinary look-alike.** A long-standing household: old links, mostly paying the world.
+
+**Why a query, not the GNN alone.** How a cluster formed is a property of the cluster, beyond
+the GNN's two hops. It joins the scored account at the model's head and is ablated.
+
+**Members.** Every step is computed as of t, and a customer belongs to the first round that
+reaches it:
+
+1. Round 0 is the scored account's owner.
+2. Round 1 adds customers that share a non-leaf device or IP with it.
+3. Round 2 adds customers that share one with a member kept in round 1.
+4. The payment round adds the owners of non-hub internal accounts that paid, or were
+   paid by, an account of a kept member in the last 30 days.
+
+Candidates of each round are kept newest first, ties by customer id, until the community holds
+64 members. A sharing candidate's time is the latest, over the shared (node, member) pairs, of
+the later of the two sharing starts; a payment candidate's time is its latest such payment. A
+member's accounts are those that exist at t with a visible ownership link, open or closed,
+leaving out account hubs.
+
+**The payment round** was added because the device and IP rounds see a ring only through its
+endpoints, which about 88% of mules do not hold; for them the block would read like a customer
+who shares nothing, and a large ring's device can become a crowd. The owner: "just ensure
+that it is a meaningful feature". So the block is checked on development worlds by the
+[feature audit](#the-feature-audit) (a column with no separation is researched or dropped),
+by the "without community" ablation, and by a report of the share of mules, by whether they
+hold a ring endpoint, whose block differs from that of a customer who shares nothing.
+
+**Never a library algorithm.** Connected components, Louvain and label propagation run on the
+whole graph with no as-of time, so future ring members would leak into training, and hubs and
+crowds would merge strangers. The demo query `demo_account_web` also reads `is_mule`.
+
+| Field | Why |
+|---|---|
+| `members`, `capped` | size, and whether the cap cut it |
+| `shared_nodes`, `density` | a ring is small and dense |
+| `new_link_share_30d` | rings form fast, households are old |
+| `internal_amount_30d`, `isolation` | rings pay each other, families mostly pay the world |
+| `member_payments_30d` | shows when `isolation` has an empty denominator |
+
+### Query plumbing
+
+- Every query prints a version: a hash of its normalised text. The model file and the manifest
+  record them; fetch refuses a version with no passing parity record.
+- Every per-account query refuses invalid parameters and duplicate, unknown or invisible
+  (not existing at t) accounts with a status row. `list_accounts`, `read_labels` and
+  `read_answer_key` page by strictly increasing id.
+- Every PRINT of a vertex set is a projection: a bare `PRINT Accounts;` once leaked every
+  attribute while all 160 tests passed.
+- Per-request state is kept in accumulators keyed by the scored account, never in a vertex
+  flag two scored accounts of one request could share.
+- Work counters are printed only because `mule bench` reads them; the reference graph does not
+  mirror them and parity ignores them.
+- Each query is checked offline by `gsql-lsp check` against `gsql/schema/` as it is written,
+  and passes a compile probe on the TigerGraph 4.2.5 workspace before the Python above it is
+  built. None has been compiled on a server yet.
+- The executor keeps the rebuild's failure classes with an outage budget, one shared backoff,
+  finite timeouts, HTTP status raised before pyTigerGraph hides it, POST with orjson, and
+  reinstalls changed queries only. Requests are sized from the measured 90th percentile of
+  bytes per account to stay under half of TigerGraph's 64 MB response limit; a request refused
+  for its size or timing out is halved, down to one account, and one account still failing is
+  an error, never a gap. Accounts per request (32 by default) is a transport setting that never
+  changes a result.
+
+## Encoding
+
+| Kind | Encoding |
+|---|---|
+| Counts | `log(1 + n)` |
+| Amounts | `log(1 + dollars)`, from integer cents |
+| Shares | as they are, in `[0, 1]`; 0 when the denominator is 0, with another column showing the empty denominator |
+| Flags | 0 or 1 |
+| Rail | one-hot over `ach`, `card`, `cash`, `check`, `internal`, `unknown`, `zelle` (a `Zelle_Transfer` is `zelle`) |
+| Durations | a presence bit plus 64 Fourier numbers: `u = log1p(seconds) / log1p(10 years)`, 32 log-spaced frequencies from 0.125 to 2 cycles per unit of u, sine and cosine. An absent duration is bit 0 and 64 zeros. |
+
+The basis resolves a second (u = 0.035), a minute (0.21), an hour (0.42), a day (0.58) and 90
+days (0.81). It is invertible, which is why durations measured to t carry the clock of their
+event (see the Clock guard). The cache and the built batches keep raw integer milliseconds;
+the GPU encodes them each step. The `unknown` rail column stays because PhantomLedger's rail
+fixes make it honest, and a reported run refuses a world that fails those gates. On an
+earlier task the Fourier encoding added little on its own (average precision 0.829 against
+0.823), so no gain is credited to it without the per-payment timing ablation.
+
+## Leak rules and how tests enforce them
+
+Leaks are absolutely not allowed. Each guard below is named once; [the
+features](features.md) cites them by name for every feature.
+
+| Guard | Rule | Enforced by |
+|---|---|---|
+| Labels | Only `read_labels` reads `pu_label`, `mule_onset_ms` and `mule_last_ms`, printing the dates only for `pu_label` 1; only `read_answer_key` reads `is_mule` and `mule_ring_id` and prints `opened_ms`. No feature query reads any of them, and no feature says whether any account is known or caught. Labels and weights never join a node row. | erasing every label column leaves every query's answer identical; projection-only PRINTs; text tests fail any other reader; the fetch executor refuses `read_answer_key`; import contracts |
+| Selection by labels only | Selection reads `pu_label`, never the answer key, in every scoring mode. | with the answer key erased, every selection input is byte-identical |
+| Before t | Values come only from payments with `t - 90 d <= ts < t` and links with `valid_from_ms < t`; an account exists only when `opened_ms < t`. | fixtures with a payment, a link start and an account opening exactly at t, a link end exactly at `t - 90 d` and at `t - 30 d`, and a closure exactly at t; text tests that require one exact allowed form for every bound; an account alone equals itself among 31 others |
+| No link ends as values | `valid_to_ms` appears only in the visible and current tests, both at least 30 days back; `closed_ms` only in the population test. These are decided by the past only while no ring tenure is quiet for more than about 26 days, so a gate keeps PhantomLedger's renewal gap at most 21 days and tenures built from attempted payments. | a fixture of two holders with identical pasts, one with a later ring payment, giving identical rows at t; text tests allowing only the two forms |
+| Lookback | Every window and duration lies inside `[t - 90 d, t)`, which with 90 days of history is always inside the export, so no value reaches the data start, a clamped date or the burn-in boundary. | `mule prepare` checks the first Monday against the first payment, never the first join |
+| Known starts | A link start or first seen use is used only when known. | fixtures: a joiner and a long-standing customer with the same behaviour read the same; a pre-data customer reads the same on two Mondays far apart |
+| No dates of record | `opened_ms`, `joined_ms` and `closed_ms` decide existence, the population and the known-start test, never a value or an order; no token is read; caps order by activity. | a perturbation test moves every date of record and link start before `t - 90 d` by keyed amounts that keep each on the same side of every bound it meets, on the reference graph and in live parity, and requires every answer byte-identical; a test that the batch builder never reads `opened_ms` |
+| No identification closure | Identification closes nothing in PhantomLedger, so no end, silence or missing account is caused by a catch. | a caught neighbour reads exactly like an uncaught one |
+| Clock | No column holds a clock value. Durations measured to t (payment `age`, `since_last_in`, `since_last_out`, enrolment `since_start` and `since_last_seen`, seen `since_first_use` and `since_last_use`) carry their event's clock time, since t is always Monday 00:00, and a monthly payment in the subgraph can fix the day of month. | a reported run refuses a world unless PhantomLedger's Clocks gates passed (`mule prepare`) and the clock probe of `mule audit` (a classifier on the residues of every such duration modulo 60 seconds, an hour, a day and a week) predicts `is_mule` no better than chance, its ROC AUC interval containing 0.5 (`mule train`); until then results are development only |
+| Order-free ties | Same-second payments have no order (see [Time](#time)). | a fixture swapping same-second ids changes no B1, B2, B3 or B6 value; the loader refuses payment ids that follow event time |
+| Same rule for all | Caps, orders, hub handling and subgraph shape are identical for positives, unlabelled draws, neighbours and accounts scored in selection or test; one query with one set of settings builds all of them; thresholds are tuned on development worlds only, and on reported worlds a check only verifies and a failure stops the run. | the cache key holds query versions and settings; the contract lock |
+| No label conditioning | Graph-structure features are computed identically for every account whatever its label. | erasing the labels (above) |
+| Evaluation never feeds back | Time to first flag and every other evaluation output never become features (the owner: "dont sent this time to the model"). No query, data or training code imports evaluation, and nothing reads evaluation's results back. Gate results (`mule audit`'s clock probe, lift gates and feature audit) are pass records holding only pass or fail, query versions, settings and world identity; `mule train` reads them, so they can stop a run but never change an input. | import contracts (the XGBoost package included) |
+| Gates | A value is only as honest as PhantomLedger's behaviour. | a reported run refuses a world unless every gate mapped to a feature passed (see [Gates](#gates)) |
+
+**Other tests.** Every query ignores a self-payment; two payment-less accounts, one sharing a
+node with a busy mule, get different subgraphs and scores (Account Z); about 60 one-line
+mutants and a planted-slip harness (seven planted slips once passed all 16 text tests) are run
+in every review; every printed field is an edge end, a feature or a presence flag; unknown
+categories are refused; the reference-world fixtures include the behaviour catalogue's
+look-alikes (direct-deposit splits, self-transfers, dormancy wake-ups, landlords, family
+chains).
+
+**Leak paths found and how each is closed.**
+
+| Path | Concrete case | Closed by |
+|---|---|---|
+| A label in a feature query | the rebuild's bare `PRINT Accounts;` | Labels guard |
+| A date of record leaving a query | `list_accounts` printing `opened_ms` into every cache | `opened_ms` only in `read_answer_key` |
+| The answer key in selection | a fallback scoring every hidden mule at weight 1 against 10 for others | Selection by labels only |
+| An event at t | a ring tenure starting exactly on Monday 00:00 | Before t |
+| A link end read against t | two ring-mates last paid on 3 March; one resumes on 20 March; on 16 March one read active, the other ended | No link ends as values, while its gate holds |
+| A future account in the subgraph | a co-user's fallback account opened at t + 3 days | every account node passes `opened_ms < t` and visible ownership |
+| A date of record as a value | a backdated join makes a clamped link's age measure the calendar | Known starts, No dates of record |
+| A first seen use dating the customer | a joiner's first payment makes a new co-user pair | the known first-seen-use rule |
+| Account newness rebuilt from behaviour | an account opened 20 days before t | a bank sees it; its strength is gated |
+| Closure or silence from a catch | a caught mule's links end and payments stop | No identification closure |
+| Clock phase | a `since_last_out` of 16 to 17 hours is a Sunday 07:xx outflow, and only mules make night ATM withdrawals | Clock |
+| Same-second ties by row order | whether a victim edge shows a 9-minute dwell followed the generator's row order | Order-free ties |
+| Generator cues | a Zelle credit from a first-time payer and an internal move of USD 662 to the same owner 9 minutes later is mule-only today | Gates |
+| Settings tuned on reported worlds | raising the hub threshold after seeing world C's collector | Same rule for all |
+| Payments a bank cannot see | an external neighbour's payments to another external account | the loader refuses them |
 
 ## The model
 
-- Heterogeneous temporal graph attention: two `HeteroConv` layers of `TransformerConv` per
-  relation, taking the edge features (Fourier encodings included) as edge attributes, summed
-  across relations. `owned_by` and its reverse have no edge features, so their attention
-  reads the nodes alone.
-- *Defaults*: hidden size 64, 4 heads, dropout 0.2.
-- The seed's final representation, joined with its community block (11 numbers), goes
-  through a small head (to 32, then to 1) that gives one score. Without the community block
-  (for the ablation) the head reads the representation alone.
-- No per-account embedding and no memory, so any account, including a new one, can be
-  scored.
-- The ablations of "Experiments" are switches of the same model: emptied relations and
-  zeroed columns of the built batches.
+| Part | Decision |
+|---|---|
+| Node types | account, customer, device, IP |
+| Relations | 16: payment (`pays`), ownership (`owned_by`), device and IP enrolment (customer to node), device and IP owner-enrolment (account to node), device and IP seen on payments (account to node), each with its reverse |
+| Layers | two `HeteroConv` layers of one `TransformerConv` per relation, summed over relations, reading each edge's fields (every Fourier-encoded duration included) as edge attributes; `owned_by` and its reverse have none |
+| Sizes | hidden 64, 4 heads of 16, dropout 0.2 |
+| Inputs | account 309 columns, customer 11, device 12, IP 12; payment edge 401, enrolment edge 130, seen edge 131 ([widths](features.md#widths)) |
+| Degrees | every node carries the log of its number of edges per incoming relation in the example's subgraph, because attention's softmax averages over neighbours and cannot count them |
+| Head | the scored account's final 64 numbers joined with its 8-number community block: Linear(72, 32), ReLU, Linear(32, 1) |
+| Inductive | no per-account embedding and no memory; no batch-statistics layer, so a score never depends on its batch |
 
-**Label-input variant.** The same model also sees, for each account node, whether it was a
-confirmed mule by t, with the Fourier encoding of the time since its confirmation, cut at the
-lookback; every relation has its own attention, so a confirmation counts according to how
-the account is linked. The seed and every account of its owner always read as unknown: a
-bank that had confirmed the seed's own customer would have closed it. A run reads the
-confirmations once with `read_supervision`, known by the last date it scores, keeps them by
-`revealed_share`, and joins them in training by account id when `discovered_ms <= t`;
-confirmed accounts of every split count, as a bank knows all its confirmed mules.
-Masking (*default*: each confirmed neighbour hidden with probability 0.5 during training,
-never at evaluation) happens on the GPU, so cached subgraphs are reused across epochs and
-serve both variants.
+An example is one (account, Monday) with its own copy of its two-hop subgraph, so no node is
+shared between examples and a node reached by two paths appears once, which keeps cycles
+visible. The ablations are switches on built batches ([exact
+rules](features.md#ablation-and-comparison-switches)).
 
-## Training
+## Training and selection
 
-- **Loss.** nnPU (kept from the old code). The positive risk is weighted by 1 minus the
-  prior (*default* `pu_weighting` balanced), which is imbalanced nnPU with a balanced target
-  (Su, Chen and Xu, 2021). The textbook weight, the prior itself, stays a setting
-  (`pu_weighting` prior): with it, training collapses to a constant scorer (on the reference
-  world the loss settles at exactly the prior by the fourth epoch, and the earlier runs on
-  NVIDIA measured a PR AUC of 0.001). The negative-risk correction subtracts the prior times
-  the positives' risk as negatives; there each positive example counts once, one per mule and
-  date, because a hidden mule enters the unlabelled draw once per date it is active, while
-  the positive risk keeps each mule's equal weight.
-- **Prior.** The prior is the share of hidden active mules in the pool the unlabelled are
-  drawn from. `prepare` reports the revealed active share of the selection run: on each of
-  its training dates, the training split's mules revealed at V that are active, divided by
-  the training split's population, averaged over the dates. The grid is 1, 3 and 10 times it
-  (*default*), so a hidden mule is assumed as common as, three times or ten times a revealed
-  one; the choice and its sensitivity are reported.
-- **Weights.** Before training, each label's weights are divided by their mean over all
-  the training batches, once, because the loss divides each label's weighted sum by its
-  count in the batch. Each mule then keeps its equal share however its dates fall into
-  batches.
-- **Selection run.** For each prior of the grid, train for at most 30 epochs (patience 5)
-  and score validation after each epoch. The score is the recall of the revealed validation
-  mules within the top 1% and within the top 5% of their date's accounts, pooled over the
-  dates (mules found on all dates divided by positives on all dates), averaged over the two
-  budgets. Only revealed labels are used, as in a bank. The run keeps the prior and the
-  epoch with the best score; a later epoch or prior must be strictly better.
-- **Final run.** Train once with the chosen prior for exactly the chosen number of epochs, on
-  the final run's training examples. The final run is the model that is tested and saved.
-- **Seeds.** Five seeds per world (*default*), 0 to 4, vary the model only: the initial
-  weights, dropout, the label masks and the batch order. Each seed has its own selection run
-  and final run. The data seed (the account split, the revealed share and every draw) stays
-  fixed, since the three worlds already vary the data. Results are reported per seed, with
-  their mean and range; `score` uses the final model of the seed whose selection run scored
-  best.
-- *Defaults*: Adam, learning rate 0.001, weight decay 0.0001, 128 examples per step.
-
-## Scaling
-
-**Sampling and batching.** The query's caps are the sampler: deterministic, newest first,
-so a seed's subgraph is the same in every run. Hubs and crowds are leaves whose rows hold
-only their flags, which keeps billers, ledgers, carrier NAT and terminals from pulling in
-thousands of strangers or a year of their payments, and the time-ordered account features
-read at most `recent_payments` payments per direction. A request's cost is therefore
-bounded by the caps and by the lookback's payments of its seeds and of the non-hub accounts
-it holds, read once each. Seeds are fetched by date, 32 to a request (*default*, a transport
-setting, since it never changes a result); training steps take 128 examples.
-
-**Date tables.** The leaves and the co-user counts are computed once per date by
-`read_leaves` and `read_sharing` (see "Date tables"), not once per request: a co-user count
-needs every device and IP an owner touched, each with its own users, and the hub test reads
-a hub's whole year of payments.
-
-**Extraction and caching.** TigerGraph does the feature work as of t, so only the subgraphs
-and the date tables leave the database. The cache keeps each request's response, as printed,
-in one compressed file per (world, as-of date, request), written once and never rewritten,
-with an index of the seeds each holds; `fetch` requests only seeds the index does not hold.
-The key is the world's identity, the query version and the subgraph settings. The world's
-identity is a hash of what `read_world` returns:
-
-- the count of every vertex and edge type, and of each value of `account_type`,
-  `payment_rail` and `is_external`;
-- sums in whole seconds of `joined_ms`, `opened_ms`, `closed_ms`, each link type's
-  `valid_from_ms` and `valid_to_ms`, and each payment type's `event_ts_ms`;
-- sums of the amounts in cents per payment type;
-- per edge type, the sum over its source vertices of their squared degree, so rewiring
-  shows.
-
-All are integers, so the hash is the same on every run. A world regenerated or changed in
-any count, time, amount, category or wiring has another identity, so its stale subgraphs and
-date tables are never read. Subgraphs no longer depend on the phase, so one cache serves
-every run, both variants, the controls and every experiment. `prepare` also checks the
-lookback against the data start the identity gives.
-
-**Response size.** The executor asks TigerGraph for responses of at most 64 MB
-(`sizeLimit`). `seeds_per_request` is set so that the 90th percentile of bytes per seed,
-times the seeds per request, stays under half of it. A request refused for its size is split
-in two and retried, down to one seed; a single seed over the limit is an error.
-
-**Parity.** No query has run on a TigerGraph server yet: the GSQL is checked by text tests
-and mirrored in Python by the reference graph. `mule parity` takes a live TigerGraph that
-holds a small export (*default* the 5,000-person parity world) and the reference graph
-reading the same export. On a seeded sample of dates and seeds it runs every installed query
-on both and compares the canonical responses, and it checks that a seed fetched alone equals
-the same seed fetched among 31 others. It records the query versions that passed under
-`results/parity/`. Every command that runs a query, except `install` and `parity`, refuses a
-version with no passing record.
-
-**Building.** Responses are parsed into one component per seed, the co-user counts are
-joined by owner, and durations are Fourier-encoded on the GPU. Built batches stay on the
-training device for every epoch when they fit (*default*), otherwise in pinned host memory,
-copied each step.
-
-**`mule bench`.** On the loaded world, after `prepare`, it draws seeds from the prepared
-examples of every run in their proportions (*default* 256 seeds on each of 4 dates), and at
-8, 32 and 128 seeds per request, with 1, 2 and 4 requests at once, it measures:
-
-- the time and response size of each request, and its `work` counts, by positives and
-  others, a refusal for size counted as a result;
-- the time of `read_leaves` and `read_sharing` per date;
-- the nodes and edges per subgraph by type, and the community sizes (median, 90th
-  percentile and largest);
-- TigerGraph's memory in use, from its metrics endpoint;
-- the parse and build time per training batch, the forward and backward time and peak device
-  memory per training step, and the cache bytes per seed;
-- `profile_hubs`'s histograms on the bench dates, and the share of positive examples that
-  are hub accounts;
-- a projection of a full run: the examples per date divided by the seeds per request, times
-  the time per request, plus the date tables, and the cache bytes.
-
-It writes one table per world, with the world's size, to `results/bench/`. It is run on
-worlds of 30,000, 100,000 and 300,000 people, and the tables side by side show how cost
-grows and which part drives it.
-
-**Recommended training architecture.** For each as-of date, TigerGraph computes the date
-tables once, then the features and subgraphs of the date's seeds in requests of 32; requests
-for different dates are independent and can run in parallel. The responses are cached once
-per world and reused by every epoch, prior, seed, run, variant, ablation and control. Python
-builds one component per seed, and the GPU encodes time, masks labels and trains on 128
-examples a step. The bench decides the request size, the parallel requests and whether the
-built batches fit on the device; this paragraph is updated from its tables.
+- **Loss.** nnPU with balanced weighting (imbalanced nnPU with a balanced target, Su, Chen and
+  Xu 2021). The textbook weight collapsed: the loss settled at the prior by the fourth epoch,
+  and PR AUC was 0.001 on the earlier NVIDIA runs. The positive risk keeps each mule's weight
+  of 1 divided by its active Mondays; the negative-risk correction uses unit weights over
+  positives, because a hidden mule enters the unlabelled draw once per active Monday. The loss
+  for a positive uses `1 - sigmoid(f)` for float32, and a test drives the negative risk below
+  zero.
+- **Prior.** The share of hidden active mules among the unlabelled is unknown, as in a bank.
+  The grid is 1, 3 and 10 times the identified active share measured in the training world
+  (identified active mules divided by scorable accounts, averaged over Mondays). The grid is
+  run on the development rotation; if the three are within noise, the prior is fixed at 1
+  times for reported runs and that is stated, saving two thirds of selection training. It is
+  never set from PhantomLedger's identified-share report, which reads the truth.
+- **Settings.** Adam, learning rate 0.001, weight decay 0.0001, 128 examples a step (the
+  rebuild's setting), at most 30 epochs, patience 5.
+- **Selection.** After each epoch the selection world is scored whole. The score is the mean
+  of the recall of identified active mules within the top 1% and within the top 5% of each
+  Monday's ranking, pooled over Mondays (mules found on all Mondays divided by positives on
+  all Mondays), using `pu_label` only. Each seed keeps the prior and epoch with the best
+  score; a later epoch or prior must be strictly better. Pooled recall never fails on a
+  Monday with no positive.
+- **Seeds.** Five model seeds, 0 to 4, vary only the initial weights, dropout and batch order;
+  the draw seed is a separate setting and stays fixed, since the three worlds vary the data.
+- **No refit.** With separate worlds the selected model is final.
+- **Which model scores.** `mule score` uses the seed with the best selection score, never
+  chosen by test; its test metrics are reported beside the mean and spread over seeds.
+- **Determinism.** Batches are built once, shuffled across Mondays and labels, and reused;
+  per-step reseeding and deterministic flags; PyG's scatter softmax is checked under
+  `torch.use_deterministic_algorithms` on CUDA. A per-epoch checkpoint is written atomically
+  so a run can resume.
+- **Contract lock.** The model file holds every query version, every layout with its count
+  transform and Fourier basis, the community, degree and ablation flags, and the settings
+  (lookback 90; caps 32, 16, 8, 8 devices and IPs, 48; time-ordered lists 256; community 64;
+  hub 200; crowd 8). `mule score` refuses a model built for other query versions or settings
+  and names the fields that differ.
 
 ## Comparisons
 
-Every ranker is trained on the final run's examples with the same weights and scored on the
-same dates and groups. The controls read the features of the fetched subgraphs, so they see
-exactly what TigerGraph gives the GNN.
+Every ranker trains on the same examples, weights and labels as the GNN and is scored on the
+same Mondays and groups. They read the features of the fetched subgraphs, so they see exactly
+what TigerGraph gives the GNN.
 
-| Ranker | What it is |
-|---|---|
-| Rule | Ranks by the count of confirmed accounts linked to the seed at t (payment counterparties, shared devices and IPs; not its own customer), ties by the newest confirmation |
-| Trees, own behaviour | Gradient-boosted trees (scikit-learn's `HistGradientBoostingClassifier`, its default settings, early stopping off, seeded by the model seed) on the seed's own account row, without its `hub` and co-user fields |
-| Trees, graph features | The same on the seed's full account row, its owner's party row and its community block |
-| Trees, graph features and labels | The same plus the counts of confirmed accounts linked to the seed, by how they are linked |
-| GNN | The behavioural GNN, without label inputs |
-| GNN with labels | The label-input variant |
+| Ranker | What it reads | Question it answers |
+|---|---|---|
+| XGBoost, own behaviour | the scored account's own row (50 numbers, durations as presence and seconds) | what graph learning adds at all |
+| XGBoost, graph features | the same plus its customer row (8), its owner's device and IP rows aggregated by mean and maximum, and its community block (8) | what message passing adds beyond hand-made graph features |
+| GNN | everything | the model |
+| GNN, scored account alone | its own row and own payment edges; every other node zeroed, no other edge, no community | what neighbours add |
+| GNN without devices and IPs | no device and IP nodes or relations; customer rows keep `accounts_owned` only; no community | what shared identity adds |
+| GNN without community | head Linear(64, 32) | whether two hops already see the ring |
+| GNN without per-payment timing | every payment-edge duration and dwell field zeroed | what the temporal encoding adds |
 
-The trees learn revealed against unlabelled with the examples' weights, rescaled so the two
-labels weigh the same in total, as balanced nnPU does. When labels are selected completely
-at random, a classifier of labelled against unlabelled ranks accounts as one of positive
-against negative would (Elkan and Noto, 2008). The trees have no settings to select, so they
-train only once, in the final run.
-
-The claims we make:
-
-- what graph learning adds: the GNN against trees on own behaviour, and against the GNN with
-  the seed alone (its own payment sequence without its neighbours);
-- what devices and IPs add: the GNN against the GNN without them;
-- what message passing adds beyond graph features made by hand: the GNN against trees with
-  graph features;
-- what the GNN adds beyond guilt by association: the GNN with labels against trees with
-  graph features and labels, and the rule.
-
-## Experiments
-
-- **Ablations.** The GNN without labels, trained without one family of inputs at a time, on
-  the same examples and five seeds, each seed with the prior and number of epochs its full
-  model chose, and compared with the full model at test seed by seed. None needs a new fetch.
-  - Without the community block; the trees with graph features also run without it.
-  - Without devices and IPs: no Device or IP nodes, no `enrolled_on_*` or `sent_from_*`
-    relations, no co-user fields and no community block, so only payments and owners remain.
-  - The seed alone: the seed's own payment edges and their features stay, and every other
-    node's features are zeroed.
-  - Without link ends: `active`, `since_end_ms`, `held_ms`, `devices_now`, `ips_now` and
-    `parties_now` zeroed.
-  - Without year-long counts: `in_365d`, `out_365d`, `counterparties_in_365d` and
-    `counterparties_out_365d` zeroed.
-  - Without `account_type`.
-- **Sparse labels.** The final run at `revealed_share` 1, 0.5, 0.25 and 0.1, for the GNN,
-  the GNN with labels and the trees, still positive-unlabelled, reported at test against the
-  full answer key. Every share keeps the dates, the maturity gaps, the unlabelled counts and
-  weights, and each seed's prior and number of epochs of share 1, so only the labels change;
-  this borrows share 1's validation labels for selection, which a bank with sparse labels
-  would not have, and the report says so. Below 1, the run is repeated for `revealed_key` 0
-  to 4 with model seed 0, beside model seeds 0 to 4 with key 0, so the spread over which
-  mules are kept is reported apart from the spread over seeds. The report gives each share's
-  positives and the labelled share of all mules (the share kept times the share discovered by
-  R).
-- **Sensitivity world.** The results on the world whose rings share devices and IPs at 10%.
+- XGBoost replaced gradient-boosted trees at the owner's request ("just train it against
+  industry standard xgboost"). It learns identified against unlabelled with each label's
+  weights rescaled to equal totals: when labels are selected completely at random, a classifier
+  of labelled against unlabelled ranks like one of positive against negative (Elkan and Noto,
+  2008). It uses XGBoost's default settings, seeded by the model seed, with the number of
+  rounds chosen on the selection world by the same selection score, as the GNN chooses its
+  epochs.
+- Each ablation trains and selects its epoch like the full model, at the prior the full model
+  chose for that seed, with the same five seeds.
+- A difference is called shown only when its paired, ring-resampled interval excludes zero;
+  an ablation whose interval straddles zero gets more seeds.
+- What to expect: in the old runs a model without message passing matched the GNN in the top
+  1% (35% against 34%) once counts were given, and the old Fourier ablation was null. With a
+  ring device on about 12% of mules, the device and IP ablation may move little; the share of
+  positives with any ring-device link is reported beside it. Plan for a close result, and fix
+  PhantomLedger's shortcuts first, since a shortcut favours the simple models.
 
 ## Evaluation
 
-- **Scoring.** On every weekly date in the test window, every true mule of the test split
-  active that date is scored, plus the weighted draw of the other accounts, so the metrics
-  estimate the full ranking without scoring every account every week.
-- **Per-date alert budgets** (top 1% and 5%): precision and recall of the hidden mules active
-  that date.
-- **Account level.** The first alert date of each mule among its active dates: time to
-  detection (first alert minus onset) and lead time (discovery minus first alert). An alert
-  counts only before discovery.
-- **Early warning.** The share of the early-warning mules (see "Examples") scored above their
-  date's top-1% and top-5% thresholds, reported apart from the ranking metrics.
-- **Cost.** Distinct accounts alerted per week.
-- **Groups.**
-  - New rings: test mules whose ring (`mule_ring_id`) gave no positive to the final run's
-    training examples.
-  - Never in training: test accounts in no subgraph of the final run's training examples.
-  - Accounts opened after the final run's last training date.
-  - Accounts linked to a confirmed mule at t (by link type and direction) and not linked,
-    for every ranker including the GNN without labels: since a confirmed mule's customer was
-    offboarded, a lift of the GNN without labels concentrated there would come from what
-    offboarding leaves in the graph, not from behaviour.
-  - Mules never discovered; mules by `mule_flow`.
-- **Uncertainty.** A ring-level bootstrap within each world, and the spread across the five
-  seeds, the revealed keys and the three worlds.
+Evaluation is the only code that reads the answer key. It scores the test world from the cache
+after selection is frozen.
 
-## Scoring new accounts
+### Rankings
 
-`mule score --date D` scores any account at any date with the same queries and the saved
-model, including accounts opened after training. An account with no payments is scored from
-its links and its community.
+On each test Monday the ranking holds every scorable account except true mules outside their
+activity. Positives are the true mules active that Monday; the rest are non-mules. A mule is
+**flagged** on a Monday when it ranks within that Monday's top 1% or top 5% (two budgets,
+tie-aware). Scores are ranked as raw logits in float64, since a float32 sigmoid tied every
+logit above about 17.
 
-## Package layout and commands
+### Metrics
 
-| Package | Holds |
+| Metric | Definition |
 |---|---|
-| `config.py`, `paths.py` | frozen settings; output locations |
-| `tigergraph/` | connection, client with retries (kept), executor, query installer, query names and parsers, the world's identity |
-| `data/` | the runs and their dates, the account split and the draws, the population per date, supervision with the revealed share, the training and validation examples, the maturity gap; the answer-key reader, which only evaluation imports |
-| `subgraph/` | the date tables, the query request, the sharded disk cache, response to `HeteroData` |
-| `model/` | Fourier time encoding, the heterogeneous attention model and its ablation switches, nnPU loss |
-| `training/` | trainer, selection, the selection and final runs over priors and seeds |
-| `controls/` | the rule, the gradient-boosted trees, and the features they read from fetched subgraphs |
-| `evaluation/` | the test and early-warning examples, weekly scoring, groups, metrics and the ring bootstrap (kept), the experiments |
-| `testing/` | the reference graph, the test world and the parity check |
-| `bench.py` | the cost measurements |
-| `cli.py` | the commands below |
+| Recall and precision in the top 1% and 5% | per Monday and pooled over Mondays; these lead the report |
+| ROC AUC, PR AUC | over all ranked account-Mondays, with ring-resampled intervals |
+| Share ever flagged while active | per mule, flagged on any active Monday |
+| Time to first flag | days from onset to the first Monday it is flagged while active |
+| Early warning | the share of mules flagged on their early-warning Monday, the one Monday with `mule_onset_ms - 7 days < t <= mule_onset_ms`, against that Monday's thresholds; also among mules whose ring link is visible that Monday. Reported as conditional on PhantomLedger's researched lead law, since tenures with no payment are not generated |
+| After activity | flags on Mondays after `mule_last_ms + 7 days`, reported apart |
+| Distinct accounts alerted | over the scored year at each budget, beside the share ever flagged, which otherwise rewards lists that churn |
+
+Lift is never printed beside recall at the same budget. In the old runs about 90% of PR AUC
+came from hidden mules ranked above every sampled normal account, which is why the top of the
+list leads.
+
+### Groups
+
+Each group is ranked against non-mules with the other groups removed, as an investigator
+removes known cases:
+
+- mules in fully hidden rings (no member identified): the headline;
+- unidentified members of rings that surfaced;
+- identified mules (`pu_label` 1 in the test world; the model never saw them either);
+- mules with no ring (account-takeover drops and impostor payees);
+- mules whose account opened within 90 days of t (from `read_answer_key`'s `opened_ms`):
+  purpose-opened mules are the hard case;
+- mules scored with no payment in the lookback (on an early-warning Monday, or an account
+  opened for a ring and not yet used), which only shared devices and IPs can reveal: the
+  owner's Account Z, reported beside the enrolment ceiling (72% of device and 61% of IP
+  associations are on file);
+- recall by hop distance from the nearest identified mule.
+
+### Uncertainty
+
+A ring bootstrap within each world resamples whole rings with all their account-Mondays, each
+ringless mule as its own cluster, and whole non-mule accounts with all their Mondays, since an
+account's 52 Mondays are correlated. Comparisons use paired replicates. The spread over the
+five seeds and the three rotations is reported beside it.
+
+### The missed-mule report
+
+The owner: "if not, we need to investigate why. maybe theres a bug, or we are missing
+some features that need to be added." For every true mule never flagged in the top 5% on any
+of its active Mondays, evaluation writes its decoded feature rows on each active Monday, its
+subgraph (nodes and edges with their fields), its group, its ring, and how each ring-mate
+scored and whether it was identified. Each missed mule is explained as a bug or a missing
+feature before the next run. The report is written to the run's results and read by nothing
+else.
+
+### The feature audit
+
+On development worlds, `mule audit` (evaluation code, reading the cache and the answer key)
+measures each feature's univariate separation of active mules from non-mules over scored
+account-Mondays: its ROC AUC against `is_mule`, with a ring-resampled interval. Every column
+of the scored account's row, its customer row, its own device and IP rows (aggregated by mean
+and maximum), its own edge fields (likewise), its degree columns and its community block is
+audited.
+
+- A feature with no separation (its interval contains 0.5) is researched or dropped.
+- A feature that separates almost perfectly (ROC AUC at least 0.95, or at most 0.05) is a
+  suspected leak or shortcut and stops the run: `mule train` refuses a reported run until a
+  development audit of the same query versions and settings passes.
+
+On development worlds the same command also checks that no positive is an account hub, that
+the share of ring devices and IPs that are leaves on their ring's active Mondays is near 0,
+and that busy ordinary accounts' card spending does not fill B1's short dwell shares.
+
+### Identification bias
+
+Victim reports may identify more often the mules whose victims bank here, so
+`new_internal_payers_*` could learn who gets caught rather than what mules do.
+Evaluation reports identified against hidden mules by victim origin: the internal share of
+their new payers over their active Mondays, from their own B2 rows, and recall of hidden mules
+by that share. It also reports how well the features separate identified from hidden mules,
+and the correlation of the selection score with recall of all mules per prior and epoch,
+reported, never used to select.
+
+## The pipeline
+
+**Where each step runs.** PhantomLedger, then `tf_gnn_loader_v2`, then
+MulePatternLearner, one command per repository for generation and loading. TigerGraph is the
+MulePatternLearner workspace on TigerGraph Cloud that the repository's `.env` points to
+(host, graph name `Mule_Pattern_Learner`, secret); `TransactionFraud_GNN` lives in a different
+workspace and is never touched. The 5,000-person test runs from this laptop; the
+300,000-person worlds are generated and loaded from the NVIDIA training machine, which also
+fetches and trains.
+
+1. **Code** reaches the training machine by git: pushed to `main` after the owner's code
+   review of all three repositories, then pulled.
+2. **PhantomLedger** generates a world.
+3. **tf_gnn_loader_v2** loads it. It pins pyTigerGraph below 2 while MulePatternLearner runs
+   2.0.4, so the two keep separate environments on the training machine.
+4. **`mule install`** installs the queries; **`mule parity`** checks them on a 5,000-person
+   world against the reference graph and records the versions that pass, on every machine
+   that fetches, before its first `mule fetch`.
+5. **`mule prepare`** reads the world's identity, checks the lookback, the gates and the
+   labels, and writes the training examples.
+6. **`mule fetch`** fills the cache. Worlds are loaded one at a time into the one graph, and a
+   world is cleared only after everything each of its roles needs is cached.
+7. **`mule audit`** runs the checks that need the answer key and writes pass records.
+8. **`mule train`** trains from the cache and never queries TigerGraph.
+9. **`mule evaluate`** scores the test world from the cache and writes the results.
+
+### Cache
+
+- One folder per (world, Monday) holds the population, that Monday's labels and the hubs, and
+  one Parquet table per query: one row per node or edge, every field named as in [the
+  features](features.md). Parquet tables can be opened and checked by hand.
+- Each table is a set of part files written once (a temporary file, then rename) with an index
+  of their accounts; fetch computes only missing accounts. Only 00:00 UTC dates are accepted,
+  and cached rows are reparsed with the live checks.
+- The key, held in the path so other settings never overwrite, is the world's identity, the
+  query versions and the settings, plus a label identity (a hash of `read_labels`' output) for
+  the label tables.
+- **World identity** (`read_world`): counts per vertex and edge type and per value of
+  `account_type`, `payment_rail` and `is_external`; second sums of `joined_ms`, `opened_ms`,
+  `closed_ms`, each link type's starts and ends and each payment type's event times; cent
+  sums per payment type; per edge type the sum of squared source degrees and the sum of the
+  product of both ends' degrees (one link moving between vertices of degrees 2 and 1 leaves
+  the squared sums unchanged); the first join and the first and last payment. All are
+  integers. A world regenerated or changed has another identity, so stale rows are never read.
+  The lookback check uses the first payment, since backdated joins make the first join years
+  earlier than the data.
+- The cache, PhantomLedger's exports and `.env` are never in git.
+
+### Results
+
+`results/<run>/` holds the result tables, the model files and a manifest, and is never
+committed: the owner zips it on the training machine and copies it to Downloads on this laptop.
+`.gitignore` stays as it is.
+
+The manifest records the code commit and whether the tree was dirty (a reported run refuses a
+dirty tree: the NVIDIA results came from a commit with 71 files differing), the query versions,
+the world identities, the GPU name and count, the CUDA, torch, PyG and XGBoost versions, wall
+time per stage, TigerGraph calls and cache hits. Every result is written through a temporary
+file and a rename, and each command appends to an `events.jsonl` with the error that stopped
+it. Results are tables and files, no charts. There is no baseline paragraph from the old
+NVIDIA numbers, which came from a pipeline with known leaks.
+
+### The demo
+
+When the time comes, the TigerGraph workspace is wiped. Only the two demo queries that show an
+account's network and its timeline (`gsql/demo/demo_account_web.gsql` and
+`demo_account_timeline.gsql`, the owner's untracked files) are ported to the new schema, and
+the demos are redone. They read the answer key and are never a training input.
+
+## The 5,000-person test on TigerGraph Cloud
+
+The MulePatternLearner workspace is its own TigerGraph Cloud workspace, and the repository's
+`.env` points only to it. Once PhantomLedger, the loader and MulePatternLearner are built:
+
+1. Run `CLEAR GRAPH STORE -HARD` and drop every query, loading job and schema object in that
+   workspace.
+2. Generate the 5,000-person world with PhantomLedger and load it with `tf_gnn_loader_v2`
+   (one command per repository), using the same graph name and secret.
+3. Install and run every query, the live B1 verification and the reference-graph checks.
+4. Run `CLEAR GRAPH STORE -HARD` again and tell the owner.
+
+If after the wipe the `.env` secret no longer authenticates, stop and ask the owner. The owner
+then generates and loads the 300,000-person worlds on the NVIDIA machine and trains there,
+after the code review.
+
+## Commands
+
+Commands take no options: worlds, roles, dates and settings live in config.
 
 | Command | What it does |
 |---|---|
-| `mule install` | installs the queries |
-| `mule parity` | checks every installed query against the reference graph on the parity world and records the versions that pass |
-| `mule prepare` | reads the world's identity and checks the lookback against its start, reads the populations and supervision, estimates the maturity gaps, writes every run's examples (the test and early-warning examples through evaluation), and reports their counts, the gaps, the revealed active share and the labelled share of mules |
-| `mule fetch` | reads the date tables and fetches and caches the subgraph of every example |
-| `mule train` | runs the selection and final runs of the GNN (both variants, five seeds) and trains the trees |
-| `mule evaluate` | scores every weekly test date and reports the metrics |
-| `mule experiment` | runs the ablations or the sparse-label series |
-| `mule score` | scores accounts at a date with the saved model |
-| `mule bench` | measures cost on the loaded world |
+| `mule install` | installs the changed queries of `gsql/queries/` and `gsql/evaluation/` |
+| `mule parity` | runs every installed query on the loaded world and the reference graph on the same export, on a seeded sample of Mondays and accounts with mules oversampled; compares the canonical answers and refusals, and that an account fetched alone equals itself among 31 others; records the versions that pass under `results/parity/` |
+| `mule prepare` | reads the world's identity, checks the lookback and, for a reported run, the gate records; reads the populations and labels; writes the training examples and weights; reports counts, the identified active share, the identified share by onset quarter and the weight balance per Monday |
+| `mule fetch` | fills the cache for every example the configured roles need: the training draw, and every scorable account of every Monday of a selection or test world |
+| `mule audit` | evaluation code, on the loaded world from the cache: the clock probe and the lift gates that need the answer key; on development worlds also the feature audit and the hub, leaf and card-spending checks; writes pass records |
+| `mule train` | refuses a reported world without passing records; trains the GNN over the prior grid and five seeds with selection after each epoch, the ablations and the two XGBoost comparisons |
+| `mule evaluate` | scores the test world and writes the metrics, groups, uncertainty, missed-mule report and identification bias |
+| `mule score` | scores the accounts and dates set in config with the model of the best-selection seed |
+| `mule bench` | measures cost on the loaded world and writes `results/bench/` |
 
-GSQL: `gsql/schema/` (schema and loading job), `gsql/queries/` (`fetch_subgraphs`,
-`read_leaves`, `read_sharing`, `list_population`, `read_supervision`, `read_world`,
-`profile_hubs`), `gsql/evaluation/` (`read_answer_key`). Results are tables and files, no
-charts.
+Every long command first runs a read-only readiness check: installed versions, the world's
+identity, one account fetched, one training step.
 
-## Questions raised while building
+## Scaling and the benchmark
 
-| Question | Settled |
+**Size.** A 300,000-person world has about 1.6 million accounts and about 46 million payments
+in any 90 days. Whole-world scoring is about 23 million account-Mondays (about 2.3 million at
+30,000 people); at the old rate of about 80 subgraphs a second that is 80 to 90 hours per
+300,000-person world. Each is fetched once and cached, after which scoring is a cheap GPU
+pass. A training Monday needs a few thousand scored accounts and their neighbours.
+
+**Bounds.** The caps are the sampler: deterministic, newest first, so an account's subgraph is
+the same in every run. Leaves keep billers, ledgers, carrier lines and terminals from pulling
+in thousands of strangers (the card-interest ledger takes about 100,000 postings a month at
+300,000 people), and every time-ordered list reads at most 256 payments. B6 costs at most the
+kept members times the nodes each shares times 200, plus 30 days of the members' payments.
+
+**`mule bench`** runs on worlds of 30,000, 100,000 and 300,000 people and writes one table
+per world to `results/bench/`:
+
+- fetch time and response size per query and request, with work counters, for accounts drawn
+  in training proportions, positives reported apart (a collector's subgraph is the largest,
+  about 2,000 hop-2 accounts), at 1, 2 and 4 concurrent requests;
+- B1's worst account and its steps;
+- subgraph sizes by type, community sizes, cache bytes per account and in total;
+- TigerGraph's memory in use and install time per query (the old full install took about 50
+  minutes, and one install timed out after 5,402 seconds);
+- parse and build time per batch, GPU step time and peak memory, examples per second;
+- `profile_hubs`' histograms and the share of positives that are hubs, which must be 0;
+- a projection of a whole-world scoring run, against its fallback;
+- whether co-user rows are cheaper per Monday for every customer or on demand; the rule is
+  the same either way.
+
+Whole-world scoring is settled against its fallback on the 30,000-person bench before any
+300,000-person world is generated. The README's recommended training architecture follows
+from the bench tables and is updated from them: whether built batches stay on the GPU or in
+pinned host memory, the request size and the parallel requests. PhantomLedger took about 63
+minutes and 13.7 GB for 200,000 people over 366 days; 300,000 people over two years was
+extrapolated at 3.2 hours and 215 GB.
+
+## Package layout
+
+| Path | Holds |
 |---|---|
-| The audit sample was unused and refused more than one split | Removed; the examples draw the per-date samples |
-| External accounts have `is_mule` -1 | The population holds only accounts a customer owns, never external ones |
-| "Active that date" was undefined for test mules | Defined under "Time", the same for training, validation and test |
-| Where the answer-key reader lives | `data/answer_key.py`, imported only by evaluation; it also returns, for evaluation only, every account's onset, last activity and discovery |
-| Time boundaries | Stated under "Time": everything strictly before t, half-open tenures, labels and confirmations at or before their date |
-| How confirmations reach the label-input variant | From `read_supervision`, joined in training; the query reads no supervision |
-| No query listed the ids for `write_split`, and chunked writes could mis-assign joint accounts | The split is a hash in Python and is never written |
-| The hub threshold had no measured value | 200 stays, above any ring PhantomLedger makes; large observed-only nodes are crowds; `profile_hubs` gives the bench the exact distributions |
-| The maturity estimate's data | Right-truncated, estimated with Lynden-Bell's estimator from the training split's revealed mules, floor 60 days |
-| The cache key had no load identity | The world's identity from `read_world` |
-| What the five seeds vary | The model only |
-| An account of the seed's owner reached only at hop 2 had no ownership edge | The query adds the ownership edge of every subgraph account a seed's owner owns |
-| The controls' weights | The scaled weights (each label's mean 1 over all training batches, once, not per batch), with the two labels rescaled to equal totals |
-| The category values | Listed under "Features" |
-| Nodes are not merged across the seeds of a batch | Stated under "The subgraph query" |
-| torch_geometric prints thousands of DeprecationWarnings per test run | Not a design matter: filtering that one warning in the test settings waits for the owner's agreement |
-| Joint accounts | PhantomLedger writes one owner per account, and the design assumes at most one |
+| `config.py`, `paths.py` | frozen, validated settings (worlds, roles, Mondays, caps, thresholds, seeds; the lookback must exceed the 30-day "new" window); output locations |
+| `tigergraph/` | connection, client with retries, executor, installer, query names, versions and row parsers, the world identity |
+| `data/` | the Monday calendar, the population, the labels reader, the keyed draws, the training examples and weights |
+| `subgraph/` | fetch and the cache; rows to tensors, degree columns and ablation switches |
+| `model/` | the Fourier time encoding, the heterogeneous attention model, the nnPU loss |
+| `training/` | the trainer, selection, the prior grid and seeds, the contract lock, scoring with a saved model |
+| `comparisons/` | the two XGBoost comparisons |
+| `evaluation/` | the answer-key reader, test scoring and the fallback list, metrics and the ring bootstrap, groups, the missed-mule report, the feature audit, the clock probe, identification bias |
+| `testing/` | the reference graph, reference worlds and fixtures, parity, the planted-slip harness and the version restamper |
+| `bench.py`, `cli.py` | the benchmark; the commands |
 
-## Limitations we state up front
+GSQL: `gsql/schema/schema.gsql`; `gsql/queries/` (`list_accounts`, `read_labels`, `read_hubs`,
+`read_world`, `profile_hubs`, `read_money_flow`, `read_counterparties`, `read_activity_change`,
+`read_payment_events`, `read_shared_identity`, `read_community`); `gsql/evaluation/`
+(`read_answer_key`).
 
-- Synthetic data, however well cited, is not a bank's data.
-- Most mule research is British; PhantomLedger simulates a US bank.
-- Discovery is not completely at random, so nnPU's assumption does not hold exactly.
-- The sharing rates of ring devices and IPs are declared, not measured; the sensitivity world
-  shows how much the result depends on them.
-- A mule's onset and last activity come from PhantomLedger's ground truth, so they are
-  sharper than an investigation's reconstruction.
-- Label noise: organizers' accounts that ring money reached, and a mule's own second
-  account, are positives; recruits whose payments the fraud budget cut hold ring devices but
-  are not mules; until PhantomLedger adds scam payees, account-takeover drops and impostor
-  payees receive fraud money unlabelled.
-- Traits of the generator that a model could learn in place of behaviour, until
-  PhantomLedger changes them: camouflage payments all year, card cash-outs on the `unknown`
-  rail, organizers outside ordinary sharing groups, and ring links starting on staggered days
-  where ordinary groups start on one day.
-- A customer that left the bank goes silent. Its link ends at the exit are hidden, but until
-  ordinary customers also leave in PhantomLedger, a silent neighbour is more often a caught
-  mule than anything else; the groups by link to a confirmed mule show how much the models
-  draw on it.
-- Each world has few test mules (roughly a quarter of the year's mules, in a quarter of the
-  accounts), and few validation mules, so the bootstrap intervals matter and selection is
-  noisy.
-- The final run trains on more dates than the selection run that chose its epochs.
-- Most test mules belong to rings the model trained on; only the new-rings group measures
-  rings it never saw.
+The import contracts in `pyproject.toml` keep every layer exhaustive: no package but
+`evaluation/` imports the answer-key reader, and none of `tigergraph/`, `data/`, `subgraph/`,
+`model/`, `training/` or `comparisons/` imports `evaluation/`. The README says to run
+`pip install -e` after a pull, and pytest filters the torch_geometric deprecation warnings
+(about 14,700 a run) for that module only.
+
+## Order of work
+
+1. This design and [the features](features.md), for the owner to read before any code.
+2. In parallel, each step implemented, reviewed and fixed:
+   - PhantomLedger: the shortcut fixes, activity model, lifecycle, identification and burn-in,
+     each in its citation ledger, with the research dossiers moved into its `docs/research/`;
+   - `tf_gnn_loader_v2`: the new contract, every exported field loaded;
+   - MulePatternLearner: first `git revert` of dc975ee, d8bcf02 and c6376eb, which implement the
+     superseded October 17 design (history keeps them reachable), back to the rebuild of
+     fc63ad9, whose executor, installer, reference graph, contract lock, nnPU fixes and
+     metrics are kept; then module by module against the reference graph and the export
+     contract.
+3. The 5,000-person test on TigerGraph Cloud.
+4. The owner reviews all three repositories; then the push to `main`.
+
+## Limitations
+
+- The worlds are synthetic, however well cited, and the features were designed knowing the
+  generator.
+- Much of the mule research is British, for a simulated US bank.
+- Identification is not completely at random, so nnPU's assumption does not hold exactly;
+  evaluation measures the effect against the full answer key.
+- `pu_label` has no false positives and no identification through shared devices, both unlike
+  a real bank's labels.
+- A mule's onset and last activity come from PhantomLedger's truth, so they are sharper than an
+  investigation's reconstruction. Event time equals knowledge time; a bank would need arrival
+  times to match.
+- Label noise: organizers' accounts that ring money reached are mules, and recruits no money
+  reached are not.
+- `mule_ring_id` is the ring of the first landing payment, and about 6% of mule persons serve a
+  second ring.
+- A ring device appears on only about 12% of mules, so shared identity is a strong signal for a
+  minority, and money flow carries the rest.
+- Early warning is conditional on PhantomLedger's declared lead law.
+- Dwell near t is censored: an inflow less than w before t shows only part of its curve.
+- Account newness read from behaviour is real, and only as strong as PhantomLedger's
+  lifecycle makes it.
+- Results stay development only until PhantomLedger's Clocks gates pass and the clock probe
+  shows chance.
+- Weekly scoring flags a short burst up to six days after it ends.
+- Each world has few identified mules (about 750 a year at 300,000 people), so the intervals
+  matter and selection is noisy.
+- Token and Address are not read; device and IP are the identity signal.
