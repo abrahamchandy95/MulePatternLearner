@@ -9,13 +9,15 @@ imports that module.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import fields
+from dataclasses import Field, fields
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from _typeshed import DataclassInstance
 
 OK = "ok"
+# The types a row's field may have, by name.
+FIELD_TYPES: dict[str, type] = {"str": str, "bool": bool, "int": int, "float": float}
 
 
 class QueryRefused(ValueError):
@@ -67,18 +69,33 @@ def parse_row[T: DataclassInstance](
     values: dict[str, Any] = {}
     for field in fields(kind):
         value = row[field.name]
+        of = _field_type(field)
+        if of is None:
+            raise ValueError(
+                f"{name}.{field.name} has the type {field.type!r}, "
+                f"not one of {', '.join(FIELD_TYPES)}"
+            )
         ok = {
-            "str": isinstance(value, str),
-            "bool": isinstance(value, bool),
-            "int": isinstance(value, int)
+            str: isinstance(value, str),
+            bool: isinstance(value, bool),
+            int: isinstance(value, int)
             and not isinstance(value, bool)
             and (value >= 0 or field.name in signed),
-            "float": isinstance(value, int | float) and not isinstance(value, bool),
-        }[str(field.type)]
+            float: isinstance(value, int | float) and not isinstance(value, bool),
+        }[of]
         if not ok:
-            raise ValueError(f"{name}.{field.name} is {value!r}, not a valid {field.type}")
-        values[field.name] = float(value) if field.type == "float" else value
+            raise ValueError(f"{name}.{field.name} is {value!r}, not a valid {of.__name__}")
+        values[field.name] = float(value) if of is float else value
     return kind(**values)
+
+
+def _field_type(field: Field[Any]) -> type | None:
+    """A row field's type: its class, or its name where annotations are postponed (`from
+    __future__ import annotations`); None for any other type, such as `int | None`."""
+    declared: object = field.type
+    if isinstance(declared, str):
+        return FIELD_TYPES.get(declared)
+    return next((kind for kind in FIELD_TYPES.values() if declared is kind), None)
 
 
 def ids(value: object, what: str) -> tuple[str, ...]:

@@ -1,10 +1,10 @@
 """Installed-query access: failure classification, the retrying executor, the entry points
-that run only the queries their role allows, request halving and response helpers."""
+that run only the queries their role allows, and request halving."""
 
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Callable, Collection, Iterator, Sequence
+from collections.abc import Callable, Collection, Sequence
 import json
 import random
 import re
@@ -656,69 +656,3 @@ def run_in_halves(
             *run_in_halves(executor, name, chunk[middle:], params, timeout_s=timeout_s),
         ]
     return [(chunk, rows)]
-
-
-# A named tuple of exception types: formatters targeting Python 3.14 rewrite
-# `except (A, B):` as `except A, B:`, which Python 3.12 and 3.13 cannot parse.
-CONVERSION_ERRORS = (TypeError, ValueError)
-
-
-def checked_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    for row in rows:
-        if "status" in row and row["status"] != "ok":
-            raise ValueError(f"TigerGraph rejected request: {row}")
-    if not any(row.get("status") == "ok" for row in rows):
-        raise ValueError("Query did not return a success status")
-    return rows
-
-
-def merged_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    """A query's PRINT rows as one dict (a later row wins on a repeated field)."""
-    merged: dict[str, Any] = {}
-    for row in rows:
-        merged.update(row)
-    return merged
-
-
-def printed(rows: list[dict[str, Any]], name: str) -> Any:
-    """The first PRINT row's value of field name; a missing field is a malformed response."""
-    for row in rows:
-        if name in row:
-            return row[name]
-    raise ValueError(f"{name} missing from response")
-
-
-def account_pages(
-    executor: QueryExecutor,
-    query: str,
-    params: dict[str, Any],
-    *,
-    page_size: int = 10_000,
-    timeout_s: float | None = None,
-) -> Iterator[list[dict[str, Any]]]:
-    """Pages of an after_id/batch_size account query, each row a flat attribute dict.
-
-    A page larger than page_size, or an account_id that does not strictly increase
-    within and across pages, is a transport contract violation. Paging stops after
-    an empty or short page.
-    """
-    after = ""
-    while True:
-        rows = checked_rows(
-            executor.run(
-                query, {**params, "after_id": after, "batch_size": page_size}, timeout_s=timeout_s
-            )
-        )
-        page = [dict(item.get("attributes", item)) for item in printed(rows, "accounts")]
-        if len(page) > page_size:
-            raise ValueError(f"{query} page exceeds the transport contract")
-        if not page:
-            return
-        for row in page:
-            account = str(row["account_id"])
-            if account <= after:
-                raise ValueError(f"{query} pagination is not strictly increasing")
-            after = account
-        yield page
-        if len(page) < page_size:
-            return

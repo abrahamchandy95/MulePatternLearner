@@ -5,10 +5,7 @@ from typing import ClassVar
 from pydantic import Field, SecretStr, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from ..paths import REPOSITORY_ROOT
-
-# Under the repository root, so commands behave the same from any working directory.
-ENV_FILE = REPOSITORY_ROOT / ".env"
+from ..paths import ENV_FILE
 
 
 class ConnectionSettings(BaseSettings):

@@ -16,6 +16,8 @@ from mule_pattern_learner.testing.gsql_rules import (
     accumulator_rule,
     attribute_rule,
     bound_rule,
+    call_rule,
+    clock_rule,
     common_problems,
     field_rule,
     heap_rule,
@@ -23,21 +25,26 @@ from mule_pattern_learner.testing.gsql_rules import (
     leaf_rule,
     name_rule,
     parameter_rule,
+    pattern_rule,
     projection_fields,
     projection_rule,
+    refusal_rule,
     status_fields,
+    structure_rule,
     time_rule,
     tuple_rule,
     version_rule,
+    window_rule,
     write_rule,
 )
 from mule_pattern_learner.tigergraph.installer import definitions, text_version
 from mule_pattern_learner.tigergraph.queries import written_files
 
 NAME = "read_example"
-# A query that keeps every form the rules read: payments in a window before t, visible and
-# current links, an account that exists, known starts, the crowd count and the leaf test, a
-# capped heap, a tuple and a projected PRINT.
+# A query that keeps every form the rules read: the refusal of scored accounts that do not
+# exist at t, payments in a window before t, visible and current links, an account that
+# exists, known starts, the crowd count and the leaf test, a capped heap, a tuple and a
+# projected PRINT.
 GOOD = """USE GRAPH Mule_Pattern_Learner
 
 /* Every form the text rules read. */
@@ -59,6 +66,11 @@ CREATE OR REPLACE QUERY read_example(
         RETURN;
     END;
     Scored = {scored};
+    Existing = SELECT s FROM Scored:s WHERE s.opened_ms < t_ms;
+    IF Existing.size() != Scored.size() THEN
+        PRINT "invisible_account" AS status;
+        RETURN;
+    END;
     Inflows = SELECT p FROM Scored:s -(Account_Received_Transaction>:r)- Payment_Transaction:p
       WHERE p.event_ts_ms >= t_ms - 2592000000 AND p.event_ts_ms < t_ms
       ACCUM @@inflows += Lot(p.event_ts_ms, p.id), @@received += 1;
@@ -316,10 +328,22 @@ UNBOUNDED_STEPS = [
     ),
     ("    X = SELECT q FROM Scored:s -(_>:o)- Party:q ACCUM @@received += 1;\n", "steps along _"),
     ("    X = SELECT q FROM Scored:s -(:o)- Party:q ACCUM @@received += 1;\n", "edge of no type"),
-    # A set assigned in a form the rules do not follow is no set they know.
+    # A set declared with its type, or assigned by a set expression in parentheses, is
+    # followed like any other.
     (
         "    All (Payment_Transaction) = {Payment_Transaction.*};\n"
         "    X = SELECT p FROM All:p ACCUM @@received += 1;\n",
+        "does not bound p",
+    ),
+    (
+        "    Whole = {Payment_Transaction.*};\n"
+        "    All = (Inflows UNION (Whole MINUS Inflows));\n"
+        "    X = SELECT p FROM All:p ACCUM @@received += 1;\n",
+        "does not bound p",
+    ),
+    # A set assigned in a form the rules do not follow is no set they know.
+    (
+        "    All = Inflows UNION @@ids;\n    X = SELECT p FROM All:p ACCUM @@received += 1;\n",
         "steps to All",
     ),
     ("    X = SELECT a FROM Account:a ACCUM @@received += 1;\n", "may not exist at t"),
@@ -586,3 +610,352 @@ def test_projections_and_heaps_alone() -> None:
     # Printing a set's size prints no attribute.
     size = _changed("@@received AS received;", "@@received AS received, Owners.size() AS owners;")
     assert projection_rule(NAME, _definition(size)) == []
+
+
+def _with_ids(text: str) -> str:
+    """text with a global SetAccum @@ids declared."""
+    return _changed(
+        "SumAccum<INT> @@received;", "SumAccum<INT> @@received;\n    SetAccum<STRING> @@ids;", text
+    )
+
+
+@pytest.mark.parametrize(
+    ("statements", "printed"),
+    [
+        # A set declared with its type, a set expression in parentheses, a vertex parameter
+        # and a set the rules cannot follow each print every attribute, labels among them.
+        ("    All (Account) = {Account.*};\n    PRINT All;\n", "All"),
+        ("    All = (Accounts UNION Scored);\n    PRINT All;\n", "All"),
+        ("    All = Accounts UNION Scored;\n    PRINT All AS everyone;\n", "All"),
+        ("    PRINT scored;\n", "scored"),
+        ("    All = Accounts UNION @@ids;\n    PRINT @@received AS received, All;\n", "All"),
+    ],
+)
+def test_a_vertex_set_is_never_printed_whole(statements: str, printed: str) -> None:
+    problems = common_problems(NAME, _with_ids(_added(statements)))
+    assert f"{NAME} prints all of {printed}" in problems, problems
+
+
+def test_a_print_of_values_is_no_print_of_a_set() -> None:
+    values = _added("    PRINT t_ms AS t, lookback_ms AS lookback, Accounts.size() AS accounts;\n")
+    assert projection_rule(NAME, _definition(values)) == []
+
+
+# A step between a device and its users in another spelling than GOOD's, without the leaf
+# test: users first, payments seen on the device, two steps through a device, and a step
+# between a device and users chosen before (a closure, which also reads leaves).
+LEAF_SLIPS = [
+    "    X = SELECT q FROM Party:q -(Party_Uses_Device>:l)- Devices:d\n"
+    "      WHERE l.valid_from_ms < t_ms\n"
+    "        AND (l.valid_to_ms == 0 OR l.valid_to_ms > t_ms - 2592000000)\n"
+    "      ACCUM d.@co_users += q.id;\n",
+    "    X = SELECT p FROM Payment_Transaction:p -(Transaction_Used_Device>:u)- Devices:d\n"
+    "      WHERE p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms\n"
+    "      ACCUM d.@co_users += p.id;\n",
+    "    X = SELECT r FROM Owners:q -(Party_Uses_Device>:l)- Device:d"
+    " -(Device_Used_By_Party>:m)- Party:r\n"
+    "      WHERE l.valid_from_ms < t_ms\n"
+    "        AND (l.valid_to_ms == 0 OR l.valid_to_ms > t_ms - 2592000000)\n"
+    "        AND m.valid_from_ms < t_ms\n"
+    "        AND (m.valid_to_ms == 0 OR m.valid_to_ms > t_ms - 2592000000)\n"
+    "      ACCUM d.@co_users += r.id;\n",
+    "    X = SELECT q FROM Devices:d -(Device_Used_By_Party>:l)- Owners:q\n"
+    "      WHERE l.valid_from_ms < t_ms\n"
+    "        AND (l.valid_to_ms == 0 OR l.valid_to_ms > t_ms - 2592000000)\n"
+    "      ACCUM d.@co_users += q.id;\n",
+]
+
+
+@pytest.mark.parametrize("statements", LEAF_SLIPS)
+def test_every_step_between_a_device_and_its_users_applies_the_leaf_test(statements: str) -> None:
+    problems = common_problems(NAME, _added(statements))
+    assert any("without the leaf test" in problem for problem in problems), problems
+    # With the leaf test the same step passes.
+    where = "WHERE l.valid_from_ms" if "WHERE l." in statements else "WHERE p.event_ts_ms"
+    tested = statements.replace(where, where.replace("WHERE ", "WHERE NOT d.@leaf AND "), 1)
+    assert common_problems(NAME, _added(tested)) == []
+
+
+# Changes that defeat the leaf test without dropping it: a crowd count that selects the
+# users, a leaf flag never set or set in another form, a crowd count that reads no user, and
+# a crowd read other than through its size.
+LEAF_FLAG_SLIPS = [
+    ("Crowd = SELECT d FROM Devices:d", "Crowd = SELECT q FROM Devices:d", "leaf test"),
+    (
+        "    Leaves = SELECT d FROM Devices:d POST-ACCUM d.@leaf += d.@crowd_customers.size() > 8;\n",
+        "",
+        "before a crowd count sets it",
+    ),
+    ("d.@crowd_customers.size() > 8", "d.@crowd_customers.size() > 80", "sets the leaf flag"),
+    (
+        "POST-ACCUM d.@leaf += d.@crowd_customers.size() > 8",
+        'POST-ACCUM IF d.type == "IP" THEN d.@leaf += d.@crowd_customers.size() > 8 END',
+        "sets the leaf flag",
+    ),
+    (
+        "Crowd = SELECT d FROM Devices:d -(Device_Used_By_Party>:l)- Party:q\n"
+        "      WHERE l.valid_from_ms < t_ms AND (l.valid_to_ms == 0 OR l.valid_to_ms > t_ms - lookback_ms)\n"
+        "      ACCUM d.@crowd_customers += q.id;",
+        "Crowd = SELECT d FROM Devices:d ACCUM d.@crowd_customers += d.id;",
+        "sets the leaf flag",
+    ),
+    (
+        "ACCUM d.@co_users += q.id;",
+        "ACCUM d.@co_users += q.id, @@ids += d.@crowd_customers;",
+        "other than through its size",
+    ),
+]
+
+
+@pytest.mark.parametrize(("old", "new", "word"), LEAF_FLAG_SLIPS)
+def test_the_leaf_flag_comes_from_a_crowd_count(old: str, new: str, word: str) -> None:
+    problems = leaf_rule(NAME, _definition(_changed(old, new)))
+    assert any(word in problem for problem in problems), problems
+
+
+def test_the_crowd_threshold_is_the_settings() -> None:
+    named = _changed("d.@crowd_customers.size() > 8", "d.@crowd_customers.size() > crowd_threshold")
+    declared = _changed(
+        "UINT lookback_ms = 7776000000;",
+        "UINT lookback_ms = 7776000000;\n    UINT crowd_threshold = 8;",
+        named,
+    )
+    assert common_problems(NAME, declared) == []
+    raised = declared.replace("UINT crowd_threshold = 8;", "UINT crowd_threshold = 100;")
+    assert window_rule(NAME, _definition(raised)) == [
+        f"{NAME} reads crowd_threshold without declaring it once as UINT crowd_threshold = 8 "
+        "or taking it as a parameter"
+    ]
+
+
+# Edges of several hops hide the payments and users between their ends.
+@pytest.mark.parametrize(
+    "statements",
+    [
+        "    X = SELECT b FROM Scored:s"
+        " -(Account_Initiated_Transaction>.Transaction_To_Account>)- Account:b"
+        " ACCUM @@received += 1;\n",
+        "    X = SELECT b FROM Scored:s"
+        " -((Account_Initiated_Transaction>|Transaction_To_Account>)*2)- Account:b"
+        " ACCUM @@received += 1;\n",
+        "    X = SELECT a FROM Devices:d"
+        " -((Device_Used_By_Transaction>|Transaction_From_Account>)*2)- Account:a"
+        " WHERE NOT d.@leaf ACCUM @@received += 1;\n",
+    ],
+)
+def test_an_edge_of_several_hops_is_refused(statements: str) -> None:
+    problems = common_problems(NAME, _added(statements))
+    assert any("several edges at once" in problem for problem in problems), problems
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "call"),
+    [
+        (
+            "@@received += 1",
+            '@@received += s.outdegree("Account_Received_Transaction")',
+            "outdegree",
+        ),
+        (
+            "@@received += 1",
+            '@@received += s.neighbors("Account_Received_Transaction").size()',
+            "neighbors",
+        ),
+        (
+            "ACCUM a.@first_seen += p.event_ts_ms",
+            'ACCUM a.@first_seen += a.getAttr("opened_ms", "UINT")',
+            "getattr",
+        ),
+        ("@@received += 1", '@@received += evaluate("p.amount", "int")', "evaluate"),
+    ],
+)
+def test_a_built_in_that_reads_around_the_rules_is_refused(old: str, new: str, call: str) -> None:
+    assert structure_rule(NAME, _definition()) == []
+    assert structure_rule(NAME, _definition(_changed(old, new))) == [
+        f"{NAME} calls {call}, which reads the graph around the rules"
+    ]
+
+
+HUBS = """USE GRAPH Mule_Pattern_Learner
+CREATE OR REPLACE QUERY read_hubs(UINT t_ms) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+    SumAccum<INT> @@busy;
+    All = {Account.*};
+    Busy = SELECT a FROM All:a
+      WHERE a.opened_ms < t_ms
+        AND a.outdegree("Account_Initiated_Transaction")
+          + a.outdegree("Account_Received_Transaction") > 200
+      ACCUM @@busy += 1;
+    PRINT "ok" AS status, @@busy AS busy;
+}
+"""
+
+
+def test_read_hubs_alone_prefilters_by_all_time_payments() -> None:
+    hubs = definitions(HUBS)["read_hubs"]
+    assert structure_rule("read_hubs", hubs) == []
+    assert common_problems("read_hubs", HUBS) == []
+    # Anywhere else, over another edge, or against another bound, it reads after t.
+    other = HUBS.replace("read_hubs", NAME)
+    assert structure_rule(NAME, _definition(other)) == [
+        f"{NAME} calls outdegree, which reads the graph around the rules"
+    ]
+    for old, new in (
+        ('"Account_Received_Transaction"', '"Account_Owned_By_Party"'),
+        ("> 200", "> 100"),
+        ("ACCUM @@busy += 1", 'ACCUM @@busy += a.outdegree("Account_Initiated_Transaction")'),
+    ):
+        changed = definitions(HUBS.replace(old, new))["read_hubs"]
+        assert structure_rule("read_hubs", changed), new
+
+
+# Windows and durations that reach before the lookback's start.
+WINDOW_SLIPS = [
+    ("p.event_ts_ms >= t_ms - 2592000000", "p.event_ts_ms >= t_ms - 31536000000"),
+    ("UINT lookback_ms = 7776000000;", "UINT lookback_ms = 31536000000;"),
+    ("UINT lookback_ms = 7776000000;", "UINT lookback_ms = 7776000001;"),
+    (
+        "UINT lookback_ms = 7776000000;",
+        "UINT lookback_ms = 7776000000;\n    lookback_ms = 31536000000;",
+    ),
+    # Days since a date before the lookback, which is the Monday's index.
+    ("@@received += 1", "@@received += t_ms - 1704067200000"),
+    # A start new over the whole lookback is the known start's slip in another spelling.
+    ("l.valid_from_ms > t_ms - lookback_ms", "l.valid_from_ms >= t_ms - 7776000000"),
+]
+
+
+@pytest.mark.parametrize(("old", "new"), WINDOW_SLIPS)
+def test_every_window_lies_inside_the_lookback(old: str, new: str) -> None:
+    assert window_rule(NAME, _definition()) == []
+    problems = common_problems(NAME, _changed(old, new))
+    assert problems and all(" reads " in problem for problem in problems), problems
+
+
+def test_the_lookback_may_be_a_parameter_never_set() -> None:
+    text = _changed("    UINT t_ms,\n", "    UINT t_ms,\n    UINT lookback_ms,\n")
+    text = _changed("    UINT lookback_ms = 7776000000;\n", "", text)
+    assert common_problems(NAME, text) == []
+    changed = _changed(
+        "    Scored = {scored};", "    lookback_ms = 31536000000;\n    Scored = {scored};", text
+    )
+    assert window_rule(NAME, _definition(changed)) == [f"{NAME} sets its parameter lookback_ms"]
+
+
+@pytest.mark.parametrize(
+    ("new", "word"),
+    [
+        ("@@received += datetime_to_epoch(now())", "now"),
+        ("@@received += hour(epoch_to_datetime(p.event_ts_ms / 1000))", "hour"),
+        ("@@received += p.event_ts_ms % 86400000", "remainder"),
+        ("@@received += (t_ms - p.event_ts_ms) % 3600000", "remainder"),
+    ],
+)
+def test_no_query_reads_the_clock(new: str, word: str) -> None:
+    assert clock_rule(NAME, _definition()) == []
+    problems = clock_rule(NAME, _definition(_changed("@@received += 1", new)))
+    assert any(word in problem for problem in problems), problems
+    # A test of the parameter t reads no event's clock.
+    test = _changed(
+        "IF t_ms <= lookback_ms THEN", "IF t_ms <= lookback_ms OR t_ms % 86400000 != 0 THEN"
+    )
+    assert clock_rule(NAME, _definition(test)) == []
+
+
+def test_bounds_by_other_payments_must_reach_a_window() -> None:
+    # Each payment bounded below only by the other bounds neither.
+    circular = _changed(
+        "Seen = SELECT a FROM Accounts:a -(Account_Initiated_Transaction>:e)- Payment_Transaction:p\n"
+        "      WHERE p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms",
+        "Seen = SELECT a FROM Payment_Transaction:p -(Transaction_From_Account>:e)- Account:a\n"
+        "      -(Account_Initiated_Transaction>:f)- Payment_Transaction:x\n"
+        "      WHERE p.event_ts_ms >= x.event_ts_ms AND p.event_ts_ms < t_ms\n"
+        "        AND x.event_ts_ms >= p.event_ts_ms AND x.event_ts_ms < t_ms",
+    )
+    problems = bound_rule(NAME, _definition(circular))
+    assert len(problems) == 2, problems
+    assert problems[0].endswith("does not bound p from a window's start"), problems
+    assert problems[1].endswith("does not bound x from a window's start"), problems
+    # Above, a chain through each other never reaches t either.
+    above = circular.replace(
+        "p.event_ts_ms >= x.event_ts_ms AND p.event_ts_ms < t_ms",
+        "p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < x.event_ts_ms",
+    ).replace(
+        "x.event_ts_ms >= p.event_ts_ms AND x.event_ts_ms < t_ms",
+        "x.event_ts_ms >= p.event_ts_ms AND x.event_ts_ms < p.event_ts_ms",
+    )
+    problems = bound_rule(NAME, _definition(above))
+    assert len(problems) == 2 and all("below t" in p for p in problems), problems
+
+
+TOKEN_STEP = (
+    "    X = SELECT k FROM Owners:q -(Party_Uses_Token>:l)- Token:k\n"
+    "      WHERE l.valid_from_ms < t_ms\n"
+    "        AND (l.valid_to_ms == 0 OR l.valid_to_ms > t_ms - lookback_ms)\n"
+    "      ACCUM @@received += 1;\n"
+)
+
+
+def test_only_read_world_reads_a_token() -> None:
+    problems = common_problems(NAME, _added(TOKEN_STEP))
+    assert any("steps to a Token" in problem for problem in problems), problems
+    assert any("a Token's link" in problem for problem in problems), problems
+    world = _added(TOKEN_STEP).replace(NAME, "read_world")
+    assert pattern_rule("read_world", _definition(world, "read_world")) == []
+
+
+@pytest.mark.parametrize(
+    ("statement", "problem"),
+    [
+        (
+            '    tg_wcc(["Party"], ["Party_Uses_Device"], 100, FALSE, "");\n',
+            "calls the library algorithm tg_wcc",
+        ),
+        ("    read_hubs(t_ms);\n", "calls the query read_hubs"),
+    ],
+)
+def test_no_query_calls_a_library_algorithm_or_another_query(statement: str, problem: str) -> None:
+    assert call_rule(NAME, _definition()) == []
+    assert call_rule(NAME, _definition(_added(statement))) == [f"{NAME} {problem}"]
+
+
+REFUSAL = (
+    "    Existing = SELECT s FROM Scored:s WHERE s.opened_ms < t_ms;\n"
+    "    IF Existing.size() != Scored.size() THEN\n"
+    '        PRINT "invisible_account" AS status;\n'
+    "        RETURN;\n"
+    "    END;\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        (REFUSAL, ""),
+        ("WHERE s.opened_ms < t_ms;", "WHERE NOT s.is_external;"),
+        ("IF Existing.size() != Scored.size()", "IF Existing.size() > Scored.size()"),
+        ('PRINT "invisible_account" AS status;', 'PRINT "ok" AS status;'),
+        ('"invisible_account" AS status;\n        RETURN;', '"invisible_account" AS status;'),
+    ],
+)
+def test_a_query_with_t_refuses_accounts_that_do_not_exist_at_t(old: str, new: str) -> None:
+    assert refusal_rule(NAME, _definition()) == []
+    assert refusal_rule(NAME, _definition(_changed(old, new))) == [
+        f"{NAME} does not refuse accounts of scored that do not exist at t"
+    ]
+
+
+def test_a_refusal_after_the_ok_status_comes_too_late() -> None:
+    # The parser reads the first row, so the "ok" status would already have been taken.
+    late = _changed("AS received;\n", "AS received;\n" + REFUSAL, _changed(REFUSAL, ""))
+    assert refusal_rule(NAME, _definition(late)) == [
+        f"{NAME} does not refuse accounts of scored that do not exist at t"
+    ]
+
+
+def test_only_account_parameters_of_a_query_with_t_need_the_refusal() -> None:
+    no_t = _changed("    UINT t_ms,\n", "").replace(REFUSAL, "")
+    assert refusal_rule(NAME, _definition(no_t)) == []
+    parties = _changed("SET<VERTEX<Account>> scored", "SET<VERTEX<Party>> scored").replace(
+        REFUSAL, ""
+    )
+    assert refusal_rule(NAME, _definition(parties)) == []

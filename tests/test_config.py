@@ -165,6 +165,8 @@ def test_sections_refuse_values_outside_their_ranges() -> None:
         (lambda: SubgraphConfig(new_windows=(30, 7)), "subgraph.new_windows"),
         (lambda: SubgraphConfig(new_windows=(7, 90)), "subgraph.new_windows"),
         (lambda: SubgraphConfig(sharing_days=90), "subgraph.sharing_days"),
+        # The current test is fixed at 30 days, as the queries write it.
+        (lambda: SubgraphConfig(sharing_days=20), r"subgraph.sharing_days must be .* \[30, 30\]"),
         (lambda: RunConfig(subgraph="wide"), "subgraph must be"),  # pyright: ignore[reportArgumentType]
         (
             lambda: RunConfig(subgraph=SubgraphConfig(lookback_days=60)),

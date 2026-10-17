@@ -29,6 +29,11 @@ LOOKBACK_DAYS = range(31, 3_651)
 SCORED_DAYS = 365
 CAPS = range(1, 1_025)
 THRESHOLDS = range(1, 1_000_001)
+# The current test reads 30 days back, the one value the design allows: no tenure built from
+# uses is quiet for more than 21 days or ends more than 4 days after its last use's day, and
+# 21 + 4 is under 30, so a link reads current from the past alone (docs/design.md, "Time").
+# The queries write it as 2592000000, which the text rules require.
+SHARING_DAYS = range(30, 31)
 # The ranges of the worlds and the data settings.
 SEEDS = range(0, 2**63)
 PEOPLE = range(1, 1_000_000_001)
@@ -310,7 +315,8 @@ class SubgraphConfig:
     crowd_threshold: int = 8
     # The windows over which a link, a pair or a customer is new, in days.
     new_windows: tuple[int, ...] = (7, 30)
-    # Days in which a link held, or a use on a payment, makes a customer share a node.
+    # Days in which a link held, or a use on a payment, makes a customer share a node: fixed
+    # at 30 (SHARING_DAYS).
     sharing_days: int = 30
 
     def __post_init__(self) -> None:
@@ -338,7 +344,7 @@ class SubgraphConfig:
             _integer("subgraph.new_windows", window, range(1, lookback))
         if list(windows) != sorted(self.new_windows):
             raise ValueError(f"subgraph.new_windows must increase, got {self.new_windows!r}")
-        _integer("subgraph.sharing_days", self.sharing_days, range(1, lookback))
+        _integer("subgraph.sharing_days", self.sharing_days, SHARING_DAYS)
 
 
 # How the selection and test worlds are scored (docs/design.md, "If whole-world scoring is

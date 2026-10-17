@@ -10,6 +10,7 @@ import pytest
 from mule_pattern_learner import paths
 from mule_pattern_learner.paths import (
     DATA_DIR,
+    ENV_FILE,
     GSQL_DIR,
     REPOSITORY_ROOT,
     RESULTS_DIR,
@@ -23,6 +24,7 @@ from mule_pattern_learner.paths import (
     pl_identity_files,
     results_dir,
 )
+from mule_pattern_learner.tigergraph.connection import ConnectionSettings
 
 IDENTITY = "0123456789abcdef0123456789abcdef"
 FOLDERS = ("MULE_EXPORT_DIR", "MULE_PL_RECORDS_DIR")
@@ -44,6 +46,11 @@ def test_the_repository_root_holds_the_project_and_its_design() -> None:
     assert (REPOSITORY_ROOT / "pyproject.toml").is_file()
     assert (REPOSITORY_ROOT / "docs" / "design.md").is_file()
     assert GSQL_DIR == REPOSITORY_ROOT / "gsql"
+
+
+def test_the_connection_and_the_folders_read_one_env_file() -> None:
+    assert ENV_FILE == REPOSITORY_ROOT / ".env"
+    assert ConnectionSettings.model_config.get("env_file") is ENV_FILE
 
 
 def test_what_the_code_writes_lives_under_the_git_ignored_data_and_results() -> None:

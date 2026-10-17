@@ -5,7 +5,7 @@ set of vertices as a parameter."""
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, make_dataclass
 from typing import Any
 
 import pytest
@@ -73,6 +73,33 @@ def test_a_negative_integer_is_refused_unless_its_field_is_signed() -> None:
         parse_row(Row, ROW)
     with pytest.raises(ValueError, match="not an object"):
         parse_row(Row, [ROW])
+
+
+def test_a_field_typed_by_its_class_parses_as_one_typed_by_its_name() -> None:
+    # A module without postponed annotations gives each field its class, not its name.
+    plain = make_dataclass(
+        "Plain",
+        [("account_id", str), ("is_external", bool), ("payments", int), ("gap_ms", int)]
+        + [("amount", float)],
+    )
+    row = parse_row(plain, {**ROW, "gap_ms": 5})
+    assert (row.account_id, row.amount) == ("a_01", 12.0)  # pyright: ignore[reportAttributeAccessIssue]
+    with pytest.raises(ValueError, match="Plain.payments"):
+        parse_row(plain, {**ROW, "gap_ms": 5, "payments": "3"})
+
+
+@dataclass(frozen=True)
+class Optional:
+    account_id: str
+    gap_ms: int | None
+
+
+@pytest.mark.parametrize(
+    "kind", [Optional, make_dataclass("Optional", [("account_id", str), ("gap_ms", int | None)])]
+)
+def test_a_field_of_another_type_is_refused_by_name(kind: type[Any]) -> None:
+    with pytest.raises(ValueError, match="Optional.gap_ms has the type"):
+        parse_row(kind, {"account_id": "a_01", "gap_ms": 5})
 
 
 def test_the_head_of_an_answer_says_it_ran_and_its_version() -> None:
