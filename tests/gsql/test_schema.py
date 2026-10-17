@@ -190,9 +190,15 @@ WRITES = {
 }
 
 
+# A string literal or a comment, matched in one pass from the left with string literals
+# first, so a "#" or "//" inside a string never starts a comment and a quote inside a
+# comment never starts a string.
+LITERALS_AND_COMMENTS = re.compile(r'"(?:\\.|[^"\\])*"|' + COMMENTS.pattern, re.S)
+
+
 def writes(text: str) -> list[str]:
     """The forms of a write text holds, outside its comments and string literals."""
-    code = re.sub(r'"(?:\\.|[^"\\])*"', '""', COMMENTS.sub(" ", text))
+    code = LITERALS_AND_COMMENTS.sub(lambda m: '""' if m[0].startswith('"') else " ", text)
     return [form for form, pattern in WRITES.items() if pattern.search(code)]
 
 
@@ -208,6 +214,14 @@ def test_the_write_check_finds_every_form_of_a_write() -> None:
         "attribute assignment"
     ]
     assert writes("X = SELECT a FROM Account:a ACCUM a.count += 1;") == ["attribute assignment"]
+    # A "#" or "//" inside a status message starts no comment, so it hides no write.
+    for message in ("refused: #1", "a//b"):
+        hidden = (
+            f'PRINT "{message}";\n'
+            "X = SELECT a FROM Account:a POST-ACCUM a.pu_label = 1;\n"
+            'PRINT "done";'
+        )
+        assert writes(hidden) == ["attribute assignment"], message
     reads = (
         "/* delete nothing, insert nothing */ X = SELECT a FROM Account:a\n"
         "  WHERE a.opened_ms < t_ms AND a.closed_ms == 0 AND a.is_mule != 1\n"

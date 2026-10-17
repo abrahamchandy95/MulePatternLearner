@@ -6,7 +6,7 @@ neural network on TigerGraph, trained and scored on data simulated by PhantomLed
 **The code is being rebuilt.** What it will do, and every decision behind it, is in
 [the design](docs/design.md). Until the rebuild is done the package holds only what the
 design keeps from the earlier code: the TigerGraph client and its retrying query executor,
-the nnPU loss, the weighted metrics with the ring bootstrap, and the audit sample. The
+the nnPU loss, and the weighted metrics with the ring bootstrap. The
 `mule` command names the design's commands, and each one still says it is not built yet.
 The earlier code is in this repository's history.
 

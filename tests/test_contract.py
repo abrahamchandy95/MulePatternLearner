@@ -159,6 +159,10 @@ def test_the_label_columns_are_accounts_and_follow_one_convention() -> None:
     assert not follows_label_convention(1, is_external=True)
     assert not follows_label_convention(2, is_external=False)
     assert not follows_label_convention(True, is_external=False)
+    # The convention is the integers -1, 0 and 1, so a float equal to one is refused too.
+    assert not follows_label_convention(1.0, is_external=False)  # pyright: ignore[reportArgumentType]
+    assert not follows_label_convention(0.0, is_external=False)  # pyright: ignore[reportArgumentType]
+    assert not follows_label_convention(-1.0, is_external=True)  # pyright: ignore[reportArgumentType]
 
 
 def test_the_contract_is_frozen() -> None:

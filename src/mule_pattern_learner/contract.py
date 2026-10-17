@@ -142,6 +142,6 @@ EXTERNAL_LABEL = -1
 def follows_label_convention(value: int, *, is_external: bool) -> bool:
     """Whether an account's is_mule or pu_label value keeps the convention: -1 when the
     account is external, and 0 or 1 when it is not."""
-    if isinstance(value, bool) or value not in LABEL_VALUES:
+    if type(value) is not int or value not in LABEL_VALUES:
         return False
     return (value == EXTERNAL_LABEL) == is_external

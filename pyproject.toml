@@ -89,10 +89,12 @@ include_external_packages = true
 # without exceptions; tests/test_import_contracts.py runs them. The layers are exhaustive,
 # so every new top-level module must be placed in one; a layer in parentheses is optional
 # until its module exists. A layer imports only the layers below it, and the modules of
-# one layer, split by "|", never import each other. evaluation, the only package that
-# reads the answer key for a result, sits above everything that builds examples, batches
-# or models, and testing (the reference graph and parity, which may read every column)
-# beside the commands at the top.
+# one layer, split by "|", never import each other. The commands sit alone at the top,
+# since they run parity (testing code) and the benchmark; testing (the reference graph and
+# parity, which may read every column) and the benchmark sit under them. evaluation, the
+# only package that reads the answer key for a result, sits above everything that builds
+# examples, batches or models; and comparisons above training, since XGBoost chooses its
+# rounds by training's selection score.
 
 [[tool.importlinter.contracts]]
 name = "Layers run one way"
@@ -102,9 +104,11 @@ containers = ["mule_pattern_learner"]
 exhaustive = true
 exhaustive_ignores = ["__main__"]
 layers = [
-    "cli | testing | (bench)",
+    "cli",
+    "testing | (bench)",
     "evaluation",
-    "training | (comparisons)",
+    "(comparisons)",
+    "training",
     "data | subgraph",
     "tigergraph | model",
     "runtime | metrics",
