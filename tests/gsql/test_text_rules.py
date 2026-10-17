@@ -270,6 +270,130 @@ def test_the_bound_rule_requires_a_bound_at_t_on_every_step(old: str, new: str) 
     assert bound_rule("read_world", _definition(other, "read_world")) == []
 
 
+# Where GOOD's last statements begin, so a test can add statements before them.
+BEFORE_PRINT = '    PRINT "ok" AS status'
+
+
+def _added(statements: str, text: str = GOOD) -> str:
+    """GOOD with statements added before its PRINTs."""
+    return _changed(BEFORE_PRINT, statements + BEFORE_PRINT, text)
+
+
+# Steps no bound covers, each with a word of the problem it causes: a set of a whole type or
+# from to_vertex_set was bounded nowhere; a wildcard, a mixed type, an edge without a type or
+# a set the rules cannot follow could reach anything; an account scanned whole may open
+# after t.
+UNBOUNDED_STEPS = [
+    (
+        "    All = {Payment_Transaction.*};\n    X = SELECT p FROM All:p ACCUM @@received += 1;\n",
+        "does not bound p",
+    ),
+    (
+        '    All = to_vertex_set(@@ids, "Zelle_Transfer");\n'
+        "    X = SELECT p FROM All:p ACCUM @@received += 1;\n",
+        "does not bound p",
+    ),
+    (
+        "    Whole = {Payment_Transaction.*};\n"
+        "    All = Inflows UNION Whole;\n"
+        "    X = SELECT p FROM All:p ACCUM @@received += 1;\n",
+        "does not bound p",
+    ),
+    (
+        "    X = SELECT x FROM Scored:s -(Account_Received_Transaction>:r)-"
+        " (Payment_Transaction|Account):x ACCUM @@received += 1;\n",
+        "does not bound x",
+    ),
+    (
+        "    X = SELECT x FROM Scored:s -(Account_Received_Transaction>:r)- _:x"
+        " ACCUM @@received += 1;\n",
+        "steps to _",
+    ),
+    (
+        "    X = SELECT x FROM Scored:s -(Account_Received_Transaction>:r)- ANY:x"
+        " ACCUM @@received += 1;\n",
+        "steps to ANY",
+    ),
+    ("    X = SELECT q FROM Scored:s -(_>:o)- Party:q ACCUM @@received += 1;\n", "steps along _"),
+    ("    X = SELECT q FROM Scored:s -(:o)- Party:q ACCUM @@received += 1;\n", "edge of no type"),
+    # A set assigned in a form the rules do not follow is no set they know.
+    (
+        "    All (Payment_Transaction) = {Payment_Transaction.*};\n"
+        "    X = SELECT p FROM All:p ACCUM @@received += 1;\n",
+        "steps to All",
+    ),
+    ("    X = SELECT a FROM Account:a ACCUM @@received += 1;\n", "may not exist at t"),
+    (
+        "    All = {Account.*};\n"
+        "    X = SELECT a FROM All:a -(Account_Bound_From_Token>:b)- Token:k"
+        " ACCUM @@received += 1;\n",
+        "may not exist at t",
+    ),
+]
+
+
+@pytest.mark.parametrize(("statements", "word"), UNBOUNDED_STEPS)
+def test_a_step_no_bound_covers_is_refused(statements: str, word: str) -> None:
+    text = _changed(
+        "SumAccum<INT> @@received;",
+        "SumAccum<INT> @@received;\n    SetAccum<STRING> @@ids;",
+        _added(statements),
+    )
+    problems = common_problems(NAME, text)
+    assert any(word in problem for problem in problems), problems
+
+
+def test_sets_of_whole_types_and_of_vertex_accumulators_are_bounded_where_they_are_read() -> None:
+    # A set of a whole type is bounded in the SELECT that reads it.
+    whole = _added(
+        "    All = {Payment_Transaction.*};\n"
+        "    X = SELECT p FROM All:p\n"
+        "      WHERE p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms\n"
+        "      ACCUM @@received += 1;\n"
+        "    Every = {Account.*};\n"
+        "    Y = SELECT a FROM Every:a WHERE a.opened_ms < t_ms ACCUM @@received += 1;\n"
+    )
+    assert common_problems(NAME, whole) == []
+    # Accounts reached as a payment's sender or receiver opened before it.
+    paid = _added(
+        "    Z = SELECT a FROM Inflows:p -(Transaction_From_Account>:f)- Account:a"
+        " ACCUM @@received += 1;\n"
+    )
+    assert common_problems(NAME, paid) == []
+    # A vertex accumulator holds vertices that SELECTs bounded, so its set is chosen and its
+    # accounts need no second existence test; a set of a whole type does.
+    kept = _changed(
+        "SumAccum<INT> @@received;",
+        "SumAccum<INT> @@received;\n    SetAccum<VERTEX<Account>> @@kept;",
+        _added(
+            "    Kept = {@@kept};\n"
+            "    K = SELECT q FROM Kept:a -(Account_Owned_By_Party>:o)- Party:q\n"
+            "      WHERE o.valid_from_ms < t_ms\n"
+            "        AND (o.valid_to_ms == 0 OR o.valid_to_ms > t_ms - lookback_ms);\n"
+        ),
+    )
+    kept = _changed(
+        "ACCUM a.@first_seen += p.event_ts_ms",
+        "ACCUM a.@first_seen += p.event_ts_ms, @@kept += a",
+        kept,
+    )
+    assert common_problems(NAME, kept) == []
+    scanned = _changed("Kept = {@@kept};", "Kept = {Account.*};", kept)
+    (problem,) = common_problems(NAME, scanned)
+    assert problem.endswith("reaches an account that may not exist at t")
+    # A query with no t, read_labels, scans every account.
+    labels = _definition(
+        "USE GRAPH Mule_Pattern_Learner\n"
+        "CREATE OR REPLACE QUERY read_labels() FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {\n"
+        "    All = {Account.*};\n"
+        "    Identified = SELECT a FROM All:a WHERE a.pu_label == 1;\n"
+        "    PRINT Identified[Identified.id AS account_id] AS accounts;\n"
+        "}\n",
+        "read_labels",
+    )
+    assert bound_rule("read_labels", labels) == []
+
+
 def test_a_payment_may_be_bounded_by_another_payment_of_its_pattern() -> None:
     text = _changed(
         "Seen = SELECT a FROM Accounts:a -(Account_Initiated_Transaction>:e)- Payment_Transaction:p\n"

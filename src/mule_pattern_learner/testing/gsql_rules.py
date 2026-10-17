@@ -20,7 +20,8 @@ The rules read the text, so the queries keep these forms, with keywords in capit
   - a visible link: `l.valid_from_ms < t_ms AND (l.valid_to_ms == 0 OR l.valid_to_ms >
     t_ms - lookback_ms)`, and a current one the same with `t_ms - 2592000000` (30 days);
   - an account that exists: `a.opened_ms < t_ms`, required wherever an account is reached
-    through its ownership;
+    through its ownership, and on every other account a query with t reaches but as a
+    payment's sender or receiver, which exists before the payment by the loader's check;
   - an open account, in list_accounts alone: `(a.closed_ms == 0 OR a.closed_ms >= t_ms)`;
   - a known start s: `s > t_ms - lookback_ms`, `s > q.joined_ms`, and an own payment before
     it, `p.event_ts_ms < s`; a start new over w, a window shorter than the lookback:
@@ -34,6 +35,12 @@ The rules read the text, so the queries keep these forms, with keywords in capit
   counts the crowd itself, accumulating only into accumulators named `@crowd...`.
 - A vertex is read through a pattern's alias or a vertex set; a name.field that is neither
   is a tuple's field, which a TYPEDEF declares.
+- Every step of a pattern names a vertex set or the schema's types: no wildcard (`_` or
+  `ANY`) and no edge without a type. A vertex set is assigned by a SELECT, from a vertex
+  parameter or vertex accumulator (`{@@kept}`, declared VERTEX<T>), as a whole type
+  (`{Account.*}`), by `to_vertex_set(..., "T")` or by UNION, INTERSECT or MINUS of sets. A
+  set of a whole type or from to_vertex_set was bounded nowhere, so a step on it is bounded
+  like a step on the type itself.
 """
 
 from __future__ import annotations
@@ -74,6 +81,15 @@ LINK_TYPES = frozenset(
 )
 OWNERSHIP = frozenset({"Party_Owns_Account", "Account_Owned_By_Party"})
 ACCOUNT = frozenset({"Account"})
+# The roles that join a payment to its sender or receiver, with their reverses: the account
+# at their end was open before the payment, by the loader's check.
+PAYMENT_ACCOUNTS = frozenset(
+    name
+    for table in TABLES
+    if table.kind is Kind.ROLE and table.target == "Account"
+    for name in (table.name, table.reverse)
+    if name is not None
+)
 PAYMENTS = frozenset({"Payment_Transaction", "Zelle_Transfer"})
 NODES = frozenset({"Device", "IP"})
 USERS = frozenset({"Party", *PAYMENTS})
@@ -241,10 +257,30 @@ def _vertex_parameters(definition: str) -> dict[str, frozenset[str]]:
     return found
 
 
+def _vertex_accumulators(definition: str) -> dict[str, frozenset[str]]:
+    """The vertex type of each global accumulator declared to hold VERTEX<T>, such as
+    `SetAccum<VERTEX<Account>> @@kept`; one declared to hold an untyped VERTEX has none."""
+    found: dict[str, frozenset[str]] = {}
+    for statement in statements(definition):
+        if not re.fullmatch(r"\w+Accum", statement[0]) or "VERTEX" not in statement:
+            continue
+        at = statement.index("VERTEX")
+        types = (
+            frozenset({statement[at + 2]}) if statement[at + 1 : at + 2] == ["<"] else frozenset()
+        )
+        for item in statement:
+            if re.fullmatch(r"@@\w+", item):
+                found[item] = types
+    return found
+
+
 @dataclass(frozen=True)
 class Step:
     """A vertex of a pattern: its alias, its types, and whether it is a vertex set chosen
-    before rather than a type."""
+    before rather than a type. A set is chosen when its members came from a SELECT, a vertex
+    parameter or a vertex accumulator, or from chosen sets alone; a set of a whole type
+    (`{Payment_Transaction.*}`) or from to_vertex_set is not, and is bounded like the type
+    itself."""
 
     alias: str | None
     types: frozenset[str]
@@ -305,7 +341,9 @@ def _clauses(statement: Sequence[str]) -> dict[str, list[str]]:
     return found
 
 
-def _vertex(items: Sequence[str], at: int, sets: dict[str, frozenset[str]]) -> tuple[Step, int]:
+def _vertex(
+    items: Sequence[str], at: int, sets: dict[str, frozenset[str]], chosen: frozenset[str]
+) -> tuple[Step, int]:
     """The vertex step at items[at], and the index after it."""
     if items[at] == "(":
         close = list(items).index(")", at)
@@ -317,9 +355,9 @@ def _vertex(items: Sequence[str], at: int, sets: dict[str, frozenset[str]]) -> t
     alias = None
     if at + 1 < len(items) and items[at] == ":":
         alias, at = items[at + 1], at + 2
-    chosen = len(names) == 1 and names[0] in sets
-    types = sets[names[0]] if chosen else frozenset(names)
-    return Step(alias, types, chosen), at
+    is_set = len(names) == 1 and names[0] in sets
+    types = sets[names[0]] if is_set else frozenset(names)
+    return Step(alias, types, is_set and names[0] in chosen), at
 
 
 def _edge(items: Sequence[str]) -> EdgeStep:
@@ -332,12 +370,12 @@ def _edge(items: Sequence[str]) -> EdgeStep:
 
 
 def _path(
-    items: Sequence[str], sets: dict[str, frozenset[str]]
+    items: Sequence[str], sets: dict[str, frozenset[str]], chosen: frozenset[str]
 ) -> tuple[tuple[Step, ...], tuple[EdgeStep, ...]]:
     """A path of a pattern: its vertex steps and the edge steps between them."""
     steps: list[Step] = []
     edges: list[EdgeStep] = []
-    step, at = _vertex(items, 0, sets)
+    step, at = _vertex(items, 0, sets, chosen)
     steps.append(step)
     while at < len(items) and items[at] == "-" and at + 1 < len(items) and items[at + 1] == "(":
         depth, close = 0, at + 1
@@ -349,7 +387,7 @@ def _path(
         edges.append(_edge(items[at + 2 : close]))
         if close + 1 >= len(items) or items[close + 1] != "-":
             raise ValueError(f"A pattern's edge does not end with )-: {' '.join(items)}")
-        step, at = _vertex(items, close + 2, sets)
+        step, at = _vertex(items, close + 2, sets, chosen)
         steps.append(step)
     if at != len(items):
         raise ValueError(f"A pattern holds what is not a step: {' '.join(items[at:])}")
@@ -370,14 +408,19 @@ def scopes(
     definition: str,
 ) -> list[tuple[list[str], dict[str, frozenset[str]], Select | None]]:
     """Each statement of a query with the types of the vertex sets assigned before it, and
-    its SELECT, if it is one."""
+    its SELECT, if it is one. A set whose members were chosen before (see Step) is marked
+    chosen in its SELECT's steps."""
     sets: dict[str, frozenset[str]] = dict(_vertex_parameters(definition))
+    chosen = set(sets)
+    held = _vertex_accumulators(definition)
     found: list[tuple[list[str], dict[str, frozenset[str]], Select | None]] = []
     for statement in statements(definition):
         select = None
         if "SELECT" in statement:
             clauses = _clauses(statement)
-            paths = tuple(_path(path, sets) for path in _split(clauses["FROM"], ","))
+            paths = tuple(
+                _path(path, sets, frozenset(chosen)) for path in _split(clauses["FROM"], ",")
+            )
             where = clauses.get("WHERE", [])
             conjuncts = frozenset(" ".join(part) for part in _split_and(where) if part)
             accumulations = tuple(clauses.get("ACCUM", []) + clauses.get("POST-ACCUM", []))
@@ -387,18 +430,28 @@ def scopes(
         if assigned is None:
             continue
         target, value = assigned
+        chosen.discard(target)
         if select is not None and value[:1] == ["SELECT"]:
-            chosen = value[1]
-            sets[target] = select.aliases().get(chosen, frozenset())
+            sets[target] = select.aliases().get(value[1], frozenset())
+            chosen.add(target)
         elif value[:1] == ["{"] and value[-1:] == ["}"]:
             kinds: set[str] = set()
+            whole = False
             for item in _split(value[1:-1], ","):
                 name = "".join(item)
                 if name.endswith(".*"):
                     kinds.add(name[:-2])
+                    whole = True
                 elif name in sets:
                     kinds |= sets[name]
+                    whole |= name not in chosen
+                elif name in held:
+                    kinds |= held[name]
+                else:
+                    whole = True
             sets[target] = frozenset(kinds)
+            if not whole:
+                chosen.add(target)
         elif value[:2] == ["to_vertex_set", "("] and value[-2:-1] and value[-2].startswith('"'):
             sets[target] = frozenset({value[-2].strip('"')})
         elif value and all(
@@ -406,6 +459,8 @@ def scopes(
             for index, item in enumerate(value)
         ):
             sets[target] = frozenset().union(*(sets[item] for item in value[::2]))
+            if all(item in chosen for item in value[::2]):
+                chosen.add(target)
     return found
 
 
@@ -511,11 +566,13 @@ def time_rule(name: str, definition: str) -> list[str]:
 def bound_rule(name: str, definition: str) -> list[str]:
     """Every SELECT bounds what it reads at t: each payment it steps to by a window before t
     or by another payment of its pattern, each link it steps along by the visible or current
-    form, and each account it reaches through its ownership by `opened_ms < t_ms`. A vertex
-    set chosen before was bounded where it was chosen. read_world and read_answer_key have
-    no t."""
+    form, and each account it reaches through its ownership by `opened_ms < t_ms`; in a query
+    with t, so is every other account it reaches but as a payment's sender or receiver. A
+    vertex set chosen before was bounded where it was chosen. read_world and read_answer_key
+    have no t."""
     if name in NO_AS_OF:
         return []
+    as_of = "t_ms" in parameters(definition)
     problems: list[str] = []
     lower = re.compile(rf"(\w+)\.event_ts_ms >= (?:t_ms - (?:{NAME}|\d+)|(\w+)\.event_ts_ms)")
     upper = re.compile(r"(\w+)\.event_ts_ms < (?:t_ms|(\w+)\.(?:event_ts_ms|valid_from_ms))")
@@ -526,7 +583,7 @@ def bound_rule(name: str, definition: str) -> list[str]:
         where = f"{name}: {' '.join(select.statement)[:80]}"
         aliases = select.aliases()
         for step in select.vertices:
-            if step.chosen or not step.types or not step.types <= PAYMENTS:
+            if step.chosen or not step.types & PAYMENTS:
                 continue
             if step.alias is None:
                 problems.append(f"{where} steps to a payment without an alias")
@@ -560,10 +617,38 @@ def bound_rule(name: str, definition: str) -> list[str]:
             for index, step in enumerate(steps):
                 beside = [edges[i].types for i in (index - 1, index) if 0 <= i < len(edges)]
                 owned = any(types & OWNERSHIP for types in beside)
-                if step.chosen or step.types != ACCOUNT or not owned:
+                paid = any(types & PAYMENT_ACCOUNTS for types in beside)
+                if step.chosen or not step.types & ACCOUNT or not (owned or (as_of and not paid)):
                     continue
                 if step.alias is None or f"{step.alias}.opened_ms < t_ms" not in select.conjuncts:
                     problems.append(f"{where} reaches an account that may not exist at t")
+    return problems
+
+
+def pattern_rule(name: str, definition: str) -> list[str]:
+    """Every step of a pattern can be placed: a vertex set chosen before, or vertex types and
+    edge types of the schema. A wildcard (`_` or `ANY`), an edge without a type, or a name that
+    is neither a vertex set the rules can follow nor a type could reach a payment, a link or
+    an account that no bound covers."""
+    problems: list[str] = []
+    for select in selects(definition):
+        where = f"{name}: {' '.join(select.statement)[:80]}"
+        for step in select.vertices:
+            if step.chosen:
+                continue
+            unknown = sorted(step.types - VERTEX_ATTRIBUTES.keys())
+            if unknown or not step.types:
+                problems.append(
+                    f"{where} steps to {' or '.join(unknown) or 'a set of no known type'}, "
+                    "which is no vertex type of the schema"
+                )
+        for edge in select.edges:
+            unknown = sorted(edge.types - EDGE_ATTRIBUTES.keys())
+            if unknown or not edge.types:
+                problems.append(
+                    f"{where} steps along {' or '.join(unknown) or 'an edge of no type'}, "
+                    "which is no edge type of the schema"
+                )
     return problems
 
 
@@ -681,7 +766,7 @@ def leaf_rule(name: str, definition: str) -> list[str]:
         for steps, edges in select.paths:
             for index, edge in enumerate(edges):
                 node, users = steps[index], steps[index + 1]
-                if not node.types or not node.types <= NODES or not users.types & USERS:
+                if not node.types & NODES or not users.types & USERS:
                     continue
                 if node.alias is not None and f"NOT {node.alias}.@leaf" in select.conjuncts:
                     continue
@@ -761,6 +846,7 @@ def common_problems(name: str, text: str) -> list[str]:
         *write_rule(name, definition),
         *label_rule(name, definition),
         *time_rule(name, definition),
+        *pattern_rule(name, definition),
         *bound_rule(name, definition),
         *projection_rule(name, definition),
         *heap_rule(name, definition),
