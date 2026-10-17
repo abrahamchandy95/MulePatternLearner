@@ -27,9 +27,12 @@ from mule_pattern_learner.testing.gsql_rules import (
     parameter_rule,
     pattern_rule,
     projection_fields,
+    projection_items,
     projection_rule,
     refusal_rule,
+    source_rule,
     status_fields,
+    status_items,
     structure_rule,
     time_rule,
     tuple_rule,
@@ -597,6 +600,39 @@ def test_parameters_and_printed_fields_are_the_pythons() -> None:
     assert field_rule("status", status_fields(definition), ExampleHead) == []
     assert field_rule("status", ["received", "extra"], ExampleHead) == [
         "status prints ['received', 'extra'], not ['received']"
+    ]
+
+
+def test_each_printed_field_reads_what_it_is_named_for() -> None:
+    definition = _definition()
+    assert projection_items(definition, "Accounts") == [
+        ("Accounts.id", "account_id"),
+        ("Accounts.@first_seen", "first_seen"),
+    ]
+    assert status_items(definition) == [("@@received", "received")]
+    assert source_rule("Accounts", projection_items(definition, "Accounts")) == []
+    assert source_rule("status", status_items(definition)) == []
+    # Swapped under their names, the fields still match the dataclass.
+    swapped = _definition(
+        _changed(
+            "Accounts.id AS account_id, Accounts.@first_seen AS first_seen",
+            "Accounts.@first_seen AS account_id, Accounts.id AS first_seen",
+        )
+    )
+    assert projection_fields(swapped, "Accounts") == ["account_id", "first_seen"]
+    assert source_rule("Accounts", projection_items(swapped, "Accounts")) == [
+        "Accounts prints Accounts.@first_seen as account_id, which does not read account_id",
+        "Accounts prints Accounts.id as first_seen, which does not read first_seen",
+    ]
+    other = _definition(_changed("@@received AS received", "@@inflows AS received"))
+    assert source_rule("status", status_items(other)) == [
+        "status prints @@inflows as received, which does not read received"
+    ]
+    # An id is read as account_id or node_id alone, and a name ending in it is no read of it.
+    assert source_rule("ids", [("Nodes.id", "node_id"), ("Page.@owner_id", "owner_id")]) == []
+    assert source_rule("ids", [("Page.id", "owner_id"), ("Page.@x_account_id", "account_id")]) == [
+        "ids prints Page.id as owner_id, which does not read owner_id",
+        "ids prints Page.@x_account_id as account_id, which does not read account_id",
     ]
 
 

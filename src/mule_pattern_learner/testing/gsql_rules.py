@@ -41,7 +41,7 @@ The rules read the text, so the queries keep these forms, with keywords in capit
   `Existing = SELECT s FROM Scored:s WHERE s.opened_ms < t_ms;`, then
   `IF Existing.size() != Scored.size() THEN PRINT "<status>" AS status ...; RETURN; END;`.
 - No query reads the clock: no date or time function, and no remainder but a test of the
-  parameter itself, `t_ms % N != 0`.
+  parameter itself, `t_ms % N != R` or `t_ms % N == R` with N and R integers.
 - No query reads around the rules: no built-in that reads a vertex's edges or attributes by
   name (outdegree, neighbors, neighborAttribute, edgeAttribute, getAttr, evaluate) but
   read_hubs' all-time prefilter of the account hub test, `a.outdegree("T") + ... >
@@ -70,6 +70,9 @@ The rules read the text, so the queries keep these forms, with keywords in capit
 - A PRINT prints a vertex set only as a projection, `Set[Set.id AS id, ...]`. A printed name
   that is not a parameter of another type than vertices, a local scalar or a tuple is taken
   for a vertex set, so a set the rules cannot follow is never printed whole.
+- A field of a projection or of the "ok" status row reads what it is named for:
+  `Set.name AS name`, `Set.@name AS name` or `@@name AS name`, and an id `Set.id AS
+  account_id` or `Set.id AS node_id`.
 """
 
 from __future__ import annotations
@@ -180,6 +183,9 @@ CLOCK_CALLS = frozenset(
 SCALAR_TYPES = frozenset({"INT", "UINT", "FLOAT", "DOUBLE", "STRING", "BOOL", "DATETIME"})
 # The words a PRINT may hold that name no vertex set.
 PRINT_WORDS = frozenset({"TRUE", "FALSE", "NULL", "AND", "OR", "NOT", "IN", "IS"})
+# The printed names that read a vertex's id; every other printed name reads an attribute or
+# an accumulator of its own name.
+ID_NAMES = frozenset({"account_id", "node_id"})
 
 # A string literal or a comment, matched in one pass from the left with string literals
 # first, so a "#" or "//" inside a string never starts a comment and a quote inside a
@@ -1196,26 +1202,59 @@ def parameter_rule(name: str, definition: str, built: Iterable[str]) -> list[str
     return [] if found == expected else [f"{name} takes {found}, not {expected}"]
 
 
-def projection_fields(definition: str, vertex_set: str) -> list[str]:
-    """The names a PRINT of a projection of vertex_set prints, in order."""
+def _printed(items: Sequence[str]) -> list[tuple[str, str]]:
+    """Each `expression AS name` of a PRINT's items: the expression's tokens joined by spaces,
+    and the name."""
+    return [
+        (" ".join(part[:-2]), part[-1])
+        for part in _split(items, ",")
+        if len(part) >= 2 and part[-2] == "AS"
+    ]
+
+
+def projection_items(definition: str, vertex_set: str) -> list[tuple[str, str]]:
+    """What a PRINT of a projection of vertex_set prints, in order: each expression and the
+    name it is printed as."""
     for statement in statements(definition):
         if statement[:1] == ["PRINT"] and statement[1:3] == [vertex_set, "["]:
-            close = statement.index("]")
-            return [
-                part[-1]
-                for part in _split(statement[3:close], ",")
-                if len(part) >= 2 and part[-2] == "AS"
-            ]
+            return _printed(statement[3 : statement.index("]")])
     raise ValueError(f"No PRINT of a projection of {vertex_set}")
+
+
+def status_items(definition: str) -> list[tuple[str, str]]:
+    """What a query's PRINT of its "ok" status prints after the status and the version: each
+    expression and the name it is printed as."""
+    for statement in statements(definition):
+        if statement[:4] == ["PRINT", '"ok"', "AS", "status"]:
+            return _printed(statement[1:])[2:]
+    raise ValueError('No PRINT "ok" AS status')
+
+
+def projection_fields(definition: str, vertex_set: str) -> list[str]:
+    """The names a PRINT of a projection of vertex_set prints, in order."""
+    return [name for _, name in projection_items(definition, vertex_set)]
 
 
 def status_fields(definition: str) -> list[str]:
     """What a query's PRINT of its "ok" status prints after the status and the version."""
-    for statement in statements(definition):
-        if statement[:4] == ["PRINT", '"ok"', "AS", "status"]:
-            printed = [part[-1] for part in _split(statement[1:], ",") if part[-2:-1] == ["AS"]]
-            return printed[2:]
-    raise ValueError('No PRINT "ok" AS status')
+    return [name for _, name in status_items(definition)]
+
+
+def source_rule(what: str, printed: Sequence[tuple[str, str]]) -> list[str]:
+    """Each printed name reads what it names: its expression ends in `.name`, `.@name` or
+    `@@name`, or, for an id (ID_NAMES), in `.id`. The names alone match the dataclass whatever
+    they read, so without this two fields could swap their sources unseen."""
+    problems: list[str] = []
+    for expression, name in printed:
+        last = expression.rsplit(" ", 1)[-1]
+        named = rf"(?:\w+\.@?|@@){re.escape(name)}"
+        if not re.fullmatch(named, last) and not (
+            name in ID_NAMES and re.fullmatch(r"\w+\.id", last)
+        ):
+            problems.append(
+                f"{what} prints {expression or 'nothing'} as {name}, which does not read {name}"
+            )
+    return problems
 
 
 def field_rule(what: str, printed: Sequence[str], kind: type) -> list[str]:

@@ -2,9 +2,10 @@
 read_labels, read_answer_key, read_hubs, read_world and profile_hubs.
 
 Each passes every rule of testing.gsql_rules, takes the parameters its Python builder gives and
-prints the fields of the dataclasses its parser reads. Beside those rules, each query's own
-rules are held here clause by clause, since no reference graph runs them yet: the scored
-population, the label readers, the hub and crowd measures and the world's identity. gsql-lsp
+prints the fields of the dataclasses its parser reads, each from what it is named for. Beside
+those rules, each query's own rules are held here clause by clause, since no reference graph
+runs them yet: its declarations, its refusals, the scored population, the label readers, the
+hub and crowd measures and the world's identity. gsql-lsp
 checks every file against the schema in tests/gsql/test_schema.py, and the live compile test
 compiles them once the workspace has the schema.
 """
@@ -27,9 +28,12 @@ from mule_pattern_learner.testing.gsql_rules import (
     field_rule,
     parameter_rule,
     projection_fields,
+    projection_items,
     scopes,
+    source_rule,
     statements,
     status_fields,
+    status_items,
     version_rule,
     without_comments,
 )
@@ -168,11 +172,14 @@ def test_each_printed_set_has_the_fields_of_its_dataclass(
 ) -> None:
     printed = projection_fields(DEFINITIONS[name], vertex_set)
     assert field_rule(f"{name} {vertex_set}", printed, kind) == []
+    items = projection_items(DEFINITIONS[name], vertex_set)
+    assert source_rule(f"{name} {vertex_set}", items) == []
 
 
 @pytest.mark.parametrize(("name", "kind"), HEADS)
 def test_each_printed_status_row_has_the_fields_of_its_dataclass(name: str, kind: type) -> None:
     assert field_rule(f"{name} status", status_fields(DEFINITIONS[name]), kind) == []
+    assert source_rule(f"{name} status", status_items(DEFINITIONS[name])) == []
 
 
 def test_the_registry_holds_each_querys_builder_and_rows_but_the_answer_keys() -> None:
@@ -181,6 +188,54 @@ def test_the_registry_holds_each_querys_builder_and_rows_but_the_answer_keys() -
             assert kind in REGISTRY[name].rows, (name, kind)
     # The answer key's parser is imported by evaluation and testing only.
     assert REGISTRY[READ_ANSWER_KEY].params is None and REGISTRY[READ_ANSWER_KEY].rows == ()
+
+
+# What each query declares, exactly, in order. The type of an accumulator decides what a
+# measure counts: a SetAccum of customers counts each customer once where a ListAccum would
+# count each payment; an OrAccum flag is set when any write is true where an AndAccum would
+# need all; a SumAccum map adds where a MaxAccum keeps the largest value.
+DECLARATIONS: dict[str, list[str]] = {
+    LIST_ACCOUNTS: ["MaxAccum<STRING> @owner_id", f"UINT lookback_ms = {LOOKBACK_MS}"],
+    READ_LABELS: ["SetAccum<STRING> @@invalid"],
+    READ_ANSWER_KEY: ["OrAccum @owned"],
+    READ_HUBS: [
+        "SetAccum<VERTEX<Party>> @hub_customers, @crowd_customers, @crowd_enrolled",
+        "SumAccum<INT> @customers_90d",
+        "OrAccum @observed_only, @hub",
+        f"UINT lookback_ms = {LOOKBACK_MS}",
+        f"UINT crowd_threshold = {SUBGRAPH.crowd_threshold}",
+        f"UINT hub_threshold = {SUBGRAPH.hub_threshold}",
+    ],
+    READ_WORLD: [
+        "MapAccum<STRING, SumAccum<INT>> @out_degree, @in_degree",
+        "MapAccum<STRING, SumAccum<INT>> @@vertices, @@edges, @@account_types, @@payment_rails, "
+        "@@seconds, @@cents, @@squared_degrees, @@squared_target_degrees, @@degree_products",
+        "SumAccum<INT> @@external_accounts",
+        "MinAccum<UINT> @@first_joined_ms, @@first_event_ms",
+        "MaxAccum<UINT> @@last_event_ms",
+    ],
+    PROFILE_HUBS: [
+        "SetAccum<VERTEX<Party>> @hub_customers, @crowd_customers, @crowd_enrolled",
+        "MapAccum<INT, SumAccum<INT>> @@accounts, @@registered_devices, @@observed_devices, "
+        "@@registered_ips, @@observed_ips",
+        f"UINT lookback_ms = {LOOKBACK_MS}",
+    ],
+}
+DECLARES = re.compile(r"\w+Accum\b|TYPEDEF |(?:INT|UINT|FLOAT|DOUBLE|STRING|BOOL|DATETIME) ")
+
+
+def _declarations(name: str) -> list[str]:
+    """The statements of a query's body that declare an accumulator, a tuple or a local
+    scalar, in order, each with its whitespace made single spaces."""
+    code = without_comments(DEFINITIONS[name])
+    body = code[code.index("{") + 1 : code.rindex("}")]
+    found = [" ".join(part.split()) for part in body.split(";")]
+    return [text for text in found if DECLARES.match(text)]
+
+
+@pytest.mark.parametrize("name", INFRASTRUCTURE)
+def test_each_query_declares_exactly_its_accumulators_and_settings(name: str) -> None:
+    assert _declarations(name) == DECLARATIONS[name]
 
 
 # Parameters every query checks alike.
@@ -192,6 +247,35 @@ def _refusal(name: str) -> str:
     text = " ".join(first)
     assert text.endswith('THEN PRINT "invalid_parameters" AS status'), text
     return text[len("IF ") : -len(' THEN PRINT "invalid_parameters" AS status')]
+
+
+# The status each query refuses with, in order; read_world takes no parameter.
+REFUSALS: dict[str, list[str]] = {
+    LIST_ACCOUNTS: ["invalid_parameters"],
+    READ_LABELS: ["invalid_parameters", "invalid_activity"],
+    READ_ANSWER_KEY: ["invalid_parameters"],
+    READ_HUBS: ["invalid_parameters"],
+    READ_WORLD: [],
+    PROFILE_HUBS: ["invalid_parameters"],
+}
+
+
+@pytest.mark.parametrize("name", INFRASTRUCTURE)
+def test_every_refusal_returns_at_once(name: str) -> None:
+    """A refusal that went on would read with t at or below the lookback, where
+    t_ms - lookback_ms wraps in UINT, or print a page after its refusal."""
+    found = statements(DEFINITIONS[name])
+    refused: list[str] = []
+    for index, statement in enumerate(found):
+        if "PRINT" not in statement:
+            continue
+        at = statement.index("PRINT")
+        word = statement[at + 1]
+        if statement[at + 2 : at + 4] == ["AS", "status"] and word != '"ok"':
+            refused.append(word.strip('"'))
+            assert statement[0] == "IF", statement
+            assert found[index + 1 : index + 3] == [["RETURN"], ["END"]], statement
+    assert refused == REFUSALS[name]
 
 
 @pytest.mark.parametrize("name", AS_OF)
@@ -402,17 +486,19 @@ LINKS = {table.name for table in TABLES if table.kind is Kind.LINK}
 VERTICES = {table.name for table in TABLES if table.kind is Kind.VERTEX}
 
 
-def test_read_world_counts_every_vertex_type_once() -> None:
+def test_read_world_counts_every_vertex_type_once_under_its_own_name() -> None:
     counted: list[str] = []
     for statement, _, select in scopes(DEFINITIONS[READ_WORLD]):
         if select is not None and not select.edges and not select.vertices[0].chosen:
+            (step,) = select.vertices
+            (kind,) = step.types
             text = " ".join(select.accumulations)
-            assert re.search(r"@@vertices \+= \( (?:\"\w+\"|\w\.type) -> 1 \)", text), statement
-            counted += [step.types for step in select.vertices][0]
+            # One count, keyed by the type the SELECT reads: by name, or by its alias's type.
+            keys = re.findall(r"@@vertices \+= \( (\S+) -> 1 \)", text)
+            assert text.count("@@vertices") == 1, statement
+            assert keys in ([f'"{kind}"'], [f"{step.alias}.type"]), statement
+            counted.append(kind)
     assert sorted(counted) == sorted(VERTICES)
-    # The named counts are of their own type.
-    for target, kind in (("Parties", "Party"), ("Accounts", "Account")):
-        assert f'@@vertices += ( "{kind}" -> 1 )' in " ".join(_select(READ_WORLD, target).statement)
 
 
 def test_read_world_steps_along_every_forward_edge_type_once_per_pass() -> None:
