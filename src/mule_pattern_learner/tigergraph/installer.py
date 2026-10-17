@@ -1,21 +1,29 @@
-"""Install the queries of gsql/ on the graph, and check that the installed ones are current.
+"""Install the queries of gsql/ on the graph, check that the installed ones are current, and
+refuse versions the parity check has not passed.
 
 A query is current when SHOW QUERY gives the repository's text (comments, whitespace and
 case outside string literals aside) and its REST endpoint is enabled with the same
 parameters. install creates and installs only the queries that are not. Every write runs
 once through the executor, so it is never repeated behind the caller's back. The schema
 (gsql/schema/) is not installed here: the loader creates it on an empty graph.
+
+No query is fetched until its version has passed parity on the 5,000-person test world,
+which mule parity records in gsql/parity.toml, committed with the code (docs/design.md,
+"The pipeline").
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from datetime import date
 import hashlib
+from pathlib import Path
 import re
 import time
+import tomllib
 from typing import Any
 
-from ..paths import GSQL_DIR
+from ..paths import GSQL_DIR, parity_record
 from .executor import (
     AVAILABILITY,
     SERVER_TIMEOUT,
@@ -100,7 +108,12 @@ def repository_queries() -> dict[str, str]:
     """Every query the code installs, by name: its definition in its file under gsql/."""
     found: dict[str, str] = {}
     for name, relative in QUERY_FILES.items():
-        defined = definitions((GSQL_DIR / relative).read_text())
+        path = GSQL_DIR / relative
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"gsql/{relative} is missing: the query {name} is registered but not written"
+            )
+        defined = definitions(path.read_text())
         if list(defined) != [name]:
             raise ValueError(f"gsql/{relative} must define the query {name} and no other")
         found[name] = defined[name]
@@ -236,3 +249,48 @@ def install(
         sleep(poll_s)
     verify(executor)
     return stale
+
+
+# The fields of each record of gsql/parity.toml: the query, the version of its text that
+# passed, the TigerGraph version it ran on, and the identity and date of that world's run.
+PARITY_FIELDS = {"query": str, "version": str, "tigergraph": str, "world": str, "date": date}
+
+
+def parity_versions(record: Path | None = None) -> set[tuple[str, str]]:
+    """The (query, version) pairs the parity record holds, each one that passed parity.
+
+    The record is TOML, one `[[passed]]` table per query version with the PARITY_FIELDS.
+    """
+    path = parity_record() if record is None else record
+    if not path.is_file():
+        return set()
+    passed = tomllib.loads(path.read_text()).get("passed", [])
+    if not isinstance(passed, list):
+        raise ValueError(f"{path} must hold [[passed]] tables")
+    found: set[tuple[str, str]] = set()
+    for entry in passed:
+        if not isinstance(entry, dict) or set(entry) != set(PARITY_FIELDS):
+            raise ValueError(f"{path} holds a record without exactly {sorted(PARITY_FIELDS)}")
+        for field, kind in PARITY_FIELDS.items():
+            if not isinstance(entry[field], kind):
+                raise ValueError(f"{path} holds a {field} that is not a {kind.__name__}")
+        query, version = str(entry["query"]), str(entry["version"])
+        if not version.startswith(f"{query}-"):
+            raise ValueError(f"{path} records the version {version} for the query {query}")
+        found.add((query, version))
+    return found
+
+
+def require_parity(versions: Mapping[str, str], record: Path | None = None) -> None:
+    """Raise unless the parity record holds every version (query name to version), naming
+    every one it lacks."""
+    passed = parity_versions(record)
+    missing = [
+        f"{name} {version}" for name, version in versions.items() if (name, version) not in passed
+    ]
+    if missing:
+        path = parity_record() if record is None else record
+        raise ValueError(
+            f"No parity record for {', '.join(missing)} in {path}: run `mule parity` on the "
+            "5,000-person test world and commit the record"
+        )

@@ -19,6 +19,7 @@ import pytest
 
 from mule_pattern_learner.contract import ENDS, ID, TABLES, Kind, Table
 from mule_pattern_learner.paths import GSQL_DIR, REPOSITORY_ROOT
+from mule_pattern_learner.testing.gsql_rules import writes
 from mule_pattern_learner.tigergraph.installer import COMMENTS
 from mule_pattern_learner.tigergraph.queries import GRAPH_NAME
 
@@ -177,29 +178,6 @@ def test_nothing_left_out_of_the_export_is_in_the_schema() -> None:
         "Transaction_To_Token",
     ):
         assert not re.search(rf"\b{name}\b", code), name
-
-
-# The forms of a write: a loading job, an insert, a delete, or an attribute set (an
-# assignment to `alias.attribute`, plain or accumulating; accumulators are `alias.@name`).
-WRITES = {
-    "loading job": re.compile(r"\bLOADING\s+JOB\b", re.I),
-    "insert": re.compile(r"\bINSERT\b", re.I),
-    "delete": re.compile(r"\bDELETE\b", re.I),
-    "update": re.compile(r"\bUPDATE\b", re.I),
-    "attribute assignment": re.compile(r"\b\w+\s*\.\s*\w+\s*[+-]?=(?!=)"),
-}
-
-
-# A string literal or a comment, matched in one pass from the left with string literals
-# first, so a "#" or "//" inside a string never starts a comment and a quote inside a
-# comment never starts a string.
-LITERALS_AND_COMMENTS = re.compile(r'"(?:\\.|[^"\\])*"|' + COMMENTS.pattern, re.S)
-
-
-def writes(text: str) -> list[str]:
-    """The forms of a write text holds, outside its comments and string literals."""
-    code = LITERALS_AND_COMMENTS.sub(lambda m: '""' if m[0].startswith('"') else " ", text)
-    return [form for form, pattern in WRITES.items() if pattern.search(code)]
 
 
 def test_the_write_check_finds_every_form_of_a_write() -> None:

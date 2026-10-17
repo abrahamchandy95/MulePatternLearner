@@ -1,9 +1,10 @@
-"""Installed-query access: failure classification, the retrying executor and response helpers."""
+"""Installed-query access: failure classification, the retrying executor, the entry points
+that run only the queries their role allows, request halving and response helpers."""
 
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Collection, Iterator, Sequence
 import json
 import random
 import re
@@ -11,7 +12,7 @@ import threading
 import time
 from typing import TYPE_CHECKING, Any, Protocol, TypeVar
 
-from ..config import DEFAULT_CONFIG, OUTAGE_SECONDS, QUERY_ATTEMPTS
+from ..config import DEFAULT_CONFIG, OUTAGE_SECONDS, QUERY_ATTEMPTS, RESPONSE_LIMIT_BYTES
 from ..runtime.console import brief, plural, retry_line, show
 
 if TYPE_CHECKING:
@@ -28,6 +29,16 @@ class TransientQueryError(RuntimeError):
 
 class ServerTimeoutError(TransientQueryError):
     """TigerGraph exceeded its query timeout on every allowed attempt of one request."""
+
+
+class ResponseTooLarge(RuntimeError):
+    """TigerGraph refused a query's response for its size (the RESPONSE-LIMIT header, set
+    from size_limit). It is never retried, since the same request would be refused again;
+    the caller halves the request (run_in_halves)."""
+
+
+class QueryNotAllowed(ValueError):
+    """A query its entry point does not run, refused before any request."""
 
 
 class TigerGraphUnavailableError(TransientQueryError):
@@ -60,6 +71,9 @@ _AVAILABILITY_MESSAGE = re.compile(
 )
 _TIMEOUT_MESSAGE = re.compile(r"timed? ?out|timeout", re.IGNORECASE)
 _DETERMINISTIC_MESSAGE = re.compile(r"cannot parse json|out of memory", re.IGNORECASE)
+# How a refusal for the response's size reads. No server has confirmed the wording yet: the
+# bench counts these refusals, so a miss shows there.
+_TOO_LARGE_MESSAGE = re.compile(r"response.?(?:size|limit)|size limit", re.IGNORECASE)
 
 
 def looks_like_html(text: str) -> bool:
@@ -100,6 +114,11 @@ def _http_class(error: Any) -> str | None:
     if looks_like_html(body):
         return AVAILABILITY  # a gateway error page, not a query error
     return _message_class(message) or DETERMINISTIC
+
+
+def response_too_large(error: BaseException) -> bool:
+    """Whether TigerGraph refused a response for its size."""
+    return _TOO_LARGE_MESSAGE.search(_failure_text(error)[0]) is not None
 
 
 def failure_class(error: BaseException) -> str | None:
@@ -335,7 +354,7 @@ class TigerGraphExecutor:
         base_delay_s: float = 4.0,
         max_delay_s: float = 60.0,
         slow_attempt_s: float = 30.0,
-        size_limit: int = 64_000_000,
+        size_limit: int = RESPONSE_LIMIT_BYTES,
         client: Any = None,
         settings: ConnectionSettings | None = None,
         sleep: Callable[[float], None] = time.sleep,
@@ -486,14 +505,22 @@ class TigerGraphExecutor:
         """Run an installed query. Pass attempts=1 for queries that write.
 
         timeout_retries=0 raises ServerTimeoutError on the first server timeout,
-        for callers that split the request instead of repeating it.
+        for callers that split the request instead of repeating it. A response refused for
+        its size raises ResponseTooLarge at once.
         """
         timeout_ms = int(1000 * (self.timeout_s if timeout_s is None else timeout_s))
 
         def operation(conn: TigerGraphConnection) -> list[dict[str, Any]]:
-            result: Any = conn.runInstalledQuery(
-                name, params, usePost=True, timeout=timeout_ms, sizeLimit=self.size_limit
-            )
+            try:
+                result: Any = conn.runInstalledQuery(
+                    name, params, usePost=True, timeout=timeout_ms, sizeLimit=self.size_limit
+                )
+            except Exception as error:
+                if response_too_large(error):
+                    raise ResponseTooLarge(
+                        f"{name} answered more than {self.size_limit} bytes"
+                    ) from error
+                raise
             if not isinstance(result, list):
                 raise ValueError(f"{name} returned {type(result).__name__}, not a result list")
             return result
@@ -523,6 +550,112 @@ class TigerGraphExecutor:
             return output
 
         return self.call(operation, what=what, attempts=attempts)
+
+
+class AllowedQueries:
+    """A QueryExecutor that runs only the queries its role allows, through another one.
+
+    It refuses any other name before a request is made, and offers no GSQL statement or
+    connection operation, so code that holds it can run nothing else installed in the graph.
+    """
+
+    def __init__(self, executor: QueryExecutor, allowed: Collection[str], role: str) -> None:
+        self._executor = executor
+        self.allowed = frozenset(allowed)
+        self.role = role
+
+    def run(
+        self,
+        name: str,
+        params: dict[str, Any],
+        *,
+        timeout_s: float | None = None,
+        attempts: int | None = None,
+        timeout_retries: int = 1,
+    ) -> list[dict[str, Any]]:
+        """Run an allowed installed query, as TigerGraphExecutor.run does."""
+        if name not in self.allowed:
+            raise QueryNotAllowed(
+                f"The {self.role} executor does not run {name}; it runs {sorted(self.allowed)}"
+            )
+        return self._executor.run(
+            name, params, timeout_s=timeout_s, attempts=attempts, timeout_retries=timeout_retries
+        )
+
+
+# The entry points, one per role (docs/design.md, "Query plumbing"). Each reads its allowlist
+# from the query registry when it is built, so that the registry's query modules may import
+# this module.
+
+
+class FetchExecutor(AllowedQueries):
+    """What fetch and data code run: the allowlist of fetch, never the answer key,
+    profile_hubs or anything else installed in the graph."""
+
+    def __init__(self, executor: QueryExecutor) -> None:
+        from .queries import FETCH_ALLOWLIST
+
+        super().__init__(executor, FETCH_ALLOWLIST, "fetch")
+
+
+class EvaluationExecutor(AllowedQueries):
+    """What evaluation runs: read_answer_key alone."""
+
+    def __init__(self, executor: QueryExecutor) -> None:
+        from .queries import EVALUATION_ONLY
+
+        super().__init__(executor, EVALUATION_ONLY, "evaluation")
+
+
+class BenchExecutor(AllowedQueries):
+    """What mule bench runs: the allowlist of fetch and profile_hubs."""
+
+    def __init__(self, executor: QueryExecutor) -> None:
+        from .queries import BENCH_ONLY, FETCH_ALLOWLIST
+
+        super().__init__(executor, FETCH_ALLOWLIST | BENCH_ONLY, "bench")
+
+
+class ParityExecutor(AllowedQueries):
+    """What parity runs: every registered query."""
+
+    def __init__(self, executor: QueryExecutor) -> None:
+        from .queries import QUERY_FILES
+
+        super().__init__(executor, QUERY_FILES, "parity")
+
+
+def run_in_halves(
+    executor: QueryExecutor,
+    name: str,
+    accounts: Sequence[str],
+    params: Callable[[tuple[str, ...]], dict[str, Any]],
+    *,
+    timeout_s: float | None = None,
+) -> list[tuple[tuple[str, ...], list[dict[str, Any]]]]:
+    """Run name for accounts in one request, halving a request that TigerGraph refuses for
+    its size or that times out (docs/design.md, "Query plumbing").
+
+    params builds a request's parameters from its accounts. Each half runs on its own, down
+    to one account; one account still refused or timing out raises, since a row is never
+    left out. The answers come back with the accounts each request asked for, in order.
+    Accounts per request is a transport setting, so halving never changes a result.
+    """
+    chunk = tuple(accounts)
+    if not chunk:
+        raise ValueError(f"A request of {name} needs an account")
+    try:
+        rows = executor.run(name, params(chunk), timeout_s=timeout_s, timeout_retries=0)
+    except (ResponseTooLarge, ServerTimeoutError) as error:
+        if len(chunk) == 1:
+            error.add_note(f"{name} failed for the account {chunk[0]} alone")
+            raise
+        middle = (len(chunk) + 1) // 2
+        return [
+            *run_in_halves(executor, name, chunk[:middle], params, timeout_s=timeout_s),
+            *run_in_halves(executor, name, chunk[middle:], params, timeout_s=timeout_s),
+        ]
+    return [(chunk, rows)]
 
 
 # A named tuple of exception types: formatters targeting Python 3.14 rewrite

@@ -1,4 +1,5 @@
-"""The query executor: failure classes, retry budgets and the shared backoff."""
+"""The query executor: failure classes, retry budgets, the shared backoff, the size refusal
+and request halving, and the entry points that run only the queries their role allows."""
 
 # Tests inspect transport internals (in-flight map, cadence, sessions) on purpose.
 # pyright: reportPrivateUsage=false
@@ -13,10 +14,18 @@ import pytest
 from pyTigerGraph.common.exception import TigerGraphException
 import requests
 
+from mule_pattern_learner.config import DEFAULT_CONFIG
 from mule_pattern_learner.tigergraph.executor import (
     AVAILABILITY,
     DETERMINISTIC,
     SERVER_TIMEOUT,
+    AllowedQueries,
+    BenchExecutor,
+    EvaluationExecutor,
+    FetchExecutor,
+    ParityExecutor,
+    QueryNotAllowed,
+    ResponseTooLarge,
     ServerTimeoutError,
     TigerGraphExecutor,
     TigerGraphUnavailableError,
@@ -24,7 +33,14 @@ from mule_pattern_learner.tigergraph.executor import (
     error_summary,
     failure_class,
     failure_summary,
+    run_in_halves,
     short_reason,
+)
+from mule_pattern_learner.tigergraph.queries import (
+    BENCH_ONLY,
+    EVALUATION_ONLY,
+    FETCH_ALLOWLIST,
+    QUERY_FILES,
 )
 
 # A query that takes a batch of keys, so a retry names how many it asked for.
@@ -495,3 +511,119 @@ def test_a_count_of_one_in_a_failure_reads_in_the_singular() -> None:
     with pytest.raises(ServerTimeoutError) as raised:
         executor(FakeConn([timeout])).run("q", {}, timeout_retries=0)
     assert str(raised.value).startswith("q failed after 1 attempt (server timeout, 0 retries")
+
+
+# How TigerGraph words a refusal for the response's size, as far as is known.
+TOO_LARGE = [
+    TigerGraphException("The response size 70000000 exceeds the size limit 64000000"),
+    http_error(500, {"error": True, "message": "Response size exceeds RESPONSE-LIMIT"}),
+]
+
+
+@pytest.mark.parametrize("error", TOO_LARGE)
+def test_a_response_refused_for_its_size_raises_at_once(error: BaseException) -> None:
+    conn = FakeConn([error, [{"status": "ok"}]])
+    tg = executor(conn, size_limit=64_000_000)
+    with pytest.raises(ResponseTooLarge, match="more than 64000000 bytes"):
+        tg.run("read_payment_events", {"accounts": ["A1", "A2"]})
+    assert len(conn.calls) == 1 and not tg.sleeps
+    assert conn.calls[0][2]["sizeLimit"] == 64_000_000
+
+
+def test_requests_are_sized_under_half_of_the_limit_the_executor_asks_for() -> None:
+    conn = FakeConn([[{"status": "ok"}]])
+    executor(conn).run("q", {})
+    assert conn.calls[0][2]["sizeLimit"] == 2 * DEFAULT_CONFIG.transport.response_budget_bytes
+
+
+def _ok(name: str, params: dict[str, Any], kwargs: dict[str, Any]) -> list[dict[str, Any]]:
+    return [{"status": "ok", "query": name}]
+
+
+# Names no entry point but parity may run: the loader's verification and the owner's demos.
+ELSEWHERE = ("verify_load", "demo_account_web")
+
+
+@pytest.mark.parametrize(
+    ("entry", "allowed"),
+    [
+        (FetchExecutor, FETCH_ALLOWLIST),
+        (EvaluationExecutor, EVALUATION_ONLY),
+        (BenchExecutor, FETCH_ALLOWLIST | BENCH_ONLY),
+        (ParityExecutor, frozenset(QUERY_FILES)),
+    ],
+)
+def test_each_entry_point_runs_only_the_queries_of_its_role(
+    entry: Callable[[TigerGraphExecutor], AllowedQueries], allowed: frozenset[str]
+) -> None:
+    conn = FakeConn([_ok] * 20)
+    runner = entry(executor(conn))
+    assert runner.allowed == allowed
+    refused = [*ELSEWHERE, *sorted(set(QUERY_FILES) - allowed)]
+    for name in refused:
+        with pytest.raises(QueryNotAllowed, match=f"does not run {name}"):
+            runner.run(name, {})
+    # Refused before any request.
+    assert conn.calls == []
+    for name in sorted(allowed):
+        assert runner.run(name, {"t_ms": 1}) == [{"status": "ok", "query": name}]
+    assert [call[0] for call in conn.calls] == sorted(allowed)
+    # It offers no GSQL statement and no connection operation.
+    assert not hasattr(runner, "gsql") and not hasattr(runner, "call")
+
+
+def test_fetch_refuses_the_answer_key_and_the_loaders_verification() -> None:
+    conn = FakeConn([])
+    fetch = FetchExecutor(executor(conn))
+    for name in ("read_answer_key", "verify_load", "profile_hubs"):
+        with pytest.raises(QueryNotAllowed):
+            fetch.run(name, {})
+    assert conn.calls == []
+
+
+def _accounts(chunk: tuple[str, ...]) -> dict[str, Any]:
+    return {"t_ms": 1, "accounts": list(chunk)}
+
+
+def _refusing(error: BaseException, most: int) -> Any:
+    """An answer refusing, with error, any request of more than most accounts."""
+
+    def answer(name: str, params: dict[str, Any], kwargs: dict[str, Any]) -> Any:
+        if len(params["accounts"]) > most:
+            raise error
+        return [{"status": "ok", "accounts": params["accounts"]}]
+
+    return answer
+
+
+@pytest.mark.parametrize(
+    "error",
+    [*TOO_LARGE, TigerGraphException("Query timeout exceeded", "REST-3002")],
+)
+def test_a_refused_or_timed_out_request_is_halved_down_to_one_account(
+    error: BaseException,
+) -> None:
+    conn = FakeConn([_refusing(error, 2)] * 20)
+    tg = executor(conn)
+    answers = run_in_halves(FetchExecutor(tg), "read_payment_events", "abcde", _accounts)
+    # 5 is refused, then 3 of its halves; 2, 1 and 2 accounts are answered.
+    assert [chunk for chunk, _ in answers] == [("a", "b"), ("c",), ("d", "e")]
+    assert [rows[0]["accounts"] for _, rows in answers] == [["a", "b"], ["c"], ["d", "e"]]
+    assert [len(call[1]["accounts"]) for call in conn.calls] == [5, 3, 2, 1, 2]
+    # A timeout is not repeated before the request is halved.
+    assert not tg.sleeps
+
+
+def test_one_account_still_refused_is_an_error_never_a_gap() -> None:
+    conn = FakeConn([_refusing(TOO_LARGE[0], 0)] * 20)
+    with pytest.raises(ResponseTooLarge) as raised:
+        run_in_halves(FetchExecutor(executor(conn)), "read_payment_events", "ab", _accounts)
+    assert raised.value.__notes__ == ["read_payment_events failed for the account a alone"]
+    assert [call[1]["accounts"] for call in conn.calls] == [["a", "b"], ["a"]]
+    with pytest.raises(ValueError, match="needs an account"):
+        run_in_halves(FetchExecutor(executor(conn)), "read_payment_events", [], _accounts)
+    # Any other failure is not halved.
+    conn = FakeConn([http_error(400)] * 2)
+    with pytest.raises(requests.HTTPError):
+        run_in_halves(executor(conn), "read_payment_events", "ab", _accounts)
+    assert len(conn.calls) == 1

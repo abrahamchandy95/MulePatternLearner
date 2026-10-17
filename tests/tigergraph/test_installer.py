@@ -12,13 +12,16 @@ from typing import Any
 import pytest
 import requests
 
+from mule_pattern_learner.paths import parity_record
 from mule_pattern_learner.tigergraph import installer
 from mule_pattern_learner.tigergraph.installer import (
     definitions,
     install,
     normalized,
     parameter_names,
+    parity_versions,
     repository_queries,
+    require_parity,
     verify,
 )
 from mule_pattern_learner.tigergraph.queries import GRAPH_NAME
@@ -196,6 +199,12 @@ def test_the_repository_queries_are_read_from_their_files() -> None:
     assert parameter_names(queries[READ_ITEMS]) == ["t_ms", "hubs"]
 
 
+def test_a_registered_query_whose_file_is_missing_is_named(query_folder: Path) -> None:
+    (query_folder / FILES[READ_ITEMS][0]).unlink()
+    with pytest.raises(FileNotFoundError, match="the query read_items is registered but not"):
+        repository_queries()
+
+
 def test_a_file_must_define_its_query_and_no_other(query_folder: Path) -> None:
     relative, text = FILES[READ_ITEMS]
     (query_folder / relative).write_text(text.replace("read_items(", "read_other("))
@@ -303,3 +312,66 @@ def test_query_texts_compare_without_comments_layout_or_keyword_case() -> None:
     assert normalized(definitions(same)["q"]) == normalized(definitions(text)["q"])
     other = same.replace('"Ok"', '"ok"')
     assert normalized(definitions(other)["q"]) != normalized(definitions(text)["q"])
+
+
+# One record of gsql/parity.toml: a query version that passed parity.
+PASSED = """
+[[passed]]
+query = "list_accounts"
+version = "list_accounts-0123456789ab"
+tigergraph = "4.2.5"
+world = "0123456789abcdef0123456789abcdef"
+date = 2026-10-17
+"""
+
+
+def test_the_parity_record_holds_the_versions_that_passed(tmp_path: Path) -> None:
+    record = tmp_path / "parity.toml"
+    record.write_text(PASSED + PASSED.replace("list_accounts", "read_labels"))
+    assert parity_versions(record) == {
+        ("list_accounts", "list_accounts-0123456789ab"),
+        ("read_labels", "read_labels-0123456789ab"),
+    }
+    require_parity({"list_accounts": "list_accounts-0123456789ab"}, record)
+    # Every version without a record is named: one of another text, one never run.
+    versions = {
+        "list_accounts": "list_accounts-ba9876543210",
+        "read_labels": "read_labels-0123456789ab",
+        "read_hubs": "read_hubs-0123456789ab",
+    }
+    with pytest.raises(ValueError) as refused:
+        require_parity(versions, record)
+    assert str(refused.value).startswith(
+        "No parity record for list_accounts list_accounts-ba9876543210, "
+        "read_hubs read_hubs-0123456789ab in "
+    )
+    assert "run `mule parity`" in str(refused.value)
+
+
+def test_without_a_record_no_version_has_passed(tmp_path: Path) -> None:
+    missing = tmp_path / "parity.toml"
+    assert parity_versions(missing) == set()
+    with pytest.raises(ValueError, match="No parity record for list_accounts"):
+        require_parity({"list_accounts": "list_accounts-0123456789ab"}, missing)
+    require_parity({}, missing)
+    # The record is committed with the queries, as TOML since git ignores JSON.
+    assert parity_record().name == "parity.toml" and parity_record().parent.name == "gsql"
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "message"),
+    [
+        ('tigergraph = "4.2.5"\n', "", "without exactly"),
+        ('tigergraph = "4.2.5"', 'tigergraph = "4.2.5"\nsplit = 1', "without exactly"),
+        ("date = 2026-10-17", 'date = "2026-10-17"', "date that is not a date"),
+        ('"list_accounts-0123456789ab"', '"read_labels-0123456789ab"', "records the version"),
+        ("[[passed]]", "[passed]", "must hold"),
+    ],
+)
+def test_a_malformed_parity_record_is_refused(
+    tmp_path: Path, old: str, new: str, message: str
+) -> None:
+    record = tmp_path / "parity.toml"
+    record.write_text(PASSED.replace(old, new))
+    with pytest.raises(ValueError, match=message):
+        parity_versions(record)
