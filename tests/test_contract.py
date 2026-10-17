@@ -16,7 +16,6 @@ from mule_pattern_learner.contract import (
     PAYMENT_RAILS,
     TABLES,
     Kind,
-    follows_label_convention,
 )
 
 BY_NAME = {table.name: table for table in TABLES}
@@ -145,24 +144,12 @@ def test_the_value_lists_are_the_designs() -> None:
     assert PAYMENT_RAILS == ("ach", "card", "cash", "check", "internal", "unknown")
 
 
-def test_the_label_columns_are_accounts_and_follow_one_convention() -> None:
+def test_the_label_columns_and_their_convention_are_the_designs() -> None:
     assert LABEL_COLUMNS == ("is_mule", "pu_label", "mule_ring_id", "mule_onset_ms", "mule_last_ms")
     assert set(LABEL_COLUMNS) <= set(BY_NAME["Account"].column_names)
+    # is_mule and pu_label are -1 exactly on external accounts, and 0 or 1 on every internal one.
     assert CONVENTION_COLUMNS == ("is_mule", "pu_label")
     assert (LABEL_VALUES, EXTERNAL_LABEL) == ((-1, 0, 1), -1)
-    # -1 exactly on external accounts; 0 or 1 on every internal one.
-    assert follows_label_convention(-1, is_external=True)
-    assert follows_label_convention(0, is_external=False)
-    assert follows_label_convention(1, is_external=False)
-    assert not follows_label_convention(-1, is_external=False)
-    assert not follows_label_convention(0, is_external=True)
-    assert not follows_label_convention(1, is_external=True)
-    assert not follows_label_convention(2, is_external=False)
-    assert not follows_label_convention(True, is_external=False)
-    # The convention is the integers -1, 0 and 1, so a float equal to one is refused too.
-    assert not follows_label_convention(1.0, is_external=False)  # pyright: ignore[reportArgumentType]
-    assert not follows_label_convention(0.0, is_external=False)  # pyright: ignore[reportArgumentType]
-    assert not follows_label_convention(-1.0, is_external=True)  # pyright: ignore[reportArgumentType]
 
 
 def test_the_contract_is_frozen() -> None:

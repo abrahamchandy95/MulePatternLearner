@@ -10,7 +10,6 @@ statements the loader runs from the one after CREATE GRAPH.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import re
 import shutil
 import subprocess
@@ -25,7 +24,8 @@ from mule_pattern_learner.tigergraph.queries import GRAPH_NAME
 
 SCHEMA_FILE = GSQL_DIR / "schema" / "schema.gsql"
 SCHEMA = SCHEMA_FILE.read_text()
-# The owner's demo queries: untracked files, which no test reads.
+# The owner's demo queries: untracked files on the old schema, so gsql-lsp skips them until
+# they are ported; the write check reads them like every other file.
 DEMO_DIR = GSQL_DIR / "demo"
 # Every attribute's default, by its graph type: 0 for times and amount, false for
 # is_external, the empty string for account_type and payment_rail, and -1 for is_mule,
@@ -192,6 +192,11 @@ def test_the_write_check_finds_every_form_of_a_write() -> None:
         "attribute assignment"
     ]
     assert writes("X = SELECT a FROM Account:a ACCUM a.count += 1;") == ["attribute assignment"]
+    # setAttr sets a vertex's or an edge's attribute, in whatever case it is written.
+    for call in ('a.setAttr("pu_label", 1)', 'e.setAttr("valid_to_ms", 0)', "a . SETATTR (x, 1)"):
+        assert writes(f"X = SELECT a FROM Account:a POST-ACCUM {call};") == [
+            "attribute assignment"
+        ], call
     # A "#" or "//" inside a status message starts no comment, so it hides no write.
     for message in ("refused: #1", "a//b"):
         hidden = (
@@ -205,17 +210,15 @@ def test_the_write_check_finds_every_form_of_a_write() -> None:
         "  WHERE a.opened_ms < t_ms AND a.closed_ms == 0 AND a.is_mule != 1\n"
         '    AND a.pu_label >= 0 AND a.mule_ring_id <= 3 AND a.account_type == "a.b = c"\n'
         "  ACCUM a.@seen += 1, @@total += a.amount; // update nothing\n"
-        "INT page = 10;"
+        "INT page = 10;\n"
+        # A ListAccum's update changes a list, not the graph.
+        "@@lots.update(0, 3);"
     )
     assert writes(reads) == []
 
 
-def _gsql_files() -> list[Path]:
-    return sorted(path for path in GSQL_DIR.rglob("*.gsql") if DEMO_DIR not in path.parents)
-
-
 def test_no_gsql_file_writes_to_the_graph() -> None:
-    files = _gsql_files()
+    files = sorted(GSQL_DIR.rglob("*.gsql"))
     assert SCHEMA_FILE in files
     for path in files:
         assert writes(path.read_text()) == [], path.relative_to(GSQL_DIR)
@@ -225,7 +228,11 @@ def test_every_gsql_file_passes_gsql_lsp_against_the_schema() -> None:
     lsp = shutil.which("gsql-lsp")
     if lsp is None:
         pytest.skip("gsql-lsp is not on PATH, so no file can be checked offline")
-    files = [str(path.relative_to(REPOSITORY_ROOT)) for path in _gsql_files()]
+    files = [
+        str(path.relative_to(REPOSITORY_ROOT))
+        for path in sorted(GSQL_DIR.rglob("*.gsql"))
+        if DEMO_DIR not in path.parents
+    ]
     result = subprocess.run(
         [lsp, "check", "--format", "json", *files],
         cwd=REPOSITORY_ROOT,

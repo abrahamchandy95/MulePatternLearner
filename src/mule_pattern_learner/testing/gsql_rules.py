@@ -94,14 +94,17 @@ NO_AS_OF = frozenset({READ_WORLD, READ_ANSWER_KEY})
 # first, so a "#" or "//" inside a string never starts a comment and a quote inside a
 # comment never starts a string.
 LITERALS_AND_COMMENTS = re.compile(r'"(?:\\.|[^"\\])*"|' + COMMENTS.pattern, re.S)
-# The forms of a write: a loading job, an insert, a delete, or an attribute set (an
-# assignment to `alias.attribute`, plain or accumulating; accumulators are `alias.@name`).
+# The forms of a write: a loading job, an insert, a delete, an UPDATE statement, or an
+# attribute set (an assignment to `alias.attribute`, plain or accumulating, or a vertex's or
+# edge's setAttr; accumulators are `alias.@name`). A ListAccum's update method changes no
+# graph data, so only the statement `UPDATE alias FROM` counts. gsql-lsp reads method names
+# in any case, so setAttr is matched in any case too.
 WRITES = {
     "loading job": re.compile(r"\bLOADING\s+JOB\b", re.I),
     "insert": re.compile(r"\bINSERT\b", re.I),
     "delete": re.compile(r"\bDELETE\b", re.I),
-    "update": re.compile(r"\bUPDATE\b", re.I),
-    "attribute assignment": re.compile(r"\b\w+\s*\.\s*\w+\s*[+-]?=(?!=)"),
+    "update": re.compile(r"(?<![.\w@])UPDATE\s+\w+\s+FROM\b", re.I),
+    "attribute assignment": re.compile(r"\b\w+\s*\.\s*\w+\s*[+-]?=(?!=)|\.\s*(?i:setAttr)\s*\("),
 }
 
 TOKEN = re.compile(
