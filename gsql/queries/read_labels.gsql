@@ -1,0 +1,35 @@
+USE GRAPH Mule_Pattern_Learner
+
+/* The identified mules and their activity period, a page at a time by strictly increasing id
+   (docs/design.md, "read_labels"): every account with pu_label 1, the bank identified it as a
+   mule, with its mule_onset_ms and mule_last_ms. It is the only training signal and the only
+   reader of pu_label. It reads the dates only of the accounts the pu_label 1 selection keeps,
+   so a hidden mule's dates never leave the graph.
+
+   It refuses the page, naming its accounts, when an account of it lacks
+   0 < mule_onset_ms <= mule_last_ms. A page holds 1 to 10,000 accounts. */
+CREATE OR REPLACE QUERY read_labels(
+    STRING after_id,
+    INT page
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+    SetAccum<STRING> @@invalid;
+
+    IF page < 1 OR page > 10000 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+    Identified = SELECT a FROM Account:a
+      WHERE a.pu_label == 1 AND a.id > after_id
+      ORDER BY a.id ASC
+      LIMIT page;
+    Invalid = SELECT a FROM Identified:a
+      WHERE a.mule_onset_ms == 0 OR a.mule_onset_ms > a.mule_last_ms
+      POST-ACCUM @@invalid += a.id;
+    IF Invalid.size() > 0 THEN
+        PRINT "invalid_activity" AS status, @@invalid AS accounts;
+        RETURN;
+    END;
+    PRINT "ok" AS status, "read_labels-e22e410b15e2" AS version;
+    PRINT Identified[Identified.id AS account_id, Identified.mule_onset_ms AS mule_onset_ms,
+      Identified.mule_last_ms AS mule_last_ms] AS accounts;
+}

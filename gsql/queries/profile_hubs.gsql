@@ -1,0 +1,79 @@
+USE GRAPH Mule_Pattern_Learner
+
+/* For mule bench only (docs/design.md, "profile_hubs"): exact whole-world histograms, on one
+   Monday t, of the measures behind read_hubs' two thresholds, so the owner can set them.
+
+   - accounts: every account that exists at t, by the distinct customers owning the other
+     accounts of its payments in [t - 90 days, t), read_hubs' account hub measure, with no
+     prefilter.
+   - Devices and IPs: each with at least one customer, by its distinct customers over the
+     lookback, read_hubs' crowd measure: registered when a customer has a visible enrolment
+     link to it, observed-only otherwise.
+
+   Each histogram maps a measure to the number of accounts, devices or IPs that have it. Reads
+   no label. t must be a Monday at 00:00 UTC after the lookback's length. */
+CREATE OR REPLACE QUERY profile_hubs(
+    UINT t_ms
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+    SetAccum<VERTEX<Party>> @hub_customers, @crowd_customers, @crowd_enrolled;
+    MapAccum<INT, SumAccum<INT>> @@accounts, @@registered_devices, @@observed_devices,
+      @@registered_ips, @@observed_ips;
+    UINT lookback_ms = 7776000000;
+
+    /* Mondays are 4 days after the Thursday of 1970-01-01, modulo a week. */
+    IF t_ms <= lookback_ms OR t_ms % 604800000 != 345600000 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+
+    /* Accounts, by read_hubs' account hub measure. */
+    Existing = SELECT a FROM Account:a WHERE a.opened_ms < t_ms;
+    Counted = SELECT a FROM Existing:a
+      -((Account_Initiated_Transaction>|Account_Received_Transaction>
+        |Account_Sent_Zelle_Transfer>|Account_Received_Zelle_Transfer>):e)-
+      (Payment_Transaction|Zelle_Transfer):p
+      -((Transaction_From_Account>|Transaction_To_Account>
+        |Transfer_From_Account>|Transfer_To_Account>):f)-
+      Account:b -(Account_Owned_By_Party>:o)- Party:q
+      WHERE p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms
+        AND b != a AND b.opened_ms < t_ms
+        AND o.valid_from_ms < t_ms
+        AND (o.valid_to_ms == 0 OR o.valid_to_ms > t_ms - lookback_ms)
+      ACCUM a.@hub_customers += q;
+    AccountProfiles = SELECT a FROM Existing:a
+      POST-ACCUM @@accounts += (a.@hub_customers.size() -> 1);
+
+    /* Devices and IPs, by read_hubs' crowd measure. */
+    Nodes = {Device.*, IP.*};
+    Enrolled = SELECT d FROM Nodes:d -((Device_Used_By_Party>|IP_Used_By_Party>):l)- Party:q
+      WHERE l.valid_from_ms < t_ms
+        AND (l.valid_to_ms == 0 OR l.valid_to_ms > t_ms - lookback_ms)
+      ACCUM d.@crowd_customers += q, d.@crowd_enrolled += q;
+    Seen = SELECT d FROM Nodes:d
+      -((Device_Used_By_Transaction>|IP_Observed_In_Transaction>
+        |Device_Used_By_Transfer>|IP_Used_By_Transfer>):u)-
+      (Payment_Transaction|Zelle_Transfer):p
+      -((Transaction_From_Account>|Transfer_From_Account>):f)- Account:b
+      -(Account_Owned_By_Party>:o)- Party:q
+      WHERE p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms
+        AND b.account_type == "deposit" AND b.opened_ms < t_ms
+        AND o.valid_from_ms < t_ms
+        AND (o.valid_to_ms == 0 OR o.valid_to_ms > t_ms - lookback_ms)
+      ACCUM d.@crowd_customers += q;
+    NodeProfiles = SELECT d FROM Nodes:d
+      WHERE d.@crowd_customers.size() > 0
+      POST-ACCUM
+        IF d.type == "Device" AND d.@crowd_enrolled.size() > 0 THEN
+            @@registered_devices += (d.@crowd_customers.size() -> 1)
+        ELSE IF d.type == "Device" THEN
+            @@observed_devices += (d.@crowd_customers.size() -> 1)
+        ELSE IF d.@crowd_enrolled.size() > 0 THEN
+            @@registered_ips += (d.@crowd_customers.size() -> 1)
+        ELSE
+            @@observed_ips += (d.@crowd_customers.size() -> 1)
+        END;
+
+    PRINT "ok" AS status, "profile_hubs-74c4feb9aaec" AS version, @@accounts AS accounts,
+      @@registered_devices AS registered_devices, @@observed_devices AS observed_devices,
+      @@registered_ips AS registered_ips, @@observed_ips AS observed_ips;
+}

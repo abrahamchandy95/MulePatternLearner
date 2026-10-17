@@ -1,0 +1,121 @@
+USE GRAPH Mule_Pattern_Learner
+
+/* What identifies the loaded world (docs/design.md, "Cache"), all integers, for the cache key
+   and the lookback check:
+
+   - vertices, the count of each vertex type; edges, the count of each of the 15 forward edge
+     types; account_types and payment_rails, the count of each value; external_accounts, the
+     accounts with is_external true;
+   - seconds, keyed "<type>.<attribute>": the sums over rows of floor(ms / 1,000) of
+     Party.joined_ms, Account.opened_ms and closed_ms, each link type's valid_from_ms and
+     valid_to_ms, and each payment type's event_ts_ms;
+   - cents, per payment type, the sum over rows of floor(amount x 100 + 0.5);
+   - per forward edge type, the sum of its sources' squared degrees (squared_degrees), the sum
+     of its targets' squared degrees (squared_target_degrees, which are the squared source
+     degrees of its reverse type) and, over its edges, the sum of the product of both ends'
+     degrees (degree_products; a reverse edge joins the same two ends, so its sum is the
+     same): one link moving between vertices of degrees 2 and 1 leaves the squared sums
+     unchanged, but not the products;
+   - the first joined_ms, and the first and last payment's event_ts_ms.
+
+   A reverse edge type is its forward type read from the other end, so its count is the
+   forward type's and is not printed again. PhantomLedger's world record carries the counts,
+   the second and cent sums and the three times under these names; the degree sums are
+   read_world's own. Every degree is counted from the source of a forward edge, so no step
+   goes from a device or IP to its users. Reads no label. */
+CREATE OR REPLACE QUERY read_world() FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+    MapAccum<STRING, SumAccum<INT>> @out_degree, @in_degree;
+    MapAccum<STRING, SumAccum<INT>> @@vertices, @@edges, @@account_types, @@payment_rails,
+      @@seconds, @@cents, @@squared_degrees, @@squared_target_degrees, @@degree_products;
+    SumAccum<INT> @@external_accounts;
+    MinAccum<UINT> @@first_joined_ms, @@first_event_ms;
+    MaxAccum<UINT> @@last_event_ms;
+
+    /* The vertices. */
+    Parties = SELECT q FROM Party:q
+      POST-ACCUM @@vertices += ("Party" -> 1),
+        @@seconds += ("Party.joined_ms" -> floor(q.joined_ms / 1000)),
+        @@first_joined_ms += q.joined_ms;
+    Accounts = SELECT a FROM Account:a
+      POST-ACCUM @@vertices += ("Account" -> 1),
+        @@account_types += (a.account_type -> 1),
+        IF a.is_external THEN @@external_accounts += 1 END,
+        @@seconds += ("Account.opened_ms" -> floor(a.opened_ms / 1000)),
+        @@seconds += ("Account.closed_ms" -> floor(a.closed_ms / 1000));
+    Tokens = SELECT k FROM Token:k POST-ACCUM @@vertices += (k.type -> 1);
+    Devices = SELECT d FROM Device:d POST-ACCUM @@vertices += (d.type -> 1);
+    Ips = SELECT d FROM IP:d POST-ACCUM @@vertices += (d.type -> 1);
+    Transactions = SELECT p FROM Payment_Transaction:p
+      POST-ACCUM @@vertices += ("Payment_Transaction" -> 1),
+        @@payment_rails += (p.payment_rail -> 1),
+        @@seconds += ("Payment_Transaction.event_ts_ms" -> floor(p.event_ts_ms / 1000)),
+        @@cents += ("Payment_Transaction" -> floor(p.amount * 100 + 0.5)),
+        @@first_event_ms += p.event_ts_ms, @@last_event_ms += p.event_ts_ms;
+    Transfers = SELECT p FROM Zelle_Transfer:p
+      POST-ACCUM @@vertices += ("Zelle_Transfer" -> 1),
+        @@seconds += ("Zelle_Transfer.event_ts_ms" -> floor(p.event_ts_ms / 1000)),
+        @@cents += ("Zelle_Transfer" -> floor(p.amount * 100 + 0.5)),
+        @@first_event_ms += p.event_ts_ms, @@last_event_ms += p.event_ts_ms;
+
+    /* Each forward edge type from its sources: the degree at both its ends, and a link's
+       times. */
+    PartyEnds = SELECT x FROM Parties:q
+      -((Party_Owns_Account>|Party_Uses_Token>|Party_Uses_Device>|Party_Uses_IP>):e)-
+      (Account|Token|Device|IP):x
+      ACCUM q.@out_degree += (e.type -> 1), x.@in_degree += (e.type -> 1),
+        @@seconds += (e.type + ".valid_from_ms" -> floor(e.valid_from_ms / 1000)),
+        @@seconds += (e.type + ".valid_to_ms" -> floor(e.valid_to_ms / 1000));
+    TokenEnds = SELECT x FROM Tokens:k -(Token_Bound_To_Account>:e)- Account:x
+      ACCUM k.@out_degree += (e.type -> 1), x.@in_degree += (e.type -> 1),
+        @@seconds += (e.type + ".valid_from_ms" -> floor(e.valid_from_ms / 1000)),
+        @@seconds += (e.type + ".valid_to_ms" -> floor(e.valid_to_ms / 1000));
+    TransactionEnds = SELECT x FROM Transactions:p
+      -((Transaction_From_Account>|Transaction_To_Account>|Transaction_Used_Device>
+        |Transaction_Used_IP>):e)-
+      (Account|Device|IP):x
+      ACCUM p.@out_degree += (e.type -> 1), x.@in_degree += (e.type -> 1);
+    TransferEnds = SELECT x FROM Transfers:p
+      -((Transfer_From_Account>|Transfer_To_Account>|Transfer_From_Token>|Transfer_To_Token>
+        |Transfer_Used_Device>|Transfer_Used_IP>):e)-
+      (Account|Token|Device|IP):x
+      ACCUM p.@out_degree += (e.type -> 1), x.@in_degree += (e.type -> 1);
+
+    /* The counts and squared degrees, from each source and each target. */
+    Sources = Parties UNION Tokens UNION Transactions UNION Transfers;
+    SourceDegrees = SELECT v FROM Sources:v
+      POST-ACCUM
+        FOREACH (kind, degree) IN v.@out_degree DO
+            @@edges += (kind -> degree), @@squared_degrees += (kind -> degree * degree)
+        END;
+    Targets = Accounts UNION Tokens UNION Devices UNION Ips;
+    TargetDegrees = SELECT v FROM Targets:v
+      POST-ACCUM
+        FOREACH (kind, degree) IN v.@in_degree DO
+            @@squared_target_degrees += (kind -> degree * degree)
+        END;
+
+    /* The products of both ends' degrees, over each edge. */
+    PartyProducts = SELECT x FROM Parties:q
+      -((Party_Owns_Account>|Party_Uses_Token>|Party_Uses_Device>|Party_Uses_IP>):e)-
+      (Account|Token|Device|IP):x
+      ACCUM @@degree_products += (e.type -> q.@out_degree.get(e.type) * x.@in_degree.get(e.type));
+    TokenProducts = SELECT x FROM Tokens:k -(Token_Bound_To_Account>:e)- Account:x
+      ACCUM @@degree_products += (e.type -> k.@out_degree.get(e.type) * x.@in_degree.get(e.type));
+    TransactionProducts = SELECT x FROM Transactions:p
+      -((Transaction_From_Account>|Transaction_To_Account>|Transaction_Used_Device>
+        |Transaction_Used_IP>):e)-
+      (Account|Device|IP):x
+      ACCUM @@degree_products += (e.type -> p.@out_degree.get(e.type) * x.@in_degree.get(e.type));
+    TransferProducts = SELECT x FROM Transfers:p
+      -((Transfer_From_Account>|Transfer_To_Account>|Transfer_From_Token>|Transfer_To_Token>
+        |Transfer_Used_Device>|Transfer_Used_IP>):e)-
+      (Account|Token|Device|IP):x
+      ACCUM @@degree_products += (e.type -> p.@out_degree.get(e.type) * x.@in_degree.get(e.type));
+
+    PRINT "ok" AS status, "read_world-0c985b5f9e81" AS version, @@vertices AS vertices,
+      @@edges AS edges, @@account_types AS account_types, @@payment_rails AS payment_rails,
+      @@external_accounts AS external_accounts, @@seconds AS seconds, @@cents AS cents,
+      @@squared_degrees AS squared_degrees, @@squared_target_degrees AS squared_target_degrees,
+      @@degree_products AS degree_products, @@first_joined_ms AS first_joined_ms,
+      @@first_event_ms AS first_event_ms, @@last_event_ms AS last_event_ms;
+}

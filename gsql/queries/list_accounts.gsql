@@ -1,0 +1,37 @@
+USE GRAPH Mule_Pattern_Learner
+
+/* The scorable accounts of one Monday t, with their owner, a page at a time by strictly
+   increasing id (docs/design.md, "The scored population" and "list_accounts"): the internal
+   deposit accounts that exist at t (opened_ms < t), are open at t (closed_ms 0 or at or
+   after t) and have a visible ownership link (it began before t and had not ended by
+   t - 90 days). Every account has at most one owner, which the loader checks.
+
+   It prints no opened_ms, since a date of record in every world's cache is one edit away
+   from a feature, and reads no label. t must be a Monday at 00:00 UTC after the lookback's
+   length, and a page holds 1 to 10,000 accounts. */
+CREATE OR REPLACE QUERY list_accounts(
+    UINT t_ms,
+    STRING after_id,
+    INT page
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+    MaxAccum<STRING> @owner_id;
+    UINT lookback_ms = 7776000000;
+
+    /* Mondays are 4 days after the Thursday of 1970-01-01, modulo a week. */
+    IF t_ms <= lookback_ms OR t_ms % 604800000 != 345600000 OR page < 1 OR page > 10000 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+    Page = SELECT a FROM Account:a -(Account_Owned_By_Party>:o)- Party:q
+      WHERE a.id > after_id
+        AND NOT a.is_external AND a.account_type == "deposit"
+        AND a.opened_ms < t_ms
+        AND (a.closed_ms == 0 OR a.closed_ms >= t_ms)
+        AND o.valid_from_ms < t_ms
+        AND (o.valid_to_ms == 0 OR o.valid_to_ms > t_ms - lookback_ms)
+      ACCUM a.@owner_id += q.id
+      ORDER BY a.id ASC
+      LIMIT page;
+    PRINT "ok" AS status, "list_accounts-a270fbdf9620" AS version;
+    PRINT Page[Page.id AS account_id, Page.@owner_id AS owner_id] AS accounts;
+}

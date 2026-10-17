@@ -7,6 +7,11 @@ steps add the rest as each query is written: its version, stamped by testing.ver
 parameter builder and row dataclasses, from a module of this package beside rows.py, which
 holds what every query's parser shares. Until its step is done a query's file does not exist,
 so `mule install` refuses to run and the live compile test compiles the queries written so far.
+
+read_answer_key alone is registered with its version but without its builder and rows: its
+module, read_answer_key.py, is imported by evaluation/ and testing/ only, which an import
+contract in pyproject.toml holds (the Labels guard), so nothing that imports the registry
+imports the answer key's parser.
 """
 
 from __future__ import annotations
@@ -16,6 +21,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from ...paths import GSQL_DIR
+from . import list_accounts, profile_hubs, read_hubs, read_labels, read_world
 
 if TYPE_CHECKING:
     from _typeshed import DataclassInstance
@@ -62,18 +68,48 @@ class Query:
 REGISTRY: dict[str, Query] = {
     query.name: query
     for query in (
-        Query(LIST_ACCOUNTS, QUERIES_FOLDER),
-        Query(READ_LABELS, QUERIES_FOLDER),
-        Query(READ_HUBS, QUERIES_FOLDER),
-        Query(READ_WORLD, QUERIES_FOLDER),
-        Query(PROFILE_HUBS, QUERIES_FOLDER),
+        Query(
+            LIST_ACCOUNTS,
+            QUERIES_FOLDER,
+            "list_accounts-a270fbdf9620",
+            list_accounts.params,
+            (list_accounts.ScorableAccount,),
+        ),
+        Query(
+            READ_LABELS,
+            QUERIES_FOLDER,
+            "read_labels-e22e410b15e2",
+            read_labels.params,
+            (read_labels.IdentifiedMule,),
+        ),
+        Query(
+            READ_HUBS,
+            QUERIES_FOLDER,
+            "read_hubs-3b28b3433685",
+            read_hubs.params,
+            (read_hubs.HubAccount, read_hubs.Leaf),
+        ),
+        Query(
+            READ_WORLD,
+            QUERIES_FOLDER,
+            "read_world-0c985b5f9e81",
+            read_world.params,
+            (read_world.World,),
+        ),
+        Query(
+            PROFILE_HUBS,
+            QUERIES_FOLDER,
+            "profile_hubs-74c4feb9aaec",
+            profile_hubs.params,
+            (profile_hubs.HubProfile,),
+        ),
         Query(READ_MONEY_FLOW, QUERIES_FOLDER),
         Query(READ_COUNTERPARTIES, QUERIES_FOLDER),
         Query(READ_ACTIVITY_CHANGE, QUERIES_FOLDER),
         Query(READ_PAYMENT_EVENTS, QUERIES_FOLDER),
         Query(READ_SHARED_IDENTITY, QUERIES_FOLDER),
         Query(READ_COMMUNITY, QUERIES_FOLDER),
-        Query(READ_ANSWER_KEY, EVALUATION_FOLDER),
+        Query(READ_ANSWER_KEY, EVALUATION_FOLDER, "read_answer_key-3d5467c23b01"),
     )
 }
 

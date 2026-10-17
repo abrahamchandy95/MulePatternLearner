@@ -1,9 +1,10 @@
 """What every query's parser shares: a response's head with its status and version, a
-refusal, a row parsed into a plain dataclass, a printed list of ids, and a set of vertices as a
-parameter.
+refusal, a row parsed into a plain dataclass, what a PRINT printed, a page of accounts in id
+order, a printed list of ids, and the parameters every query checks alike: t, a page's size and
+a set of vertices.
 
-It imports nothing else of the package, so a query module may import it while the registry
-imports that module.
+It imports nothing of the package but the settings, so a query module may import it while the
+registry imports that module.
 """
 
 from __future__ import annotations
@@ -12,12 +13,24 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import Field, fields
 from typing import TYPE_CHECKING, Any
 
+from ...config import DEFAULT_CONFIG
+
 if TYPE_CHECKING:
     from _typeshed import DataclassInstance
 
 OK = "ok"
 # The types a row's field may have, by name.
 FIELD_TYPES: dict[str, type] = {"str": str, "bool": bool, "int": int, "float": float}
+# A query with t takes a Monday at 00:00 UTC after the lookback's length, so that t - lookback
+# never goes below 0 (docs/design.md, "Time"). 1970-01-01 was a Thursday, so a Monday starts 4
+# days into a week of epoch time. The queries refuse any other t, and so do their builders.
+DAY_MS = 86_400_000
+WEEK_MS = 7 * DAY_MS
+MONDAY_MS = 4 * DAY_MS
+LOOKBACK_MS = DEFAULT_CONFIG.subgraph.lookback_days * DAY_MS
+# The most accounts a page of list_accounts, read_labels or read_answer_key holds, which they
+# page by strictly increasing id.
+PAGE_LIMIT = 10_000
 
 
 class QueryRefused(ValueError):
@@ -117,3 +130,93 @@ def vertex_set(vertex_ids: Iterable[object]) -> list[dict[str, str]]:
     if len(set(given)) != len(given):
         raise ValueError("A vertex set repeats an id")
     return [{"id": vertex_id} for vertex_id in given]
+
+
+def as_of(t_ms: object) -> int:
+    """t, when it is a Monday at 00:00 UTC after the lookback's length."""
+    if (
+        isinstance(t_ms, bool)
+        or not isinstance(t_ms, int)
+        or t_ms <= LOOKBACK_MS
+        or t_ms % WEEK_MS != MONDAY_MS
+    ):
+        raise ValueError(f"t must be a Monday at 00:00 UTC in epoch milliseconds, got {t_ms!r}")
+    return t_ms
+
+
+def after(after_id: object) -> str:
+    """after_id, when it is an account id or the empty string, which starts the first page."""
+    if not isinstance(after_id, str):
+        raise ValueError(f"after_id is an account id or the empty string, got {after_id!r}")
+    return after_id
+
+
+def page_size(page: object) -> int:
+    """page, when it is a number of accounts from 1 to PAGE_LIMIT."""
+    if isinstance(page, bool) or not isinstance(page, int) or not 1 <= page <= PAGE_LIMIT:
+        raise ValueError(f"A page holds 1 to {PAGE_LIMIT} accounts, got {page!r}")
+    return page
+
+
+def printed(rows: Sequence[object], key: str, query: str) -> object:
+    """The value a query printed under key, from the one row of its answer that holds it."""
+    found = [row[key] for row in rows if isinstance(row, Mapping) and key in row]
+    if len(found) != 1:
+        raise ValueError(f"{query} printed {key} {len(found)} times, not once")
+    return found[0]
+
+
+def projected(rows: Sequence[object], key: str, query: str) -> list[Mapping[str, Any]]:
+    """The rows of a PRINT of a vertex set's projection under key: the fields projected for
+    each vertex, which TigerGraph prints under "attributes" beside its id and type."""
+    value = printed(rows, key, query)
+    if not isinstance(value, list):
+        raise ValueError(f"{query} printed {key} as {value!r}, not a list of vertices")
+    found: list[Mapping[str, Any]] = []
+    for item in value:
+        attributes = item.get("attributes") if isinstance(item, Mapping) else None
+        if not isinstance(attributes, Mapping):
+            raise ValueError(f"{query} printed in {key} {item!r}, not a vertex's attributes")
+        found.append(attributes)
+    return found
+
+
+def paged[T: DataclassInstance](
+    kind: type[T],
+    rows: Sequence[object],
+    query: str,
+    after_id: str,
+    page: int,
+    *,
+    signed: frozenset[str] = frozenset(),
+) -> tuple[T, ...]:
+    """The accounts of a page of a paged query, printed under "accounts", as kind, whose first
+    field is account_id: at most page of them, each id after after_id and after the one before
+    it, as the query's strictly increasing order gives them."""
+    found = tuple(parse_row(kind, row, signed=signed) for row in projected(rows, "accounts", query))
+    if len(found) > page:
+        raise ValueError(f"{query} answered {len(found)} accounts to a page of {page}")
+    previous = after_id
+    for row in found:
+        account: object = getattr(row, "account_id")
+        if not isinstance(account, str) or account <= previous:
+            raise ValueError(
+                f"{query} answered {account!r} after {previous!r}, not in strictly increasing id "
+                "order"
+            )
+        previous = account
+    return found
+
+
+def counts(value: object, what: str, query: str) -> dict[str, int]:
+    """A printed map of names to integers that are not negative, such as a count per type."""
+    if not isinstance(value, Mapping) or not all(
+        isinstance(key, str)
+        and isinstance(count, int)
+        and not isinstance(count, bool)
+        and count >= 0
+        for key, count in value.items()
+    ):
+        raise ValueError(f"{query} printed {what} {value!r}, not counts by name")
+    found: Mapping[str, int] = value
+    return dict(found)

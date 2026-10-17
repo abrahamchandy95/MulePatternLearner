@@ -135,3 +135,20 @@ source_modules = [
     "mule_pattern_learner.training",
 ]
 forbidden_modules = ["mule_pattern_learner.evaluation", "mule_pattern_learner.testing"]
+
+[[tool.importlinter.contracts]]
+name = "Only evaluation and testing import the answer key's parser"
+type = "forbidden"
+# The Labels guard: read_answer_key's parser reads the truth, so no package but evaluation and
+# testing imports it, directly or not. The registry names the query without importing its
+# module; tests/tigergraph/test_infrastructure_rows.py holds the modules of tigergraph to that,
+# since an import inside one package is not a contract's to see. comparisons joins the list
+# with its package.
+source_modules = [
+    "mule_pattern_learner.tigergraph",
+    "mule_pattern_learner.data",
+    "mule_pattern_learner.subgraph",
+    "mule_pattern_learner.model",
+    "mule_pattern_learner.training",
+]
+forbidden_modules = ["mule_pattern_learner.tigergraph.queries.read_answer_key"]
