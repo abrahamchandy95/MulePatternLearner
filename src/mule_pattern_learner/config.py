@@ -13,7 +13,6 @@ from datetime import date
 # The ranges of the transport settings; the executor checks the ones it is given too.
 QUERY_ATTEMPTS = range(1, 21)
 OUTAGE_SECONDS = range(0, 86_401)
-SEEDS_PER_REQUEST = range(1, 1_025)
 # The ranges of the subgraph settings; fetch_subgraphs refuses a lookback outside its range.
 CAPS = range(1, 1_025)
 HUB_THRESHOLDS = range(1, 1_000_001)
@@ -82,29 +81,24 @@ def _window(name: str, value: object) -> tuple[date, date]:
 
 @dataclass(frozen=True)
 class TransportConfig:
-    """The retry budgets and the size of TigerGraph requests. Changing them never changes
-    results."""
+    """The retry budgets of every TigerGraph request. Changing them never changes results."""
 
     # Attempts of one request that count toward its retries (tigergraph.executor).
     max_query_attempts: int = 6
     # Wall-clock seconds one operation keeps retrying while TigerGraph is unavailable.
     max_outage_s: int = 900
-    # Seeds of one as-of date per fetch_subgraphs request (docs/design.md, "Response size").
-    seeds_per_request: int = 32
 
     def __post_init__(self) -> None:
         _integer("transport.max_query_attempts", self.max_query_attempts, QUERY_ATTEMPTS)
         _integer("transport.max_outage_s", self.max_outage_s, OUTAGE_SECONDS)
-        _integer("transport.seeds_per_request", self.seeds_per_request, SEEDS_PER_REQUEST)
 
 
 @dataclass(frozen=True)
 class SubgraphConfig:
-    """The settings of the subgraph query and the date tables (docs/design.md, "The subgraph
-    query" and "Hubs, crowds and leaves"); every value is the design's default.
+    """The caps and windows of the subgraph query (docs/design.md, "The subgraph query").
 
-    Each field but the two thresholds is the fetch_subgraphs parameter of the same name; the
-    thresholds are read_leaves parameters, which decide the leaves fetch_subgraphs receives.
+    Each field is the fetch_subgraphs parameter of the same name. The caps and the lookback
+    are the design's defaults; the design leaves the hub threshold to be measured.
     """
 
     # Payments per direction: a seed's newest, and those of every other expanded account.
@@ -117,20 +111,16 @@ class SubgraphConfig:
     # An account's links through its owner, and the nodes observed on its own payments.
     enrolled_devices: int = 8
     enrolled_ips: int = 8
+    addresses: int = 4
     sent_devices: int = 8
     sent_ips: int = 8
     # Other customers' accounts per identity node of a seed, and in all per seed.
     reverse_accounts: int = 16
     identity_accounts: int = 48
-    # Members of a seed's community at most.
-    community_parties: int = 64
-    # Payments per direction the time-ordered account features read.
-    recent_payments: int = 256
-    # Distinct customers above which an account, device or IP is a hub, and an observed-only
-    # device or IP a crowd.
+    # Distinct visible owners above which a node is a hub and is not expanded. A placeholder
+    # until it is measured: above PhantomLedger's largest ring (150 members).
     hub_threshold: int = 200
-    observed_threshold: int = 8
-    # Days of history before the as-of time.
+    # Days of payment history before the as-of time.
     lookback_days: int = 365
 
     def __post_init__(self) -> None:
@@ -141,16 +131,14 @@ class SubgraphConfig:
             "siblings",
             "enrolled_devices",
             "enrolled_ips",
+            "addresses",
             "sent_devices",
             "sent_ips",
             "reverse_accounts",
             "identity_accounts",
-            "community_parties",
-            "recent_payments",
         ):
             _integer(f"subgraph.{name}", getattr(self, name), CAPS)
         _integer("subgraph.hub_threshold", self.hub_threshold, HUB_THRESHOLDS)
-        _integer("subgraph.observed_threshold", self.observed_threshold, HUB_THRESHOLDS)
         _integer("subgraph.lookback_days", self.lookback_days, LOOKBACK_DAYS)
 
 

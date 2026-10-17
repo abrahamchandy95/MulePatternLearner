@@ -1,9 +1,7 @@
 USE GRAPH Mule_Pattern_Learner
 
-/* The answer key, for evaluation only, a page at a time by id (docs/design.md, "Who may
-   read what"): each account's truth from PhantomLedger, with its onset, last activity and
-   discovery whether or not it was discovered, since evaluation needs the active dates of
-   the mules nobody found. is_mule is 1, 0, or -1 when unknown (an external account). */
+/* The answer key, for evaluation only, a page at a time by id: each account's truth from
+   PhantomLedger. is_mule is 1, 0, or -1 when unknown (an external account). */
 CREATE OR REPLACE QUERY read_answer_key(
     STRING after_id,
     INT batch_size
@@ -16,7 +14,7 @@ CREATE OR REPLACE QUERY read_answer_key(
       WHERE a.id > after_id
       ORDER BY a.id ASC
       LIMIT batch_size;
-    PRINT "ok" AS status, "read_answer_key-478d3430ad3c" AS version;
+    PRINT "ok" AS status;
     PRINT Page[Page.id AS account_id, Page.is_mule AS is_mule,
       Page.mule_ring_id AS mule_ring_id, Page.mule_layer AS mule_layer,
       Page.mule_flow AS mule_flow, Page.mule_onset_ms AS mule_onset_ms,

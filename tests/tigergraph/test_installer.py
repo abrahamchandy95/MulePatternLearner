@@ -4,30 +4,20 @@ from __future__ import annotations
 
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
-from pathlib import Path
 from typing import Any
 
 import pytest
 import requests
 
-from mule_pattern_learner.paths import GSQL_DIR
 from mule_pattern_learner.tigergraph.installer import (
     definitions,
     install,
     normalized,
     parameter_names,
-    parity_record,
     repository_queries,
-    require_parity,
     verify,
 )
-from mule_pattern_learner.tigergraph.queries import (
-    FETCH_SUBGRAPHS,
-    GRAPH_NAME,
-    QUERY_FILES,
-    READ_LEAVES,
-    VERSIONS,
-)
+from mule_pattern_learner.tigergraph.queries import FETCH_SUBGRAPHS, GRAPH_NAME, QUERY_FILES
 
 QUERIES = repository_queries()
 
@@ -133,36 +123,17 @@ def _current() -> FakeServer:
     return FakeServer(texts, set(QUERIES))
 
 
-def test_the_installed_queries_are_the_designs() -> None:
-    assert list(QUERY_FILES) == [
-        "fetch_subgraphs",
-        "read_leaves",
-        "read_sharing",
-        "list_population",
-        "read_supervision",
-        "read_world",
-        "profile_hubs",
-        "read_answer_key",
-    ]
-    files = {
-        path.relative_to(GSQL_DIR).as_posix()
-        for folder in ("queries", "evaluation")
-        for path in (GSQL_DIR / folder).glob("*.gsql")
-    }
-    assert set(QUERY_FILES.values()) == files
-
-
 def test_a_fresh_graph_gets_every_query_created_and_installed() -> None:
     server = FakeServer()
     executor = FakeExecutor(server)
-    assert install(executor) == VERSIONS
+    assert install(executor) == list(QUERY_FILES)
     assert server.created == [list(QUERY_FILES)] and server.installs == [list(QUERY_FILES)]
     verify(executor)
 
 
 def test_current_queries_are_left_alone() -> None:
     server = _current()
-    assert install(FakeExecutor(server)) == {}
+    assert install(FakeExecutor(server)) == []
     assert server.created == [] and server.installs == []
 
 
@@ -171,16 +142,16 @@ def test_only_a_changed_query_is_created_again() -> None:
     server.texts[FETCH_SUBGRAPHS] = server.texts[FETCH_SUBGRAPHS].replace(
         "seed_payments < 1", "seed_payments < 2"
     )
-    assert install(FakeExecutor(server)) == {FETCH_SUBGRAPHS: VERSIONS[FETCH_SUBGRAPHS]}
+    assert install(FakeExecutor(server)) == [FETCH_SUBGRAPHS]
     assert server.created == [[FETCH_SUBGRAPHS]]
     assert definitions(server.texts[FETCH_SUBGRAPHS]) == {FETCH_SUBGRAPHS: QUERIES[FETCH_SUBGRAPHS]}
 
 
 def test_a_query_whose_compilation_did_not_finish_is_installed_without_a_create() -> None:
     server = _current()
-    server.enabled.discard(READ_LEAVES)
-    assert install(FakeExecutor(server)) == {READ_LEAVES: VERSIONS[READ_LEAVES]}
-    assert server.created == [] and server.installs == [[READ_LEAVES]]
+    server.enabled.discard("write_split")
+    assert install(FakeExecutor(server)) == ["write_split"]
+    assert server.created == [] and server.installs == [["write_split"]]
 
 
 def test_an_install_the_client_stops_waiting_for_is_awaited_on_the_endpoints() -> None:
@@ -251,17 +222,3 @@ def test_query_texts_compare_without_comments_layout_or_keyword_case() -> None:
     assert normalized(definitions(same)["q"]) == normalized(definitions(text)["q"])
     other = same.replace('"Ok"', '"ok"')
     assert normalized(definitions(other)["q"]) != normalized(definitions(text)["q"])
-
-
-def test_queries_run_only_once_the_parity_check_recorded_their_versions(tmp_path: Path) -> None:
-    for name in list(VERSIONS)[:-1]:
-        record = parity_record(tmp_path, VERSIONS[name])
-        record.parent.mkdir(parents=True, exist_ok=True)
-        record.write_text("{}")
-    unrecorded = list(VERSIONS)[-1]
-    with pytest.raises(ValueError, match=f"{unrecorded} {VERSIONS[unrecorded]}") as refused:
-        require_parity(VERSIONS, tmp_path)
-    assert "mule parity" in str(refused.value) and FETCH_SUBGRAPHS not in str(refused.value)
-    parity_record(tmp_path, VERSIONS[unrecorded]).write_text("{}")
-    require_parity(VERSIONS, tmp_path)
-    assert parity_record(tmp_path, "v-1") == tmp_path / "parity" / "v-1.json"

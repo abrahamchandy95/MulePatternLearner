@@ -23,18 +23,14 @@ def test_the_defaults_are_the_built_in_settings() -> None:
     assert RunConfig() == DEFAULT_CONFIG
     transport = DEFAULT_CONFIG.transport
     assert (transport.max_query_attempts, transport.max_outage_s) == (6, 900)
-    assert transport.seeds_per_request == 32
-    # The design's defaults for the subgraph query and the date tables.
+    # The design's defaults for the subgraph query, and a hub threshold still to be measured.
     subgraph = DEFAULT_CONFIG.subgraph
     caps = (subgraph.seed_payments, subgraph.other_payments, subgraph.owners, subgraph.siblings)
-    identity = (subgraph.enrolled_devices, subgraph.enrolled_ips)
+    identity = (subgraph.enrolled_devices, subgraph.enrolled_ips, subgraph.addresses)
     sent = (subgraph.sent_devices, subgraph.sent_ips)
-    assert (caps, identity, sent) == ((32, 16, 1, 8), (8, 8), (8, 8))
+    assert (caps, identity, sent) == ((32, 16, 1, 8), (8, 8, 4), (8, 8))
     assert (subgraph.reverse_accounts, subgraph.identity_accounts) == (16, 48)
-    assert (subgraph.community_parties, subgraph.recent_payments) == (64, 256)
-    assert (subgraph.hub_threshold, subgraph.observed_threshold) == (200, 8)
-    assert subgraph.lookback_days == 365
-    assert not hasattr(subgraph, "addresses")
+    assert (subgraph.hub_threshold, subgraph.lookback_days) == (200, 365)
     # The design's windows, gap and unlabelled count, and a scored sample and seed it leaves.
     data = DEFAULT_CONFIG.data
     assert (data.training, data.validation, data.test) == (
@@ -60,17 +56,11 @@ def test_sections_refuse_values_outside_their_ranges() -> None:
         (lambda: TransportConfig(max_query_attempts=True), "transport.max_query_attempts"),
         (lambda: TransportConfig(max_outage_s=-1), "transport.max_outage_s"),
         (lambda: TransportConfig(max_outage_s=1.5), "transport.max_outage_s"),  # pyright: ignore[reportArgumentType]
-        (lambda: TransportConfig(seeds_per_request=0), "transport.seeds_per_request"),
-        (lambda: TransportConfig(seeds_per_request=1_025), "transport.seeds_per_request"),
         (lambda: RunConfig(transport="fast"), "transport must be"),  # pyright: ignore[reportArgumentType]
         (lambda: SubgraphConfig(seed_payments=0), "subgraph.seed_payments"),
         (lambda: SubgraphConfig(owners=0), "subgraph.owners"),
         (lambda: SubgraphConfig(identity_accounts=2_000), "subgraph.identity_accounts"),
-        (lambda: SubgraphConfig(community_parties=0), "subgraph.community_parties"),
-        (lambda: SubgraphConfig(recent_payments=1_025), "subgraph.recent_payments"),
         (lambda: SubgraphConfig(hub_threshold=0), "subgraph.hub_threshold"),
-        (lambda: SubgraphConfig(observed_threshold=0), "subgraph.observed_threshold"),
-        (lambda: SubgraphConfig(observed_threshold=True), "subgraph.observed_threshold"),
         (lambda: SubgraphConfig(lookback_days=29), "subgraph.lookback_days"),
         (lambda: SubgraphConfig(lookback_days=3_651), "subgraph.lookback_days"),
         (lambda: RunConfig(subgraph="wide"), "subgraph must be"),  # pyright: ignore[reportArgumentType]

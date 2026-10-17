@@ -1,21 +1,16 @@
-"""Install the queries of gsql/ on the graph, check that the installed ones are current, and
-refuse versions the parity check has not passed.
+"""Install the queries of gsql/ on the graph, and check that the installed ones are current.
 
 A query is current when SHOW QUERY gives the repository's text (comments, whitespace and
 case outside string literals aside) and its REST endpoint is enabled with the same
 parameters. install creates and installs only the queries that are not. Every write runs
 once through the executor, so it is never repeated behind the caller's back. The schema and
 the loading job (gsql/schema/) are run by a person, on a fresh graph.
-
-No query runs for real until its version has passed the parity check (docs/design.md,
-"Parity"), which writes one record per version under results/parity/.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 import hashlib
-from pathlib import Path
 import re
 import time
 from typing import Any
@@ -28,7 +23,7 @@ from .executor import (
     TransientQueryError,
     failure_class,
 )
-from .queries import GRAPH_NAME, QUERY_FILES, VERSIONS
+from .queries import GRAPH_NAME, QUERY_FILES
 
 # GSQL comments, which neither a compared text nor a version includes.
 COMMENTS = re.compile(r"/\*.*?\*/|//[^\n]*|#[^\n]*", re.S)
@@ -193,9 +188,8 @@ def install(
     poll_s: float = 30.0,
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
-) -> dict[str, str]:
-    """Create and install every query that is not current; the version of each it installed,
-    by name.
+) -> list[str]:
+    """Create and install every query that is not current; the names it installed.
 
     Only a query whose text is missing or differs is created again, since CREATE OR
     REPLACE disables an installed endpoint until it is installed again; one whose text is
@@ -210,7 +204,7 @@ def install(
     problems = query_problems(executor)
     stale = [name for name in queries if name in problems]
     if not stale:
-        return {}
+        return []
     changed = [name for name in stale if {MISSING, DIFFERS} & set(problems[name])]
     if changed:
         text = "\n\n".join(f"CREATE OR REPLACE {queries[name]}" for name in changed)
@@ -241,23 +235,4 @@ def install(
             )
         sleep(poll_s)
     verify(executor)
-    return {name: VERSIONS[name] for name in stale}
-
-
-def parity_record(results: Path, version: str) -> Path:
-    """Where the parity check records that a query version passed, under the results root."""
-    return results / "parity" / f"{version}.json"
-
-
-def require_parity(versions: Mapping[str, str], results: Path) -> None:
-    """Raise unless the parity check has recorded every version (query name to version)."""
-    missing = [
-        f"{name} {version}"
-        for name, version in versions.items()
-        if not parity_record(results, version).is_file()
-    ]
-    if missing:
-        raise ValueError(
-            f"No parity record for {', '.join(missing)} under {results / 'parity'}: "
-            "run `mule parity` first"
-        )
+    return stale
