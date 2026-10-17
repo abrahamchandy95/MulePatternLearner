@@ -80,10 +80,17 @@ PhantomLedger (`../PhantomLedger`, use case `mule-temporal`) simulates one US ba
 simulates the whole universe of behaviour, criminal flows included; the mule use case only
 decides which accounts its label calls mules:
 
-- A mule is an internal account that ring money landed in, where the money's chain starts
-  with a victim payment. Drug-cash structuring and organizers moving their own
-  money (the bipartite, cycle and invoice playbooks) stay in the world as real criminal
-  flows and are unlabelled in this use case, because a mule moves victims' money.
+- A mule is every account a ring recruited as a mule, whether or not ring money reached it,
+  and every internal account ring money landed in, whatever started the money's chain:
+  scam victims' money, an organizer's own funds (the bipartite, cycle and invoice
+  playbooks) or drug and structured cash. Organizers' own accounts that ring money landed
+  in are mules too. The label does not depend on victims, which belong to the
+  transaction-fraud use case (the owner, 18 October 2026: "victims are for transaction fraud
+  (a different use case). we are currently interested in mule detection usecase!!").
+- A recruit that no ring money reached is still scored: it is linked to other mules, and
+  that graph behaviour is what the model should learn (the owner: "even if they dont
+  necessarily have many transactions, they will be connected to other mules, and we will get
+  some graph behavior from them").
 - Account-takeover drops and impostor payees become mules with no ring (`mule_ring_id` -1)
   once PhantomLedger's scam payees step lands.
 - PhantomLedger also decides which mules the bank identifies (see
@@ -279,9 +286,9 @@ is not ready for MulePatternLearner:
 | Columns | Meaning | Read only by |
 |---|---|---|
 | `pu_label` | the bank identified the account as a mule (1), or not (0); -1 on external accounts | `read_labels` (training, selection, and evaluation's groups) |
-| `mule_onset_ms`, `mule_last_ms` | the account's first and last ring payment: the activity period an investigation records | `read_labels`, which prints them only for `pu_label` 1; `read_answer_key` |
+| `mule_onset_ms`, `mule_last_ms` | the account's first and last ring payment: the activity period an investigation records. A recruit no ring money reached has its recruitment and its leaving the ring (the ring's end, the account's closure or its holder's death, censored at the export's end) | `read_labels`, which prints them only for `pu_label` 1; `read_answer_key` |
 | `is_mule` | the truth: 1 mule, 0 not, -1 external (unknown) | `read_answer_key` (evaluation) |
-| `mule_ring_id` | the ring of the account's first landing payment, -1 for none | `read_answer_key` (evaluation: ring groups and ring-resampled uncertainty) |
+| `mule_ring_id` | the ring of the account's first landing payment, else the ring that recruited it; -1 for none | `read_answer_key` (evaluation: ring groups and ring-resampled uncertainty) |
 | `opened_ms`, `closed_ms`, `joined_ms` | dates of record | existence, the scored population and the known-start test; `opened_ms` is printed only by `read_answer_key`, for an evaluation group |
 | `account_type` | the product | the scored population and the deposit-only co-user accounts; never a feature |
 | `is_external` | another bank's account | a feature on neighbours |
@@ -1189,8 +1196,9 @@ removes known cases:
 - mules with no ring (account-takeover drops and impostor payees);
 - mules whose account opened within 90 days of t (from `read_answer_key`'s `opened_ms`):
   purpose-opened mules are the hard case;
-- mules scored with no payment in the lookback (on an early-warning Monday, or an account
-  opened for a ring and not yet used), which only shared devices and IPs can reveal: the
+- mules scored with no payment in the lookback (on an early-warning Monday, an account
+  opened for a ring and not yet used, or a recruit no ring money reached), which only links
+  to other mules, such as shared devices and IPs, can reveal: the
   owner's Account Z, reported beside the enrolment ceiling (72% of device and 61% of IP
   associations are on file);
 - recall by hop distance from the nearest identified mule: on each Monday, the fewest edges,
@@ -1198,13 +1206,7 @@ removes known cases:
   account with `pu_label` 1 inside the mule's own fetched subgraph at that t, in bins 1, 2 and
   "not within two hops" (an account node counts; customer, device and IP nodes are steps on
   the way, so a shared device puts two mule accounts two edges apart). Evaluation computes it
-  in Python from the cached edge lists: it is an evaluation output, never a model input;
-- criminal non-mules (the owner, 2026-10-17): the accounts of the world's other criminal
-  flows, structuring funnels and the receivers of organizers' own money. The mule use case
-  labels them `is_mule` 0, since a mule moves victims' money, but they can look like mules, so
-  they are their own group, ranked like the others against the ordinary non-mules, and the
-  report shows how often the model flags them. No column of the export contract marks them
-  yet; how evaluation tells them apart is [pending the owner](#pending-the-owner).
+  in Python from the cached edge lists: it is an evaluation output, never a model input.
 
 ### Uncertainty
 
@@ -1525,7 +1527,6 @@ on 2026-10-17, and each is written into its section above.
 | Choice | Interim rule in this design |
 |---|---|
 | The internal and external new-payer split as a declared cue until the on-us share is sourced | kept, with its lift gates |
-| How evaluation tells criminal non-mules (structuring funnels, receivers of organizers' own money) apart, since no column of the export contract marks them | the group is not reported until the owner answers; every other group is |
 
 ## Limitations
 
