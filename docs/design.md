@@ -119,7 +119,7 @@ a gate (see [Gates](#gates)).
 | Mule origins | Three: the mule's own established account; an account the person opens for the purpose; and, new, accounts a controller opens under a stolen or synthetic identity (about 0.10 of mule accounts, declared, below Experian's bound of about 0.23), run from the controller's devices, with legitimate look-alikes (new, quiet, single-device customers) so that "new and quiet" is not a mule-only marker. |
 | Device and IP link lives | The phone keeps its 40 months; a web device is keyed on a cookie or login token (its life uncited); home IPs are a two-class mixture of about 0.4 static lines and spells of one to four months, so 30% to 40% of home-IP links start inside a 90-day lookback. Legitimate new links must be common, or "new link" becomes mule-only. |
 | Export | The contract under [The graph](#the-graph). Payment ids are exported as BLAKE2b pseudonyms like entity ids, not row numbers, and within one second their order is independent of the laundering flag and the ring. No self-payments. Links made at sign-up start exactly at `joined_ms` (PhantomLedger's own check; MulePatternLearner's [known-start rule](#time) no longer depends on it). A NaN amount fails the export. |
-| Identity and gate records | For every world, two files beside PhantomLedger's output: an identity file (the world's seed, size, export start, the PhantomLedger commit, a clean-tree flag, and exactly the fields of `read_world` computed from the 22 exported tables) and a gate record (the same identity fields; for every gate, its entry id, kind (code or world) and pass, never its value or bound; the code-gate results of that commit). Values and bounds stay in PhantomLedger's run summary, which no MulePatternLearner code opens. See [Gates](#gates). |
+| Identity and gate records | For every world, two TOML files named by its seed, in a folder MulePatternLearner's `.env` names: an identity file (the world's seed, size, export start, the PhantomLedger commit, a clean-tree flag, and exactly the fields of `read_world` computed from the 22 exported tables) and a gate record (the same identity fields; for every gate, its entry id, kind (code or world) and pass, never its value or bound; the code-gate results of that commit). Values and bounds stay in PhantomLedger's run summary, which no MulePatternLearner code opens. See [Gates](#gates). |
 | Clocks | The Clocks step (no rows stamped at second 0, no same-second couplings, victim, mule and organizer clocks like their holders' own, legitimate night ATM use, the account-takeover clock, legitimate rails on every day of the month) must pass before a reported run, because durations measured to t carry the clock of their event. |
 | Rails | Card cash-outs on rail `card` and own-account moves on rail `internal`, so that the `unknown` rail is honest. |
 
@@ -978,7 +978,7 @@ features](features.md) cites them by name for every feature.
 | Guard | Rule | Enforced by |
 |---|---|---|
 | Labels | Only `read_labels` reads `pu_label`, and it prints `mule_onset_ms` and `mule_last_ms` only for `pu_label` 1. Only `read_answer_key` reads `is_mule` and `mule_ring_id`, and it also prints every mule's dates and `opened_ms`. No feature query reads any of them, and no feature says whether any account is known or caught. Labels and weights never join a node row. | erasing every label column leaves every query's answer identical; projection-only PRINTs; text tests fail any other reader of these columns; the fetch executor's allowlist; import contracts |
-| Files that carry labels | The loader's manifest, its verification report and its `Account` shards hold label counts or label columns; PhantomLedger's run summary holds values computed from the truth; the evaluation store holds the answer key. Only `evaluation/` and `testing/` open them, and nothing in `tigergraph/`, `data/`, `subgraph/`, `model/`, `training/` or `comparisons/` imports `testing/`. | a path contract: each of these locations has one accessor in `paths.py`, and a test scans every module and fails any call to it outside `evaluation/` and `testing/` |
+| Files that carry labels | The loader's manifest, its verification report and its `Account` shards hold label counts or label columns; PhantomLedger's run summary holds values computed from the truth, and its gate record pass flags computed from it; the evaluation store holds the answer key. Only `evaluation/` and `testing/` open them, and nothing in `tigergraph/`, `data/`, `subgraph/`, `model/`, `training/` or `comparisons/` imports `testing/`. | a path contract: each of these locations has one accessor in `paths.py`, and a test scans every module and fails any call to it outside `evaluation/` and `testing/` |
 | Selection by labels only | Selection reads `pu_label`, never the answer key, in every scoring mode. | with the answer key erased, every selection input is byte-identical |
 | Before t | Values come only from payments with `t - 90 d <= ts < t` and links with `valid_from_ms < t`; an account exists only when `opened_ms < t`. | fixtures with a payment, a link start and an account opening exactly at t, a link end exactly at `t - 90 d` and at `t - 30 d`, and a closure exactly at t; text tests that require one exact allowed form for every bound; an account alone equals itself among 31 others |
 | No link ends as values | `valid_to_ms` appears only in the visible and current tests, both at least 30 days back; `closed_ms` only in the population test. These are decided by the past only while no tenure built from uses, ring or ordinary, is quiet for more than 21 days or ends more than a day after its last use, which a PhantomLedger world check proves on every party link table. | fixtures of two holders with identical pasts, one with a later ring payment and one with a later ordinary use of a hotspot, giving identical rows at t; text tests allowing only the two forms; PhantomLedger's gate record |
@@ -1246,7 +1246,7 @@ fetches and trains.
 
 1. **Code** reaches the training machine by git: pushed to `main` after the owner's code
    review of all three repositories, then pulled. It carries the parity record of the
-   5,000-person test (`gsql/parity.json`), so the training machine needs no 5,000-person
+   5,000-person test (`gsql/parity.toml`), so the training machine needs no 5,000-person
    world of its own; whether it reruns parity anyway is pending the owner.
 2. **`mule install`** installs the queries once; `mule-load clear` keeps them between worlds.
 3. **For each world, one at a time,** in the one graph:
@@ -1296,7 +1296,9 @@ taken while the world is loaded.
   earlier than the data. PhantomLedger computes the same fields from its exported tables for
   its identity file and gate record, and a golden test in both repositories pins them on one
   small export.
-- The cache, PhantomLedger's exports and `.env` are never in git.
+- The cache, the evaluation store and the training examples live under the repository's
+  `/data/` folder (`data/cache/`, `data/evaluation/`, `data/examples/`), which `.gitignore`
+  already keeps out of git, as it does PhantomLedger's exports and `.env`.
 
 ### Results
 
@@ -1332,7 +1334,7 @@ The MulePatternLearner workspace is its own TigerGraph Cloud workspace, and the 
    the schema.
 3. Install every query (the first live compile of each), run every query, the live B1
    verification and `mule parity` against the reference graph, and commit the parity record
-   `gsql/parity.json` it writes.
+   `gsql/parity.toml` it writes.
 4. Run `CLEAR GRAPH STORE -HARD` again and tell the owner.
 
 If after the wipe the `.env` secret no longer authenticates, stop and ask the owner. The owner
@@ -1346,7 +1348,7 @@ Commands take no options: worlds, roles, dates and settings live in config.
 | Command | What it does |
 |---|---|
 | `mule install` | installs the changed queries of `gsql/queries/` and `gsql/evaluation/` |
-| `mule parity` | testing code: runs every installed query on the loaded world, and the reference graph on the same export (the loader's shards whose `read_world` identity equals the live graph's, found under the configured export folder), on a seeded sample of Mondays and accounts with mules oversampled; compares the canonical answers and refusals, that an account fetched alone equals itself among 31 others, and that B5's and B6's inline leaf flags equal `read_hubs`; writes the versions that pass, the TigerGraph version and the world identity to `gsql/parity.json`, committed with the code |
+| `mule parity` | testing code: runs every installed query on the loaded world, and the reference graph on the same export (the loader's shards whose `read_world` identity equals the live graph's, found under the configured export folder), on a seeded sample of Mondays and accounts with mules oversampled; compares the canonical answers and refusals, that an account fetched alone equals itself among 31 others, and that B5's and B6's inline leaf flags equal `read_hubs`; writes the versions that pass, the TigerGraph version and the world identity to `gsql/parity.toml`, committed with the code |
 | `mule prepare` | data code: reads `read_world` and matches the configured world by its identity file; checks the scored Mondays and the lookback, the value sets and the labels from `read_labels`; reads the populations; writes the training examples and weights; reports counts, the identified active share and the weight balance per Monday |
 | `mule fetch` | fills the cache for every example the configured roles of the loaded world need: the training draw, and every scorable account of every Monday of a selection or test role |
 | `mule audit` | evaluation code, on the loaded world: reads the answer key into the evaluation store; checks PhantomLedger's gate record against the world's identity; builds and fetches a test-role fallback list if configured; runs the label checks, the clock probe and the identified share by onset month; on development worlds also the feature audit and the hub, leaf and card-spending checks; writes pass records to the evaluation store |
@@ -1414,8 +1416,8 @@ extrapolated at 3.2 hours and 215 GB.
 GSQL: `gsql/schema/schema.gsql` (no loading job); `gsql/queries/` (`list_accounts`,
 `read_labels`, `read_hubs`, `read_world`, `profile_hubs`, `read_money_flow`,
 `read_counterparties`, `read_activity_change`, `read_payment_events`, `read_shared_identity`,
-`read_community`); `gsql/evaluation/` (`read_answer_key`); `gsql/parity.json`, the parity
-record.
+`read_community`); `gsql/evaluation/` (`read_answer_key`); `gsql/parity.toml`, the parity
+record (TOML, since `.gitignore` keeps every JSON file out of git).
 
 The import contracts in `pyproject.toml` keep every layer exhaustive: no package but
 `evaluation/` and `testing/` imports the answer-key reader; none of `tigergraph/`, `data/`,
