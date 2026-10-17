@@ -3,8 +3,10 @@
 The specification the code builds. Its decisions were agreed with the owner in the grilling
 session of 2026-10-17, and it replaces the October 17 revision of this file (commits 5637d9c
 and ed62329), which was written before that session. Where three reviews of this design found
-a choice the owner has not made, the design states a safe interim rule and lists the choice
-under [Pending the owner](#pending-the-owner). Nothing here is built yet.
+a choice the owner had not made, the design stated a safe interim rule and listed the choice
+under [Pending the owner](#pending-the-owner). The owner settled most of them later the same
+day, and those decisions are written in below; what is still open stays listed there. Nothing
+here is built yet.
 
 - [The features](features.md) is part of this design: every number that reaches the model in
   a batch, with its exact definition, encoding, width, leak guard and the generator gates it
@@ -17,23 +19,22 @@ under [Pending the owner](#pending-the-owner). Nothing here is built yet.
   (`generator_realism_2026-10-15.md`, `mule_bursts_2026-10-15.md`), the mule activity research
   (`mule_activity_2026-10-17.md`) and the checked customer lifecycle research
   (`lifecycle_2026-10-17.md`).
-- The GSQL dwell research of 2026-10-17 and its check are in no repository yet. They sit in
-  the owner's research folder, in
-  `MulePatternLearner-backup-2026-10-14/research/session_2026-10-17/mpl_plan/features_lifecycle_gsql.json`
-  (keys `gsql` and `gsqlCheck`), until the owner says where to commit them.
+- [The GSQL dwell research of 2026-10-17](research/gsql_dwell_2026-10-17.md) and its check,
+  with the checker's corrections applied, are in this repository's `docs/research/`.
 
 ## Standing rules
 
 | Rule | Where it comes from |
 |---|---|
 | Leaks are absolutely not allowed. | The owner |
-| TigerGraph and GSQL are the main deliverable and Python the additional one. TigerGraph computes every value the model reads from the graph; Python joins rows by id, encodes them, builds tensors, and counts the edges of each built subgraph for the [degree columns](features.md#degree-columns), which exist only once a batch is assembled and an ablation switch has run. That one exception is put to the owner. | The owner: "our whole deliverable is TigerGraph and GSQL with the python as an additional deliverable"; "we want as many things to be calculated in TigerGraph as possible and exported to the GNN" |
+| TigerGraph and GSQL are the main deliverable and Python the additional one. TigerGraph computes every value the model reads from the graph; Python joins rows by id, encodes them, builds tensors, and counts the edges of each built subgraph for the [degree columns](features.md#degree-columns), which exist only once a batch is assembled and an ablation switch has run. The owner agreed to that one exception on 2026-10-17. | The owner: "our whole deliverable is TigerGraph and GSQL with the python as an additional deliverable"; "we want as many things to be calculated in TigerGraph as possible and exported to the GNN" |
 | Query names start with a verb. | The owner's standing rule, confirmed on 2026-10-17 |
 | Commands take no options; dates and settings live in config. | The same |
 | GSQL computes nothing that nothing reads. | The same |
 | Every table and every column PhantomLedger exports is loaded, so the schema holds every exported column and the export holds nothing the schema lacks. | The owner: "when I look at the uploaded data, i dont want to see missing fields in the load data page" |
 | PhantomLedger gets no new flags. It simulates the whole universe of behaviour, and a use case only decides what its label means. | The owner: "we are defining the behavior of the mule usecase now"; "we code in behavoir of the whole universe" |
 | Every behaviour in PhantomLedger is backed by research, or declared as a choice, in its citation ledger. | The owner: "every line in phantomledger is research backed" |
+| PhantomLedger keeps every researched behaviour, in every use case. A shortcut is fixed by making the behaviour's implementation realistic, never by deleting the behaviour. | The owner (2026-10-17): "The cover payments and all the other things that phantomledger makes are behaviors! we do not want to remove these"; "in the universe, it does not matter what we are trying to label, the behaviors of people would be always the same" |
 | One branch, `main`, the same on both remotes; nothing is pushed without the owner's confirmation; `redesign` is merged into `main` at that push. | The owner's standing rule, confirmed on 2026-10-17 |
 
 ## What we are testing
@@ -94,9 +95,9 @@ decides which accounts its label calls mules:
 |---|---|---|
 | Worlds | Three independent worlds from different seeds: one trains, one selects, one tests. Reported runs rotate the roles (A/B/C, B/C/A, C/A/B); development uses one rotation. | Every test account, ring, device and IP is new to the model, which is "mule accounts created after the GNN was trained", with no split machinery. Rotation gives three test numbers and a spread across worlds. |
 | Sizes | Development worlds have 30,000 people, reported worlds 300,000. Development worlds use other seeds, never those of A, B or C. | Thresholds and caps are tuned on development worlds only, from label-free statistics or the selection score (see the Same rule for all guard), and frozen before the reported worlds are generated. A change made after a reported run, whatever prompted it, needs new reported worlds from new seeds before the next report, and the manifest records which run's report led to which change. |
-| Burn-in | PhantomLedger simulates a burn-in with laundering running before the 90 days of history, defined in the use case, not a flag. Its length is pending the owner: 365 days whose last 90 are the exported history (730 simulated days), or 365 days before the history (820). MulePatternLearner reads only the 455 exported days, so its code is the same either way. | The burn-in fills the mule-level history: earlier ring payments in a lookback, open tenures, balances. It does not by itself make the ring count steady: rings born at a constant rate and living about 730 days on average, started cold, reach about 0.39 (or 0.46) of their steady-state count by the first scored Monday and about 0.63 (or 0.68) by the last, a rise that would put more positives late in the year. PhantomLedger's plan draws the rings alive on the first simulated day from the stationary law (a representative start), pending the owner, and its stationarity gates hold the weekly active-ring count flat. |
+| Burn-in, representative start and label tail | PhantomLedger simulates 730 days per world, defined in the use case, not a flag: 275 burn-in days, not exported, then the 455 exported days. After the export it simulates a 90-day label tail, also not exported, which only identification reads. Laundering runs throughout. Rings start mid-life at the burn-in's start: the rings alive on the first simulated day are drawn from the stationary law (a representative start). MulePatternLearner reads only the 455 exported days. | The burn-in fills the mule-level history: earlier ring payments in a lookback, open tenures, balances. It does not by itself make the ring count steady: rings born at a constant rate and living about 730 days on average, started cold, would reach about 0.39 of their steady-state count by the first scored Monday and about 0.63 by the last, a rise that would put more positives late in the year. With the representative start the weekly active-ring count is flat from the first simulated day, which PhantomLedger's stationarity gates check. The label tail lets identification see whole mule lives (see [Identification horizon](#identification-horizon)). |
 | Export window | 455 days: 90 days of history only, then 365 scored days holding 52 Mondays. Laundering may run from day 0. There is no laundering-free warm-up. The window may grow if research shows a need. | Every scored Monday has a full 90-day lookback, for mules and ordinary accounts alike, and nobody loads a year nobody reads (the owner: "we would have our window of 365 days + 90 days"). |
-| Scored Mondays | Config holds one export start date (day 0, PhantomLedger's `--start`), the same for every world, and each world's seed and size. The scored Mondays are the 52 Mondays at 00:00 UTC from the first Monday at or after day 90; `mule prepare` derives them and checks them against the loaded world. | The calendar is the same in every world. Which calendar does not matter, since no feature reads the clock, except that every exported time must fit the schema (see [The export contract](#the-export-contract)). |
+| Scored Mondays | Config holds one export start date, 2024-01-01 (day 0, PhantomLedger's `--start`, a Monday), the same for every world, and each world's fixed seed and size. The burn-in then runs from 2023-04-01, the export to 2025-03-30 and the label tail to 2025-06-28. The scored Mondays are the 52 Mondays at 00:00 UTC from the first Monday at or after day 90, 2024-04-01 to 2025-03-24; `mule prepare` derives them and checks them against the loaded world. | The calendar is the same in every world. Which calendar does not matter, since no feature reads the clock, except that every exported time must fit the schema (see [The export contract](#the-export-contract)). |
 | Scoring frequency | Weekly, on Mondays, everywhere. Daily scoring is a later option once the benchmark shows its cost (see [future design work](future_design.md)). | A mule active Tuesday to Thursday is still scored the next Monday with its whole burst in view. |
 
 ### What PhantomLedger must provide
@@ -107,27 +108,29 @@ a gate (see [Gates](#gates)).
 
 | Area | What the world must do |
 |---|---|
-| Shortcuts | Every one of the dossier's 63 shortcuts that a model could exploit is fixed with research-backed behaviour or declared. The owner: "get rid of all the shortcuts". |
+| Shortcuts | Every one of the dossier's 63 shortcuts that a model could exploit is fixed with research-backed behaviour or declared. The owner: "get rid of all the shortcuts". A shortcut is fixed by making the behaviour's implementation realistic, never by deleting the behaviour (see [Standing rules](#standing-rules)): cover payments stay in every use case and go to the holder's own contacts, billers and merchants on the holder's own clock, as a mule acting like a normal account would make them; ordinary people get second jobs at the rate the BLS measures; and the ring budget cut, a volume control of the generator rather than a behaviour, gives way to the fixed declared ring rate the owner chose, so every planned ring payment is made. Every residual shortcut gets a world check, and every ceiling no research sets is declared at the value PhantomLedger's plan suggests (see [Gates](#gates)). |
 | Mule activity | One active period per account per ring; a second episode only through a second ring (0.06 of mule persons). Victims over the account's life are the sum of today's per-burst draws, so credits per mule stay about the same. The first victim arrives at onset plus the recruitment lag; later victims after a renewal gap LogNormal with median 2 days and sigma 1.3, kept to [10 minutes, 21 days], all declared choices. The active period belongs to the account and is shared by every playbook. Long quiet belongs before the first misuse. No source supports quiet gaps of weeks to months between bursts in one account (`mule_activity_2026-10-17.md`, committed as PhantomLedger 77e0c61). |
-| Ring devices and IPs | They belong only to controller-operated accounts (online handover and organizers' own ring accounts), about 12% of mules instead of 70% (about 18% once controller-opened accounts are counted, pending the owner). A tenure starts at the first attempted ring payment minus a lead (median 1 day, at most 14 days) and is built from attempted payments. A controller who logs in and never pays out is not generated, since no research gives a rate. |
+| Ring devices and IPs | They belong only to controller-operated accounts (online handover, organizers' own ring accounts and controller-opened accounts), about 18% of mules instead of 70% (12% before controller-opened accounts are counted). A tenure starts at the first attempted ring payment minus a lead (median 1 day, at most 14 days) and is built from attempted payments. A controller who logs in and never pays out is not generated, since no research gives a rate. |
 | Usage edges | Every observed device and IP, carrier networks, public terminals and hotspots included, gets usage edges at the declared coverage; `read_hubs` marks the big ones as crowds. |
 | Link tenures built from uses | Every `Party_Uses_Device` and `Party_Uses_IP` tenure that PhantomLedger builds from uses (observed payments, or a ring's attempted payments), ring and ordinary alike, starts a new tenure wherever two consecutive uses are more than 21 days apart and ends at most one day after its last use. Tenures are derived from every simulated use, burn-in included, never from exported rows only. Every other tenure ends at a real event of its own (a new phone, a move, a closure). A world check proves it on every party link table. Without it a link's end is set by uses after t: a hotspot used on 1 January and 1 June would read current on 1 March. |
 | Onward money | A declared 0.6 of mules' onward value goes to accounts at other banks, following RUSI's direction. The share of victims at the same bank is pinned in the dossier. |
 | Identification | The mechanism of [Identification](#identification-as-phantomledger-defines-it), written as `pu_label` only. Identification closes nothing, and it sees past the last scored Monday (see [Identification horizon](#identification-horizon)). |
-| Customer lifecycle | One research-backed change: relationship starts backdated years before the data by the customer's age (the owner: a world of 2030 to 2031 must not have its first account opened in 2030); each account's own opening date; small-business and other secondary accounts; device, IP and token starts; ordinary openings and closures all year; mule account origins; no exported row before its account opens. Small-business accounts are deposit accounts (`account_type` `deposit`), so a business account used as a mule is scored; no new account type is added. |
+| Customer lifecycle | One research-backed change: relationship starts backdated years before the data by the customer's age (the owner: a world of 2030 to 2031 must not have its first account opened in 2030); each account's own opening date; small-business and other secondary accounts; device, IP and token starts; ordinary openings and closures all year; mule account origins; no exported row before its account opens. No date before 1970 (the owner: "we do not need data before 1970"): backdated relationship, account and link starts are drawn from their distributions truncated at 1970-01-02 by redrawing, never by clamping, so nothing piles up at 1970 and very few of a reported world's 300,000 people get starts that early. Small-business accounts are deposit accounts (`account_type` `deposit`), so a business account used as a mule is scored; no new account type is added. |
 | Lifecycle numbers | New to the bank: at least 0.033 of customers a year, a floor (NAFBS 2024: 3.3% of US adults have held their primary account under a year; 0.014 at 60 and over), by age, so that about 0.8% or more of customers joined in the last 90 days on any date. Closures from ordinary churn and death only: charge-off about 0.06 of accounts a year, switch-outs 0.02 to 0.03 a year. Small-business accounts for 0.045 of adults (adults only), mostly owners without employees, with owner transfers in both directions. One mule account per customer at one bank, a second with chance 0.02 (UK 2025: 1.02 accounts per offboarded customer). |
 | Mule origins | Three: the mule's own established account; an account the person opens for the purpose; and, new, accounts a controller opens under a stolen or synthetic identity (about 0.10 of mule accounts, declared, below Experian's bound of about 0.23), run from the controller's devices, with legitimate look-alikes (new, quiet, single-device customers) so that "new and quiet" is not a mule-only marker. |
 | Device and IP link lives | The phone keeps its 40 months; a web device is keyed on a cookie or login token (its life uncited); home IPs are a two-class mixture of about 0.4 static lines and spells of one to four months, so 30% to 40% of home-IP links start inside a 90-day lookback. Legitimate new links must be common, or "new link" becomes mule-only. |
 | Export | The contract under [The graph](#the-graph). Payment ids are exported as BLAKE2b pseudonyms like entity ids, not row numbers, and within one second their order is independent of the laundering flag and the ring. No self-payments. Links made at sign-up start exactly at `joined_ms` (PhantomLedger's own check; MulePatternLearner's [known-start rule](#time) no longer depends on it). A NaN amount fails the export. |
-| Identity and gate records | For every world, two TOML files named by its seed, in a folder MulePatternLearner's `.env` names: an identity file (the world's seed, size, export start, the PhantomLedger commit, a clean-tree flag, and exactly the fields of `read_world` computed from the 22 exported tables) and a gate record (the same identity fields; for every gate, its entry id, kind (code or world) and pass, never its value or bound; the code-gate results of that commit). Values and bounds stay in PhantomLedger's run summary, which no MulePatternLearner code opens. See [Gates](#gates). |
+| Identity and gate records | For every world, two TOML files named by its seed, in a folder MulePatternLearner's `.env` names: an identity file (the world's seed, size, export start, the PhantomLedger commit, a clean-tree flag, and exactly the fields of `read_world` computed from the 22 exported tables) and a gate record (the same identity fields; for every gate, its entry id, kind (code or world) and pass, never its value or bound; the code-gate results of that commit). Values and bounds stay in PhantomLedger's run summary, which no MulePatternLearner code opens. The loader refuses a world without both records. See [Gates](#gates). |
 | Clocks | The Clocks step (no rows stamped at second 0, no same-second couplings, victim, mule and organizer clocks like their holders' own, legitimate night ATM use, the account-takeover clock, legitimate rails on every day of the month) must pass before a reported run, because durations measured to t carry the clock of their event. |
 | Rails | Card cash-outs on rail `card` and own-account moves on rail `internal`, so that the `unknown` rail is honest. |
 
 Data for PhantomLedger's research: the Federal Reserve's 2025 Diary of Consumer Payment Choice
 (`dcpc-2025-public-csv.zip`, 2.9 MB, downloaded with the owner's approval into the research
 folder's `data/dcpc_2025/`) anchors the hour-of-day profiles. The RBIH mule data on Kaggle is
-optional and the owner's to download. The NAFBS and SCF tenure files are to be located, with
-file, source and size shown to the owner before any download.
+optional and the owner's to download. For the lifecycle tenure fit, the NAFBS 2024 public-use
+file and its data dictionary, and the SCF 2025 full public data and its codebook, were
+downloaded with the owner's approval into the research folder's `data/` (`nafbs_2024/`,
+`nafbs_2024_dictionary/`, `scf_2025/`, `scf_2025_codebook/`), and are read only as data.
 
 **Expected label counts.** Ring births are calibrated so identified mule customers come to
 about 25 per 10,000 customers per scored year: about 75 in a 30,000-person world and 750 in a
@@ -153,14 +156,19 @@ only when, for each of the rotation's three worlds:
   query versions and settings.
 
 Otherwise its results are marked development only, as on development worlds. The operator
-runs `mule audit` on each world before `mule train`; no training code reads its records.
-Whether a failed record may also stop `mule train` early, as a stated exception to the rule
-above, is pending the owner.
+runs `mule audit` on each world before `mule train`, and no training code reads its records.
+The one stated exception to the rule above, agreed by the owner on 2026-10-17: a failed audit
+may stop `mule train`. Before any training code runs, the `mule train` command reads the pass
+or fail of each audit record of its rotation's worlds, and nothing else in them, and stops
+when a failure is one that stops the run: on a reported world any failed check (see the Same
+rule for all guard), and on a development world a failed label check or a failed feature
+audit. Training code itself still imports nothing of evaluation.
 
 **Ceilings.** A lift or distance gate has a ceiling declared before any development world is
 generated: from research where it exists (the newness lift: 10, the top of the 5 to 10 times
-band found in reality), and otherwise a declared realistic bound the owner sets. A
-development world must meet a ceiling, never set it. Each gate belongs to one repository: the
+band found in reality), and otherwise a declared bound, which the owner set on 2026-10-17 at
+the value PhantomLedger's plan suggests; every such ceiling is gated. A development world must
+meet a ceiling, never set it. Each gate belongs to one repository: the
 lift gates on generator behaviour are PhantomLedger's world checks, defined once in
 [the features](features.md#gates-the-features-add); the clock probe, the feature audit and the
 label checks are MulePatternLearner's.
@@ -174,13 +182,13 @@ every table and every column of them. One UTC millisecond clock, 0 for none. Eac
 from `valid_from_ms` until `valid_to_ms` (0 while open), and `DISCRIMINATOR(valid_from_ms)`
 keeps repeated links of one pair. Every event edge repeats its payment's `event_ts_ms`.
 
-Every time is UINT milliseconds, as in all three repositories' plans, so every exported date
-must be after 1970-01-01 00:00 UTC. Backdated relationship starts reach up to 63 years before
-the data, and the Zelle model puts the export start in 2019 or later, so today a customer could
-have joined in the 1950s. Pending the owner, one of three fixes applies in all three
-repositories: an export start late enough, backdated starts capped at 1970-01-02, or every
-`_ms` attribute INT. Until then PhantomLedger's exporter stops on such a time and the loader
-refuses a start at or below 0, so such a world cannot load.
+Every time stays UINT milliseconds in all three repositories (the owner: "unsigned integer is
+fine"), so every exported date must be after 1970-01-01 00:00 UTC, and no data before 1970 is
+needed. Backdated relationship starts reach up to 63 years before the data, so PhantomLedger
+draws every backdated relationship, account and link start from its distribution truncated at
+1970-01-02 by redrawing, never by clamping (see
+[What PhantomLedger must provide](#what-phantomledger-must-provide)). PhantomLedger's exporter
+still stops on an earlier time, and the loader still refuses one, so such a world cannot load.
 
 | Table | Columns | Read by |
 |---|---|---|
@@ -227,8 +235,8 @@ enrolment is backdated with the accounts. Token re-registration is in
 MulePatternLearner's `gsql/schema/schema.gsql` is the master copy of the DDL, for TigerGraph
 4.2.5. Three copies exist and are kept identical by tests: the master; the loader's
 `gsql/mule_temporal/schema.gsql`, a byte copy pinned to a MulePatternLearner commit; and
-PhantomLedger's `schemas/mule_temporal.gsql`, which its own tests compare with the master at
-the same pin (or which PhantomLedger deletes, its choice). In the master:
+PhantomLedger's `schemas/mule_temporal.gsql`, also a byte copy, which its own tests compare
+with the master at the same pin. In the master:
 
 - each type's attributes are in the order of its contract table's columns;
 - every attribute's default is written out: 0 for times and `amount`, false for
@@ -250,6 +258,17 @@ accounts; an account with two owners or two ownership tenures; label columns out
 convention above; payment ids whose order follows event time. It reports, without refusing,
 self-payments and links that start within a day after a join but not at it, since it cannot
 tell a sign-up link from a later one; PhantomLedger's own world checks hold both to zero.
+
+After loading, `mule-load push` verifies the graph against the export, and a world that fails
+is not ready for MulePatternLearner:
+
+- **Every attribute is filled from the export,** none left at a default: every column's counts
+  and fingerprints in the graph, read in both edge directions, equal the export's, so no
+  attribute in the schema was left unwritten and no exported column was left out.
+- **The graph holds exactly the 455 exported days:** every payment's `event_ts_ms` lies in
+  `[export start, export start + 455 days)`, with payments on the first and on the last of
+  those days. The owner: "this is fine as long as we have 365 + 90 days worth of data in
+  TigerGraph, ensure that this is the case with the loader".
 
 ### Who may read what
 
@@ -391,17 +410,16 @@ needs the truth, so `mule audit` reports it, with the share by onset month that 
 
 ### Identification horizon
 
-Identification cannot see past the end of PhantomLedger's simulation, so mules active in the
-last weeks of the export have fewer victim reports and traces in view and are identified less
-often. Every world shares one calendar, so the positive rate would fall at the same point of
-every training and selection year, and seasonal spending could tell the model when that is.
-Pending the owner, PhantomLedger either simulates an unexported tail after the export, as it
-does the burn-in, in which cases rooted in exported payments can still be reported and
-traced; or MulePatternLearner leaves out of training and selection the Mondays within a
-declared horizon of the export's end. Either way `mule audit` gates it: the identified share
-of true mules by onset month stays flat across the scored year, each month within its
-binomial band around the pooled share. A world that fails it gives development-only
-results.
+Identification cannot see past the end of PhantomLedger's simulation, so without more days
+mules active in the last weeks of the export would have fewer victim reports and traces in
+view and be identified less often. Every world shares one calendar, so the positive rate would
+fall at the same point of every training and selection year, and seasonal spending could tell
+the model when that is. So PhantomLedger simulates a 90-day label tail after the export, not
+exported, as it does the burn-in before it: cases rooted in exported payments can still be
+reported and traced there, and identification sees whole mule lives. `mule audit` checks it:
+the identified share of true mules by onset month stays flat across the scored year, each
+month within its binomial band around the pooled share. A world that fails it gives
+development-only results.
 
 ### Positives, dropped Mondays and the activity period
 
@@ -685,8 +703,8 @@ running level and still holds `max(0, min(lowest level since k, L + c) - L)` cen
 of that minimum inside its band is a piece that left at that outflow's time. A global OrAccum
 records a heap that did not iterate in order, and the query then stops with a status. A port
 of this sketch matched full-history last-in, first-out matching in 20,000 random worlds with no
-mismatch (the GSQL dwell research and its check, in the owner's research folder named in the
-introduction). The Python reference is an independent explicit stack of lots written from the
+mismatch ([the GSQL dwell research and its check](research/gsql_dwell_2026-10-17.md)). The
+Python reference is an independent explicit stack of lots written from the
 specification. The walk is compiled and verified on a live TigerGraph; its worst account (an
 account later emptied by a sweep, up to about 32,896 steps; a retaining mule about n + m) is
 measured by `mule bench`.
@@ -809,8 +827,8 @@ customer, most recently active first. The full composition of an example's subgr
 node and since when, as enrolment, owner-enrolment and seen edges with customer, device and IP
 rows.
 
-**Mule behaviour.** Controller-operated accounts, about 12% of mules (about 18% with
-controller-opened accounts, pending the owner), hold the ring's device
+**Mule behaviour.** Controller-operated accounts, about 18% of mules with controller-opened
+accounts counted, hold the ring's device
 and IP from shortly before the first ring payment (median lead 1 day). A ring device nobody
 registered still shows on members' payments: a holder lacks it on file with chance 0.28 for a
 device and 0.39 for an IP. Controller-opened accounts under stolen or synthetic identities run
@@ -841,7 +859,8 @@ Hop-2 accounts and hub accounts get none, nor does a co-user's account for its o
 Those devices and IPs would sit three hops from the scored account, beyond two layers: their
 only trace on the score would be a count in those accounts' degree columns, at the cost of a
 fetch per hop-2 account. Every subgraph is built this way, so the rule is the same for all.
-The owner asked for every subgraph account; this exception is put to him.
+The owner asked for every subgraph account, and on 2026-10-17 agreed to this rule:
+owner-enrolment edges for the scored account and its direct neighbours only.
 
 **Link ends.** `active`, `since_end` and `held`, agreed earlier in the session, are dropped,
 and the "now" counts become 30-day counts: PhantomLedger sets the end of a tenure built from
@@ -897,10 +916,11 @@ Candidates of each round are kept newest first, ties by customer id, until the c
 64 members. A sharing candidate's time is the latest, over the shared (node, member) pairs, of
 the later of the two sharing starts; a payment candidate's time is its latest such payment. A
 member's accounts are those that exist at t with a visible ownership link, open or closed,
-leaving out account hubs.
+leaving out account hubs. The payment round adds members, never links: `density` and
+`new_link_share_30d` count sharing links only (the owner, 2026-10-17).
 
 **The payment round** was added because the device and IP rounds see a ring only through its
-endpoints, which about 82% to 88% of mules do not hold; for them the block would read like a customer
+endpoints, which about 82% of mules do not hold; for them the block would read like a customer
 who shares nothing, and a large ring's device can become a crowd. The owner: "just ensure
 that it is a meaningful feature". So the block is checked on development worlds by the
 [feature audit](#the-feature-audit) (a column with no separation is researched or dropped),
@@ -934,12 +954,14 @@ crowds would merge strangers. The demo query `demo_account_web` also reads `is_m
 - Work counters are printed only because `mule bench` reads them; the reference graph does not
   mirror them and parity ignores them.
 - Each query is checked offline by `gsql-lsp check` against `gsql/schema/` as it is written,
-  before the Python above it is built. The workspace keeps the old demo schema until the
-  agreed wipe, which comes only once all three repositories are built, so the live compile and
-  the live B1 verification happen in [the 5,000-person test](#the-5000-person-test-on-tigergraph-cloud).
-  None has been compiled on a server yet, and the idioms the research left unconfirmed on 4.2.5
-  (heap iteration order, a parameter as heap capacity, local list functions) are a risk until
-  then. An earlier wipe for an early compile probe is pending the owner.
+  before the Python above it is built, and compiled on the live server as it is written. The
+  owner allowed the MulePatternLearner workspace to be wiped early for this, once the new
+  schema and the loader's wipe step land (see [Order of work](#order-of-work)), so no query
+  waits for the end to meet the server. None has been compiled on a server yet, and the idioms
+  the research left unconfirmed on 4.2.5 (heap iteration order, a parameter as heap capacity,
+  local list functions) are a risk until each query's own compile; B1 also checks heap order
+  at run time. Runs on loaded data, the live B1 verification and parity come in
+  [the 5,000-person test](#the-5000-person-test-on-tigergraph-cloud).
 - The fetch executor runs only an allowlist: `list_accounts`, `read_labels`, `read_hubs`,
   `read_world` and B1 to B6. It refuses `read_answer_key`, the loader's `verify_load` and
   anything else installed in the graph. `profile_hubs` runs only from `mule bench`,
@@ -992,7 +1014,7 @@ features](features.md) cites them by name for every feature.
 | Keys chosen by their reader | Training, selection and scoring read only the cache keys they computed themselves, never the cache's index, so rows fetched for a test-role list chosen by the truth never steer them. | selection on a world after a test-role fallback fetch of it, with the answer key erased, gives byte-identical inputs |
 | Test worlds stay unseen | Nothing learned from a reported world's answer key changes the next reported result on the same worlds: missed mules are investigated on development worlds, a change prompted by a reported run needs new reported worlds from new seeds, and the number of seeds for every ranker is fixed at five before any result is seen. | the manifest records the worlds whose reports informed each change; the seed count is in the contract lock |
 | No label conditioning | Graph-structure features are computed identically for every account whatever its label. | erasing the labels (above) |
-| Evaluation never feeds back | Time to first flag and every other evaluation output never become features (the owner: "dont sent this time to the model"). No query, data or training code imports evaluation, and nothing outside evaluation reads evaluation's output: `mule audit`'s pass records are read only by `mule evaluate`. | import contracts (the XGBoost package included); the path contract above |
+| Evaluation never feeds back | Time to first flag and every other evaluation output never become features (the owner: "dont sent this time to the model"). No query, data or training code imports evaluation, and nothing outside evaluation reads evaluation's output: `mule audit`'s pass records are read by `mule evaluate`, and, for pass or fail only, by the `mule train` command before any training code runs (the one exception, see [Gates](#gates)). | import contracts (the XGBoost package included); the path contract above |
 | Gates | A value is only as honest as PhantomLedger's behaviour. | `mule evaluate` refuses a reported result unless every gate mapped to a feature passed (see [Gates](#gates)) |
 
 **Other tests.** Every query ignores a self-payment; two payment-less accounts, one sharing a
@@ -1117,7 +1139,7 @@ what TigerGraph gives the GNN.
   straddles zero is reported as inconclusive, never answered with more seeds.
 - What to expect: a model without message passing may come close to the GNN once it is given
   counts; plan for a close result. With a ring device
-  on about 12% to 18% of mules, the device and IP ablation may move little; the share of
+  on about 18% of mules, the device and IP ablation may move little; the share of
   positives with any ring-device link is reported beside it. Fix PhantomLedger's shortcuts
   first, since a shortcut favours the simple models.
 
@@ -1171,7 +1193,13 @@ removes known cases:
   account with `pu_label` 1 inside the mule's own fetched subgraph at that t, in bins 1, 2 and
   "not within two hops" (an account node counts; customer, device and IP nodes are steps on
   the way, so a shared device puts two mule accounts two edges apart). Evaluation computes it
-  in Python from the cached edge lists: it is an evaluation output, never a model input.
+  in Python from the cached edge lists: it is an evaluation output, never a model input;
+- criminal non-mules (the owner, 2026-10-17): the accounts of the world's other criminal
+  flows, structuring funnels and the receivers of organizers' own money. The mule use case
+  labels them `is_mule` 0, since a mule moves victims' money, but they can look like mules, so
+  they are their own group, ranked like the others against the ordinary non-mules, and the
+  report shows how often the model flags them. No column of the export contract marks them
+  yet; how evaluation tells them apart is [pending the owner](#pending-the-owner).
 
 ### Uncertainty
 
@@ -1188,8 +1216,8 @@ investigate why. maybe theres a bug, or we are missing some features that need t
 
 - **Who is in it.** Every true mule hidden from the model that did not score high: one never
   flagged in the top 5% on any of its active Mondays (**missed**), and one whose median rank
-  over its active Mondays is outside the top 5% though it was flagged on some (**weak**). Both
-  thresholds are pending the owner.
+  over its active Mondays is outside the top 5% though it was flagged on some (**weak**). The
+  owner set both thresholds on 2026-10-17.
 - **What it holds.** For each, its decoded feature rows on each active Monday, its subgraph
   (nodes and edges with their fields), its group, its ring, and how each ring-mate scored and
   whether it was identified.
@@ -1216,8 +1244,9 @@ audited.
   active true-mule account-Mondays and in which true mules are more than half (declared).
 - A stopped run resumes only once the cause is fixed, or the owner accepts it on the evidence
   as real behaviour with real look-alikes. `mule evaluate` refuses a reported result until a
-  development audit of the same query versions and settings passes. The 0.95 and near-pure
-  thresholds are pending the owner.
+  development audit of the same query versions and settings passes. The owner set the 0.95 and
+  near-pure thresholds on 2026-10-17, and a failed audit stops `mule train` (see
+  [Gates](#gates)).
 
 On development worlds the same command also checks that no positive is an account hub, that
 the share of ring devices and IPs that are leaves on their ring's active Mondays is near 0,
@@ -1240,15 +1269,17 @@ score with recall of all mules per prior and epoch, never used to select.
 MulePatternLearner, one command per repository for generation and loading. TigerGraph is the
 MulePatternLearner workspace on TigerGraph Cloud that the repository's `.env` points to
 (host, graph name `Mule_Pattern_Learner`, secret); `TransactionFraud_GNN` lives in a different
-workspace and is never touched. The 5,000-person test runs from this laptop; the
-300,000-person worlds are generated and loaded from the NVIDIA training machine, which also
-fetches and trains.
+workspace and is never touched. The 5,000-person pipeline runs from this laptop, all of it:
+PhantomLedger, the loader and MulePatternLearner. The 300,000-person worlds are generated and
+loaded from the NVIDIA training machine, which also fetches and trains.
 
 1. **Code** reaches the training machine by git: pushed to `main` after the owner's code
    review of all three repositories, then pulled. It carries the parity record of the
-   5,000-person test (`gsql/parity.toml`), so the training machine needs no 5,000-person
-   world of its own; whether it reruns parity anyway is pending the owner.
-2. **`mule install`** installs the queries once; `mule-load clear` keeps them between worlds.
+   5,000-person test (`gsql/parity.toml`, committed with the code), so the training machine
+   needs no 5,000-person world of its own and runs no parity; its fetch refuses any query
+   version the record does not cover.
+2. **`mule install`** installs the queries once; `mule-load clear` keeps the schema and the
+   queries between worlds.
 3. **For each world, one at a time,** in the one graph:
    1. PhantomLedger generates it, writing its identity file and gate record;
    2. `mule-load push` loads and verifies it (the loader pins pyTigerGraph below 2 while
@@ -1260,7 +1291,9 @@ fetches and trains.
       builds and fetches a test-role fallback list if one is configured, runs its checks and
       writes pass records;
    6. `mule-load clear` empties the graph.
-4. **`mule train`** trains from the cache and never queries TigerGraph.
+4. **`mule train`** trains from the cache and never queries TigerGraph. It first reads the pass
+   or fail of the audit records, and stops on a failure that stops the run (see
+   [Gates](#gates)).
 5. **`mule evaluate`** scores the test world from the cache, reads the evaluation store and the
    pass records, and writes the results; it marks them development only unless every gate
    passed (see [Gates](#gates)).
@@ -1317,7 +1350,9 @@ NVIDIA numbers, which came from a pipeline with known leaks.
 
 ### The demo
 
-When the time comes, the TigerGraph workspace is wiped. Only the two demo queries that show an
+The TigerGraph workspace is wiped early, once the new schema and the loader's wipe step land
+(see [Order of work](#order-of-work)), and the old demo schema and queries go with it. Only the
+two demo queries that show an
 account's network and its timeline (`gsql/demo/demo_account_web.gsql` and
 `demo_account_timeline.gsql`, the owner's untracked files) are ported to the new schema, and
 the demos are redone. They read the answer key and are never a training input.
@@ -1325,19 +1360,22 @@ the demos are redone. They read the answer key and are never a training input.
 ## The 5,000-person test on TigerGraph Cloud
 
 The MulePatternLearner workspace is its own TigerGraph Cloud workspace, and the repository's
-`.env` points only to it. Once PhantomLedger, the loader and MulePatternLearner are built:
+`.env` points only to it. The whole pipeline of this test runs from this laptop. Once
+PhantomLedger, the loader and MulePatternLearner are built:
 
 1. Run `CLEAR GRAPH STORE -HARD` and drop every query, loading job and schema object in that
-   workspace (`mule-load wipe`).
+   workspace (`mule-load wipe`). The workspace was already wiped once, early, so that each
+   query could be compiled on the live server as it was written; this wipe starts the test
+   from an empty workspace.
 2. Generate the 5,000-person world with PhantomLedger and load it with `tf_gnn_loader_v2`
    (one command per repository), using the same graph name and secret; the loader creates
-   the schema.
-3. Install every query (the first live compile of each), run every query, the live B1
-   verification and `mule parity` against the reference graph, and commit the parity record
-   `gsql/parity.toml` it writes.
+   the schema and verifies the load, the 455 exported days and every attribute included.
+3. Install every query (each already compiled on the live server at its own step), run every
+   query, the live B1 verification and `mule parity` against the reference graph, and commit
+   the parity record `gsql/parity.toml` it writes.
 4. Run `CLEAR GRAPH STORE -HARD` again and tell the owner.
 
-If after the wipe the `.env` secret no longer authenticates, stop and ask the owner. The owner
+If after either wipe the `.env` secret no longer authenticates, stop and ask the owner. The owner
 then generates and loads the 300,000-person worlds on the NVIDIA machine and trains there,
 after the code review.
 
@@ -1352,7 +1390,7 @@ Commands take no options: worlds, roles, dates and settings live in config.
 | `mule prepare` | data code: reads `read_world` and matches the configured world by its identity file; checks the scored Mondays and the lookback, the value sets and the labels from `read_labels`; reads the populations; writes the training examples and weights; reports counts, the identified active share and the weight balance per Monday |
 | `mule fetch` | fills the cache for every example the configured roles of the loaded world need: the training draw, and every scorable account of every Monday of a selection or test role |
 | `mule audit` | evaluation code, on the loaded world: reads the answer key into the evaluation store; checks PhantomLedger's gate record against the world's identity; builds and fetches a test-role fallback list if configured; runs the label checks, the clock probe and the identified share by onset month; on development worlds also the feature audit and the hub, leaf and card-spending checks; writes pass records to the evaluation store |
-| `mule train` | trains the GNN over the prior grid and five seeds with selection after each epoch, the ablations and the two XGBoost comparisons; reads no gate or audit record |
+| `mule train` | first reads the pass or fail of the audit records of its rotation's worlds, and nothing else of them, and stops on a failure that stops the run (see [Gates](#gates)); then trains the GNN over the prior grid and five seeds with selection after each epoch, the ablations and the two XGBoost comparisons; training code reads no gate or audit record |
 | `mule evaluate` | scores the test world and writes the metrics, groups, uncertainty, missed-mule report and identification bias; marks the results development only unless every gate passed |
 | `mule score` | scores the accounts and dates set in config with the model of the best-selection seed |
 | `mule bench` | measures cost on the loaded world and writes `results/bench/` |
@@ -1440,35 +1478,24 @@ column because it checks queries and builds no example, batch or model. The READ
      metrics are kept. The revert brings back `write_split.gsql` and the 27-table
      `loading.gsql`, so the first commit after it is the new schema, which removes both; then
      module by module against the reference graph and the export contract.
-3. The 5,000-person test on TigerGraph Cloud.
+   - The early wipe, once MulePatternLearner's schema commit and the loader's wipe step land:
+     `mule-load wipe` in the MulePatternLearner workspace, then `mule-load install`, which
+     creates the new schema on the empty graph. From then on each query is compiled on the
+     live server as it is written. If after the wipe the `.env` secret no longer
+     authenticates, stop and ask the owner.
+3. The 5,000-person test on TigerGraph Cloud, run from this laptop.
 4. The owner reviews all three repositories; then the push to `main`.
 
 ## Pending the owner
 
 Choices the reviews found unmade. Each has the interim rule this design states, and none is
-built past that rule until the owner answers.
+built past that rule until the owner answers. The owner settled every other choice listed here
+on 2026-10-17, and each is written into its section above.
 
 | Choice | Interim rule in this design |
 |---|---|
-| The burn-in's length: 730 or 820 simulated days | MulePatternLearner reads only the 455 exported days, so nothing waits on it |
-| PhantomLedger's representative start for rings | the stationarity gates must pass either way |
-| The ring-device share: 12% or about 18% with controller-opened accounts | both figures are stated |
-| Times before 1970: a later calendar, a cap at 1970-01-02, or INT times in all three repositories | UINT times; a world with an earlier time cannot load |
-| Whether a failed audit record may stop `mule train`, as an exception to "nothing reads evaluation's output back" | only `mule evaluate` reads the records |
-| An earlier workspace wipe for a live compile probe per query | offline `gsql-lsp` checks until the 5,000-person test |
-| Degree columns counted in Python, or printed by the queries | counted in Python when the batch is built |
-| The missed and weak thresholds of the missed-mule report | never in the top 5% on an active Monday; median rank outside the top 5% |
-| The feature audit's thresholds: ROC AUC 0.95 and the near-pure region | as stated in [The feature audit](#the-feature-audit) |
-| The clock probe's bound of 0.55 | as stated in the Clock guard |
-| Ceilings of lift gates no research sets (same-owner move, recent shared link, external shares, origin C look-alikes) | no reported result until the owner declares them |
-| The identification horizon: an unexported tail, or Mondays left out near the export's end | the gate on the identified share by onset month |
-| Owner-enrolment edges only for accounts whose devices are within two hops | as stated in B5 |
-| The parity record committed with the code instead of parity on the training machine | the committed record |
-| Where the GSQL dwell research is committed | the owner's research folder |
-| Whether the community's payment round counts as links in `density` and `new_link_share_30d` | sharing links only |
-| XGBoost: default settings with rounds chosen on the selection world, or more tuning | default settings |
-| Residual shortcuts with no gate: gated or accepted as ungated risks | no reported result until each is settled |
 | The internal and external new-payer split as a declared cue until the on-us share is sourced | kept, with its lift gates |
+| How evaluation tells criminal non-mules (structuring funnels, receivers of organizers' own money) apart, since no column of the export contract marks them | the group is not reported until the owner answers; every other group is |
 
 ## Limitations
 
@@ -1486,7 +1513,7 @@ built past that rule until the owner answers.
   reached are not.
 - `mule_ring_id` is the ring of the first landing payment, and about 6% of mule persons serve a
   second ring.
-- A ring device appears on only about 12% to 18% of mules, so shared identity is a strong signal for a
+- A ring device appears on only about 18% of mules, so shared identity is a strong signal for a
   minority, and money flow carries the rest.
 - Early warning is conditional on PhantomLedger's declared lead law.
 - Dwell near t is censored: an inflow less than w before t shows only part of its curve.
@@ -1505,5 +1532,7 @@ built past that rule until the owner answers.
   a known start, so a new customer's devices and IPs never read new; the rule costs the model
   that signal for everyone alike.
 - Shortcuts the dossier noted but has not researched (listed in
-  [the features](features.md#generator-gates-each-feature-depends-on)) have no gate yet; a
-  reported result needs each gated or accepted by the owner as an ungated risk.
+  [the features](features.md#generator-gates-each-feature-depends-on)) each get a world check,
+  but its ceiling is declared rather than researched, so it bounds a cue without showing that
+  the cue is as strong as in reality. No reported result passes until every such check
+  passes.

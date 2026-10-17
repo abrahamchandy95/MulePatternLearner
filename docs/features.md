@@ -175,8 +175,8 @@ ending at the node in the example's subgraph)`. They are counted when the batch 
 from the edge lists the queries returned and after any ablation switch, because they describe
 the batch's own structure rather than a value of the graph; the same caps and rules build every
 subgraph, so they mean the same for every example. This is the one count Python makes, an
-exception to the design's standing rule that is put to the owner; the alternative is for B4
-and B5 to print each node's counts per relation, with the ablation switches recounting.
+exception to the design's standing rule that the owner agreed to on 2026-10-17, rather than
+B4 and B5 printing each node's counts per relation with the ablation switches recounting.
 
 | Node | Relations counted (edges arriving) | Width |
 |---|---|---|
@@ -260,8 +260,9 @@ Two relations carry these fields:
   and every expanded hop-1 account; and for a co-user's account, its customer's links to s's
   nodes only, which puts it two hops from s. Caps are counted per customer, so every account
   of one customer has the same set. Hop-2 accounts and hub accounts get none: their nodes
-  would sit three hops from s, beyond two layers, and the owner's wording "every subgraph
-  account" is pending his confirmation of this exception.
+  would sit three hops from s, beyond two layers. The owner asked for "every subgraph
+  account" and agreed on 2026-10-17 to owner-enrolment edges for the scored account and its
+  direct neighbours only.
 
 | Attr | Feature | Definition as of t | Temporal | Kind | Encoding | Width | Leak guard |
 |---|---|---|---|---|---|---|---|
@@ -424,6 +425,13 @@ gate on that world or on its gate world, as PhantomLedger's gate record for the 
 (see the design's [Gates](design.md#gates)). Entry ids are those of the shortcut dossier,
 `generator_shortcuts_2026-10-17.md`.
 
+The tables name each cue, not its fix. PhantomLedger fixes a cue by making the behaviour's
+implementation realistic, never by deleting the behaviour (the owner, 2026-10-17; see the
+design's [Standing rules](design.md#standing-rules)). So the camouflage cover payments of
+S-MEM-1 stay and go to the holder's own contacts, billers and merchants on the holder's own
+clock, and the ring budget cut of S-LIFE-7 gives way to the fixed declared ring rate, so every
+planned ring payment is made.
+
 **Timing and clocks** (every one reaches the durations measured to t through the clock):
 
 | Entry | Cue | Features it reaches |
@@ -503,7 +511,7 @@ gate on that world or on its gate world, as PhantomLedger's gate record for the 
 | Entry | Cue | Features it reaches |
 |---|---|---|
 | S-LIFE-1 | no history before the window | Known starts, `mule prepare`'s lookback check |
-| S-LIFE-2 | laundering-free warm-up (settled: a burn-in, its length pending the owner) | positives per Monday, the label rate: the burn-in and the stationarity gates (with the representative start, pending the owner) keep the weekly active-ring count flat |
+| S-LIFE-2 | laundering-free warm-up (settled: 275 unexported burn-in days with laundering running, rings starting mid-life at the burn-in's start) | positives per Monday, the label rate: the burn-in, the representative start and the stationarity gates keep the weekly active-ring count flat |
 | S-LIFE-3 | ring activity anchored to the window's edges | `age`, `pair_age`, positives per Monday |
 | S-LIFE-4 | no purpose-opened mule accounts, and short ordinary dormancy (7 to 45 days) | `accounts_owned`, newness from counts (`in_90d` against `in_30d`), new payers, `pair_age`, `since_first_use` |
 | S-LIFE-5 | closure only at death, almost no arrivals | `accounts_owned`, the population, the newness lift |
@@ -513,12 +521,12 @@ gate on that world or on its gate world, as PhantomLedger's gate record for the 
 | S-LIFE-9 | rings never form or end | `new_link_share_30d`, `since_start` of ring links, positives per Monday |
 | S-IDN-1 to S-IDN-5 | label completeness, dates, range, roles, masking | labels and evaluation only; S-IDN-2 settled (identification closes nothing) |
 
-**Shortcuts noted but not yet researched**, which reach features. None has a gate yet, so
-until each is given a world check with a stated ceiling, or the owner accepts it as an
-ungated risk, no reported result passes. The checks proposed: an hour distance of ATO drain
-pushes against legitimate rows under 0.05, as for impostor pushes; a lift of shared community
-membership across rings for multi-ring reuse; and, for origin C, a lift gate in the table
-after this one.
+**Shortcuts noted but not yet researched**, which reach features. The owner decided on
+2026-10-17 that each gets a PhantomLedger world check, with its ceiling declared at the value
+PhantomLedger's plan suggests; until its check is in the gate record and passes, no reported
+result passes. The checks proposed: an hour distance of ATO drain pushes against legitimate
+rows under 0.05, as for impostor pushes; a lift of shared community membership across rings
+for multi-ring reuse; and, for origin C, a lift gate in the table after this one.
 
 | Residual | Features it reaches |
 |---|---|
@@ -528,16 +536,17 @@ after this one.
 | multi-ring reuse drawn uniformly | community block |
 | legitimate hour profiles uncited | every duration measured to t |
 | the consumer cash-deposit cap | `amount` with rail cash |
-| no legitimate second jobs | `new_external_payers_*` |
+| no legitimate second jobs (PhantomLedger adds them at the rate the BLS measures) | `new_external_payers_*` |
 | the attacker clock of ATO drains | `age` |
 
 ## Gates the features add
 
 Each gate is a check on every world, with one owner and one definition here. A ceiling is
 declared before any development world is generated, from research where it exists and
-otherwise by the owner (see the design's [Gates](design.md#gates)); a development world must
-meet it, never set it. A lift compares P(true mule | the cue) with P(true mule) among scored
-account-Mondays.
+otherwise at the value PhantomLedger's plan suggests in its section "Lifts, distances and
+ceilings", as the owner decided on 2026-10-17 (see the design's [Gates](design.md#gates)); a
+development world must meet it, never set it. A lift compares P(true mule | the cue) with
+P(true mule) among scored account-Mondays.
 
 **PhantomLedger's world checks**, reported as pass or fail in its gate record:
 
@@ -547,20 +556,21 @@ account-Mondays.
 | no exported payment comes before its accounts open | invariant | every account node exists at t |
 | payment ids are pseudonyms whose order does not follow event time; among payments sharing a second, the chance that a laundering row's id sorts before a legitimate row's lies within its binomial band of 0.5 | invariant | subgraph cap ties carry no class |
 | no payment between two external accounts | invariant | a bank cannot see them |
-| no exported time at or before 1970-01-01 00:00 UTC, while times stay UINT (pending the owner) | invariant | the times are UINT milliseconds, 0 for none |
+| no exported time before 1970-01-02 00:00 UTC: backdated relationship, account and link starts are drawn from their distributions truncated there by redrawing, never by clamping | invariant | the times are UINT milliseconds, 0 for none |
 | the lift of "no payment in the first 60 days of the lookback, some after", and the share of customers new to the bank within a year | the lift at most 10, the top of the 5 to 10 times band found in reality; the share at least 0.033 | account newness rebuilt from behaviour must be as strong as in reality, not more |
-| the lift of "an internal move to an account of the same owner within 1 hour of a non-payroll credit", and the distance between mule and ordinary same-owner move amounts | declared by the owner | the same-owner move residual and own-account move sizes |
-| the lift of "a link to a node shared with another customer, started in the last 14 days" | declared by the owner | every ring tenure is followed by ring money in PhantomLedger |
-| the lift, between mules and matched ordinary receivers, of the external share of new payers; and between mules and matched ordinary senders, of the external share of onward P2P value | declared by the owner | `is_external` and the internal or external split of new payers rest on a declared share of victims at the same bank |
-| the lift of "joined within 90 days, one device, no payment outside the ring" between origin C accounts and their legitimate look-alikes | declared by the owner | "new and quiet" must not be a mule-only marker |
+| the lift of "an internal move to an account of the same owner within 1 hour of a non-payroll credit", and the distance between mule and ordinary same-owner move amounts | the lift at most 3; the amount distance (Kolmogorov-Smirnov) at most 0.10 | the same-owner move residual and own-account move sizes |
+| the lift of "a link to a node shared with another customer, started in the last 14 days" | at most 10 | every ring tenure is followed by ring money in PhantomLedger |
+| the lift, between mules and matched ordinary receivers, of the external share of new payers; and between mules and matched ordinary senders, of the external share of onward P2P value | each ratio between mules and matched ordinary accounts within [1/3, 3] | `is_external` and the internal or external split of new payers rest on a declared share of victims at the same bank |
+| the lift of "joined within 90 days, one device, no payment outside the ring" between origin C accounts and their legitimate look-alikes | at most 10 | "new and quiet" must not be a mule-only marker |
 
 Sign-up links starting exactly at `joined_ms` and zero self-payments stay PhantomLedger's own
 checks; the loader only reports them, and no feature depends on them, since the
 [known-start rule](design.md#time) reads a joiner's first link as unknown either way and no
 query reads a self-payment.
 
-**MulePatternLearner's checks**, run by `mule audit` (evaluation code) and read only by
-`mule evaluate`:
+**MulePatternLearner's checks**, run by `mule audit` (evaluation code) and read by
+`mule evaluate`, and for pass or fail only by the `mule train` command, which stops on a failure
+that stops the run (see the design's [Gates](design.md#gates)):
 
 | Check | Bound | Why |
 |---|---|---|
