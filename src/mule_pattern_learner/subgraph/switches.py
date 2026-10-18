@@ -89,16 +89,25 @@ CUSTOMER_SHARING = CUSTOMER_LAYOUT.positions(
 )
 
 
+def _copy(data: HeteroData) -> HeteroData:
+    """A copy of a batch's data in which each reverse relation shares its forward relation's
+    attributes, one tensor, as in a built batch: HeteroData.clone copies them apart, which
+    would have encode_batch encode every payment's 401 numbers twice."""
+    found = data.clone()
+    for relation in FORWARD:
+        put_relation(found, relation, found[relation].edge_index, found[relation].get("edge_attr"))
+    return found
+
+
 def apply(batch: Batch, switch: Switch) -> Batch:
     """The batch under a switch, its degree columns recounted."""
-    data = batch.data.clone()
+    data = _copy(batch.data)
     if switch is Switch.SCORED_ALONE:
         _scored_alone(data)
     elif switch is Switch.WITHOUT_DEVICES_AND_IPS:
         _without_devices_and_ips(data)
     elif switch is Switch.WITHOUT_PAYMENT_TIMING:
         data[PAYS].edge_attr[:, TIMING] = 0
-        put_relation(data, PAYS, data[PAYS].edge_index, data[PAYS].edge_attr)
     if not switch.community:
         data.community = torch.zeros_like(data.community)
     degrees.count(data)

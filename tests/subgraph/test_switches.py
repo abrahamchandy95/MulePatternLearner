@@ -9,12 +9,14 @@ import pytest
 import torch
 from torch import Tensor
 
+from mule_pattern_learner.model.encode import encode_batch
 from mule_pattern_learner.subgraph.build import Batch
 from mule_pattern_learner.subgraph.layouts import (
     ACCOUNT_LAYOUT,
     CUSTOMER_LAYOUT,
     FORWARD,
     IDENTITY_RELATIONS,
+    LAYOUT,
     OWNED_BY,
     PAYMENT_LAYOUT,
     PAYS,
@@ -22,6 +24,7 @@ from mule_pattern_learner.subgraph.layouts import (
     reverse,
 )
 from mule_pattern_learner.subgraph.switches import Switch, apply
+from mule_pattern_learner.testing.world import HOUR_MS
 
 # The first degree column of an account row, after columns 1 to 46.
 DEGREES = ACCOUNT_LAYOUT.index("degree_pays")
@@ -43,13 +46,15 @@ def _zeroed(attrs: Tensor, rows: list[int], *names: str) -> Tensor:
 
 
 def _reverses_match(batch: Batch) -> None:
+    """Every reverse relation is its forward relation turned around and shares its attributes,
+    one tensor, as in a built batch."""
     data = batch.data
     assert set(data.edge_types) == set(RELATIONS)
     for relation in FORWARD:
         backward = data[reverse(relation)]
         assert torch.equal(backward.edge_index, data[relation].edge_index.flip(0))
         if relation != OWNED_BY:
-            assert torch.equal(backward.edge_attr, data[relation].edge_attr)
+            assert backward.edge_attr is data[relation].edge_attr
 
 
 def test_the_scored_account_alone(hand_batch: Batch) -> None:
@@ -67,6 +72,9 @@ def test_the_scored_account_alone(hand_batch: Batch) -> None:
     assert data[PAYS].edge_attr[0, PAYMENT_LAYOUT.index("dwell_tracked")] == 1
     assert built[PAYS].edge_attr[P4, PAYMENT_LAYOUT.index("receiver_gap_ms")] > 0
     assert built[PAYS].edge_attr[P6, PAYMENT_LAYOUT.index("left_24h")] == 0.5
+    dwell = PAYMENT_LAYOUT.positions("dwell")
+    assert built[PAYS].edge_attr[P6, dwell].tolist() == [1, 2 * HOUR_MS]
+    assert data[PAYS].edge_attr[4, dwell].tolist() == [0, 0]
     for relation in FORWARD[1:]:
         assert data[relation].edge_index.shape == (2, 0)
     # Each scored account keeps its row, with its degrees counted again: a_s1 received p1 and
@@ -145,6 +153,19 @@ def test_without_per_payment_timing(hand_batch: Batch) -> None:
     for relation in FORWARD[1:]:
         assert torch.equal(data[relation].edge_index, built[relation].edge_index)
     _reverses_match(switched)
+
+
+@pytest.mark.parametrize("switch", list(Switch))
+def test_a_switch_keeps_each_reverse_sharing_its_forward_attributes(
+    hand_batch: Batch, switch: Switch
+) -> None:
+    """One tensor each, so that encode_batch encodes the 401-wide payment attributes once."""
+    switched = apply(hand_batch, switch)
+    _reverses_match(switched)
+    encoded = encode_batch(switched.data, LAYOUT)
+    for relation in FORWARD:
+        if relation != OWNED_BY:
+            assert encoded[reverse(relation)].edge_attr is encoded[relation].edge_attr
 
 
 @pytest.mark.parametrize("switch", list(Switch))

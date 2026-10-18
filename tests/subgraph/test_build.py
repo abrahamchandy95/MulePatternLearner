@@ -136,7 +136,7 @@ EXPECTED_ACCOUNTS = [
 ]
 # The customers: B5's row, then ownership edges, enrolment on a device and on an IP.
 EXPECTED_CUSTOMERS = [
-    [2, 3, 1, 1, 0, 1, 1, 0, 2, 1, 1],
+    [2, 3, 1, 1, 1, 1, 1, 1, 2, 1, 1],
     [1, 1, 2, 1, 1, 1, 0, 0, 0, 1, 0],
     [1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0],
 ]
@@ -176,8 +176,9 @@ EXPECTED_PAYMENTS = [
     + [6 * DAY_MS, 0, 0, 0, 0],
     # p5, x_payer to a_s2, the scored hub: B1 tracked it, but a hub end carries no dwell.
     [1_250, *rail("check"), 1, DAY_MS, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-    # p6, a_s2 to a_three, tracked by a_three: half left within a day, the dwell absent.
-    [900, *rail("unknown"), 1, 6 * HOUR_MS, 0, 0, 0, 0, 0, 0, 0, 1, 2 * DAY_MS, 1, 0.5, 0, 0],
+    # p6, a_s2 to a_three, tracked by a_three: half left within 2 hours, so the dwell is 2 hours.
+    [900, *rail("unknown"), 1, 6 * HOUR_MS, 0, 0, 0, 0, 0, 0, 0, 1, 2 * DAY_MS, 1, 0.5, 1]
+    + [2 * HOUR_MS],
 ]
 # Edges by relation, as (source, target) positions in the batch.
 EXPECTED_EDGES = {
@@ -347,6 +348,27 @@ def test_a_value_outside_its_column_is_refused(hand: list[ExampleRows]) -> None:
     flows = {**first.flows, "a_s1": replace(first.flows["a_s1"], median_dwell_present=False)}
     with pytest.raises(ValueError, match="account.median_dwell is absent but not 0"):
         build([replace(first, flows=flows)], "w")
+    # A count, cents or milliseconds is a whole number below 2**53, which float64 holds
+    # exactly: a fraction, a negative or 2**53 itself is refused.
+    for count in (1.5, -1, 2**53):
+        rows = {
+            **first.counterparties,
+            "a_s1": replace(first.counterparties["a_s1"], payers_30d=count),
+        }
+        with pytest.raises(
+            ValueError, match="account.payers_30d holds a value that is not a whole"
+        ):
+            build([replace(first, counterparties=rows)], "w")
+    for cents in (0.5, 2**53):
+        flows = {**first.flows, "a_s1": replace(first.flows["a_s1"], in_amount_7d=cents)}
+        with pytest.raises(
+            ValueError, match="account.in_amount_7d holds a value that is not a whole"
+        ):
+            build([replace(first, flows=flows)], "w")
+    for milliseconds in (1.5, -1, 2**53):
+        flows = {**first.flows, "a_s1": replace(first.flows["a_s1"], median_dwell_ms=milliseconds)}
+        with pytest.raises(ValueError, match="account.median_dwell_ms holds a value that is not"):
+            build([replace(first, flows=flows)], "w")
 
 
 # The modules that build a batch, and the fields of every row they read.

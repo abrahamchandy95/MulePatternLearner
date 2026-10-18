@@ -1,17 +1,8 @@
 """What the cache, fetch and batch tests share: a reference world, a parity record of the
 test's own, and the rows of a hand-built batch of two examples (hand_rows, below).
 
-The world is the catalogue of look-alikes (testing.fixtures) around T, 2024-07-01, with:
-
-- a household, p_h1 and p_h2, on the device d_home and the IP i_home since joining, a_h1
-  paying a_h2 from them 3 days before t;
-- a ring, p_r1 (identified) and p_r2, on the device d_ring since 20 days before t, a_r1 paying
-  a_r2 from it 5 days before t;
-- the owner's Account Z: p_z, whose account a_z has no payment, enrolled on the ring's device d_ring
-  18 days before t, so that B5 reaches a_z through the device alone, never through a payment;
-- a shop, a_shop, paid 10.00 by card once in the lookback by each of 201 customers, a_c000 to
-  a_c200, so that it is an account hub at T: more than 200 customers own the other accounts of
-  its payments.
+The world is testing.fixtures.batch_world: the catalogue of look-alikes with a household, a
+ring, the owner's Account Z and a shop that is an account hub at T.
 """
 
 from __future__ import annotations
@@ -27,8 +18,7 @@ from mule_pattern_learner.subgraph.build import Batch, ExampleRows, Leaves, buil
 from mule_pattern_learner.subgraph.cache import INDEX_FILE
 from mule_pattern_learner.testing import fixtures
 from mule_pattern_learner.testing.reference import ReferenceGraph
-from mule_pattern_learner.testing.world import DAY_MS, HOUR_MS, T, WorldBuilder
-from mule_pattern_learner.tigergraph.queries import VERSIONS
+from mule_pattern_learner.testing.world import DAY_MS, HOUR_MS, T
 from mule_pattern_learner.tigergraph.queries.read_activity_change import ActivityChange
 from mule_pattern_learner.tigergraph.queries.read_community import Community
 from mule_pattern_learner.tigergraph.queries.read_counterparties import Counterparties
@@ -50,53 +40,18 @@ from mule_pattern_learner.tigergraph.queries.read_shared_identity import (
     Seen,
 )
 
-JOINED = fixtures.JOINED
-SHOPPERS = tuple(f"c{index:03d}" for index in range(201))
-
-
-def subgraph_world() -> WorldBuilder:
-    """The world of this module's docstring."""
-    w = fixtures.catalogue()
-    w.household(["h1", "h2"], JOINED, "d_home", "i_home")
-    w.pay("x_home", "a_h1", "a_h2", T - 3 * DAY_MS, 75.0, "ach", device="d_home", ip="i_home")
-    w.ring(
-        9,
-        ["r1", "r2"],
-        JOINED,
-        "d_ring",
-        T - 20 * DAY_MS,
-        T - 10 * DAY_MS,
-        T - 2 * DAY_MS,
-        identified=["r1"],
-    )
-    w.pay("z_ring", "a_r1", "a_r2", T - 5 * DAY_MS, 480.0, "zelle", device="d_ring")
-    w.customer("z", JOINED)
-    w.device("p_z", "d_ring", T - 18 * DAY_MS)
-    w.customer("shop", JOINED)
-    for index, name in enumerate(SHOPPERS):
-        w.customer(name, JOINED)
-        at = T - (index % 80 + 1) * DAY_MS + index * fixtures.MINUTE_MS
-        w.pay(f"x_shop_{name}", f"a_{name}", "a_shop", at, 10.0, "card")
-    return w
-
 
 @pytest.fixture(scope="session")
 def graph() -> ReferenceGraph:
     """The reference graph of the world of this module's docstring."""
-    return subgraph_world().graph()
+    return fixtures.batch_world().graph()
 
 
 @pytest.fixture
 def parity(tmp_path: Path) -> Path:
     """A parity record of the test's own holding every query's current version."""
     record = tmp_path / "parity.toml"
-    record.write_text(
-        "".join(
-            f'[[passed]]\nquery = "{name}"\nversion = "{version}"\ntigergraph = "4.2.5"\n'
-            f'world = "{"0" * 32}"\ndate = 2026-10-18\n'
-            for name, version in VERSIONS.items()
-        )
-    )
+    fixtures.write_parity_record(record)
     return record
 
 
@@ -294,7 +249,7 @@ def hand_rows() -> list[ExampleRows]:
     )
     identity0 = IdentityGraph(
         "a_s1",
-        (CustomerRow("p_c1", 2, 3, 1, 1, 0, 1, 1, 0), CustomerRow("p_co", 1, 1, 2, 1, 1, 1, 0, 0)),
+        (CustomerRow("p_c1", 2, 3, 1, 1, 1, 1, 1, 1), CustomerRow("p_co", 1, 1, 2, 1, 1, 1, 0, 0)),
         (
             NodeRow("d_crowd", True, 0, 0, 0, 0, 0, 0, False),
             NodeRow("d_home", False, 2, 3, 1, 2, 2, 5, False),
@@ -353,7 +308,7 @@ def hand_rows() -> list[ExampleRows]:
     # a_s2 is a hub, so B1 tracks p5 for it but its edge reads none; a_three tracks p6.
     inflows1 = {
         "p5": TrackedInflow("a_s2", "p5", 1.0, True, MIN),
-        "p6": TrackedInflow("a_three", "p6", 0.5, False, 0),
+        "p6": TrackedInflow("a_three", "p6", 0.5, True, 2 * HOUR_MS),
     }
     found: list[ExampleRows] = []
     for t_ms, leaves, payments, identity, community, inflows in (

@@ -20,6 +20,9 @@ work out by hand:
 Every customer joined, and every account opened, long before the lookback; HUBS names the
 merchants, billers and ledgers a whole world would make account hubs.
 
+batch_world adds to the catalogue the people the batch, cache, fetch and model tests read, and
+write_parity_record writes the parity record those tests give fetch.
+
 The transforms take a world's contract frames and give new ones: erase_labels empties every
 label column; move_dates_of_record moves every date of record and link start before the
 lookback earlier by a keyed amount; swap_same_second_ids swaps the ids of payments of one
@@ -33,10 +36,12 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Mapping
 import hashlib
+from pathlib import Path
 
 import pandas as pd
 
 from ..contract import EXTERNAL_LABEL
+from ..tigergraph.queries import VERSIONS
 from .reference.graph import SECOND_MS, ZELLE
 from .world import DAY_MS, HOUR_MS, NO_RING, Mule, T, WorldBuilder
 
@@ -242,6 +247,50 @@ def catalogue() -> WorldBuilder:
     new_job(w)
     mule_ring(w)
     return w
+
+
+# The customers of the shop of batch_world: its 201 shoppers, one account each, a_c000 to a_c200.
+SHOPPERS = tuple(f"c{index:03d}" for index in range(201))
+
+
+def batch_world() -> WorldBuilder:
+    """The catalogue around T, 2024-07-01, with:
+
+    - a household, p_h1 and p_h2, on the device d_home and the IP i_home since joining, a_h1
+      paying a_h2 from them 3 days before t;
+    - a ring, p_r1 (identified) and p_r2, on the device d_ring since 20 days before t, a_r1
+      paying a_r2 from it 5 days before t;
+    - the owner's Account Z: p_z, whose account a_z has no payment, enrolled on the ring's
+      device d_ring 18 days before t, so that B5 reaches a_z through the device alone, never
+      through a payment;
+    - a shop, a_shop, paid 10.00 by card once in the lookback by each of the 201 SHOPPERS, so
+      that it is an account hub at T: more than 200 customers own the other accounts of its
+      payments.
+    """
+    w = catalogue()
+    w.household(["h1", "h2"], JOINED, "d_home", "i_home")
+    w.pay("x_home", "a_h1", "a_h2", T - 3 * D, 75.0, "ach", device="d_home", ip="i_home")
+    w.ring(9, ["r1", "r2"], JOINED, "d_ring", T - 20 * D, T - 10 * D, T - 2 * D, identified=["r1"])
+    w.pay("z_ring", "a_r1", "a_r2", T - 5 * D, 480.0, "zelle", device="d_ring")
+    w.customer("z", JOINED)
+    w.device("p_z", "d_ring", T - 18 * D)
+    w.customer("shop", JOINED)
+    for index, name in enumerate(SHOPPERS):
+        w.customer(name, JOINED)
+        at = T - (index % 80 + 1) * D + index * MINUTE_MS
+        w.pay(f"x_shop_{name}", f"a_{name}", "a_shop", at, 10.0, "card")
+    return w
+
+
+def write_parity_record(path: Path) -> None:
+    """A parity record holding every query's current version, as fetch asks for one."""
+    path.write_text(
+        "".join(
+            f'[[passed]]\nquery = "{name}"\nversion = "{version}"\ntigergraph = "4.2.5"\n'
+            f'world = "{"0" * 32}"\ndate = 2026-10-18\n'
+            for name, version in VERSIONS.items()
+        )
+    )
 
 
 # The transforms.

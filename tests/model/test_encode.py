@@ -129,6 +129,16 @@ def test_a_batch_is_encoded_to_the_widths_of_the_features(raw_batch: Batch) -> N
     # A reverse relation reads its forward relation's encoded attributes.
     assert data[reverse(PAYS)].edge_attr is data[PAYS].edge_attr
     assert data.community.shape == (32, 8) and data.community.dtype == torch.float32
+    # The block is encoded as its layout gives: the first example has 4 members, USD 4,650.00
+    # of internal money and 12 member payments, read as log(1 + n) and log(1 + dollars).
+    raw = raw_batch.data.community
+    assert raw[0].tolist() == [4, 0, 0, 0, 0, 465_000, pytest.approx(1 / 3), 12]
+    torch.testing.assert_close(data.community, encode(raw, COMMUNITY_LAYOUT))
+    np.testing.assert_allclose(
+        data.community[0].numpy(),
+        [math.log1p(4), 0, 0, 0, 0, math.log1p(4_650), 1 / 3, math.log1p(12)],
+        rtol=1e-6,
+    )
     assert torch.equal(data.scored_index, raw_batch.data.scored_index)
     assert torch.equal(data.label, raw_batch.data.label)
     assert data.weight.dtype == torch.float32 and data.weight.tolist() == [1.0] * 32

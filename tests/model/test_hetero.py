@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 import torch
+from torch import Tensor
 from torch.nn import BatchNorm1d, Embedding, LayerNorm, Linear, Module
 from torch_geometric.data import HeteroData
 from torch_geometric.nn import HeteroConv, TransformerConv
@@ -53,6 +54,7 @@ def test_the_parts_are_the_designs() -> None:
         assert isinstance(layer, HeteroConv)
         convs: dict[Any, Module] = dict(layer.convs.items())
         assert len(convs) == 16
+        assert layer.aggr == "sum"
         for key, conv in convs.items():
             assert isinstance(conv, TransformerConv)
             assert (conv.heads, conv.out_channels, conv.concat) == (4, 16, True)
@@ -67,6 +69,27 @@ def test_the_parts_are_the_designs() -> None:
     without = _model(WITHOUT_COMMUNITY)
     first = without.head[0]
     assert isinstance(first, Linear) and first.in_features == 64
+
+
+def test_each_layer_is_followed_by_a_relu(raw_batch: Batch) -> None:
+    """What a layer hands on is never negative and holds zeros: the second layer reads the
+    first one's output and the head, without the community block, the second one's."""
+    model = _model(replace(NO_DROPOUT, community=False)).eval()
+    handed_on: list[Tensor] = []
+
+    def second_layer(_: Module, args: tuple[Any, ...]) -> None:
+        handed_on.extend(args[0].values())
+
+    def head(_: Module, args: tuple[Tensor]) -> None:
+        handed_on.append(args[0])
+
+    model.layers[1].register_forward_pre_hook(second_layer)
+    model.head[0].register_forward_pre_hook(head)
+    with torch.no_grad():
+        model(_encoded(raw_batch))
+    assert len(handed_on) == 4 + 1
+    for rows in handed_on:
+        assert bool((rows >= 0).all()) and bool((rows == 0).any())
 
 
 def test_there_is_no_embedding_memory_or_batch_statistics() -> None:
