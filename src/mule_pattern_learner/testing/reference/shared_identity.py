@@ -58,7 +58,7 @@ from read_hubs. The account hubs are those the query's parameter names.
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Collection, Iterable
+from collections.abc import Callable, Collection, Iterable
 from dataclasses import asdict, astuple, dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -239,20 +239,10 @@ class Sharing:
         return sorted(node for node in found if self.shares(customer, node))
 
     def sharers(self, node: Node) -> set[str]:
-        """The customers sharing the node: none on a leaf."""
-        if self.leaf(node):
-            return set()
-        view = self.view
-        kind, node_id = node
-        found = {
-            link.source for link in view.graph.users[kind].get(node_id, []) if view.current(link)
-        }
-        for payment in view.seen(kind, node_id):
-            if payment.ts >= self.recent and not payment.self_payment:
-                owner = view.owner(payment.sender)
-                if owner is not None and payment.sender in self.deposits(owner):
-                    found.add(owner)
-        return found
+        """The customers sharing the node: none on a leaf. Every sharer is in the node's crowd,
+        since a current link is a visible one and a payment that counts for sharing is one the
+        crowd counts, so the crowd's customers are tested one by one."""
+        return {customer for customer in self.crowd(node)[0] if self.shares(customer, node)}
 
     def sharing_start(self, customer: str, node: Node) -> int:
         """The customer's sharing start on the node: the earliest of its visible link starts
@@ -402,7 +392,7 @@ class IdentityParts:
     seen: frozenset[Seen]
 
 
-def co_users(sharing: Sharing, customer: str | None, nodes: Iterable[Node]) -> list[str]:
+def kept_co_users(sharing: Sharing, customer: str | None, nodes: Iterable[Node]) -> list[str]:
     """The kept co-users on the nodes, those of s that are no leaf: the customers of their
     crowds other than the scored account's own, the newest CO_USERS by evidence."""
     view = sharing.view
@@ -439,9 +429,11 @@ def identity_graph(sharing: Sharing, scored: str, hubs: Collection[str]) -> Iden
     view = sharing.view
     payments = subgraph(sharing.lookback, scored, hubs)
     customer = payments.customer
-    own_nodes = [*sharing.kept_links(customer), *sharing.kept_seen(scored)]
+    d_s = sharing.kept_links(customer)
+    s_s = sharing.kept_seen(scored)
+    own_nodes = [*d_s, *s_s]
     open_nodes = sorted({node for node in own_nodes if not sharing.leaf(node)})
-    kept = co_users(sharing, customer, open_nodes)
+    kept = kept_co_users(sharing, customer, open_nodes)
     brought = {
         other: account
         for other in kept
@@ -473,7 +465,6 @@ def identity_graph(sharing: Sharing, scored: str, hubs: Collection[str]) -> Iden
         assert owner is not None
         return OwnerEnrolled(account, node[1], *sharing.link_fields(owner, node))
 
-    d_s = sharing.kept_links(customer)
     enrolled = {enrolment(customer, node) for node in d_s if customer is not None}
     owner_enrolled = {
         owner_enrolment(account, node)
@@ -481,7 +472,7 @@ def identity_graph(sharing: Sharing, scored: str, hubs: Collection[str]) -> Iden
         if customer is not None and view.owner(account) == customer
         for node in d_s
     }
-    seen = {sharing.seen_edge(scored, node) for node in sharing.kept_seen(scored)}
+    seen = {sharing.seen_edge(scored, node) for node in s_s}
     for account in payments.expanded:
         owner = view.owner(account)
         owner_enrolled.update(owner_enrolment(account, node) for node in sharing.kept_links(owner))
@@ -507,21 +498,17 @@ def identity_graph(sharing: Sharing, scored: str, hubs: Collection[str]) -> Iden
     )
 
 
-def _by_scored(parts: list[IdentityParts], items: str) -> dict[str, list[Any]]:
+def _by_scored[Item](
+    parts: list[IdentityParts], items: Callable[[IdentityParts], list[Item]]
+) -> dict[str, list[Item]]:
     """A map of scored accounts to their sorted ids or edges of one kind, a scored account
     with none left out, as a TigerGraph MapAccum prints it."""
-    found: dict[str, list[Any]] = {}
-    for part in parts:
-        values: frozenset[Any] = getattr(part, items)
-        if not values:
-            continue
-        if items == "nodes":
-            found[part.scored] = sorted(node_id for _, node_id in values)
-        elif items in ("customers", "co_user_accounts"):
-            found[part.scored] = sorted(values)
-        else:
-            found[part.scored] = [asdict(edge) for edge in sorted(values, key=_ends)]
-    return found
+    return {part.scored: found for part in parts if (found := items(part))}
+
+
+def _edges(edges: frozenset[Any]) -> list[dict[str, Any]]:
+    """Edges of one kind sorted by their two ends, each as its printed fields."""
+    return [asdict(edge) for edge in sorted(edges, key=_ends)]
 
 
 def _ends(edge: DataclassInstance) -> tuple[Any, ...]:
@@ -559,10 +546,14 @@ def read_shared_identity(
                 "Account", (IdentityAccount(a, graph.accounts[a].is_external) for a in accounts)
             )
         },
-        {"subgraph_customers": _by_scored(parts, "customers")},
-        {"subgraph_nodes": _by_scored(parts, "nodes")},
-        {"co_user_accounts": _by_scored(parts, "co_user_accounts")},
-        {"enrolled": _by_scored(parts, "enrolled")},
-        {"owner_enrolled": _by_scored(parts, "owner_enrolled")},
-        {"seen": _by_scored(parts, "seen")},
+        {"subgraph_customers": _by_scored(parts, lambda part: sorted(part.customers))},
+        {
+            "subgraph_nodes": _by_scored(
+                parts, lambda part: sorted(node_id for _, node_id in part.nodes)
+            )
+        },
+        {"co_user_accounts": _by_scored(parts, lambda part: sorted(part.co_user_accounts))},
+        {"enrolled": _by_scored(parts, lambda part: _edges(part.enrolled))},
+        {"owner_enrolled": _by_scored(parts, lambda part: _edges(part.owner_enrolled))},
+        {"seen": _by_scored(parts, lambda part: _edges(part.seen))},
     ]

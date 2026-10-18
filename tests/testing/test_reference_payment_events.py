@@ -1,8 +1,9 @@
 """The reference answer of read_payment_events, B4, on worlds worked out by hand from
-docs/features.md ("What one example's subgraph holds", items 1 to 5 and 10, and "Payment
-edges", attributes 1 to 14): one subgraph with every row by hand, a scored hub, the caps and
-their ties, the customer's other accounts, the hub parameter, the refusals, and a
-self-payment.
+docs/features.md ("What one example's subgraph holds", its scored account, payments, hop-1
+accounts, hop-2 accounts, other accounts of the customer and ownership edges, and "Payment
+edges", the fields from amount to receiver_gap): one subgraph with every row by hand, a scored
+hub, the caps and their ties, the customer's other accounts, the hub parameter, the refusals,
+and a self-payment.
 
 Every answer goes through ReferenceGraph.run and the query's own parser, so it has the shape
 TigerGraph prints and the parser's checks hold of it. Amounts are in cents and times in

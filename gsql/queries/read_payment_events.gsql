@@ -1,7 +1,8 @@
 USE GRAPH Mule_Pattern_Learner
 
 /* The payment graph, B4 (docs/design.md, "read_payment_events (B4): the payment graph", and
-   docs/features.md, "What one example's subgraph holds", items 1 to 5 and 10, and "Payment
+   docs/features.md, "What one example's subgraph holds", its scored account, payments, hop-1
+   accounts, hop-2 accounts, other accounts of the customer and ownership edges, and "Payment
    edges"): for each account of the request at one Monday t, the accounts and payments of its
    subgraph, one edge per payment, each with its own timing, and its ownership edges. Every
    amount is integer cents, floor(amount x 100 + 0.5). A self-payment is read nowhere.

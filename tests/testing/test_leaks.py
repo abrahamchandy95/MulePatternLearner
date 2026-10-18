@@ -6,14 +6,18 @@ enforce them"), on the reference graph:
 - known starts: a joiner's first links read no new link and no time since start; a joiner and
   a long-standing customer with the same behaviour read the same; a long-standing customer's
   new phone reads new;
-- link ends: a tenure whose end later uses set reads as one that ended;
+- link ends: a tenure whose end later uses set reads as one that ended, whether its last use
+  is recent or is out of the last 30 days, so that the link alone puts its holder in the
+  sharing;
 - a caught neighbour reads exactly like an uncaught one;
 - an account fetched alone equals itself among 31 others;
 - a co-user's account opened after t never appears;
 - a node with 9 customers by the one account rule is a leaf, never expanded, and a node that
   is no leaf has at most 8 customers sharing it;
-- erasing every label column, moving every date of record before the lookback and swapping
-  the ids of same-second payments change no answer.
+- erasing every label column and moving every date of record before the lookback change no
+  answer, in the catalogue and in worlds where an identified mule shares a node through its
+  payments alone and where a cap cuts links, accounts, seen nodes or co-users among ties;
+  swapping the ids of same-second payments changes no value.
 
 Each answer goes through ReferenceGraph.run and the query's own parser, or is compared as the
 bytes TigerGraph would send.
@@ -27,6 +31,7 @@ import json
 from typing import Any
 
 import pandas as pd
+import pytest
 
 from mule_pattern_learner.testing import fixtures
 from mule_pattern_learner.testing.reference import ReferenceGraph
@@ -239,42 +244,53 @@ def test_a_start_at_joining_is_never_known() -> None:
 # Link ends.
 
 
-def _tenures(resume: bool) -> WorldBuilder:
-    """Two ring-mates, p_r1 and p_r2, held d_ring from 12 days before t and paid from it 5
-    days before t at 14:00; two neighbours, p_h1 and p_h2, held the hotspot i_cafe from 30
-    days before t and used it then too. Each paid another bank 50 days before t with no
-    device. Without resume each tenure ended 2 days before t, within 4 days of the start of
-    its last use's day. With resume p_r1 makes a ring payment and p_h1 uses the hotspot again
-    10 days after t, within 21 days of their last use, so their tenures run on to 12 days
-    after t."""
+def _tenures(resume: bool, last_use_days: int) -> WorldBuilder:
+    """Two ring-mates, p_r1 and p_r2, held d_ring from 40 days before t, and two neighbours,
+    p_h1 and p_h2, held the hotspot i_cafe from 45 days before t. Each paid another bank 50
+    days before t with no device, and made its last use of its node at 14:00, last_use_days
+    before t.
+
+    Without resume each tenure ended 3.5 days after the start of its last use's day, inside
+    the law of 4 days: 1.5 days before t for a last use 5 days before t, and 29.5 days before
+    t for one 33 days before t, which is still current, since the current test holds a link
+    that ended at any time in the last 30 days. With resume p_r1 makes a ring payment and p_h1
+    uses the hotspot again 10 days after t, and their tenures run on to 12 days after t. After
+    a last use 5 days before t that is within the 21 days of the law. After one 33 days before
+    t it is not, and PhantomLedger would have split the tenure; it is built so anyway, to show
+    that no answer reads a tenure's end beyond the two tests."""
     w = WorldBuilder()
     w.external("x_out", OPENED)
+    day = T - last_use_days * D
     for name, node, start in (
-        ("r1", "d_ring", T - 12 * D),
-        ("r2", "d_ring", T - 12 * D),
-        ("h1", "i_cafe", T - 30 * D),
-        ("h2", "i_cafe", T - 30 * D),
+        ("r1", "d_ring", T - 40 * D),
+        ("r2", "d_ring", T - 40 * D),
+        ("h1", "i_cafe", T - 45 * D),
+        ("h2", "i_cafe", T - 45 * D),
     ):
         w.customer(name, JOINED)
-        ended = T + 12 * D if resume and name in ("r1", "h1") else T - 2 * D
+        resumes = resume and name in ("r1", "h1")
+        ended = T + 12 * D if resumes else day + 3 * D + 12 * H
         device, ip = (node, None) if node == "d_ring" else (None, node)
         if device is not None:
             w.device(f"p_{name}", device, start, ended)
         if ip is not None:
             w.ip(f"p_{name}", ip, start, ended)
         w.pay(f"x_{name}_old", f"a_{name}", "x_out", T - 50 * D, 5.0, "ach")
-        last = T - 5 * D + 14 * H
-        w.pay(f"x_{name}", f"a_{name}", "x_out", last, 5.0, "ach", device=device, ip=ip)
-        if resume and name in ("r1", "h1"):
+        w.pay(f"x_{name}", f"a_{name}", "x_out", day + 14 * H, 5.0, "ach", device=device, ip=ip)
+        if resumes:
             later = T + 10 * D
             w.pay(f"x_{name}_later", f"a_{name}", "x_out", later, 5.0, "ach", device=device, ip=ip)
     return w
 
 
-def test_a_link_end_set_by_later_uses_reads_as_one_that_ended() -> None:
-    resumed, ended = _tenures(True).graph(), _tenures(False).graph()
+@pytest.mark.parametrize("last_use_days", [5, 33], ids=["used 5 days ago", "used 33 days ago"])
+def test_a_link_end_set_by_later_uses_reads_as_one_that_ended(last_use_days: int) -> None:
+    # A last use 5 days before t puts each holder in the sharing of the last 30 days through
+    # its payment as well as its link. One 33 days before t leaves the link alone: it ended
+    # 29.5 days before t, so it is still current, and a read of the end against t, instead of
+    # the current test, would tell the resumed holder from the one that ended.
+    resumed, ended = _tenures(True, last_use_days).graph(), _tenures(False, last_use_days).graph()
     assert _printed(resumed, []) == _printed(ended, [])
-    # In one world the two holders of each node, whose tenures end apart, read alike.
     # In one world the two holders of each node, whose tenures end apart, read alike: in the
     # resumed holder's graph its own customer row and link equal its mate's.
     for resumer, mate in (("r1", "r2"), ("h1", "h2")):
@@ -283,6 +299,8 @@ def test_a_link_end_set_by_later_uses_reads_as_one_that_ended() -> None:
         assert rows[f"p_{resumer}"] == rows[f"p_{mate}"]
         links = {edge.customer_id: replace(edge, customer_id="") for edge in found.enrolled}
         assert links[f"p_{resumer}"] == links[f"p_{mate}"]
+        # Each holder reads its link as held in the last 30 days, so the premise holds.
+        assert rows[f"p_{resumer}"].devices_30d + rows[f"p_{resumer}"].ips_30d == 1
 
 
 # One account, alone or among others.
@@ -426,18 +444,112 @@ def test_a_node_that_is_no_leaf_has_at_most_8_customers_sharing_it() -> None:
 # Labels, dates of record and same-second ids.
 
 
-def test_erasing_every_label_column_changes_no_answer() -> None:
-    tables = _identity_world().tables()
+def _identified_by_payment() -> WorldBuilder:
+    """a_m, the account of p_m, a mule the bank identified, takes a victim's money 10 days
+    before t and passes it on 10 minutes later from the device d_x and the IP i_x, on which p_m
+    never enrolled; p_n, whose account a_n has never paid, enrolled on both since joining. p_m
+    shares d_x and i_x with p_n through its payment alone."""
+    w = WorldBuilder()
+    onset = T - 10 * D
+    w.customer("m", JOINED, mule=Mule(onset, onset + 10 * M, 3, identified=True))
+    w.customer("n", JOINED)
+    w.external("x_vic", OPENED)
+    w.external("x_out", OPENED)
+    w.device("p_n", "d_x", JOINED)
+    w.ip("p_n", "i_x", JOINED)
+    w.pay("x_vic1", "x_vic", "a_m", onset, 900.0, "ach")
+    w.pay("x_fwd1", "a_m", "x_out", onset + 10 * M, 850.0, "ach", device="d_x", ip="i_x")
+    return w
+
+
+def _cap_links() -> WorldBuilder:
+    """p_k holds twelve device links, d_00 to d_11, and twelve IP links, i_00 to i_11, each of
+    which began before the lookback, between 112 and 101 days before t, a day apart, the
+    devices in the order of their ids and the IPs in the opposite one; so every start is
+    unknown and none of them has a use. p_z, whose account the bank identified as a mule, is
+    enrolled on d_11 and i_11, the last of each list. Each list is cut at 8 among ties."""
+    w = WorldBuilder()
+    w.customer("k", JOINED)
+    w.customer("z", JOINED, mule=Mule(T - 20 * D, T - 10 * D, 4, identified=True))
+    w.device("p_z", "d_11", JOINED)
+    w.ip("p_z", "i_11", JOINED)
+    for n in range(12):
+        w.device("p_k", f"d_{n:02d}", T - (112 - n) * D)
+        w.ip("p_k", f"i_{n:02d}", T - (101 + n) * D)
+    return w
+
+
+def _cap_accounts() -> WorldBuilder:
+    """p_k owns twelve more deposit accounts, o_00 to o_11, none of which has paid, so a_k
+    keeps 8 of them among ties; o_11 is a mule account the bank identified."""
+    w = WorldBuilder()
+    w.customer("k", JOINED)
+    for n in range(12):
+        mule = Mule(T - 20 * D, T - 10 * D, 4, identified=True) if n == 11 else None
+        w.account(f"o_{n:02d}", "p_k", JOINED, mule=mule)
+    return w
+
+
+def _cap_seen() -> WorldBuilder:
+    """a_k sent twelve payments in one millisecond 5 days before t, each seen on another
+    device, d_00 to d_11, so its latest uses tie. On each device p_n, of the account a_n, is
+    enrolled since joining and a_n paid from it 60 days before t; a_11 is a mule the bank
+    identified."""
+    w = WorldBuilder()
+    w.customer("k", JOINED)
+    w.external("x_any", OPENED)
+    for n in range(12):
+        name = f"{n:02d}"
+        mule = Mule(T - 20 * D, T - 10 * D, 4, identified=True) if n == 11 else None
+        w.customer(name, JOINED, mule=mule)
+        w.device(f"p_{name}", f"d_{name}", JOINED)
+        w.pay(f"x_old_{name}", f"a_{name}", "x_any", T - 60 * D, 1.0, "ach", device=f"d_{name}")
+        w.pay(f"x_k_{name}", "a_k", "x_any", T - 5 * D, 1.0, "ach", device=f"d_{name}")
+    return w
+
+
+def _cap_co_users() -> WorldBuilder:
+    """p_k enrolled since joining on eight devices, d_0 to d_7, on each of which seven others,
+    c_j_0 to c_j_6, are enrolled too, none of whom has paid: 56 co-user candidates with the
+    same evidence, 8 more than a scored account keeps. c_7_6 is a mule the bank identified."""
+    w = WorldBuilder()
+    w.customer("k", JOINED)
+    for d in range(8):
+        w.device("p_k", f"d_{d}", JOINED)
+        for c in range(7):
+            mule = Mule(T - 20 * D, T - 10 * D, 4, identified=True) if (d, c) == (7, 6) else None
+            w.customer(f"c_{d}_{c}", JOINED, mule=mule)
+            w.device(f"p_c_{d}_{c}", f"d_{d}", JOINED)
+    return w
+
+
+# The worlds in which a cap cuts a list among ties, or an identified account shares a node
+# through its payments alone: the catalogue's never does either, so a label or a date of record
+# that decided a tie, or a mule's sharing, would show nowhere in it.
+WORLDS: dict[str, Callable[[], WorldBuilder]] = {
+    "the catalogue": _identity_world,
+    "an identified mule sharing through payments alone": _identified_by_payment,
+    "links cut among ties": _cap_links,
+    "accounts cut among ties": _cap_accounts,
+    "seen nodes cut among ties": _cap_seen,
+    "co-users cut among ties": _cap_co_users,
+}
+
+
+@pytest.mark.parametrize("world", WORLDS)
+def test_erasing_every_label_column_changes_no_answer(world: str) -> None:
+    tables = WORLDS[world]().tables()
     erased = fixtures.erase_labels(tables)
     assert not erased["Account"].equals(tables["Account"])
     assert _printed(ReferenceGraph(erased)) == _printed(ReferenceGraph(tables))
 
 
-def test_moving_dates_of_record_before_the_lookback_changes_no_answer() -> None:
-    tables = _identity_world().tables()
+@pytest.mark.parametrize("world", WORLDS)
+def test_moving_dates_of_record_before_the_lookback_changes_no_answer(world: str) -> None:
+    tables = WORLDS[world]().tables()
     moved = fixtures.move_dates_of_record(tables, T, LOOKBACK_MS)
     for name in ("Party", "Account", "Party_Owns_Account", "Party_Uses_Device", "Party_Uses_IP"):
-        assert not moved[name].equals(tables[name])
+        assert tables[name].empty or not moved[name].equals(tables[name])
     assert _printed(ReferenceGraph(moved)) == _printed(ReferenceGraph(tables))
 
 

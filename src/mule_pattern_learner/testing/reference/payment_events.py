@@ -1,6 +1,7 @@
 """The reference answer of read_payment_events, B4: the payment graph (docs/design.md,
 "read_payment_events (B4): the payment graph", and docs/features.md, "What one example's
-subgraph holds", items 1 to 5 and 10, and "Payment edges"), written from the features apart
+subgraph holds", its scored account, payments, hop-1 accounts, hop-2 accounts, other accounts
+of the customer and ownership edges, and "Payment edges"), written from the features apart
 from the GSQL.
 
 The subgraph of a scored account s:

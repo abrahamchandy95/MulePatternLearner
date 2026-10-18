@@ -1,8 +1,9 @@
 """The reference answer of read_community, B6, on worlds worked out by hand from
 docs/features.md ("The community block") and docs/design.md ("read_community (B6): how the
 mule network formed"): the rounds by sharing, which never step through a leaf, the payment
-round, the block by hand, an account with no owner, a hub's own payments, the cap of 64 and
-its order, the hub parameter and the refusals.
+round, the block by hand, a closed account of a member, an account with no owner, a hub's own
+payments, the cap of 64 and its order in every round, a start and a payment exactly 30 days
+before t, the hub parameter and the refusals.
 
 Every answer goes through ReferenceGraph.run and the query's own parser, so it has the shape
 TigerGraph prints and the parser's checks hold of it. Amounts are in cents. The leak tests
@@ -40,9 +41,9 @@ def _blocks(
 def _world() -> WorldBuilder:
     """p_s's account a_s, scored, and the customers around it.
 
-    - p_s holds a_s and savings a_s_save. Since joining, 400 days before t, it has been
-      enrolled on d_1 and on the carrier IP i_crowd, on which 8 others, p_k1 to p_k8, are
-      enrolled too.
+    - p_s holds a_s, savings a_s_save and a_s_closed, which closed 20 days before t. Since
+      joining, 400 days before t, it has been enrolled on d_1 and on the carrier IP i_crowd,
+      on which 8 others, p_k1 to p_k8, are enrolled too.
     - a_a paid another bank 70 days before t and p_o's a_o 40 days before t. p_a has been
       enrolled on i_crowd since joining, and enrolled on i_2 50 days before t and on d_1 20
       days before t. p_b enrolled on i_2 10 days before t, after a_b paid another bank 50 days
@@ -50,11 +51,12 @@ def _world() -> WorldBuilder:
     - In the last 30 days: p_x's a_x paid a_s 300.00 3 days before t; a_b paid p_y's a_y 70.00
       10 days before t; a_a paid 15.00 to the hub g_hub, p_g's account, 5 days before t; a_s
       paid another bank 40.00 2 days before t, its savings 100.00 the day before t, and itself
-      5.00.
+      5.00; and p_o's a_o paid a_s_closed 11.00 25 days before t, before it closed.
     """
     w = WorldBuilder()
     w.customer("s", JOINED)
     w.account("a_s_save", "p_s", JOINED)
+    w.account("a_s_closed", "p_s", JOINED, closed_ms=T - 20 * D)
     for name in ("a", "b", "x", "y", "o"):
         w.customer(name, JOINED)
     w.party("p_g", JOINED)
@@ -78,23 +80,26 @@ def _world() -> WorldBuilder:
     w.pay("x_s_ext", "a_s", "x_ext", T - 2 * D, 40.0, "ach")
     w.pay("x_s_save", "a_s", "a_s_save", T - D, 100.0, "internal")
     w.pay("x_s_self", "a_s", "a_s", T - D, 5.0, "internal")
+    w.pay("z_o_closed", "a_o", "a_s_closed", T - 25 * D, 11.0, "zelle")
     return w
 
 
 # The members of p_s's community: p_s (round 0); p_a, sharing d_1 with p_s (round 1); p_b,
-# sharing i_2 with p_a (round 2); p_x, whose a_x paid a_s, and p_y, whom a_b paid (the payment
+# sharing i_2 with p_a (round 2); p_x, whose a_x paid a_s, p_y, whom a_b paid, and p_o, whose
+# a_o paid p_s's closed account, which is a member's account all the same (the payment
 # round). The leaf i_crowd is never stepped through, so p_k1 to p_k8 are no members, and
 # though p_s and p_a both hold it, it is shared by no one; g_hub is a hub and x_ext another
-# bank's, so p_g joins by no payment, and p_o's payment is 40 days before t.
+# bank's, so p_g joins by no payment, and a_a's earlier payment to p_o is 40 days before t.
 # - Shared nodes: d_1 (p_s, p_a) and i_2 (p_a, p_b): 2 nodes and 4 links; the density is
-#   4 / (5 members x 2 nodes) = 0.4. Every start of p_a and p_b comes after an own payment,
+#   4 / (6 members x 2 nodes) = 1/3. Every start of p_a and p_b comes after an own payment,
 #   so each is known: p_a's link to d_1 began 20 days before t and p_b's to i_2 10 days
 #   before t, new; p_a's to i_2 50 days before t, and p_s's to d_1 before the lookback, not
 #   new: 2 of 4.
-# - Payments of the last 30 days: z_x_s (30,000) and z_b_y (7,000) between two members,
-#   internal; x_a_hub to a hub and x_s_ext to another bank, external; x_s_save between
-#   accounts of p_s, neither; the self-payment is read nowhere. Isolation 2 / 4.
-BLOCK = Community("a_s", 5, False, 2, 4 / 10, 2 / 4, 37_000, 2 / 4, 4)
+# - Payments of the last 30 days: z_x_s (30,000), z_b_y (7,000) and z_o_closed (1,100)
+#   between two members, internal; x_a_hub to a hub and x_s_ext to another bank, external;
+#   x_s_save between accounts of p_s, neither; the self-payment is read nowhere. Isolation
+#   3 / 5.
+BLOCK = Community("a_s", 6, False, 2, 4 / 12, 2 / 4, 38_100, 3 / 5, 5)
 
 
 def test_a_community_grows_by_sharing_then_by_payments_by_hand() -> None:
@@ -102,9 +107,9 @@ def test_a_community_grows_by_sharing_then_by_payments_by_hand() -> None:
 
 
 def test_the_same_members_give_the_same_block_from_another_member() -> None:
-    # From p_a, p_s and p_b share a node with it in round 1, and the payment round adds p_x and
-    # p_y as before: the same 5 members, nodes, links and payments.
-    expected = Community("a_a", 5, False, 2, 4 / 10, 2 / 4, 37_000, 2 / 4, 4)
+    # From p_a, p_s and p_b share a node with it in round 1, and the payment round adds p_x,
+    # p_y and p_o as before: the same 6 members, nodes, links and payments.
+    expected = Community("a_a", 6, False, 2, 4 / 12, 2 / 4, 38_100, 3 / 5, 5)
     assert _blocks(_world().graph(), ["a_a"]) == (expected,)
 
 
@@ -124,9 +129,9 @@ def test_a_hub_is_no_members_account() -> None:
 
 def test_the_hubs_are_those_of_the_parameter_alone() -> None:
     # With no hub, g_hub is p_g's account: a_a's payment to it makes p_g a member of the
-    # payment round, and internal; 6 members, density 4 / (6 x 2), isolation 3 / 4. A hub the
+    # payment round, and internal; 7 members, density 4 / (7 x 2), isolation 4 / 5. A hub the
     # graph lacks is dropped, as TigerGraph drops it.
-    expected = Community("a_s", 6, False, 2, 4 / 12, 2 / 4, 38_500, 3 / 4, 4)
+    expected = Community("a_s", 7, False, 2, 4 / 14, 2 / 4, 39_600, 4 / 5, 5)
     graph = _world().graph()
     assert _blocks(graph, ["a_s"], []) == (expected,)
     assert _blocks(graph, ["a_s"], ["x_nowhere"]) == (expected,)
@@ -186,6 +191,67 @@ def test_capped_says_a_candidate_was_left_out_not_that_the_community_is_full() -
     )
     assert _blocks(_crowded(9, extra=1).graph(), ["a_s"], []) == (
         Community("a_s", 64, True, 9, 72 / (64 * 9), 0.0, 0, 0.0, 0),
+    )
+
+
+def test_a_start_and_a_payment_exactly_30_days_before_t_are_in_the_last_30_days() -> None:
+    # p_s and p_n each paid another bank 60 days before t from no device and enrolled on d_b
+    # exactly 30 days before t: known starts, the first moment of the last 30 days, so both
+    # links of d_b are new, 2 of 2. a_n paid a_s 7.00 and p_m's a_m paid it 3.00, both exactly
+    # 30 days before t: the first payments of the last 30 days. p_m joins the community by its
+    # payment, and the two payments are between members, internal, 1,000 cents, 2 of 2.
+    w = WorldBuilder()
+    w.customer("s", JOINED)
+    w.customer("n", JOINED)
+    w.customer("m", JOINED)
+    w.external("x_s0", OPENED)
+    w.external("x_n0", OPENED)
+    w.pay("x_s", "a_s", "x_s0", T - 60 * D, 1.0, "ach")
+    w.pay("x_n", "a_n", "x_n0", T - 60 * D, 1.0, "ach")
+    w.device("p_s", "d_b", T - 30 * D)
+    w.device("p_n", "d_b", T - 30 * D)
+    w.pay("z_n_s", "a_n", "a_s", T - 30 * D, 7.0, "zelle")
+    w.pay("z_m_s", "a_m", "a_s", T - 30 * D, 3.0, "zelle")
+    assert _blocks(w.graph(), ["a_s"], []) == (
+        Community("a_s", 3, False, 1, 2 / 3, 1.0, 1_000, 1.0, 2),
+    )
+
+
+def _payment_candidates(candidates: bool) -> WorldBuilder:
+    """p_s enrolled since joining on d_0 to d_8, and 61 others on them: seven on each of d_0 to
+    d_7 and five on d_8, so that with p_s the community holds 62, 2 short of the cap. When
+    candidates is set, four others pay a_s in the last 30 days: p_e's a_e 100.00 2 days before
+    t; p_b's a_b 40.00 4 days before t and 80.00 28 days before t; p_c's a_c 30.00 4 days before
+    t, the same millisecond as a_b's 40.00; and p_a's a_a 20.00 25 days before t."""
+    w = _crowded(8, extra=5)
+    if candidates:
+        for name, payments in (
+            ("e", ((2, 100.0),)),
+            ("b", ((4, 40.0), (28, 80.0))),
+            ("c", ((4, 30.0),)),
+            ("a", ((25, 20.0),)),
+        ):
+            w.customer(name, JOINED)
+            for n, (days, amount) in enumerate(payments):
+                w.pay(f"z_{name}{n}", f"a_{name}", "a_s", T - days * D, amount, "zelle")
+    return w
+
+
+def test_the_payment_round_keeps_the_candidates_with_the_latest_payments_ties_by_id() -> None:
+    # 62 members before the payment round, room for 2 of its 4 candidates, each timed by its
+    # latest payment: p_e 2 days before t, p_b and p_c, tied, 4 days before t (p_b's other
+    # payment, 28 days before t, is not its latest), p_a 25 days before t. p_e, then p_b, the
+    # smaller id of the tie, are kept: p_c and p_a are left out and capped is set. The 64
+    # members share nine nodes in 8 x 8 + 6 = 70 links, none new; the payments of the last 30
+    # days are 3 between members, 22,000 cents (10,000 + 4,000 + 8,000), and 2 with p_c and
+    # p_a, which are no members.
+    graph = _payment_candidates(True).graph()
+    assert _blocks(graph, ["a_s"], []) == (
+        Community("a_s", 64, True, 9, 70 / (64 * 9), 0.0, 22_000, 3 / 5, 5),
+    )
+    # Without the candidates the community is the 62, not capped.
+    assert _blocks(_payment_candidates(False).graph(), ["a_s"], []) == (
+        Community("a_s", 62, False, 9, 70 / (62 * 9), 0.0, 0, 0.0, 0),
     )
 
 

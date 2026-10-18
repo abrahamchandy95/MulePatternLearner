@@ -1,10 +1,12 @@
 USE GRAPH Mule_Pattern_Learner
 
 /* The device and IP graph, B5 (docs/design.md, "read_shared_identity (B5): the device and IP
-   graph", and docs/features.md, "What one example's subgraph holds", items 3 and 5 to 9, and
-   the customer, device, IP, enrolment and seen tables): for each account of the request at one
-   Monday t, the customers, devices and IPs of its subgraph, and its enrolment, owner-enrolment
-   and seen edges, each with its fields.
+   graph", and docs/features.md, "What one example's subgraph holds", its hop-1 accounts, other
+   accounts of the customer, devices and IPs of the customer, seen devices and IPs, co-users and
+   closure around the scored account's own nodes, and the customer, device, IP, enrolment and
+   seen tables): for each account of the request at one Monday t, the customers, devices and
+   IPs of its subgraph, and its enrolment, owner-enrolment and seen edges, each with its
+   fields.
 
    The subgraph's accounts are read_payment_events' (B4), found here again by the same rules,
    since an expanded hop-1 account brings its customer's devices and IPs: s, the scored
