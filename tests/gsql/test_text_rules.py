@@ -628,8 +628,10 @@ def test_each_printed_field_reads_what_it_is_named_for() -> None:
     assert source_rule("status", status_items(other)) == [
         "status prints @@inflows as received, which does not read received"
     ]
-    # An id is read as account_id or node_id alone, and a name ending in it is no read of it.
+    # An id is read as account_id, node_id or payment_id alone, and a name ending in it is no
+    # read of it.
     assert source_rule("ids", [("Nodes.id", "node_id"), ("Page.@owner_id", "owner_id")]) == []
+    assert source_rule("ids", [("Rows.id", "payment_id"), ("Rows.@sender_id", "sender_id")]) == []
     assert source_rule("ids", [("Page.id", "owner_id"), ("Page.@x_account_id", "account_id")]) == [
         "ids prints Page.id as owner_id, which does not read owner_id",
         "ids prints Page.@x_account_id as account_id, which does not read account_id",

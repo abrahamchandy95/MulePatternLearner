@@ -72,7 +72,7 @@ The rules read the text, so the queries keep these forms, with keywords in capit
   for a vertex set, so a set the rules cannot follow is never printed whole.
 - A field of a projection or of the "ok" status row reads what it is named for:
   `Set.name AS name`, `Set.@name AS name` or `@@name AS name`, and an id `Set.id AS
-  account_id` or `Set.id AS node_id`.
+  account_id`, `Set.id AS node_id` or `Set.id AS payment_id`.
 """
 
 from __future__ import annotations
@@ -185,7 +185,7 @@ SCALAR_TYPES = frozenset({"INT", "UINT", "FLOAT", "DOUBLE", "STRING", "BOOL", "D
 PRINT_WORDS = frozenset({"TRUE", "FALSE", "NULL", "AND", "OR", "NOT", "IN", "IS"})
 # The printed names that read a vertex's id; every other printed name reads an attribute or
 # an accumulator of its own name.
-ID_NAMES = frozenset({"account_id", "node_id"})
+ID_NAMES = frozenset({"account_id", "node_id", "payment_id"})
 
 # A string literal or a comment, matched in one pass from the left with string literals
 # first, so a "#" or "//" inside a string never starts a comment and a quote inside a

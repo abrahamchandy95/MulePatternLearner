@@ -29,6 +29,7 @@ from . import (
     read_hubs,
     read_labels,
     read_money_flow,
+    read_payment_events,
     read_world,
 )
 
@@ -133,7 +134,17 @@ REGISTRY: dict[str, Query] = {
             read_activity_change.params,
             (read_activity_change.ActivityChange,),
         ),
-        Query(READ_PAYMENT_EVENTS, QUERIES_FOLDER),
+        Query(
+            READ_PAYMENT_EVENTS,
+            QUERIES_FOLDER,
+            "read_payment_events-a9233646b1bf",
+            read_payment_events.params,
+            (
+                read_payment_events.EventAccount,
+                read_payment_events.PaymentEvent,
+                read_payment_events.OwnedBy,
+            ),
+        ),
         Query(READ_SHARED_IDENTITY, QUERIES_FOLDER),
         Query(READ_COMMUNITY, QUERIES_FOLDER),
         Query(READ_ANSWER_KEY, EVALUATION_FOLDER, "read_answer_key-3d5467c23b01"),
