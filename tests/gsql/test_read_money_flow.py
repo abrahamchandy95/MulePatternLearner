@@ -150,7 +150,7 @@ DECLARATIONS = [
     "INT dwell_ms > TrackedInflow",
     "SumAccum<INT> @in_amount_7d, @in_amount_30d, @in_amount_90d, @out_amount_7d, "
     "@out_amount_30d, @out_amount_90d",
-    f"HeapAccum<Paid>({HEAP}, ts DESC, id DESC) @inflows, @outflows",
+    f"HeapAccum<Paid>({HEAP}, ts DESC, rail DESC, id DESC) @inflows, @outflows",
     "ListAccum<INT> @in_s, @in_cents, @out_s, @out_cents",
     "ListAccum<STRING> @in_id, @out_rail",
     "MaxAccum<INT> @cut_s",
@@ -263,23 +263,161 @@ def test_t_is_a_monday_after_the_lookback_and_every_account_is_known_once_and_ex
     assert _normal(DEFINITION).count("FROM Scored : a") == 8
 
 
+# The order of the SELECTs. A value a walk reads later is read in a later SELECT than the one
+# that wrote it: POST-ACCUM clauses of one SELECT run in parallel, and a SELECT moved before
+# the one that fills what it reads walks empty lists and still compiles, so the order is pinned
+# whole, and the rule that explains it is checked on the text and on three text moves.
+SELECT_ORDER = [
+    "Scored",
+    "Received",
+    "Sent",
+    "SentByZelle",
+    "Listed",
+    "Levels",
+    "Lowest",
+    "Matched",
+    "Rows",
+]
+VERTEX_ACCUMULATOR = re.compile(r"\w+\.@(\w+)(\.\w+)?")
+
+
+def _flows(definition: str) -> list[tuple[str, set[str], set[str]]]:
+    """Each assigned SELECT of a query in file order, with the vertex accumulators (`a.@name`)
+    its ACCUM and POST-ACCUM clauses write (`+=` or `=` on the accumulator itself) and read
+    (any other use, as in `a.@in_s.get(n)` or `FOREACH x IN a.@inflows`)."""
+    found: list[tuple[str, set[str], set[str]]] = []
+    for _, _, select in scopes(definition):
+        if select is None:
+            continue
+        items = list(select.accumulations)
+        written: set[str] = set()
+        read: set[str] = set()
+        for at, item in enumerate(items):
+            match = VERTEX_ACCUMULATOR.fullmatch(item)
+            if match is None:
+                continue
+            if match[2] is None and items[at + 1 : at + 2] in (["+="], ["="]):
+                written.add(match[1])
+            else:
+                read.add(match[1])
+        found.append((select.statement[0], written, read))
+    return found
+
+
+def dataflow_problems(definition: str) -> list[str]:
+    """Every accumulator a SELECT reads, with a writer in the query, is written only by SELECTs
+    strictly before it, and has at least one."""
+    flows = _flows(definition)
+    problems: list[str] = []
+    for index, (target, _, read) in enumerate(flows):
+        for name in sorted(read):
+            writers = [at for at, (_, written, _) in enumerate(flows) if name in written]
+            if not writers or max(writers) >= index:
+                by = [flows[at][0] for at in writers] or ["no SELECT"]
+                problems.append(f"{target} reads @{name}, written by {', '.join(by)}")
+    return problems
+
+
+def _moved(target: str, after: str) -> str:
+    """The query's text with the SELECT that assigns target moved to follow the one that
+    assigns after."""
+
+    def statement(name: str) -> re.Pattern[str]:
+        return re.compile(rf"^    {name} = SELECT .*?;\n", re.MULTILINE | re.DOTALL)
+
+    moved = statement(target).search(DEFINITION)
+    stays = statement(after).search(DEFINITION)
+    assert moved is not None and stays is not None
+    without = DEFINITION.replace(moved[0], "", 1)
+    end = statement(after).search(without)
+    assert end is not None
+    return without[: end.end()] + moved[0] + without[end.end() :]
+
+
+def test_the_selects_run_in_the_order_the_walk_needs() -> None:
+    assert [target for target, _, _ in _flows(DEFINITION)] == SELECT_ORDER
+
+
+def test_every_value_a_select_reads_is_written_by_an_earlier_select() -> None:
+    assert dataflow_problems(DEFINITION) == []
+    # The rule sees the reads that matter: the lists a walk reads, the cut, the levels and the
+    # lowest levels, the lots and the portions.
+    reads = {target: read for target, _, read in _flows(DEFINITION)}
+    assert {"inflows", "outflows"} <= reads["Listed"]
+    assert {"in_s", "in_cents", "out_s", "out_cents", "cut_s"} <= reads["Levels"]
+    assert reads["Lowest"] == {"out_level"}
+    assert {"out_lowest", "out_level", "lot_base", "lot_next", "in_id"} <= reads["Matched"]
+    assert {"portions", "received", "matched", "within_1d", "by_card"} <= reads["Rows"]
+
+
+@pytest.mark.parametrize(
+    ("target", "after", "problem"),
+    [
+        # Lowest after Matched removes the suffix-minimum stop: out_lowest reads as empty.
+        ("Lowest", "Matched", "Matched reads @out_lowest, written by Lowest"),
+        # Levels before Listed: every list is empty, so every lot is empty and every velocity
+        # value is 0.
+        ("Listed", "Levels", "Levels reads @in_s, written by Listed"),
+        # Rows before Matched: the median and every share read an empty sum.
+        ("Matched", "Rows", "Rows reads @received, written by Matched"),
+    ],
+)
+def test_a_select_moved_before_the_one_it_reads_from_breaks_the_rule(
+    target: str, after: str, problem: str
+) -> None:
+    moved = _moved(target, after)
+    assert moved != DEFINITION
+    assert problem in dataflow_problems(moved)
+
+
+def test_same_second_outflows_are_walked_by_rail_name_then_id() -> None:
+    """Payments of one second have no order, so no value may follow an id. The two outflows of
+    one second that take different rails split the cents a lot holds by rail, and which of them
+    takes the newest cents decides the split, so the heap orders them by rail name before the
+    id, and the walk reads each list from its end, oldest first: ach, card, cash, check,
+    internal, unknown, zelle. By hand: a lot A of 10,000 cents at s - 2 days, a lot B of 10,000
+    cents at s - 1 hour, and at second s an outflow p1 of 10,000 cents by card and an outflow
+    p2 of 10,000 cents by ach. Ach is walked first and takes B (dwell 3,600 s, under a day),
+    then card takes A (dwell 172,800 s): left_by_transfer is 10,000 / 10,000 = 1,
+    left_by_card 0 and left_1d 10,000 / 20,000 = 0.5, whichever of p1 and p2 has the smaller
+    id. Ordered by id alone, the smaller id took B, and swapping the ids swapped the rails."""
+    assert re.findall(r"HeapAccum<Paid>\((\d+), ([^)]*)\)", DEFINITION) == [
+        (str(HEAP), "ts DESC, rail DESC, id DESC")
+    ]
+    code = _normal(DEFINITION)
+    # Each list is read at m - 1 - j, from its end: the lot test and the dwell read the second,
+    # the portion's rail the rail.
+    assert code.count("a.@out_s.get ( m - 1 - j )") == 2
+    assert code.count("a.@out_rail.get ( m - 1 - j )") == 1
+    # The only comparison of two payment ids is the check of each heap's order.
+    assert len(re.findall(r"\.id [<>]", code)) == 2
+
+
 def test_a_heap_walked_out_of_order_stops_the_query() -> None:
     """FOREACH is taken to walk a heap in its sort order, which the documentation does not
-    promise: each payment must sort after the one before, (ts DESC, id DESC), and each portion
-    after the one before, dwell ASC. A heap out of order names its account and the query
-    stops, after the lists are walked and again after the portions are, before any row."""
+    promise: each payment must sort after the one before, (ts DESC, rail DESC, id DESC), and
+    each portion after the one before, dwell ASC. A heap out of order names its account and the
+    query stops, after the lists are walked and again after the portions are, before any
+    row."""
     out_of_order = (
-        "IF k > 0 AND (x.ts > previous_ts OR (x.ts == previous_ts AND x.id > previous_id)) THEN "
+        "IF k > 0 AND (x.ts > previous_ts OR (x.ts == previous_ts AND (x.rail > previous_rail "
+        "OR (x.rail == previous_rail AND x.id > previous_id)))) THEN "
         "@@unsorted += TRUE, @@unsorted_accounts += a.id END"
     )
     assert _accumulations("Listed").count(_normal(out_of_order)) == 2
-    _has("Listed", "previous_ts = x.ts, previous_id = x.id, k = k + 1 END")
     _has(
         "Listed",
-        'k = 0, previous_ts = 0, previous_id = "", FOREACH x IN a.@outflows DO',
+        "previous_ts = x.ts, previous_rail = x.rail, previous_id = x.id, k = k + 1 END",
+    )
+    _has(
+        "Listed",
+        'k = 0, previous_ts = 0, previous_rail = "", previous_id = "", FOREACH x IN a.@outflows DO',
     )
     assert _accumulations("Listed").startswith(
-        _normal('INT k = 0, UINT previous_ts = 0, STRING previous_id = "", FOREACH x IN a.@inflows')
+        _normal(
+            'INT k = 0, UINT previous_ts = 0, STRING previous_rail = "", '
+            'STRING previous_id = "", FOREACH x IN a.@inflows'
+        )
     )
     _has(
         "Rows",
@@ -515,6 +653,7 @@ def test_every_level_and_cent_of_the_walk_is_int() -> None:
     assert _declared_locals("Listed") == [
         ("INT", "k"),
         ("UINT", "previous_ts"),
+        ("STRING", "previous_rail"),
         ("STRING", "previous_id"),
     ]
     for target in ("Levels", "Lowest"):

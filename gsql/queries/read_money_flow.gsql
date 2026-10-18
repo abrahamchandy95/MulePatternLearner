@@ -8,17 +8,22 @@ USE GRAPH Mule_Pattern_Learner
 
    The walk:
    - The lists: the newest 256 payments received in [t - 30 days, t) with positive cents, and
-     the newest 256 sent then, each kept in a heap ordered (ts DESC, id DESC) that holds one
-     more, the 257th: the newest payment left out of its list, when the list was cut.
+     the newest 256 sent then, each kept in a heap ordered (ts DESC, rail DESC, id DESC) that
+     holds one more, the 257th: the newest payment left out of its list, when the list was cut.
+     An inflow has the rail "", so for inflows the order is (ts DESC, id DESC).
    - The span: when neither list was cut, all of [t - 30 days, t); otherwise (b, t), b the
      latest second, over the cut lists, of the payment left out, and every payment of either
      list at or before the second b is dropped. Both lists are then complete inside the span,
      so the walk is exact last in, first out for every inflow it keeps.
    - The lots: the inflows of one second are one lot, which comes before every outflow of its
      second, so the order of payments in one second never matters to a lot.
-   - The outflows of one second are walked in the order the heap gives them, by payment id.
-     The levels, windows, held cents, median and each lot's values do not depend on that
-     order; which of two such outflows took the newest cents, and so the split by rail, can.
+   - The outflows of one second are walked in the order the heap gives them, oldest first:
+     by the name of their rail (ach, card, cash, check, internal, unknown, zelle), then by
+     payment id. The levels, windows, held cents, median and each lot's values do not depend
+     on that order. The split by rail does depend on which of two outflows took the newest
+     cents, so a rail decides it and no payment id does: of two outflows of one second the
+     one whose rail comes first in that list spends first, and two of one rail change no
+     value whichever goes first.
    - The matching, without a stack: count cents as heights. A lot of c cents arriving at level
      L holds the band [L, L + c), and still holds max(0, min(lowest level since, L + c) - L)
      cents; each fall of that lowest level inside its band is a portion that left at that
@@ -64,7 +69,7 @@ CREATE OR REPLACE QUERY read_money_flow(
       @out_amount_30d, @out_amount_90d;
     /* Each list and its 257th, and the lists newest first: the inflows' seconds, ids and
        cents, the outflows' seconds, cents and rails; the latest second left out of a list. */
-    HeapAccum<Paid>(257, ts DESC, id DESC) @inflows, @outflows;
+    HeapAccum<Paid>(257, ts DESC, rail DESC, id DESC) @inflows, @outflows;
     ListAccum<INT> @in_s, @in_cents, @out_s, @out_cents;
     ListAccum<STRING> @in_id, @out_rail;
     MaxAccum<INT> @cut_s;
@@ -158,13 +163,15 @@ CREATE OR REPLACE QUERY read_money_flow(
         END,
         IF p.event_ts_ms >= t_ms - 604800000 THEN a.@out_amount_7d += cents END;
 
-    /* The heaps as lists, newest first, each payment checked against the one before; a
-       heap's 257th payment is the newest left out of its list. */
+    /* The heaps as lists, newest first, each payment checked against the one before in the
+       order of its heap, (ts, rail, id) descending; a heap's 257th payment is the newest left
+       out of its list. */
     Listed = SELECT a FROM Scored:a
       POST-ACCUM
-        INT k = 0, UINT previous_ts = 0, STRING previous_id = "",
+        INT k = 0, UINT previous_ts = 0, STRING previous_rail = "", STRING previous_id = "",
         FOREACH x IN a.@inflows DO
-            IF k > 0 AND (x.ts > previous_ts OR (x.ts == previous_ts AND x.id > previous_id)) THEN
+            IF k > 0 AND (x.ts > previous_ts OR (x.ts == previous_ts AND (x.rail > previous_rail
+              OR (x.rail == previous_rail AND x.id > previous_id)))) THEN
                 @@unsorted += TRUE, @@unsorted_accounts += a.id
             END,
             IF k < 256 THEN
@@ -172,11 +179,12 @@ CREATE OR REPLACE QUERY read_money_flow(
             ELSE
                 a.@cut_s += floor(x.ts / 1000)
             END,
-            previous_ts = x.ts, previous_id = x.id, k = k + 1
+            previous_ts = x.ts, previous_rail = x.rail, previous_id = x.id, k = k + 1
         END,
-        k = 0, previous_ts = 0, previous_id = "",
+        k = 0, previous_ts = 0, previous_rail = "", previous_id = "",
         FOREACH x IN a.@outflows DO
-            IF k > 0 AND (x.ts > previous_ts OR (x.ts == previous_ts AND x.id > previous_id)) THEN
+            IF k > 0 AND (x.ts > previous_ts OR (x.ts == previous_ts AND (x.rail > previous_rail
+              OR (x.rail == previous_rail AND x.id > previous_id)))) THEN
                 @@unsorted += TRUE, @@unsorted_accounts += a.id
             END,
             IF k < 256 THEN
@@ -184,7 +192,7 @@ CREATE OR REPLACE QUERY read_money_flow(
             ELSE
                 a.@cut_s += floor(x.ts / 1000)
             END,
-            previous_ts = x.ts, previous_id = x.id, k = k + 1
+            previous_ts = x.ts, previous_rail = x.rail, previous_id = x.id, k = k + 1
         END;
     IF @@unsorted THEN
         PRINT "unsorted_heap" AS status, @@unsorted_accounts AS accounts;
@@ -319,7 +327,7 @@ CREATE OR REPLACE QUERY read_money_flow(
         RETURN;
     END;
 
-    PRINT "ok" AS status, "read_money_flow-0db0e808d666" AS version;
+    PRINT "ok" AS status, "read_money_flow-04c652eeaf53" AS version;
     PRINT Rows[Rows.id AS account_id, Rows.@in_amount_7d AS in_amount_7d,
       Rows.@in_amount_30d AS in_amount_30d, Rows.@in_amount_90d AS in_amount_90d,
       Rows.@out_amount_7d AS out_amount_7d, Rows.@out_amount_30d AS out_amount_30d,

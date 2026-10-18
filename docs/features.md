@@ -120,7 +120,13 @@ GSQL form is in the design's [B1 section](design.md#read_money_flow-b1-velocity)
   complete inside the span, so the walk is exactly last in, first out over the whole 30 days
   for every inflow it keeps.
 - **Lots.** A lot is the set of inflows of one second inside the span. Within one second the
-  lot comes before every outflow; the order among same-second outflows changes nothing.
+  lot comes before every outflow.
+- **Same-second outflows.** They are walked oldest first by the name of their rail (`ach`,
+  `card`, `cash`, `check`, `internal`, `unknown`, `zelle`), then by payment id. The order among
+  them changes no level, window, held cent, median or lot value, so the ids only break ties
+  that change nothing. It changes which outflow took which cents, so of two outflows of one
+  second the one whose rail comes first spends the newest cents first, and the split by rail
+  follows that rule and never an id.
 - **Matching.** Last in, first out: an outflow of c cents spends from the most recent lot with
   unspent cents, then the next, until c is spent or none is left. The rest of the outflow spent
   money from before the span and is not recorded.
@@ -240,7 +246,10 @@ rule.
 Width 401. Stored before encoding: 23. Each payment row depends only on the payment, the date
 and the hub set, never on which account is scored, so it can be cached per payment; for the
 same reason gaps and dwell are absent at every hub end, the scored hub's included. Payments of
-one lot share `left_24h` and `dwell`, so the order inside one second never matters.
+one lot share `left_24h` and `dwell`, so the order inside one second never matters. B1 prints
+them as one row per tracked payment (its id, its lot's `left_24h` and its lot's dwell as
+presence and milliseconds), not one per lot, because a GSQL tuple cannot hold a list of ids;
+the row is joined to the payment's edge by the payment id.
 
 ## Ownership edges: no attributes
 

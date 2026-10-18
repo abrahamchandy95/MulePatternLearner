@@ -342,6 +342,12 @@ by fraud flag and ring id within a second.
 
 - Every count, window, burst, gap, B1 walk and community value is order-free: swapping the
   ids of same-second payments changes no B1, B2, B3 or B6 value.
+- B1 walks the outflows of one second oldest first by the name of their rail (`ach`, `card`,
+  `cash`, `check`, `internal`, `unknown`, `zelle`), then by payment id, so of two outflows of
+  one second the one whose rail comes first spends the newest cents first. Only the split by
+  rail depends on which outflow took which cents, and it must not follow an id; two outflows
+  of one rail change no value whichever goes first, so the ids only break ties that change
+  nothing.
 - A gap is to the latest strictly earlier payment. Windows are anchored at payments, never at
   clock bins.
 - The time-ordered caps keep whole seconds: when a list is cut, b is the second of the newest
@@ -564,7 +570,7 @@ lookback is 90 days and no query reads clock time.
 | `read_hubs` | the accounts, devices and IPs too connected to expand | once per (world, Monday) | account hubs, device and IP crowds and hubs, each with its measure, and `observed_only` for devices and IPs |
 | `read_world` | the loaded world's identity | once per world | counts and sums (see [Cache](#cache)) |
 | `profile_hubs` | the distributions behind the hub and crowd thresholds | `mule bench` only | histograms |
-| `read_money_flow` (B1) | velocity | per (world, Monday, account), cached | the velocity columns, and one row per tracked inflow lot |
+| `read_money_flow` (B1) | velocity | per (world, Monday, account), cached | the velocity columns, and one row per tracked inflow, carrying its lot's values |
 | `read_counterparties` (B2) | who pays it and whom it pays | per (world, Monday, account), cached | the counterparty columns |
 | `read_activity_change` (B3) | the account against its own past | per (world, Monday, account), cached | the activity columns |
 | `read_payment_events` (B4) | the payment graph | per scored account | the subgraph's accounts with `is_external`, payment edges and their fields, ownership edges |
@@ -701,25 +707,32 @@ the owner's old salary was used up, and hide the pass-through.
 
 **How it runs.** The newest 256 inflows and the newest 256 outflows of the last 30 days, within
 a whole-second span (exact walk in [The features](features.md#account-node-309-columns)).
-Inflows of one second form one lot, so same-second order never matters. Only outflows before t
-count: an inflow received less than w before t shows only what left by t, and the payment's
-age on its edge tells the model how much of its curve it could see. On development
+Inflows of one second form one lot, so their order never matters, and outflows of one second
+are walked by rail name, then id (see [Time](#time)), so no id decides a value. Only outflows
+before t count: an inflow received less than w before t shows only what left by t, and the
+payment's age on its edge tells the model how much of its curve it could see. On development
 worlds, a check confirms that busy ordinary accounts' card spending does not fill the short
 dwell shares; if it does, the dwell shares count transfer and cash outflows only.
 
 **In GSQL.** The owner chose to write the walk in TigerGraph: "we need to try b". It is
 plain GSQL, with no user-defined function and no subquery: local scalars, FOREACH and WHILE in
-POST-ACCUM over ListAccums an earlier SELECT filled, heaps ordered (ts DESC, id DESC) with
-explicit capacities, and a suffix-minimum early stop. Lot k occupies cents `[L, L + c)` of a
+POST-ACCUM over ListAccums an earlier SELECT filled, heaps ordered (ts DESC, rail DESC, id DESC)
+with explicit capacities, and a suffix-minimum early stop. Lot k occupies cents `[L, L + c)` of a
 running level and still holds `max(0, min(lowest level since k, L + c) - L)` cents; each fall
 of that minimum inside its band is a piece that left at that outflow's time. A global OrAccum
 records a heap that did not iterate in order, and the query then stops with a status. A port
 of this sketch matched full-history last-in, first-out matching in 20,000 random worlds with no
 mismatch ([the GSQL dwell research and its check](research/gsql_dwell_2026-10-17.md)). The
 Python reference is an independent explicit stack of lots written from the
-specification. The walk is compiled and verified on a live TigerGraph; its worst account (an
-account later emptied by a sweep, up to about 32,896 steps; a retaining mule about n + m) is
-measured by `mule bench`.
+specification. A request names its accounts by id, a list of strings, not as a vertex set,
+from which an installed query drops an id the graph lacks without a word, so the query itself
+refuses an unknown, repeated or invisible account. It prints one row per tracked inflow, a
+payment id with its lot's `left_24h` and dwell, because a GSQL tuple cannot hold a list of
+ids. The walk compiles on a live TigerGraph (see [Query plumbing](#query-plumbing)) and is
+verified there on loaded data in [the 5,000-person
+test](#the-5000-person-test-on-tigergraph-cloud); its worst account (an account later emptied
+by a sweep, up to about 32,896 steps; a retaining mule about n + m) is measured by `mule
+bench`.
 
 **Fields** (definitions in [The features](features.md#account-node-309-columns)):
 
@@ -969,10 +982,15 @@ crowds would merge strangers. The demo query `demo_account_web` also reads `is_m
   before the Python above it is built, and compiled on the live server as it is written. The
   owner allowed the MulePatternLearner workspace to be wiped early for this, once the new
   schema and the loader's wipe step land (see [Order of work](#order-of-work)), so no query
-  waits for the end to meet the server. None has been compiled on a server yet, and the idioms
-  the research left unconfirmed on 4.2.5 (heap iteration order, a parameter as heap capacity,
-  local list functions) are a risk until each query's own compile; B1 also checks heap order
-  at run time. Runs on loaded data, the live B1 verification and parity come in
+  waits for the end to meet the server. The seven queries written so far (`list_accounts`,
+  `read_labels`, `read_hubs`, `read_world`, `profile_hubs`, `read_money_flow` and
+  `read_answer_key`) compile on the live server, B1's heap and list functions included, and
+  its heaps take literal capacities, so no parameter is a capacity. A heap of payments ordered
+  (ts DESC, rail DESC, id DESC), probed on the live server with 76 payments, kept its first 30
+  and iterated in exactly that order, which B1's own order check read as sorted. What an empty
+  graph cannot show is the order of the heap of one account's payments, so B1 still checks
+  every heap's order at run time and stops with a status when one is out of order. Runs on
+  loaded data, the live B1 verification and parity come in
   [the 5,000-person test](#the-5000-person-test-on-tigergraph-cloud).
 - The fetch executor runs only an allowlist: `list_accounts`, `read_labels`, `read_hubs`,
   `read_world` and B1 to B6. It refuses `read_answer_key`, the loader's `verify_load` and

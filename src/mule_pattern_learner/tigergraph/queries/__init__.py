@@ -106,7 +106,7 @@ REGISTRY: dict[str, Query] = {
         Query(
             READ_MONEY_FLOW,
             QUERIES_FOLDER,
-            "read_money_flow-0db0e808d666",
+            "read_money_flow-04c652eeaf53",
             read_money_flow.params,
             (read_money_flow.MoneyFlow, read_money_flow.TrackedInflow),
         ),
