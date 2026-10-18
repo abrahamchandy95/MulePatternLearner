@@ -1,0 +1,199 @@
+USE GRAPH Mule_Pattern_Learner
+
+/* The account against its own past, B3 (docs/design.md, "read_activity_change (B3): the
+   account against its own past", and docs/features.md, "Account node", columns 34 to 46):
+   for each account of the request at one Monday t, how many payments it received and sent
+   over the last 7, 30 and 90 days, its busiest hour and day of the last 30 days each way, the
+   shortest gap between its inflows, and how long it has been quiet each way. A self-payment
+   is read nowhere.
+
+   - in_7d, in_30d, in_90d and out_7d, out_30d, out_90d count every payment received and sent
+     in [t - w, t).
+   - The time-ordered lists: the newest 256 payments received in [t - 30 days, t), and
+     the newest 256 sent then, each kept by the whole-second rule on its own. A heap ordered
+     (ts DESC, id DESC) keeps the newest 256 and one more, the 257th: when it holds 257, b is
+     the second of its oldest, and only the payments after the second b are kept, so the
+     payments of one second are kept or dropped together.
+   - burst_in_1h, burst_in_24h: over the kept inflows, the most in [x, x + w) with x one of
+     their times, so the payments of one time all count; burst_out_1h and burst_out_24h the
+     same over the kept outflows.
+   - shortest_in_gap: over the kept inflows, the smallest x - x' with x' the latest kept inflow
+     strictly before x, which is the smallest difference of two distinct kept times; absent
+     when no kept inflow has a strictly earlier one.
+   - since_last_in, since_last_out: t minus the latest payment received, or sent, in the
+     lookback; absent with none.
+   Each duration is printed as presence and milliseconds.
+
+   No value reads the order in which FOREACH walks a heap: the cut is the oldest second the
+   full heap holds, and the bursts and the gap compare every pair of kept times. So neither an
+   id nor a heap's walk decides a value. Every value a step reads is written by an earlier
+   SELECT or kept in a local variable.
+
+   Reads no label and no hub: a hub that is not the scored account is never requested. t must
+   be a Monday at 00:00 UTC after the lookback's length, and the request must name at least
+   one account, each once, each in the graph and existing at t; the accounts come as ids, as
+   read_money_flow says why. */
+CREATE OR REPLACE QUERY read_activity_change(
+    UINT t_ms,
+    LIST<STRING> account_ids
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+    /* A payment of a time-ordered list: its time and id. */
+    TYPEDEF TUPLE<UINT ts, STRING id> Paid;
+    /* The payments received and sent over the last 7, 30 and 90 days, and the latest each
+       way. */
+    SumAccum<INT> @in_7d, @in_30d, @in_90d, @out_7d, @out_30d, @out_90d;
+    MaxAccum<UINT> @last_in, @last_out;
+    /* The payments received and sent in the last 30 days, the newest 256 and one more. */
+    HeapAccum<Paid>(257, ts DESC, id DESC) @inflows, @outflows;
+    /* The row. */
+    SumAccum<INT> @burst_in_1h, @burst_in_24h, @burst_out_1h, @burst_out_24h;
+    OrAccum @shortest_in_gap_present, @since_last_in_present, @since_last_out_present;
+    SumAccum<UINT> @shortest_in_gap_ms, @since_last_in_ms, @since_last_out_ms;
+    /* The request's ids, each once, and how many it gave. */
+    SetAccum<STRING> @@ids;
+    SumAccum<INT> @@given;
+    UINT lookback_ms = 7776000000;
+
+    /* Mondays are 4 days after the Thursday of 1970-01-01, modulo a week. */
+    IF t_ms <= lookback_ms OR t_ms % 604800000 != 345600000 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+    FOREACH account_id IN account_ids DO
+        @@ids += account_id;
+        @@given += 1;
+    END;
+    IF @@given == 0 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+    IF @@ids.size() != @@given THEN
+        PRINT "duplicate_account" AS status;
+        RETURN;
+    END;
+    Requested = to_vertex_set(@@ids, "Account");
+    IF Requested.size() != @@ids.size() THEN
+        PRINT "unknown_account" AS status;
+        RETURN;
+    END;
+    Scored = SELECT s FROM Requested:s WHERE s.opened_ms < t_ms;
+    IF Scored.size() != Requested.size() THEN
+        PRINT "invisible_account" AS status;
+        RETURN;
+    END;
+
+    /* The payments of the lookback, each way, but self-payments. */
+    Received = SELECT a FROM Scored:a
+      -((Account_Received_Transaction>|Account_Received_Zelle_Transfer>):e)-
+      (Payment_Transaction|Zelle_Transfer):p
+      -((Transaction_From_Account>|Transfer_From_Account>):f)- Account:b
+      WHERE p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms AND b != a
+      ACCUM
+        a.@in_90d += 1,
+        a.@last_in += p.event_ts_ms,
+        IF p.event_ts_ms >= t_ms - 2592000000 THEN
+            a.@in_30d += 1,
+            a.@inflows += Paid(p.event_ts_ms, p.id)
+        END,
+        IF p.event_ts_ms >= t_ms - 604800000 THEN a.@in_7d += 1 END;
+    Sent = SELECT a FROM Scored:a
+      -((Account_Initiated_Transaction>|Account_Sent_Zelle_Transfer>):e)-
+      (Payment_Transaction|Zelle_Transfer):p
+      -((Transaction_To_Account>|Transfer_To_Account>):f)- Account:b
+      WHERE p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms AND b != a
+      ACCUM
+        a.@out_90d += 1,
+        a.@last_out += p.event_ts_ms,
+        IF p.event_ts_ms >= t_ms - 2592000000 THEN
+            a.@out_30d += 1,
+            a.@outflows += Paid(p.event_ts_ms, p.id)
+        END,
+        IF p.event_ts_ms >= t_ms - 604800000 THEN a.@out_7d += 1 END;
+
+    /* The cut of each list: with a full heap, the second of its oldest; with no cut, -1,
+       below every second. Then over the kept payments of each list, the most in an hour and
+       in 24 hours from one of them, and over the kept inflows the shortest gap; and the time
+       since the latest payment each way. */
+    Rows = SELECT a FROM Scored:a
+      POST-ACCUM
+        INT cut_in = -1, INT cut_out = -1, INT within_1h = 0, INT within_24h = 0,
+        INT most_1h = 0, INT most_24h = 0, UINT shortest = 0, BOOL gap_found = FALSE,
+        IF a.@inflows.size() > 256 THEN
+            FOREACH x IN a.@inflows DO
+                IF cut_in < 0 OR floor(x.ts / 1000) < cut_in THEN
+                    cut_in = floor(x.ts / 1000)
+                END
+            END
+        END,
+        IF a.@outflows.size() > 256 THEN
+            FOREACH x IN a.@outflows DO
+                IF cut_out < 0 OR floor(x.ts / 1000) < cut_out THEN
+                    cut_out = floor(x.ts / 1000)
+                END
+            END
+        END,
+        FOREACH x IN a.@inflows DO
+            IF floor(x.ts / 1000) > cut_in THEN
+                within_1h = 0, within_24h = 0,
+                FOREACH y IN a.@inflows DO
+                    IF floor(y.ts / 1000) > cut_in THEN
+                        IF y.ts >= x.ts AND y.ts < x.ts + 3600000 THEN
+                            within_1h = within_1h + 1
+                        END,
+                        IF y.ts >= x.ts AND y.ts < x.ts + 86400000 THEN
+                            within_24h = within_24h + 1
+                        END,
+                        IF y.ts < x.ts THEN
+                            IF NOT gap_found OR x.ts - y.ts < shortest THEN
+                                shortest = x.ts - y.ts, gap_found = TRUE
+                            END
+                        END
+                    END
+                END,
+                IF within_1h > most_1h THEN most_1h = within_1h END,
+                IF within_24h > most_24h THEN most_24h = within_24h END
+            END
+        END,
+        a.@burst_in_1h += most_1h, a.@burst_in_24h += most_24h,
+        IF gap_found THEN
+            a.@shortest_in_gap_present += TRUE, a.@shortest_in_gap_ms += shortest
+        END,
+        most_1h = 0, most_24h = 0,
+        FOREACH x IN a.@outflows DO
+            IF floor(x.ts / 1000) > cut_out THEN
+                within_1h = 0, within_24h = 0,
+                FOREACH y IN a.@outflows DO
+                    IF floor(y.ts / 1000) > cut_out THEN
+                        IF y.ts >= x.ts AND y.ts < x.ts + 3600000 THEN
+                            within_1h = within_1h + 1
+                        END,
+                        IF y.ts >= x.ts AND y.ts < x.ts + 86400000 THEN
+                            within_24h = within_24h + 1
+                        END
+                    END
+                END,
+                IF within_1h > most_1h THEN most_1h = within_1h END,
+                IF within_24h > most_24h THEN most_24h = within_24h END
+            END
+        END,
+        a.@burst_out_1h += most_1h, a.@burst_out_24h += most_24h,
+        IF a.@in_90d > 0 THEN
+            a.@since_last_in_present += TRUE, a.@since_last_in_ms += t_ms - a.@last_in
+        END,
+        IF a.@out_90d > 0 THEN
+            a.@since_last_out_present += TRUE, a.@since_last_out_ms += t_ms - a.@last_out
+        END;
+
+    PRINT "ok" AS status, "read_activity_change-fbaa2ddc1360" AS version;
+    PRINT Rows[Rows.id AS account_id, Rows.@in_7d AS in_7d, Rows.@in_30d AS in_30d,
+      Rows.@in_90d AS in_90d, Rows.@out_7d AS out_7d, Rows.@out_30d AS out_30d,
+      Rows.@out_90d AS out_90d, Rows.@burst_in_1h AS burst_in_1h,
+      Rows.@burst_in_24h AS burst_in_24h, Rows.@burst_out_1h AS burst_out_1h,
+      Rows.@burst_out_24h AS burst_out_24h,
+      Rows.@shortest_in_gap_present AS shortest_in_gap_present,
+      Rows.@shortest_in_gap_ms AS shortest_in_gap_ms,
+      Rows.@since_last_in_present AS since_last_in_present,
+      Rows.@since_last_in_ms AS since_last_in_ms,
+      Rows.@since_last_out_present AS since_last_out_present,
+      Rows.@since_last_out_ms AS since_last_out_ms] AS accounts;
+}

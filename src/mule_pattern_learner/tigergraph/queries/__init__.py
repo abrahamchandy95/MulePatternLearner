@@ -24,6 +24,7 @@ from ...paths import GSQL_DIR
 from . import (
     list_accounts,
     profile_hubs,
+    read_activity_change,
     read_counterparties,
     read_hubs,
     read_labels,
@@ -125,7 +126,13 @@ REGISTRY: dict[str, Query] = {
             read_counterparties.params,
             (read_counterparties.Counterparties,),
         ),
-        Query(READ_ACTIVITY_CHANGE, QUERIES_FOLDER),
+        Query(
+            READ_ACTIVITY_CHANGE,
+            QUERIES_FOLDER,
+            "read_activity_change-fbaa2ddc1360",
+            read_activity_change.params,
+            (read_activity_change.ActivityChange,),
+        ),
         Query(READ_PAYMENT_EVENTS, QUERIES_FOLDER),
         Query(READ_SHARED_IDENTITY, QUERIES_FOLDER),
         Query(READ_COMMUNITY, QUERIES_FOLDER),
