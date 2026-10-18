@@ -30,6 +30,7 @@ from typing import Any
 
 from ..config import DEFAULT_CONFIG
 from ..data.calendar import epoch_ms
+from ..tigergraph.executor import ResponseTooLarge
 from ..tigergraph.queries import READ_WORLD, read_world
 from ..tigergraph.queries.read_world import World
 from ..tigergraph.world import shared_fields
@@ -75,10 +76,12 @@ def calendar_world() -> WorldBuilder:
 @dataclass
 class Spy:
     """A query executor that answers through a reference graph and records every query it
-    runs, with its parameters."""
+    runs, with its parameters. With too_large, (query, most), it refuses every request of that
+    query for more than most accounts, as TigerGraph refuses an answer for its size."""
 
     graph: ReferenceGraph
     calls: list[tuple[str, dict[str, Any]]] = field(default_factory=lambda: [])
+    too_large: tuple[str, int] | None = None
 
     def run(
         self,
@@ -90,12 +93,20 @@ class Spy:
         timeout_retries: int = 1,
     ) -> list[dict[str, Any]]:
         self.calls.append((name, params))
+        if self.too_large is not None:
+            query, most = self.too_large
+            if name == query and len(params["account_ids"]) > most:
+                raise ResponseTooLarge(f"{name} answered more than the response limit")
         return self.graph.run(
             name, params, timeout_s=timeout_s, attempts=attempts, timeout_retries=timeout_retries
         )
 
     def names(self) -> list[str]:
         return [name for name, _ in self.calls]
+
+    def sizes(self, query: str) -> list[int]:
+        """The accounts of each request of query, in order."""
+        return [len(params["account_ids"]) for name, params in self.calls if name == query]
 
 
 def world_of(graph: ReferenceGraph) -> World:
