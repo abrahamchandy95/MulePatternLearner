@@ -14,13 +14,24 @@ from ...tigergraph.queries import (
     PROFILE_HUBS,
     READ_ACTIVITY_CHANGE,
     READ_ANSWER_KEY,
+    READ_COMMUNITY,
     READ_COUNTERPARTIES,
     READ_HUBS,
     READ_LABELS,
     READ_MONEY_FLOW,
+    READ_PAYMENT_EVENTS,
+    READ_SHARED_IDENTITY,
     READ_WORLD,
 )
-from . import activity, counterparties, infrastructure, money_flow
+from . import (
+    activity,
+    community,
+    counterparties,
+    infrastructure,
+    money_flow,
+    payment_events,
+    shared_identity,
+)
 from .graph import ReferenceGraph
 
 # Each query's answer: given the graph and the query's parameters by name, the rows it prints.
@@ -34,6 +45,9 @@ ANSWERS: dict[str, Callable[..., list[dict[str, Any]]]] = {
     READ_MONEY_FLOW: money_flow.read_money_flow,
     READ_COUNTERPARTIES: counterparties.read_counterparties,
     READ_ACTIVITY_CHANGE: activity.read_activity_change,
+    READ_PAYMENT_EVENTS: payment_events.read_payment_events,
+    READ_SHARED_IDENTITY: shared_identity.read_shared_identity,
+    READ_COMMUNITY: community.read_community,
 }
 
 __all__ = ["ANSWERS", "ReferenceGraph"]
