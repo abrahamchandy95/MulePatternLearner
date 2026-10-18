@@ -8,8 +8,9 @@ PhantomLedger's world record (world_<seed>.identity.toml), keeps the one whose s
 read_world's, comparing those fields only, and maps its seed to a configured world. The shared
 fields are those of tigergraph.world.shared_fields, under the same key names; PhantomLedger
 writes every one of them, zero counts included, so a file that lacks one, or holds another
-under their names, is refused. read_world's degree sums are its own, and the file's other keys
-(commit, clean tree, seed, size, calendar) are read as they are.
+under their names, is refused. read_world's degree sums are its own. Of the file's other keys
+only the seed is read, to name the configured world, so no other key travels through data
+code: not the commit, the clean-tree flag or the code-gate certificate.
 
 A TOML key with dots is either a quoted key or a path of tables; both read here as the same
 dotted name, and a file that holds one name both ways is refused.
@@ -42,13 +43,13 @@ SEED = "seed"
 @dataclass(frozen=True)
 class LoadedWorld:
     """The configured world loaded in TigerGraph: its settings, read_world's fields and their
-    identity, and the identity file that matched them, its keys flattened to dotted names."""
+    identity, the identity file that matched them, and the seed in it."""
 
     config: WorldConfig
     world: World
     identity: str
     path: Path
-    record: Mapping[str, object]
+    seed: int
 
 
 def load_world(executor: QueryExecutor) -> World:
@@ -127,7 +128,7 @@ def match_world(world: World, files: Sequence[Path], worlds: WorldsConfig) -> Lo
     configured = [config for config in worlds.worlds if config.seed == seed]
     if not configured:
         raise ValueError(f"The loaded world, of seed {seed} ({path}), is no configured world")
-    return LoadedWorld(configured[0], world, identity(world), path, record)
+    return LoadedWorld(configured[0], world, identity(world), path, seed)
 
 
 def find_world(

@@ -8,10 +8,12 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from mule_pattern_learner.config import DEFAULT_CONFIG, RunConfig
+from mule_pattern_learner.data import prepare as prepare_module
 from mule_pattern_learner.data.examples import (
     POSITIVE,
     SELECTION_FILE,
@@ -25,11 +27,11 @@ from mule_pattern_learner.data.examples import (
 )
 from mule_pattern_learner.data.population import POPULATION_FILE
 from mule_pattern_learner.data.prepare import Prepared, prepare
-from mule_pattern_learner.data.report import REPORT_FILE
+from mule_pattern_learner.data.report import REPORT_FILE, REPORT_SCHEMA
 from mule_pattern_learner.data.worlds import SELECT, TEST, TRAIN
 from mule_pattern_learner.testing.calendar import Spy, calendar_world, identity_text, world_of
 from mule_pattern_learner.testing.world import DAY_MS, T
-from mule_pattern_learner.tigergraph.executor import FetchExecutor, QueryNotAllowed
+from mule_pattern_learner.tigergraph.executor import FetchExecutor, QueryExecutor, QueryNotAllowed
 from mule_pattern_learner.tigergraph.world import cache_key, identity
 
 Records = Callable[[str, str], Path]
@@ -116,6 +118,20 @@ def test_each_world_writes_the_tables_of_its_roles(
     _, prepared = _prepared(records, seed, config)
     assert sorted(path.name for path in prepared.folder.iterdir()) == tables
     assert prepared.folder.is_relative_to(data_dir)
+    # Only a world that trains has a pool, a draw and weights in its report, in the table
+    # written to the folder as in the one prepare returns.
+    drawn = ["pool", "unlabelled", "positive_weight", "unlabelled_weight", "ratio"]
+    for frame in (
+        prepared.report.mondays,
+        read_table(prepared.folder / REPORT_FILE, REPORT_SCHEMA),
+    ):
+        if TRAINING_FILE in tables:
+            assert (frame[["pool", "unlabelled"]] > 0).all().all()
+            assert (frame["unlabelled_weight"] > 0).all()
+        else:
+            assert frame[drawn].eq(0).all().all()
+        # Every world reports its Mondays' scorable accounts and positives.
+        assert frame["scorable"].gt(0).all() and frame["positives"].sum() == 28
 
 
 def test_a_selection_world_with_too_few_identified_active_mules_is_refused(
@@ -141,6 +157,33 @@ def test_a_world_without_its_window_or_its_identity_file_is_refused(
     with pytest.raises(ValueError, match="No identity file of 0"):
         prepare(Spy(graph), CONFIG, [])
     assert not data_dir.exists()
+
+
+@pytest.mark.parametrize(
+    ("step", "names"),
+    [("read_identified", ["read_world"]), ("population", ["read_world", "read_labels"])],
+)
+def test_prepare_runs_its_steps_through_the_fetch_allowlist(
+    records: Records,
+    data_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    step: str,
+    names: list[str],
+) -> None:
+    graph = calendar_world().graph()
+    path = records("world_1001.identity.toml", identity_text(world_of(graph), 1001))
+    spy = Spy(graph)
+
+    def sneaky(executor: QueryExecutor, *args: Any) -> None:
+        """A step of prepare that asks the executor it was given for the answer key."""
+        executor.run("read_answer_key", {"after_id": "", "page": 1})
+
+    monkeypatch.setattr(prepare_module, step, sneaky)
+    with pytest.raises(QueryNotAllowed, match="does not run read_answer_key"):
+        prepare(spy, CONFIG, [path])
+    # The step reached the allowlist, not the spy: it never ran the answer key.
+    assert spy.names() == names
+    assert not data_dir.exists() or not any(data_dir.rglob("*.parquet"))
 
 
 def test_the_data_code_runs_through_the_fetch_executor() -> None:

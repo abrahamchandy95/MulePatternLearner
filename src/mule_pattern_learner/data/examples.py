@@ -4,7 +4,7 @@ an (account, Monday t); every one is a scorable account of t.
 Training world:
 - a positive is an identified mule active at t and scorable at t, weighing 1 over its number
   of positive Mondays, so every mule counts once however long it ran;
-- an identified mule's other Mondays are dropped, never unlabelled;
+- an identified mule's other Mondays, when it is scorable, are dropped, never unlabelled;
 - the unlabelled examples of t are the training draw (draw.lowest) of n = min(pool, max(15 x
   positives, 500)) accounts from the pool, every scorable account of t that is no identified
   mule; hidden mules can be drawn. Each weighs the pool over n, so each Monday's draw stands
@@ -77,33 +77,37 @@ EXAMPLE_QUERIES = (LIST_ACCOUNTS, READ_LABELS)
 @dataclass(frozen=True)
 class Tally:
     """What the training weights and the report need of a Monday: how many accounts are
-    scorable then, and its positives, by id."""
+    scorable then, its positives, by id, and how many identified mules are dropped."""
 
     t_ms: int
     scorable: int
     positives: tuple[str, ...]
+    dropped: int
 
 
 @dataclass(frozen=True)
 class Monday:
-    """A Monday's scorable accounts, by id, and its positives: the identified mules active then
-    and scorable then, by id."""
+    """A Monday's scorable accounts, by id; its positives, the identified mules active then
+    and scorable then, by id; and how many are dropped, the identified mules scorable then and
+    not active: examples on their other Mondays, so no mule that is not an example that Monday
+    (not yet open, or closed) is counted."""
 
     t_ms: int
     accounts: tuple[str, ...]
     positives: tuple[str, ...]
+    dropped: int
 
     def tally(self) -> Tally:
-        return Tally(self.t_ms, len(self.accounts), self.positives)
+        return Tally(self.t_ms, len(self.accounts), self.positives, self.dropped)
 
 
 def monday(t_ms: int, accounts: Collection[str], mules: Sequence[IdentifiedMule]) -> Monday:
-    """The Monday t's scorable accounts and positives."""
+    """The Monday t's scorable accounts, positives and dropped identified mules."""
     scorable = set(accounts)
-    positives = sorted(
-        mule.account_id for mule in mules if mule.account_id in scorable and active(mule, t_ms)
-    )
-    return Monday(t_ms, tuple(sorted(scorable)), tuple(positives))
+    held = [mule for mule in mules if mule.account_id in scorable]
+    positives = sorted(mule.account_id for mule in held if active(mule, t_ms))
+    dropped = sum(1 for mule in held if not active(mule, t_ms))
+    return Monday(t_ms, tuple(sorted(scorable)), tuple(positives), dropped)
 
 
 @dataclass(frozen=True)

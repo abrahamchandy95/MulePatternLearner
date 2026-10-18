@@ -15,6 +15,7 @@ from datetime import date, timedelta
 QUERY_ATTEMPTS = range(1, 21)
 OUTAGE_SECONDS = range(0, 86_401)
 ACCOUNTS_PER_REQUEST = range(1, 1_025)
+ACCOUNTS_PER_PART = range(1, 100_001)
 # The response size above which TigerGraph refuses a query's answer, as the executor asks
 # for it. Requests are sized to stay under half of it (docs/design.md, "Query plumbing").
 RESPONSE_LIMIT_BYTES = 64_000_000
@@ -280,12 +281,16 @@ class TransportConfig:
     accounts_per_request: int = 32
     # The bytes a request's answer is sized to stay under: half of the response limit.
     response_budget_bytes: int = RESPONSE_LIMIT_BYTES // 2
+    # Accounts of one Monday in a part of the cache, which is written once: a fetch that stops
+    # loses at most the part it was filling.
+    accounts_per_part: int = 1_024
 
     def __post_init__(self) -> None:
         _integer("transport.max_query_attempts", self.max_query_attempts, QUERY_ATTEMPTS)
         _integer("transport.max_outage_s", self.max_outage_s, OUTAGE_SECONDS)
         _integer("transport.accounts_per_request", self.accounts_per_request, ACCOUNTS_PER_REQUEST)
         _integer("transport.response_budget_bytes", self.response_budget_bytes, RESPONSE_BUDGETS)
+        _integer("transport.accounts_per_part", self.accounts_per_part, ACCOUNTS_PER_PART)
 
 
 @dataclass(frozen=True)

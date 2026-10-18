@@ -43,6 +43,8 @@ def test_the_defaults_are_the_designs_settings() -> None:
     assert (transport.max_query_attempts, transport.max_outage_s) == (6, 900)
     # 32 accounts a request, sized under half of the 64,000,000-byte response limit.
     assert (transport.accounts_per_request, transport.response_budget_bytes) == (32, 32_000_000)
+    # A part of the cache holds 1,024 accounts of a Monday.
+    assert transport.accounts_per_part == 1_024
     subgraph = DEFAULT_CONFIG.subgraph
     assert (subgraph.lookback_days, subgraph.recent_payments) == (90, 256)
     caps = (subgraph.scored_payments, subgraph.counterparty_payments, subgraph.own_accounts)
@@ -149,6 +151,8 @@ def test_sections_refuse_values_outside_their_ranges() -> None:
         (lambda: TransportConfig(max_outage_s=-1), "transport.max_outage_s"),
         (lambda: TransportConfig(max_outage_s=1.5), "transport.max_outage_s"),  # pyright: ignore[reportArgumentType]
         (lambda: TransportConfig(accounts_per_request=0), "transport.accounts_per_request"),
+        (lambda: TransportConfig(accounts_per_part=0), "transport.accounts_per_part"),
+        (lambda: TransportConfig(accounts_per_part=100_001), "transport.accounts_per_part"),
         # Half of the response limit at most.
         (
             lambda: TransportConfig(response_budget_bytes=32_000_001),

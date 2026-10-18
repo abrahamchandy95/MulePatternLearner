@@ -25,7 +25,9 @@ MULES = (
     IdentifiedMule("c", T1 - 5 * W, T1 - 4 * W),
 )
 LABELS = Labels(MULES, label_identity(MULES))
-TALLIES = [Tally(T1, 10, ("a",)), Tally(T2, 20, ("a", "b")), Tally(T3, 0, ())]
+# The Mondays' dropped counts are the identified mules scorable then and not active: on T1, b
+# and c; on T2, c; on T3 nothing is scorable.
+TALLIES = [Tally(T1, 10, ("a",), 2), Tally(T2, 20, ("a", "b"), 1), Tally(T3, 0, (), 0)]
 DRAWS = [Draw(T1, 9, ("u1", "u2", "u3")), Draw(T2, 18, ("u1", "u4")), Draw(T3, 0, ())]
 UNSCORED = Unscored(("c",), ())
 
@@ -37,8 +39,9 @@ def test_the_report_of_a_training_world() -> None:
     assert list(frame.columns) == REPORT_SCHEMA.names
     assert frame["scorable"].tolist() == [10, 20, 0]
     assert frame["positives"].tolist() == [1, 2, 0]
-    # Dropped: the identified mules not active then: b and c, then c, then all three.
-    assert frame["dropped"].tolist() == [2, 1, 3]
+    # Dropped is what each Monday's tally carries, not every identified mule that is not active
+    # then: on T3, with no scorable account, none of the three is an example.
+    assert frame["dropped"].tolist() == [2, 1, 0]
     assert frame["pool"].tolist() == [9, 18, 0]
     assert frame["unlabelled"].tolist() == [3, 2, 0]
     # Positives: a 1/2 twice and b 1, mean 2/3, so a's rows weigh 3/4 and b's 3/2. Unlabelled:
@@ -50,6 +53,16 @@ def test_the_report_of_a_training_world() -> None:
     # (1/10 + 2/20) / 2, over the Mondays with a scorable account.
     assert report.identified_active_share == pytest.approx(0.1)
     assert report.unscored == UNSCORED
+
+
+def test_the_identified_active_share_is_the_mean_over_mondays_not_the_pooled_ratio() -> None:
+    # One positive on a Monday of 10 scorable accounts and one on a Monday of 40: the shares
+    # 0.1 and 0.025 average 0.0625, where the pooled ratio, 2 over 50, is 0.04. The prior grid
+    # is defined on the mean.
+    tallies = [Tally(T1, 10, ("a",), 0), Tally(T2, 40, ("b",), 0)]
+    report = build_report(tallies, LABELS, UNSCORED)
+    assert report.identified_active_share == pytest.approx(0.0625)
+    assert report.identified_active_share != pytest.approx(2 / 50)
 
 
 def test_the_report_of_a_world_that_does_not_train() -> None:

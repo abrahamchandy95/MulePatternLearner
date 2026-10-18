@@ -12,19 +12,24 @@ For each Monday, fetch:
 4. records the part's scored accounts as complete, so a fetch interrupted at any point resumes
    where it stopped, and a second fetch of the same keys makes no request.
 
+Every table's rows are written a part of accounts_per_part accounts at a time, as soon as the
+answers for them are in, so a fetch that stops loses only the part it was filling. Nothing
+keeps the answers of a whole call in memory: the nodes of a part are read back from the cache
+the part's B4 and B5 were written to, on a first fetch and on a resumed one alike.
+
 Every query runs through the fetch executor, and fetch refuses to start unless the parity
 record holds the version of every query it runs. A request holds at most accounts_per_request
 accounts, fewer once a query's answers have been measured: as many as fit the response budget
-at the 90th percentile of the bytes per account its answers took so far. A request TigerGraph
-refuses for its size or that times out is halved, down to one account
-(tigergraph.executor.run_in_halves). The number of accounts in a request never changes a
-result.
+at the 90th percentile of the bytes per account its answers took, which each request reads
+anew from the answers before it. A request TigerGraph refuses for its size or that times out
+is halved, down to one account (tigergraph.executor.run_in_halves). The number of accounts in
+a request never changes a result.
 """
 
 from __future__ import annotations
 
-from collections import Counter, defaultdict
-from collections.abc import Callable, Collection, Mapping, Sequence
+from collections import Counter, defaultdict, deque
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 import json
 from pathlib import Path
@@ -53,8 +58,6 @@ from ..tigergraph.queries import (
     read_shared_identity,
 )
 from ..tigergraph.queries.read_hubs import Hubs
-from ..tigergraph.queries.read_payment_events import PaymentGraph
-from ..tigergraph.queries.read_shared_identity import IdentityGraph
 from .cache import (
     ACTIVITY,
     COMMUNITY,
@@ -77,11 +80,10 @@ FETCHED = (
     READ_COUNTERPARTIES,
     READ_ACTIVITY_CHANGE,
 )
-# The scored accounts of one part of a Monday's subgraph tables: a storage setting, which
-# never changes a result.
-PART_ACCOUNTS = 1_024
-# The share of a query's measured answers whose bytes per account size its requests.
+# The share of a query's measured accounts whose bytes size its requests, and how many of the
+# latest accounts are kept: a Monday of a 300,000-person world has millions.
 PERCENTILE = 0.9
+MEASURED_ACCOUNTS = 10_000
 # Each query's parameters, from the Monday, the request's accounts and the account hubs.
 PARAMS: dict[str, Callable[[int, tuple[str, ...], Sequence[str]], dict[str, Any]]] = {
     READ_PAYMENT_EVENTS: read_payment_events.params,
@@ -109,13 +111,14 @@ class Fetched:
 
 class Sizer:
     """The accounts of each query's requests: accounts_per_request until an answer of the query
-    has been measured, then as many as fit the response budget at the 90th percentile of its
-    bytes per account, at least one and at most accounts_per_request."""
+    has been measured, then as many as fit the response budget at the 90th percentile of the
+    bytes per account of its latest measured accounts, at least one and at most
+    accounts_per_request."""
 
     def __init__(self, transport: TransportConfig) -> None:
         self.most = transport.accounts_per_request
         self.budget = transport.response_budget_bytes
-        self.measured: dict[str, list[float]] = defaultdict(list)
+        self.measured: dict[str, deque[int]] = defaultdict(lambda: deque(maxlen=MEASURED_ACCOUNTS))
 
     def size(self, query: str) -> int:
         found = self.measured.get(query)
@@ -126,10 +129,22 @@ class Sizer:
             return self.most
         return max(1, min(self.most, int(self.budget // per_account)))
 
-    def measure(self, query: str, accounts: int, rows: Sequence[object]) -> None:
-        """Record an answer's bytes per account, as compact JSON."""
-        size = len(json.dumps(rows, separators=(",", ":")))
-        self.measured[query].append(size / accounts)
+    def measure(self, query: str, per_account: Iterable[int]) -> None:
+        """Record the bytes each account of an answer took."""
+        self.measured[query].extend(per_account)
+
+
+def account_bytes[R](table: Table[R], answer: R, asked: Sequence[str]) -> list[int]:
+    """The bytes each of the asked accounts' rows of an answer take, as compact JSON, in the
+    order asked: the rows of a scored account's own copy of its subgraph for B4 and B5, so a
+    subgraph's rows that another shares count for each, and an account with no row takes 0.
+    This is the bytes the account would take if asked alone, which keeps the 90th percentile
+    the size of a large subgraph and never the mean of a request."""
+    sizes: Counter[str] = Counter()
+    for kind in table.kinds:
+        for row in table.encode(answer)[kind.name]:
+            sizes[row[kind.key]] += len(json.dumps(row, separators=(",", ":")))
+    return [sizes[account] for account in asked]
 
 
 def _chunks[T](items: Sequence[T], size: int) -> list[Sequence[T]]:
@@ -143,6 +158,7 @@ class Fetcher:
     def __init__(self, executor: QueryExecutor, cache: Cache, transport: TransportConfig) -> None:
         self.executor = FetchExecutor(executor)
         self.cache = cache
+        self.part_accounts = transport.accounts_per_part
         self.sizer = Sizer(transport)
         self.done = Fetched()
 
@@ -161,69 +177,76 @@ class Fetcher:
     def run[R](
         self, table: Table[R], t_ms: int, accounts: Sequence[str], hubs: Sequence[str]
     ) -> list[R]:
-        """The answers of table's query for accounts, in requests of the sized number of
-        accounts, each halved when refused for its size or timing out."""
+        """The answers of table's query for accounts, each request sized from the answers
+        before it, and halved when refused for its size or timing out."""
         query = table.query
         answers: list[R] = []
-        for chunk in _chunks(accounts, self.sizer.size(query)):
+        start = 0
+        while start < len(accounts):
+            chunk = accounts[start : start + self.sizer.size(query)]
+            start += len(chunk)
             replies = run_in_halves(
                 self.executor, query, chunk, lambda part: PARAMS[query](t_ms, part, hubs)
             )
             for part, rows in replies:
                 self.done.requests[query] += 1
-                self.sizer.measure(query, len(part), rows)
-                answers.append(table.parse(rows, part))
+                answer = table.parse(rows, part)
+                self.sizer.measure(query, account_bytes(table, answer, part))
+                answers.append(answer)
         self.done.accounts[query] += len(accounts)
         return answers
 
     def fill[R](
         self, table: Table[R], t_ms: int, accounts: Collection[str], hubs: Sequence[str]
-    ) -> list[R]:
-        """Fetch and cache the rows of accounts that table lacks, and give their answers."""
+    ) -> None:
+        """Fetch and cache the rows of accounts that table lacks, a part of accounts_per_part
+        accounts at a time, each written as soon as its answers are in."""
         missing = self.cache.missing(table.name, t_ms, accounts)
         self.done.cached[table.query] += len(set(accounts)) - len(missing)
-        if not missing:
-            return []
-        answers = self.run(table, t_ms, missing, hubs)
-        self.cache.write(table, t_ms, missing, answers)
-        return answers
+        for part in _chunks(missing, self.part_accounts):
+            self.cache.write(table, t_ms, part, self.run(table, t_ms, part, hubs))
 
     def nodes(self, t_ms: int, scored: Sequence[str], hubs: Collection[str]) -> set[str]:
-        """The account nodes of the scored accounts' subgraphs that get B1 to B3 rows: every
-        account of B4's subgraphs and B5's co-users' accounts but the account hubs, and the
-        scored accounts themselves."""
-        listed = sorted(hubs)
-        graphs: list[PaymentGraph] = [
-            graph for answer in self.fill(PAYMENT_EVENTS, t_ms, scored, listed) for graph in answer
-        ]
-        identities: list[IdentityGraph] = [
-            graph for answer in self.fill(SHARED_IDENTITY, t_ms, scored, listed) for graph in answer
-        ]
-        # The subgraphs cached by an earlier fetch that stopped before they were complete.
-        earlier = set(scored) - {graph.scored_id for graph in graphs}
-        if earlier:
-            graphs += self.cache.rows(PAYMENT_EVENTS, t_ms, earlier)
-        earlier = set(scored) - {graph.scored_id for graph in identities}
-        if earlier:
-            identities += self.cache.rows(SHARED_IDENTITY, t_ms, earlier)
-        found = {account.account_id for graph in graphs for account in graph.accounts}
-        for graph in identities:
-            found |= {account.account_id for account in graph.accounts}
-            found |= {edge.account_id for edge in (*graph.owner_enrolled, *graph.seen)}
+        """The account nodes of the scored accounts' subgraphs that get B1 to B3 rows, read
+        from the cached B4 and B5: every account of B4's subgraphs and B5's co-users'
+        accounts but the account hubs, and the scored accounts themselves. An owner-enrolment
+        or seen edge of B5 joins an account of its own subgraph, and one that joins another
+        is refused, since its account would get no B1 to B3 rows."""
+        found: set[str] = set()
+        graphs = {graph.scored_id: graph for graph in self.cache.rows(PAYMENT_EVENTS, t_ms, scored)}
+        for identity in self.cache.rows(SHARED_IDENTITY, t_ms, scored):
+            listed = {account.account_id for account in graphs[identity.scored_id].accounts}
+            listed |= {account.account_id for account in identity.accounts}
+            for edge in (*identity.owner_enrolled, *identity.seen):
+                if edge.account_id not in listed:
+                    raise ValueError(
+                        f"{READ_SHARED_IDENTITY} gave {identity.scored_id} an edge of the "
+                        f"account {edge.account_id}, which no account of its subgraph lists"
+                    )
+            found |= listed
         return (found - set(hubs)) | set(scored)
 
     def monday(self, t_ms: int, scored: Collection[str]) -> None:
-        """Fill the cache for the scored accounts of the Monday t."""
+        """Fill the cache for the scored accounts of the Monday t, and drop the cache's
+        indexes of the Monday, which no later Monday needs."""
+        try:
+            self._monday(t_ms, scored)
+        finally:
+            self.cache.forget(t_ms)
+
+    def _monday(self, t_ms: int, scored: Collection[str]) -> None:
         todo = self.cache.missing(COMPLETE, t_ms, scored)
         self.done.cached[COMPLETE] += len(set(scored)) - len(todo)
         if not todo:
             return
         hubs = {account.account_id for account in self.hubs(t_ms).accounts}
-        for part in _chunks(todo, PART_ACCOUNTS):
+        listed = sorted(hubs)
+        for part in _chunks(todo, self.part_accounts):
+            for table in SUBGRAPH_TABLES:
+                self.fill(table, t_ms, part, listed)
             nodes = self.nodes(t_ms, part, hubs)
-            self.fill(COMMUNITY, t_ms, part, sorted(hubs))
             for table in ACCOUNT_TABLES:
-                self.fill(table, t_ms, nodes, sorted(hubs))
+                self.fill(table, t_ms, nodes, listed)
             self.cache.complete(t_ms, part)
 
 

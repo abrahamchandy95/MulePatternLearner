@@ -3,13 +3,13 @@ world"), from pu_label alone, and the refusal of a selection world with too few 
 active mules.
 
 Per Monday: the scorable accounts, the positives (identified mules active and scorable then),
-the identified mules dropped (not active then), and for a training world the unlabelled pool,
-the draw, and the sums of each label's weights and their ratio. If identified mules cluster in
-some months, seasonal spending could act as a clock; the identification horizon gate holds the
-cause flat, and this table shows the effect. For the world: the identified mules, the
-identified active mules (positive on some Monday), the identified active share (positives over
-scorable accounts, averaged over Mondays), which sets the prior grid, and the identified
-mules never scored on a Monday of their activity.
+the identified mules dropped (scorable then and not active: examples on their other Mondays),
+and for a training world the unlabelled pool, the draw, and the sums of each label's weights
+and their ratio. If identified mules cluster in some months, seasonal spending could act as a
+clock; the identification horizon gate holds the cause flat, and this table shows the effect.
+For the world: the identified mules, the identified active mules (positive on some Monday),
+the identified active share (positives over scorable accounts, averaged over Mondays), which
+sets the prior grid, and the identified mules never scored on a Monday of their activity.
 
 The per-Monday table is written beside the examples as report.parquet.
 """
@@ -24,7 +24,7 @@ import pyarrow as pa
 
 from ..runtime.console import plural
 from .examples import POSITIVE, UNLABELLED, Draw, Tally
-from .labels import Labels, Unscored, active
+from .labels import Labels, Unscored
 
 REPORT_FILE = "report.parquet"
 REPORT_SCHEMA = pa.schema(
@@ -82,13 +82,12 @@ def build_report(
         draw = pools.get(tally.t_ms)
         positive = weights.get((tally.t_ms, POSITIVE), 0.0)
         unlabelled = weights.get((tally.t_ms, UNLABELLED), 0.0)
-        dropped = sum(1 for mule in labels.mules if not active(mule, tally.t_ms))
         rows.append(
             (
                 tally.t_ms,
                 tally.scorable,
                 len(tally.positives),
-                dropped,
+                tally.dropped,
                 draw.pool if draw else 0,
                 len(draw.drawn) if draw else 0,
                 positive,

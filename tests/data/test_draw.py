@@ -9,6 +9,7 @@ import pytest
 from scipy.stats import chisquare
 
 from mule_pattern_learner.config import DEFAULT_CONFIG
+from mule_pattern_learner.data import draw
 from mule_pattern_learner.data.draw import SCALE, draw_hash, lowest, sampled
 
 KEY = DEFAULT_CONFIG.data.draw_key
@@ -39,6 +40,19 @@ def test_the_draw_takes_the_lowest_hashes() -> None:
     assert sorted(lowest(KEY, POOL, T, 50)) == POOL
     with pytest.raises(ValueError, match="not negative"):
         lowest(KEY, POOL, T, -1)
+
+
+def test_hashes_that_tie_are_broken_by_account_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A 64-bit hash practically never ties, so the rule is shown with a hash that always does:
+    # the lowest two of b, a and c are a and b, whatever order they come in.
+
+    def tied(key: bytes, account_id: str, t_ms: int) -> int:
+        return 7
+
+    monkeypatch.setattr(draw, "draw_hash", tied)
+    assert lowest(KEY, ["b", "a", "c"], T, 2) == ["a", "b"]
+    assert lowest(KEY, ["c", "b", "a"], T, 2) == ["a", "b"]
+    assert lowest(KEY, ["c", "b", "a"], T, 3) == ["a", "b", "c"]
 
 
 def test_the_draw_is_uniform() -> None:

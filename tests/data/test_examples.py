@@ -31,6 +31,13 @@ from mule_pattern_learner.data.labels import Labels, read_identified
 from mule_pattern_learner.data.population import population
 from mule_pattern_learner.testing.calendar import ORDINARY, Spy, calendar_world
 from mule_pattern_learner.testing.world import DAY_MS, T
+from mule_pattern_learner.tigergraph.queries import (
+    LIST_ACCOUNTS,
+    READ_LABELS,
+    READ_MONEY_FLOW,
+    VERSIONS,
+)
+from mule_pattern_learner.tigergraph.queries.read_labels import IdentifiedMule
 
 W = 7 * DAY_MS
 MONDAYS = DEFAULT_CONFIG.calendar.mondays()
@@ -72,6 +79,41 @@ def test_the_positives_are_identified_mules_active_and_scorable(
     assert len(_on(found, T).accounts) == 17 and len(found[0].accounts) == 18
     positive = sum(len(day.positives) for day in found)
     assert positive == 26 + 1 + 1
+
+
+def test_the_dropped_mules_are_the_identified_scorable_and_not_active(
+    days: tuple[Labels, list[Monday]],
+) -> None:
+    _, found = days
+    # On the first Monday, 2024-04-01, all five identified mules are scorable (a_gone has not
+    # closed) and none is active yet: 5 dropped.
+    assert (found[0].dropped, found[0].positives) == (5, ())
+    # A week before T, a_long is not active yet (its onset is T - 1 day) and is dropped with
+    # a_short, a_edge and a_early; a_gone closed on 2024-06-01, so it is no example.
+    assert (_on(found, T - W).dropped, _on(found, T - W).positives) == (4, ())
+    # At T, a_long is a positive, and the other three scorable ones are dropped, not a_gone.
+    assert (_on(found, T).dropped, _on(found, T).positives) == (3, ("a_long",))
+    # Two weeks later a_gone's activity is over and it is still closed: not counted. Counting
+    # every identified mule that is not active would give 4.
+    assert (_on(found, T + 2 * W).dropped, _on(found, T + 2 * W).positives) == (3, ("a_long",))
+    # a_short is active at T + 9 weeks, so a_edge and a_early are dropped; at T + 30 weeks
+    # a_edge's onset is exactly then, so all four scorable ones are.
+    assert _on(found, T + 9 * W).dropped == 2
+    assert (_on(found, T + 30 * W).dropped, _on(found, T + 30 * W).positives) == (4, ())
+    assert _on(found, T + 30 * W).tally().dropped == 4
+
+
+def test_a_mule_not_scorable_that_monday_is_neither_positive_nor_dropped() -> None:
+    mules = (
+        IdentifiedMule("a_past", T - 3 * W, T - 2 * W),
+        IdentifiedMule("a_later", T + W, T + 2 * W),
+        IdentifiedMule("a_now", T - W, T + W),
+        IdentifiedMule("a_closed", T - W, T + W),
+    )
+    # a_later is not scorable yet and a_closed is closed: neither is an example at T.
+    day = monday(T, ["a_n1", "a_past", "a_now"], mules)
+    assert (day.positives, day.dropped) == (("a_now",), 1)
+    assert monday(T, [], mules).dropped == 0 and monday(T, ["a_past"], mules).dropped == 1
 
 
 def test_each_mule_counts_once_however_long_it_ran(days: tuple[Labels, list[Monday]]) -> None:
@@ -120,12 +162,12 @@ def test_the_unlabelled_draw_stands_for_its_mondays_pool(
 
 
 def test_the_draw_is_at_least_the_minimum_and_at_most_the_pool() -> None:
-    day = Monday(T, tuple(POOL), ())
+    day = Monday(T, tuple(POOL), (), 0)
     assert len(unlabelled(day, (), DATA).drawn) == 3
     assert len(unlabelled(day, (), DEFAULT_CONFIG.data).drawn) == 13
-    busy = Monday(T, tuple(POOL), tuple(POOL[:5]))
+    busy = Monday(T, tuple(POOL), tuple(POOL[:5]), 0)
     assert len(unlabelled(busy, POOL[:5], DATA).drawn) == 8
-    assert unlabelled(Monday(T, (), ()), (), DATA).weight == 0.0
+    assert unlabelled(Monday(T, (), (), 0), (), DATA).weight == 0.0
 
 
 def test_the_selection_keys_rank_by_pu_label_alone(days: tuple[Labels, list[Monday]]) -> None:
@@ -161,13 +203,23 @@ def test_the_test_keys_are_every_scorable_account(days: tuple[Labels, list[Monda
     assert frame["t_ms"].eq(T).all() and list(frame.columns) == ["t_ms", "account_id"]
 
 
-def test_the_examples_are_keyed_by_the_settings_they_read() -> None:
+def test_the_examples_are_keyed_by_the_settings_they_read(monkeypatch: pytest.MonkeyPatch) -> None:
     calendar = DEFAULT_CONFIG.calendar
     key = examples_key(calendar, DEFAULT_CONFIG.data)
     assert len(key) == 32 and key == examples_key(calendar, DataConfig())
     assert examples_key(calendar, DATA) != key
     assert examples_key(calendar, replace(DEFAULT_CONFIG.data, draw_key=b"other")) != key
     assert examples_key(replace(calendar, scored_mondays=51), DEFAULT_CONFIG.data) != key
+    # The versions of the two queries the examples are made of move the key; those of the
+    # queries only the cache holds do not.
+    for query in (LIST_ACCOUNTS, READ_LABELS):
+        monkeypatch.setitem(VERSIONS, query, f"{query}-000000000000")
+        assert examples_key(calendar, DEFAULT_CONFIG.data) != key
+        monkeypatch.undo()
+        assert examples_key(calendar, DEFAULT_CONFIG.data) == key
+    monkeypatch.setitem(VERSIONS, READ_MONEY_FLOW, "read_money_flow-000000000000")
+    assert examples_key(calendar, DEFAULT_CONFIG.data) == key
+    monkeypatch.undo()
     found = examples_folder(IDENTITY, key, IDENTITY)
     assert found.parts[-4:] == ("examples", IDENTITY, key, IDENTITY)
     for bad in ("", "../x", key.upper()):

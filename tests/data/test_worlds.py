@@ -5,7 +5,7 @@ world plays in the rotations."""
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import fields, replace
 from pathlib import Path
 
 import pytest
@@ -15,6 +15,7 @@ from mule_pattern_learner.data.worlds import (
     SELECT,
     TEST,
     TRAIN,
+    LoadedWorld,
     find_world,
     match_world,
     read_record,
@@ -50,9 +51,16 @@ def test_the_identity_file_matching_read_world_names_the_configured_world(
     assert found.config.name == "D1" and found.config.seed == 1001
     assert found.path == path and found.world == world
     assert found.identity == identity(world)
-    # The file's own keys are read as they are.
-    assert found.record["seed"] == 1001 and found.record["clean_tree"] is True
-    assert found.record["population"] == 30_000
+    # Of the file's own keys only the seed travels on: no commit, clean-tree flag or code-gate
+    # certificate reaches data code.
+    assert found.seed == 1001
+    assert [field.name for field in fields(LoadedWorld)] == [
+        "config",
+        "world",
+        "identity",
+        "path",
+        "seed",
+    ]
 
 
 def test_a_file_of_tables_reads_as_one_of_dotted_keys(records: Records) -> None:

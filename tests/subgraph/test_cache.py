@@ -1,6 +1,7 @@
-"""The cache of fetched rows: written once a part at a time, read back for exactly the keys asked,
-reparsed with the live checks, and keyed by the world, the query versions and the settings
-(docs/design.md, "Cache")."""
+"""The cache of fetched rows: written once a part at a time, each part with its own index, read
+back for exactly the keys asked, reparsed with the live checks, its indexes held for one Monday
+at a time, and keyed by the world, the query versions and the settings (docs/design.md,
+"Cache")."""
 
 from __future__ import annotations
 
@@ -82,9 +83,10 @@ def test_each_table_reads_back_what_was_written(
     cache.write(table, T, ACCOUNTS, [answer])
     assert cache.rows(table, T, ACCOUNTS) == answer
     folder = tmp_path / "2024-07-01" / name
-    assert sorted(path.name for path in folder.iterdir()) == [INDEX_FILE, "part-0"]
+    assert [path.name for path in folder.iterdir()] == ["part-0"]
+    # The part holds a file of each kind of row, and its index of the accounts.
     assert sorted(path.name for path in (folder / "part-0").iterdir()) == sorted(
-        f"{kind.name}.parquet" for kind in table.kinds
+        [INDEX_FILE, *(f"{kind.name}.parquet" for kind in table.kinds)]
     )
 
 
@@ -108,17 +110,23 @@ def test_the_reader_gives_exactly_the_keys_asked(
         cache.rows(table, T, ["a_saver", "a_mule"])
 
 
-def test_the_index_names_each_accounts_part(graph: ReferenceGraph, tmp_path: Path) -> None:
+def test_each_part_holds_the_index_of_its_accounts(graph: ReferenceGraph, tmp_path: Path) -> None:
     cache = Cache(tmp_path)
     cache.write(COUNTERPARTIES, T, ["a_mule"], [_answer(graph, COUNTERPARTIES, ["a_mule"])])
-    cache.write(COUNTERPARTIES, T, ["a_h1"], [_answer(graph, COUNTERPARTIES, ["a_h1"])])
-    index = pq.read_table(tmp_path / "2024-07-01" / "counterparties" / INDEX_FILE)
-    assert index.to_pylist() == [
-        {"account_id": "a_mule", "part": 0},
-        {"account_id": "a_h1", "part": 1},
+    cache.write(
+        COUNTERPARTIES,
+        T,
+        ["a_r1", "a_h1"],
+        [_answer(graph, COUNTERPARTIES, ["a_h1", "a_r1"])],
+    )
+    folder = tmp_path / "2024-07-01" / "counterparties"
+    for part, accounts in ((0, ["a_mule"]), (1, ["a_h1", "a_r1"])):
+        index = pq.read_table(folder / f"part-{part}" / INDEX_FILE)
+        assert index.to_pylist() == [{"account_id": account} for account in accounts]
+    # A new reader of the same folder finds both parts' accounts.
+    assert Cache(tmp_path).missing("counterparties", T, ["a_mule", "a_h1", "a_r1", "a_c000"]) == [
+        "a_c000"
     ]
-    # A new reader of the same folder finds both.
-    assert Cache(tmp_path).missing("counterparties", T, ["a_mule", "a_h1", "a_r1"]) == ["a_r1"]
 
 
 def test_a_part_holds_only_the_accounts_it_was_written_for(
@@ -153,29 +161,34 @@ def test_a_crash_before_a_parts_rename_leaves_no_part(
     assert cache.rows(PAYMENT_EVENTS, T, ACCOUNTS) == answer
 
 
-def test_a_crash_before_the_index_leaves_a_part_never_read(
+def test_a_crash_while_a_part_is_written_leaves_no_part(
     graph: ReferenceGraph, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     cache = Cache(tmp_path)
     answer = _answer(graph, MONEY_FLOW, ACCOUNTS)
+    written: list[Path] = []
+    write_table = pq.write_table
 
-    def crash(self: Path, target: Path) -> Path:
-        raise OSError("the process stopped")
+    def crash_at_the_index(table: pa.Table, where: Path, *args: Any, **keywords: Any) -> None:
+        if Path(where).name == INDEX_FILE:
+            raise OSError("the process stopped")
+        written.append(Path(where))
+        write_table(table, where, *args, **keywords)
 
-    monkeypatch.setattr(Path, "replace", crash)
+    monkeypatch.setattr(pq, "write_table", crash_at_the_index)
     with pytest.raises(OSError, match="stopped"):
         cache.write(MONEY_FLOW, T, ACCOUNTS, [answer])
     monkeypatch.undo()
+    # The rows of the part were written, into a temporary folder that is gone; with no index
+    # in place no account reads as cached, in this reader or a new one.
+    assert len(written) == len(MONEY_FLOW.kinds)
     folder = tmp_path / "2024-07-01" / "money_flow"
-    assert sorted(path.name for path in folder.iterdir()) == ["part-0"]
-    reader = Cache(tmp_path)
-    assert reader.missing("money_flow", T, ACCOUNTS) == sorted(ACCOUNTS)
-    # The accounts are written again into a part of their own, which the index names.
-    reader.write(MONEY_FLOW, T, ACCOUNTS, [answer])
-    assert sorted(path.name for path in folder.iterdir()) == [INDEX_FILE, "part-0", "part-1"]
-    assert reader.rows(MONEY_FLOW, T, ACCOUNTS) == answer
-    index = pq.read_table(folder / INDEX_FILE)
-    assert set(index["part"].to_pylist()) == {1}
+    assert list(folder.iterdir()) == []
+    for reader in (cache, Cache(tmp_path)):
+        assert reader.missing("money_flow", T, ACCOUNTS) == sorted(ACCOUNTS)
+    cache.write(MONEY_FLOW, T, ACCOUNTS, [answer])
+    assert [path.name for path in folder.iterdir()] == ["part-0"]
+    assert Cache(tmp_path).rows(MONEY_FLOW, T, ACCOUNTS) == answer
 
 
 def test_cached_rows_are_reparsed_with_the_live_checks(
@@ -228,11 +241,17 @@ def test_the_hubs_of_a_monday_are_cached_once(graph: ReferenceGraph, tmp_path: P
     assert HUBS.name == "hubs" and (tmp_path / "2024-07-01" / "hubs" / "part-0").is_dir()
 
 
-def test_complete_subgraphs_are_an_index_alone(tmp_path: Path) -> None:
+def test_complete_subgraphs_are_parts_of_an_index_alone(tmp_path: Path) -> None:
     cache = Cache(tmp_path)
     cache.complete(T, ["a_mule", "a_h1"])
-    assert cache.missing(COMPLETE, T, ["a_h1", "a_r1"]) == ["a_r1"]
-    assert [path.name for path in (tmp_path / "2024-07-01" / COMPLETE).iterdir()] == [INDEX_FILE]
+    cache.complete(T, ["a_r1"])
+    assert cache.missing(COMPLETE, T, ["a_h1", "a_r1", "a_c000"]) == ["a_c000"]
+    folder = tmp_path / "2024-07-01" / COMPLETE
+    assert sorted(path.name for path in folder.iterdir()) == ["part-0", "part-1"]
+    for part in ("part-0", "part-1"):
+        assert [path.name for path in (folder / part).iterdir()] == [INDEX_FILE]
+    with pytest.raises(ValueError, match="at least one account"):
+        cache.complete(T, [])
 
 
 def test_only_a_monday_at_midnight_has_a_folder(tmp_path: Path) -> None:
@@ -242,6 +261,63 @@ def test_only_a_monday_at_midnight_has_a_folder(tmp_path: Path) -> None:
             cache.missing("activity", t_ms, ["a_mule"])
         with pytest.raises(ValueError, match="Monday at 00:00 UTC"):
             cache.hubs(t_ms)
+        with pytest.raises(ValueError, match="Monday at 00:00 UTC"):
+            cache.forget(t_ms)
+
+
+def test_the_indexes_of_one_monday_are_held_at_a_time(
+    tmp_path: Path, index_reads: list[Path]
+) -> None:
+    """The indexes of a Monday run to millions of entries at 300,000 people, so a cache that
+    goes through 52 Mondays holds one Monday's and reads another's again when it is asked."""
+    later = T + 7 * DAY_MS
+    cache = Cache(tmp_path)
+    cache.complete(T, ["a_mule"])
+    cache.complete(later, ["a_h1"])
+
+    def reading(t_ms: int, accounts: list[str], expected: list[str]) -> int:
+        """How many indexes asking about accounts on the Monday t reads, and what it lacks."""
+        before = len(index_reads)
+        assert cache.missing(COMPLETE, t_ms, accounts) == expected
+        return len(index_reads) - before
+
+    # The Monday last asked about is held: asking again reads nothing.
+    assert reading(later, ["a_h1", "a_mule"], ["a_mule"]) == 0
+    assert reading(later, ["a_h1"], []) == 0
+    # Asking about the other drops it, and the first is read again when it is asked about.
+    assert reading(T, ["a_h1", "a_mule"], ["a_h1"]) == 1
+    assert reading(T, ["a_mule"], []) == 0
+    assert reading(later, ["a_h1"], []) == 1
+    # forget drops the Monday it names, and no other.
+    cache.forget(T)
+    assert reading(later, ["a_h1"], []) == 0
+    cache.forget(later)
+    assert reading(later, ["a_h1"], []) == 1
+    assert reading(later, ["a_h1"], []) == 0
+    # What a Monday holds is read again from its parts, new parts included.
+    cache.complete(later, ["a_r1"])
+    cache.forget(later)
+    assert reading(later, ["a_h1", "a_r1"], []) == 2
+
+
+def test_a_reader_of_many_mondays_holds_the_indexes_of_one(
+    graph: ReferenceGraph, tmp_path: Path, index_reads: list[Path]
+) -> None:
+    cache = Cache(tmp_path)
+    mondays = [T + week * 7 * DAY_MS for week in range(4)]
+    answer = _answer(graph, ACTIVITY, ["a_mule", "a_h1"])
+    for t_ms in mondays:
+        cache.write(ACTIVITY, t_ms, ["a_mule", "a_h1"], [answer])
+    # The last Monday written is held. Reading each Monday in turn, twice, reads its index
+    # once, the last Monday's included since the first Monday dropped it; going back to the
+    # first reads it again, since only the Monday last read is held.
+    before = len(index_reads)
+    for t_ms in mondays:
+        assert cache.rows(ACTIVITY, t_ms, ["a_mule"]) == _answer(graph, ACTIVITY, ["a_mule"])
+        assert cache.rows(ACTIVITY, t_ms, ["a_h1"]) == _answer(graph, ACTIVITY, ["a_h1"])
+    assert len(index_reads) - before == len(mondays)
+    cache.rows(ACTIVITY, mondays[0], ["a_mule"])
+    assert len(index_reads) - before == len(mondays) + 1
 
 
 def test_two_settings_never_share_a_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -7,6 +7,8 @@ The world is the catalogue of look-alikes (testing.fixtures) around T, 2024-07-0
   paying a_h2 from them 3 days before t;
 - a ring, p_r1 (identified) and p_r2, on the device d_ring since 20 days before t, a_r1 paying
   a_r2 from it 5 days before t;
+- the owner's Account Z: p_z, whose account a_z has no payment, enrolled on the ring's device d_ring
+  18 days before t, so that B5 reaches a_z through the device alone, never through a payment;
 - a shop, a_shop, paid 10.00 by card once in the lookback by each of 201 customers, a_c000 to
   a_c200, so that it is an account hub at T: more than 200 customers own the other accounts of
   its payments.
@@ -15,9 +17,13 @@ The world is the catalogue of look-alikes (testing.fixtures) around T, 2024-07-0
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
+from mule_pattern_learner.subgraph.cache import INDEX_FILE
 from mule_pattern_learner.testing import fixtures
 from mule_pattern_learner.testing.reference import ReferenceGraph
 from mule_pattern_learner.testing.world import DAY_MS, T, WorldBuilder
@@ -43,6 +49,8 @@ def subgraph_world() -> WorldBuilder:
         identified=["r1"],
     )
     w.pay("z_ring", "a_r1", "a_r2", T - 5 * DAY_MS, 480.0, "zelle", device="d_ring")
+    w.customer("z", JOINED)
+    w.device("p_z", "d_ring", T - 18 * DAY_MS)
     w.customer("shop", JOINED)
     for index, name in enumerate(SHOPPERS):
         w.customer(name, JOINED)
@@ -69,3 +77,19 @@ def parity(tmp_path: Path) -> Path:
         )
     )
     return record
+
+
+@pytest.fixture
+def index_reads(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
+    """The part indexes the cache reads from now on, in order: a cache holds a Monday's indexes
+    in memory, so each read is one that was not held."""
+    reads: list[Path] = []
+    read_table = pq.read_table
+
+    def counting(source: Path, *args: Any, **keywords: Any) -> pa.Table:
+        if Path(source).name == INDEX_FILE:
+            reads.append(Path(source))
+        return read_table(source, *args, **keywords)
+
+    monkeypatch.setattr(pq, "read_table", counting)
+    return reads

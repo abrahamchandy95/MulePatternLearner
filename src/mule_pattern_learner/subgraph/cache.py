@@ -5,7 +5,7 @@ Under a world's identity and the key of its query versions and settings
 the hubs, and one table per query, B1 to B6:
 
     data/cache/<world identity>/<cache key>/<Monday>/<table>/part-<n>/<kind>.parquet
-    data/cache/<world identity>/<cache key>/<Monday>/<table>/index.parquet
+    data/cache/<world identity>/<cache key>/<Monday>/<table>/part-<n>/index.parquet
 
 - A table holds one Parquet file per kind of row its query prints, one row per node or edge,
   every field named as its row dataclass names it: B4's accounts, payments and ownership
@@ -13,15 +13,19 @@ the hubs, and one table per query, B1 to B6:
   accounts and tracked inflows; one kind for B2, B3 and B6. A row of B4 or B5 carries the
   scored account it belongs to, scored_id, since one example holds its own copy of its
   subgraph; every other row names its account.
-- A part holds the rows of a set of accounts, and is written once: its files go into a
-  temporary folder, which a rename puts in place whole. The index then names the part of each
-  of its accounts, rewritten through a temporary file and a rename. A part no index names, left
-  by a crash between the two, is never read, and its accounts are fetched again into another
-  part.
-- The hubs of a Monday are one part, without an index. The complete table is an index alone: the
-  scored accounts whose subgraph and every account node's B1 to B3 rows are all cached.
+- A part holds the rows of a set of accounts, and is written once: its files and its index of
+  those accounts go into a temporary folder, which a rename puts in place whole. So a part is
+  never without its index, and a crash between the two leaves nothing: no part, and no
+  account that reads as cached without its rows. A table's index is its parts' indexes
+  together, read once and kept for the Monday being read.
+- The hubs of a Monday are one part, without an index. The complete table is parts that hold
+  an index alone: the scored accounts whose subgraph and every account node's B1 to B3 rows
+  are all cached.
 - Rows read back are reparsed by their query's own parser, from the response they were parsed
   from, so cached rows pass the live checks.
+- The cache holds the indexes of one Monday at a time, the one last asked about, and forget
+  drops them early, so a fetch or a reader that goes through 52 Mondays never holds more than
+  one Monday's. A 300,000-person world has millions of entries in a Monday's indexes.
 
 Only fetch asks which accounts a table lacks (missing). Every other reader names its keys:
 rows(table, Monday, accounts) gives exactly those accounts' rows, and nothing lists the index
@@ -89,8 +93,9 @@ if TYPE_CHECKING:
 # The column that names the scored account a row of B4 or B5 belongs to.
 SCORED = "scored_id"
 ACCOUNT = "account_id"
+# The file of a part that names its accounts.
 INDEX_FILE = "index.parquet"
-INDEX_SCHEMA = pa.schema([(ACCOUNT, pa.string()), ("part", pa.int64())])
+INDEX_SCHEMA = pa.schema([(ACCOUNT, pa.string())])
 # The part of a Monday's hubs.
 HUBS_PART = "part-0"
 # The Arrow type of each type a row's field may have (tigergraph.queries.rows.FIELD_TYPES).
@@ -339,8 +344,23 @@ def _temporary(path: Path) -> Path:
     return path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
 
 
-def _write_part(folder: Path, name: str, kinds: Sequence[Kind], rows: Rows) -> None:
-    """Write a part's files into a temporary folder and rename it into place whole."""
+def _parts(folder: Path) -> list[int]:
+    """The numbers of a table folder's parts, in increasing order."""
+    if not folder.is_dir():
+        return []
+    numbers = (path.name.removeprefix("part-") for path in folder.glob("part-*"))
+    return sorted(int(number) for number in numbers if number.isdigit())
+
+
+def _write_part(
+    folder: Path,
+    name: str,
+    kinds: Sequence[Kind],
+    rows: Rows,
+    accounts: Collection[str] | None = None,
+) -> None:
+    """Write a part's files, and its index of accounts unless that is None, into a temporary
+    folder and rename it into place whole."""
     folder.mkdir(parents=True, exist_ok=True)
     temporary = _temporary(folder / name)
     try:
@@ -348,6 +368,9 @@ def _write_part(folder: Path, name: str, kinds: Sequence[Kind], rows: Rows) -> N
         for kind in kinds:
             table = pa.Table.from_pylist(rows[kind.name], schema=kind.schema)
             pq.write_table(table, temporary / f"{kind.name}.parquet")
+        if accounts is not None:
+            index = pa.table({ACCOUNT: sorted(set(accounts))}, schema=INDEX_SCHEMA)
+            pq.write_table(index, temporary / INDEX_FILE)
         temporary.rename(folder / name)
     finally:
         if temporary.exists():
@@ -359,7 +382,9 @@ class Cache:
 
     def __init__(self, root: Path) -> None:
         self.root = root
-        self._indexes: dict[Path, dict[str, int]] = {}
+        # The indexes held, by table name: those of one Monday, the one last asked about.
+        self._monday: str | None = None
+        self._indexes: dict[str, dict[str, int]] = {}
 
     @classmethod
     def of(cls, identity: str, subgraph: SubgraphConfig) -> Cache:
@@ -371,47 +396,57 @@ class Cache:
         """The folder of a table on the Monday t; only a Monday at 00:00 UTC has one."""
         return self.root / monday_folder(t_ms) / name
 
-    def _index(self, folder: Path) -> dict[str, int]:
-        """The part of each account a table's folder holds."""
-        if folder not in self._indexes:
-            path = folder / INDEX_FILE
+    def _index(self, name: str, t_ms: int) -> dict[str, int]:
+        """The part of each account the table name holds on the Monday t: its parts' indexes,
+        read once, a later part naming an account that two hold. The indexes of another
+        Monday are dropped first."""
+        monday = monday_folder(t_ms)
+        if monday != self._monday:
+            self._indexes.clear()
+            self._monday = monday
+        if name not in self._indexes:
+            folder = self.folder(name, t_ms)
             found: dict[str, int] = {}
-            if path.is_file():
-                index = pq.read_table(path, schema=INDEX_SCHEMA)
-                found = dict(
-                    zip(index[ACCOUNT].to_pylist(), index["part"].to_pylist(), strict=True)
-                )
-            self._indexes[folder] = found
-        return self._indexes[folder]
+            for part in _parts(folder):
+                index = pq.read_table(folder / f"part-{part}" / INDEX_FILE, schema=INDEX_SCHEMA)
+                found.update(dict.fromkeys(index[ACCOUNT].to_pylist(), part))
+            self._indexes[name] = found
+        return self._indexes[name]
 
-    def _add(self, folder: Path, accounts: Collection[str], part: int) -> None:
-        """Name part as the part of accounts in the index, through a temporary file and a
-        rename."""
-        index = {**self._index(folder), **dict.fromkeys(accounts, part)}
-        table = pa.table({ACCOUNT: list(index), "part": list(index.values())}, schema=INDEX_SCHEMA)
-        folder.mkdir(parents=True, exist_ok=True)
-        path = folder / INDEX_FILE
-        temporary = _temporary(path)
-        try:
-            pq.write_table(table, temporary)
-            temporary.replace(path)
-        finally:
-            temporary.unlink(missing_ok=True)
-        self._indexes[folder] = index
+    def forget(self, t_ms: int) -> None:
+        """Drop the indexes held for the Monday t, which a reader that has finished with the
+        Monday no longer needs; they are read again from the parts if it is asked about
+        again."""
+        if self._monday == monday_folder(t_ms):
+            self._indexes.clear()
+            self._monday = None
+
+    def _add(
+        self,
+        name: str,
+        t_ms: int,
+        kinds: Sequence[Kind],
+        rows: Rows,
+        accounts: Collection[str],
+    ) -> None:
+        """Write rows as a new part of the table name for accounts, with its index."""
+        if not accounts:
+            raise ValueError(f"A part of {name} holds at least one account")
+        folder = self.folder(name, t_ms)
+        part = max(_parts(folder), default=-1) + 1
+        _write_part(folder, f"part-{part}", kinds, rows, accounts)
+        self._index(name, t_ms).update(dict.fromkeys(accounts, part))
 
     def missing(self, name: str, t_ms: int, accounts: Iterable[str]) -> list[str]:
         """Of accounts, those the table name lacks on the Monday t, each once, sorted. Only
         fetch asks."""
-        index = self._index(self.folder(name, t_ms))
+        index = self._index(name, t_ms)
         return sorted({account for account in accounts if account not in index})
 
     def write[R](
         self, table: Table[R], t_ms: int, accounts: Collection[str], answers: Iterable[R]
     ) -> None:
         """Cache the answers of table's query for accounts on the Monday t, as one new part."""
-        if not accounts:
-            raise ValueError(f"A part of {table.name} holds at least one account")
-        folder = self.folder(table.name, t_ms)
         rows: Rows = {kind.name: [] for kind in table.kinds}
         for answer in answers:
             for name, found in table.encode(answer).items():
@@ -419,25 +454,18 @@ class Cache:
         keyed = {row[kind.key] for kind in table.kinds for row in rows[kind.name]}
         if not keyed <= set(accounts):
             raise ValueError(f"An answer of {table.name} holds rows of accounts it was not asked")
-        taken = [
-            int(path.name.removeprefix("part-"))
-            for path in (folder.glob("part-*") if folder.is_dir() else ())
-            if path.name.removeprefix("part-").isdigit()
-        ]
-        part = max(taken, default=-1) + 1
-        _write_part(folder, f"part-{part}", table.kinds, rows)
-        self._add(folder, accounts, part)
+        self._add(table.name, t_ms, table.kinds, rows, accounts)
 
     def complete(self, t_ms: int, accounts: Collection[str]) -> None:
         """Record that every row of the subgraphs of these scored accounts is cached."""
-        self._add(self.folder(COMPLETE, t_ms), accounts, 0)
+        self._add(COMPLETE, t_ms, (), {}, accounts)
 
     def rows[R](self, table: Table[R], t_ms: int, accounts: Iterable[str]) -> R:
         """The cached answer of table's query for exactly these accounts on the Monday t,
         reparsed by the query's parser. An account the table lacks is refused."""
         asked = sorted(set(accounts))
         folder = self.folder(table.name, t_ms)
-        index = self._index(folder)
+        index = self._index(table.name, t_ms)
         lacking = [account for account in asked if account not in index]
         if lacking:
             raise KeyError(f"The cache of {table.name} on {monday_folder(t_ms)} lacks {lacking}")
