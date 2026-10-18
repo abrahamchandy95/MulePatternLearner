@@ -30,6 +30,7 @@ from . import (
     read_labels,
     read_money_flow,
     read_payment_events,
+    read_shared_identity,
     read_world,
 )
 
@@ -145,7 +146,20 @@ REGISTRY: dict[str, Query] = {
                 read_payment_events.OwnedBy,
             ),
         ),
-        Query(READ_SHARED_IDENTITY, QUERIES_FOLDER),
+        Query(
+            READ_SHARED_IDENTITY,
+            QUERIES_FOLDER,
+            "read_shared_identity-ccebbca1bdd2",
+            read_shared_identity.params,
+            (
+                read_shared_identity.CustomerRow,
+                read_shared_identity.NodeRow,
+                read_shared_identity.IdentityAccount,
+                read_shared_identity.Enrolled,
+                read_shared_identity.OwnerEnrolled,
+                read_shared_identity.Seen,
+            ),
+        ),
         Query(READ_COMMUNITY, QUERIES_FOLDER),
         Query(READ_ANSWER_KEY, EVALUATION_FOLDER, "read_answer_key-3d5467c23b01"),
     )

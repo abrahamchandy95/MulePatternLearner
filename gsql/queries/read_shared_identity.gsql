@@ -1,0 +1,1022 @@
+USE GRAPH Mule_Pattern_Learner
+
+/* The device and IP graph, B5 (docs/design.md, "read_shared_identity (B5): the device and IP
+   graph", and docs/features.md, "What one example's subgraph holds", items 3 and 5 to 9, and
+   the customer, device, IP, enrolment and seen tables): for each account of the request at one
+   Monday t, the customers, devices and IPs of its subgraph, and its enrolment, owner-enrolment
+   and seen edges, each with its fields.
+
+   The subgraph's accounts are read_payment_events' (B4), found here again by the same rules,
+   since an expanded hop-1 account brings its customer's devices and IPs: s, the scored
+   account; its hop-1 accounts, of which those that are no hub are expanded; their hop-2
+   accounts; and up to 8 other accounts of s's customer C_s.
+
+   - D_s: C_s's visible enrolment links, up to 8 devices and 8 IPs, by their newest evidence,
+     the later of the link's known start and the latest payment seen on the node from an
+     account C_s owns, then by node id; a link with neither comes last. Each expanded hop-1
+     account's customer keeps its links by the same rule. A customer's visible links to one
+     node are one link, whose start is the earliest of theirs.
+   - S_s: the devices and IPs seen on s's payments sent in the lookback, up to 8 of each,
+     latest use first, then by node id; each expanded hop-1 account keeps its own the same
+     way.
+   - The leaves: every device and IP is tested inline by read_hubs' crowd rule, its customers
+     with a visible enrolment link and the owners, through a visible ownership link, of
+     deposit accounts that exist at t and sent a payment seen on it in the lookback. One with
+     more than 8 is a leaf: it stays as a node with its leaf flag, is never expanded, and
+     counts for no sharing.
+   - Co-users: the customers other than C_s counted on a node of D_s or S_s that is no leaf;
+     the newest 48 per scored account by their newest evidence on those nodes, the later of a
+     known link start and the latest use seen from a deposit account, t - 90 days with
+     neither, then by customer id. Each brings one deposit account that exists at t through a
+     visible ownership link: the one seen last on those nodes, else the one with the latest
+     payment in the lookback, else the one with none, then by account id. A co-user with a
+     visible link to one of those nodes is a customer node of the subgraph.
+   - The customers of the subgraph: C_s, each expanded hop-1 account's customer and the
+     co-users with a link; its devices and IPs: D_s, S_s and each expanded hop-1 account's.
+   - Edges: enrolment from C_s to D_s; owner-enrolment from every account of C_s in the
+     subgraph to D_s, and from each expanded hop-1 account to its customer's kept links; seen
+     edges from s to S_s and from each expanded hop-1 account to its own; and around every
+     node of D_s and S_s that is no leaf, every enrolment, owner-enrolment and seen edge
+     between it and a customer or an account of the subgraph. A hub account other than s has
+     none.
+
+   A start s of a customer on a node, a link's start or its first use seen in the lookback, is
+   known when s > t - 90 days, s > its joined_ms, and an account it owns through a visible
+   ownership link sent a payment in [t - 90 days, s) not seen on that node. A customer shares
+   a node that is no leaf when it has a link to it held in the last 30 days, or a deposit
+   account it owns, existing at t through a visible ownership link, sent a payment seen on it
+   in the last 30 days. Its sharing start there is the earliest of its link start and its
+   first use seen from such an account, each t - 90 days when it is not known; two customers
+   began sharing a node at the later of their starts, and began sharing at the earliest of
+   those over the nodes they share.
+
+   The rows and edge fields are those of docs/features.md; each duration that may be absent is
+   printed as presence and milliseconds. No link end is a value: valid_to_ms appears only in
+   the visible and current tests. A self-payment is read nowhere but in the crowd count,
+   which is read_hubs' measure.
+
+   Per-request state is kept by the scored account: on its own vertex, or in maps keyed by its
+   id. Every other map holds what one customer, account, node or payment is at t, whichever
+   scored account reached it. The account hubs of t come as hub_accounts, read_hubs' account
+   hubs of the same t; each must exist at t. Reads no label. t must be a Monday at 00:00 UTC
+   after the lookback's length, and the request must name at least one account, each once,
+   each in the graph and existing at t; the accounts come as ids, as read_money_flow says
+   why. */
+CREATE OR REPLACE QUERY read_shared_identity(
+    UINT t_ms,
+    LIST<STRING> account_ids,
+    SET<VERTEX<Account>> hub_accounts
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+    /* B4's capped payment and other account of a customer; a kept link, seen node or co-user
+       by its evidence and id; the three kinds of edge printed. */
+    TYPEDEF TUPLE<INT sec, STRING id, STRING other> Picked;
+    TYPEDEF TUPLE<INT sec, STRING id> Sibling;
+    TYPEDEF TUPLE<UINT ts, STRING id> Ranked;
+    TYPEDEF TUPLE<
+        STRING customer_id,
+        STRING node_id,
+        BOOL since_start_present,
+        UINT since_start_ms,
+        BOOL since_last_seen_present,
+        UINT since_last_seen_ms
+    > Enrolled;
+    TYPEDEF TUPLE<
+        STRING account_id,
+        STRING node_id,
+        BOOL since_start_present,
+        UINT since_start_ms,
+        BOOL since_last_seen_present,
+        UINT since_last_seen_ms
+    > OwnerEnrolled;
+    TYPEDEF TUPLE<
+        STRING account_id,
+        STRING node_id,
+        INT uses_90d,
+        BOOL since_first_use_present,
+        UINT since_first_use_ms,
+        UINT since_last_use_ms
+    > Seen;
+    /* B4's accounts: the account hubs, the capped payments and the other accounts. */
+    OrAccum @hub, @expanding;
+    HeapAccum<Picked>(32, sec DESC, id ASC) @scored_out, @scored_in;
+    HeapAccum<Picked>(16, sec DESC, id ASC) @other_out, @other_in;
+    MaxAccum<UINT> @last_active;
+    HeapAccum<Sibling>(8, sec DESC, id ASC) @siblings;
+    /* A customer's kept links; an expanded account's kept seen nodes; a scored account's
+       co-user candidates by evidence and its kept co-users. */
+    HeapAccum<Ranked>(8, ts DESC, id ASC) @kept_devices, @kept_ips, @kept_seen_devices,
+      @kept_seen_ips;
+    MapAccum<STRING, MaxAccum<UINT>> @candidate_evidence;
+    HeapAccum<Ranked>(48, ts DESC, id ASC) @kept_co_users;
+    /* A payment's sender; its sender's owner, a customer of a row or another user, and
+       whether that is a deposit account; its receiver; and the nodes it was seen on. */
+    MaxAccum<STRING> @sender_id, @owner_id, @user_id, @receiver_id;
+    OrAccum @deposit_sender;
+    SetAccum<STRING> @seen_on;
+    /* A node's crowd count, its leaf flag, and its activity of the last 30 days. A node
+       first reached through a customer of a row has a count of its own, since its row is
+       never printed. */
+    SetAccum<VERTEX<Party>> @crowd_customers, @crowd_enrolled, @crowd_reached;
+    OrAccum @leaf;
+    SetAccum<STRING> @seen_accounts;
+    /* A customer's co-users: when each pair began sharing, and on which kinds of node. */
+    MapAccum<STRING, MinAccum<UINT>> @pair_start;
+    SetAccum<STRING> @device_co_users, @ip_co_users;
+    /* The rows: a customer's, and a device's or IP's. */
+    SumAccum<INT> @accounts_owned, @devices_30d, @ips_30d, @new_devices_30d, @new_ips_30d,
+      @co_users, @new_co_users_30d, @co_users_both;
+    SumAccum<INT> @customers_30d, @customers_90d, @new_customers_7d, @new_customers_30d,
+      @accounts_seen_30d, @payments_seen_30d;
+    OrAccum @observed_only;
+    /* B4's accounts per scored account, the hop-1 accounts and whom they were reached by,
+       the expanded ones per scored account, the account hubs, and each expanded account's
+       customer; the accounts of C_s in each subgraph. */
+    MapAccum<STRING, SetAccum<STRING>> @@subgraph_accounts, @@reached_by, @@expanded_of,
+      @@customer_accounts;
+    SetAccum<STRING> @@hop1_ids, @@hub_ids;
+    MapAccum<STRING, MaxAccum<STRING>> @@owner_of;
+    /* Per account and node, its payments sent in the lookback seen on the node: how many,
+       the first and the last; the nodes whose first use is a known start; per node, the
+       accounts seen on it. */
+    MapAccum<STRING, MapAccum<STRING, SumAccum<INT>>> @@uses;
+    MapAccum<STRING, MapAccum<STRING, MinAccum<UINT>>> @@first_use;
+    MapAccum<STRING, MapAccum<STRING, MaxAccum<UINT>>> @@last_use;
+    MapAccum<STRING, SetAccum<STRING>> @@first_use_known, @@node_senders;
+    SetAccum<STRING> @@seen_account_ids;
+    /* Per customer and node: the earliest start of its visible links, and the known one;
+       whether one is held in the last 30 days; its latest payment seen on the node from an
+       account it owns; its first and latest from a deposit account, and whether one was in
+       the last 30 days; its sharing start. */
+    MapAccum<STRING, MapAccum<STRING, MinAccum<UINT>>> @@link_start, @@known_link, @@dep_first,
+      @@share_start;
+    MapAccum<STRING, MapAccum<STRING, MaxAccum<UINT>>> @@any_last, @@dep_last;
+    MapAccum<STRING, SetAccum<STRING>> @@link_current, @@dep_recent;
+    /* Per customer, for the known-start test: its earliest payment in the lookback, the nodes
+       its payments were seen on, and per such node its earliest payment not seen there. */
+    MapAccum<STRING, MinAccum<UINT>> @@first_own;
+    MapAccum<STRING, SetAccum<STRING>> @@own_seen;
+    MapAccum<STRING, MapAccum<STRING, MinAccum<UINT>>> @@first_unseen;
+    /* The nodes: which are IPs, which are leaves, which some customer of a row shares; per
+       node, the scored accounts it may be a node of, its co-user candidates, its users, and
+       the accounts whose customer has a visible link to it, with that customer. */
+    SetAccum<STRING> @@ip_ids, @@leaf_ids, @@shared_ids;
+    MapAccum<STRING, SetAccum<STRING>> @@node_scored, @@candidates, @@node_users;
+    MapAccum<STRING, MapAccum<STRING, MaxAccum<STRING>>> @@node_link_accounts;
+    /* Per customer, its deposit accounts; per co-user's deposit account, its latest payment;
+       per customer and per expanded account, its kept nodes; per scored account, its nodes
+       that are no leaf and its kept co-users. */
+    MapAccum<STRING, SetAccum<STRING>> @@deposit_accounts, @@kept_links, @@kept_seen, @@s_open,
+      @@kept_co_users;
+    SetAccum<STRING> @@co_user_deposit_ids;
+    MapAccum<STRING, MaxAccum<UINT>> @@last_active;
+    /* The answer: per scored account its customers, nodes and co-users' accounts, and its
+       edges; the customers, nodes and accounts printed. */
+    MapAccum<STRING, SetAccum<STRING>> @@subgraph_customers, @@subgraph_nodes,
+      @@co_user_accounts, @@s_accounts;
+    MapAccum<STRING, SetAccum<Enrolled>> @@enrolled;
+    MapAccum<STRING, SetAccum<OwnerEnrolled>> @@owner_enrolled;
+    MapAccum<STRING, SetAccum<Seen>> @@seen;
+    SetAccum<STRING> @@printed_customers, @@printed_nodes, @@printed_accounts;
+    /* The request's ids, each once, and how many it gave. */
+    SetAccum<STRING> @@ids;
+    SumAccum<INT> @@given;
+    UINT lookback_ms = 7776000000;
+    UINT crowd_threshold = 8;
+
+    /* Mondays are 4 days after the Thursday of 1970-01-01, modulo a week. */
+    IF t_ms <= lookback_ms OR t_ms % 604800000 != 345600000 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+    FOREACH account_id IN account_ids DO
+        @@ids += account_id;
+        @@given += 1;
+    END;
+    IF @@given == 0 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+    IF @@ids.size() != @@given THEN
+        PRINT "duplicate_account" AS status;
+        RETURN;
+    END;
+    Requested = to_vertex_set(@@ids, "Account");
+    IF Requested.size() != @@ids.size() THEN
+        PRINT "unknown_account" AS status;
+        RETURN;
+    END;
+    Scored = SELECT s FROM Requested:s WHERE s.opened_ms < t_ms;
+    IF Scored.size() != Requested.size() THEN
+        PRINT "invisible_account" AS status;
+        RETURN;
+    END;
+    Hubs = {hub_accounts};
+    HubAccounts = SELECT h FROM Hubs:h WHERE h.opened_ms < t_ms;
+    IF HubAccounts.size() != Hubs.size() THEN
+        PRINT "invisible_hub" AS status;
+        RETURN;
+    END;
+    Marked = SELECT h FROM HubAccounts:h POST-ACCUM h.@hub += TRUE, @@hub_ids += h.id;
+
+    /* B4's accounts of every subgraph, by B4's rules. */
+    ScoredSent = SELECT a FROM Scored:a
+      -((Account_Initiated_Transaction>|Account_Sent_Zelle_Transfer>):e)-
+      (Payment_Transaction|Zelle_Transfer):p
+      -((Transaction_To_Account>|Transfer_To_Account>):f)- Account:b
+      WHERE p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms AND b != a
+      ACCUM a.@scored_out += Picked(floor(p.event_ts_ms / 1000), p.id, b.id);
+    ScoredReceived = SELECT a FROM Scored:a
+      -((Account_Received_Transaction>|Account_Received_Zelle_Transfer>):e)-
+      (Payment_Transaction|Zelle_Transfer):p
+      -((Transaction_From_Account>|Transfer_From_Account>):f)- Account:b
+      WHERE p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms AND b != a
+      ACCUM a.@scored_in += Picked(floor(p.event_ts_ms / 1000), p.id, b.id);
+    ScoredPicked = SELECT a FROM Scored:a
+      POST-ACCUM
+        @@subgraph_accounts += (a.id -> a.id),
+        FOREACH x IN a.@scored_out DO
+            @@subgraph_accounts += (a.id -> x.other),
+            @@hop1_ids += x.other,
+            @@reached_by += (x.other -> a.id)
+        END,
+        FOREACH x IN a.@scored_in DO
+            @@subgraph_accounts += (a.id -> x.other),
+            @@hop1_ids += x.other,
+            @@reached_by += (x.other -> a.id)
+        END;
+    Hop1Listed = to_vertex_set(@@hop1_ids, "Account");
+    Hop1 = SELECT c FROM Hop1Listed:c WHERE c.opened_ms < t_ms AND NOT c.@hub;
+    Hop1Sent = SELECT c FROM Hop1:c
+      -((Account_Initiated_Transaction>|Account_Sent_Zelle_Transfer>):e)-
+      (Payment_Transaction|Zelle_Transfer):p
+      -((Transaction_To_Account>|Transfer_To_Account>):f)- Account:b
+      WHERE p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms AND b != c
+      ACCUM c.@other_out += Picked(floor(p.event_ts_ms / 1000), p.id, b.id);
+    Hop1Received = SELECT c FROM Hop1:c
+      -((Account_Received_Transaction>|Account_Received_Zelle_Transfer>):e)-
+      (Payment_Transaction|Zelle_Transfer):p
+      -((Transaction_From_Account>|Transfer_From_Account>):f)- Account:b
+      WHERE p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms AND b != c
+      ACCUM c.@other_in += Picked(floor(p.event_ts_ms / 1000), p.id, b.id);
+    Hop1Picked = SELECT c FROM Hop1:c
+      POST-ACCUM
+        FOREACH i IN @@reached_by.get(c.id) DO @@expanded_of += (i -> c.id) END,
+        FOREACH x IN c.@other_out DO
+            FOREACH i IN @@reached_by.get(c.id) DO @@subgraph_accounts += (i -> x.other) END
+        END,
+        FOREACH x IN c.@other_in DO
+            FOREACH i IN @@reached_by.get(c.id) DO @@subgraph_accounts += (i -> x.other) END
+        END;
+    Siblings = SELECT b FROM Scored:a -(Account_Owned_By_Party>:o)- Party:q
+      -(Party_Owns_Account>:w)- Account:b
+      WHERE o.valid_from_ms < t_ms
+        AND (o.valid_to_ms == 0 OR o.valid_to_ms > t_ms - lookback_ms)
+        AND w.valid_from_ms < t_ms
+        AND (w.valid_to_ms == 0 OR w.valid_to_ms > t_ms - lookback_ms)
+        AND b.opened_ms < t_ms AND b != a;
+    Active = SELECT b FROM Siblings:b
+      -((Account_Initiated_Transaction>|Account_Received_Transaction>
+        |Account_Sent_Zelle_Transfer>|Account_Received_Zelle_Transfer>):e)-
+      (Payment_Transaction|Zelle_Transfer):p
+      -((Transaction_From_Account>|Transaction_To_Account>
+        |Transfer_From_Account>|Transfer_To_Account>):f)- Account:x
+      WHERE p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms AND x != b
+      ACCUM b.@last_active += p.event_ts_ms;
+    SiblingPicks = SELECT a FROM Scored:a -(Account_Owned_By_Party>:o)- Party:q
+      -(Party_Owns_Account>:w)- Account:b
+      WHERE o.valid_from_ms < t_ms
+        AND (o.valid_to_ms == 0 OR o.valid_to_ms > t_ms - lookback_ms)
+        AND w.valid_from_ms < t_ms
+        AND (w.valid_to_ms == 0 OR w.valid_to_ms > t_ms - lookback_ms)
+        AND b.opened_ms < t_ms AND b != a
+      ACCUM a.@siblings += Sibling(floor(b.@last_active / 1000), b.id);
+    SiblingsPicked = SELECT a FROM Scored:a
+      POST-ACCUM
+        FOREACH x IN a.@siblings DO @@subgraph_accounts += (a.id -> x.id) END;
+    CustomerAccounts = SELECT a FROM Scored:a -(Account_Owned_By_Party>:o)- Party:q
+      -(Party_Owns_Account>:w)- Account:b
+      WHERE o.valid_from_ms < t_ms
+        AND (o.valid_to_ms == 0 OR o.valid_to_ms > t_ms - lookback_ms)
+        AND w.valid_from_ms < t_ms
+        AND (w.valid_to_ms == 0 OR w.valid_to_ms > t_ms - lookback_ms)
+        AND b.opened_ms < t_ms
+      ACCUM
+        IF @@subgraph_accounts.get(a.id).contains(b.id) THEN
+            @@customer_accounts += (a.id -> b.id)
+        END;
+
+    /* The expanded accounts, the scored ones and the hop-1 accounts that are no hub, and
+       their customers. */
+    Expanding = Scored UNION Hop1;
+    ExpandingMarked = SELECT a FROM Expanding:a POST-ACCUM a.@expanding += TRUE;
+    Owners = SELECT q FROM Expanding:a -(Account_Owned_By_Party>:o)- Party:q
+      WHERE o.valid_from_ms < t_ms
+        AND (o.valid_to_ms == 0 OR o.valid_to_ms > t_ms - lookback_ms)
+      ACCUM @@owner_of += (a.id -> q.id);
+
+    /* The devices and IPs seen on the expanded accounts' payments sent in the lookback, but
+       self-payments, and the visible links of their customers. */
+    ExpandingSent = SELECT p FROM Expanding:a
+      -((Account_Initiated_Transaction>|Account_Sent_Zelle_Transfer>):e)-
+      (Payment_Transaction|Zelle_Transfer):p
+      -((Transaction_To_Account>|Transfer_To_Account>):f)- Account:b
+      WHERE p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms AND b != a
+      ACCUM p.@sender_id += a.id;
+    ExpandingSeen = SELECT n FROM ExpandingSent:p
+      -((Transaction_Used_Device>|Transaction_Used_IP>
+        |Transfer_Used_Device>|Transfer_Used_IP>):u)- (Device|IP):n
+      ACCUM
+        @@uses += (p.@sender_id -> (n.id -> 1)),
+        @@first_use += (p.@sender_id -> (n.id -> p.event_ts_ms)),
+        @@last_use += (p.@sender_id -> (n.id -> p.event_ts_ms)),
+        @@node_senders += (n.id -> p.@sender_id),
+        @@seen_account_ids += p.@sender_id,
+        IF n.type == "IP" THEN @@ip_ids += n.id END;
+    OwnerLinks = SELECT n FROM Owners:q -((Party_Uses_Device>|Party_Uses_IP>):l)- (Device|IP):n
+      WHERE l.valid_from_ms < t_ms
+        AND (l.valid_to_ms == 0 OR l.valid_to_ms > t_ms - lookback_ms)
+      ACCUM
+        @@link_start += (q.id -> (n.id -> l.valid_from_ms)),
+        IF l.valid_from_ms < t_ms
+          AND (l.valid_to_ms == 0 OR l.valid_to_ms > t_ms - 2592000000) THEN
+            @@link_current += (q.id -> n.id),
+            @@shared_ids += n.id
+        END,
+        IF n.type == "IP" THEN @@ip_ids += n.id END;
+
+    /* The leaves among them, by read_hubs' crowd rule; payments are read only for a node
+       that 8 enrolled customers or fewer do not already make a leaf. */
+    Discovered = ExpandingSeen UNION OwnerLinks;
+    EnrolledCrowd = SELECT d FROM Discovered:d
+      -((Device_Used_By_Party>|IP_Used_By_Party>):l)- Party:q
+      WHERE l.valid_from_ms < t_ms
+        AND (l.valid_to_ms == 0 OR l.valid_to_ms > t_ms - lookback_ms)
+      ACCUM d.@crowd_customers += q, d.@crowd_enrolled += q;
+    SeenCrowd = SELECT d FROM Discovered:d
+      -((Device_Used_By_Transaction>|IP_Observed_In_Transaction>
+        |Device_Used_By_Transfer>|IP_Used_By_Transfer>):u)-
+      (Payment_Transaction|Zelle_Transfer):p
+      -((Transaction_From_Account>|Transfer_From_Account>):f)- Account:b
+      -(Account_Owned_By_Party>:o)- Party:q
+      WHERE d.@crowd_customers.size() <= crowd_threshold
+        AND p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms
+        AND b.account_type == "deposit" AND b.opened_ms < t_ms
+        AND o.valid_from_ms < t_ms
+        AND (o.valid_to_ms == 0 OR o.valid_to_ms > t_ms - lookback_ms)
+      ACCUM d.@crowd_customers += q;
+    Leaves = SELECT d FROM Discovered:d
+      POST-ACCUM d.@leaf += d.@crowd_customers.size() > crowd_threshold;
+    LeafIds = SELECT d FROM Discovered:d WHERE d.@leaf POST-ACCUM @@leaf_ids += d.id;
+
+    /* Each scored account's nodes before the caps, C_s's links and those seen on s's
+       payments; the customers counted on those that are no leaf are its co-user
+       candidates, by the crowd rule. */
+    ScoredNodes = SELECT a FROM Scored:a
+      POST-ACCUM
+        FOREACH (n, last_ms) IN @@last_use.get(a.id) DO @@node_scored += (n -> a.id) END,
+        FOREACH (n, start_ms) IN @@link_start.get(@@owner_of.get(a.id)) DO
+            @@node_scored += (n -> a.id)
+        END;
+    SNodes = SELECT d FROM Discovered:d WHERE NOT d.@leaf AND @@node_scored.containsKey(d.id);
+    LinkedCandidates = SELECT q FROM SNodes:d
+      -((Device_Used_By_Party>|IP_Used_By_Party>):l)- Party:q
+      WHERE NOT d.@leaf AND l.valid_from_ms < t_ms
+        AND (l.valid_to_ms == 0 OR l.valid_to_ms > t_ms - lookback_ms)
+      ACCUM @@candidates += (d.id -> q.id);
+    SeenCandidates = SELECT q FROM SNodes:d
+      -((Device_Used_By_Transaction>|IP_Observed_In_Transaction>
+        |Device_Used_By_Transfer>|IP_Used_By_Transfer>):u)-
+      (Payment_Transaction|Zelle_Transfer):p
+      -((Transaction_From_Account>|Transfer_From_Account>):f)- Account:b
+      -(Account_Owned_By_Party>:o)- Party:q
+      WHERE NOT d.@leaf
+        AND p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms
+        AND b.account_type == "deposit" AND b.opened_ms < t_ms
+        AND o.valid_from_ms < t_ms
+        AND (o.valid_to_ms == 0 OR o.valid_to_ms > t_ms - lookback_ms)
+      ACCUM @@candidates += (d.id -> q.id);
+    Candidates = LinkedCandidates UNION SeenCandidates;
+
+    /* The customers that may get a row: the expanded accounts' customers and the co-user
+       candidates. Their links, their accounts, and their payments sent in the lookback, but
+       self-payments, with the nodes each was seen on. */
+    RowCustomers = Owners UNION Candidates;
+    NewRows = Candidates MINUS Owners;
+    RowLinks = SELECT n FROM NewRows:q -((Party_Uses_Device>|Party_Uses_IP>):l)- (Device|IP):n
+      WHERE l.valid_from_ms < t_ms
+        AND (l.valid_to_ms == 0 OR l.valid_to_ms > t_ms - lookback_ms)
+      ACCUM
+        @@link_start += (q.id -> (n.id -> l.valid_from_ms)),
+        IF l.valid_from_ms < t_ms
+          AND (l.valid_to_ms == 0 OR l.valid_to_ms > t_ms - 2592000000) THEN
+            @@link_current += (q.id -> n.id),
+            @@shared_ids += n.id
+        END,
+        IF n.type == "IP" THEN @@ip_ids += n.id END;
+    RowAccounts = SELECT b FROM RowCustomers:q -(Party_Owns_Account>:w)- Account:b
+      WHERE w.valid_from_ms < t_ms
+        AND (w.valid_to_ms == 0 OR w.valid_to_ms > t_ms - lookback_ms)
+        AND b.opened_ms < t_ms
+      ACCUM
+        q.@accounts_owned += 1,
+        IF b.account_type == "deposit" THEN @@deposit_accounts += (q.id -> b.id) END;
+    RowSent = SELECT p FROM RowCustomers:q -(Party_Owns_Account>:w)- Account:b
+      -((Account_Initiated_Transaction>|Account_Sent_Zelle_Transfer>):e)-
+      (Payment_Transaction|Zelle_Transfer):p
+      -((Transaction_To_Account>|Transfer_To_Account>):f)- Account:r
+      WHERE w.valid_from_ms < t_ms
+        AND (w.valid_to_ms == 0 OR w.valid_to_ms > t_ms - lookback_ms)
+        AND b.opened_ms < t_ms
+        AND p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms AND r != b
+      ACCUM
+        p.@owner_id += q.id,
+        p.@deposit_sender += b.account_type == "deposit",
+        @@first_own += (q.id -> p.event_ts_ms);
+    RowSeen = SELECT n FROM RowSent:p
+      -((Transaction_Used_Device>|Transaction_Used_IP>
+        |Transfer_Used_Device>|Transfer_Used_IP>):u)- (Device|IP):n
+      ACCUM
+        p.@seen_on += n.id,
+        @@own_seen += (p.@owner_id -> n.id),
+        @@any_last += (p.@owner_id -> (n.id -> p.event_ts_ms)),
+        IF p.@deposit_sender THEN
+            @@dep_first += (p.@owner_id -> (n.id -> p.event_ts_ms)),
+            @@dep_last += (p.@owner_id -> (n.id -> p.event_ts_ms)),
+            IF p.event_ts_ms >= t_ms - 2592000000 THEN
+                @@dep_recent += (p.@owner_id -> n.id),
+                @@shared_ids += n.id
+            END
+        END,
+        IF n.type == "IP" THEN @@ip_ids += n.id END;
+
+    /* The leaves among the nodes those customers share that were not tested yet. */
+    Reached = RowLinks UNION RowSeen;
+    SharedReached = SELECT n FROM Reached:n WHERE @@shared_ids.contains(n.id);
+    Untested = SharedReached MINUS Discovered;
+    UntestedEnrolledCrowd = SELECT d FROM Untested:d
+      -((Device_Used_By_Party>|IP_Used_By_Party>):l)- Party:q
+      WHERE l.valid_from_ms < t_ms
+        AND (l.valid_to_ms == 0 OR l.valid_to_ms > t_ms - lookback_ms)
+      ACCUM d.@crowd_reached += q;
+    UntestedSeenCrowd = SELECT d FROM Untested:d
+      -((Device_Used_By_Transaction>|IP_Observed_In_Transaction>
+        |Device_Used_By_Transfer>|IP_Used_By_Transfer>):u)-
+      (Payment_Transaction|Zelle_Transfer):p
+      -((Transaction_From_Account>|Transfer_From_Account>):f)- Account:b
+      -(Account_Owned_By_Party>:o)- Party:q
+      WHERE d.@crowd_reached.size() <= crowd_threshold
+        AND p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms
+        AND b.account_type == "deposit" AND b.opened_ms < t_ms
+        AND o.valid_from_ms < t_ms
+        AND (o.valid_to_ms == 0 OR o.valid_to_ms > t_ms - lookback_ms)
+      ACCUM d.@crowd_reached += q;
+    UntestedLeaves = SELECT d FROM Untested:d
+      POST-ACCUM d.@leaf += d.@crowd_reached.size() > crowd_threshold;
+    UntestedLeafIds = SELECT d FROM Untested:d WHERE d.@leaf POST-ACCUM @@leaf_ids += d.id;
+
+    /* Every node tested that is no leaf: the receiver of each payment seen on it in the
+       lookback; then its users, through a visible link or a payment, but self-payments, from
+       an account they own through a visible ownership link; its activity of the last 30
+       days; and, on a scored account's node, every account seen on it and every account
+       whose customer has a visible link to it. */
+    Tested = Discovered UNION Untested;
+    Open = SELECT d FROM Tested:d WHERE NOT d.@leaf;
+    OpenReceivers = SELECT p FROM Open:d
+      -((Device_Used_By_Transaction>|IP_Observed_In_Transaction>
+        |Device_Used_By_Transfer>|IP_Used_By_Transfer>):u)-
+      (Payment_Transaction|Zelle_Transfer):p
+      -((Transaction_To_Account>|Transfer_To_Account>):f)- Account:r
+      WHERE NOT d.@leaf AND p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms
+      ACCUM p.@receiver_id += r.id;
+    LinkUsers = SELECT q FROM Open:d -((Device_Used_By_Party>|IP_Used_By_Party>):l)- Party:q
+      WHERE NOT d.@leaf AND l.valid_from_ms < t_ms
+        AND (l.valid_to_ms == 0 OR l.valid_to_ms > t_ms - lookback_ms)
+      ACCUM
+        @@link_start += (q.id -> (d.id -> l.valid_from_ms)),
+        IF l.valid_from_ms < t_ms
+          AND (l.valid_to_ms == 0 OR l.valid_to_ms > t_ms - 2592000000) THEN
+            @@link_current += (q.id -> d.id)
+        END,
+        @@node_users += (d.id -> q.id);
+    SeenUsers = SELECT q FROM Open:d
+      -((Device_Used_By_Transaction>|IP_Observed_In_Transaction>
+        |Device_Used_By_Transfer>|IP_Used_By_Transfer>):u)-
+      (Payment_Transaction|Zelle_Transfer):p
+      -((Transaction_From_Account>|Transfer_From_Account>):f)- Account:b
+      -(Account_Owned_By_Party>:o)- Party:q
+      WHERE NOT d.@leaf
+        AND p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms
+        AND b.opened_ms < t_ms AND b.id != p.@receiver_id
+        AND o.valid_from_ms < t_ms
+        AND (o.valid_to_ms == 0 OR o.valid_to_ms > t_ms - lookback_ms)
+      ACCUM
+        @@any_last += (q.id -> (d.id -> p.event_ts_ms)),
+        IF b.account_type == "deposit" THEN
+            @@dep_first += (q.id -> (d.id -> p.event_ts_ms)),
+            @@dep_last += (q.id -> (d.id -> p.event_ts_ms)),
+            @@node_users += (d.id -> q.id),
+            IF p.event_ts_ms >= t_ms - 2592000000 THEN @@dep_recent += (q.id -> d.id) END
+        END;
+    OpenActivity = SELECT d FROM Open:d
+      -((Device_Used_By_Transaction>|IP_Observed_In_Transaction>
+        |Device_Used_By_Transfer>|IP_Used_By_Transfer>):u)-
+      (Payment_Transaction|Zelle_Transfer):p
+      -((Transaction_From_Account>|Transfer_From_Account>):f)- Account:b
+      WHERE NOT d.@leaf
+        AND p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms
+        AND b.id != p.@receiver_id
+      ACCUM
+        IF p.event_ts_ms >= t_ms - 2592000000 THEN
+            d.@seen_accounts += b.id,
+            d.@payments_seen_30d += 1
+        END,
+        IF NOT b.@expanding AND @@node_scored.containsKey(d.id) THEN
+            @@uses += (b.id -> (d.id -> 1)),
+            @@first_use += (b.id -> (d.id -> p.event_ts_ms)),
+            @@last_use += (b.id -> (d.id -> p.event_ts_ms)),
+            @@node_senders += (d.id -> b.id),
+            @@seen_account_ids += b.id
+        END;
+    LinkedAccounts = SELECT b FROM SNodes:d -((Device_Used_By_Party>|IP_Used_By_Party>):l)-
+      Party:q -(Party_Owns_Account>:w)- Account:b
+      WHERE NOT d.@leaf AND l.valid_from_ms < t_ms
+        AND (l.valid_to_ms == 0 OR l.valid_to_ms > t_ms - lookback_ms)
+        AND w.valid_from_ms < t_ms
+        AND (w.valid_to_ms == 0 OR w.valid_to_ms > t_ms - lookback_ms)
+        AND b.opened_ms < t_ms
+      ACCUM @@node_link_accounts += (d.id -> (b.id -> q.id));
+
+    /* The known-start test needs each user's payments sent in the lookback, but
+       self-payments, and the nodes each was seen on; the customers of a row have theirs. */
+    Users = LinkUsers UNION SeenUsers;
+    OtherUsers = Users MINUS RowCustomers;
+    OtherSent = SELECT p FROM OtherUsers:q -(Party_Owns_Account>:w)- Account:b
+      -((Account_Initiated_Transaction>|Account_Sent_Zelle_Transfer>):e)-
+      (Payment_Transaction|Zelle_Transfer):p
+      -((Transaction_To_Account>|Transfer_To_Account>):f)- Account:r
+      WHERE w.valid_from_ms < t_ms
+        AND (w.valid_to_ms == 0 OR w.valid_to_ms > t_ms - lookback_ms)
+        AND b.opened_ms < t_ms
+        AND p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms AND r != b
+      ACCUM
+        p.@user_id += q.id,
+        @@first_own += (q.id -> p.event_ts_ms);
+    OtherSeen = SELECT n FROM OtherSent:p
+      -((Transaction_Used_Device>|Transaction_Used_IP>
+        |Transfer_Used_Device>|Transfer_Used_IP>):u)- (Device|IP):n
+      ACCUM
+        p.@seen_on += n.id,
+        @@own_seen += (p.@user_id -> n.id);
+    RowUnseen = SELECT p FROM RowSent:p
+      POST-ACCUM
+        FOREACH n IN @@own_seen.get(p.@owner_id) DO
+            IF NOT p.@seen_on.contains(n) THEN
+                @@first_unseen += (p.@owner_id -> (n -> p.event_ts_ms))
+            END
+        END;
+    OtherUnseen = SELECT p FROM OtherSent:p
+      POST-ACCUM
+        FOREACH n IN @@own_seen.get(p.@user_id) DO
+            IF NOT p.@seen_on.contains(n) THEN
+                @@first_unseen += (p.@user_id -> (n -> p.event_ts_ms))
+            END
+        END;
+
+    /* Each user's starts: a link start or a first use from a deposit account is known when
+       it is after the lookback's start, after the customer joined, and after a payment of the
+       customer's own not seen on the node; the sharing start is the earliest of them, each
+       t - 90 days when not known. */
+    AllUsers = RowCustomers UNION Users;
+    Starts = SELECT q FROM AllUsers:q
+      POST-ACCUM
+        UINT unseen_ms = 0, BOOL found = FALSE,
+        FOREACH (n, start_ms) IN @@link_start.get(q.id) DO
+            IF @@own_seen.get(q.id).contains(n) THEN
+                found = @@first_unseen.get(q.id).containsKey(n),
+                unseen_ms = @@first_unseen.get(q.id).get(n)
+            ELSE
+                found = @@first_own.containsKey(q.id),
+                unseen_ms = @@first_own.get(q.id)
+            END,
+            IF start_ms > t_ms - lookback_ms AND start_ms > q.joined_ms
+              AND found AND unseen_ms < start_ms THEN
+                @@known_link += (q.id -> (n -> start_ms)),
+                @@share_start += (q.id -> (n -> start_ms))
+            ELSE
+                @@share_start += (q.id -> (n -> t_ms - lookback_ms))
+            END
+        END,
+        FOREACH (n, start_ms) IN @@dep_first.get(q.id) DO
+            IF @@own_seen.get(q.id).contains(n) THEN
+                found = @@first_unseen.get(q.id).containsKey(n),
+                unseen_ms = @@first_unseen.get(q.id).get(n)
+            ELSE
+                found = @@first_own.containsKey(q.id),
+                unseen_ms = @@first_own.get(q.id)
+            END,
+            IF start_ms > t_ms - lookback_ms AND start_ms > q.joined_ms
+              AND found AND unseen_ms < start_ms THEN
+                @@share_start += (q.id -> (n -> start_ms))
+            ELSE
+                @@share_start += (q.id -> (n -> t_ms - lookback_ms))
+            END
+        END;
+    SeenAccounts = to_vertex_set(@@seen_account_ids, "Account");
+    FirstUses = SELECT a FROM SeenAccounts:a -(Account_Owned_By_Party>:o)- Party:q
+      WHERE a.opened_ms < t_ms AND o.valid_from_ms < t_ms
+        AND (o.valid_to_ms == 0 OR o.valid_to_ms > t_ms - lookback_ms)
+      ACCUM
+        UINT unseen_ms = 0, BOOL found = FALSE,
+        FOREACH (n, start_ms) IN @@first_use.get(a.id) DO
+            IF @@own_seen.get(q.id).contains(n) THEN
+                found = @@first_unseen.get(q.id).containsKey(n),
+                unseen_ms = @@first_unseen.get(q.id).get(n)
+            ELSE
+                found = @@first_own.containsKey(q.id),
+                unseen_ms = @@first_own.get(q.id)
+            END,
+            IF start_ms > t_ms - lookback_ms AND start_ms > q.joined_ms
+              AND found AND unseen_ms < start_ms THEN
+                @@first_use_known += (a.id -> n)
+            END
+        END;
+
+    /* The caps: each expanded account's customer keeps its 8 newest links of each kind,
+       each expanded account its 8 latest seen nodes of each kind. */
+    KeptLinks = SELECT q FROM Owners:q
+      POST-ACCUM
+        UINT evidence = 0,
+        FOREACH (n, start_ms) IN @@link_start.get(q.id) DO
+            evidence = 0,
+            IF @@known_link.get(q.id).containsKey(n) THEN
+                evidence = @@known_link.get(q.id).get(n)
+            END,
+            IF @@any_last.get(q.id).containsKey(n)
+              AND @@any_last.get(q.id).get(n) > evidence THEN
+                evidence = @@any_last.get(q.id).get(n)
+            END,
+            IF @@ip_ids.contains(n) THEN
+                q.@kept_ips += Ranked(evidence, n)
+            ELSE
+                q.@kept_devices += Ranked(evidence, n)
+            END
+        END;
+    KeptLinksListed = SELECT q FROM Owners:q
+      POST-ACCUM
+        FOREACH x IN q.@kept_devices DO @@kept_links += (q.id -> x.id) END,
+        FOREACH x IN q.@kept_ips DO @@kept_links += (q.id -> x.id) END;
+    KeptSeen = SELECT a FROM Expanding:a
+      POST-ACCUM
+        FOREACH (n, last_ms) IN @@last_use.get(a.id) DO
+            IF @@ip_ids.contains(n) THEN
+                a.@kept_seen_ips += Ranked(last_ms, n)
+            ELSE
+                a.@kept_seen_devices += Ranked(last_ms, n)
+            END
+        END;
+    KeptSeenListed = SELECT a FROM Expanding:a
+      POST-ACCUM
+        FOREACH x IN a.@kept_seen_devices DO @@kept_seen += (a.id -> x.id) END,
+        FOREACH x IN a.@kept_seen_ips DO @@kept_seen += (a.id -> x.id) END;
+
+    /* Each scored account's nodes that are no leaf; its co-user candidates by their newest
+       evidence on them; the newest 48; and the deposit accounts they may bring. */
+    ScoredOpen = SELECT a FROM Scored:a
+      POST-ACCUM
+        FOREACH n IN @@kept_links.get(@@owner_of.get(a.id)) DO
+            IF NOT @@leaf_ids.contains(n) THEN @@s_open += (a.id -> n) END
+        END,
+        FOREACH n IN @@kept_seen.get(a.id) DO
+            IF NOT @@leaf_ids.contains(n) THEN @@s_open += (a.id -> n) END
+        END;
+    CoUserEvidence = SELECT a FROM Scored:a
+      POST-ACCUM
+        UINT evidence = 0,
+        FOREACH n IN @@s_open.get(a.id) DO
+            FOREACH c IN @@candidates.get(n) DO
+                IF c != @@owner_of.get(a.id) THEN
+                    evidence = t_ms - lookback_ms,
+                    IF @@known_link.get(c).containsKey(n)
+                      AND @@known_link.get(c).get(n) > evidence THEN
+                        evidence = @@known_link.get(c).get(n)
+                    END,
+                    IF @@dep_last.get(c).containsKey(n)
+                      AND @@dep_last.get(c).get(n) > evidence THEN
+                        evidence = @@dep_last.get(c).get(n)
+                    END,
+                    a.@candidate_evidence += (c -> evidence)
+                END
+            END
+        END;
+    CoUsersPicked = SELECT a FROM Scored:a
+      POST-ACCUM
+        FOREACH (c, evidence) IN a.@candidate_evidence DO
+            a.@kept_co_users += Ranked(evidence, c)
+        END;
+    CoUsersListed = SELECT a FROM Scored:a
+      POST-ACCUM
+        FOREACH x IN a.@kept_co_users DO
+            @@kept_co_users += (a.id -> x.id),
+            FOREACH b IN @@deposit_accounts.get(x.id) DO @@co_user_deposit_ids += b END
+        END;
+    CoUserDeposits = to_vertex_set(@@co_user_deposit_ids, "Account");
+    CoUserActive = SELECT b FROM CoUserDeposits:b
+      -((Account_Initiated_Transaction>|Account_Received_Transaction>
+        |Account_Sent_Zelle_Transfer>|Account_Received_Zelle_Transfer>):e)-
+      (Payment_Transaction|Zelle_Transfer):p
+      -((Transaction_From_Account>|Transaction_To_Account>
+        |Transfer_From_Account>|Transfer_To_Account>):f)- Account:x
+      WHERE p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms AND x != b
+      ACCUM @@last_active += (b.id -> p.event_ts_ms);
+    CoUserAccounts = SELECT a FROM Scored:a
+      POST-ACCUM
+        STRING best = "", UINT best_seen = 0, UINT best_active = 0, UINT seen_ms = 0,
+        UINT active_ms = 0,
+        FOREACH c IN @@kept_co_users.get(a.id) DO
+            best = "", best_seen = 0, best_active = 0,
+            FOREACH b IN @@deposit_accounts.get(c) DO
+                seen_ms = 0, active_ms = 0,
+                FOREACH n IN @@s_open.get(a.id) DO
+                    IF @@last_use.get(b).containsKey(n) AND @@last_use.get(b).get(n) > seen_ms THEN
+                        seen_ms = @@last_use.get(b).get(n)
+                    END
+                END,
+                IF @@last_active.containsKey(b) THEN active_ms = @@last_active.get(b) END,
+                IF best == "" OR seen_ms > best_seen
+                  OR (seen_ms == best_seen AND seen_ms == 0 AND active_ms > best_active)
+                  OR (seen_ms == best_seen AND (seen_ms > 0 OR active_ms == best_active)
+                    AND b < best) THEN
+                    best = b, best_seen = seen_ms, best_active = active_ms
+                END
+            END,
+            IF best != "" THEN
+                @@co_user_accounts += (a.id -> best),
+                @@printed_accounts += best
+            END
+        END;
+
+    /* Each subgraph's customers, nodes and accounts that may carry an edge. */
+    ScoredCustomers = SELECT a FROM Scored:a
+      POST-ACCUM
+        IF @@owner_of.containsKey(a.id) THEN
+            @@subgraph_customers += (a.id -> @@owner_of.get(a.id))
+        END,
+        FOREACH e IN @@expanded_of.get(a.id) DO
+            IF @@owner_of.containsKey(e) THEN
+                @@subgraph_customers += (a.id -> @@owner_of.get(e))
+            END
+        END,
+        FOREACH c IN @@kept_co_users.get(a.id) DO
+            FOREACH n IN @@s_open.get(a.id) DO
+                IF @@link_start.get(c).containsKey(n) THEN
+                    @@subgraph_customers += (a.id -> c)
+                END
+            END
+        END;
+    ScoredNodesKept = SELECT a FROM Scored:a
+      POST-ACCUM
+        FOREACH n IN @@kept_links.get(@@owner_of.get(a.id)) DO
+            @@subgraph_nodes += (a.id -> n)
+        END,
+        FOREACH n IN @@kept_seen.get(a.id) DO @@subgraph_nodes += (a.id -> n) END,
+        FOREACH e IN @@expanded_of.get(a.id) DO
+            FOREACH n IN @@kept_links.get(@@owner_of.get(e)) DO
+                @@subgraph_nodes += (a.id -> n)
+            END,
+            FOREACH n IN @@kept_seen.get(e) DO @@subgraph_nodes += (a.id -> n) END
+        END;
+    ScoredAccounts = SELECT a FROM Scored:a
+      POST-ACCUM
+        FOREACH b IN @@subgraph_accounts.get(a.id) DO
+            IF b == a.id OR NOT @@hub_ids.contains(b) THEN @@s_accounts += (a.id -> b) END
+        END,
+        FOREACH b IN @@co_user_accounts.get(a.id) DO
+            IF b == a.id OR NOT @@hub_ids.contains(b) THEN @@s_accounts += (a.id -> b) END
+        END;
+    Printed = SELECT a FROM Scored:a
+      POST-ACCUM
+        FOREACH c IN @@subgraph_customers.get(a.id) DO @@printed_customers += c END,
+        FOREACH n IN @@subgraph_nodes.get(a.id) DO @@printed_nodes += n END;
+
+    /* The edges. An enrolment edge and an owner-enrolment edge carry their customer's link:
+       the time since its known start and since the latest payment seen on the node from an
+       account the customer owns. A seen edge carries the account's uses of the node: how
+       many, since the first when it is a known start, and since the last. */
+    EnrolledEdges = SELECT a FROM Scored:a
+      POST-ACCUM
+        STRING owner = @@owner_of.get(a.id), BOOL start_present = FALSE, UINT start_ms = 0,
+        BOOL seen_present = FALSE, UINT seen_ms = 0,
+        FOREACH n IN @@kept_links.get(owner) DO
+            start_present = @@known_link.get(owner).containsKey(n),
+            start_ms = 0,
+            IF start_present THEN start_ms = t_ms - @@known_link.get(owner).get(n) END,
+            seen_present = @@any_last.get(owner).containsKey(n),
+            seen_ms = 0,
+            IF seen_present THEN seen_ms = t_ms - @@any_last.get(owner).get(n) END,
+            @@enrolled += (a.id -> Enrolled(owner, n, start_present, start_ms, seen_present,
+              seen_ms))
+        END,
+        FOREACH n IN @@s_open.get(a.id) DO
+            FOREACH c IN @@subgraph_customers.get(a.id) DO
+                IF @@link_start.get(c).containsKey(n) THEN
+                    start_present = @@known_link.get(c).containsKey(n),
+                    start_ms = 0,
+                    IF start_present THEN start_ms = t_ms - @@known_link.get(c).get(n) END,
+                    seen_present = @@any_last.get(c).containsKey(n),
+                    seen_ms = 0,
+                    IF seen_present THEN seen_ms = t_ms - @@any_last.get(c).get(n) END,
+                    @@enrolled += (a.id -> Enrolled(c, n, start_present, start_ms,
+                      seen_present, seen_ms))
+                END
+            END
+        END;
+    OwnerEnrolledEdges = SELECT a FROM Scored:a
+      POST-ACCUM
+        STRING owner = @@owner_of.get(a.id), STRING customer = "", BOOL start_present = FALSE,
+        UINT start_ms = 0, BOOL seen_present = FALSE, UINT seen_ms = 0,
+        FOREACH b IN @@customer_accounts.get(a.id) DO
+            IF @@s_accounts.get(a.id).contains(b) THEN
+                FOREACH n IN @@kept_links.get(owner) DO
+                    start_present = @@known_link.get(owner).containsKey(n),
+                    start_ms = 0,
+                    IF start_present THEN start_ms = t_ms - @@known_link.get(owner).get(n) END,
+                    seen_present = @@any_last.get(owner).containsKey(n),
+                    seen_ms = 0,
+                    IF seen_present THEN seen_ms = t_ms - @@any_last.get(owner).get(n) END,
+                    @@owner_enrolled += (a.id -> OwnerEnrolled(b, n, start_present, start_ms,
+                      seen_present, seen_ms))
+                END
+            END
+        END,
+        FOREACH e IN @@expanded_of.get(a.id) DO
+            customer = @@owner_of.get(e),
+            FOREACH n IN @@kept_links.get(customer) DO
+                start_present = @@known_link.get(customer).containsKey(n),
+                start_ms = 0,
+                IF start_present THEN start_ms = t_ms - @@known_link.get(customer).get(n) END,
+                seen_present = @@any_last.get(customer).containsKey(n),
+                seen_ms = 0,
+                IF seen_present THEN seen_ms = t_ms - @@any_last.get(customer).get(n) END,
+                @@owner_enrolled += (a.id -> OwnerEnrolled(e, n, start_present, start_ms,
+                  seen_present, seen_ms))
+            END
+        END,
+        FOREACH n IN @@s_open.get(a.id) DO
+            FOREACH (b, linked) IN @@node_link_accounts.get(n) DO
+                IF @@s_accounts.get(a.id).contains(b) THEN
+                    start_present = @@known_link.get(linked).containsKey(n),
+                    start_ms = 0,
+                    IF start_present THEN start_ms = t_ms - @@known_link.get(linked).get(n) END,
+                    seen_present = @@any_last.get(linked).containsKey(n),
+                    seen_ms = 0,
+                    IF seen_present THEN seen_ms = t_ms - @@any_last.get(linked).get(n) END,
+                    @@owner_enrolled += (a.id -> OwnerEnrolled(b, n, start_present, start_ms,
+                      seen_present, seen_ms))
+                END
+            END
+        END;
+    SeenEdges = SELECT a FROM Scored:a
+      POST-ACCUM
+        BOOL first_present = FALSE, UINT first_ms = 0,
+        FOREACH n IN @@kept_seen.get(a.id) DO
+            first_present = @@first_use_known.get(a.id).contains(n),
+            first_ms = 0,
+            IF first_present THEN first_ms = t_ms - @@first_use.get(a.id).get(n) END,
+            @@seen += (a.id -> Seen(a.id, n, @@uses.get(a.id).get(n), first_present, first_ms,
+              t_ms - @@last_use.get(a.id).get(n)))
+        END,
+        FOREACH e IN @@expanded_of.get(a.id) DO
+            FOREACH n IN @@kept_seen.get(e) DO
+                first_present = @@first_use_known.get(e).contains(n),
+                first_ms = 0,
+                IF first_present THEN first_ms = t_ms - @@first_use.get(e).get(n) END,
+                @@seen += (a.id -> Seen(e, n, @@uses.get(e).get(n), first_present, first_ms,
+                  t_ms - @@last_use.get(e).get(n)))
+            END
+        END,
+        FOREACH n IN @@s_open.get(a.id) DO
+            FOREACH b IN @@node_senders.get(n) DO
+                IF @@s_accounts.get(a.id).contains(b) THEN
+                    first_present = @@first_use_known.get(b).contains(n),
+                    first_ms = 0,
+                    IF first_present THEN first_ms = t_ms - @@first_use.get(b).get(n) END,
+                    @@seen += (a.id -> Seen(b, n, @@uses.get(b).get(n), first_present,
+                      first_ms, t_ms - @@last_use.get(b).get(n)))
+                END
+            END
+        END;
+
+    /* The rows. A customer's co-users: those sharing a node with it that is no leaf, when
+       each pair began sharing, and on which kinds of node; then its counts. A node's
+       customers sharing it, and those whose sharing start is in the last 7 or 30 days. */
+    CustomersListed = to_vertex_set(@@printed_customers, "Party");
+    Pairs = SELECT q FROM CustomersListed:q
+      POST-ACCUM
+        UINT own_ms = 0, UINT other_ms = 0,
+        FOREACH n IN @@link_current.get(q.id) DO
+            IF NOT @@leaf_ids.contains(n) THEN
+                FOREACH c IN @@node_users.get(n) DO
+                    IF c != q.id AND (@@link_current.get(c).contains(n)
+                      OR @@dep_recent.get(c).contains(n)) THEN
+                        own_ms = @@share_start.get(q.id).get(n),
+                        other_ms = @@share_start.get(c).get(n),
+                        q.@pair_start += (c -> CASE WHEN own_ms > other_ms THEN own_ms
+                          ELSE other_ms END),
+                        IF @@ip_ids.contains(n) THEN
+                            q.@ip_co_users += c
+                        ELSE
+                            q.@device_co_users += c
+                        END
+                    END
+                END
+            END
+        END,
+        FOREACH n IN @@dep_recent.get(q.id) DO
+            IF NOT @@leaf_ids.contains(n) THEN
+                FOREACH c IN @@node_users.get(n) DO
+                    IF c != q.id AND (@@link_current.get(c).contains(n)
+                      OR @@dep_recent.get(c).contains(n)) THEN
+                        own_ms = @@share_start.get(q.id).get(n),
+                        other_ms = @@share_start.get(c).get(n),
+                        q.@pair_start += (c -> CASE WHEN own_ms > other_ms THEN own_ms
+                          ELSE other_ms END),
+                        IF @@ip_ids.contains(n) THEN
+                            q.@ip_co_users += c
+                        ELSE
+                            q.@device_co_users += c
+                        END
+                    END
+                END
+            END
+        END;
+    CustomerRows = SELECT q FROM CustomersListed:q
+      POST-ACCUM
+        FOREACH n IN @@link_current.get(q.id) DO
+            IF @@ip_ids.contains(n) THEN q.@ips_30d += 1 ELSE q.@devices_30d += 1 END
+        END,
+        FOREACH (n, start_ms) IN @@known_link.get(q.id) DO
+            IF start_ms >= t_ms - 2592000000 THEN
+                IF @@ip_ids.contains(n) THEN q.@new_ips_30d += 1 ELSE q.@new_devices_30d += 1 END
+            END
+        END,
+        FOREACH (c, start_ms) IN q.@pair_start DO
+            q.@co_users += 1,
+            IF start_ms >= t_ms - 2592000000 THEN q.@new_co_users_30d += 1 END,
+            IF q.@device_co_users.contains(c) AND q.@ip_co_users.contains(c) THEN
+                q.@co_users_both += 1
+            END
+        END;
+    DevicesListed = to_vertex_set(@@printed_nodes, "Device");
+    IpsListed = to_vertex_set(@@printed_nodes, "IP");
+    NodesListed = DevicesListed UNION IpsListed;
+    NodeRows = SELECT d FROM NodesListed:d
+      WHERE NOT d.@leaf
+      POST-ACCUM
+        FOREACH c IN @@node_users.get(d.id) DO
+            IF @@link_current.get(c).contains(d.id) OR @@dep_recent.get(c).contains(d.id) THEN
+                d.@customers_30d += 1
+            END,
+            IF @@share_start.get(c).get(d.id) >= t_ms - 604800000 THEN
+                d.@new_customers_7d += 1
+            END,
+            IF @@share_start.get(c).get(d.id) >= t_ms - 2592000000 THEN
+                d.@new_customers_30d += 1
+            END
+        END,
+        d.@customers_90d += d.@crowd_customers.size(),
+        d.@accounts_seen_30d += d.@seen_accounts.size(),
+        d.@observed_only += d.@crowd_enrolled.size() == 0;
+    AccountsListed = to_vertex_set(@@printed_accounts, "Account");
+    Accounts = SELECT a FROM AccountsListed:a WHERE a.opened_ms < t_ms;
+
+    PRINT "ok" AS status, "read_shared_identity-ccebbca1bdd2" AS version;
+    PRINT CustomersListed[CustomersListed.id AS customer_id,
+      CustomersListed.@accounts_owned AS accounts_owned,
+      CustomersListed.@devices_30d AS devices_30d, CustomersListed.@ips_30d AS ips_30d,
+      CustomersListed.@new_devices_30d AS new_devices_30d,
+      CustomersListed.@new_ips_30d AS new_ips_30d, CustomersListed.@co_users AS co_users,
+      CustomersListed.@new_co_users_30d AS new_co_users_30d,
+      CustomersListed.@co_users_both AS co_users_both] AS customers;
+    PRINT DevicesListed[DevicesListed.id AS node_id, DevicesListed.@leaf AS leaf,
+      DevicesListed.@customers_30d AS customers_30d,
+      DevicesListed.@customers_90d AS customers_90d,
+      DevicesListed.@new_customers_7d AS new_customers_7d,
+      DevicesListed.@new_customers_30d AS new_customers_30d,
+      DevicesListed.@accounts_seen_30d AS accounts_seen_30d,
+      DevicesListed.@payments_seen_30d AS payments_seen_30d,
+      DevicesListed.@observed_only AS observed_only] AS devices;
+    PRINT IpsListed[IpsListed.id AS node_id, IpsListed.@leaf AS leaf,
+      IpsListed.@customers_30d AS customers_30d, IpsListed.@customers_90d AS customers_90d,
+      IpsListed.@new_customers_7d AS new_customers_7d,
+      IpsListed.@new_customers_30d AS new_customers_30d,
+      IpsListed.@accounts_seen_30d AS accounts_seen_30d,
+      IpsListed.@payments_seen_30d AS payments_seen_30d,
+      IpsListed.@observed_only AS observed_only] AS ips;
+    PRINT Accounts[Accounts.id AS account_id, Accounts.is_external AS is_external] AS accounts;
+    PRINT @@subgraph_customers AS subgraph_customers;
+    PRINT @@subgraph_nodes AS subgraph_nodes;
+    PRINT @@co_user_accounts AS co_user_accounts;
+    PRINT @@enrolled AS enrolled;
+    PRINT @@owner_enrolled AS owner_enrolled;
+    PRINT @@seen AS seen;
+}

@@ -655,10 +655,11 @@ world is reloaded for evaluation.
 Prints the Monday's account hubs, crowds and device and IP hubs with their measure (distinct
 customers over 90 days), and each device's and IP's `observed_only`, under the rules above.
 
-- **Account hubs** travel as a `SET<VERTEX>` parameter to B2, B4 and B6: an account hub needs
-  to be known before a subgraph is built, and its test reads a whole lookback of a busy
-  account, so it runs once per Monday rather than once per request. Billers, merchants and
-  ledgers are few, and `mule bench` measures the request bytes.
+- **Account hubs** travel as a `SET<VERTEX>` parameter to B2, B4, B5 and B6: an account hub
+  needs to be known before a subgraph is built, and its test reads a whole lookback of a busy
+  account, so it runs once per Monday rather than once per request. B5 takes it because it
+  finds B4's accounts again, and an expanded hop-1 account is one that is no hub. Billers,
+  merchants and ledgers are few, and `mule bench` measures the request bytes.
 - **Device and IP leaves** are never sent as a parameter: with carrier IPs renumbering daily
   there can be hundreds of thousands of crowds per Monday, and resending them with each of
   about 720,000 requests would dwarf the answers. B5 and B6 apply the same crowd rule inline
@@ -970,9 +971,10 @@ crowds would merge strangers. The demo query `demo_account_web` also reads `is_m
   record them; fetch refuses a version with no passing parity record (see
   [Commands](#commands)).
 - Every per-account query refuses invalid parameters and duplicate, unknown or invisible
-  (not existing at t) accounts with a status row, and `read_counterparties` also refuses a
-  member of its hub set that does not exist at t (`invisible_hub`). `list_accounts`,
-  `read_labels` and `read_answer_key` page by strictly increasing id.
+  (not existing at t) accounts with a status row, and `read_counterparties`,
+  `read_payment_events` and `read_shared_identity` also refuse a member of their hub set that
+  does not exist at t (`invisible_hub`). `list_accounts`, `read_labels` and `read_answer_key`
+  page by strictly increasing id.
 - Every PRINT of a vertex set is a projection: a bare `PRINT Accounts;` once leaked every
   attribute while all 160 tests passed.
 - Per-request state is kept in accumulators keyed by the scored account, never in a vertex
@@ -983,11 +985,12 @@ crowds would merge strangers. The demo query `demo_account_web` also reads `is_m
   before the Python above it is built, and compiled on the live server as it is written. The
   owner allowed the MulePatternLearner workspace to be wiped early for this, once the new
   schema and the loader's wipe step land (see [Order of work](#order-of-work)), so no query
-  waits for the end to meet the server. The nine queries written so far (`list_accounts`,
+  waits for the end to meet the server. The eleven queries written so far (`list_accounts`,
   `read_labels`, `read_hubs`, `read_world`, `profile_hubs`, `read_money_flow`,
-  `read_counterparties`, `read_activity_change` and `read_answer_key`) compile on the live
-  server, B1's heap and list functions included, and its heaps take literal capacities, so no
-  parameter is a capacity. A heap of payments ordered (ts DESC, rail DESC, id DESC), probed on
+  `read_counterparties`, `read_activity_change`, `read_payment_events`,
+  `read_shared_identity` and `read_answer_key`) compile on the live server, B1's heap and list
+  functions included, and their heaps take literal capacities, so no parameter is a
+  capacity. A heap of payments ordered (ts DESC, rail DESC, id DESC), probed on
   the live server with 76 payments, kept its first 30 and iterated in exactly that order, which
   B1's own order check read as sorted. What an empty graph cannot show is the order of the
   heap of one account's payments, so B1 still checks every heap's order at run time and stops
