@@ -23,7 +23,6 @@ from ...tigergraph.queries import (
     READ_HUBS,
     READ_LABELS,
     READ_WORLD,
-    VERSIONS,
 )
 from ...tigergraph.queries import read_world as world_rows
 from ...tigergraph.queries.list_accounts import ScorableAccount
@@ -32,52 +31,17 @@ from ...tigergraph.queries.read_answer_key import AccountTruth
 from ...tigergraph.queries.read_hubs import HubAccount, Hubs, Leaf
 from ...tigergraph.queries.read_labels import IdentifiedMule
 from ...tigergraph.queries.read_world import PAYMENT_TYPES, SECONDS, World
-from ...tigergraph.queries.rows import LOOKBACK_MS, MONDAY_MS, PAGE_LIMIT, WEEK_MS
 from ...tigergraph.world import identity
+from .answer import INVALID_PARAMETERS, head, monday, refused, valid_page, vertices
 from .graph import BY_NAME, DEVICE, EDGE_TABLES, IP, NODE_KINDS, VERTEX_TABLES, Account, AsOf, cents
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
-
-    from _typeshed import DataclassInstance
-
     from .graph import ReferenceGraph
 
 SUBGRAPH = DEFAULT_CONFIG.subgraph
-OK = "ok"
-INVALID_PARAMETERS = "invalid_parameters"
 INVALID_ACTIVITY = "invalid_activity"
 # What TigerGraph's MinAccum<UINT> holds before it reads a value: the largest UINT.
 UINT_MAX = 2**64 - 1
-
-
-def _head(name: str) -> dict[str, Any]:
-    return {"status": OK, "version": VERSIONS[name]}
-
-
-def _refused(status: str, **fields: Any) -> list[dict[str, Any]]:
-    return [{"status": status, **fields}]
-
-
-def _vertices(kind: str, rows: Iterable[DataclassInstance]) -> list[dict[str, Any]]:
-    """A PRINT of a vertex set's projection: each vertex, keyed by its row's first field, the
-    vertex's id, with the row as its attributes."""
-    printed: list[dict[str, Any]] = []
-    for row in rows:
-        attributes = asdict(row)
-        vertex_id = next(iter(attributes.values()))
-        printed.append({"v_id": vertex_id, "v_type": kind, "attributes": attributes})
-    return printed
-
-
-def _monday(t_ms: int) -> bool:
-    """t is a Monday at 00:00 UTC after the lookback's length, which every query with t
-    requires."""
-    return t_ms > LOOKBACK_MS and t_ms % WEEK_MS == MONDAY_MS
-
-
-def _page(page: int) -> bool:
-    return 1 <= page <= PAGE_LIMIT
 
 
 # list_accounts.
@@ -98,14 +62,14 @@ def list_accounts(
     graph: ReferenceGraph, t_ms: int, after_id: str, page: int
 ) -> list[dict[str, Any]]:
     """A page of the scorable accounts of t, each with its owner."""
-    if not _monday(t_ms) or not _page(page):
-        return _refused(INVALID_PARAMETERS)
+    if not monday(t_ms) or not valid_page(page):
+        return refused(INVALID_PARAMETERS)
     view = graph.as_of(t_ms)
     rows = [
         ScorableAccount(account.id, str(view.owner(account.id)))
         for account in graph.page(after_id, page, lambda account: scorable(view, account))
     ]
-    return [_head(LIST_ACCOUNTS), {"accounts": _vertices("Account", rows)}]
+    return [head(LIST_ACCOUNTS), {"accounts": vertices("Account", rows)}]
 
 
 # read_labels and read_answer_key.
@@ -114,8 +78,8 @@ def list_accounts(
 def read_labels(graph: ReferenceGraph, after_id: str, page: int) -> list[dict[str, Any]]:
     """A page of the identified mules, pu_label 1, with their activity period. The page is
     refused, naming its accounts, when one of them lacks 0 < mule_onset_ms <= mule_last_ms."""
-    if not _page(page):
-        return _refused(INVALID_PARAMETERS)
+    if not valid_page(page):
+        return refused(INVALID_PARAMETERS)
     identified = graph.page(after_id, page, lambda account: account.pu_label == 1)
     invalid = [
         account.id
@@ -123,19 +87,19 @@ def read_labels(graph: ReferenceGraph, after_id: str, page: int) -> list[dict[st
         if not 0 < account.mule_onset_ms <= account.mule_last_ms
     ]
     if invalid:
-        return _refused(INVALID_ACTIVITY, accounts=invalid)
+        return refused(INVALID_ACTIVITY, accounts=invalid)
     rows = [
         IdentifiedMule(account.id, account.mule_onset_ms, account.mule_last_ms)
         for account in identified
     ]
-    return [_head(READ_LABELS), {"accounts": _vertices("Account", rows)}]
+    return [head(READ_LABELS), {"accounts": vertices("Account", rows)}]
 
 
 def read_answer_key(graph: ReferenceGraph, after_id: str, page: int) -> list[dict[str, Any]]:
     """A page of every internal account's truth, and whether it has an ownership link at
     all."""
-    if not _page(page):
-        return _refused(INVALID_PARAMETERS)
+    if not valid_page(page):
+        return refused(INVALID_PARAMETERS)
     rows = [
         AccountTruth(
             account.id,
@@ -149,7 +113,7 @@ def read_answer_key(graph: ReferenceGraph, after_id: str, page: int) -> list[dic
         )
         for account in graph.page(after_id, page, lambda account: not account.is_external)
     ]
-    return [_head(READ_ANSWER_KEY), {"accounts": _vertices("Account", rows)}]
+    return [head(READ_ANSWER_KEY), {"accounts": vertices("Account", rows)}]
 
 
 # read_hubs and profile_hubs.
@@ -209,14 +173,14 @@ def hubs(graph: ReferenceGraph, t_ms: int) -> Hubs:
 
 def read_hubs(graph: ReferenceGraph, t_ms: int) -> list[dict[str, Any]]:
     """The leaves of t with their measures."""
-    if not _monday(t_ms):
-        return _refused(INVALID_PARAMETERS)
+    if not monday(t_ms):
+        return refused(INVALID_PARAMETERS)
     found = hubs(graph, t_ms)
     return [
-        _head(READ_HUBS),
-        {"accounts": _vertices("Account", found.accounts)},
-        {"devices": _vertices(DEVICE, found.devices)},
-        {"ips": _vertices(IP, found.ips)},
+        head(READ_HUBS),
+        {"accounts": vertices("Account", found.accounts)},
+        {"devices": vertices(DEVICE, found.devices)},
+        {"ips": vertices(IP, found.ips)},
     ]
 
 
@@ -254,14 +218,14 @@ def hub_profile(graph: ReferenceGraph, t_ms: int) -> HubProfile:
 def profile_hubs(graph: ReferenceGraph, t_ms: int) -> list[dict[str, Any]]:
     """The histograms of t, each measure printed as a string, as TigerGraph prints a map's
     integer keys."""
-    if not _monday(t_ms):
-        return _refused(INVALID_PARAMETERS)
+    if not monday(t_ms):
+        return refused(INVALID_PARAMETERS)
     profile = asdict(hub_profile(graph, t_ms))
     printed = {
         name: {str(measure): count for measure, count in histogram.items()}
         for name, histogram in profile.items()
     }
-    return [{**_head(PROFILE_HUBS), **printed}]
+    return [{**head(PROFILE_HUBS), **printed}]
 
 
 # read_world.
@@ -312,7 +276,7 @@ def read_world(graph: ReferenceGraph) -> list[dict[str, Any]]:
         "first_event_ms": min(events, default=UINT_MAX),
         "last_event_ms": max(events, default=0),
     }
-    return [{**_head(READ_WORLD), **printed}]
+    return [{**head(READ_WORLD), **printed}]
 
 
 def world(graph: ReferenceGraph) -> World:

@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from bisect import bisect_left, bisect_right
 from collections import defaultdict
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cache
 import math
@@ -51,6 +51,10 @@ ENROLMENTS = {DEVICE: "Party_Uses_Device", IP: "Party_Uses_IP"}
 ZELLE = "zelle"
 # The window of the current test: a link held at some time in the last 30 days.
 CURRENT_MS = DEFAULT_CONFIG.subgraph.sharing_days * DAY_MS
+# The payments a time-ordered list keeps (docs/design.md, "Time", under Caps), and the second
+# whose whole cut keeps them.
+RECENT = DEFAULT_CONFIG.subgraph.recent_payments
+SECOND_MS = 1_000
 # The pandas dtype of each graph type in a contract frame, whose values read back as str, int,
 # bool and float. "str" is pandas 3's string dtype, which holds nothing but strings; on pandas 2
 # it would be object, which holds anything, so pyproject.toml requires pandas 3.
@@ -184,6 +188,40 @@ def cents(amount: float) -> int:
     """An amount in integer cents, floor(amount x 100 + 0.5) in double arithmetic, as GSQL
     computes it (docs/design.md, "Time", under Money)."""
     return math.floor(amount * 100 + 0.5)
+
+
+def share(part: int, whole: int) -> float:
+    """A share of cents, part / whole, in one division of two integers as GSQL makes it; 0
+    with an empty denominator, which another column shows (docs/design.md, "Encoding")."""
+    return part / whole if whole > 0 else 0.0
+
+
+def second(ts: int) -> int:
+    """The whole second a time in milliseconds falls in."""
+    return ts // SECOND_MS
+
+
+def cut_second(times: Collection[int], cap: int = RECENT) -> int | None:
+    """The cut of a time-ordered list of cap payments (docs/design.md, "Time", under Ties):
+    None when it keeps every payment, else b, the second of the newest payment it leaves out.
+    The list then keeps only the payments after the second b, so the payments of one second
+    are kept or dropped together, whatever their order."""
+    if len(times) <= cap:
+        return None
+    return second(sorted(times, reverse=True)[cap])
+
+
+def kept_times(times: Collection[int], cap: int = RECENT) -> list[int]:
+    """The times a time-ordered list of cap payments keeps, on its own cut, oldest first."""
+    cut = cut_second(times, cap)
+    return sorted(ts for ts in times if cut is None or second(ts) > cut)
+
+
+def most_within(times: Collection[int], window_ms: int) -> int:
+    """The most of times in [x, x + window_ms) with x one of them, a window anchored at a
+    payment and never at a clock bin (docs/design.md, "Time", under Ties); 0 with none. Equal
+    times all count."""
+    return max((sum(1 for y in times if x <= y < x + window_ms) for x in times), default=0)
 
 
 class _Timeline:
