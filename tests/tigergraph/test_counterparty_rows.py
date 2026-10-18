@@ -86,6 +86,28 @@ SAVER = Counterparties(
 )
 
 
+# Rows at the edges of the cap, MULE with its new payers changed, all of this bank.
+# - ONE_NEW: 1 new payer, so a burst of 1 in 24 hours.
+# - FULL: 256 new payers, all kept, so a burst of at least 1.
+ONE_NEW = replace(
+    MULE,
+    new_internal_payers_7d=1,
+    new_internal_payers_30d=1,
+    new_external_payers_7d=0,
+    new_external_payers_30d=0,
+    max_new_payers_24h=1,
+)
+FULL = replace(
+    MULE,
+    payers_30d=300,
+    new_internal_payers_7d=256,
+    new_internal_payers_30d=256,
+    new_external_payers_7d=0,
+    new_external_payers_30d=0,
+    max_new_payers_24h=256,
+)
+
+
 def _row(row: Counterparties) -> dict[str, Any]:
     return {"v_id": row.account_id, "v_type": "Account", "attributes": vars(row)}
 
@@ -159,6 +181,8 @@ def test_a_row_for_every_account_asked_and_no_other(
         (replace(MULE, max_new_payers_24h=4), "more new payers in 24 hours"),
         (replace(MULE, max_new_payers_24h=0), "no new payer in 24 hours"),
         (replace(SAVER, max_new_payers_24h=1), "more new payers in 24 hours"),
+        (replace(ONE_NEW, max_new_payers_24h=0), "no new payer in 24 hours"),
+        (replace(FULL, max_new_payers_24h=0), "no new payer in 24 hours"),
     ],
     ids=[
         "internal 7 over 30",
@@ -173,12 +197,34 @@ def test_a_row_for_every_account_asked_and_no_other(
         "a burst of more payers than new",
         "no burst of kept payers",
         "a burst with no payer",
+        "no burst of exactly 1 new payer",
+        "no burst of exactly 256 new payers",
     ],
 )
 def test_a_row_the_query_cannot_give_is_refused(row: Counterparties, message: str) -> None:
     others = [SAVER] if row.account_id == "a_01" else [MULE]
     with pytest.raises(ValueError, match=message):
         read_counterparties.parse(_answer([row, *others]), ["a_01", "a_02"])
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        ONE_NEW,
+        FULL,
+        # 257 new payers may leave none kept: 257 first payments in one second.
+        replace(
+            FULL,
+            payers_30d=400,
+            new_internal_payers_7d=257,
+            new_internal_payers_30d=257,
+            max_new_payers_24h=0,
+        ),
+    ],
+    ids=["exactly 1 new payer", "exactly 256 new payers", "exactly 257 new payers"],
+)
+def test_a_row_at_the_edge_of_the_cap_is_accepted(row: Counterparties) -> None:
+    assert read_counterparties.parse(_answer([row, SAVER]), ["a_01", "a_02"])[0] == row
 
 
 def test_more_new_payers_than_the_cap_may_keep_none_in_24_hours() -> None:

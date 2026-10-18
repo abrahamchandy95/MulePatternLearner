@@ -20,18 +20,23 @@ import pytest
 from mule_pattern_learner.config import DEFAULT_CONFIG
 from mule_pattern_learner.paths import GSQL_DIR
 from mule_pattern_learner.testing.gsql_rules import (
-    Select,
+    accumulation_text,
     common_problems,
+    dataflow_problems,
+    declared_locals,
     field_rule,
+    moved_select,
+    normal,
     parameter_rule,
     parameters,
     projection_fields,
     projection_items,
     scopes,
+    select_flows,
+    select_of,
     source_rule,
     statements,
     status_fields,
-    tokens,
     tuples,
     version_rule,
     without_comments,
@@ -73,37 +78,11 @@ HEAP = LIST + 1
 PORTIONS = 2 * LIST
 
 
-def _normal(text: str) -> str:
-    """A GSQL text as the rules read it: its tokens joined by single spaces."""
-    return " ".join(tokens(text))
-
-
-def _select(target: str) -> Select:
-    """The SELECT that assigns target."""
-    for statement, _, select in scopes(DEFINITION):
-        if select is not None and statement[:2] == [target, "="]:
-            return select
-    raise AssertionError(f"read_money_flow assigns no {target} by a SELECT")
-
-
-def _accumulations(target: str) -> str:
-    """The ACCUM and POST-ACCUM of the SELECT that assigns target, as the rules read them."""
-    return " ".join(_select(target).accumulations)
-
-
 def _has(target: str, *snippets: str) -> None:
     """Each snippet, written as GSQL, is in the clauses of the SELECT that assigns target."""
-    code = _accumulations(target)
+    code = accumulation_text(DEFINITION, target)
     for snippet in snippets:
-        assert _normal(snippet) in code, snippet
-
-
-def _declared_locals(target: str) -> list[tuple[str, str]]:
-    """The local variables a SELECT's clauses declare, with their types, in order."""
-    found = re.findall(
-        r"(?:^|, )(INT|UINT|STRING|BOOL|DOUBLE|FLOAT) (\w+) =", _accumulations(target)
-    )
-    return [(kind, name) for kind, name in found]
+        assert normal(snippet) in code, snippet
 
 
 # Every rule, and the Python above the query.
@@ -188,7 +167,7 @@ def test_its_heaps_hold_one_more_than_a_list_and_every_portion() -> None:
     assert (HEAP, PORTIONS) == (257, 512)
     for way in ("in", "out"):
         heap = f"a.@{way}flows"
-        loop = _accumulations("Listed").split(f"FOREACH x IN {heap} DO")[1]
+        loop = accumulation_text(DEFINITION, "Listed").split(f"FOREACH x IN {heap} DO")[1]
         branch = loop.split(" , previous_ts = x.ts")[0]
         assert f"IF k < {LIST} THEN a.@{way}_s += floor ( x.ts / 1000 )" in branch, way
         assert branch.endswith("ELSE a.@cut_s += floor ( x.ts / 1000 ) END"), way
@@ -251,7 +230,7 @@ def test_t_is_a_monday_after_the_lookback_and_every_account_is_known_once_and_ex
         "Scored = SELECT s FROM Requested : s WHERE s.opened_ms < t_ms",
         'IF Scored.size ( ) != Requested.size ( ) THEN PRINT "invisible_account" AS status',
     ]
-    assert _select("Scored").conjuncts == {"s.opened_ms < t_ms"}
+    assert select_of(DEFINITION, "Scored").conjuncts == {"s.opened_ms < t_ms"}
     # Every later SELECT starts from the checked accounts.
     starts = [
         select.vertices[0]
@@ -260,7 +239,7 @@ def test_t_is_a_monday_after_the_lookback_and_every_account_is_known_once_and_ex
     ]
     assert len(starts) == 8
     assert {(step.alias, step.chosen) for step in starts} == {("a", True)}
-    assert _normal(DEFINITION).count("FROM Scored : a") == 8
+    assert normal(DEFINITION).count("FROM Scored : a") == 8
 
 
 # The order of the SELECTs. A value a walk reads later is read in a later SELECT than the one
@@ -278,71 +257,17 @@ SELECT_ORDER = [
     "Matched",
     "Rows",
 ]
-VERTEX_ACCUMULATOR = re.compile(r"\w+\.@(\w+)(\.\w+)?")
-
-
-def _flows(definition: str) -> list[tuple[str, set[str], set[str]]]:
-    """Each assigned SELECT of a query in file order, with the vertex accumulators (`a.@name`)
-    its ACCUM and POST-ACCUM clauses write (`+=` or `=` on the accumulator itself) and read
-    (any other use, as in `a.@in_s.get(n)` or `FOREACH x IN a.@inflows`)."""
-    found: list[tuple[str, set[str], set[str]]] = []
-    for _, _, select in scopes(definition):
-        if select is None:
-            continue
-        items = list(select.accumulations)
-        written: set[str] = set()
-        read: set[str] = set()
-        for at, item in enumerate(items):
-            match = VERTEX_ACCUMULATOR.fullmatch(item)
-            if match is None:
-                continue
-            if match[2] is None and items[at + 1 : at + 2] in (["+="], ["="]):
-                written.add(match[1])
-            else:
-                read.add(match[1])
-        found.append((select.statement[0], written, read))
-    return found
-
-
-def dataflow_problems(definition: str) -> list[str]:
-    """Every accumulator a SELECT reads, with a writer in the query, is written only by SELECTs
-    strictly before it, and has at least one."""
-    flows = _flows(definition)
-    problems: list[str] = []
-    for index, (target, _, read) in enumerate(flows):
-        for name in sorted(read):
-            writers = [at for at, (_, written, _) in enumerate(flows) if name in written]
-            if not writers or max(writers) >= index:
-                by = [flows[at][0] for at in writers] or ["no SELECT"]
-                problems.append(f"{target} reads @{name}, written by {', '.join(by)}")
-    return problems
-
-
-def _moved(target: str, after: str) -> str:
-    """The query's text with the SELECT that assigns target moved to follow the one that
-    assigns after."""
-
-    def statement(name: str) -> re.Pattern[str]:
-        return re.compile(rf"^    {name} = SELECT .*?;\n", re.MULTILINE | re.DOTALL)
-
-    moved = statement(target).search(DEFINITION)
-    stays = statement(after).search(DEFINITION)
-    assert moved is not None and stays is not None
-    without = DEFINITION.replace(moved[0], "", 1)
-    end = statement(after).search(without)
-    assert end is not None
-    return without[: end.end()] + moved[0] + without[end.end() :]
 
 
 def test_the_selects_run_in_the_order_the_walk_needs() -> None:
-    assert [target for target, _, _ in _flows(DEFINITION)] == SELECT_ORDER
+    assert [target for target, _, _ in select_flows(DEFINITION)] == SELECT_ORDER
 
 
 def test_every_value_a_select_reads_is_written_by_an_earlier_select() -> None:
     assert dataflow_problems(DEFINITION) == []
     # The rule sees the reads that matter: the lists a walk reads, the cut, the levels and the
     # lowest levels, the lots and the portions.
-    reads = {target: read for target, _, read in _flows(DEFINITION)}
+    reads = {target: read for target, _, read in select_flows(DEFINITION)}
     assert {"inflows", "outflows"} <= reads["Listed"]
     assert {"in_s", "in_cents", "out_s", "out_cents", "cut_s"} <= reads["Levels"]
     assert reads["Lowest"] == {"out_level"}
@@ -365,7 +290,7 @@ def test_every_value_a_select_reads_is_written_by_an_earlier_select() -> None:
 def test_a_select_moved_before_the_one_it_reads_from_breaks_the_rule(
     target: str, after: str, problem: str
 ) -> None:
-    moved = _moved(target, after)
+    moved = moved_select(DEFINITION, target, after)
     assert moved != DEFINITION
     assert problem in dataflow_problems(moved)
 
@@ -384,7 +309,7 @@ def test_same_second_outflows_are_walked_by_rail_name_then_id() -> None:
     assert re.findall(r"HeapAccum<Paid>\((\d+), ([^)]*)\)", DEFINITION) == [
         (str(HEAP), "ts DESC, rail DESC, id DESC")
     ]
-    code = _normal(DEFINITION)
+    code = normal(DEFINITION)
     # Each list is read at m - 1 - j, from its end: the lot test and the dwell read the second,
     # the portion's rail the rail.
     assert code.count("a.@out_s.get ( m - 1 - j )") == 2
@@ -404,7 +329,7 @@ def test_a_heap_walked_out_of_order_stops_the_query() -> None:
         "OR (x.rail == previous_rail AND x.id > previous_id)))) THEN "
         "@@unsorted += TRUE, @@unsorted_accounts += a.id END"
     )
-    assert _accumulations("Listed").count(_normal(out_of_order)) == 2
+    assert accumulation_text(DEFINITION, "Listed").count(normal(out_of_order)) == 2
     _has(
         "Listed",
         "previous_ts = x.ts, previous_rail = x.rail, previous_id = x.id, k = k + 1 END",
@@ -413,8 +338,8 @@ def test_a_heap_walked_out_of_order_stops_the_query() -> None:
         "Listed",
         'k = 0, previous_ts = 0, previous_rail = "", previous_id = "", FOREACH x IN a.@outflows DO',
     )
-    assert _accumulations("Listed").startswith(
-        _normal(
+    assert accumulation_text(DEFINITION, "Listed").startswith(
+        normal(
             'INT k = 0, UINT previous_ts = 0, STRING previous_rail = "", '
             'STRING previous_id = "", FOREACH x IN a.@inflows'
         )
@@ -463,7 +388,7 @@ def test_it_reads_the_lookbacks_payments_each_way_but_self_payments(
     list: inflows with positive cents, outflows whatever their cents, each with its rail, a
     Zelle transfer's being zelle. A payment whose other end is the account itself is read
     nowhere."""
-    select = _select(target)
+    select = select_of(DEFINITION, target)
     assert [step.alias for step in select.vertices] == ["a", "p", "b"]
     assert select.vertices[0].chosen and select.vertices[1].types == payments
     assert [set(edge.types) for edge in select.edges] == edges
@@ -474,7 +399,7 @@ def test_it_reads_the_lookbacks_payments_each_way_but_self_payments(
         if rail is None
         else f"a.@outflows += Paid(p.event_ts_ms, p.id, cents, {rail})"
     )
-    assert _accumulations(target) == _normal(
+    assert accumulation_text(DEFINITION, target) == normal(
         f"""INT cents = floor(p.amount * 100 + 0.5),
         a.@{way}_amount_90d += cents,
         IF p.event_ts_ms >= t_ms - {WINDOW_30D_MS} THEN
@@ -492,8 +417,8 @@ def test_the_span_drops_every_payment_at_or_before_the_cut_second() -> None:
     """With no list cut, the cut second is MaxAccum's least INT, below every second; otherwise
     every payment of either list at or before it is dropped, a prefix of each list newest
     first being kept."""
-    assert _accumulations("Levels").startswith(
-        _normal(
+    assert accumulation_text(DEFINITION, "Levels").startswith(
+        normal(
             "INT cut = a.@cut_s, INT n = 0, INT m = 0, INT i = 0, INT j = 0, INT level = 0, "
             "INT lot_s = 0, INT lot = 0, INT first_in = 0, "
             "WHILE n < a.@in_s.size() AND a.@in_s.get(n) > cut DO n = n + 1 END, "
@@ -501,7 +426,9 @@ def test_the_span_drops_every_payment_at_or_before_the_cut_second() -> None:
             "WHILE i < n OR j < m DO"
         )
     )
-    assert _accumulations("Levels").endswith(_normal("j = j + 1 END END, a.@kept_in += n"))
+    assert accumulation_text(DEFINITION, "Levels").endswith(
+        normal("j = j + 1 END END, a.@kept_in += n")
+    )
 
 
 def test_a_lot_holds_the_inflows_of_one_second_and_comes_before_its_outflows() -> None:
@@ -534,7 +461,7 @@ def test_an_outflow_lowers_the_level_never_below_zero() -> None:
 def test_the_suffix_minima_stop_a_lots_scan() -> None:
     """The lowest level from each outflow to the last, appended from the last back; a lot's
     scan goes on only while it holds cents and a later outflow falls below its lowest level."""
-    assert _accumulations("Lowest") == _normal(
+    assert accumulation_text(DEFINITION, "Lowest") == normal(
         """INT m = a.@out_level.size(), INT j = m - 1, INT low = 0,
         IF m > 0 THEN low = a.@out_level.get(m - 1) END,
         WHILE j >= 0 DO
@@ -552,15 +479,17 @@ def test_the_suffix_minima_stop_a_lots_scan() -> None:
         "IF a.@out_level.get(j) < low THEN low = a.@out_level.get(j),",
         "steps = steps + 1, j = j + 1 END, a.@received += c, a.@matched += gone,",
     )
-    assert _accumulations("Matched").startswith(
-        _normal(
+    assert accumulation_text(DEFINITION, "Matched").startswith(
+        normal(
             "INT m = a.@out_level.size(), INT n = a.@kept_in, INT j = 0, INT c = 0, "
             "INT base = 0, INT low = 0, INT gone = 0, INT taken = 0, INT dwell = 0, "
             'INT within_24h = 0, INT half = -1, INT steps = 0, INT q = 0, STRING rail = "", '
             "IF a.@lot_s.size() > 0 THEN"
         )
     )
-    assert _accumulations("Matched").endswith(_normal("END END, a.@scan_steps += steps"))
+    assert accumulation_text(DEFINITION, "Matched").endswith(
+        normal("END END, a.@scan_steps += steps")
+    )
 
 
 def test_each_fall_inside_a_lots_band_is_a_portion_timed_in_whole_seconds() -> None:
@@ -629,16 +558,16 @@ def test_the_median_and_the_shares_divide_sums_of_cents_once() -> None:
         "IF median >= 0 THEN a.@median_dwell_present += TRUE, "
         "a.@median_dwell_ms += median * 1000 END,",
     )
-    assert _accumulations("Rows").startswith(
-        _normal("INT cumulative = 0, INT previous = 0, BOOL started = FALSE, INT median = -1,")
+    assert accumulation_text(DEFINITION, "Rows").startswith(
+        normal("INT cumulative = 0, INT previous = 0, BOOL started = FALSE, INT median = -1,")
     )
     shares = ", ".join(f"a.@left_{w} += a.@within_{w} * 1.0 / a.@received" for w in DWELL_WINDOWS_S)
     rails = ", ".join(
         f"a.@left_by_{rail} += a.@by_{rail} * 1.0 / a.@within_1d"
         for rail in ("transfer", "card", "cash")
     )
-    assert _accumulations("Rows").endswith(
-        _normal(
+    assert accumulation_text(DEFINITION, "Rows").endswith(
+        normal(
             f"IF a.@received > 0 THEN a.@flow_present += TRUE, {shares}, "
             "a.@held_share += (a.@received - a.@matched) * 1.0 / a.@received END, "
             f"IF a.@within_1d > 0 THEN {rails} END"
@@ -650,30 +579,32 @@ def test_every_level_and_cent_of_the_walk_is_int() -> None:
     """Mixing INT with UINT turns arithmetic into UINT, where a level or cent below 0 wraps.
     The walk's locals are INT (seconds included), but the heap's millisecond time it compares
     the next payment's with, and its rail and flags."""
-    assert _declared_locals("Listed") == [
+    assert declared_locals(DEFINITION, "Listed") == [
         ("INT", "k"),
         ("UINT", "previous_ts"),
         ("STRING", "previous_rail"),
         ("STRING", "previous_id"),
     ]
     for target in ("Levels", "Lowest"):
-        assert {kind for kind, _ in _declared_locals(target)} == {"INT"}, target
-    assert [name for kind, name in _declared_locals("Matched") if kind != "INT"] == ["rail"] and (
+        assert {kind for kind, _ in declared_locals(DEFINITION, target)} == {"INT"}, target
+    assert [name for kind, name in declared_locals(DEFINITION, "Matched") if kind != "INT"] == [
+        "rail"
+    ] and (
         "STRING",
         "rail",
-    ) in _declared_locals("Matched")
-    assert _declared_locals("Rows") == [
+    ) in declared_locals(DEFINITION, "Matched")
+    assert declared_locals(DEFINITION, "Rows") == [
         ("INT", "cumulative"),
         ("INT", "previous"),
         ("BOOL", "started"),
         ("INT", "median"),
     ]
     for target in ("Received", "Sent", "SentByZelle"):
-        assert _declared_locals(target) == [("INT", "cents")], target
+        assert declared_locals(DEFINITION, target) == [("INT", "cents")], target
 
 
 def test_no_bound_at_t_takes_t_itself() -> None:
-    code = _normal(DEFINITION)
+    code = normal(DEFINITION)
     assert not re.search(r"<= t_ms\b|t_ms >=|t_ms > (?!lookback)", code)
     assert code.count("p.event_ts_ms < t_ms") == 3
 

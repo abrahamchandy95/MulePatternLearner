@@ -1263,6 +1263,94 @@ def field_rule(what: str, printed: Sequence[str], kind: type) -> list[str]:
     return [] if list(printed) == expected else [f"{what} prints {list(printed)}, not {expected}"]
 
 
+# Readers of one query's text, shared by the tests that hold a query clause by clause: each
+# takes the query's definition, and most the name a SELECT assigns, its target.
+
+
+def normal(text: str) -> str:
+    """A GSQL text as the rules read it: its tokens joined by single spaces."""
+    return " ".join(tokens(text))
+
+
+def select_of(definition: str, target: str) -> Select:
+    """The SELECT that assigns target."""
+    for statement, _, select in scopes(definition):
+        if select is not None and statement[:2] == [target, "="]:
+            return select
+    raise AssertionError(f"no SELECT assigns {target}")
+
+
+def accumulation_text(definition: str, target: str) -> str:
+    """The ACCUM and POST-ACCUM of the SELECT that assigns target, as the rules read them."""
+    return " ".join(select_of(definition, target).accumulations)
+
+
+def declared_locals(definition: str, target: str) -> list[tuple[str, str]]:
+    """The local variables a SELECT's clauses declare, with their types, in order."""
+    found = re.findall(
+        r"(?:^|, )(INT|UINT|STRING|BOOL|DOUBLE|FLOAT) (\w+) =",
+        accumulation_text(definition, target),
+    )
+    return [(kind, name) for kind, name in found]
+
+
+VERTEX_ACCUMULATOR = re.compile(r"\w+\.@(\w+)(\.\w+)?")
+
+
+def select_flows(definition: str) -> list[tuple[str, set[str], set[str]]]:
+    """Each assigned SELECT of a query in file order, with the vertex accumulators (`a.@name`)
+    its ACCUM and POST-ACCUM clauses write (`+=` or `=` on the accumulator itself) and read
+    (any other use, as in `a.@in_s.get(n)` or `FOREACH x IN a.@inflows`)."""
+    found: list[tuple[str, set[str], set[str]]] = []
+    for _, _, select in scopes(definition):
+        if select is None:
+            continue
+        items = list(select.accumulations)
+        written: set[str] = set()
+        read: set[str] = set()
+        for at, item in enumerate(items):
+            match = VERTEX_ACCUMULATOR.fullmatch(item)
+            if match is None:
+                continue
+            if match[2] is None and items[at + 1 : at + 2] in (["+="], ["="]):
+                written.add(match[1])
+            else:
+                read.add(match[1])
+        found.append((select.statement[0], written, read))
+    return found
+
+
+def dataflow_problems(definition: str) -> list[str]:
+    """Every accumulator a SELECT reads is written only by SELECTs strictly before it, and
+    has at least one. POST-ACCUM clauses of one SELECT run in parallel, and a SELECT moved
+    before the one that fills what it reads walks empty lists and still compiles."""
+    flows = select_flows(definition)
+    problems: list[str] = []
+    for index, (target, _, read) in enumerate(flows):
+        for name in sorted(read):
+            writers = [at for at, (_, written, _) in enumerate(flows) if name in written]
+            if not writers or max(writers) >= index:
+                by = [flows[at][0] for at in writers] or ["no SELECT"]
+                problems.append(f"{target} reads @{name}, written by {', '.join(by)}")
+    return problems
+
+
+def moved_select(definition: str, target: str, after: str) -> str:
+    """The query's text with the SELECT that assigns target moved to follow the one that
+    assigns after."""
+
+    def statement(name: str) -> re.Pattern[str]:
+        return re.compile(rf"^    {name} = SELECT .*?;\n", re.MULTILINE | re.DOTALL)
+
+    moved = statement(target).search(definition)
+    stays = statement(after).search(definition)
+    assert moved is not None and stays is not None
+    without = definition.replace(moved[0], "", 1)
+    end = statement(after).search(without)
+    assert end is not None
+    return without[: end.end()] + moved[0] + without[end.end() :]
+
+
 def common_problems(name: str, text: str) -> list[str]:
     """What breaks any rule that reads the query's file alone: every rule but the version,
     the parameters and the printed fields, which also read the Python above it."""

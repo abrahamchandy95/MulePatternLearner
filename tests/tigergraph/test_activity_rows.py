@@ -85,6 +85,30 @@ DORMANT = ActivityChange(
 )
 
 
+# Rows at the edges of what the query can give, MULE with its inflows changed.
+# - ONE_IN: 1 inflow in 30 days, 2 days ago, so a burst of 1 and no gap.
+# - FULL: 256 inflows in the last 30 days, all kept, so a burst of at least 1 and a gap.
+ONE_IN = replace(
+    MULE,
+    in_7d=1,
+    in_30d=1,
+    in_90d=1,
+    burst_in_1h=1,
+    burst_in_24h=1,
+    shortest_in_gap_present=False,
+    shortest_in_gap_ms=0,
+)
+FULL = replace(
+    MULE,
+    in_7d=256,
+    in_30d=256,
+    in_90d=256,
+    burst_in_1h=1,
+    burst_in_24h=9,
+    shortest_in_gap_ms=2 * HOUR_MS,
+)
+
+
 def _row(row: ActivityChange) -> dict[str, Any]:
     return {"v_id": row.account_id, "v_type": "Account", "attributes": vars(row)}
 
@@ -154,6 +178,11 @@ def test_a_row_for_every_account_asked_and_no_other(
         (replace(MULE, shortest_in_gap_ms=0), "a gap"),
         (replace(MULE, shortest_in_gap_ms=30 * DAY_MS), "a gap"),
         (replace(MULE, shortest_in_gap_present=False), "an absent gap"),
+        (replace(ONE_IN, shortest_in_gap_present=True, shortest_in_gap_ms=240_000), "a gap"),
+        (replace(ONE_IN, burst_in_1h=0, burst_in_24h=0), "no in burst though it kept payments"),
+        (replace(FULL, burst_in_1h=0, burst_in_24h=0), "no in burst though it kept payments"),
+        (replace(ONE_IN, since_last_in_ms=30 * DAY_MS + 1), "since the last payment in unlike"),
+        (replace(DORMANT, since_last_in_ms=29 * DAY_MS), "since the last payment in unlike"),
     ],
     ids=[
         "in counts",
@@ -173,6 +202,11 @@ def test_a_row_for_every_account_asked_and_no_other(
         "a gap of 0",
         "a gap of 30 days",
         "an absent gap that is not 0",
+        "a gap with exactly 1 inflow",
+        "no burst of exactly 1 inflow",
+        "no burst of exactly 256 inflows",
+        "an inflow 1 ms before 30 days ago counted in 30 days",
+        "no inflow in 30 days but one less than 30 days ago",
     ],
 )
 def test_a_row_the_query_cannot_give_is_refused(row: ActivityChange, message: str) -> None:
@@ -190,6 +224,60 @@ def test_the_boundaries_of_the_count_windows() -> None:
     assert read_activity_change.parse(_answer([MULE, week]), ["a_01", "a_02"])[1] == week
     oldest = replace(DORMANT, since_last_in_ms=90 * DAY_MS)
     assert read_activity_change.parse(_answer([MULE, oldest]), ["a_01", "a_02"])[1] == oldest
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        # 2 of 10 inflows in the last 7 days, the burst of 6 reaching back past the week: the
+        # bursts and the time since read the 30 days, not the 7.
+        replace(
+            MULE,
+            in_7d=2,
+            in_30d=10,
+            in_90d=10,
+            burst_in_1h=6,
+            burst_in_24h=6,
+            since_last_in_ms=3 * DAY_MS,
+        ),
+        # The latest inflow 10 days ago: none in 7 days, some in 30.
+        replace(
+            MULE,
+            in_7d=0,
+            in_30d=3,
+            in_90d=3,
+            burst_in_1h=2,
+            burst_in_24h=3,
+            since_last_in_ms=10 * DAY_MS,
+        ),
+        # The latest inflow exactly 30 days ago still counts over 30 days.
+        replace(ONE_IN, in_7d=0, since_last_in_ms=30 * DAY_MS),
+        # A gap needs two inflows in 30 days, and two are enough.
+        replace(MULE, in_7d=2, in_30d=2, in_90d=2, burst_in_1h=2, burst_in_24h=2),
+        # 256 inflows are all kept, so one of them is a burst; 257 may leave none kept.
+        FULL,
+        replace(
+            FULL,
+            in_7d=257,
+            in_30d=257,
+            in_90d=257,
+            burst_in_1h=0,
+            burst_in_24h=0,
+            shortest_in_gap_present=False,
+            shortest_in_gap_ms=0,
+        ),
+    ],
+    ids=[
+        "bursts over the 30 days, not the 7",
+        "the latest inflow between 7 and 30 days ago",
+        "the latest inflow exactly 30 days ago",
+        "a gap between exactly 2 inflows",
+        "exactly 256 inflows, all kept",
+        "exactly 257 inflows, none kept",
+    ],
+)
+def test_a_row_at_the_edge_of_what_the_query_gives_is_accepted(row: ActivityChange) -> None:
+    assert read_activity_change.parse(_answer([row, DORMANT]), ["a_01", "a_02"])[0] == row
 
 
 def test_more_payments_than_the_cap_may_keep_none_in_a_burst() -> None:

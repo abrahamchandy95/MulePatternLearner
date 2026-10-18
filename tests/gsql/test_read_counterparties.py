@@ -19,18 +19,23 @@ import pytest
 from mule_pattern_learner.config import DEFAULT_CONFIG
 from mule_pattern_learner.paths import GSQL_DIR
 from mule_pattern_learner.testing.gsql_rules import (
-    Select,
+    accumulation_text,
     common_problems,
+    dataflow_problems,
+    declared_locals,
     field_rule,
+    moved_select,
+    normal,
     parameter_rule,
     parameters,
     projection_fields,
     projection_items,
     scopes,
+    select_flows,
+    select_of,
     source_rule,
     statements,
     status_fields,
-    tokens,
     version_rule,
     without_comments,
 )
@@ -62,32 +67,6 @@ WINDOW_24H_MS = DAY_MS  # 86,400,000
 # holds one more, the newest left out.
 LIST = SUBGRAPH.recent_payments
 HEAP = LIST + 1
-
-
-def _normal(text: str) -> str:
-    """A GSQL text as the rules read it: its tokens joined by single spaces."""
-    return " ".join(tokens(text))
-
-
-def _select(target: str) -> Select:
-    """The SELECT that assigns target."""
-    for statement, _, select in scopes(DEFINITION):
-        if select is not None and statement[:2] == [target, "="]:
-            return select
-    raise AssertionError(f"read_counterparties assigns no {target} by a SELECT")
-
-
-def _accumulations(target: str) -> str:
-    """The ACCUM and POST-ACCUM of the SELECT that assigns target, as the rules read them."""
-    return " ".join(_select(target).accumulations)
-
-
-def _declared_locals(target: str) -> list[tuple[str, str]]:
-    """The local variables a SELECT's clauses declare, with their types, in order."""
-    found = re.findall(
-        r"(?:^|, )(INT|UINT|STRING|BOOL|DOUBLE|FLOAT) (\w+) =", _accumulations(target)
-    )
-    return [(kind, name) for kind, name in found]
 
 
 # Every rule, and the Python above the query.
@@ -234,7 +213,7 @@ def test_t_then_every_account_then_every_hub_is_checked_before_any_payment_is_re
         if select is not None and select.statement[0] in ("Received", "Sent", "Counted", "Rows")
     ]
     assert {(step.alias, step.chosen) for step in starts} == {("a", True)}
-    assert _normal(DEFINITION).count("FROM Scored : a") == 4
+    assert normal(DEFINITION).count("FROM Scored : a") == 4
 
 
 # The account hubs.
@@ -245,11 +224,13 @@ def test_the_hub_parameter_is_the_only_hub_input() -> None:
     counts no customer, reads no degree and has no threshold of its own. The flag is set once,
     on the hubs that exist at t, and read once, on the payee of a payment of the last 30
     days."""
-    code = _normal(DEFINITION)
+    code = normal(DEFINITION)
     assert code.count("hub_accounts") == 2  # the parameter and Hubs = {hub_accounts}
     assert re.findall(r"\S*@hub\b\S*", code) == ["@hub", "h.@hub", "b.@hub"]
-    assert "h.@hub += TRUE" in _accumulations("Marked")
-    assert "IF b.@hub THEN a.@sent_to_hubs_30d += cents END" in _accumulations("Sent")
+    assert "h.@hub += TRUE" in accumulation_text(DEFINITION, "Marked")
+    assert "IF b.@hub THEN a.@sent_to_hubs_30d += cents END" in accumulation_text(
+        DEFINITION, "Sent"
+    )
     assert not re.search(r"outdegree|threshold|crowd|leaf|Party|customers", code)
 
 
@@ -257,69 +238,15 @@ def test_the_hub_parameter_is_the_only_hub_input() -> None:
 # wrote it, so the order is pinned whole, and the rule that explains it is checked on the text
 # and on text moves.
 SELECT_ORDER = ["Scored", "HubAccounts", "Marked", "Received", "Sent", "Counted", "Rows"]
-VERTEX_ACCUMULATOR = re.compile(r"\w+\.@(\w+)(\.\w+)?")
-
-
-def _flows(definition: str) -> list[tuple[str, set[str], set[str]]]:
-    """Each assigned SELECT of a query in file order, with the vertex accumulators (`a.@name`)
-    its ACCUM and POST-ACCUM clauses write (`+=` or `=` on the accumulator itself) and read
-    (any other use, as in `a.@payer_cents.get(payer)` or `FOREACH x IN a.@new_payers`)."""
-    found: list[tuple[str, set[str], set[str]]] = []
-    for _, _, select in scopes(definition):
-        if select is None:
-            continue
-        items = list(select.accumulations)
-        written: set[str] = set()
-        read: set[str] = set()
-        for at, item in enumerate(items):
-            match = VERTEX_ACCUMULATOR.fullmatch(item)
-            if match is None:
-                continue
-            if match[2] is None and items[at + 1 : at + 2] in (["+="], ["="]):
-                written.add(match[1])
-            else:
-                read.add(match[1])
-        found.append((select.statement[0], written, read))
-    return found
-
-
-def dataflow_problems(definition: str) -> list[str]:
-    """Every accumulator a SELECT reads is written only by SELECTs strictly before it, and
-    has at least one."""
-    flows = _flows(definition)
-    problems: list[str] = []
-    for index, (target, _, read) in enumerate(flows):
-        for name in sorted(read):
-            writers = [at for at, (_, written, _) in enumerate(flows) if name in written]
-            if not writers or max(writers) >= index:
-                by = [flows[at][0] for at in writers] or ["no SELECT"]
-                problems.append(f"{target} reads @{name}, written by {', '.join(by)}")
-    return problems
-
-
-def _moved(target: str, after: str) -> str:
-    """The query's text with the SELECT that assigns target moved to follow the one that
-    assigns after."""
-
-    def statement(name: str) -> re.Pattern[str]:
-        return re.compile(rf"^    {name} = SELECT .*?;\n", re.MULTILINE | re.DOTALL)
-
-    moved = statement(target).search(DEFINITION)
-    stays = statement(after).search(DEFINITION)
-    assert moved is not None and stays is not None
-    without = DEFINITION.replace(moved[0], "", 1)
-    end = statement(after).search(without)
-    assert end is not None
-    return without[: end.end()] + moved[0] + without[end.end() :]
 
 
 def test_the_selects_run_in_the_order_the_columns_need() -> None:
-    assert [target for target, _, _ in _flows(DEFINITION)] == SELECT_ORDER
+    assert [target for target, _, _ in select_flows(DEFINITION)] == SELECT_ORDER
 
 
 def test_every_value_a_select_reads_is_written_by_an_earlier_select() -> None:
     assert dataflow_problems(DEFINITION) == []
-    reads = {target: read for target, _, read in _flows(DEFINITION)}
+    reads = {target: read for target, _, read in select_flows(DEFINITION)}
     assert reads["Sent"] == {"hub"}
     assert reads["Counted"] == {
         "payer_first",
@@ -348,7 +275,7 @@ def test_every_value_a_select_reads_is_written_by_an_earlier_select() -> None:
 def test_a_select_moved_before_the_one_it_reads_from_breaks_the_rule(
     target: str, after: str, problem: str
 ) -> None:
-    moved = _moved(target, after)
+    moved = moved_select(DEFINITION, target, after)
     assert moved != DEFINITION
     assert problem in dataflow_problems(moved)
 
@@ -399,13 +326,13 @@ def test_it_reads_the_lookbacks_payments_each_way_but_self_payments(
     """Every payment of the lookback, of either kind, dates its other end's first payment with
     the account; those of the last 30 days count the other end and its cents. A payment whose
     other end is the account itself is read nowhere."""
-    select = _select(target)
+    select = select_of(DEFINITION, target)
     assert [step.alias for step in select.vertices] == ["a", "p", "b"]
     assert select.vertices[0].chosen and select.vertices[1].types == PAYMENTS
     assert select.vertices[2].types == {"Account"}
     assert [set(edge.types) for edge in select.edges] == edges
     assert select.conjuncts == WINDOW
-    assert _accumulations(target) == _normal(accumulations)
+    assert accumulation_text(DEFINITION, target) == normal(accumulations)
 
 
 # The columns.
@@ -418,8 +345,8 @@ def test_new_payers_and_payees_date_their_first_payment_in_the_lookback() -> Non
     t - 30 days, so it is no new payer though it paid in the last 7 days; one that first paid
     on 2024-03-28, 4 days before t, is new over 7 and over 30 days; one whose first payment is
     exactly at t - 30 days, 2024-03-02 00:00, is new over 30 days and not over 7."""
-    code = _accumulations("Counted")
-    assert code.startswith(_normal("INT new_cents = 0, INT top_cents = 0,"))
+    code = accumulation_text(DEFINITION, "Counted")
+    assert code.startswith(normal("INT new_cents = 0, INT top_cents = 0,"))
     payers = f"""FOREACH (payer, first_ms) IN a.@payer_first DO
         IF first_ms >= t_ms - {WINDOW_30D_MS} THEN
             a.@new_payers += NewPayer(first_ms, payer),
@@ -437,8 +364,8 @@ def test_new_payers_and_payees_date_their_first_payment_in_the_lookback() -> Non
         IF first_ms >= t_ms - {WINDOW_30D_MS} THEN a.@new_payees_30d += 1 END,
         IF first_ms >= t_ms - {WINDOW_7D_MS} THEN a.@new_payees_7d += 1 END
     END,"""
-    assert _normal(payers) in code
-    assert _normal(payees) in code
+    assert normal(payers) in code
+    assert normal(payees) in code
     # The first payment is a minimum over the lookback, by the payer's id.
     assert "MapAccum<STRING, MinAccum<UINT>> @payer_first, @payee_first" in DECLARATIONS
 
@@ -462,7 +389,7 @@ def test_the_counts_and_shares_of_the_last_30_days() -> None:
         a.@top_payee_share_30d += top_cents * 1.0 / a.@sent_30d,
         a.@hub_payee_share_30d += a.@sent_to_hubs_30d * 1.0 / a.@sent_30d
     END"""
-    assert _accumulations("Counted").endswith(_normal(expected))
+    assert accumulation_text(DEFINITION, "Counted").endswith(normal(expected))
 
 
 def test_max_new_payers_cuts_whole_seconds_and_counts_every_pair() -> None:
@@ -472,7 +399,7 @@ def test_max_new_payers_cuts_whole_seconds_and_counts_every_pair() -> None:
     first payments at 10:00:00, 10:00:00 (two payers of one second), 21:00:00 and 10:00:00 the
     next day give 3 at x = 10:00:00 (the next day's 10:00:00 is exactly 24 hours later and
     out); 258 new payers, the two oldest in one second b, keep the 256 after b."""
-    assert _accumulations("Rows") == _normal(
+    assert accumulation_text(DEFINITION, "Rows") == normal(
         f"""INT cut = -1, INT within = 0, INT most = 0,
         IF a.@new_payers.size() > {LIST} THEN
             FOREACH x IN a.@new_payers DO
@@ -498,7 +425,7 @@ def test_max_new_payers_cuts_whole_seconds_and_counts_every_pair() -> None:
 def test_no_value_reads_the_order_of_a_heaps_walk() -> None:
     """The heap is filled once, its size read once, and walked only by the three FOREACH of
     Rows, which read its times as a set: no index counts its steps and no list copies it."""
-    code = _normal(DEFINITION)
+    code = normal(DEFINITION)
     assert re.findall(r"a\.@new_payers\S*(?: \S+){0,2}", code) == [
         "a.@new_payers += NewPayer",
         "a.@new_payers.size ( )",
@@ -513,13 +440,17 @@ def test_every_cent_and_count_of_the_query_is_int() -> None:
     """Mixing INT with UINT turns arithmetic into UINT, where a value below 0 wraps; every
     local is INT but the times the heap and the maps hold, which stay UINT."""
     for target in ("Received", "Sent"):
-        assert _declared_locals(target) == [("INT", "cents")], target
-    assert _declared_locals("Counted") == [("INT", "new_cents"), ("INT", "top_cents")]
-    assert _declared_locals("Rows") == [("INT", "cut"), ("INT", "within"), ("INT", "most")]
+        assert declared_locals(DEFINITION, target) == [("INT", "cents")], target
+    assert declared_locals(DEFINITION, "Counted") == [("INT", "new_cents"), ("INT", "top_cents")]
+    assert declared_locals(DEFINITION, "Rows") == [
+        ("INT", "cut"),
+        ("INT", "within"),
+        ("INT", "most"),
+    ]
 
 
 def test_no_bound_at_t_takes_t_itself() -> None:
-    code = _normal(DEFINITION)
+    code = normal(DEFINITION)
     # t itself is no bound: no `<= t_ms`, `t_ms >=` or `t_ms >` but the test of t.
     assert not re.search(r"<= t_ms\b|(?<![\w.@])t_ms >(?!= lookback)(?! lookback)", code)
     assert code.count("p.event_ts_ms < t_ms") == 2
