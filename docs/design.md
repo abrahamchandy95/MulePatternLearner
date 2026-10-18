@@ -1330,7 +1330,9 @@ taken while the world is loaded.
 - **The evaluation store** sits beside the cache, keyed by world identity: the answer key's
   rows and `mule audit`'s pass records. Only `evaluation/` and `testing/` open it (see the Files
   that carry labels guard).
-- **World identity** (`read_world`): counts per vertex and edge type and per value of
+- **World identity** (`read_world`): counts per vertex type and per forward edge type (a
+  reverse edge type is the forward edge read from its other end, so its count is the
+  forward count and is not printed), and per value of
   `account_type`, `payment_rail` and `is_external`; second sums of `joined_ms`, `opened_ms`,
   `closed_ms`, each link type's starts and ends and each payment type's event times; cent
   sums per payment type; per edge type the sum of squared source degrees and the sum of the
@@ -1345,8 +1347,10 @@ taken while the world is loaded.
   fingerprint computed from its exported tables under `read_world`'s key names:
   `vertices.<type>`, `edges.<type>` for the 15 forward edge types, `account_types.<value>`,
   `payment_rails.<value>`, `external_accounts`, `seconds.<type>.<column>`, `cents.<type>`,
-  `first_joined_ms`, `first_event_ms` and `last_event_ms`. It does not carry the reverse edge
-  types' counts or the degree sums, which only `read_world` computes. `mule prepare` compares
+  `first_joined_ms`, `first_event_ms` and `last_event_ms`. It does not carry the degree sums,
+  which only `read_world` computes. PhantomLedger writes every one of these keys, zero counts
+  included, so the comparison is exact and a missing key is an error (the owner, 18 October
+  2026). `mule prepare` compares
   these shared fields, and only these, with `read_world`'s; the identity file's other keys
   (commit, clean tree, seed, size, calendar) are read as they are. A golden test in both
   repositories pins the shared fields on one small export.
