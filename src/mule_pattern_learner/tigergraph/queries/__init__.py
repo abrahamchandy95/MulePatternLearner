@@ -99,7 +99,7 @@ REGISTRY: dict[str, Query] = {
         Query(
             PROFILE_HUBS,
             QUERIES_FOLDER,
-            "profile_hubs-74c4feb9aaec",
+            "profile_hubs-a4603a434498",
             profile_hubs.params,
             (profile_hubs.HubProfile,),
         ),

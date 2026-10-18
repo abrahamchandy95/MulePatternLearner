@@ -24,6 +24,7 @@ from mule_pattern_learner.contract import LABEL_COLUMNS, TABLES, Kind
 from mule_pattern_learner.paths import GSQL_DIR
 from mule_pattern_learner.testing.gsql_rules import (
     Select,
+    Step,
     common_problems,
     field_rule,
     parameter_rule,
@@ -464,17 +465,20 @@ def test_profile_hubs_measures_exactly_as_read_hubs_without_the_prefilter() -> N
     accounts = _select(PROFILE_HUBS, "AccountProfiles")
     assert [s.alias for s in accounts.vertices] == ["a"] and accounts.vertices[0].chosen
     assert " ".join(accounts.accumulations) == "@@accounts += ( a.@hub_customers.size ( ) -> 1 )"
-    nodes = _select(PROFILE_HUBS, "NodeProfiles")
-    assert nodes.conjuncts == {"d.@crowd_customers.size ( ) > 0"}
-    branches = re.findall(r"IF (.*?) THEN (@@\w+) \+=", " ".join(nodes.accumulations))
-    assert branches == [
-        ('d.type == "Device" AND d.@crowd_enrolled.size ( ) > 0', "@@registered_devices"),
-        ('d.type == "Device"', "@@observed_devices"),
-        ("d.@crowd_enrolled.size ( ) > 0", "@@registered_ips"),
-    ]
-    assert " ".join(nodes.accumulations).endswith(
-        "ELSE @@observed_ips += ( d.@crowd_customers.size ( ) -> 1 ) END"
-    )
+    # One SELECT per type, since the live type check refuses a second d.type test in one IF
+    # chain: registered with a visible enrolment link, observed-only otherwise.
+    for target, kind, registered, observed in (
+        ("DeviceProfiles", "Device", "@@registered_devices", "@@observed_devices"),
+        ("IpProfiles", "IP", "@@registered_ips", "@@observed_ips"),
+    ):
+        nodes = _select(PROFILE_HUBS, target)
+        assert nodes.vertices == [Step("d", frozenset({"Device", "IP"}), False)]
+        assert nodes.conjuncts == {"d.@crowd_customers.size ( ) > 0", f'd.type == "{kind}"'}
+        assert " ".join(nodes.accumulations) == (
+            f"IF d.@crowd_enrolled.size ( ) > 0 THEN {registered} += "
+            "( d.@crowd_customers.size ( ) -> 1 ) "
+            f"ELSE {observed} += ( d.@crowd_customers.size ( ) -> 1 ) END"
+        )
     assert "outdegree" not in DEFINITIONS[PROFILE_HUBS]
 
 

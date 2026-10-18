@@ -60,20 +60,26 @@ CREATE OR REPLACE QUERY profile_hubs(
         AND o.valid_from_ms < t_ms
         AND (o.valid_to_ms == 0 OR o.valid_to_ms > t_ms - lookback_ms)
       ACCUM d.@crowd_customers += q;
-    NodeProfiles = SELECT d FROM Nodes:d
-      WHERE d.@crowd_customers.size() > 0
+    /* One SELECT per type: TigerGraph's type check refuses a second test of d.type in one
+       IF chain. */
+    DeviceProfiles = SELECT d FROM Nodes:d
+      WHERE d.@crowd_customers.size() > 0 AND d.type == "Device"
       POST-ACCUM
-        IF d.type == "Device" AND d.@crowd_enrolled.size() > 0 THEN
+        IF d.@crowd_enrolled.size() > 0 THEN
             @@registered_devices += (d.@crowd_customers.size() -> 1)
-        ELSE IF d.type == "Device" THEN
+        ELSE
             @@observed_devices += (d.@crowd_customers.size() -> 1)
-        ELSE IF d.@crowd_enrolled.size() > 0 THEN
+        END;
+    IpProfiles = SELECT d FROM Nodes:d
+      WHERE d.@crowd_customers.size() > 0 AND d.type == "IP"
+      POST-ACCUM
+        IF d.@crowd_enrolled.size() > 0 THEN
             @@registered_ips += (d.@crowd_customers.size() -> 1)
         ELSE
             @@observed_ips += (d.@crowd_customers.size() -> 1)
         END;
 
-    PRINT "ok" AS status, "profile_hubs-74c4feb9aaec" AS version, @@accounts AS accounts,
+    PRINT "ok" AS status, "profile_hubs-a4603a434498" AS version, @@accounts AS accounts,
       @@registered_devices AS registered_devices, @@observed_devices AS observed_devices,
       @@registered_ips AS registered_ips, @@observed_ips AS observed_ips;
 }
