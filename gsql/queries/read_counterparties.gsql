@@ -1,0 +1,199 @@
+USE GRAPH Mule_Pattern_Learner
+
+/* Who pays it and whom it pays, B2 (docs/design.md, "read_counterparties (B2): who pays it
+   and whom it pays", and docs/features.md, "Account node", columns 22 to 33): for each
+   account of the request at one Monday t, how many accounts paid it and were paid by it, how
+   new they are, and where its money went. Every amount is integer cents,
+   floor(amount x 100 + 0.5), summed in INT. A self-payment is read nowhere.
+
+   - A payer or a payee is the account at the other end of a payment in [t - 90 days, t).
+     payers_30d and payees_30d count those of the last 30 days.
+   - A payer is new over w (7 or 30 days) when its earliest payment to the account in that
+     lookback is in the last w, so a payer older than 90 days that pays again reads new, for
+     every account alike; the same for a payee and its earliest payment from the account. New
+     payers split by the payer's is_external.
+   - new_payer_share_30d: the cents received in the last 30 days from payers new over 30 days,
+     divided by all cents received then. A payer new over 30 days paid nothing before them.
+   - max_new_payers_24h: over the first-payment times of the payers new over 30 days, one per
+     payer, the most in [x, x + 24 hours) with x one of them. A heap ordered (ts DESC, id DESC)
+     keeps the newest 256 and one more, the 257th: when it holds 257, b is the second of its
+     oldest, and only the times after the second b are kept, so the payers of one second are
+     kept or dropped together.
+   - top_payee_share_30d: the most cents sent to one payee in the last 30 days, divided by all
+     cents sent then; hub_payee_share_30d: the cents sent then to account hubs, divided by the
+     same. Every share is 0 with an empty denominator, which payers_30d or payees_30d shows.
+
+   No value reads the order in which FOREACH walks a heap: the cut is the oldest second the
+   full heap holds, and the window compares every pair of kept times. So neither an id nor a
+   heap's walk decides a value. Every value a step reads is written by an earlier SELECT or
+   kept in a local variable.
+
+   The account hubs of t come as the parameter hub_accounts, read_hubs' account hubs of the
+   same t, the query's only reading of hubs; each must exist at t. An installed query drops an
+   id the graph lacks from a SET<VERTEX> parameter without a word, and such an id can be no
+   payee, so it changes no value. Reads no label. t must be a Monday at 00:00 UTC after the
+   lookback's length, and the request must name at least one account, each once, each in the
+   graph and existing at t; the accounts come as ids, as read_money_flow says why. */
+CREATE OR REPLACE QUERY read_counterparties(
+    UINT t_ms,
+    LIST<STRING> account_ids,
+    SET<VERTEX<Account>> hub_accounts
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+    /* A payer new over 30 days: the time of its first payment in the lookback, and its id. */
+    TYPEDEF TUPLE<UINT ts, STRING id> NewPayer;
+    /* The account hubs of t. */
+    OrAccum @hub;
+    /* Per payer and per payee, by id: its earliest payment with the account in the lookback,
+       and its cents over the last 30 days; the payers that are other banks' accounts. */
+    MapAccum<STRING, MinAccum<UINT>> @payer_first, @payee_first;
+    MapAccum<STRING, SumAccum<INT>> @payer_cents, @payee_cents;
+    SetAccum<STRING> @external_payers;
+    /* The cents received and sent over the last 30 days, and those sent to account hubs. */
+    SumAccum<INT> @received_30d, @sent_30d, @sent_to_hubs_30d;
+    /* The first-payment times of the payers new over 30 days, the newest 256 and one more. */
+    HeapAccum<NewPayer>(257, ts DESC, id DESC) @new_payers;
+    /* The row. */
+    SumAccum<INT> @payers_30d, @payees_30d, @new_internal_payers_7d, @new_internal_payers_30d,
+      @new_external_payers_7d, @new_external_payers_30d, @new_payees_7d, @new_payees_30d,
+      @max_new_payers_24h;
+    SumAccum<DOUBLE> @new_payer_share_30d, @top_payee_share_30d, @hub_payee_share_30d;
+    /* The request's ids, each once, and how many it gave. */
+    SetAccum<STRING> @@ids;
+    SumAccum<INT> @@given;
+    UINT lookback_ms = 7776000000;
+
+    /* Mondays are 4 days after the Thursday of 1970-01-01, modulo a week. */
+    IF t_ms <= lookback_ms OR t_ms % 604800000 != 345600000 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+    FOREACH account_id IN account_ids DO
+        @@ids += account_id;
+        @@given += 1;
+    END;
+    IF @@given == 0 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+    IF @@ids.size() != @@given THEN
+        PRINT "duplicate_account" AS status;
+        RETURN;
+    END;
+    Requested = to_vertex_set(@@ids, "Account");
+    IF Requested.size() != @@ids.size() THEN
+        PRINT "unknown_account" AS status;
+        RETURN;
+    END;
+    Scored = SELECT s FROM Requested:s WHERE s.opened_ms < t_ms;
+    IF Scored.size() != Requested.size() THEN
+        PRINT "invisible_account" AS status;
+        RETURN;
+    END;
+    Hubs = {hub_accounts};
+    HubAccounts = SELECT h FROM Hubs:h WHERE h.opened_ms < t_ms;
+    IF HubAccounts.size() != Hubs.size() THEN
+        PRINT "invisible_hub" AS status;
+        RETURN;
+    END;
+    Marked = SELECT h FROM HubAccounts:h POST-ACCUM h.@hub += TRUE;
+
+    /* The payments of the lookback, each way, but self-payments. */
+    Received = SELECT a FROM Scored:a
+      -((Account_Received_Transaction>|Account_Received_Zelle_Transfer>):e)-
+      (Payment_Transaction|Zelle_Transfer):p
+      -((Transaction_From_Account>|Transfer_From_Account>):f)- Account:b
+      WHERE p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms AND b != a
+      ACCUM
+        INT cents = floor(p.amount * 100 + 0.5),
+        a.@payer_first += (b.id -> p.event_ts_ms),
+        IF b.is_external THEN a.@external_payers += b.id END,
+        IF p.event_ts_ms >= t_ms - 2592000000 THEN
+            a.@payer_cents += (b.id -> cents),
+            a.@received_30d += cents
+        END;
+    Sent = SELECT a FROM Scored:a
+      -((Account_Initiated_Transaction>|Account_Sent_Zelle_Transfer>):e)-
+      (Payment_Transaction|Zelle_Transfer):p
+      -((Transaction_To_Account>|Transfer_To_Account>):f)- Account:b
+      WHERE p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms AND b != a
+      ACCUM
+        INT cents = floor(p.amount * 100 + 0.5),
+        a.@payee_first += (b.id -> p.event_ts_ms),
+        IF p.event_ts_ms >= t_ms - 2592000000 THEN
+            a.@payee_cents += (b.id -> cents),
+            a.@sent_30d += cents,
+            IF b.@hub THEN a.@sent_to_hubs_30d += cents END
+        END;
+
+    /* The new payers, by is_external, and the new payees; the first-payment time of each
+       payer new over 30 days into the heap; the shares. */
+    Counted = SELECT a FROM Scored:a
+      POST-ACCUM
+        INT new_cents = 0, INT top_cents = 0,
+        FOREACH (payer, first_ms) IN a.@payer_first DO
+            IF first_ms >= t_ms - 2592000000 THEN
+                a.@new_payers += NewPayer(first_ms, payer),
+                new_cents = new_cents + a.@payer_cents.get(payer),
+                IF a.@external_payers.contains(payer) THEN
+                    a.@new_external_payers_30d += 1,
+                    IF first_ms >= t_ms - 604800000 THEN a.@new_external_payers_7d += 1 END
+                ELSE
+                    a.@new_internal_payers_30d += 1,
+                    IF first_ms >= t_ms - 604800000 THEN a.@new_internal_payers_7d += 1 END
+                END
+            END
+        END,
+        FOREACH (payee, first_ms) IN a.@payee_first DO
+            IF first_ms >= t_ms - 2592000000 THEN a.@new_payees_30d += 1 END,
+            IF first_ms >= t_ms - 604800000 THEN a.@new_payees_7d += 1 END
+        END,
+        FOREACH (payee, cents) IN a.@payee_cents DO
+            IF cents > top_cents THEN top_cents = cents END
+        END,
+        a.@payers_30d += a.@payer_cents.size(),
+        a.@payees_30d += a.@payee_cents.size(),
+        IF a.@received_30d > 0 THEN
+            a.@new_payer_share_30d += new_cents * 1.0 / a.@received_30d
+        END,
+        IF a.@sent_30d > 0 THEN
+            a.@top_payee_share_30d += top_cents * 1.0 / a.@sent_30d,
+            a.@hub_payee_share_30d += a.@sent_to_hubs_30d * 1.0 / a.@sent_30d
+        END;
+
+    /* The most first-payment times of new payers in [x, x + 24 hours), x one of them, over
+       the times kept: with a full heap, those after the second of its oldest; with no cut,
+       the cut is -1, below every second. */
+    Rows = SELECT a FROM Scored:a
+      POST-ACCUM
+        INT cut = -1, INT within = 0, INT most = 0,
+        IF a.@new_payers.size() > 256 THEN
+            FOREACH x IN a.@new_payers DO
+                IF cut < 0 OR floor(x.ts / 1000) < cut THEN cut = floor(x.ts / 1000) END
+            END
+        END,
+        FOREACH x IN a.@new_payers DO
+            IF floor(x.ts / 1000) > cut THEN
+                within = 0,
+                FOREACH y IN a.@new_payers DO
+                    IF floor(y.ts / 1000) > cut AND y.ts >= x.ts AND y.ts < x.ts + 86400000
+                    THEN
+                        within = within + 1
+                    END
+                END,
+                IF within > most THEN most = within END
+            END
+        END,
+        a.@max_new_payers_24h += most;
+
+    PRINT "ok" AS status, "read_counterparties-07a31e72fd65" AS version;
+    PRINT Rows[Rows.id AS account_id, Rows.@payers_30d AS payers_30d,
+      Rows.@payees_30d AS payees_30d, Rows.@new_internal_payers_7d AS new_internal_payers_7d,
+      Rows.@new_internal_payers_30d AS new_internal_payers_30d,
+      Rows.@new_external_payers_7d AS new_external_payers_7d,
+      Rows.@new_external_payers_30d AS new_external_payers_30d,
+      Rows.@new_payees_7d AS new_payees_7d, Rows.@new_payees_30d AS new_payees_30d,
+      Rows.@new_payer_share_30d AS new_payer_share_30d,
+      Rows.@max_new_payers_24h AS max_new_payers_24h,
+      Rows.@top_payee_share_30d AS top_payee_share_30d,
+      Rows.@hub_payee_share_30d AS hub_payee_share_30d] AS accounts;
+}
