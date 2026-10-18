@@ -336,7 +336,10 @@ def test_the_walk_reads_from_t_minus_30_days_to_just_before_t() -> None:
         w.pay(payment_id, "x_edge_payer", "a_edge", ts, amount, "ach")
     for payment_id, ts, amount, rail in (
         ("x_edge_out", T - 30 * D + 10 * M, 300.0, "card"),
+        ("x_edge_out_15m", T - 7 * D + 15 * M, 1.0, "ach"),
         ("x_edge_out_unknown", T - 7 * D + H, 2.0, "unknown"),
+        ("x_edge_out_check", T - 7 * D + 2 * H, 1.0, "check"),
+        ("x_edge_out_6h", T - 7 * D + 6 * H, 1.0, "ach"),
         ("x_edge_out_day", T - 6 * D, 5.0, "ach"),
         ("x_edge_out_t", T, 200.0, "card"),
     ):
@@ -344,20 +347,23 @@ def test_the_walk_reads_from_t_minus_30_days_to_just_before_t() -> None:
     found = _flows(w.graph(), ["a_edge"])
     # The inflow at exactly t - 30 days is a lot; one a millisecond earlier, one at t and one
     # of 0.004 (0 cents) are not. The card outflow 10 minutes later takes 30,000 of it after
-    # 600 s. The lot of 1,000 at exactly t - 7 days gives 200 on rail unknown after exactly an
-    # hour (not under it), and 500 by ACH after exactly a day (not under it): of the 30,200
-    # matched within a day, 30,000 left by card and 200, unknown, by no rail of the three.
-    # The outflow at t is outside the lookback and matches nothing. The amounts count from
-    # t - 90 days, the 0 cents included, to just before t.
+    # 600 s. The lot of 1,000 at exactly t - 7 days is spent in five outflows, at exactly
+    # 15 minutes (100 by ACH, not under 15 minutes), an hour (200 on rail unknown, not under
+    # an hour), 2 hours (100 by check), 6 hours (100 by ACH, not under 6 hours) and a day (500
+    # by ACH, not under a day): of the 30,500 matched within a day, 30,000 left by card, 300
+    # (the ACH and the check) by transfer and 200, unknown, by no rail of the three. The
+    # outflow at t is outside the lookback and matches nothing. The amounts count from t - 90
+    # days, the 0 cents included, to just before t. Half of that lot is reached with the
+    # outflow at 6 hours, 21,600 s.
     row, tracked = Hand(
         received=(1_000, 101_000, 101_000 + 50_000 + 7_000),
-        sent=(700, 30_700, 30_700),
+        sent=(1_000, 31_000, 31_000),
         total=101_000,
-        within=(30_000, 30_000, 30_200, 30_200, 30_700, 30_700),
-        matched=30_700,
+        within=(30_000, 30_100, 30_400, 30_500, 31_000, 31_000),
+        matched=31_000,
         median_s=None,
-        rails=(0, 30_000, 0),
-        lots={"x_edge_in_30d": (30_000, 100_000, None), "x_edge_in_7d": (200, 1_000, 86_400)},
+        rails=(300, 30_000, 0),
+        lots={"x_edge_in_30d": (30_000, 100_000, None), "x_edge_in_7d": (500, 1_000, 21_600)},
     ).rows("a_edge")
     assert found.accounts == (row,) and list(found.tracked_inflows) == tracked
 
@@ -494,8 +500,20 @@ def test_the_walk_matches_full_history_last_in_first_out_on_2000_random_accounts
         ({"t_ms": T, "account_ids": ["a_mule", "a_mule"]}, "duplicate_account"),
         ({"t_ms": T, "account_ids": ["a_mule", "a_nobody"]}, "unknown_account"),
         ({"t_ms": T, "account_ids": ["a_mule", "a_late"]}, "invisible_account"),
+        ({"t_ms": T + D, "account_ids": ["a_mule", "a_mule"]}, "invalid_parameters"),
+        ({"t_ms": T, "account_ids": ["a_nobody", "a_nobody"]}, "duplicate_account"),
+        ({"t_ms": T, "account_ids": ["a_late", "a_nobody"]}, "unknown_account"),
     ],
-    ids=["no Monday", "no account", "an account twice", "an unknown account", "opened at t"],
+    ids=[
+        "no Monday",
+        "no account",
+        "an account twice",
+        "an unknown account",
+        "opened at t",
+        "no Monday before an account twice",
+        "an account twice before an unknown one",
+        "an unknown account before one opened at t",
+    ],
 )
 def test_the_query_refuses_a_request_it_cannot_answer(
     params: dict[str, object], status: str

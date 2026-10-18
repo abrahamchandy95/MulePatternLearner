@@ -142,6 +142,7 @@ def test_a_request_answers_each_account_as_it_answers_it_alone(
 def test_the_windows_count_from_t_minus_w_to_just_before_t() -> None:
     w = WorldBuilder()
     w.customer("edge", fixtures.JOINED)
+    w.customer("old", fixtures.JOINED)
     w.external("x_edge", fixtures.OPENED)
     for payment_id, ts in (
         ("x_in_90d", T - LOOKBACK_MS),
@@ -155,14 +156,19 @@ def test_the_windows_count_from_t_minus_w_to_just_before_t() -> None:
     ):
         w.pay(payment_id, "x_edge", "a_edge", ts, 10.0, "ach")
     w.pay("x_out_90d", "a_edge", "x_edge", T - LOOKBACK_MS, 10.0, "ach")
+    w.pay("x_in_60d", "x_edge", "a_old", T - 60 * D, 10.0, "ach")
     # In: exactly t - 7 d counts over 7 days; t - 30 d, 30 minutes later, t - 20 d, an hour
     # later and t - 7 d over 30 days; t - 90 d too over 90; a millisecond before t - 90 d and
     # t itself never. The two from exactly t - 30 d are in the bursts' list: an hour holds
     # both, and their 30 minutes are the shortest gap; the two of t - 20 d are exactly an
     # hour apart, so no hour holds both. The latest inflow is exactly 7 days before t. Out:
-    # one payment, exactly 90 days before t, in no burst's 30 days.
-    expected = _row("a_edge", (1, 5, 6), (0, 0, 1), (2, 2, 0, 0), 30 * M, 7 * D, LOOKBACK_MS)
-    assert _rows(w.graph(), ["a_edge"]) == (expected,)
+    # one payment, exactly 90 days before t, in no burst's 30 days. a_old's only payment is
+    # an inflow 60 days before t: it counts over 90 days alone, is in no burst's list, so
+    # gives no gap, and is its latest inflow, 60 days before t, which reads the whole
+    # lookback and not only the last 30 days.
+    edge = _row("a_edge", (1, 5, 6), (0, 0, 1), (2, 2, 0, 0), 30 * M, 7 * D, LOOKBACK_MS)
+    old = _row("a_old", (0, 0, 1), (0, 0, 0), (0, 0, 0, 0), None, 60 * D, None)
+    assert _rows(w.graph(), ["a_edge", "a_old"]) == (edge, old)
 
 
 def test_the_bursts_lists_are_cut_at_a_whole_second() -> None:
@@ -171,14 +177,23 @@ def test_the_bursts_lists_are_cut_at_a_whole_second() -> None:
     w.external("x_burst", fixtures.OPENED)
     for i in range(300):
         minute = 43 if i == 44 else i
-        w.pay(f"x_burst{i:03d}", "x_burst", "a_burst", T - 10 * D + minute * M, 1.0, "ach")
-    w.pay("x_burst_out", "a_burst", "x_burst", T - 9 * D, 1.0, "ach")
-    # 300 inflows, one a minute from t - 10 days, the 45th in the minute of the 44th. The
-    # newest 256 end in that tie: the newest left out is at minute 43, so both of minute 43
-    # are dropped and minutes 45 to 299 kept. An hour from any of them holds 60, 24 hours all
-    # 255; they are a minute apart. The counts read every payment.
+        at = T - 10 * D + minute * M
+        w.pay(f"x_burst_in{i:03d}", "x_burst", "a_burst", at, 1.0, "ach")
+        w.pay(f"x_burst_out{i:03d}", "a_burst", "x_burst", at, 1.0, "ach")
+    # 300 inflows and 300 outflows, one of each a minute from t - 10 days, the 45th of each in
+    # the minute of the 44th. The newest 256 of each list end in that tie: the newest left out
+    # is at minute 43, so both of minute 43 are dropped and minutes 45 to 299 kept. An hour
+    # from any of them holds 60, 24 hours all 255, each way; the inflows are a minute apart.
+    # The counts read every payment, and so do the times since the last, 299 minutes after
+    # the first.
     expected = _row(
-        "a_burst", (0, 300, 300), (0, 1, 1), (60, 255, 1, 1), M, 10 * D - 299 * M, 9 * D
+        "a_burst",
+        (0, 300, 300),
+        (0, 300, 300),
+        (60, 255, 60, 255),
+        M,
+        10 * D - 299 * M,
+        10 * D - 299 * M,
     )
     assert _rows(w.graph(), ["a_burst"]) == (expected,)
 
@@ -191,8 +206,20 @@ def test_the_bursts_lists_are_cut_at_a_whole_second() -> None:
         ({"t_ms": T, "account_ids": ["a_mule", "a_mule"]}, "duplicate_account"),
         ({"t_ms": T, "account_ids": ["a_nobody"]}, "unknown_account"),
         ({"t_ms": T, "account_ids": ["a_mule", "a_late"]}, "invisible_account"),
+        ({"t_ms": T - D, "account_ids": ["a_mule", "a_mule"]}, "invalid_parameters"),
+        ({"t_ms": T, "account_ids": ["a_nobody", "a_nobody"]}, "duplicate_account"),
+        ({"t_ms": T, "account_ids": ["a_late", "a_nobody"]}, "unknown_account"),
     ],
-    ids=["no Monday", "no account", "an account twice", "an unknown account", "opened at t"],
+    ids=[
+        "no Monday",
+        "no account",
+        "an account twice",
+        "an unknown account",
+        "opened at t",
+        "no Monday before an account twice",
+        "an account twice before an unknown one",
+        "an unknown account before one opened at t",
+    ],
 )
 def test_the_query_refuses_a_request_it_cannot_answer(
     params: dict[str, object], status: str

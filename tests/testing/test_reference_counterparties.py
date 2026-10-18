@@ -129,14 +129,15 @@ def test_a_payer_is_new_over_w_from_t_minus_w_to_just_before_t() -> None:
     w.customer("edge", fixtures.JOINED)
     for name in ("p30b", "p7", "pt"):
         w.customer(name, fixtures.JOINED)
-    for account in ("x_p30", "x_p24", "x_old", "x_q30", "x_q90"):
+    for account in ("x_p30", "x_p7b", "x_p24", "x_old", "x_q30", "x_q7b", "x_q31", "x_q90"):
         w.external(account, fixtures.OPENED)
     for payment_id, payer, ts, amount in (
         ("x_e_p30", "x_p30", T - 30 * D, 100.0),
         ("x_e_p30b_early", "a_p30b", T - 30 * D - 1, 50.0),
         ("x_e_p30b", "a_p30b", T - 10 * D, 20.0),
+        ("x_e_p7b", "x_p7b", T - 7 * D - 1, 4.0),
         ("x_e_p7", "a_p7", T - 7 * D, 10.0),
-        ("x_e_p24", "x_p24", T - 6 * D, 5.0),
+        ("x_e_p24", "x_p24", T - 6 * D - 1, 5.0),
         ("x_e_old_before", "x_old", T - 100 * D, 40.0),
         ("x_e_old", "x_old", T - 20 * D, 30.0),
         ("x_e_pt", "a_pt", T, 90.0),
@@ -144,20 +145,26 @@ def test_a_payer_is_new_over_w_from_t_minus_w_to_just_before_t() -> None:
         w.pay(payment_id, payer, "a_edge", ts, amount, "ach")
     for payment_id, payee, ts, amount in (
         ("x_e_q30", "x_q30", T - 30 * D, 40.0),
+        ("x_e_q31", "x_q31", T - 31 * D, 25.0),
+        ("x_e_q7b", "x_q7b", T - 7 * D - 1, 10.0),
         ("x_e_q90_first", "x_q90", T - LOOKBACK_MS, 60.0),
         ("x_e_q90", "x_q90", T - 3 * D, 15.0),
     ):
         w.pay(payment_id, "a_edge", payee, ts, amount, "ach")
-    # Received in the 30 days: 10,000 + 2,000 + 1,000 + 500 + 3,000 from five payers; a_pt
-    # pays at t and is not read. New over 30 days: x_p30 first at exactly t - 30 d, a_p7 at
-    # exactly t - 7 d (new over 7 days too, internal), x_p24 at t - 6 d (new over 7 days,
-    # external), and x_old, whose earlier payment is before the lookback; not a_p30b, first a
-    # millisecond before t - 30 d. They gave 14,500. Their first payments are at least 24
-    # hours apart, x_p24 exactly 24 hours after a_p7, so no window holds two. x_q30, first paid
-    # at exactly t - 30 d, is a new payee; x_q90, first paid at exactly t - 90 d, is not. Of
-    # 5,500 sent in 30 days, 4,000 went to x_q30, and 1,500 to the hub x_q90.
+    # Received in the 30 days: 10,000 + 2,000 + 400 + 1,000 + 500 + 3,000 from six payers; a_pt
+    # pays at t and is not read. New over 30 days: x_p30 first at exactly t - 30 d, x_p7b at a
+    # millisecond before t - 7 d (new over 30 days only, external), a_p7 at exactly t - 7 d
+    # (new over 7 days too, internal), x_p24 at t - 6 d - 1 ms (new over 7 days, external),
+    # and x_old, whose earlier payment is before the lookback; not a_p30b, first a millisecond
+    # before t - 30 d. They gave 14,900. Of their first payments, x_p7b's and a_p7's are a
+    # millisecond apart, so a window of 24 hours holds two; x_p24's is exactly 24 hours after
+    # x_p7b's, so none holds three. x_q30, first paid at exactly t - 30 d, and x_q7b, at a
+    # millisecond before t - 7 d, are new payees (x_q7b over 30 days only); x_q90, first paid
+    # at exactly t - 90 d, is not. x_q31, paid only 31 days before t, is no payee of the 30
+    # days: it counts nowhere. Of 6,500 sent in 30 days, 4,000 went to x_q30, 1,000 to x_q7b
+    # and 1,500 to the hub x_q90.
     expected = Counterparties(
-        "a_edge", 5, 2, 1, 1, 1, 3, 0, 1, 14_500 / 16_500, 1, 4_000 / 5_500, 1_500 / 5_500
+        "a_edge", 6, 3, 1, 1, 1, 4, 0, 2, 14_900 / 16_900, 2, 4_000 / 6_500, 1_500 / 6_500
     )
     assert _rows(w.graph(), ["a_edge"], ["x_q90"]) == (expected,)
 
@@ -186,6 +193,13 @@ def test_the_new_payers_first_payments_are_cut_at_a_whole_second() -> None:
         ({"account_ids": ["a_nobody"]}, "unknown_account"),
         ({"account_ids": ["a_late"]}, "invisible_account"),
         ({"hub_accounts": [{"id": "x_mule_atm"}, {"id": "a_late"}]}, "invisible_hub"),
+        ({"t_ms": T - D, "account_ids": ["a_mule", "a_mule"]}, "invalid_parameters"),
+        ({"account_ids": ["a_nobody", "a_nobody"]}, "duplicate_account"),
+        ({"account_ids": ["a_late", "a_nobody"]}, "unknown_account"),
+        (
+            {"account_ids": ["a_late"], "hub_accounts": [{"id": "a_late"}]},
+            "invisible_account",
+        ),
     ],
     ids=[
         "no Monday",
@@ -194,6 +208,10 @@ def test_the_new_payers_first_payments_are_cut_at_a_whole_second() -> None:
         "an unknown account",
         "opened at t",
         "a hub opened at t",
+        "no Monday before an account twice",
+        "an account twice before an unknown one",
+        "an unknown account before one opened at t",
+        "an account opened at t before a hub opened at t",
     ],
 )
 def test_the_query_refuses_a_request_it_cannot_answer(

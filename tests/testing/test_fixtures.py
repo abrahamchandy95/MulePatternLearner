@@ -50,6 +50,8 @@ def test_move_dates_of_record_moves_only_dates_before_the_lookback_and_keeps_the
     w.customer("edge", START)
     w.device("p_old", "d_1", T - 300 * D, T - 100 * D)
     w.device("p_recent", "d_1", T - 20 * D)
+    w.device("p_edge", "d_2", START)
+    w.ip("p_old", "i_1", T - 250 * D)
     tables = w.tables()
     moved = fixtures.move_dates_of_record(tables, T, LOOKBACK_MS)
     for name in tables:
@@ -66,9 +68,12 @@ def test_move_dates_of_record_moves_only_dates_before_the_lookback_and_keeps_the
     }
     assert accounts["a_old"][1] < T - 200 * D and accounts["a_recent"] == (T - 30 * D, 0)
     links = moved["Party_Uses_Device"]
-    assert list(links["valid_to_ms"]) == [T - 100 * D, 0]
+    assert list(links["valid_to_ms"]) == [T - 100 * D, 0, 0]
     starts = list(links["valid_from_ms"])
     assert starts[0] < T - 300 * D and starts[1] == T - 20 * D
+    # A link starting exactly at the lookback's start stays, as a date does; an IP's moves.
+    assert starts[2] == START
+    assert list(moved["Party_Uses_IP"]["valid_from_ms"])[0] < T - 250 * D
     # Each moves by its own keyed amount, the same on every run, and never past a year.
     again = fixtures.move_dates_of_record(tables, T, LOOKBACK_MS)
     assert all(again[name].equals(moved[name]) for name in tables)
