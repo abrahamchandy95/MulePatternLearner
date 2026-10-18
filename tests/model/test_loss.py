@@ -80,8 +80,8 @@ def _loss_outputs(
 def test_nnpu_values_and_gradients_equal_the_former_branch(dtype: torch.dtype) -> None:
     fired = set()
     for case in loss_cases():
-        # positive_weight None exercises the constructor's default (the prior).
-        weight = case["positive_weight"] or case["prior"]
+        # positive_weight None exercises the constructor's default, the balanced 1 - prior.
+        weight = case["positive_weight"] or 1 - case["prior"]
         new = NonNegativePULoss(
             case["prior"],
             beta=case["beta"],
@@ -140,7 +140,8 @@ def test_objective_matches_hand_computation() -> None:
     l_neg = [_sigmoid(x) for x in raw]  # l(-f) = sigmoid(+f)
     n_p, n_u = 2.0, 2.0
     pos_idx, unl_idx = (0, 3), (1, 2)
-    positive_risk = pi * sum(l_pos[i] for i in pos_idx) / n_p
+    # The default weight on the positive risk is the balanced 1 - pi.
+    positive_risk = (1 - pi) * sum(l_pos[i] for i in pos_idx) / n_p
     negative_risk = sum(l_neg[i] for i in unl_idx) / n_u - pi * sum(l_neg[i] for i in pos_idx) / n_p
     expected = positive_risk + negative_risk
     assert objective.item() == pytest.approx(expected, abs=1e-5)
@@ -196,8 +197,8 @@ def test_textbook_weight_drives_every_score_down_and_balanced_does_not() -> None
     # reference run with prior 0.001 settled in.
     prior = 0.001
     targets = torch.tensor([1.0] * 16 + [0.0] * 48, dtype=torch.float64)
-    textbook = NonNegativePULoss(prior=prior)
-    balanced = NonNegativePULoss(prior=prior, positive_weight=1 - prior)
+    textbook = NonNegativePULoss(prior=prior, positive_weight=prior)
+    balanced = NonNegativePULoss(prior=prior)
     collapsed = torch.full((64,), -15.6, dtype=torch.float64, requires_grad=True)
     slope = _sigmoid(-15.6) * (1 - _sigmoid(-15.6))
     # Scoring everything near zero costs only the prior under the textbook weight, and
@@ -250,9 +251,10 @@ def test_unit_weights_are_the_unweighted_loss(dtype: torch.dtype) -> None:
 
 
 def test_each_group_is_its_weighted_sum_over_its_count_in_the_batch() -> None:
-    """Weights scale each example's loss, and each group's sum is divided by how many
-    examples of the group the batch holds, not by what they weigh: a positive of small
-    weight alone in its group adds that small weight, not the whole positive risk."""
+    """Weights scale each example's loss in the positive and the unlabeled risk, and each
+    group's sum is divided by how many examples of the group the batch holds, not by what
+    they weigh: a positive of small weight alone in its group adds that small weight, not the
+    whole positive risk. The correction reads every positive at unit weight."""
     f = torch.tensor([2.0, -0.5, 0.5, -1.0, 0.0], dtype=torch.float64)
     t = torch.tensor([1, 1, 0, 0, 0])
     loss = NonNegativePULoss(prior=0.3)
@@ -260,11 +262,48 @@ def test_each_group_is_its_weighted_sum_over_its_count_in_the_batch() -> None:
     _, objective = _weighted(loss, f, t, weights)
     l_pos, l_neg = [1 - _sigmoid(x) for x in f.tolist()], [_sigmoid(x) for x in f.tolist()]
     r_pos = (0.1 * l_pos[0] + 3.0 * l_pos[1]) / 2
-    r_pos_neg = (0.1 * l_neg[0] + 3.0 * l_neg[1]) / 2
+    r_pos_neg = (l_neg[0] + l_neg[1]) / 2
     r_unl = (0.05 * l_neg[2] + 0.15 * l_neg[3] + 2.0 * l_neg[4]) / 3
-    assert objective.item() == pytest.approx(0.3 * r_pos + r_unl - 0.3 * r_pos_neg)
+    # The balanced weight on the positive risk is 1 - 0.3 = 0.7.
+    assert objective.item() == pytest.approx(0.7 * r_pos + r_unl - 0.3 * r_pos_neg)
     _, objective = _weighted(loss, f[:1], t[:1], weights[:1])
-    assert objective.item() == pytest.approx(0.1 * (0.3 * l_pos[0] - 0.3 * l_neg[0]))
+    assert objective.item() == pytest.approx(0.7 * 0.1 * l_pos[0] - 0.3 * l_neg[0])
     # A group the batch does not hold adds nothing.
     _, objective = _weighted(loss, f[2:], t[2:], weights[2:])
     assert objective.item() == pytest.approx(r_unl)
+
+
+def test_the_default_weight_is_balanced() -> None:
+    """docs/design.md ("Training and selection"): nnPU with balanced weighting, 1 - prior on
+    the positive risk, unless a weight is given."""
+    for case in loss_cases():
+        default = NonNegativePULoss(case["prior"])
+        balanced = NonNegativePULoss(case["prior"], positive_weight=1 - case["prior"])
+        for left, right in zip(
+            _call(default, case["logits"], case["targets"]),
+            _call(balanced, case["logits"], case["targets"]),
+            strict=True,
+        ):
+            torch.testing.assert_close(left, right, rtol=0, atol=0)
+
+
+def test_the_correction_reads_the_positives_at_unit_weight() -> None:
+    """A positive's weight, 1 over its mule's active Mondays, scales its positive risk only:
+    the negative risk, and so the corrected loss when it fires, does not change with it."""
+    f = torch.tensor([3.0, 1.0, -9.0, -9.0], dtype=torch.float64)
+    t = torch.tensor([1, 1, 0, 0])
+    loss = NonNegativePULoss(prior=0.4)
+    unit = torch.ones(4, dtype=torch.float64)
+    weighted = torch.tensor([0.25, 1.75, 1.0, 1.0], dtype=torch.float64)
+    corrected_unit, objective_unit = _weighted(loss, f, t, unit)
+    corrected, objective = _weighted(loss, f, t, weighted)
+    # The negative risk is below zero, so the correction fires, -negative_risk alike.
+    l_neg = [_sigmoid(x) for x in f.tolist()]
+    negative_risk = (l_neg[2] + l_neg[3]) / 2 - 0.4 * (l_neg[0] + l_neg[1]) / 2
+    assert negative_risk < 0
+    assert corrected.item() == pytest.approx(-negative_risk)
+    assert corrected_unit.item() == pytest.approx(-negative_risk)
+    # The objective differs by the positive risk alone: 0.6 x the weighted mean of l(+f).
+    l_pos = [1 - _sigmoid(x) for x in f.tolist()]
+    difference = 0.6 * ((0.25 - 1) * l_pos[0] + (1.75 - 1) * l_pos[1]) / 2
+    assert objective.item() - objective_unit.item() == pytest.approx(difference)

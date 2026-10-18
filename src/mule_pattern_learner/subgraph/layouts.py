@@ -242,4 +242,4 @@ EDGE_LAYOUTS: dict[EdgeType, Layout] = {
     for relation in (forward, reverse(forward))
 }
 # Every layout of a batch, which the model is built from.
-LAYOUT = BatchLayout(NODE_LAYOUTS, RELATIONS, EDGE_LAYOUTS, COMMUNITY_LAYOUT)
+LAYOUT = BatchLayout(NODE_LAYOUTS, RELATIONS, EDGE_LAYOUTS, COMMUNITY_LAYOUT, ACCOUNT)
