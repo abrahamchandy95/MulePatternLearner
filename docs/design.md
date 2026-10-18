@@ -490,8 +490,9 @@ owner: `is_mule` is "the truth, read only by evaluation").
 
 On each Monday t the **scorable accounts** are the internal deposit accounts open at t with a
 visible ownership link: owned by a customer. Ring money moves between deposit accounts. Other
-accounts (credit cards, brokerage, the bank's ledgers, other banks' accounts) appear only as
-neighbours. `account_type` chooses the population and is not a feature: the rail on each
+accounts (credit cards and brokerage accounts, which customers own too, the bank's ledgers,
+other banks' accounts) appear only as neighbours; a payment to one's own card is a same-owner
+move (the owner, 18 October 2026). `account_type` chooses the population and is not a feature: the rail on each
 payment says what kind of payment it was.
 
 ### Training world
