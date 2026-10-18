@@ -1,20 +1,36 @@
 """The loaded world's identity: the hash of read_world's fields that names every cache and store
-folder, and the fields PhantomLedger's world record shares with read_world (docs/design.md,
-"Cache")."""
+folder, and the fields PhantomLedger's world record shares with read_world; and the rest of a
+cached row's key, the folder of the query versions and settings and the folder of each Monday
+(docs/design.md, "Cache")."""
 
 from __future__ import annotations
 
 from dataclasses import replace
 
+import pytest
+
+from mule_pattern_learner.config import SubgraphConfig
 from mule_pattern_learner.contract import ACCOUNT_TYPES, PAYMENT_RAILS
 from mule_pattern_learner.paths import IDENTITY
-from mule_pattern_learner.tigergraph.queries import READ_WORLD, VERSIONS, read_world
+from mule_pattern_learner.tigergraph.queries import (
+    READ_ANSWER_KEY,
+    READ_MONEY_FLOW,
+    READ_WORLD,
+    VERSIONS,
+    read_world,
+)
 from mule_pattern_learner.tigergraph.queries.read_world import (
     EDGE_TYPES,
     SECONDS,
     VERTEX_TYPES,
 )
-from mule_pattern_learner.tigergraph.world import identity, shared_fields
+from mule_pattern_learner.tigergraph.world import (
+    CACHED_QUERIES,
+    cache_key,
+    identity,
+    monday_folder,
+    shared_fields,
+)
 
 # read_world's answer for a small world, as TigerGraph prints it: no key for a type or value
 # with no row, which the parser reads as 0.
@@ -100,3 +116,30 @@ def test_the_shared_fields_are_those_of_phantomledgers_world_record() -> None:
     assert shared_fields(replace(WORLD, external_accounts=2))["external_accounts"] == 2
     products = replace(WORLD, degree_products={**WORLD.degree_products, "Party_Owns_Account": 7})
     assert shared_fields(products) == shared
+
+
+def test_the_cache_key_names_the_query_versions_and_the_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    key = cache_key(SubgraphConfig())
+    assert IDENTITY.fullmatch(key) and key == cache_key(SubgraphConfig())
+    # Two settings never share a folder.
+    assert cache_key(SubgraphConfig(hub_threshold=300)) != key
+    assert cache_key(SubgraphConfig(co_users=47)) != key
+    # Another version of a cached query moves every cached row to another folder; a query whose
+    # rows the cache does not hold moves none.
+    assert READ_MONEY_FLOW in CACHED_QUERIES and READ_ANSWER_KEY not in CACHED_QUERIES
+    assert READ_WORLD not in CACHED_QUERIES
+    monkeypatch.setitem(VERSIONS, READ_ANSWER_KEY, "read_answer_key-000000000000")
+    assert cache_key(SubgraphConfig()) == key
+    monkeypatch.setitem(VERSIONS, READ_MONEY_FLOW, "read_money_flow-000000000000")
+    assert cache_key(SubgraphConfig()) != key
+
+
+def test_a_mondays_folder_is_its_date() -> None:
+    assert monday_folder(1_711_929_600_000) == "2024-04-01"
+    assert monday_folder(1_742_774_400_000) == "2025-03-24"
+    # Only a Monday at 00:00 UTC has a folder.
+    for t_ms in (1_711_929_600_001, 1_711_929_600_000 + 86_400_000, 1_711_926_000_000):
+        with pytest.raises(ValueError, match="Monday at 00:00 UTC"):
+            monday_folder(t_ms)
