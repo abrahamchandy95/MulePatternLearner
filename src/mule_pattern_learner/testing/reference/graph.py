@@ -28,6 +28,7 @@ from functools import cache
 import math
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from ...config import DEFAULT_CONFIG
@@ -51,14 +52,22 @@ ZELLE = "zelle"
 # The window of the current test: a link held at some time in the last 30 days.
 CURRENT_MS = DEFAULT_CONFIG.subgraph.sharing_days * DAY_MS
 # The pandas dtype of each graph type in a contract frame, whose values read back as str, int,
-# bool and float.
+# bool and float. "str" is pandas 3's string dtype, which holds nothing but strings; on pandas 2
+# it would be object, which holds anything, so pyproject.toml requires pandas 3.
 DTYPES = {"STRING": "str", "UINT": "int64", "INT": "int64", "BOOL": "bool", "DOUBLE": "float64"}
 CONTRACT_DTYPES = {kind: pd.Series([], dtype=dtype).dtype for kind, dtype in DTYPES.items()}
 
 
+def _type_name(graph_type: str) -> str:
+    """A graph type as a refusal names it: a DOUBLE must be finite, since an amount of NaN or
+    infinity has no cents ("A NaN amount fails the export", docs/design.md, "What PhantomLedger
+    must provide")."""
+    return "finite DOUBLE" if graph_type == "DOUBLE" else graph_type
+
+
 def _value(table: str, column: str, graph_type: str, value: object) -> object:
     """A table's value, once it has its column's type: a str, an int (not negative for a
-    UINT), a bool, or a float (an int too) for a DOUBLE."""
+    UINT), a bool, or a finite float (an int too) for a DOUBLE."""
     if graph_type == "STRING" and isinstance(value, str):
         return value
     if graph_type == "BOOL" and isinstance(value, bool):
@@ -69,8 +78,9 @@ def _value(table: str, column: str, graph_type: str, value: object) -> object:
     if number and graph_type == "UINT" and isinstance(value, int) and value >= 0:
         return value
     if number and graph_type == "DOUBLE" and isinstance(value, int | float):
-        return float(value)
-    raise ValueError(f"{table}.{column} holds {value!r}, not a {graph_type}")
+        if math.isfinite(value):
+            return float(value)
+    raise ValueError(f"{table}.{column} holds {value!r}, not a {_type_name(graph_type)}")
 
 
 def frame(table: str, rows: Iterable[Sequence[object]]) -> pd.DataFrame:
@@ -95,8 +105,8 @@ def frame(table: str, rows: Iterable[Sequence[object]]) -> pd.DataFrame:
 
 def _rows(table: Table, data: pd.DataFrame) -> list[tuple[Any, ...]]:
     """A frame's rows, once its columns are the table's and each value has its type. A column
-    of its contract dtype is checked whole: no missing string and no negative UINT; any other
-    column value by value."""
+    of its contract dtype is checked whole: no missing string, no negative UINT and no NaN or
+    infinite DOUBLE; any other column value by value."""
     if tuple(str(column) for column in data.columns) != table.column_names:
         raise ValueError(
             f"{table.name} has the columns {list(data.columns)}, not {list(table.column_names)}"
@@ -106,9 +116,15 @@ def _rows(table: Table, data: pd.DataFrame) -> list[tuple[Any, ...]]:
         series = data[column.name]
         kind = column.graph_type
         if series.dtype == CONTRACT_DTYPES[kind]:
-            negative = kind == "UINT" and bool((series < 0).any())
-            if negative or (kind == "STRING" and bool(series.isna().any())):
-                raise ValueError(f"{table.name}.{column.name} holds a value that is not a {kind}")
+            bad = (
+                (kind == "UINT" and bool((series < 0).any()))
+                or (kind == "STRING" and bool(series.isna().any()))
+                or (kind == "DOUBLE" and not bool(np.isfinite(series.to_numpy()).all()))
+            )
+            if bad:
+                raise ValueError(
+                    f"{table.name}.{column.name} holds a value that is not a {_type_name(kind)}"
+                )
             columns.append(series.tolist())
         else:
             columns.append([_value(table.name, column.name, kind, v) for v in series.tolist()])

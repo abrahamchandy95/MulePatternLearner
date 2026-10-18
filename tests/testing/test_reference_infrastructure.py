@@ -15,7 +15,7 @@ import pandas as pd
 import pytest
 
 from mule_pattern_learner.testing.reference import ReferenceGraph
-from mule_pattern_learner.testing.reference.graph import DEVICE, IP, Link, cents
+from mule_pattern_learner.testing.reference.graph import DEVICE, IP, Link, cents, frame
 from mule_pattern_learner.testing.reference.infrastructure import (
     UINT_MAX,
     hub_profile,
@@ -156,8 +156,28 @@ def test_the_graph_checks_every_value_against_its_columns_type() -> None:
     # right types read as the contract's dtypes do.
     with pytest.raises(ValueError, match="Party.joined_ms holds '"):
         ReferenceGraph({**tables, "Party": parties.astype({"joined_ms": "str"})})
+    # A STRING column holding numbers is no STRING: the contract's dtype for it is pandas 3's
+    # string dtype, which is not object, so such a column is never read whole (pyproject.toml
+    # requires pandas 3 for this).
+    with pytest.raises(ValueError, match="Party.id holds 1, not a STRING"):
+        ReferenceGraph({**tables, "Party": parties.assign(id=pd.Series([1, 2], dtype=object))})
     as_objects = ReferenceGraph({**tables, "Party": parties.astype(object)})
     assert world(as_objects) == world(_small().graph())
+
+
+@pytest.mark.parametrize("amount", [float("nan"), float("inf"), float("-inf")])
+def test_the_graph_refuses_an_amount_that_is_not_finite(amount: float) -> None:
+    tables = _small().tables()
+    for name, rows in (("Payment_Transaction", 1), ("Zelle_Transfer", 1)):
+        planted = tables[name].assign(amount=[amount] * rows)
+        # The whole column of its contract dtype, and the same column as Python objects.
+        with pytest.raises(ValueError, match=f"{name}.amount holds a value that is not a finite"):
+            ReferenceGraph({**tables, name: planted})
+        with pytest.raises(ValueError, match=f"{name}.amount holds .*, not a finite DOUBLE"):
+            ReferenceGraph({**tables, name: planted.astype(object)})
+    # A frame made from rows is refused as it is made.
+    with pytest.raises(ValueError, match="Zelle_Transfer.amount holds .*, not a finite DOUBLE"):
+        frame("Zelle_Transfer", [("z_1", amount, T)])
 
 
 def test_the_graph_indexes_payments_owners_and_links() -> None:
@@ -275,17 +295,42 @@ def test_list_accounts_lists_internal_deposit_accounts_open_and_owned_at_t() -> 
     w.account("a_unowned", None, T - 100 * D)
     w.external("x_deposit", T - 100 * D, account_type="deposit")
     w.customer("mule", T - 100 * D, mule=Mule(T - 20 * D, T - 10 * D, 4, identified=True))
+    # Open deposit accounts of p_open whose one ownership link is written by hand, so that its
+    # visibility is the only thing that differs: it starts at t, or ended exactly 90 days
+    # before t, or started a millisecond before t, or ended a millisecond after the lookback's
+    # start.
+    for name, start, end in (
+        ("link_at_t", T, 0),
+        ("link_ended_at_lookback_start", T - 100 * D, T - LOOKBACK),
+        ("link_just_before_t", T - 1, 0),
+        ("link_ending_just_after_lookback_start", T - 100 * D, T - LOOKBACK + 1),
+    ):
+        w.account(f"a_{name}", None, T - 100 * D)
+        w.link("Party_Owns_Account", "p_open", f"a_{name}", start, end)
     graph = w.graph()
     # Opened exactly at t: not listed. Closed exactly at t: still open at t, listed. A credit
-    # card, an ownerless deposit account and another bank's are never scorable.
+    # card, an ownerless deposit account and another bank's are never scorable, and neither is
+    # an account whose ownership link is not visible at t: one starting at t or ending at
+    # t - 90 days is not, one starting at t - 1 or ending at t - 90 days + 1 is.
     assert _scorable(graph) == {
         "a_closed_at_t": "p_closed_at_t",
+        "a_link_ending_just_after_lookback_start": "p_open",
+        "a_link_just_before_t": "p_open",
         "a_mule": "p_mule",
         "a_open": "p_open",
         "a_second": "p_open",
     }
-    # A week later the account opened at t is listed, and the one closed at t is not.
-    assert set(_scorable(graph, T + 7 * D)) == {"a_mule", "a_open", "a_opened_at_t", "a_second"}
+    # A week later the account opened at t is listed, and the one closed at t is not. The link
+    # that started at t is visible, and the one that ended a millisecond after the lookback's
+    # start is not, since its lookback now starts a week later.
+    assert set(_scorable(graph, T + 7 * D)) == {
+        "a_link_at_t",
+        "a_link_just_before_t",
+        "a_mule",
+        "a_open",
+        "a_opened_at_t",
+        "a_second",
+    }
 
 
 def test_list_accounts_pages_by_strictly_increasing_id() -> None:
@@ -425,6 +470,33 @@ HUB_CASES: list[tuple[str, Callable[[WorldBuilder], object], int | None]] = [
     ),
     ("a self-payment", lambda w: w.pay("x_n", "a_shop", "a_shop", T - D, 5.0, "internal"), None),
     (
+        "a payer opened a millisecond before t, owned by a customer",
+        lambda w: (
+            w.account("a_late", None, T - 1),
+            w.link("Party_Owns_Account", "p_new", "a_late", T - D),
+            w.pay("x_n", "a_late", "a_shop", T - D, 5.0, "ach"),
+        ),
+        201,
+    ),
+    (
+        "a payer opened at t, owned by a customer through a link from before t",
+        lambda w: (
+            w.account("a_future", None, T),
+            w.link("Party_Owns_Account", "p_new", "a_future", T - D),
+            w.pay("x_n", "a_future", "a_shop", T - D, 5.0, "ach"),
+        ),
+        None,
+    ),
+    (
+        "a payee opened after t, owned by a customer through a link from before t",
+        lambda w: (
+            w.account("a_future", None, T + D),
+            w.link("Party_Owns_Account", "p_new", "a_future", T - D),
+            w.pay("x_n", "a_shop", "a_future", T - D, 5.0, "ach"),
+        ),
+        None,
+    ),
+    (
         "an account closed a millisecond after it paid at the lookback's start",
         lambda w: (
             w.customer("brief", T - 400 * D, closed_ms=T - LOOKBACK + 1),
@@ -541,6 +613,33 @@ CROWD_CASES: list[tuple[str, CrowdPlant, bool]] = [
         False,
     ),
     (
+        "a sender opened a millisecond before t, owned by a customer",
+        lambda w, enrol, seen: (
+            w.account("a_late", None, T - 1),
+            w.link("Party_Owns_Account", "p_n", "a_late", T - D),
+            seen("x_n", "a_late", T - D),
+        ),
+        True,
+    ),
+    (
+        "a sender opened at t, owned by a customer through a link from before t",
+        lambda w, enrol, seen: (
+            w.account("a_future", None, T),
+            w.link("Party_Owns_Account", "p_n", "a_future", T - D),
+            seen("x_n", "a_future", T - D),
+        ),
+        False,
+    ),
+    (
+        "a sender opened after t, owned by a customer through a link from before t",
+        lambda w, enrol, seen: (
+            w.account("a_future", None, T + D),
+            w.link("Party_Owns_Account", "p_n", "a_future", T - D),
+            seen("x_n", "a_future", T - D),
+        ),
+        False,
+    ),
+    (
         "a self-payment, which the crowd count reads",
         lambda w, enrol, seen: seen("x_n", "a_n", T - D, "a_n"),
         True,
@@ -559,6 +658,44 @@ def test_a_crowd_has_more_than_8_customers_by_the_one_account_rule(
     leaves = (Leaf("d_cafe" if kind == DEVICE else "i_cafe", 9, False, False),) if crowd else ()
     expected = Hubs((), leaves, ()) if kind == DEVICE else Hubs((), (), leaves)
     assert _hubs(graph) == expected
+
+
+def _busy_node_world(kind: str, customers: int, enrolled: int) -> WorldBuilder:
+    """A device or IP of customers customers: the first enrolled of them enrolled on it since
+    100 days before t, and each of the others the owner of a deposit account that paid a
+    merchant of its own on it 5 days before t, so no account is paid by more than one."""
+    w = WorldBuilder()
+    node = "d_busy" if kind == DEVICE else "i_busy"
+    for index in range(customers):
+        name = f"c{index:03d}"
+        account = w.customer(name, T - 400 * D)
+        if index < enrolled:
+            (w.device if kind == DEVICE else w.ip)(f"p_{name}", node, T - 100 * D)
+        else:
+            w.external(f"x_shop_{name}", T - 900 * D)
+            w.pay(
+                f"x_{name}",
+                account,
+                f"x_shop_{name}",
+                T - 5 * D,
+                20.0,
+                "card",
+                device=node if kind == DEVICE else None,
+                ip=node if kind == IP else None,
+            )
+    return w
+
+
+@pytest.mark.parametrize("kind", [DEVICE, IP])
+@pytest.mark.parametrize("enrolled", [0, 100], ids=["observed only", "half enrolled"])
+@pytest.mark.parametrize(("customers", "hub"), [(200, False), (201, True)])
+def test_a_device_or_ip_is_a_hub_with_more_than_200_customers(
+    kind: str, enrolled: int, customers: int, hub: bool
+) -> None:
+    graph = _busy_node_world(kind, customers, enrolled).graph()
+    leaf = Leaf("d_busy" if kind == DEVICE else "i_busy", customers, enrolled == 0, hub)
+    # Either way it is a crowd, with more than 8 customers; it is a hub only with more than 200.
+    assert _hubs(graph) == (Hubs((), (leaf,), ()) if kind == DEVICE else Hubs((), (), (leaf,)))
 
 
 def test_a_leaf_says_whether_it_is_observed_only_and_a_hub() -> None:

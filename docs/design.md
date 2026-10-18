@@ -589,7 +589,7 @@ once. A hub that is not the scored account gets a flag-only row and no B1 to B3.
 
 | Kind | Rule | Examples |
 |---|---|---|
-| Account hub | more than 200 distinct customers own the other accounts of its payments in `[t - 90 d, t)`; ownerless counterparties are not counted; an account with at most 200 payments in all time skips the test, since it cannot pass it | billers, merchants, ledgers |
+| Account hub | more than 200 distinct customers own the other accounts of its payments in `[t - 90 d, t)`, each of which exists at t; ownerless counterparties are not counted; an account with at most 200 payments in all time skips the test, since it cannot pass it | billers, merchants, ledgers |
 | Crowd | a device or IP with more than 8 distinct customers in the lookback, registered or not: those with a visible enrolment link to it plus the owners (visible ownership) of deposit accounts that exist at t and sent a payment seen on it in the lookback | carrier networks, public terminals |
 | Device or IP hub | more than 200 such customers | |
 

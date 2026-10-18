@@ -13,7 +13,7 @@ authors = [{ name = "Abraham Chandy" }]
 dependencies = [
     "pyTigerGraph>=1.8",
     "numpy>=2.2",
-    "pandas>=2.2",
+    "pandas>=3.0",
     "pyarrow>=18.0",
     "pydantic>=2.10",
     "pydantic-settings>=2.7",
