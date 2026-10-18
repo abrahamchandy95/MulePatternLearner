@@ -25,6 +25,7 @@ from . import (
     list_accounts,
     profile_hubs,
     read_activity_change,
+    read_community,
     read_counterparties,
     read_hubs,
     read_labels,
@@ -160,7 +161,13 @@ REGISTRY: dict[str, Query] = {
                 read_shared_identity.Seen,
             ),
         ),
-        Query(READ_COMMUNITY, QUERIES_FOLDER),
+        Query(
+            READ_COMMUNITY,
+            QUERIES_FOLDER,
+            "read_community-9c2ad9e04eda",
+            read_community.params,
+            (read_community.Community,),
+        ),
         Query(READ_ANSWER_KEY, EVALUATION_FOLDER, "read_answer_key-3d5467c23b01"),
     )
 }
