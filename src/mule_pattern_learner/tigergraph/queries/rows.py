@@ -1,7 +1,7 @@
 """What every query's parser shares: a response's head with its status and version, a
 refusal, a row parsed into a plain dataclass, what a PRINT printed, a page of accounts in id
-order, a printed list of ids, and the parameters every query checks alike: t, a page's size and
-a set of vertices.
+order, a printed list of ids, and the parameters every query checks alike: t, a page's size, a
+set of vertices and a request's accounts.
 
 It imports nothing of the package but the settings, so a query module may import it while the
 registry imports that module.
@@ -130,6 +130,25 @@ def vertex_set(vertex_ids: Iterable[object]) -> list[dict[str, str]]:
     if len(set(given)) != len(given):
         raise ValueError("A vertex set repeats an id")
     return [{"id": vertex_id} for vertex_id in given]
+
+
+def account_ids(accounts: Iterable[object]) -> list[str]:
+    """The accounts of a per-account query's request, as the LIST<STRING> parameter it takes:
+    at least one, each a distinct id.
+
+    An installed query drops an id the graph lacks from a SET<VERTEX> parameter without a
+    word, so a per-account query takes its accounts as ids and refuses a duplicate or unknown
+    one itself, with a status row (docs/design.md, "Query plumbing").
+    """
+    found = list(accounts)
+    given = [item for item in found if isinstance(item, str) and item]
+    if len(given) != len(found):
+        raise ValueError(f"A request holds account ids, got {found!r}")
+    if not given:
+        raise ValueError("A request holds at least one account")
+    if len(set(given)) != len(given):
+        raise ValueError("A request repeats an account")
+    return given
 
 
 def as_of(t_ms: object) -> int:

@@ -1,6 +1,6 @@
 """What every query's parser shares, on rows written by hand: a response's head with its
-status and version, a refusal, a row parsed into its dataclass, a printed list of ids and a
-set of vertices as a parameter."""
+status and version, a refusal, a row parsed into its dataclass, a printed list of ids, and a
+set of vertices and a request's accounts as parameters."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ import pytest
 
 from mule_pattern_learner.tigergraph.queries.rows import (
     QueryRefused,
+    account_ids,
     ids,
     parse_row,
     response_head,
@@ -151,3 +152,18 @@ def test_a_vertex_set_parameter_holds_each_id_once() -> None:
         vertex_set(["a_01", ""])
     with pytest.raises(ValueError, match="holds ids"):
         vertex_set(["a_01", 2])
+
+
+def test_a_requests_accounts_are_distinct_ids_at_least_one() -> None:
+    """A list of ids in the request's order, since an installed query drops an id the graph
+    lacks from a SET<VERTEX> parameter without a word; the query refuses a duplicate or
+    unknown id itself, and the builder refuses what it can see."""
+    assert account_ids(["a_02", "a_01"]) == ["a_02", "a_01"]
+    assert account_ids(iter(["a_01"])) == ["a_01"]
+    with pytest.raises(ValueError, match="repeats an account"):
+        account_ids(["a_01", "a_02", "a_01"])
+    with pytest.raises(ValueError, match="at least one account"):
+        account_ids([])
+    for bad in (["a_01", ""], ["a_01", 2], [None]):
+        with pytest.raises(ValueError, match="holds account ids"):
+            account_ids(bad)

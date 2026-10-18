@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from ...paths import GSQL_DIR
-from . import list_accounts, profile_hubs, read_hubs, read_labels, read_world
+from . import list_accounts, profile_hubs, read_hubs, read_labels, read_money_flow, read_world
 
 if TYPE_CHECKING:
     from _typeshed import DataclassInstance
@@ -103,7 +103,13 @@ REGISTRY: dict[str, Query] = {
             profile_hubs.params,
             (profile_hubs.HubProfile,),
         ),
-        Query(READ_MONEY_FLOW, QUERIES_FOLDER),
+        Query(
+            READ_MONEY_FLOW,
+            QUERIES_FOLDER,
+            "read_money_flow-0db0e808d666",
+            read_money_flow.params,
+            (read_money_flow.MoneyFlow, read_money_flow.TrackedInflow),
+        ),
         Query(READ_COUNTERPARTIES, QUERIES_FOLDER),
         Query(READ_ACTIVITY_CHANGE, QUERIES_FOLDER),
         Query(READ_PAYMENT_EVENTS, QUERIES_FOLDER),

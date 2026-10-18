@@ -1,0 +1,334 @@
+USE GRAPH Mule_Pattern_Learner
+
+/* Velocity, B1 (docs/design.md, "read_money_flow (B1): velocity", and B1's walk in
+   docs/features.md, "Account node"): for each account of the request at one Monday t, the
+   money it received and sent over the last 7, 30 and 90 days, and how fast the money it
+   received in the last 30 days left again, matched last in, first out. Every amount is
+   integer cents, floor(amount x 100 + 0.5), summed in INT. A self-payment is read nowhere.
+
+   The walk:
+   - The lists: the newest 256 payments received in [t - 30 days, t) with positive cents, and
+     the newest 256 sent then, each kept in a heap ordered (ts DESC, id DESC) that holds one
+     more, the 257th: the newest payment left out of its list, when the list was cut.
+   - The span: when neither list was cut, all of [t - 30 days, t); otherwise (b, t), b the
+     latest second, over the cut lists, of the payment left out, and every payment of either
+     list at or before the second b is dropped. Both lists are then complete inside the span,
+     so the walk is exact last in, first out for every inflow it keeps.
+   - The lots: the inflows of one second are one lot, which comes before every outflow of its
+     second, so the order of payments in one second never matters to a lot.
+   - The outflows of one second are walked in the order the heap gives them, by payment id.
+     The levels, windows, held cents, median and each lot's values do not depend on that
+     order; which of two such outflows took the newest cents, and so the split by rail, can.
+   - The matching, without a stack: count cents as heights. A lot of c cents arriving at level
+     L holds the band [L, L + c), and still holds max(0, min(lowest level since, L + c) - L)
+     cents; each fall of that lowest level inside its band is a portion that left at that
+     outflow's time. An outflow larger than the level empties it to 0: the rest spent money
+     from before the span. The scan of a lot stops once no later outflow can lower its lowest
+     level, read from the suffix minima of the levels.
+   - Dwell, in whole seconds: an outflow's second minus its lot's second. A window w holds
+     the portions with dwell < w, and only outflows before t exist, so an inflow received less
+     than w before t shows only what left by t.
+
+   Per account it prints the 18 velocity columns of docs/features.md (the median dwell as
+   presence and milliseconds) and the steps of its scan, a work counter for mule bench that
+   no feature reads; and one row per inflow of each lot, with its lot's left_24h and dwell.
+   The shares are each one division of two sums of cents. Transfer means ach, check, internal
+   and zelle; unknown counts in the denominator of the rail shares only.
+
+   FOREACH is taken to walk a heap in its sort order, which the documentation does not
+   promise, so every step of every heap walked is checked against the one before, and a heap
+   out of order stops the query with the status unsorted_heap. Every value a walk reads later
+   is read in a later SELECT than the one that wrote it, or kept in a local variable.
+
+   Reads no label and no hub: a hub that is not the scored account is never requested. t must
+   be a Monday at 00:00 UTC after the lookback's length, and the request must name at least
+   one account, each once, each in the graph and existing at t. The accounts come as ids, not
+   as a SET<VERTEX> parameter, from which an installed query drops an id the graph lacks
+   without a word. */
+CREATE OR REPLACE QUERY read_money_flow(
+    UINT t_ms,
+    LIST<STRING> account_ids
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+    /* A payment of a list, a portion matched, and the row of an inflow of a lot. */
+    TYPEDEF TUPLE<UINT ts, STRING id, INT cents, STRING rail> Paid;
+    TYPEDEF TUPLE<INT dwell, INT cents> Portion;
+    TYPEDEF TUPLE<
+        STRING account_id,
+        STRING payment_id,
+        DOUBLE left_24h,
+        BOOL dwell_present,
+        INT dwell_ms
+    > TrackedInflow;
+    /* The cents received and sent over the last 7, 30 and 90 days. */
+    SumAccum<INT> @in_amount_7d, @in_amount_30d, @in_amount_90d, @out_amount_7d,
+      @out_amount_30d, @out_amount_90d;
+    /* Each list and its 257th, and the lists newest first: the inflows' seconds, ids and
+       cents, the outflows' seconds, cents and rails; the latest second left out of a list. */
+    HeapAccum<Paid>(257, ts DESC, id DESC) @inflows, @outflows;
+    ListAccum<INT> @in_s, @in_cents, @out_s, @out_cents;
+    ListAccum<STRING> @in_id, @out_rail;
+    MaxAccum<INT> @cut_s;
+    /* Inside the span, oldest first: each lot's second, cents, level before it, first outflow
+       after it, and first inflow and inflow count; each outflow's level after it; the
+       lowest level from each outflow on, last outflow first; the inflows kept. */
+    ListAccum<INT> @lot_s, @lot_cents, @lot_base, @lot_next, @lot_first, @lot_count,
+      @out_level, @out_lowest;
+    SumAccum<INT> @kept_in;
+    /* The portions by dwell, at most one per lot and one per outflow, and their sums. */
+    HeapAccum<Portion>(512, dwell ASC) @portions;
+    SumAccum<INT> @received, @matched, @within_15m, @within_1h, @within_6h, @within_1d,
+      @within_3d, @within_7d, @by_transfer, @by_card, @by_cash, @scan_steps;
+    /* The row. */
+    OrAccum @flow_present, @median_dwell_present;
+    SumAccum<INT> @median_dwell_ms;
+    SumAccum<DOUBLE> @left_15m, @left_1h, @left_6h, @left_1d, @left_3d, @left_7d, @held_share,
+      @left_by_transfer, @left_by_card, @left_by_cash;
+    ListAccum<TrackedInflow> @@tracked_inflows;
+    OrAccum @@unsorted;
+    SetAccum<STRING> @@unsorted_accounts;
+    /* The request's ids, each once, and how many it gave. */
+    SetAccum<STRING> @@ids;
+    SumAccum<INT> @@given;
+    UINT lookback_ms = 7776000000;
+
+    /* Mondays are 4 days after the Thursday of 1970-01-01, modulo a week. */
+    IF t_ms <= lookback_ms OR t_ms % 604800000 != 345600000 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+    FOREACH account_id IN account_ids DO
+        @@ids += account_id;
+        @@given += 1;
+    END;
+    IF @@given == 0 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+    IF @@ids.size() != @@given THEN
+        PRINT "duplicate_account" AS status;
+        RETURN;
+    END;
+    Requested = to_vertex_set(@@ids, "Account");
+    IF Requested.size() != @@ids.size() THEN
+        PRINT "unknown_account" AS status;
+        RETURN;
+    END;
+    Scored = SELECT s FROM Requested:s WHERE s.opened_ms < t_ms;
+    IF Scored.size() != Requested.size() THEN
+        PRINT "invisible_account" AS status;
+        RETURN;
+    END;
+
+    /* The payments of the lookback, each way, but self-payments. */
+    Received = SELECT a FROM Scored:a
+      -((Account_Received_Transaction>|Account_Received_Zelle_Transfer>):e)-
+      (Payment_Transaction|Zelle_Transfer):p
+      -((Transaction_From_Account>|Transfer_From_Account>):f)- Account:b
+      WHERE p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms AND b != a
+      ACCUM
+        INT cents = floor(p.amount * 100 + 0.5),
+        a.@in_amount_90d += cents,
+        IF p.event_ts_ms >= t_ms - 2592000000 THEN
+            a.@in_amount_30d += cents,
+            IF cents > 0 THEN a.@inflows += Paid(p.event_ts_ms, p.id, cents, "") END
+        END,
+        IF p.event_ts_ms >= t_ms - 604800000 THEN a.@in_amount_7d += cents END;
+    Sent = SELECT a FROM Scored:a
+      -(Account_Initiated_Transaction>:e)- Payment_Transaction:p
+      -(Transaction_To_Account>:f)- Account:b
+      WHERE p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms AND b != a
+      ACCUM
+        INT cents = floor(p.amount * 100 + 0.5),
+        a.@out_amount_90d += cents,
+        IF p.event_ts_ms >= t_ms - 2592000000 THEN
+            a.@out_amount_30d += cents,
+            a.@outflows += Paid(p.event_ts_ms, p.id, cents, p.payment_rail)
+        END,
+        IF p.event_ts_ms >= t_ms - 604800000 THEN a.@out_amount_7d += cents END;
+    SentByZelle = SELECT a FROM Scored:a
+      -(Account_Sent_Zelle_Transfer>:e)- Zelle_Transfer:p
+      -(Transfer_To_Account>:f)- Account:b
+      WHERE p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms AND b != a
+      ACCUM
+        INT cents = floor(p.amount * 100 + 0.5),
+        a.@out_amount_90d += cents,
+        IF p.event_ts_ms >= t_ms - 2592000000 THEN
+            a.@out_amount_30d += cents,
+            a.@outflows += Paid(p.event_ts_ms, p.id, cents, "zelle")
+        END,
+        IF p.event_ts_ms >= t_ms - 604800000 THEN a.@out_amount_7d += cents END;
+
+    /* The heaps as lists, newest first, each payment checked against the one before; a
+       heap's 257th payment is the newest left out of its list. */
+    Listed = SELECT a FROM Scored:a
+      POST-ACCUM
+        INT k = 0, UINT previous_ts = 0, STRING previous_id = "",
+        FOREACH x IN a.@inflows DO
+            IF k > 0 AND (x.ts > previous_ts OR (x.ts == previous_ts AND x.id > previous_id)) THEN
+                @@unsorted += TRUE, @@unsorted_accounts += a.id
+            END,
+            IF k < 256 THEN
+                a.@in_s += floor(x.ts / 1000), a.@in_id += x.id, a.@in_cents += x.cents
+            ELSE
+                a.@cut_s += floor(x.ts / 1000)
+            END,
+            previous_ts = x.ts, previous_id = x.id, k = k + 1
+        END,
+        k = 0, previous_ts = 0, previous_id = "",
+        FOREACH x IN a.@outflows DO
+            IF k > 0 AND (x.ts > previous_ts OR (x.ts == previous_ts AND x.id > previous_id)) THEN
+                @@unsorted += TRUE, @@unsorted_accounts += a.id
+            END,
+            IF k < 256 THEN
+                a.@out_s += floor(x.ts / 1000), a.@out_cents += x.cents, a.@out_rail += x.rail
+            ELSE
+                a.@cut_s += floor(x.ts / 1000)
+            END,
+            previous_ts = x.ts, previous_id = x.id, k = k + 1
+        END;
+    IF @@unsorted THEN
+        PRINT "unsorted_heap" AS status, @@unsorted_accounts AS accounts;
+        RETURN;
+    END;
+
+    /* The span: the payments of each list after the cut second, a prefix of the list (with no
+       cut, the cut second is MaxAccum's least INT, below every second). Then the walk in event
+       order, the lists read from their ends: a lot before the outflows of its second; the
+       level of tracked cents after each outflow, never below 0. */
+    Levels = SELECT a FROM Scored:a
+      POST-ACCUM
+        INT cut = a.@cut_s, INT n = 0, INT m = 0, INT i = 0, INT j = 0, INT level = 0,
+        INT lot_s = 0, INT lot = 0, INT first_in = 0,
+        WHILE n < a.@in_s.size() AND a.@in_s.get(n) > cut DO n = n + 1 END,
+        WHILE m < a.@out_s.size() AND a.@out_s.get(m) > cut DO m = m + 1 END,
+        WHILE i < n OR j < m DO
+            IF i < n AND (j >= m OR a.@in_s.get(n - 1 - i) <= a.@out_s.get(m - 1 - j)) THEN
+                lot_s = a.@in_s.get(n - 1 - i), lot = 0, first_in = i,
+                WHILE i < n AND a.@in_s.get(n - 1 - i) == lot_s DO
+                    lot = lot + a.@in_cents.get(n - 1 - i), i = i + 1
+                END,
+                a.@lot_s += lot_s, a.@lot_cents += lot, a.@lot_base += level,
+                a.@lot_next += j, a.@lot_first += first_in, a.@lot_count += i - first_in,
+                level = level + lot
+            ELSE
+                level = CASE WHEN level > a.@out_cents.get(m - 1 - j)
+                  THEN level - a.@out_cents.get(m - 1 - j) ELSE 0 END,
+                a.@out_level += level,
+                j = j + 1
+            END
+        END,
+        a.@kept_in += n;
+
+    /* The suffix minima: the lowest level from each outflow to the last, appended from the
+       last outflow back, so that of outflow j is at index m - 1 - j. */
+    Lowest = SELECT a FROM Scored:a
+      POST-ACCUM
+        INT m = a.@out_level.size(), INT j = m - 1, INT low = 0,
+        IF m > 0 THEN low = a.@out_level.get(m - 1) END,
+        WHILE j >= 0 DO
+            IF a.@out_level.get(j) < low THEN low = a.@out_level.get(j) END,
+            a.@out_lowest += low,
+            j = j - 1
+        END;
+
+    /* One scan per lot, from the first outflow after it, while the lot holds cents and a
+       later outflow falls below its lowest level: each fall inside its band is a portion. */
+    Matched = SELECT a FROM Scored:a
+      POST-ACCUM
+        INT m = a.@out_level.size(), INT n = a.@kept_in, INT j = 0, INT c = 0, INT base = 0,
+        INT low = 0, INT gone = 0, INT taken = 0, INT dwell = 0, INT within_24h = 0,
+        INT half = -1, INT steps = 0, INT q = 0, STRING rail = "",
+        IF a.@lot_s.size() > 0 THEN
+            FOREACH k IN RANGE[0, a.@lot_s.size() - 1] DO
+                c = a.@lot_cents.get(k), base = a.@lot_base.get(k), low = base + c,
+                gone = 0, within_24h = 0, half = -1, j = a.@lot_next.get(k),
+                WHILE j < m AND low > base AND a.@out_lowest.get(m - 1 - j) < low DO
+                    IF a.@out_level.get(j) < low THEN
+                        low = a.@out_level.get(j),
+                        taken = c - (CASE WHEN low > base THEN low - base ELSE 0 END) - gone,
+                        gone = gone + taken,
+                        dwell = a.@out_s.get(m - 1 - j) - a.@lot_s.get(k),
+                        rail = a.@out_rail.get(m - 1 - j),
+                        a.@portions += Portion(dwell, taken),
+                        IF dwell < 900 THEN a.@within_15m += taken END,
+                        IF dwell < 3600 THEN a.@within_1h += taken END,
+                        IF dwell < 21600 THEN a.@within_6h += taken END,
+                        IF dwell < 86400 THEN
+                            a.@within_1d += taken,
+                            within_24h = gone,
+                            IF rail == "card" THEN
+                                a.@by_card += taken
+                            ELSE IF rail == "cash" THEN
+                                a.@by_cash += taken
+                            ELSE IF rail == "ach" OR rail == "check" OR rail == "internal"
+                                OR rail == "zelle" THEN
+                                a.@by_transfer += taken
+                            END
+                        END,
+                        IF dwell < 259200 THEN a.@within_3d += taken END,
+                        IF dwell < 604800 THEN a.@within_7d += taken END,
+                        IF half < 0 AND 2 * gone >= c THEN half = dwell END
+                    END,
+                    steps = steps + 1,
+                    j = j + 1
+                END,
+                a.@received += c, a.@matched += gone,
+                q = a.@lot_first.get(k),
+                WHILE q < a.@lot_first.get(k) + a.@lot_count.get(k) DO
+                    @@tracked_inflows += TrackedInflow(a.id, a.@in_id.get(n - 1 - q),
+                      within_24h * 1.0 / c, half >= 0,
+                      CASE WHEN half >= 0 THEN half * 1000 ELSE 0 END),
+                    q = q + 1
+                END
+            END
+        END,
+        a.@scan_steps += steps;
+
+    /* The median dwell, from the portions by dwell, each checked against the one before; then
+       the shares, each 0 with an empty denominator. */
+    Rows = SELECT a FROM Scored:a
+      POST-ACCUM
+        INT cumulative = 0, INT previous = 0, BOOL started = FALSE, INT median = -1,
+        FOREACH x IN a.@portions DO
+            IF started AND x.dwell < previous THEN
+                @@unsorted += TRUE, @@unsorted_accounts += a.id
+            END,
+            started = TRUE, previous = x.dwell, cumulative = cumulative + x.cents,
+            IF median < 0 AND 2 * cumulative >= a.@received THEN median = x.dwell END
+        END,
+        IF median >= 0 THEN
+            a.@median_dwell_present += TRUE, a.@median_dwell_ms += median * 1000
+        END,
+        IF a.@received > 0 THEN
+            a.@flow_present += TRUE,
+            a.@left_15m += a.@within_15m * 1.0 / a.@received,
+            a.@left_1h += a.@within_1h * 1.0 / a.@received,
+            a.@left_6h += a.@within_6h * 1.0 / a.@received,
+            a.@left_1d += a.@within_1d * 1.0 / a.@received,
+            a.@left_3d += a.@within_3d * 1.0 / a.@received,
+            a.@left_7d += a.@within_7d * 1.0 / a.@received,
+            a.@held_share += (a.@received - a.@matched) * 1.0 / a.@received
+        END,
+        IF a.@within_1d > 0 THEN
+            a.@left_by_transfer += a.@by_transfer * 1.0 / a.@within_1d,
+            a.@left_by_card += a.@by_card * 1.0 / a.@within_1d,
+            a.@left_by_cash += a.@by_cash * 1.0 / a.@within_1d
+        END;
+    IF @@unsorted THEN
+        PRINT "unsorted_heap" AS status, @@unsorted_accounts AS accounts;
+        RETURN;
+    END;
+
+    PRINT "ok" AS status, "read_money_flow-0db0e808d666" AS version;
+    PRINT Rows[Rows.id AS account_id, Rows.@in_amount_7d AS in_amount_7d,
+      Rows.@in_amount_30d AS in_amount_30d, Rows.@in_amount_90d AS in_amount_90d,
+      Rows.@out_amount_7d AS out_amount_7d, Rows.@out_amount_30d AS out_amount_30d,
+      Rows.@out_amount_90d AS out_amount_90d, Rows.@flow_present AS flow_present,
+      Rows.@left_15m AS left_15m, Rows.@left_1h AS left_1h, Rows.@left_6h AS left_6h,
+      Rows.@left_1d AS left_1d, Rows.@left_3d AS left_3d, Rows.@left_7d AS left_7d,
+      Rows.@held_share AS held_share, Rows.@median_dwell_present AS median_dwell_present,
+      Rows.@median_dwell_ms AS median_dwell_ms, Rows.@left_by_transfer AS left_by_transfer,
+      Rows.@left_by_card AS left_by_card, Rows.@left_by_cash AS left_by_cash,
+      Rows.@scan_steps AS scan_steps] AS accounts;
+    PRINT @@tracked_inflows AS tracked_inflows;
+}
