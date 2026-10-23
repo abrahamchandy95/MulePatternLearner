@@ -24,6 +24,8 @@ dependencies = [
     "orjson>=3.10",
     "torch>=2.9",
     "torch_geometric>=2.7",
+    # The two comparisons of docs/design.md ("Comparisons"): XGBoost with its default settings.
+    "xgboost>=2.1",
 ]
 
 [project.optional-dependencies]
@@ -107,7 +109,7 @@ layers = [
     "cli",
     "testing | (bench)",
     "evaluation",
-    "(comparisons)",
+    "comparisons",
     "training",
     "data | subgraph",
     "tigergraph | model",
@@ -124,15 +126,14 @@ forbidden_modules = ["pandas", "pyarrow", "requests", "pyTigerGraph"]
 [[tool.importlinter.contracts]]
 name = "Nothing that builds examples, batches or models reads evaluation or testing"
 type = "forbidden"
-# Indirect imports count too, so nothing these packages import may import either. A
-# forbidden contract refuses a module that does not exist, so comparisons joins the list
-# with its package; until then nothing of it can import anything.
+# Indirect imports count too, so nothing these packages import may import either.
 source_modules = [
     "mule_pattern_learner.tigergraph",
     "mule_pattern_learner.data",
     "mule_pattern_learner.subgraph",
     "mule_pattern_learner.model",
     "mule_pattern_learner.training",
+    "mule_pattern_learner.comparisons",
 ]
 forbidden_modules = ["mule_pattern_learner.evaluation", "mule_pattern_learner.testing"]
 
@@ -142,13 +143,13 @@ type = "forbidden"
 # The Labels guard: read_answer_key's parser reads the truth, so no package but evaluation and
 # testing imports it, directly or not. The registry names the query without importing its
 # module; tests/tigergraph/test_infrastructure_rows.py holds the modules of tigergraph to that,
-# since an import inside one package is not a contract's to see. comparisons joins the list
-# with its package.
+# since an import inside one package is not a contract's to see.
 source_modules = [
     "mule_pattern_learner.tigergraph",
     "mule_pattern_learner.data",
     "mule_pattern_learner.subgraph",
     "mule_pattern_learner.model",
     "mule_pattern_learner.training",
+    "mule_pattern_learner.comparisons",
 ]
 forbidden_modules = ["mule_pattern_learner.tigergraph.queries.read_answer_key"]
