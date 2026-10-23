@@ -1,20 +1,17 @@
-"""The two XGBoost comparisons (docs/design.md, "Comparisons"): each label's weights rescaled to
-equal totals, XGBoost's defaults seeded by the model seed, the round count chosen by the
-selection score with a larger count only when strictly better, the same model from the same
-seed, and the ranker's file under its lock."""
+"""The two XGBoost comparisons (docs/design.md, "Comparisons"): XGBoost's defaults seeded by the
+model seed, the round count chosen by the selection score, the same model from the same seed,
+and the ranker's file under its lock. Every fit and prediction runs in a child process
+(comparisons.process), so none of these tests imports xgboost."""
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-from numpy.typing import NDArray
 import pandas as pd
 import pytest
-import xgboost
 
 from mule_pattern_learner.comparisons import rankers
 from mule_pattern_learner.comparisons.features import (
@@ -25,11 +22,7 @@ from mule_pattern_learner.comparisons.features import (
 )
 from mule_pattern_learner.comparisons.rankers import (
     GRAPH,
-    MAX_ROUNDS,
     OWN,
-    ROUND_STEP,
-    choose,
-    equal_totals,
     fit,
     load,
     lock,
@@ -37,6 +30,7 @@ from mule_pattern_learner.comparisons.rankers import (
     scores,
     train,
 )
+from mule_pattern_learner.comparisons.rounds import MAX_ROUNDS, ROUND_STEP
 from mule_pattern_learner.config import DEFAULT_CONFIG
 from mule_pattern_learner.training.selection import selection_score
 
@@ -70,45 +64,6 @@ def _planted(n: int, seed: int, *, labelled: bool = True) -> tuple[Vectors, pd.D
     return Vectors(tuple(keys), own, graph, labels, np.ones(2 * n)), frame
 
 
-def test_each_labels_weights_total_half_the_examples() -> None:
-    labels = np.array([1, 0, 0, 0])
-    np.testing.assert_allclose(
-        equal_totals(labels, np.array([2.0, 1.0, 1.0, 2.0])), [2, 0.5, 0.5, 1]
-    )
-    with pytest.raises(ValueError, match="no label 1"):
-        equal_totals(np.zeros(3, dtype=np.int64), np.ones(3))
-
-
-def test_xgboost_keeps_its_defaults_and_takes_the_seed(monkeypatch: pytest.MonkeyPatch) -> None:
-    made: list[dict[str, Any]] = []
-    real = xgboost.XGBClassifier
-
-    def recording(**keywords: Any) -> xgboost.XGBClassifier:
-        made.append(keywords)
-        return real(**keywords)
-
-    monkeypatch.setattr(rankers.xgboost, "XGBClassifier", recording)
-    vectors, _ = _planted(50, 0)
-    booster = fit(vectors.own, vectors.labels, vectors.weights, 3, OWN_COLUMNS)
-    assert made == [{"n_estimators": MAX_ROUNDS, "random_state": 3}]
-    assert booster.num_boosted_rounds() == MAX_ROUNDS == 1_000 and ROUND_STEP == 10
-    assert booster.feature_names == list(OWN_COLUMNS)
-
-
-def test_a_score_is_the_sum_of_the_trees_up_to_its_round(tmp_path: Path) -> None:
-    """XGBoost's margin up to a round, less its base score, which every account shares."""
-    vectors, _ = _planted(100, 1)
-    booster = fit(vectors.own, vectors.labels, vectors.weights, 0, OWN_COLUMNS)
-    frame = pd.DataFrame(vectors.own, columns=list(OWN_COLUMNS))
-    margin = booster.predict(xgboost.DMatrix(frame), output_margin=True, iteration_range=(0, 30))
-    found = scores(booster, vectors.own, OWN_COLUMNS, 30)
-    assert found.dtype == np.float64
-    offset = margin.astype(np.float64) - found
-    np.testing.assert_allclose(offset, offset[0], atol=1e-5)
-    with pytest.raises(ValueError, match="multiple of 10"):
-        scores(booster, vectors.own, OWN_COLUMNS, 25)
-
-
 def test_a_constant_feature_changes_nothing() -> None:
     vectors, _ = _planted(100, 2)
     labels, weights = vectors.labels, vectors.weights
@@ -120,34 +75,6 @@ def test_a_constant_feature_changes_nothing() -> None:
         scores(plain, vectors.own[:, :10], columns, 100),
         scores(widened, padded, (*columns, "constant"), 100),
     )
-
-
-def test_the_round_count_is_the_first_with_the_best_score(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The scores of the counts tried rise to their best at 40 rounds and tie it at 60: 40 is
-    kept, since a larger count must be strictly better."""
-    keys = pd.DataFrame(
-        {
-            "t_ms": np.full(100, M1, dtype=np.int64),
-            "account_id": [f"a{index:03d}" for index in range(100)],
-            "positive": [index == 0 for index in range(100)],
-            "ranked": True,
-            "weight": 1.0,
-        }
-    )
-    # The positive's place at each count: 50th, 10th, 3rd, 1st, 2nd, 1st, then last.
-    places = [50, 10, 3, 1, 2, 1] + [100] * 94
-
-    def planted(*args: Any) -> Iterator[tuple[int, NDArray[np.float64]]]:
-        for step, place in enumerate(places):
-            total = -np.arange(100, dtype=np.float64)
-            total[0] = -(place - 1) + 0.5
-            yield (step + 1) * ROUND_STEP, total
-
-    monkeypatch.setattr(rankers, "margins", planted)
-    rounds, found, history = choose(xgboost.Booster(), np.zeros((100, 1)), ("x",), keys)
-    assert rounds == 40 and found.score == pytest.approx(1.0)
-    assert [count for count, _ in history] == list(range(10, 1_001, 10))
-    assert history[5] == (60, pytest.approx(1.0))
 
 
 def test_the_rankers_learn_a_planted_cue_and_choose_their_rounds() -> None:
@@ -201,7 +128,7 @@ def test_the_same_seed_gives_the_same_model() -> None:
     selection, keys = _planted(100, 6, labelled=False)
     first = train(GRAPH, training, selection, keys, 1)
     second = train(GRAPH, training, selection, keys, 1)
-    assert bytes(first.booster.save_raw("ubj")) == bytes(second.booster.save_raw("ubj"))
+    assert first.booster == second.booster
     assert (first.rounds, first.score, first.history) == (
         second.rounds,
         second.score,
@@ -254,20 +181,3 @@ def test_both_rankers_learn_the_batch_worlds_mules(world: Any) -> None:
         trees = train(name, training, selection, world.selection.keys, 0)
         assert trees.score >= 0.5, name
         assert set(trees.found.accounts) == set(world.mules)
-
-
-def test_xgboost_refuses_more_than_one_openmp_thread_on_macos(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """On macOS XGBoost crashes beside torch's OpenMP runtime with more than one thread, so it
-    refuses to run there unless OMP_NUM_THREADS is 1; elsewhere it runs."""
-    vectors, _ = _planted(50, 11)
-    monkeypatch.setattr(rankers.sys, "platform", "darwin")
-    monkeypatch.setenv("OMP_NUM_THREADS", "4")
-    with pytest.raises(RuntimeError, match="OMP_NUM_THREADS=1"):
-        fit(vectors.own, vectors.labels, vectors.weights, 0, OWN_COLUMNS)
-    monkeypatch.setenv("OMP_NUM_THREADS", "1")
-    rankers.require_one_openmp_thread()
-    monkeypatch.setattr(rankers.sys, "platform", "linux")
-    monkeypatch.setenv("OMP_NUM_THREADS", "4")
-    rankers.require_one_openmp_thread()

@@ -14,66 +14,42 @@ asks what message passing adds beyond hand-made graph features (comparisons.feat
   rounds. At those defaults (every row and column used by every tree) the seed changes no tree,
   so the five seeds of a ranker are five identical models and their spread is 0; whether
   XGBoost is seed-free and trained once, or its subsample and colsample_bytree are set below 1
-  so that the seed matters, is the owner's to decide; the round count is chosen among 10, 20, ..., 1,000 by the selection score on the
-  selection world (training.selection), as the GNN chooses its epochs, a larger count only
-  when strictly better.
+  so that the seed matters, is the owner's to decide. The round count is chosen among 10, 20,
+  ..., 1,000 by the selection score on the selection world (training.selection), as the GNN
+  chooses its epochs, a larger count only when strictly better.
 - An account's score is the sum of the outputs of the trees up to the chosen round, in
   float64: XGBoost's margin without its base score, which is the same for every account and so
-  changes no ranking. The sum is taken ROUND_STEP rounds at a time (XGBoost's iteration_range),
-  so one pass over the trees scores every round count of the choice, and every scoring sums
-  the same blocks in the same order.
+  changes no ranking (comparisons.boosting).
+- Every XGBoost fit and prediction runs in a Python process of its own that never imports torch
+  (comparisons.process), so this module, which imports torch to save and load a ranker's file,
+  never imports xgboost: a booster is its saved bytes here.
 
 A ranker's file holds its booster, its seed, its round count, its selection score and what it
 found, under the contract lock with its columns among the locked fields (training.contract).
-
-On macOS the pip wheels of torch and XGBoost each bring an OpenMP runtime of their own, and
-XGBoost crashes the process (exit 139) when it runs beside torch's runtime with more than one
-thread, so there every function that runs XGBoost refuses to unless OMP_NUM_THREADS is 1 when it
-is called. One thread changes no result, only the time XGBoost takes. What matters is the
-variable's value when XGBoost first runs: probed on macOS with XGBoost 3.2.0, a variable left
-unset, or torch.set_num_threads(1) without it, crashes, while one set before torch is imported,
-or after torch has run an operation and this module is imported, runs every fit, so the refusal
-is exact and the entry point of mule train need only set the variable before XGBoost first runs
-(tests/conftest.py sets it for the tests).
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
-import os
 from pathlib import Path
-import sys
 
 import numpy as np
 from numpy.typing import NDArray
 import pandas as pd
 import torch
-import xgboost
 
 from ..config import SubgraphConfig, TrainingConfig
 from ..training import contract
 from ..training.contract import Lock
-from ..training.selection import Found, found
+from ..training.selection import Found
 from .features import GRAPH_COLUMNS, OWN_COLUMNS, Vectors
+from .process import choose, fit, scores
+from .rounds import MAX_ROUNDS, ROUND_STEP
 
 # The two rankers, by name.
 OWN = "xgboost_own"
 GRAPH = "xgboost_graph"
 COLUMNS = {OWN: OWN_COLUMNS, GRAPH: GRAPH_COLUMNS}
-# The rounds trained, and the step of the round counts the choice tries.
-MAX_ROUNDS = 1_000
-ROUND_STEP = 10
-
-
-def require_one_openmp_thread() -> None:
-    """Refuse to run XGBoost on macOS unless OMP_NUM_THREADS is 1 (see the module's
-    docstring)."""
-    if sys.platform == "darwin" and os.environ.get("OMP_NUM_THREADS") != "1":
-        raise RuntimeError(
-            "On macOS, XGBoost crashes beside torch's OpenMP runtime with more than one thread: "
-            "set OMP_NUM_THREADS=1 before the run starts"
-        )
 
 
 def matrix(name: str, vectors: Vectors) -> NDArray[np.float32]:
@@ -83,71 +59,15 @@ def matrix(name: str, vectors: Vectors) -> NDArray[np.float32]:
     return vectors.own if name == OWN else vectors.graph
 
 
-def equal_totals(labels: NDArray[np.integer], weights: NDArray[np.floating]) -> NDArray[np.float64]:
-    """The weights rescaled so that each label's total is half the number of examples."""
-    found = np.asarray(weights, dtype=np.float64).copy()
-    for label in (0, 1):
-        chosen = labels == label
-        if not chosen.any():
-            raise ValueError(f"The training examples hold no label {label}")
-        found[chosen] *= (len(found) / 2) / found[chosen].sum()
-    return found
-
-
-def fit(
-    x: NDArray[np.floating],
-    labels: NDArray[np.integer],
-    weights: NDArray[np.floating],
-    seed: int,
-    columns: Sequence[str],
-) -> xgboost.Booster:
-    """XGBoost with its default settings, random_state seed, MAX_ROUNDS rounds, on x with each
-    label's weights rescaled to equal totals."""
-    require_one_openmp_thread()
-    if x.shape[1] != len(columns):
-        raise ValueError(f"The vectors are {x.shape[1]} wide, not {len(columns)}")
-    model = xgboost.XGBClassifier(n_estimators=MAX_ROUNDS, random_state=seed)
-    frame = pd.DataFrame(x, columns=list(columns))
-    model.fit(frame, np.asarray(labels), sample_weight=equal_totals(labels, weights))
-    return model.get_booster()
-
-
-def margins(
-    booster: xgboost.Booster, x: NDArray[np.floating], columns: Sequence[str], rounds: int
-) -> Iterator[tuple[int, NDArray[np.float64]]]:
-    """For each round count of ROUND_STEP, 2 ROUND_STEP, ... up to rounds, the sum in float64
-    of every account's tree outputs up to it."""
-    require_one_openmp_thread()
-    if rounds % ROUND_STEP or not 0 < rounds <= booster.num_boosted_rounds():
-        raise ValueError(f"A round count is a multiple of {ROUND_STEP} up to the trees trained")
-    data = xgboost.DMatrix(pd.DataFrame(x, columns=list(columns)), base_margin=np.zeros(len(x)))
-    total = np.zeros(len(x))
-    for start in range(0, rounds, ROUND_STEP):
-        block = booster.predict(
-            data, output_margin=True, iteration_range=(start, start + ROUND_STEP)
-        )
-        total = total + block.astype(np.float64)
-        yield start + ROUND_STEP, total
-
-
-def scores(
-    booster: xgboost.Booster, x: NDArray[np.floating], columns: Sequence[str], rounds: int
-) -> NDArray[np.float64]:
-    """Every account's score at a round count."""
-    found = np.zeros(len(x))
-    for _, found in margins(booster, x, columns, rounds):
-        pass
-    return found
-
-
 @dataclass(frozen=True)
 class Trees:
-    """A trained XGBoost ranker: its name, seed and booster, the round count selection chose,
-    its score and what it found, and the score of every round count tried."""
+    """A trained XGBoost ranker: its name, seed and booster (as XGBoost saves it), the round
+    count selection chose, its score and what it found, and the score of every round count
+    tried."""
 
     name: str
     seed: int
-    booster: xgboost.Booster
+    booster: bytes
     rounds: int
     score: float
     found: Found
@@ -156,26 +76,6 @@ class Trees:
     def scores(self, vectors: Vectors) -> NDArray[np.float64]:
         """The score of every example of vectors at the chosen round count."""
         return scores(self.booster, matrix(self.name, vectors), COLUMNS[self.name], self.rounds)
-
-
-def choose(
-    booster: xgboost.Booster,
-    x: NDArray[np.floating],
-    columns: Sequence[str],
-    keys: pd.DataFrame,
-) -> tuple[int, Found, tuple[tuple[int, float], ...]]:
-    """The round count with the best selection score on the ranked selection keys (x a row per
-    key, in their order), a larger count only when strictly better; what it found; and the
-    score of every count tried."""
-    best: tuple[int, Found] | None = None
-    history: list[tuple[int, float]] = []
-    for rounds, total in margins(booster, x, columns, MAX_ROUNDS):
-        result = found(keys, total)
-        history.append((rounds, result.score))
-        if best is None or result.score > best[1].score:
-            best = (rounds, result)
-    assert best is not None
-    return best[0], best[1], tuple(history)
 
 
 def train(
@@ -222,7 +122,7 @@ def save(trees: Trees, path: Path, current: Lock) -> None:
         {
             "ranker": trees.name,
             "seed": trees.seed,
-            "booster": bytes(trees.booster.save_raw("ubj")),
+            "booster": trees.booster,
             "rounds": trees.rounds,
             "score": trees.score,
             "accounts": list(trees.found.accounts),
@@ -236,8 +136,6 @@ def save(trees: Trees, path: Path, current: Lock) -> None:
 def load(path: Path, current: Lock) -> Trees:
     """A ranker's file, refused when its lock is not current."""
     stored = contract.load(path, current)
-    booster = xgboost.Booster()
-    booster.load_model(bytearray(stored["booster"]))
     found_back = Found(
         tuple(stored["accounts"]),
         stored["weights"].numpy().astype(np.float64),
@@ -247,7 +145,7 @@ def load(path: Path, current: Lock) -> Trees:
     return Trees(
         stored["ranker"],
         stored["seed"],
-        booster,
+        bytes(stored["booster"]),
         stored["rounds"],
         stored["score"],
         found_back,

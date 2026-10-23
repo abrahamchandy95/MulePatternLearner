@@ -26,10 +26,11 @@ events. Durations that are absent give no event.
 XGBoost with its default settings learns is_mule from them in two folds, each cluster of the
 ring bootstrap in one fold by a hash of its name (a ring with all its account-Mondays, a
 ringless mule and a non-mule account each its own), so that no ring is learned in one fold and
-scored in the other. The out-of-fold scores give a ROC AUC with a ring-resampled interval
-(evaluation.uncertainty), and the probe passes when the interval's upper end is below the
-owner's 0.55 (audit.clock_probe_upper). A probe with too few mules has a wide interval, or none,
-and fails, so low power never passes.
+scored in the other. It runs in a Python process of its own that never imports torch
+(comparisons.process), as every XGBoost fit does. The out-of-fold scores give a ROC AUC with a
+ring-resampled interval (evaluation.uncertainty), and the probe passes when the interval's upper
+end is below the owner's 0.55 (audit.clock_probe_upper). A probe with too few mules has a wide
+interval, or none, and fails, so low power never passes.
 """
 
 from __future__ import annotations
@@ -41,9 +42,8 @@ import hashlib
 import numpy as np
 from numpy.typing import NDArray
 import pandas as pd
-import xgboost
 
-from ..comparisons.rankers import require_one_openmp_thread
+from ..comparisons import process
 from ..config import AuditConfig
 from ..subgraph.build import ExampleRows
 from .uncertainty import Clusters, Ranked, interval
@@ -177,17 +177,11 @@ def out_of_fold(
 ) -> NDArray[np.float64] | None:
     """Each row's score from XGBoost with its default settings trained on the other fold; None
     when a fold lacks a class to learn from."""
-    require_one_openmp_thread()
-    scores = np.zeros(len(values))
     for held in range(FOLDS):
         train = fold != held
         if len(set(positive[train].tolist())) < 2 or not (fold == held).any():
             return None
-        model = xgboost.XGBClassifier(random_state=seed)
-        model.fit(values[train], positive[train].astype(np.int64))
-        margins = model.predict(values[~train], output_margin=True)
-        scores[~train] = np.asarray(margins, dtype=np.float64)
-    return scores
+    return process.fold_scores(values, positive, fold, seed)
 
 
 def probe(

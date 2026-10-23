@@ -43,6 +43,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from importlib.metadata import version
 import json
 from pathlib import Path
 import subprocess
@@ -53,7 +54,6 @@ import pandas as pd
 import pyarrow as pa
 import torch
 import torch_geometric
-import xgboost
 
 from ..config import AuditConfig, WorldConfig
 from ..subgraph.cache import Cache
@@ -476,7 +476,7 @@ def manifest(
         "cuda": torch.version.cuda,
         "torch": torch.__version__,
         "torch_geometric": torch_geometric.__version__,
-        "xgboost": xgboost.__version__,
+        "xgboost": version("xgboost"),
         "wall_seconds": dict(wall_seconds),
         "tigergraph_calls": tigergraph_calls,
         "cache_hits": cache_hits,

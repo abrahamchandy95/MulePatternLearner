@@ -153,3 +153,17 @@ source_modules = [
     "mule_pattern_learner.comparisons",
 ]
 forbidden_modules = ["mule_pattern_learner.tigergraph.queries.read_answer_key"]
+
+[[tool.importlinter.contracts]]
+name = "The process XGBoost runs in never imports torch"
+type = "forbidden"
+# torch and XGBoost load different OpenMP runtimes, and a process that holds both crashes in
+# XGBoost's threads, so every XGBoost fit and prediction runs in a child process that
+# comparisons.process starts. The child's modules, and what they import, never import torch;
+# tests/comparisons/test_process.py checks it in a fresh interpreter too.
+source_modules = [
+    "mule_pattern_learner.comparisons.boosting",
+    "mule_pattern_learner.comparisons.rounds",
+    "mule_pattern_learner.comparisons.process",
+]
+forbidden_modules = ["torch", "torch_geometric"]

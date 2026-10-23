@@ -1167,7 +1167,9 @@ what TigerGraph gives the GNN.
   of labelled against unlabelled ranks like one of positive against negative (Elkan and Noto,
   2008). It uses XGBoost's default settings, seeded by the model seed, with the number of
   rounds chosen on the selection world by the same selection score, as the GNN chooses its
-  epochs.
+  epochs. Every XGBoost fit and prediction, the clock probe's included, runs in a Python
+  process of its own that never imports torch, because torch and XGBoost load different
+  OpenMP runtimes and a process that holds both crashes in XGBoost's threads.
 - Each ablation trains and selects its epoch like the full model, at the prior the full model
   chose for that seed, with the same five seeds.
 - Every ranker has exactly five seeds, fixed before any result is seen. A difference is called
