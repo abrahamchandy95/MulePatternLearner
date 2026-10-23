@@ -11,7 +11,8 @@ identified, its collector a_collector and a_mule2 and a_mule3), with:
 - a_drop, a ringless mule (an account-takeover drop) the bank identified, active from 3 days
   before T to T, receiving 900.00 from x_drop 3 days before T;
 - a_late, a ring 11 mule active from 10 to 12 days after T, so that T + 1 week is its
-  early-warning Monday and T + 2 weeks its one active Monday;
+  early-warning Monday and T + 2 weeks its one active Monday, enrolled on d_hidden from 3
+  days after T, so that its ring link is visible on its early-warning Monday;
 - twelve ordinary customers, a_o00 to a_o11, each paying x_shop 20.00 by card 2 days before T.
 
 The calendar's scored Mondays are T, T + 1 week and T + 2 weeks (2024-07-01 to 2024-07-15).
@@ -65,6 +66,7 @@ def evaluation_world() -> WorldBuilder:
     w.external("x_drop", fixtures.OPENED)
     w.pay("x_drop_in", "x_drop", "a_drop", T - 3 * D + 9 * H, 900.0, "ach")
     w.customer("late", JOINED, mule=LATE)
+    w.device("p_late", "d_hidden", T + 3 * D)
     w.external("x_shop", fixtures.OPENED)
     for name in ORDINARY:
         w.customer(name, JOINED)

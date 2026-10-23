@@ -5,6 +5,7 @@ equal to scikit-learn's."""
 from __future__ import annotations
 
 import numpy as np
+from numpy.typing import NDArray
 import pytest
 from sklearn.metrics import average_precision_score, roc_auc_score
 
@@ -15,7 +16,10 @@ from mule_pattern_learner.evaluation.uncertainty import (
     interval,
     intervals,
     paired_interval,
+    percentiles,
+    replicate_matrix,
     replicate_weights,
+    spread,
 )
 
 
@@ -101,3 +105,35 @@ def test_intervals_cover_the_statistic_and_pair_runs() -> None:
     assert paired_interval(
         good.roc_auc, good.roc_auc, clusters, weight, replicates=50, level=0.9, seed=0
     ) == (0.0, 0.0)
+
+
+def test_a_replicate_matrix_pairs_its_statistics() -> None:
+    positive = np.array([True, True, False, False, False])
+    clusters = Clusters.of(["ring:1", "mule:b", "account:c", "account:d", "account:e"], positive)
+    weight = np.ones(5)
+
+    def totals(weights: NDArray[np.float64]) -> NDArray[np.float64]:
+        return np.array([weights[positive].sum(), weights[~positive].sum()])
+
+    def doubled(weights: NDArray[np.float64]) -> NDArray[np.float64]:
+        return 2 * totals(weights)
+
+    found = replicate_matrix([totals, doubled], clusters, weight, replicates=40, seed=2)
+    assert found.shape == (40, 2, 2)
+    # Two positive clusters of one row each, three negative: every replicate draws as many.
+    assert (found[:, 0, 0] == 2).all() and (found[:, 0, 1] == 3).all()
+    assert (found[:, 1] == 2 * found[:, 0]).all()
+
+
+def test_percentiles_and_spread() -> None:
+    values = np.stack([np.arange(101, dtype=np.float64), np.full(101, np.nan)], axis=1)
+    low, high = percentiles(values, 0.9)
+    assert low[0] == pytest.approx(5) and high[0] == pytest.approx(95)
+    assert np.isnan(low[1]) and np.isnan(high[1])
+    assert spread([1.0, 2.0, 3.0, float("nan")]) == {
+        "mean": 2.0,
+        "std": 1.0,
+        "min": 1.0,
+        "max": 3.0,
+    }
+    assert spread([4.0])["std"] == 0 and np.isnan(spread([])["mean"])

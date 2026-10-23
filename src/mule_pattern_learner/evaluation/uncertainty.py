@@ -152,6 +152,55 @@ def intervals(
     return [percentile(values, level) for values in found]
 
 
+def replicate_matrix(
+    statistics: Sequence[Callable[[NDArray[np.float64]], NDArray[np.float64]]],
+    clusters: Clusters,
+    weight: NDArray[np.float64],
+    *,
+    replicates: int,
+    seed: int,
+) -> NDArray[np.float64]:
+    """Each statistic's values on each replicate, all on the same draws: replicates by
+    statistics by the statistic's values. Applied to several runs over the same rows, the
+    statistics' values on one replicate are paired."""
+    rows: list[NDArray[np.float64]] = []
+    for chunk in replicate_weights(clusters, replicates, seed):
+        for draws in chunk:
+            weights = weight * draws[clusters.row]
+            rows.append(np.stack([statistic(weights) for statistic in statistics]))
+    return np.stack(rows)
+
+
+def percentiles(
+    values: NDArray[np.float64], level: float
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """The central level interval of replicate values along their first axis, NaN ones left
+    out: its low and high ends, NaN where no replicate is defined."""
+    flat = values.reshape(len(values), -1)
+    low = np.full(flat.shape[1], np.nan)
+    high = np.full(flat.shape[1], np.nan)
+    for column in range(flat.shape[1]):
+        found = percentile(flat[:, column], level)
+        if found is not None:
+            low[column], high[column] = found
+    return low.reshape(values.shape[1:]), high.reshape(values.shape[1:])
+
+
+def spread(values: Sequence[float]) -> dict[str, float]:
+    """The mean, standard deviation, least and greatest of values over seeds or rotations,
+    NaN ones left out."""
+    found = np.asarray(values, dtype=np.float64)
+    found = found[np.isfinite(found)]
+    if not len(found):
+        return {"mean": np.nan, "std": np.nan, "min": np.nan, "max": np.nan}
+    return {
+        "mean": float(found.mean()),
+        "std": float(found.std(ddof=1)) if len(found) > 1 else 0.0,
+        "min": float(found.min()),
+        "max": float(found.max()),
+    }
+
+
 def paired_interval(
     first: Callable[[NDArray[np.float64]], float],
     second: Callable[[NDArray[np.float64]], float],
