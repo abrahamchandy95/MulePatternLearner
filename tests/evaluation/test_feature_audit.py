@@ -53,63 +53,109 @@ def test_the_audited_columns_of_a_built_batch(
     assert value["community.members"][1] == 1 and value["customer.accounts_owned"][1] == 1
 
 
-def _sample() -> tuple[NDArray[np.bool_], list[str]]:
-    """200 active true-mule account-Mondays in 100 rings, and 5,000 non-mule ones."""
-    positive = np.array([True] * 200 + [False] * 5_000)
-    keys = [f"ring:{i // 2}" if mule else f"account:{i}" for i, mule in enumerate(positive)]
-    return positive, keys
+# The audit sample at production proportions: 1,200 active true-mule account-Mondays, each
+# weighing 1, in 400 rings of three, and 20,000 non-mule ones each standing for 115, so that
+# the sample stands for 2.3 million account-Mondays and the mules are 1,200 / 2,301,200 = 0.052%
+# of the weight. In production about 12,000 of 23 million are mules, 0.052% as well: under the
+# 0.1% of a tail, so a tail holds every mule that a column marks and room for 1,100 ordinary
+# account-Mondays beside them.
+MULES, ORDINARY, STANDS_FOR = 1_200, 20_000, 115.0
 
 
-def test_a_near_pure_flag_of_few_mules_stops_the_run() -> None:
-    positive, keys = _sample()
+def _sample() -> tuple[NDArray[np.bool_], NDArray[np.float64], list[str]]:
+    positive = np.array([True] * MULES + [False] * ORDINARY)
+    weight = np.where(positive, 1.0, STANDS_FOR)
+    keys = [f"ring:{i // 3}" if mule else f"account:{i}" for i, mule in enumerate(positive)]
+    return positive, weight, keys
+
+
+def _held_by_fifteen_percent_of_the_mules(positive: NDArray[np.bool_]) -> NDArray[np.bool_]:
+    held = np.zeros(len(positive), dtype=bool)
+    held[: MULES * 15 // 100] = True
+    return held
+
+
+def test_a_marker_a_minority_of_mules_hold_stops_the_run_whatever_its_kind() -> None:
+    positive, weight, keys = _sample()
     rng = np.random.default_rng(0)
-    weight = np.ones(len(positive))
-    # The planted flag is 1 on 30 of the 200 mules, 15%, and on no ordinary account: its ROC
-    # AUC is 0.5 + 0.15 / 2 = 0.575, nowhere near 0.95, but the region where it is 1 holds 15%
-    # of the mules (at least 1%) and nothing else.
-    flag = np.zeros(len(positive))
-    flag[:30] = 1
+    held = _held_by_fifteen_percent_of_the_mules(positive)
+    # Each marker is on 15% of the mules, 180 of them, and on no ordinary account: its ROC AUC
+    # is 0.5 + 0.15 / 2 = 0.575, nowhere near 0.95, but the region where it is set holds 15% of
+    # the mules (at least 1%) and nothing else.
+    flag = held.astype(np.float64)
+    count = np.where(held, np.log1p(1.0), 0.0)
+    continuous = np.where(held, 1 + rng.random(len(positive)), 0.0)
+    # Controls that must pass: noise, a count that ordinary accounts hold as often as mules
+    # (the mules' marker value is on 5% of the ordinary rows too, 1,000 rows of weight 115), and
+    # an ordinary-looking count with one level more than ordinary accounts reach among mules
+    # only, 5% of the ordinary rows sitting at the level below it.
     noise = rng.normal(size=len(positive))
-    perfect = positive.astype(np.float64) + rng.random(len(positive)) * 0.5
-    matrix = np.stack([flag, noise, perfect], axis=1)
-    found = feature_audit(
-        matrix, positive, weight, keys, AUDIT, seed=0, columns=("flag", "noise", "perfect")
-    )
+    shared = np.where(held | (~positive & (rng.random(len(positive)) < 0.05)), np.log1p(1.0), 0.0)
+    levels = np.where(rng.random(len(positive)) < 0.05, 2.0, rng.integers(0, 2, len(positive)))
+    below = np.where(held, 3.0, levels)
+    perfect = positive + rng.random(len(positive)) * 0.5
+    matrix = np.stack([flag, count, continuous, noise, shared, below, perfect], axis=1)
+    columns = ("flag", "count", "continuous", "noise", "shared", "below", "perfect")
+    found = feature_audit(matrix, positive, weight, keys, AUDIT, seed=0, columns=columns)
     table = found.table.set_index("column")
     assert table.loc["flag", "roc_auc"] == pytest.approx(0.575)
-    assert not table.loc["flag", "separates"] and table.loc["flag", "near_pure"] == "value=1,top"
-    assert table.loc["noise", "no_separation"] and table.loc["noise", "near_pure"] == ""
-    assert not table.loc["noise", "separates"]
+    assert table.loc["count", "roc_auc"] == pytest.approx(0.575)
+    for name in ("flag", "count", "continuous"):
+        assert not table.loc[name, "separates"]
+    # The same marker as a 0/1 flag, as a count and as a continuous value, whatever its kind: the
+    # flag also has its value, 1.
+    assert table.loc["flag", "near_pure"] == "value=1,top"
+    assert table.loc["count", "near_pure"] == "top"
+    assert table.loc["continuous", "near_pure"] == "top"
+    # Ordinary rows that hold the marker value too, and a tie of ordinary rows at the level
+    # beneath it, hold the mules' region off: in neither is a region mostly mules, except the
+    # one value only mules reach.
+    assert table.loc["shared", "near_pure"] == "" and table.loc["noise", "near_pure"] == ""
+    assert table.loc["below", "near_pure"] == "top"
     assert table.loc["perfect", "separates"] and table.loc["perfect", "roc_auc"] == 1.0
-    assert not found.passed and found.stopping == ("flag", "perfect")
-    clean = feature_audit(matrix[:, 1:2], positive, weight, keys, AUDIT, seed=0, columns=("noise",))
+    assert not found.passed
+    assert found.stopping == ("flag", "count", "continuous", "below", "perfect")
+    controls = [columns.index(name) for name in ("noise", "shared")]
+    clean = feature_audit(
+        matrix[:, controls], positive, weight, keys, AUDIT, seed=0, columns=("noise", "shared")
+    )
     assert clean.passed and clean.stopping == ()
 
 
 def test_a_region_must_hold_one_percent_of_the_mules_and_be_mostly_mules() -> None:
-    positive = np.array([True] * 200 + [False] * 5_000)
-    weight = np.ones(len(positive))
-    # One mule in a region of its own: 0.5% of the mules, under the 1% a region needs.
+    positive, weight, _ = _sample()
+    # One mule in a region of its own: 1 of 1,200 mules, under the 1% (12) a region needs.
     few = np.zeros(len(positive))
     few[0] = 1
-    assert "value=1" not in near_pure(few, positive, weight, AUDIT)
-    # 30 mules among 40 ordinary accounts: 15% of the mules, but under half of the region.
-    mixed = np.zeros(len(positive))
-    mixed[:30] = 1
-    mixed[200:240] = 1
-    assert near_pure(mixed, positive, weight, AUDIT) == []
-    # Weights count: the 40 ordinary accounts sampled at 1 in 10 stand for 400.
-    sampled = np.where(positive, 1.0, 10.0)
-    mixed[200:204], mixed[204:240] = 1, 0
-    assert near_pure(mixed, positive, sampled, AUDIT) == []
-    assert near_pure(mixed, positive, weight, AUDIT) == ["value=1", "top"]
+    assert near_pure(few, positive, weight, AUDIT) == []
+    # 180 mules (15%) with 2 ordinary account-Mondays of weight 115 beside them: 230 of 410, so
+    # under half of the region; with 1, 180 of 295, over half.
+    marked = np.zeros(len(positive))
+    marked[:180] = 1
+    marked[MULES : MULES + 2] = 1
+    assert near_pure(marked, positive, weight, AUDIT) == []
+    marked[MULES + 1] = 0
+    assert near_pure(marked, positive, weight, AUDIT) == ["value=1", "top"]
+    # Weights count: counted one each, the same two ordinary rows would not outweigh the mules,
+    # and the 182 rows at 1 are more than the 21 of the top 0.1% of 21,200, so only the value is
+    # a region.
+    marked[MULES + 1] = 1
+    assert near_pure(marked, positive, np.ones(len(positive)), AUDIT) == ["value=1"]
 
 
-def test_the_tails_hold_their_share_of_the_weight_with_ties_inside() -> None:
-    positive = np.array([True] * 20 + [False] * 1_980)
-    weight = np.ones(len(positive))
-    # The top 0.1% of 2,000 account-Mondays is 2 of them; here 20 tie at the top, all mules.
-    values = np.arange(len(positive), dtype=np.float64)
-    values[:20] = 10_000
+def test_a_tie_at_the_edge_of_a_tail_is_left_out_of_it() -> None:
+    positive, weight, _ = _sample()
+    # Ordinary rows sit on three levels, 70% at 0, 25% at 1 and 5% at 2; 180 mules sit above
+    # them at 3. The weight of the top 0.1% is 2,301, which the tie at 2 (about 115,000) passes,
+    # so the edge of the top tail is 2 and the tail holds what lies above it: only the mules.
+    rng = np.random.default_rng(1)
+    values = rng.choice([0.0, 1.0, 2.0], size=len(positive), p=[0.70, 0.25, 0.05])
+    values[:180] = 3.0
     assert near_pure(values, positive, weight, AUDIT) == ["top"]
-    assert near_pure(-values, positive, weight, AUDIT) == ["bottom"]
+    # With the mules at the level of the tie they share it with 1,000 ordinary rows, so no
+    # region is mostly mules, the tie being no part of the tail.
+    values[:180] = 2.0
+    assert near_pure(values, positive, weight, AUDIT) == []
+    # The bottom tail likewise: 180 mules at -1 beneath ordinary rows at 0, 1 and 2.
+    values[:180] = -1.0
+    assert near_pure(values, positive, weight, AUDIT) == ["bottom"]

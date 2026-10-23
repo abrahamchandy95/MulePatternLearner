@@ -9,8 +9,11 @@ The label checks, each failing on any account that breaks it:
 - label.mule_dates_and_ring: an is_mule 1 account without 0 < mule_onset_ms <= mule_last_ms,
   or without a ring value (a ring id, or -1 for none);
 - label.scorable_without_truth: a scorable account of some Monday the answer key lacks;
-- label.truth_join: a join of a scored frame with the truth that shares a column other than
-  the account id, which a merge would rename.
+- label.truth_join: a join of what evaluation scores with the truth that shares a column other
+  than the account id, which a merge would rename. It is checked on the columns evaluation
+  really joins (JOINED_COLUMNS: the test keys, their weight and the logit of each, which
+  rankings.evaluation_frame builds and refuses to build otherwise) against the stored truth,
+  so a column added to either side fails the audit.
 
 Reported beside them, never failing: the true mules counted by account_type and by whether
 they are owned, and every true mule outside the scored population on a scored Monday of its
@@ -26,7 +29,7 @@ check fails when a month falls outside, or when no true mule has its onset in th
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 import math
@@ -44,6 +47,9 @@ LABEL_CHECKS = (IDENTIFIED_NOT_MULE, MULE_DATES_AND_RING, SCORABLE_WITHOUT_TRUTH
 IDENTIFICATION_HORIZON = "identification_horizon"
 # The column every truth join is made on.
 JOIN_COLUMN = "account_id"
+# The columns of what evaluation joins with the truth: the test keys (a Monday and an account)
+# with their weight, and the logit that a model scored each with.
+JOINED_COLUMNS = ("t_ms", "account_id", "weight", "logit")
 
 
 @dataclass(frozen=True)
@@ -64,10 +70,10 @@ class LabelChecks:
         return found
 
 
-def truth_join_columns(scored: pd.DataFrame, truth: pd.DataFrame) -> tuple[str, ...]:
-    """The columns other than the account id that a join of a scored frame with the truth
-    shares, sorted."""
-    shared = (set(map(str, scored.columns)) & set(map(str, truth.columns))) - {JOIN_COLUMN}
+def truth_join_columns(joined: Iterable[object], truth: pd.DataFrame) -> tuple[str, ...]:
+    """The columns other than the account id that a frame holding the columns joined (their
+    names) shares with the truth, sorted: those a merge of the two would rename."""
+    shared = (set(map(str, joined)) & set(map(str, truth.columns))) - {JOIN_COLUMN}
     return tuple(sorted(shared))
 
 
@@ -140,13 +146,13 @@ def check_labels(
     key: AnswerKey,
     identified: frozenset[str],
     populations: Mapping[int, Sequence[str]],
-    scored: pd.DataFrame,
     mondays: Sequence[int],
     level: float,
+    joined: Sequence[str] = JOINED_COLUMNS,
 ) -> LabelChecks:
     """The label checks, their reports and the identification horizon: populations gives the
-    scorable accounts of each scored Monday, scored the frame of scored rows the audit joins
-    with the truth, and mondays the scored Mondays, in increasing order."""
+    scorable accounts of each scored Monday, mondays the scored Mondays in increasing order, and
+    joined the columns of what evaluation joins with the truth."""
     truths = key.by_id
     breaking: dict[str, tuple[str, ...]] = {
         IDENTIFIED_NOT_MULE: tuple(
@@ -171,7 +177,7 @@ def check_labels(
                 }
             )
         ),
-        TRUTH_JOIN: truth_join_columns(scored, key.frame()),
+        TRUTH_JOIN: truth_join_columns(joined, key.frame()),
     }
     mules = key.frame()
     mules = mules[mules["is_mule"] == 1]

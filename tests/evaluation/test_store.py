@@ -56,9 +56,9 @@ def test_a_stored_answer_key_is_reparsed_by_its_parser(
 def test_the_fallback_list_round_trips(data_dir: Path) -> None:
     store = Store(IDENTITY)
     keys = pd.DataFrame({"t_ms": [1, 2], "account_id": ["a", "b"], "weight": [1.0, 10.0]})
-    assert not store.has_fallback()
+    assert not (store.folder / "fallback.parquet").exists()
     store.write_fallback(keys)
-    assert store.has_fallback()
+    assert (store.folder / "fallback.parquet").is_file()
     pd.testing.assert_frame_equal(store.fallback(), keys)
 
 

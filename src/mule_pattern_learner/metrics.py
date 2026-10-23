@@ -20,7 +20,7 @@ flagged on any of its Mondays (ever_flagged), and the expected days to its first
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Sequence
 from typing import Any
 
 import numpy as np
@@ -76,11 +76,6 @@ def proxy_metrics(
 
 # The review budgets: the top 1, 5 and 10% of the (estimated) population.
 REVIEW_BUDGETS = (0.01, 0.05, 0.10)
-# The intervals of the audit metrics: their level, and the bootstrap replicates and the
-# seed of their draws.
-INTERVAL = 0.90
-BOOTSTRAP_REPLICATES = 1000
-BOOTSTRAP_SEED = 0
 
 
 def ranked_blocks(
@@ -276,172 +271,6 @@ def hidden_first(
         **{hidden_name(name): value for name, value in hidden.items()},
         **ranking_metrics(y, score, weight),
     }
-
-
-def ring_clusters(y: NDArray[Any], rings: NDArray[Any] | None) -> list[NDArray[np.intp]]:
-    """The rows of each positive cluster: a ring's positives together, the others alone.
-
-    ``rings`` holds each row's ring id, where -1 (or any negative id) means none; without
-    it every positive is a cluster of its own. Rings come in the order of their ids,
-    then the positives without a ring in row order.
-    """
-    positives = np.flatnonzero(y == 1)
-    if rings is None:
-        return [positives[i : i + 1] for i in range(len(positives))]
-    ring = np.asarray(rings)[positives]
-    grouped = [positives[ring == r] for r in np.unique(ring[ring >= 0])]
-    return grouped + [positives[i : i + 1] for i in np.flatnonzero(ring < 0)]
-
-
-def resamples(
-    y: NDArray[Any],
-    rings: NDArray[Any] | None = None,
-    *,
-    replicates: int = BOOTSTRAP_REPLICATES,
-    seed: int = BOOTSTRAP_SEED,
-) -> Iterator[NDArray[np.intp]]:
-    """The rows of each bootstrap replicate: positives by ring, negatives within their class.
-
-    A replicate draws as many positive clusters (ring_clusters) as there are, with
-    replacement, and takes every row of each; without ``rings`` that is the stratified
-    bootstrap of the positives. It then draws as many negatives as there are, one by
-    one, with replacement. Rows keep their weights, so each replicate is a sample of the
-    same design, and the same seed draws the same replicates for any scores: applying
-    them to several runs over the same accounts pairs the runs (paired_replicates).
-    """
-    rng = np.random.default_rng(seed)
-    clusters = ring_clusters(y, rings)
-    negatives = np.flatnonzero(y == 0)
-    empty = np.zeros(0, dtype=np.intp)
-    for _ in range(replicates):
-        drawn = rng.integers(0, len(clusters), len(clusters)) if clusters else empty
-        positives = [clusters[i] for i in drawn]
-        chosen = (
-            negatives[rng.integers(0, len(negatives), len(negatives))] if len(negatives) else empty
-        )
-        yield np.concatenate([*positives, chosen]).astype(np.intp)
-
-
-def percentile_interval(values: NDArray[Any], level: float = INTERVAL) -> list[float] | None:
-    """The central ``level`` interval of replicate values; None when none is defined.
-
-    Replicates whose value is undefined (NaN) are left out.
-    """
-    finite = np.asarray(values, dtype=np.float64)
-    finite = finite[np.isfinite(finite)]
-    if not len(finite):
-        return None
-    low, high = np.quantile(finite, [(1 - level) / 2, (1 + level) / 2])
-    return [float(low), float(high)]
-
-
-def bootstrap_intervals(
-    y: NDArray[Any],
-    score: NDArray[Any],
-    weight: NDArray[Any],
-    rings: NDArray[Any] | None = None,
-    *,
-    replicates: int = BOOTSTRAP_REPLICATES,
-    seed: int = BOOTSTRAP_SEED,
-    level: float = INTERVAL,
-) -> dict[str, list[float] | None]:
-    """The ``level`` interval of each ranking metric over bootstrap replicates (resamples).
-
-    With ``rings`` the positives are resampled by ring (the ring-clustered bootstrap),
-    without it one by one (stratified). A metric that is undefined for the sample has no
-    interval (None).
-    """
-    values: dict[str, list[float]] = {}
-    for rows in resamples(y, rings, replicates=replicates, seed=seed):
-        metrics = ranking_metrics(y[rows], score[rows], weight[rows])
-        for name, value in metrics.items():
-            values.setdefault(name, []).append(np.nan if value is None else value)
-    return {name: percentile_interval(np.array(found), level) for name, found in values.items()}
-
-
-def paired_replicates(
-    y: NDArray[Any],
-    weight: NDArray[Any],
-    scores: Sequence[NDArray[Any]],
-    statistic: Callable[[NDArray[Any], NDArray[Any], NDArray[Any]], float | None],
-    rings: NDArray[Any] | None = None,
-    *,
-    replicates: int = BOOTSTRAP_REPLICATES,
-    seed: int = BOOTSTRAP_SEED,
-) -> NDArray[np.float64]:
-    """The statistic of every run on each shared bootstrap replicate: replicates by runs.
-
-    Every run scores the same accounts (``y``, ``weight`` and ``rings`` row by row), and
-    each replicate draws one resample of those accounts and rings (resamples) and applies
-    it to every run, so differences between the columns of a row are paired: they vary
-    with the audit sample only through what the runs rank differently. ``statistic``
-    takes (y, score, weight); None becomes NaN.
-    """
-    result = np.full((replicates, len(scores)), np.nan)
-    for row, rows in enumerate(resamples(y, rings, replicates=replicates, seed=seed)):
-        for column, score in enumerate(scores):
-            value = statistic(y[rows], score[rows], weight[rows])
-            result[row, column] = np.nan if value is None else value
-    return result
-
-
-# How close to 0 or 1 log_odds_mean lets a score be: 2 ** -50, about 8.9e-16 or 34.7 in
-# log-odds, near where float64 can still tell a score from 1. A score of exactly 0 or 1
-# has no finite log-odds; a power of two makes 1 - clip exact, so both ends clip alike.
-LOG_ODDS_CLIP = 2.0**-50
-
-
-def log_odds_mean(scores: NDArray[Any], clip: float = LOG_ODDS_CLIP) -> NDArray[np.float64]:
-    """The scores of several models of the same accounts, averaged on the log-odds scale.
-
-    ``scores`` holds one column per model (a seed of a variant) and one row per account,
-    as probabilities. Each is clipped to [clip, 1 - clip], turned into its log-odds,
-    averaged over the columns and turned back into a probability: the geometric mean of
-    the odds. The trade-off: on the log-odds scale a model that is confident about an
-    account, scoring it near 0 or 1, moves the mean further than one that is unsure, so a
-    confident seed weighs more than a hesitant one; averaging the models' ranks instead
-    would give every seed the same say about every account, whatever its confidence. The
-    clip bounds how far one model can pull.
-    """
-    clipped = np.clip(np.asarray(scores, dtype=np.float64), clip, 1 - clip)
-    mean = (np.log(clipped) - np.log1p(-clipped)).mean(axis=1)
-    return 1 / (1 + np.exp(-mean))
-
-
-# The stream of the seeds' draws (seed_draws), apart from the accounts' resamples drawn
-# with the same seed, so that the two are independent.
-SEED_STREAM = 1
-
-
-def seed_draws(
-    count: int, *, replicates: int = BOOTSTRAP_REPLICATES, seed: int = BOOTSTRAP_SEED
-) -> NDArray[np.intp]:
-    """The seeds each bootstrap replicate draws: replicates by ``count`` positions.
-
-    Each replicate draws ``count`` of the seeds' positions with replacement, from a
-    generator of its own (``seed`` and SEED_STREAM), independent of the accounts'
-    resamples.
-    """
-    rng = np.random.default_rng([seed, SEED_STREAM])
-    return rng.integers(0, count, size=(replicates, count)).astype(np.intp)
-
-
-def two_source_replicates(
-    differences: NDArray[Any], draws: NDArray[Any] | None = None
-) -> NDArray[np.float64]:
-    """The mean paired difference on each replicate, the seeds and the accounts resampled.
-
-    ``differences`` has one row per bootstrap replicate of the audit sample, each one
-    resample of the accounts and rings applied to every run (paired_replicates), and one
-    column per seed: the difference between two runs of that seed on that resample. Each
-    replicate also draws as many seeds as there are, with replacement (``draws``, by
-    default seed_draws), and averages their differences, so the replicates vary with
-    both sources of uncertainty: which seeds were trained, and which accounts audited.
-    """
-    values = np.asarray(differences, dtype=np.float64)
-    if draws is None:
-        draws = seed_draws(values.shape[1], replicates=values.shape[0])
-    return np.take_along_axis(values, np.asarray(draws, dtype=np.intp), axis=1).mean(axis=1)
 
 
 def weighted_quantiles(

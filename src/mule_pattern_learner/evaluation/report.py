@@ -9,8 +9,10 @@ development only, as on development worlds. Nothing here reads a pass record's v
 are none.
 
 evaluate scores nothing itself: it takes each run's logits of the test keys (evaluation.rankings
-scores the model files) and writes, into the run's results folder, a table per kind, each with
-the rotation's name and a development_only column:
+scores the model files) and measures the runs one at a time, from a test frame built for each and
+dropped, so that memory holds one run's frame beside the selected run's (a frame of a reported
+world is 23 million rows, about 2.6 GB). It writes, into the run's results folder, a table per
+kind, each with the rotation's name and a development_only column:
 
 - metrics: per ranker and seed, the headline metrics of the main ranking and the others of
   evaluation.rankings, and for the model mule score uses (the GNN seed with the best selection
@@ -61,7 +63,7 @@ from .answer_key import ACTIVE, EARLY_WARNING, AnswerKey
 from .audit import CLOCK_PROBE, DEVELOPMENT, FEATURE_AUDIT, GATE_RECORD, REPORTED
 from .hops import hop_distances
 from .label_checks import IDENTIFICATION_HORIZON, LABEL_CHECKS
-from .rankings import HEADLINE, Ranking, evaluation_frame, ring_links, run_metrics, scored_keys
+from .rankings import HEADLINE, evaluation_frame, ring_links, run_metrics, scored_keys
 from .store import Store, write_parquet
 from .uncertainty import Clusters, cluster_keys, percentiles, replicate_matrix, spread
 
@@ -86,7 +88,7 @@ class Verdict:
 
 
 @dataclass(frozen=True)
-class Audited:
+class MadeUnder:
     """What a pass record must have been made under to count: every query version, the cache
     key and the hash of the audit's settings (evaluation.audit.audit_settings)."""
 
@@ -98,7 +100,7 @@ class Audited:
 def verdict(
     rotation: Sequence[tuple[WorldConfig, str]],
     development: Sequence[tuple[WorldConfig, str]],
-    current: Audited,
+    current: MadeUnder,
 ) -> Verdict:
     """Whether a rotation's result may be reported: rotation gives its three worlds with their
     identities, development those of the development rotation, and current what their pass
@@ -190,6 +192,18 @@ def _long(
     ]
 
 
+@dataclass(frozen=True)
+class _Measured:
+    """What one run's measurement leaves, small enough to keep for every run at once: its
+    metrics by name, its per-Monday table, its group table and its headline metrics on each
+    replicate of the ring bootstrap (replicates by HEADLINE)."""
+
+    values: Mapping[str, float]
+    per_monday: pd.DataFrame
+    groups: pd.DataFrame
+    replicates: NDArray[np.float64]
+
+
 def evaluate(
     world: ScoredWorld,
     runs: Sequence[Run],
@@ -204,73 +218,82 @@ def evaluate(
     """Evaluate every run on the test world and write the results into folder, as the module
     says; seed is the seed of the ring bootstrap's draws, and epochs, on the development
     rotation, the selection world's rescored epochs (bias.rescore_epochs). The tables written,
-    by name."""
+    by name.
+
+    A test frame holds a row for every scored account-Monday, with its strings, 23 million rows
+    and about 2.6 GB for a reported world: so the runs are measured one at a time, each from a
+    frame built for it and dropped, and what is kept of each is small (_Measured). Only the
+    selected run's frame is kept, since the missed-mule report, the groups and the identification
+    bias read it, and it is measured first: the ring bootstrap resamples its clusters, which every
+    run shares, since every run ranks the same account-Mondays."""
     if len({(run.ranker, run.seed) for run in runs}) != len(runs):
         raise ValueError("Two runs are of one ranker and seed")
-    frames = {
-        (run.ranker, run.seed): evaluation_frame(
-            run.scores, world.keys, world.key, world.identified
-        )
-        for run in runs
-    }
     best = selected(runs)
-    frame = frames[(best.ranker, best.seed)]
+
+    def frame_of(run: Run) -> pd.DataFrame:
+        return evaluation_frame(run.scores, world.keys, world.key, world.identified)
+
+    frame = frame_of(best)
     links = ring_links(world.cache, frame, scored_keys(frame, (EARLY_WARNING,)))
     quiet = groups.quiet_rows(world.cache, scored_keys(frame, (ACTIVE, EARLY_WARNING)))
     hops = hop_distances(world.cache, scored_keys(frame, (ACTIVE,)), world.identified)
     surfaced = groups.surfaced_rings(world.key, world.identified)
 
-    metrics_rows: list[dict[str, object]] = []
-    per_monday: list[pd.DataFrame] = []
-    group_tables: list[pd.DataFrame] = []
+    measured: dict[tuple[str, int], _Measured] = {}
     found_mules: pd.DataFrame | None = None
     rows_of_groups: dict[str, NDArray[np.bool_]] = {}
-    for run in runs:
-        run_frame = frames[(run.ranker, run.seed)]
+    clusters: Clusters | None = None
+    reference: tuple[NDArray[np.int64], NDArray[np.bool_], NDArray[np.float64]] | None = None
+    for run in [best, *(other for other in runs if other is not best)]:
+        run_frame = frame if run is best else frame_of(run)
         found = run_metrics(run_frame, links)
-        metrics_rows += _long(run.ranker, run.seed, "all", found.values)
-        per_monday.append(found.per_monday.assign(ranker=run.ranker, seed=run.seed))
+        ranking = found.ranking
+        rows = (
+            ranking.frame["t_ms"].to_numpy(dtype=np.int64),
+            ranking.positive,
+            ranking.weight,
+        )
+        if clusters is None or reference is None:
+            clusters = Clusters.of(
+                cluster_keys(
+                    ranking.frame["account_id"].tolist(),
+                    ranking.positive.astype(np.int64),
+                    ranking.frame["mule_ring_id"].to_numpy(dtype=np.int64),
+                ),
+                ranking.positive,
+            )
+            reference = rows
+        elif any(
+            not np.array_equal(held, same) for held, same in zip(rows, reference, strict=True)
+        ):
+            raise ValueError("The runs did not rank the same account-Mondays")
         chosen = groups.group_rows(run_frame, surfaced, quiet, hops)
-        group_tables.append(
-            groups.group_metrics(run_frame, chosen).assign(ranker=run.ranker, seed=run.seed)
+        measured[(run.ranker, run.seed)] = _Measured(
+            found.values,
+            found.per_monday.assign(ranker=run.ranker, seed=run.seed),
+            groups.group_metrics(run_frame, chosen).assign(ranker=run.ranker, seed=run.seed),
+            replicate_matrix(
+                [ranking.headline],
+                clusters,
+                reference[2],
+                replicates=audit.replicates,
+                seed=seed,
+            )[:, 0, :],
         )
         if run is best:
             found_mules = found.mules
             rows_of_groups = chosen
+        del run_frame, found, ranking, rows, chosen
     assert found_mules is not None
+
+    metrics_rows: list[dict[str, object]] = []
+    for run in runs:
+        metrics_rows += _long(run.ranker, run.seed, "all", measured[(run.ranker, run.seed)].values)
     metrics = pd.DataFrame(metrics_rows)
     metrics["selected"] = (metrics["ranker"] == best.ranker) & (metrics["seed"] == best.seed)
     metrics["low"] = np.nan
     metrics["high"] = np.nan
-
-    rankings = {
-        name: Ranking.of(run_frame, (run_frame["status"] == ACTIVE).to_numpy())
-        for name, run_frame in frames.items()
-    }
-    reference = rankings[(best.ranker, best.seed)]
-    rows = reference.frame.loc[:, ["t_ms", "account_id"]]
-    if any(
-        not ranking.frame.loc[:, ["t_ms", "account_id"]].equals(rows)
-        for ranking in rankings.values()
-    ):
-        raise ValueError("The runs did not rank the same account-Mondays")
-    clusters = Clusters.of(
-        cluster_keys(
-            reference.frame["account_id"].tolist(),
-            reference.positive.astype(np.int64),
-            reference.frame["mule_ring_id"].to_numpy(dtype=np.int64),
-        ),
-        reference.positive,
-    )
-    order = list(rankings)
-    replicates = replicate_matrix(
-        [rankings[name].headline for name in order],
-        clusters,
-        reference.weight,
-        replicates=audit.replicates,
-        seed=seed,
-    )
-    low, high = percentiles(replicates[:, order.index((best.ranker, best.seed))], audit.interval)
+    low, high = percentiles(measured[(best.ranker, best.seed)].replicates, audit.interval)
     for position, name in enumerate(HEADLINE):
         chosen_rows = (
             metrics["selected"] & (metrics["group"] == "all") & (metrics["metric"] == name)
@@ -278,13 +301,18 @@ def evaluate(
         metrics.loc[chosen_rows, "low"] = low[position]
         metrics.loc[chosen_rows, "high"] = high[position]
 
+    def headline(run: tuple[str, int]) -> NDArray[np.float64]:
+        return np.array([measured[run].values[name] for name in HEADLINE])
+
     comparisons: list[dict[str, object]] = []
-    gnn = [index for index, (ranker, _) in enumerate(order) if ranker == GNN]
-    for ranker in sorted({ranker for ranker, _ in order} - {GNN}):
-        other = [index for index, (name, _) in enumerate(order) if name == ranker]
-        differences = replicates[:, gnn].mean(axis=1) - replicates[:, other].mean(axis=1)
-        point = np.mean([rankings[order[i]].headline() for i in gnn], axis=0) - np.mean(
-            [rankings[order[i]].headline() for i in other], axis=0
+    gnn = [(run.ranker, run.seed) for run in runs if run.ranker == GNN]
+    for ranker in sorted({run.ranker for run in runs} - {GNN}):
+        other = [(run.ranker, run.seed) for run in runs if run.ranker == ranker]
+        differences = np.mean([measured[name].replicates for name in gnn], axis=0) - np.mean(
+            [measured[name].replicates for name in other], axis=0
+        )
+        point = np.mean([headline(name) for name in gnn], axis=0) - np.mean(
+            [headline(name) for name in other], axis=0
         )
         d_low, d_high = percentiles(differences, audit.interval)
         for position, name in enumerate(HEADLINE):
@@ -302,7 +330,9 @@ def evaluate(
                 }
             )
 
-    every_group = pd.concat([*group_tables], ignore_index=True)
+    every_group = pd.concat(
+        [measured[(run.ranker, run.seed)].groups for run in runs], ignore_index=True
+    )
     combined = pd.concat(
         [metrics.loc[:, ["ranker", "seed", "group", "metric", "value"]], every_group],
         ignore_index=True,
@@ -312,18 +342,14 @@ def evaluate(
         for (ranker, group, metric), held in combined.groupby(["ranker", "group", "metric"])
     ]
     mules = found_mules.copy()
-    mules["groups"] = [
-        ",".join(
-            name
-            for name, chosen in rows_of_groups.items()
-            if (chosen & (frame["account_id"] == account).to_numpy()).any()
-        )
-        for account in mules["account_id"]
-    ]
+    names = groups.group_names(frame, rows_of_groups)
+    mules["groups"] = [names.get(account, "") for account in mules["account_id"]]
     origin = bias.victim_origin(world.cache, frame)
     tables: dict[str, pd.DataFrame] = {
         "metrics": metrics,
-        "per_monday": pd.concat(per_monday, ignore_index=True),
+        "per_monday": pd.concat(
+            [measured[(run.ranker, run.seed)].per_monday for run in runs], ignore_index=True
+        ),
         "groups": every_group,
         "spread": pd.DataFrame(spread_rows),
         "comparisons": pd.DataFrame(

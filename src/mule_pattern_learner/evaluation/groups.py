@@ -110,6 +110,17 @@ def group_rows(
     }
 
 
+def group_names(frame: pd.DataFrame, rows: Mapping[str, NDArray[np.bool_]]) -> dict[str, str]:
+    """The groups of each account, by account: the names of the groups that hold any of its
+    rows, in the order of rows, joined by commas; an account in none is not a key. Each group's
+    accounts are read once from its rows, not looked for again for every account."""
+    found: dict[str, list[str]] = {}
+    for name, chosen in rows.items():
+        for account in frame.loc[chosen, "account_id"].unique().tolist():
+            found.setdefault(str(account), []).append(name)
+    return {account: ",".join(names) for account, names in found.items()}
+
+
 def group_metrics(frame: pd.DataFrame, rows: Mapping[str, NDArray[np.bool_]]) -> pd.DataFrame:
     """Each group's metrics, a row per group and metric: the headline metrics of its ranking
     against the non-mules, the mean chance of a flag of its mules, and its sizes; beside

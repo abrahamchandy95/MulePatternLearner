@@ -53,7 +53,8 @@ def test_an_audit_of_a_development_world(
     assert record.settings == audit_settings(config)
     store = Store(record.identity)
     assert store.record() == record and store.labels().accounts == {"a_mule", "a_drop"}
-    assert len(store.answer_key().mules) == 9 and not store.has_fallback()
+    assert len(store.answer_key().mules) == 9
+    assert not (store.folder / "fallback.parquet").exists()
     for table in (
         "label_counts",
         "mules_never_scored",

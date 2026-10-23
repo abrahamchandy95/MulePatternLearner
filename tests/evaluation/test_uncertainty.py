@@ -15,7 +15,6 @@ from mule_pattern_learner.evaluation.uncertainty import (
     cluster_keys,
     interval,
     intervals,
-    paired_interval,
     percentiles,
     replicate_matrix,
     replicate_weights,
@@ -85,26 +84,44 @@ def test_a_hand_worked_ranking() -> None:
     assert np.isnan(Ranked(np.zeros(2), np.zeros(2, dtype=bool)).roc_auc(np.ones(2)))
 
 
-def test_intervals_cover_the_statistic_and_pair_runs() -> None:
+def test_intervals_cover_the_statistic() -> None:
     rng = np.random.default_rng(1)
     n = 600
     positive = rng.random(n) < 0.25
     keys = [f"ring:{i % 40}" if p else f"account:{i}" for i, p in enumerate(positive)]
     clusters = Clusters.of(keys, positive)
     good = Ranked(positive + rng.normal(0, 0.8, n), positive)
-    worse = Ranked(positive + rng.normal(0, 2.0, n), positive)
     weight = np.ones(n)
     found = interval(good.roc_auc, clusters, weight, replicates=200, level=0.9, seed=0)
     assert found is not None and found[0] < good.roc_auc(weight) < found[1]
     assert intervals([good.roc_auc], clusters, weight, replicates=200, level=0.9, seed=0) == [found]
-    difference = paired_interval(
-        good.roc_auc, worse.roc_auc, clusters, weight, replicates=200, level=0.9, seed=0
+
+
+def test_ring_clustered_intervals_are_wider_when_rings_rank_together() -> None:
+    # Five rings of four mules: rings 0 and 1 rank above every non-mule, rings 2 to 4 below
+    # them, so the top 10% (20 accounts) holds exactly the 8 mules of rings 0 and 1: a recall
+    # of 0.4. Drawn by ring, a replicate takes every ring in or out whole, and the recall
+    # swings with how many of the two rings that rank high it draws; drawn one mule at a time
+    # it varies far less.
+    rings = np.r_[np.repeat(np.arange(5), 4), -np.ones(180, int)]
+    positive = rings >= 0
+    high = np.r_[np.ones(8, bool), np.zeros(12, bool), np.zeros(180, bool)]
+    weight = np.ones(200)
+
+    def recall(weights: NDArray[np.float64]) -> float:
+        return float(weights[high].sum() / weights[positive].sum())
+
+    assert recall(weight) == pytest.approx(0.4)
+    by_ring = [f"ring:{r}" if r >= 0 else f"account:{i}" for i, r in enumerate(rings)]
+    alone = [f"mule:{i}" if p else f"account:{i}" for i, p in enumerate(positive)]
+    wide = interval(
+        recall, Clusters.of(by_ring, positive), weight, replicates=400, level=0.9, seed=0
     )
-    assert difference is not None and difference[0] > 0
-    # A run against itself differs by nothing on every replicate.
-    assert paired_interval(
-        good.roc_auc, good.roc_auc, clusters, weight, replicates=50, level=0.9, seed=0
-    ) == (0.0, 0.0)
+    narrow = interval(
+        recall, Clusters.of(alone, positive), weight, replicates=400, level=0.9, seed=0
+    )
+    assert wide is not None and narrow is not None
+    assert wide[1] - wide[0] > narrow[1] - narrow[0] > 0
 
 
 def test_a_replicate_matrix_pairs_its_statistics() -> None:

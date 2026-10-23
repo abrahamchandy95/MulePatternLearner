@@ -7,7 +7,7 @@ its Mondays, since an account's 52 Mondays are correlated. A cluster drawn k tim
 times its rows' weights in the replicate, which is the same as taking its rows k times.
 Replicates are drawn from a generator of the seed in a fixed order, so the same clusters, seed
 and replicates give the same draws for any scores: applied to several runs over the same
-account-Mondays, they pair the runs (paired_interval).
+account-Mondays, they pair the runs (replicate_matrix).
 
 Ring ids are the answer key's, so this is evaluation's alone; selection's paired interval
 resamples identified mule accounts instead (training.selection).
@@ -199,25 +199,6 @@ def spread(values: Sequence[float]) -> dict[str, float]:
         "min": float(found.min()),
         "max": float(found.max()),
     }
-
-
-def paired_interval(
-    first: Callable[[NDArray[np.float64]], float],
-    second: Callable[[NDArray[np.float64]], float],
-    clusters: Clusters,
-    weight: NDArray[np.float64],
-    *,
-    replicates: int,
-    level: float,
-    seed: int,
-) -> tuple[float, float] | None:
-    """The central level interval of first minus second, both computed on each replicate's
-    same draws: a paired interval of two runs over the same account-Mondays."""
-
-    def difference(weights: NDArray[np.float64]) -> float:
-        return first(weights) - second(weights)
-
-    return interval(difference, clusters, weight, replicates=replicates, level=level, seed=seed)
 
 
 class Ranked:

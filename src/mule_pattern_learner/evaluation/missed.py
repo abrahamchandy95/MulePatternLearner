@@ -42,6 +42,7 @@ from ..subgraph.build import build, read_rows
 from ..subgraph.cache import Cache
 from .answer_key import NON_MULE
 from .feature_audit import COLUMNS, audit_columns
+from .groups import group_names
 from .rankings import Ranking
 from .store import write_parquet
 
@@ -59,11 +60,6 @@ def missed_mules(mules: pd.DataFrame, budget: float) -> pd.DataFrame:
     weak = ~never & (scored["median_rank"] > budget)
     scored["outcome"] = np.where(never, MISSED, np.where(weak, WEAK, ""))
     return scored[scored["outcome"] != ""].reset_index(drop=True)
-
-
-def _groups(account: str, frame: pd.DataFrame, rows: Mapping[str, NDArray[np.bool_]]) -> str:
-    mine = (frame["account_id"] == account).to_numpy()
-    return ",".join(name for name, chosen in rows.items() if (chosen & mine).any())
 
 
 def _write(folder: Path, name: str, frame: pd.DataFrame, marks: Mapping[str, str | bool]) -> None:
@@ -86,7 +82,8 @@ def write_report(
     target = folder / FOLDER
     accounts = set(reported["account_id"].tolist())
     table = reported.copy()
-    table["groups"] = [_groups(account, frame, groups) for account in table["account_id"]]
+    names = group_names(frame, groups)
+    table["groups"] = [names.get(account, "") for account in table["account_id"]]
     _write(target, "mules", table, marks)
     active = frame[(frame["status"] == "active") & frame["account_id"].isin(accounts)]
     keys = [
@@ -134,15 +131,16 @@ def ring_mates(frame: pd.DataFrame, reported: pd.DataFrame) -> pd.DataFrame:
     is a mule outside its activity), and whether the bank identified it."""
     ranking = Ranking.of(frame, (frame["status"] == "active").to_numpy())
     weight = ranking.weight
+    # The rows of the true mules, by ring, found once: the frame holds every scored account
+    # and each reported mule needs its ring's rows only.
+    mule_rows = frame[frame["status"] != NON_MULE]
+    rings = {int(str(ring)): held for ring, held in mule_rows.groupby("mule_ring_id")}
     rows: list[pd.DataFrame] = []
     for account, ring in zip(reported["account_id"], reported["mule_ring_id"], strict=True):
-        if int(ring) < 0:
+        if int(ring) < 0 or int(ring) not in rings:
             continue
-        mates = frame[
-            (frame["mule_ring_id"] == int(ring))
-            & (frame["account_id"] != account)
-            & (frame["status"] != NON_MULE)
-        ]
+        ring_rows = rings[int(ring)]
+        mates = ring_rows[ring_rows["account_id"] != account]
         if mates.empty:
             continue
         _, fractions = ranking.order.against(

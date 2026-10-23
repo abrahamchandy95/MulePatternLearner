@@ -1,6 +1,6 @@
 """PhantomLedger's records of a world as mule audit checks them (docs/design.md, "Gates"): GATES
-holds docs/features.md's gate tables cell for cell, and a record passes only with the
-fingerprint of the loaded world, a clean and certified build, every code gate passed and every
+names every gate of docs/features.md's gate tables by its entry id, and a record passes only with
+the fingerprint of the loaded world, a clean and certified build, every code gate passed and every
 gate mapped to a feature present and passed."""
 
 from __future__ import annotations
@@ -12,9 +12,9 @@ import re
 import pytest
 
 from mule_pattern_learner.evaluation.gate_records import (
-    BY_ENTRY,
     GATES,
     MAPPED,
+    UNMAPPED,
     check_records,
     read_gates,
 )
@@ -34,52 +34,57 @@ def _rows(text: str) -> list[list[str]]:
     ]
 
 
-def _tables() -> tuple[list[list[str]], list[list[str]], list[list[str]]]:
-    """docs/features.md's dossier rows, residual rows and PhantomLedger's added world checks,
-    without their headers."""
+def _entries(text: str) -> list[str]:
+    """The entry ids in the first column of the tables of a part of docs/features.md, a range
+    such as S-IDN-1 to S-IDN-5 as each id in it."""
+    found: list[str] = []
+    for cells in _rows(text):
+        if cells[0] == "Entry":
+            continue
+        ranged = re.fullmatch(r"(S-[A-Z]+-)(\d+) to \1(\d+)", cells[0])
+        if ranged is None:
+            found.append(cells[0])
+        else:
+            first, last = int(ranged.group(2)), int(ranged.group(3))
+            found += [f"{ranged.group(1)}{number}" for number in range(first, last + 1)]
+    return found
+
+
+def _tables() -> tuple[list[str], list[str], list[str]]:
+    """The entry ids of docs/features.md's dossier rows, residual rows and PhantomLedger's added
+    world checks."""
     text = FEATURES.read_text()
     start = text.index("## Generator gates each feature depends on")
     added = text.index("## Gates the features add")
     ours = text.index("**MulePatternLearner's checks**")
-    dossier: list[list[str]] = []
-    residual: list[list[str]] = []
-    for cells in _rows(text[start:added]):
-        if cells[0] in ("Entry", "Residual"):
-            continue
-        (dossier if cells[0].startswith("S-") else residual).append(cells)
-    world_checks = [cells for cells in _rows(text[added:ours]) if cells[0] != "Gate"]
-    return dossier, residual, world_checks
+    residual = text.index("**Shortcuts noted but not yet researched**")
+    return (
+        _entries(text[start:residual]),
+        _entries(text[residual:added]),
+        _entries(text[added:ours]),
+    )
 
 
-def test_gates_copies_every_row_of_the_gate_tables_of_features_md() -> None:
+def test_gates_names_every_entry_of_the_gate_tables_of_features_md() -> None:
     dossier, residual, world_checks = _tables()
-    assert (len(dossier), len(residual), len(world_checks)) == (59, 13, 11)
-    copied = {(gate.row, gate.reaches) for gate in GATES}
-    tabled = {(cells[0], cells[2]) for cells in dossier}
-    tabled |= {(cells[0], cells[1]) for cells in residual}
-    tabled |= {(cells[0], cells[2]) for cells in world_checks}
-    assert copied == tabled
-    assert len(BY_ENTRY) == len(GATES)
-
-
-def test_every_entry_id_of_features_md_appears() -> None:
-    dossier, _, _ = _tables()
-    ids: list[str] = []
-    for cells in dossier:
-        ranged = re.fullmatch(r"(S-[A-Z]+-)(\d+) to \1(\d+)", cells[0])
-        if ranged is None:
-            ids.append(cells[0])
-        else:
-            first, last = int(ranged.group(2)), int(ranged.group(3))
-            ids += [f"{ranged.group(1)}{n}" for n in range(first, last + 1)]
-    assert len(ids) == 63 and set(ids) <= set(BY_ENTRY)
+    assert (len(dossier), len(residual), len(world_checks)) == (63, 13, 11)
+    assert all(re.fullmatch(r"S-[A-Z]+-\d+", entry) for entry in dossier)
+    assert all(re.fullmatch(r"R-[A-Z0-9-]+", entry) for entry in residual)
+    assert all(re.fullmatch(r"G-[A-Z0-9-]+", entry) for entry in world_checks)
+    # Every id once, in the order of the tables, and no other.
+    assert list(GATES) == [*dossier, *residual, *world_checks]
+    assert len(set(GATES)) == len(GATES) == 87
 
 
 def test_only_gates_reaching_no_feature_are_unmapped() -> None:
     # S-RAIL-4 reaches none, S-MEM-4 labels only, and S-IDN-1 to S-IDN-5 labels and
     # evaluation only.
-    unmapped = {gate.entry for gate in GATES if gate.entry not in MAPPED}
-    assert unmapped == {"S-RAIL-4", "S-MEM-4", *(f"S-IDN-{n}" for n in range(1, 6))}
+    assert UNMAPPED == {"S-RAIL-4", "S-MEM-4", *(f"S-IDN-{n}" for n in range(1, 6))}
+    assert MAPPED == set(GATES) - UNMAPPED and len(MAPPED) == 80
+    # The rows of features.md say so: what each reaches is not a feature.
+    reaches = {cells[0]: cells[2] for cells in _rows(FEATURES.read_text()) if len(cells) == 3}
+    assert reaches["S-RAIL-4"].startswith("none") and reaches["S-MEM-4"] == "labels"
+    assert reaches["S-IDN-1 to S-IDN-5"].startswith("labels and evaluation only")
 
 
 def test_records_of_the_loaded_world_pass(records: Records, graph: ReferenceGraph) -> None:

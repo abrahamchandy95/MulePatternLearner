@@ -27,7 +27,13 @@ What one run (a ranker's seed) found, beside the headline metrics of the main ra
   reaches that Monday, evaluation.development_checks.own_nodes);
 - after activity: the mean share of the account-Mondays after mule_last_ms + 7 days;
 - distinct accounts alerted over the scored year at each budget: the expected number of
-  ranked accounts flagged on at least one Monday.
+  ranked accounts flagged on at least one Monday, which beside the share of mules ever flagged
+  shows a list that churns. It is defined only when every key is scored whole, at weight 1. The
+  fallback list samples each (account, Monday) of the non-mules alone, at one in ten, so an
+  account is in it on about five of its 52 Mondays, and the chance of a flag over those rows is
+  the chance over five Mondays, not 52: the count would come out low and reward the lists that
+  churn most (an account flagged on 1% of its Mondays at random would add 0.049 and not 0.407).
+  Under weighted keys it is NaN.
 
 Lift is never computed.
 """
@@ -55,7 +61,7 @@ from ..training.scoring import score
 from ..training.trainer import load_trained
 from .answer_key import ACTIVE, AFTER, EARLY_WARNING, NON_MULE, AnswerKey, statuses
 from .development_checks import own_nodes
-from .label_checks import truth_join_columns
+from .label_checks import JOINED_COLUMNS, truth_join_columns
 from .uncertainty import Ranked
 
 DAY_MS = 86_400_000
@@ -122,8 +128,13 @@ def evaluation_frame(
     )
     if joined["logit"].isna().any() or len(scores) != len(keys):
         raise ValueError("The scores are not those of the test keys")
+    if tuple(joined.columns) != JOINED_COLUMNS:
+        raise ValueError(
+            f"The test keys and scores join into {list(joined.columns)}, not the "
+            f"{list(JOINED_COLUMNS)} that mule audit checks against the truth"
+        )
     truth = key.frame()
-    shared = truth_join_columns(joined, truth)
+    shared = truth_join_columns(joined.columns, truth)
     if shared:
         raise ValueError(f"The test keys share {list(shared)} with the truth")
     frame = joined.merge(truth, on="account_id", how="left", validate="many_to_one")
@@ -236,11 +247,13 @@ def ring_links(
 @dataclass(frozen=True)
 class RunMetrics:
     """What one run found on the test world: its headline metrics and the others of the
-    module's docstring by name, its per-Monday table and its table of true mules."""
+    module's docstring by name, its per-Monday table, its table of true mules, and the ranking
+    they were found from."""
 
     values: Mapping[str, float]
     per_monday: pd.DataFrame
     mules: pd.DataFrame
+    ranking: Ranking
 
 
 def mule_table(
@@ -249,12 +262,15 @@ def mule_table(
     """Per true mule with a scored Monday: its ring and identification, its chance of a flag
     while active at each budget, the expected days to its first flag at each budget, its median
     rank fraction over its active Mondays, its share on its early-warning Monday, whether its
-    ring link was visible then, and its chance of a flag after its activity."""
+    ring link was visible then, and its chance of a flag after its activity.
+
+    Each mule's rows are found once, by account, in the active rows of the ranking and in the
+    rows outside it, and not by a scan of either for every mule."""
     mules = frame[frame["status"] != NON_MULE]
     active = ranking.positive
     weight = ranking.weight
-    shares = ranking.order.shares(weight)
-    fractions = ranking.order.rank_fraction(weight)
+    shares = ranking.order.shares(weight)[active]
+    fractions = ranking.order.rank_fraction(weight)[active]
     outside = mules[mules["status"].isin([EARLY_WARNING, AFTER])]
     outside_shares, _ = ranking.order.against(
         weight,
@@ -262,6 +278,12 @@ def mule_table(
         outside["logit"].to_numpy(dtype=np.float64),
     )
     ranked = ranking.frame[active]
+    ranked_t = ranked["t_ms"].to_numpy(dtype=np.int64)
+    ranked_rows = ranked.groupby("account_id", sort=False).indices
+    outside_t = outside["t_ms"].to_numpy(dtype=np.int64)
+    outside_status = outside["status"].to_numpy()
+    outside_rows = outside.groupby("account_id", sort=False).indices
+    nothing = np.zeros(0, dtype=np.intp)
     rows: list[dict[str, object]] = []
     for account, held in mules.groupby("account_id", sort=True):
         first = held.iloc[0]
@@ -271,35 +293,30 @@ def mule_table(
             "identified": bool(first["identified"]),
             "opened_ms": int(first["opened_ms"]),
         }
-        chosen = (ranked["account_id"] == account).to_numpy()
-        days = (
-            ranked.loc[chosen, "t_ms"].to_numpy(dtype=np.int64) - int(first["mule_onset_ms"])
-        ) / DAY_MS
-        mine = shares[active][chosen]
-        row["active_mondays"] = int(chosen.sum())
+        chosen = ranked_rows.get(account, nothing)
+        days = (ranked_t[chosen] - int(first["mule_onset_ms"])) / DAY_MS
+        mine = shares[chosen]
+        row["active_mondays"] = len(chosen)
         for column, budget in enumerate(TEST_BUDGETS):
             ever, expected = first_flag(days, mine[:, column]) if len(days) else (0.0, np.nan)
             row[f"ever_at_{budget_name(budget)}"] = ever
             row[f"first_flag_days_at_{budget_name(budget)}"] = expected
-        row["median_rank"] = (
-            float(np.median(fractions[active][chosen])) if chosen.any() else float("nan")
-        )
-        warned = (outside["account_id"] == account) & (outside["status"] == EARLY_WARNING)
-        after = (outside["account_id"] == account) & (outside["status"] == AFTER)
+        row["median_rank"] = float(np.median(fractions[chosen])) if len(chosen) else float("nan")
+        mine_outside = outside_rows.get(account, nothing)
+        warned = mine_outside[outside_status[mine_outside] == EARLY_WARNING]
+        after = mine_outside[outside_status[mine_outside] == AFTER]
         for column, budget in enumerate(TEST_BUDGETS):
             name = budget_name(budget)
-            warning = outside_shares[warned.to_numpy(), column]
-            row[f"early_warning_at_{name}"] = float(warning[0]) if len(warning) else np.nan
-            row[f"after_at_{name}"] = float(
-                ever_flagged(
-                    outside_shares[after.to_numpy(), column],
-                    np.zeros(int(after.sum()), dtype=np.intp),
-                    1,
-                )[0]
+            row[f"early_warning_at_{name}"] = (
+                float(outside_shares[warned[0], column]) if len(warned) else np.nan
             )
-        days_warned = outside.loc[warned, "t_ms"].tolist()
-        row["early_warning_monday"] = int(days_warned[0]) if days_warned else 0
-        row["ring_link_visible"] = bool(days_warned) and (int(days_warned[0]), account) in links
+            row[f"after_at_{name}"] = float(
+                ever_flagged(outside_shares[after, column], np.zeros(len(after), dtype=np.intp), 1)[
+                    0
+                ]
+            )
+        row["early_warning_monday"] = int(outside_t[warned[0]]) if len(warned) else 0
+        row["ring_link_visible"] = len(warned) > 0 and (int(outside_t[warned[0]]), account) in links
         rows.append(row)
     return pd.DataFrame(rows)
 
@@ -314,7 +331,11 @@ def run_metrics(frame: pd.DataFrame, links: Collection[tuple[int, str]]) -> RunM
     warned = mules[mules["early_warning_monday"] > 0]
     weight = ranking.weight
     shares = ranking.order.shares(weight)
-    accounts, account_index = np.unique(ranking.frame["account_id"].to_numpy(), return_inverse=True)
+    # Distinct accounts alerted are counted only when every key is scored whole, at weight 1.
+    whole = bool((weight == 1.0).all())
+    account_index, accounts = (
+        pd.factorize(ranking.frame["account_id"]) if whole else (np.zeros(0, dtype=np.intp), [])
+    )
     after = frame[frame["status"] == AFTER]
     after_shares, _ = ranking.order.against(
         weight, after["t_ms"].to_numpy(dtype=np.int64), after["logit"].to_numpy(dtype=np.float64)
@@ -339,15 +360,17 @@ def run_metrics(frame: pd.DataFrame, links: Collection[tuple[int, str]]) -> RunM
         values[f"after_activity_at_{name}"] = (
             float(after_shares[:, column].mean()) if len(after) else float("nan")
         )
-        values[f"accounts_alerted_at_{name}"] = float(
-            ever_flagged(shares[:, column], account_index.astype(np.intp), len(accounts)).sum()
+        values[f"accounts_alerted_at_{name}"] = (
+            float(ever_flagged(shares[:, column], account_index, len(accounts)).sum())
+            if whole
+            else float("nan")
         )
     values["mules_scored"] = float(len(scored))
     values["early_warning_mules"] = float(len(warned))
     values["early_warning_ring_link_mules"] = float(warned["ring_link_visible"].sum())
     values["after_activity_account_mondays"] = float(len(after))
     values["ranked_account_mondays"] = float(len(ranking.frame))
-    return RunMetrics(values, ranking.per_monday(), mules)
+    return RunMetrics(values, ranking.per_monday(), mules, ranking)
 
 
 def scored_keys(frame: pd.DataFrame, statuses_kept: Sequence[str]) -> list[tuple[int, str]]:

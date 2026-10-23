@@ -213,9 +213,6 @@ class Store:
         """The stored test-role fallback list: (t_ms, account_id, weight)."""
         return pq.read_table(self.folder / FALLBACK_FILE, schema=FALLBACK_SCHEMA).to_pandas()
 
-    def has_fallback(self) -> bool:
-        return (self.folder / FALLBACK_FILE).is_file()
-
     def write_table(self, name: str, frame: pd.DataFrame) -> None:
         """Write one of the audit's report tables."""
         write_parquet(

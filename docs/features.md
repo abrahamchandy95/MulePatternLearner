@@ -432,7 +432,27 @@ switch.
 A reported result is refused unless every entry below that reaches a feature has passed its
 gate on that world or on its gate world, as PhantomLedger's gate record for the world shows
 (see the design's [Gates](design.md#gates)). Entry ids are those of the shortcut dossier,
-`generator_shortcuts_2026-10-17.md`.
+`generator_shortcuts_2026-10-17.md`, for the dossier's entries; the dossier has none for the
+residual checks and the world checks the features add, so their rows carry ids of their own, `R-`
+for a residual and `G-` for a world check.
+
+**The gate record names its gates by these ids.** PhantomLedger's `gate_record` has a row for
+every gate and kind, with the columns `entry`, `kind` (`code` or `world`) and `pass`, and the
+loader writes it as `world_<seed>.gates.toml`, one `[[gate]]` table per row and nothing else in
+the file, no value and no bound:
+
+```toml
+[[gate]]
+entry = "S-TIM-1"
+kind = "world"
+pass = true
+```
+
+A gate that is both a code gate and a world check has one row of each kind. `mule audit` needs
+every code gate to have passed, and every gate below whose row reaches a feature to be present
+and passed as a world check. The gates that reach none (S-RAIL-4, S-MEM-4 and S-IDN-1 to
+S-IDN-5) may fail as world checks without stopping a reported result. PhantomLedger's gate table
+must carry the `R-` and `G-` ids too, since a gate its record lacks reads as missing.
 
 The tables name each cue, not its fix. PhantomLedger fixes a cue by making the behaviour's
 implementation realistic, never by deleting the behaviour (the owner, 2026-10-17; see the
@@ -539,21 +559,21 @@ not yet researched" of its plan (`docs/research/plan_2026-10-17.md`). Its residu
 no feature (Zelle tokens enrolled at first use, starts truncated at 1970-01-02, stale
 documentation) are left out here.
 
-| Residual | Features it reaches | PhantomLedger's world check and ceiling |
-|---|---|---|
-| the burst model ran only in pure-mule rings (answered by the activity research: one active period per account, shared by every playbook) | counts, bursts, `since_last_*` | per playbook, the shares of mule lives within a day, under 30 days and over 90 days within the 99% binomial band of the pooled shares |
-| a declined ring row may post again at a different second | `dwell`, `age` | the share of declined payments posted again within 36 h 30 min, ring rows against legitimate rows, within a binomial band; else the lift of "a payment posted again within 36 h 30 min of its decline" at most 3 |
-| mule own-account moves sized like onward pieces (about USD 662) against LN(USD 120, 0.75) for ordinary self-transfers | `amount` on internal same-owner edges | the same-owner move-amount Kolmogorov-Smirnov distance at most 0.10 and the same-owner move lift at most 3 |
-| the S-RAIL-2 residual: an internal same-owner move minutes after a non-salary credit | `rail`, ownership edges, `dwell`, `left_24h`, `left_15m`, `left_by_transfer` | the same-owner move lift at most 3 |
-| multi-ring reuse drawn uniformly (p 0.06) | community block | mule persons in two rings at 0.06 within a binomial band |
-| shell accounts as organizers' personal primaries (the shell routing of layering and scatter-gather stays as behaviour) | organizers' rows: their B1 to B3, `co_users`, community block | shell-flagged organizers against unflagged organizers matched on persona and age, on non-ring rows (PhantomLedger's cover comparison): no difference beyond its bounds |
-| legitimate hour profiles uncited | every duration measured to t | per rail, hour total variation between laundering rows and the same holders' legitimate rows under 0.05 |
-| the payday skew of legitimate ATM days (kept as behaviour, tied to each person's own paydays) | `age` of cash edges | per rail, day-of-month distance between laundering rows and the same holders' legitimate rows at most 0.05 beyond the skew's own distance |
-| the consumer cash-deposit cap | `amount` with rail cash | the lift of a personal cash deposit above the household cap at most 3 |
-| cover traffic volume (cover kept as behaviour, rebuilt on the holder's own life) | out counts, `payees_30d`, `new_payees_*` | the cover-volume lift at most 3 |
-| controller-made cover on accounts the holder no longer operates (P2P to a P2P platform, bills and purchases, on the controller's clock and devices) | out counts, `payees_30d`, `new_payees_*`; on the ring device, `uses_90d`, `accounts_seen_30d`, `payments_seen_30d` | the origin C look-alike lift at most 10, the cover-volume lift at most 3, and no row on a ring endpoint but its ring's payments and that cover |
-| no legitimate second jobs (PhantomLedger adds them for every person at the BLS rate; whether ring members keep the cover's 12% is open with the owner) | `new_external_payers_*` | employed non-members with two employer streams at the BLS rate within a binomial band; ring members against matched non-members within 0.02 under one law, or the lift of two concurrent employer streams at most 3 if ring members keep the 12% |
-| the attacker's own clock on ATO drains (kept as behaviour) | `age` | ATO drain payments against the same drained holders' own legitimate payments: hour total variation under 0.05, 00:00 to 05:59 share within 0.03, weekend share in its binomial band |
+| Entry | Residual | Features it reaches | PhantomLedger's world check and ceiling |
+|---|---|---|---|
+| R-BURSTS | the burst model ran only in pure-mule rings (answered by the activity research: one active period per account, shared by every playbook) | counts, bursts, `since_last_*` | per playbook, the shares of mule lives within a day, under 30 days and over 90 days within the 99% binomial band of the pooled shares |
+| R-REPOSTS | a declined ring row may post again at a different second | `dwell`, `age` | the share of declined payments posted again within 36 h 30 min, ring rows against legitimate rows, within a binomial band; else the lift of "a payment posted again within 36 h 30 min of its decline" at most 3 |
+| R-MOVE-SIZES | mule own-account moves sized like onward pieces (about USD 662) against LN(USD 120, 0.75) for ordinary self-transfers | `amount` on internal same-owner edges | the same-owner move-amount Kolmogorov-Smirnov distance at most 0.10 and the same-owner move lift at most 3 |
+| R-RAIL-2 | the S-RAIL-2 residual: an internal same-owner move minutes after a non-salary credit | `rail`, ownership edges, `dwell`, `left_24h`, `left_15m`, `left_by_transfer` | the same-owner move lift at most 3 |
+| R-MULTI-RING | multi-ring reuse drawn uniformly (p 0.06) | community block | mule persons in two rings at 0.06 within a binomial band |
+| R-SHELLS | shell accounts as organizers' personal primaries (the shell routing of layering and scatter-gather stays as behaviour) | organizers' rows: their B1 to B3, `co_users`, community block | shell-flagged organizers against unflagged organizers matched on persona and age, on non-ring rows (PhantomLedger's cover comparison): no difference beyond its bounds |
+| R-HOURS | legitimate hour profiles uncited | every duration measured to t | per rail, hour total variation between laundering rows and the same holders' legitimate rows under 0.05 |
+| R-PAYDAYS | the payday skew of legitimate ATM days (kept as behaviour, tied to each person's own paydays) | `age` of cash edges | per rail, day-of-month distance between laundering rows and the same holders' legitimate rows at most 0.05 beyond the skew's own distance |
+| R-CASH-CAP | the consumer cash-deposit cap | `amount` with rail cash | the lift of a personal cash deposit above the household cap at most 3 |
+| R-COVER-VOLUME | cover traffic volume (cover kept as behaviour, rebuilt on the holder's own life) | out counts, `payees_30d`, `new_payees_*` | the cover-volume lift at most 3 |
+| R-CONTROLLER-COVER | controller-made cover on accounts the holder no longer operates (P2P to a P2P platform, bills and purchases, on the controller's clock and devices) | out counts, `payees_30d`, `new_payees_*`; on the ring device, `uses_90d`, `accounts_seen_30d`, `payments_seen_30d` | the origin C look-alike lift at most 10, the cover-volume lift at most 3, and no row on a ring endpoint but its ring's payments and that cover |
+| R-SECOND-JOBS | no legitimate second jobs (PhantomLedger adds them for every person at the BLS rate; whether ring members keep the cover's 12% is open with the owner) | `new_external_payers_*` | employed non-members with two employer streams at the BLS rate within a binomial band; ring members against matched non-members within 0.02 under one law, or the lift of two concurrent employer streams at most 3 if ring members keep the 12% |
+| R-ATO-CLOCK | the attacker's own clock on ATO drains (kept as behaviour) | `age` | ATO drain payments against the same drained holders' own legitimate payments: hour total variation under 0.05, 00:00 to 05:59 share within 0.03, weekend share in its binomial band |
 
 ## Gates the features add
 
@@ -566,19 +586,19 @@ P(true mule) among scored account-Mondays.
 
 **PhantomLedger's world checks**, reported as pass or fail in its gate record:
 
-| Gate | Ceiling | Why |
-|---|---|---|
-| every `Party_Uses_Device` and `Party_Uses_IP` tenure built from uses, ring or ordinary, has no quiet stretch longer than 21 days (a ring tenure's lead counts as quiet) and ends at most four days after the start of its last use's day; tenures are derived from every simulated use, burn-in included | none: an invariant | keeps the visible and current tests decided by the past for every party link |
-| no exported payment comes before its accounts open | invariant | every account node exists at t |
-| payment ids are pseudonyms whose order does not follow event time; among payments sharing a second, the chance that a laundering row's id sorts before a legitimate row's lies within its binomial band of 0.5 | invariant | subgraph cap ties carry no class |
-| no payment between two external accounts | invariant | a bank cannot see them |
-| no exported time before 1970-01-02 00:00 UTC: backdated relationship, account and link starts are drawn from their distributions truncated there by redrawing, never by clamping | invariant | the times are UINT milliseconds, 0 for none |
-| the lift of "no payment in the first 60 days of the lookback, some after", and the share of customers new to the bank within a year | the lift at most 10, the top of the 5 to 10 times band found in reality; the share at least 0.033 | account newness rebuilt from behaviour must be as strong as in reality, not more |
-| the lift of "an internal move to an account of the same owner within 1 hour of a non-payroll credit", and the distance between mule and ordinary same-owner move amounts | the lift at most 3; the amount distance (Kolmogorov-Smirnov) at most 0.10 | the same-owner move residual and own-account move sizes |
-| the lift of "a link to a node shared with another customer, started in the last 14 days" | at most 10 | every ring tenure is followed by ring money in PhantomLedger |
-| the lift, between mules and matched ordinary receivers, of the external share of new payers; and between mules and matched ordinary senders, of the external share of onward P2P value | each ratio between mules and matched ordinary accounts within [1/3, 3] | `is_external` and the internal or external split of new payers rest on a declared share of victims at the same bank |
-| the origin C look-alike lift: the lift of "the customer joined in the 90 days before t, holds exactly one device link, and its accounts received no payroll credit in the 90 days before t" | at most 10 | "new and quiet" must not be a mule-only marker |
-| the cover-volume lift: the lift of "in the 30 days before t the account made more outgoing P2P, bill and card payments than the 90th percentile of internal deposit accounts of the same persona and age band on that Monday" | at most 3 | cover payments stay as behaviour, and their volume alone must not stand in for the label |
+| Entry | Gate | Ceiling | Why |
+|---|---|---|---|
+| G-TENURES | every `Party_Uses_Device` and `Party_Uses_IP` tenure built from uses, ring or ordinary, has no quiet stretch longer than 21 days (a ring tenure's lead counts as quiet) and ends at most four days after the start of its last use's day; tenures are derived from every simulated use, burn-in included | none: an invariant | keeps the visible and current tests decided by the past for every party link |
+| G-OPENINGS | no exported payment comes before its accounts open | invariant | every account node exists at t |
+| G-PAYMENT-IDS | payment ids are pseudonyms whose order does not follow event time; among payments sharing a second, the chance that a laundering row's id sorts before a legitimate row's lies within its binomial band of 0.5 | invariant | subgraph cap ties carry no class |
+| G-EXTERNAL-PAIRS | no payment between two external accounts | invariant | a bank cannot see them |
+| G-1970 | no exported time before 1970-01-02 00:00 UTC: backdated relationship, account and link starts are drawn from their distributions truncated there by redrawing, never by clamping | invariant | the times are UINT milliseconds, 0 for none |
+| G-NEWNESS | the lift of "no payment in the first 60 days of the lookback, some after", and the share of customers new to the bank within a year | the lift at most 10, the top of the 5 to 10 times band found in reality; the share at least 0.033 | account newness rebuilt from behaviour must be as strong as in reality, not more |
+| G-SAME-OWNER | the lift of "an internal move to an account of the same owner within 1 hour of a non-payroll credit", and the distance between mule and ordinary same-owner move amounts | the lift at most 3; the amount distance (Kolmogorov-Smirnov) at most 0.10 | the same-owner move residual and own-account move sizes |
+| G-SHARED-LINKS | the lift of "a link to a node shared with another customer, started in the last 14 days" | at most 10 | every ring tenure is followed by ring money in PhantomLedger |
+| G-EXTERNAL-SHARES | the lift, between mules and matched ordinary receivers, of the external share of new payers; and between mules and matched ordinary senders, of the external share of onward P2P value | each ratio between mules and matched ordinary accounts within [1/3, 3] | `is_external` and the internal or external split of new payers rest on a declared share of victims at the same bank |
+| G-ORIGIN-C | the origin C look-alike lift: the lift of "the customer joined in the 90 days before t, holds exactly one device link, and its accounts received no payroll credit in the 90 days before t" | at most 10 | "new and quiet" must not be a mule-only marker |
+| G-COVER-VOLUME | the cover-volume lift: the lift of "in the 30 days before t the account made more outgoing P2P, bill and card payments than the 90th percentile of internal deposit accounts of the same persona and age band on that Monday" | at most 3 | cover payments stay as behaviour, and their volume alone must not stand in for the label |
 
 Sign-up links starting exactly at `joined_ms` and zero self-payments stay PhantomLedger's own
 checks; the loader only reports them, and no feature depends on them, since the

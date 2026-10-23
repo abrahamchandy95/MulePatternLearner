@@ -2,17 +2,26 @@
 
 t is always a Monday at 00:00 UTC, so a duration measured to t gives its event's clock time
 back: a since_last_out of 16 to 17 hours is a Sunday 07:xx outflow. The probe asks whether the
-clock times of every duration measured to t predict is_mule, which a model could learn as the
-simulator's clock habits rather than mule behaviour.
+clock times of every duration measured to t in the batch predict is_mule, which a model could
+learn as the simulator's clock habits rather than mule behaviour.
 
 For each account-Monday of the audit sample (evaluation.sample: every active true mule, and a
-keyed sample of non-mule account-Mondays), the events of its durations measured to t, in seven
-families: the age of its own payments (B4's payments it sent or received), since_last_in and
-since_last_out (B3), since_start and since_last_seen of its owner-enrolment edges (B5), and
-since_first_use and since_last_use of its seen edges (B5). Of each family, its EVENTS newest
-events (the shortest durations), each as the event time t - duration reduced modulo a minute,
-an hour, a day and a week, and its day of the month (UTC): 7 x 8 x 5 = 280 numbers, -1 where a
-family has fewer events. Durations that are absent give no event.
+keyed sample of non-mule account-Mondays), the events of its durations measured to t, in
+seven families (OWN) of two scopes. The scored account's own: the age of its own payments
+(B4's payments it sent or received), since_last_in and since_last_out (B3), since_start and
+since_last_seen of its owner-enrolment edges (B5), and since_first_use and since_last_use of
+its seen edges (B5). And, apart, the same seven of everything else in its subgraph (the families
+named other_...), since the model reads them through message passing too: the age of every
+other payment in the subgraph (a neighbour's payments reach the score at hop 1 and 2), the
+since_last_in and since_last_out of every other account node, the since_start and
+since_last_seen of every enrolment edge of a customer (a co-user's among them) and of the
+owner-enrolment edges of every other account, and the since_first_use and since_last_use of
+the seen edges of every other account. A clock habit visible on a neighbour's payment, a co-user's
+enrolment or a hop-1 account's seen edge alone would reach the score and escape a probe that read
+the scored account's own edges only. Of each family, its EVENTS newest events (the shortest
+durations), each as the event time t - duration reduced modulo a minute, an hour, a day and a
+week, and its day of the month (UTC): 14 x 8 x 5 = 560 numbers, -1 where a family has fewer
+events. Durations that are absent give no event.
 
 XGBoost with its default settings learns is_mule from them in two folds, each cluster of the
 ring bootstrap in one fold by a hash of its name (a ring with all its account-Mondays, a
@@ -39,8 +48,10 @@ from ..config import AuditConfig
 from ..subgraph.build import ExampleRows
 from .uncertainty import Clusters, Ranked, interval
 
-# The families of durations measured to t, and the events kept of each.
-FAMILIES = (
+# The families of durations measured to t of the scored account's own edges and rows, those of
+# everything else in its subgraph under the same names with OTHER before them, and the events
+# kept of each.
+OWN = (
     "age",
     "since_last_in",
     "since_last_out",
@@ -49,6 +60,8 @@ FAMILIES = (
     "since_first_use",
     "since_last_use",
 )
+OTHER = "other_"
+FAMILIES = (*OWN, *(f"{OTHER}{name}" for name in OWN))
 EVENTS = 8
 # The clock residues of each event: modulo a minute, an hour, a day and a week, in ms; then its
 # day of the month.
@@ -62,19 +75,22 @@ FOLDS = 2
 
 
 def durations(rows: ExampleRows) -> dict[str, list[int]]:
-    """The durations measured to t of an example's scored account, by family: those present."""
+    """The durations measured to t of an example, by family (FAMILIES): those present, of the
+    scored account's own edges and rows, and of every other node and edge of its subgraph."""
     scored = rows.scored
-    activity = rows.activity[scored]
-    owner = [edge for edge in rows.identity.owner_enrolled if edge.account_id == scored]
-    seen = [edge for edge in rows.identity.seen if edge.account_id == scored]
+    mine = rows.activity[scored]
+    identity = rows.identity
+    payments = rows.payments.payments
+    others = [row for account, row in rows.activity.items() if account != scored]
+    owner = [edge for edge in identity.owner_enrolled if edge.account_id == scored]
+    elsewhere = [edge for edge in identity.owner_enrolled if edge.account_id != scored]
+    enrolled = [*identity.enrolled, *elsewhere]
+    seen = [edge for edge in identity.seen if edge.account_id == scored]
+    seen_elsewhere = [edge for edge in identity.seen if edge.account_id != scored]
     return {
-        "age": [
-            payment.age_ms
-            for payment in rows.payments.payments
-            if scored in (payment.sender_id, payment.receiver_id)
-        ],
-        "since_last_in": [activity.since_last_in_ms] if activity.since_last_in_present else [],
-        "since_last_out": [activity.since_last_out_ms] if activity.since_last_out_present else [],
+        "age": [p.age_ms for p in payments if scored in (p.sender_id, p.receiver_id)],
+        "since_last_in": [mine.since_last_in_ms] if mine.since_last_in_present else [],
+        "since_last_out": [mine.since_last_out_ms] if mine.since_last_out_present else [],
         "since_start": [edge.since_start_ms for edge in owner if edge.since_start_present],
         "since_last_seen": [
             edge.since_last_seen_ms for edge in owner if edge.since_last_seen_present
@@ -83,11 +99,28 @@ def durations(rows: ExampleRows) -> dict[str, list[int]]:
             edge.since_first_use_ms for edge in seen if edge.since_first_use_present
         ],
         "since_last_use": [edge.since_last_use_ms for edge in seen],
+        f"{OTHER}age": [p.age_ms for p in payments if scored not in (p.sender_id, p.receiver_id)],
+        f"{OTHER}since_last_in": [
+            row.since_last_in_ms for row in others if row.since_last_in_present
+        ],
+        f"{OTHER}since_last_out": [
+            row.since_last_out_ms for row in others if row.since_last_out_present
+        ],
+        f"{OTHER}since_start": [
+            edge.since_start_ms for edge in enrolled if edge.since_start_present
+        ],
+        f"{OTHER}since_last_seen": [
+            edge.since_last_seen_ms for edge in enrolled if edge.since_last_seen_present
+        ],
+        f"{OTHER}since_first_use": [
+            edge.since_first_use_ms for edge in seen_elsewhere if edge.since_first_use_present
+        ],
+        f"{OTHER}since_last_use": [edge.since_last_use_ms for edge in seen_elsewhere],
     }
 
 
 def clock_values(t_ms: int, found: dict[str, list[int]]) -> NDArray[np.float64]:
-    """An example's 280 numbers: for each family its EVENTS newest events, each as its time's
+    """An example's WIDTH numbers: for each family its EVENTS newest events, each as its time's
     residues modulo MODULI and its day of the month, MISSING for an event the family lacks."""
     values = np.full((len(FAMILIES), EVENTS, PER_EVENT), MISSING)
     for row, family in enumerate(FAMILIES):

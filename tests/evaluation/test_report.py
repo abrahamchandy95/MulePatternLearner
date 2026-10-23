@@ -23,7 +23,7 @@ from mule_pattern_learner.evaluation.label_checks import IDENTIFICATION_HORIZON,
 from mule_pattern_learner.evaluation.rankings import HEADLINE
 from mule_pattern_learner.evaluation.report import (
     EVENTS_FILE,
-    Audited,
+    MadeUnder,
     Run,
     ScoredWorld,
     Verdict,
@@ -45,7 +45,7 @@ from mule_pattern_learner.tigergraph.queries import VERSIONS
 
 W = 7 * DAY_MS
 MONDAYS = (T, T + W, T + 2 * W)
-CURRENT = Audited(dict(VERSIONS), "c" * 32, "s" * 32)
+CURRENT = MadeUnder(dict(VERSIONS), "c" * 32, "s" * 32)
 PASSED = {GATE_RECORD: True, **dict.fromkeys(LABEL_CHECKS, True), IDENTIFICATION_HORIZON: True}
 
 
@@ -58,7 +58,7 @@ DEVELOPMENT = [_world(name, "development", 10 + i) for i, name in enumerate(("D1
 
 
 def _record(
-    world: tuple[WorldConfig, str], checks: Mapping[str, bool], current: Audited = CURRENT
+    world: tuple[WorldConfig, str], checks: Mapping[str, bool], current: MadeUnder = CURRENT
 ) -> None:
     config, identity = world
     Store(identity).write_record(

@@ -12,6 +12,7 @@ from mule_pattern_learner.evaluation.answer_key import AnswerKey
 from mule_pattern_learner.evaluation.groups import (
     GROUPS,
     group_metrics,
+    group_names,
     group_rows,
     quiet_rows,
     surfaced_rings,
@@ -73,6 +74,20 @@ def test_each_group_holds_its_rows() -> None:
         "hop_1": ["b"],
         "hop_2": ["a", "d"],
         "hop_beyond": ["c"],
+    }
+
+
+def test_each_account_is_named_by_the_groups_that_hold_its_rows() -> None:
+    frame = _frame()
+    hops = {(T, "a"): 2, (T, "b"): 1, (T, "c"): None, (T, "d"): 2}
+    rows = group_rows(frame, {3}, {(T, "d"), (T, "e")}, hops)
+    # In the order of GROUPS; a non-mule is in none, so it is no key.
+    assert group_names(frame, rows) == {
+        "a": "identified,hop_2",
+        "b": "surfaced_unidentified,hop_1",
+        "c": "hidden_ring,hop_beyond",
+        "d": "no_ring,new_account,no_payment,hop_2",
+        "e": "no_payment",
     }
 
 

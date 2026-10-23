@@ -176,17 +176,8 @@ def audit(
         store.write_fallback(keys)
         fetch(executor, cache, by_monday(keys), config.transport, parity)
 
-    scored = pd.DataFrame(
-        [(t_ms, row.account_id, row.owner_id) for t_ms, rows in found.items() for row in rows],
-        columns=["t_ms", "account_id", "owner_id"],
-    )
     labelled = label_checks.check_labels(
-        key,
-        labels.accounts,
-        populations,
-        scored,
-        config.calendar.mondays(),
-        config.audit.horizon_level,
+        key, labels.accounts, populations, config.calendar.mondays(), config.audit.horizon_level
     )
     checks |= labelled.results
     reasons |= {name: labelled.breaking[name] for name in label_checks.LABEL_CHECKS}

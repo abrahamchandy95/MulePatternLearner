@@ -1,4 +1,4 @@
-"""Pure metrics: curves, review budgets, thresholded metrics and bootstrap intervals.
+"""Pure metrics: curves, review budgets, thresholded metrics and the Monday rankings.
 
 The small cases are worked by hand in their comments.
 """
@@ -11,17 +11,12 @@ import pytest
 
 from mule_pattern_learner import metrics
 from mule_pattern_learner.metrics import (
-    bootstrap_intervals,
     capture_curve,
     hidden_first,
     hidden_name,
-    paired_replicates,
-    percentile_interval,
     precision_recall_curve,
     proxy_metrics,
     ranking_metrics,
-    resamples,
-    ring_clusters,
     roc_curve,
     weighted_metrics,
     weighted_quantiles,
@@ -184,95 +179,6 @@ def test_capture_at_budgets_rank_scores_beyond_float32_precision() -> None:
 def test_capture_at_budgets_without_positives_are_zero() -> None:
     metrics = sample_metrics(audit_frame().assign(is_mule=0))
     assert all(metrics[k] == 0 for k in TOP_KEYS) and metrics["average_precision"] is None
-
-
-def test_positives_are_resampled_by_ring_and_negatives_within_their_class() -> None:
-    # Rows 0 and 1 are one ring, row 2 a mule without a ring, rows 3 and 4 non-mules.
-    y = np.array([1, 1, 1, 0, 0])
-    rings = np.array([7, 7, -1, -1, -1])
-    assert [c.tolist() for c in ring_clusters(y, rings)] == [[0, 1], [2]]
-    assert [c.tolist() for c in ring_clusters(y, None)] == [[0], [1], [2]]
-    drawn = list(resamples(y, rings, replicates=200, seed=3))
-    for rows in drawn:
-        counts = np.bincount(rows, minlength=5)
-        # Two clusters drawn with replacement: the ring's rows come together, twice at most.
-        assert counts[0] == counts[1] and counts[0] + counts[2] == 2
-        assert counts[3] + counts[4] == 2
-    # Every combination of two clusters occurs, and the seed fixes the draws.
-    assert {int(np.bincount(rows, minlength=5)[0]) for rows in drawn} == {0, 1, 2}
-    again = resamples(y, rings, replicates=200, seed=3)
-    assert all(a.tolist() == b.tolist() for a, b in zip(drawn, again, strict=True))
-    # Stratified: always three positive rows.
-    for rows in resamples(y, None, replicates=50, seed=3):
-        assert int(y[rows].sum()) == 3 and len(rows) == 5
-
-
-def test_percentile_intervals_leave_out_undefined_replicates() -> None:
-    # The 5th and 95th percentiles of 0 to 100.
-    assert percentile_interval(np.arange(101.0)) == pytest.approx([5, 95])
-    assert percentile_interval(np.r_[np.arange(101.0), np.nan]) == pytest.approx([5, 95])
-    assert percentile_interval(np.arange(101.0), 0.5) == pytest.approx([25, 75])
-    assert percentile_interval(np.full(3, np.nan)) is None
-
-
-def test_bootstrap_intervals_of_a_ranking_every_replicate_agrees_on() -> None:
-    # Two mules above 98 non-mules: every replicate keeps 2 mules on top of 100 accounts.
-    # The budgets of 1, 5 and 10 accounts find 1, 2 and 2 mules.
-    y = np.r_[1, 1, np.zeros(98, int)]
-    score = np.r_[0.9, 0.8, np.linspace(0.5, 0.1, 98)]
-    intervals = bootstrap_intervals(y, score, np.ones(100), replicates=50)
-    expected = {
-        "average_precision": 1,
-        "roc_auc": 1,
-        "precision_at_1pct": 1,
-        "recall_at_1pct": 0.5,
-        "precision_at_5pct": 0.4,
-        "recall_at_5pct": 1,
-        "precision_at_10pct": 0.2,
-        "recall_at_10pct": 1,
-    }
-    assert set(intervals) == set(expected)
-    for name, value in expected.items():
-        assert intervals[name] == pytest.approx([value, value]), name
-    # Without mules AP and ROC AUC have no interval; the budgets find nothing.
-    empty = bootstrap_intervals(np.zeros(100, int), score, np.ones(100), replicates=20)
-    assert empty["average_precision"] is None and empty["roc_auc"] is None
-    assert empty["recall_at_5pct"] == [0.0, 0.0]
-
-
-def test_ring_clustered_intervals_are_wider_when_rings_rank_together() -> None:
-    # Five rings of four mules: rings 0 and 1 rank above every non-mule, rings 2 to 4
-    # below them, so the top 10% (20 accounts) holds exactly the 8 mules of rings 0 and 1.
-    rings = np.r_[np.repeat(np.arange(5), 4), -np.ones(180, int)]
-    y = (rings >= 0).astype(int)
-    score = np.r_[np.full(8, 0.9), np.full(12, 0.1), np.full(180, 0.5)]
-    weight = np.ones(200)
-    assert ranking_metrics(y, score, weight)["recall_at_10pct"] == pytest.approx(0.4)
-    clustered = bootstrap_intervals(y, score, weight, rings, replicates=400)
-    stratified = bootstrap_intervals(y, score, weight, replicates=400)
-    low, high = clustered["recall_at_10pct"] or [0.0, 0.0]
-    s_low, s_high = stratified["recall_at_10pct"] or [0.0, 0.0]
-    assert high - low > s_high - s_low > 0
-
-
-def test_paired_replicates_apply_one_resample_to_every_run() -> None:
-    rng = np.random.default_rng(5)
-    rings = np.r_[np.repeat(np.arange(6), 3), -np.ones(60, int)]
-    y = (rings >= 0).astype(int)
-    weight = np.r_[np.ones(18), np.full(60, 10.0)]
-    first = rng.random(78) + 0.4 * y
-    second = rng.random(78) + 0.2 * y
-
-    def ap(yy: np.ndarray, score: np.ndarray, ww: np.ndarray) -> float | None:
-        return ranking_metrics(yy, score, ww)["average_precision"]
-
-    values = paired_replicates(y, weight, [first, first, second], ap, rings, replicates=30)
-    assert values.shape == (30, 3)
-    # A run paired with itself differs by exactly zero in every replicate.
-    assert (values[:, 0] == values[:, 1]).all()
-    # Each column is the statistic of that run on the shared resamples.
-    shared = [ap(y[r], second[r], weight[r]) for r in resamples(y, rings, replicates=30)]
-    assert values[:, 2].tolist() == shared
 
 
 def test_weighted_quantiles_interpolate_between_the_middles_of_the_weights() -> None:

@@ -24,9 +24,13 @@ An aggregate over no row is 0, as the model sees no edge.
 - A near-pure region stops the run too, since a marker held by a minority of mules and by no
   ordinary account keeps its ROC AUC near 0.5: for each column, each value of a flag (a column
   holding only 0 and 1) and its top and bottom audit.near_pure_tail of the account-Mondays by
-  weight (with ties at the edge inside), a region holding at least
-  audit.near_pure_min_mule_share of the active true-mule account-Mondays in which true mules
-  are more than audit.near_pure_purity of the weight.
+  weight, a region holding at least audit.near_pure_min_mule_share of the active true-mule
+  account-Mondays in which true mules are more than audit.near_pure_purity of the weight. A
+  tail holds the values strictly beyond its edge value, so a tie at the edge is left out and a
+  tail never holds more than its share of the weight. This matters because active true mules
+  are a few hundredths of a percent of the scored account-Mondays, under a tail of 0.1%: in a
+  column that is zero on most rows, the edge of the top tail is that zero, and taking the tie
+  in would make the region every row and hide a marker only a few mules hold.
 """
 
 from __future__ import annotations
@@ -180,7 +184,8 @@ class FeatureAudit:
 def _edge(
     values: NDArray[np.float64], weight: NDArray[np.float64], tail: float, top: bool
 ) -> float:
-    """The value at which the top (or bottom) tail of the weight is reached, its ties inside."""
+    """The value at which the top (or bottom) tail of the weight is reached: the first value,
+    going in from that end, at which the weight passed reaches the tail's share of the whole."""
     order = np.argsort(-values if top else values, kind="stable")
     cumulative = np.cumsum(weight[order])
     reached = int(np.searchsorted(cumulative, tail * cumulative[-1]))
@@ -194,13 +199,13 @@ def near_pure(
     audit: AuditConfig,
 ) -> list[str]:
     """The near-pure regions of one column, by name: value=<v> for a flag value, top and
-    bottom for its tails."""
+    bottom for its tails, each the values strictly beyond the edge of its tail."""
     regions: list[tuple[str, NDArray[np.bool_]]] = []
     if np.isin(values, (0.0, 1.0)).all():
         regions += [(f"value={value:g}", values == value) for value in (0.0, 1.0)]
     top = _edge(values, weight, audit.near_pure_tail, top=True)
     bottom = _edge(values, weight, audit.near_pure_tail, top=False)
-    regions += [("top", values >= top), ("bottom", values <= bottom)]
+    regions += [("top", values > top), ("bottom", values < bottom)]
     mules = float(weight[positive].sum())
     found: list[str] = []
     for name, region in regions:

@@ -41,7 +41,6 @@ ACTIVE = "active"
 EARLY_WARNING = "early_warning"
 BEFORE = "before"
 AFTER = "after"
-STATUSES = (NON_MULE, ACTIVE, EARLY_WARNING, BEFORE, AFTER)
 # The answer key's columns, in the order of its rows' fields.
 COLUMNS = tuple(field.name for field in fields(AccountTruth))
 

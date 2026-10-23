@@ -113,6 +113,19 @@ def test_an_evaluation_frame_needs_a_logit_and_a_truth_for_every_key() -> None:
         evaluation_frame(scores, keys.iloc[:1].assign(account_id="ghost"), KEY, frozenset())
 
 
+def test_an_evaluation_frame_refuses_a_truth_that_shares_a_column_with_its_keys(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frame = AnswerKey.frame
+
+    def with_weight(key: AnswerKey) -> pd.DataFrame:
+        return frame(key).assign(weight=0.0)
+
+    monkeypatch.setattr(AnswerKey, "frame", with_weight)
+    with pytest.raises(ValueError, match=r"share \['weight'\] with the truth"):
+        _frame()
+
+
 def test_the_ranking_leaves_out_mules_outside_their_activity() -> None:
     frame = _frame()
     ranking = Ranking.of(frame, (frame["status"] == ACTIVE).to_numpy())
@@ -153,10 +166,35 @@ def test_what_one_run_found() -> None:
     assert values["after_activity_account_mondays"] == 1
     assert np.isnan(values["early_warning_ring_link_at_1pct"])
     assert values["first_flag_mean_days_at_1pct"] == 2 and values["mules_scored"] == 3
-    # Alerted at 1%: m1 and m2, and n8, 0.8 under a mule of weight 1 on both Mondays, of which
-    # each budget takes (2.02 - 1) / 25 a Monday.
-    share = (2.02 - 1) / 25
-    assert values["accounts_alerted_at_1pct"] == pytest.approx(2 + 1 - (1 - share) ** 2)
+    # The non-mules stand for 25 accounts each, so the keys are weighted: no distinct count.
+    assert np.isnan(values["accounts_alerted_at_1pct"])
+    assert np.isnan(values["accounts_alerted_at_5pct"])
+
+
+def test_distinct_accounts_alerted_are_counted_when_every_key_is_scored_whole() -> None:
+    # m1 tops both Mondays, each of 9 ranked account-Mondays at weight 1: its budgets are 0.09
+    # and 0.45 of an account, so it is flagged on a Monday with chance 0.09 at 1% and 0.45 at 5%,
+    # and on at least one of the two with 1 - 0.91 ** 2 and 1 - 0.55 ** 2. No non-mule is
+    # within either budget.
+    rows = [
+        (t_ms, account, 0.95 if account == "m1" else int(account[1:]) / 10)
+        for t_ms in (T, T1)
+        for account in ("m1", *(f"n{i}" for i in range(1, 9)))
+    ]
+    scores = pd.DataFrame(rows, columns=["t_ms", "account_id", "logit"])
+    keys = scores.loc[:, ["t_ms", "account_id"]].assign(weight=1.0)
+    values = run_metrics(evaluation_frame(scores, keys, KEY, frozenset()), frozenset()).values
+    assert values["accounts_alerted_at_1pct"] == pytest.approx(1 - 0.91**2)
+    assert values["accounts_alerted_at_5pct"] == pytest.approx(1 - 0.55**2)
+    # Under the fallback list the non-mules are a sample, each of one in ten and standing for
+    # ten, and an account is in the list on a few of its Mondays only: a flag on any of them
+    # would be counted over those few, so the count is not reported.
+    sampled = keys.assign(
+        weight=[1.0 if account == "m1" else 10.0 for account in keys["account_id"]]
+    )
+    found = run_metrics(evaluation_frame(scores, sampled, KEY, frozenset()), frozenset()).values
+    assert np.isnan(found["accounts_alerted_at_1pct"])
+    assert np.isnan(found["accounts_alerted_at_5pct"])
 
 
 def test_a_ring_link_visible_on_the_early_warning_monday(

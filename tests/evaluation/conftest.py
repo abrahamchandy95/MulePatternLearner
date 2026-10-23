@@ -110,10 +110,10 @@ def gates_text(passed: Mapping[str, bool] | None = None) -> str:
     """A gate record holding a passing world check and a passing code gate of every gate of
     GATES; passed sets the pass flag of both rows of the entries it names."""
     rows: list[str] = []
-    for gate in GATES:
-        flag = "true" if (passed or {}).get(gate.entry, True) else "false"
+    for entry in GATES:
+        flag = "true" if (passed or {}).get(entry, True) else "false"
         for kind in (CODE, WORLD):
-            rows.append(f'[[gate]]\nentry = "{gate.entry}"\nkind = "{kind}"\npass = {flag}\n')
+            rows.append(f'[[gate]]\nentry = "{entry}"\nkind = "{kind}"\npass = {flag}\n')
     return "\n".join(rows)
 
 

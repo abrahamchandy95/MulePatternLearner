@@ -14,6 +14,7 @@ from mule_pattern_learner.evaluation.answer_key import AnswerKey
 from mule_pattern_learner.evaluation.label_checks import (
     IDENTIFICATION_HORIZON,
     IDENTIFIED_NOT_MULE,
+    JOINED_COLUMNS,
     LABEL_CHECKS,
     MULE_DATES_AND_RING,
     SCORABLE_WITHOUT_TRUTH,
@@ -55,11 +56,10 @@ KEY = AnswerKey(
     )
 )
 POPULATIONS = {T: ["a_m1", "a_n1", "a_n2"], T + W: ["a_m1", "a_n1", "a_n2"]}
-SCORED = pd.DataFrame({"t_ms": [T], "account_id": ["a_n1"], "owner_id": ["p_n1"]})
 
 
 def test_a_world_with_sound_labels_passes_every_label_check() -> None:
-    found = check_labels(KEY, frozenset({"a_m1"}), POPULATIONS, SCORED, MONDAYS, LEVEL)
+    found = check_labels(KEY, frozenset({"a_m1"}), POPULATIONS, MONDAYS, LEVEL)
     assert all(found.results[name] for name in LABEL_CHECKS)
     assert all(not found.breaking[name] for name in LABEL_CHECKS)
 
@@ -67,9 +67,14 @@ def test_a_world_with_sound_labels_passes_every_label_check() -> None:
 def test_each_label_check_fails_on_its_planted_case() -> None:
     planted = AnswerKey((*KEY.truths, _truth("a_bad", 1, 2, 0, T)))
     populations = {**POPULATIONS, T: [*POPULATIONS[T], "a_ghost"]}
-    scored = SCORED.assign(is_mule=0)
+    # What evaluation joins with the truth gains a column the truth holds.
     found = check_labels(
-        planted, frozenset({"a_m1", "a_n2", "a_gone"}), populations, scored, MONDAYS, LEVEL
+        planted,
+        frozenset({"a_m1", "a_n2", "a_gone"}),
+        populations,
+        MONDAYS,
+        LEVEL,
+        joined=(*JOINED_COLUMNS, "is_mule"),
     )
     assert dict(found.breaking) == {
         IDENTIFIED_NOT_MULE: ("a_gone", "a_n2"),
@@ -81,7 +86,7 @@ def test_each_label_check_fails_on_its_planted_case() -> None:
 
 
 def test_mules_are_counted_by_type_and_ownership_and_unscored_ones_reported() -> None:
-    found = check_labels(KEY, frozenset({"a_m1"}), POPULATIONS, SCORED, MONDAYS, LEVEL)
+    found = check_labels(KEY, frozenset({"a_m1"}), POPULATIONS, MONDAYS, LEVEL)
     counts = {
         (str(kind), bool(owned)): int(mules)
         for kind, owned, mules in found.counts.itertuples(index=False, name=None)
@@ -127,7 +132,7 @@ def test_the_horizon_passes_when_the_identified_share_is_flat() -> None:
     key, identified = _months_key([5] * 12)
     table = horizon(key, identified, YEAR, LEVEL)
     assert table["mules"].tolist() == [10] * 12 and table["inside"].all()
-    found = check_labels(key, identified, {}, SCORED, YEAR, LEVEL)
+    found = check_labels(key, identified, {}, YEAR, LEVEL)
     assert found.results[IDENTIFICATION_HORIZON]
 
 
@@ -137,19 +142,32 @@ def test_the_horizon_fails_when_one_month_is_identified_less() -> None:
     key, identified = _months_key([10] * 11 + [0])
     table = horizon(key, identified, YEAR, LEVEL)
     assert table["inside"].tolist() == [True] * 11 + [False]
-    assert not check_labels(key, identified, {}, SCORED, YEAR, LEVEL).results[
-        IDENTIFICATION_HORIZON
-    ]
+    assert not check_labels(key, identified, {}, YEAR, LEVEL).results[IDENTIFICATION_HORIZON]
 
 
 def test_the_horizon_fails_without_a_mule_in_the_scored_year() -> None:
-    assert not check_labels(AnswerKey(()), frozenset(), {}, SCORED, YEAR, LEVEL).results[
+    assert not check_labels(AnswerKey(()), frozenset(), {}, YEAR, LEVEL).results[
         IDENTIFICATION_HORIZON
     ]
 
 
-@pytest.mark.parametrize("column", ["account_id", "t_ms"])
-def test_the_join_may_share_the_account_id_alone(column: str) -> None:
-    scored = pd.DataFrame({column: []})
-    found = check_labels(KEY, frozenset(), POPULATIONS, scored, MONDAYS, LEVEL)
-    assert found.results[TRUTH_JOIN]
+def test_the_join_of_the_keys_and_scores_with_the_truth_shares_the_account_id_alone() -> None:
+    # Evaluation joins a Monday, an account, a weight and a logit with the truth on the account;
+    # the truth holds none of the other three.
+    assert JOINED_COLUMNS == ("t_ms", "account_id", "weight", "logit")
+    found = check_labels(KEY, frozenset(), POPULATIONS, MONDAYS, LEVEL)
+    assert found.results[TRUTH_JOIN] and found.breaking[TRUTH_JOIN] == ()
+
+
+@pytest.mark.parametrize("column", ["t_ms", "weight", "logit"])
+def test_a_column_the_truth_gains_that_the_join_holds_fails_the_check(
+    column: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    frame = AnswerKey.frame
+
+    def with_column(key: AnswerKey) -> pd.DataFrame:
+        return frame(key).assign(**{column: 0})
+
+    monkeypatch.setattr(AnswerKey, "frame", with_column)
+    found = check_labels(KEY, frozenset(), POPULATIONS, MONDAYS, LEVEL)
+    assert found.breaking[TRUTH_JOIN] == (column,) and not found.results[TRUTH_JOIN]
