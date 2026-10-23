@@ -97,4 +97,6 @@ def world(tmp_path_factory: pytest.TempPathFactory) -> TrainingWorld:
 @pytest.fixture(scope="session")
 def planted(world: TrainingWorld) -> list[Batch]:
     """The training batches with the mules planted as positives."""
-    return training_batches(world.cache, world.identity, world.examples(), SHORT.batch_size)
+    return training_batches(
+        world.cache, world.identity, world.examples(), SHORT.batch_size, seed=SHORT.shuffle_seed
+    )

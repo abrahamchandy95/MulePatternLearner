@@ -18,10 +18,14 @@ batches), train tries each prior it is given in turn:
   strictly better than the best so far, and a prior stops after patience epochs without one,
   or at max_epochs.
 - After each epoch a checkpoint is written through a temporary file and a rename: the model,
-  the optimiser, the best epoch so far and the history, under the contract lock. A run that
-  stops resumes from it; a prior whose checkpoint says it finished is not trained again. When
-  epochs names a folder, every epoch's model is kept there too, for evaluation's correlation
-  of the selection score with recall (the development rotation's seed 0 only).
+  the optimiser, the best epoch so far and the history, under the contract lock and what the
+  run is besides it: its seed, the optimiser's and the model's settings, the epochs and the
+  patience, the training and selection worlds and a digest of each one's examples
+  (checkpoint_fields). A run that stops resumes from it, and one of other settings, worlds or
+  examples is refused with the differing field named; a prior whose checkpoint says it
+  finished is not trained again. When epochs names a folder, every epoch's model is kept there
+  too, under the contract lock alone, for evaluation's correlation of the selection score with
+  recall (the development rotation's seed 0 only).
 
 Of the priors, the one whose best epoch scores highest is kept; a later prior must be strictly
 better. Each ablation trains at the prior the full model chose for that seed. A model file
@@ -40,6 +44,8 @@ from __future__ import annotations
 from collections.abc import Generator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
+from functools import cached_property
+import hashlib
 import os
 from pathlib import Path
 from typing import Any
@@ -87,20 +93,88 @@ def model_config(config: ModelConfig, switch: Switch | None) -> ModelConfig:
 
 
 def gnn_lock(
-    switch: Switch | None, model: ModelConfig, subgraph: SubgraphConfig, training: TrainingConfig
+    switch: Switch | None,
+    model: ModelConfig,
+    subgraph: SubgraphConfig,
+    training: TrainingConfig,
+    extra: Mapping[str, object] | None = None,
 ) -> Lock:
-    """The contract lock of the full model or of the ablation of switch."""
+    """The contract lock of the full model or of the ablation of switch; extra holds the
+    ranker's own fields, which a checkpoint adds (checkpoint_fields) and a model file does
+    not."""
     return contract.lock(
         ranker_name(switch),
         community=model_config(model, switch).community,
         subgraph=subgraph,
         training=training,
+        extra=extra,
     )
+
+
+def _digest(*parts: bytes) -> str:
+    """A blake2b digest of parts, each preceded by its length so no two splits collide."""
+    found = hashlib.blake2b(digest_size=16)
+    for part in parts:
+        found.update(len(part).to_bytes(8, "big"))
+        found.update(part)
+    return found.hexdigest()
+
+
+def training_digest(training: Sequence[Batch]) -> str:
+    """A digest of the training examples as the batches hold them, in their order: each one's
+    Monday, account, label and weight."""
+    keys = [key for batch in training for key in batch.keys]
+    labels = torch.cat([batch.data.label.cpu() for batch in training]).to(torch.int64)
+    weights = torch.cat([batch.data.weight.cpu() for batch in training]).to(torch.float64)
+    return _digest(
+        np.array([key.t_ms for key in keys], dtype=np.int64).tobytes(),
+        "\x00".join(key.account_id for key in keys).encode(),
+        labels.numpy().tobytes(),
+        weights.numpy().tobytes(),
+    )
+
+
+def checkpoint_fields(
+    training: Sequence[Batch],
+    selection: SelectionWorld,
+    config: ModelConfig,
+    settings: TrainingConfig,
+    seed: int,
+) -> dict[str, object]:
+    """What a checkpoint is a checkpoint of, beyond the contract lock: the seed, the
+    optimiser's settings, the epochs and the patience, the model's settings, the worlds of the
+    training and selection examples, and a digest of each one's examples. A run resumes only
+    from a checkpoint with every one of them equal, so a finished run of other settings, or on
+    other worlds or examples, is never taken for this one."""
+    return {
+        "seed": seed,
+        "learning_rate": settings.learning_rate,
+        "weight_decay": settings.weight_decay,
+        "batch_size": settings.batch_size,
+        "max_epochs": settings.max_epochs,
+        "patience": settings.patience,
+        **{f"model.{name}": value for name, value in asdict(config).items()},
+        "training_worlds": sorted({key.world for batch in training for key in batch.keys}),
+        "training_examples": training_digest(training),
+        "selection_world": selection.batches.world,
+        "selection_examples": selection.digest,
+    }
 
 
 def model_file(folder: Path, ranker: str, seed: int) -> Path:
     """The model file of a ranker and a seed in a run's results folder."""
     return folder / f"{ranker}_seed{seed}.pt"
+
+
+def selection_passes(settings: TrainingConfig, priors: int) -> int:
+    """The most passes over the selection world one rotation makes. Every seed trains the full
+    model over priors priors and then each ablation at one prior, and each of those runs at
+    most max_epochs epochs, each ending in one pass that builds every selection example anew
+    (training.batches.ScoringBatches). mule bench multiplies its build time per example by
+    this, and by the selection world's examples, before whole-world selection is accepted."""
+    if priors < 1:
+        raise ValueError(f"A rotation tries at least one prior, not {priors}")
+    return len(settings.seeds) * (priors + len(Switch)) * settings.max_epochs
 
 
 class SelectionWorld:
@@ -116,6 +190,18 @@ class SelectionWorld:
             and ordered["account_id"].tolist() == self.keys["account_id"].tolist()
         ):
             raise ValueError("The selection keys are not in the order of their batches")
+
+    @cached_property
+    def digest(self) -> str:
+        """A digest of the ranked selection keys: each one's Monday, account, whether it is a
+        positive and its weight."""
+        keys = self.keys
+        return _digest(
+            keys["t_ms"].to_numpy(dtype=np.int64).tobytes(),
+            "\x00".join(keys["account_id"]).encode(),
+            keys["positive"].to_numpy(dtype=np.bool_).tobytes(),
+            keys["weight"].to_numpy(dtype=np.float64).tobytes(),
+        )
 
 
 @dataclass(frozen=True)
@@ -308,6 +394,7 @@ class _PriorTraining:
         config: ModelConfig,
         settings: TrainingConfig,
         lock: Lock,
+        resume_lock: Lock,
         switch: Switch | None,
         device: torch.device,
         checkpoint: Path | None,
@@ -319,6 +406,7 @@ class _PriorTraining:
         self.seed = seed
         self.settings = settings
         self.lock = lock
+        self.resume_lock = resume_lock
         self.switch = switch
         self.device = device
         self.checkpoint = checkpoint
@@ -338,7 +426,7 @@ class _PriorTraining:
             self._resume(checkpoint)
 
     def _resume(self, path: Path) -> None:
-        stored = contract.load(path, self.lock, self.device)
+        stored = contract.load(path, self.resume_lock, self.device)
         if stored["prior"] != [self.prior.multiple, self.prior.value]:
             raise ValueError(f"{path} is the checkpoint of another prior: {stored['prior']}")
         self.model.load_state_dict(stored["model"])
@@ -356,7 +444,7 @@ class _PriorTraining:
         best = self.best
         contract.save(
             self.checkpoint,
-            self.lock,
+            self.resume_lock,
             {
                 "prior": [self.prior.multiple, self.prior.value],
                 "epoch": self.done,
@@ -466,6 +554,13 @@ def train(
     check_determinism(target)
     config = model_config(model, switch)
     lock = gnn_lock(switch, model, subgraph, settings)
+    resume_lock = gnn_lock(
+        switch,
+        model,
+        subgraph,
+        settings,
+        checkpoint_fields(training, selection, config, settings, seed),
+    )
     batches = list(training) if switch is None else [apply(batch, switch) for batch in training]
     ranker = ranker_name(switch)
     runs: list[PriorRun] = []
@@ -483,6 +578,7 @@ def train(
                     config=config,
                     settings=settings,
                     lock=lock,
+                    resume_lock=resume_lock,
                     switch=switch,
                     device=target,
                     checkpoint=checkpoint,

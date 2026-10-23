@@ -2,15 +2,19 @@
 own row, which asks what graph learning adds at all, and XGBoost on the graph features, which
 asks what message passing adds beyond hand-made graph features (comparisons.features).
 
-- Each trains on the GNN's training examples, with their labels and weights, and is scored on
-  the same selection Mondays from the same keys.
+- Each trains on the GNN's training examples, with their labels and weights, which come with
+  the vectors in the order of their keys (comparisons.features), and is scored on the same
+  selection Mondays from the same keys.
 - It learns identified (label 1) against unlabelled (0), with each label's weights rescaled to
   equal totals: when labels are selected completely at random, a classifier of labelled
   against unlabelled ranks like one of positive against negative (Elkan and Noto, 2008). Each
   label's weights total half the number of examples, so their mean is 1 and XGBoost's
   defaults, which read the summed weight of a leaf, keep their usual scale.
 - It uses XGBoost's default settings, random_state the model seed, with at most MAX_ROUNDS
-  rounds; the round count is chosen among 10, 20, ..., 1,000 by the selection score on the
+  rounds. At those defaults (every row and column used by every tree) the seed changes no tree,
+  so the five seeds of a ranker are five identical models and their spread is 0; whether
+  XGBoost is seed-free and trained once, or its subsample and colsample_bytree are set below 1
+  so that the seed matters, is the owner's to decide; the round count is chosen among 10, 20, ..., 1,000 by the selection score on the
   selection world (training.selection), as the GNN chooses its epochs, a larger count only
   when strictly better.
 - An account's score is the sum of the outputs of the trees up to the chosen round, in
@@ -23,9 +27,14 @@ A ranker's file holds its booster, its seed, its round count, its selection scor
 found, under the contract lock with its columns among the locked fields (training.contract).
 
 On macOS the pip wheels of torch and XGBoost each bring an OpenMP runtime of their own, and
-XGBoost crashes the process when it runs beside torch's runtime with more than one thread, so
-there every function that runs XGBoost refuses to unless OMP_NUM_THREADS is 1, set before torch
-is imported. One thread changes no result, only the time XGBoost takes.
+XGBoost crashes the process (exit 139) when it runs beside torch's runtime with more than one
+thread, so there every function that runs XGBoost refuses to unless OMP_NUM_THREADS is 1 when it
+is called. One thread changes no result, only the time XGBoost takes. What matters is the
+variable's value when XGBoost first runs: probed on macOS with XGBoost 3.2.0, a variable left
+unset, or torch.set_num_threads(1) without it, crashes, while one set before torch is imported,
+or after torch has run an operation and this module is imported, runs every fit, so the refusal
+is exact and the entry point of mule train need only set the variable before XGBoost first runs
+(tests/conftest.py sets it for the tests).
 """
 
 from __future__ import annotations
@@ -67,7 +76,7 @@ def require_one_openmp_thread() -> None:
         )
 
 
-def matrix(name: str, vectors: Vectors) -> NDArray[np.float64]:
+def matrix(name: str, vectors: Vectors) -> NDArray[np.float32]:
     """The vectors a ranker reads."""
     if name not in COLUMNS:
         raise ValueError(f"No XGBoost ranker is named {name!r}")
@@ -86,7 +95,7 @@ def equal_totals(labels: NDArray[np.integer], weights: NDArray[np.floating]) -> 
 
 
 def fit(
-    x: NDArray[np.float64],
+    x: NDArray[np.floating],
     labels: NDArray[np.integer],
     weights: NDArray[np.floating],
     seed: int,
@@ -104,7 +113,7 @@ def fit(
 
 
 def margins(
-    booster: xgboost.Booster, x: NDArray[np.float64], columns: Sequence[str], rounds: int
+    booster: xgboost.Booster, x: NDArray[np.floating], columns: Sequence[str], rounds: int
 ) -> Iterator[tuple[int, NDArray[np.float64]]]:
     """For each round count of ROUND_STEP, 2 ROUND_STEP, ... up to rounds, the sum in float64
     of every account's tree outputs up to it."""
@@ -122,7 +131,7 @@ def margins(
 
 
 def scores(
-    booster: xgboost.Booster, x: NDArray[np.float64], columns: Sequence[str], rounds: int
+    booster: xgboost.Booster, x: NDArray[np.floating], columns: Sequence[str], rounds: int
 ) -> NDArray[np.float64]:
     """Every account's score at a round count."""
     found = np.zeros(len(x))
@@ -151,7 +160,7 @@ class Trees:
 
 def choose(
     booster: xgboost.Booster,
-    x: NDArray[np.float64],
+    x: NDArray[np.floating],
     columns: Sequence[str],
     keys: pd.DataFrame,
 ) -> tuple[int, Found, tuple[tuple[int, float], ...]]:
@@ -172,20 +181,22 @@ def choose(
 def train(
     name: str,
     training: Vectors,
-    labels: NDArray[np.integer],
-    weights: NDArray[np.floating],
     selection: Vectors,
     keys: pd.DataFrame,
     seed: int,
 ) -> Trees:
-    """The ranker of name trained on the training vectors with their labels and weights, its
-    round count chosen on the selection vectors of the ranked selection keys (in their
-    order)."""
+    """The ranker of name trained on the training vectors with the labels and weights they
+    carry, its round count chosen on the selection vectors of the ranked selection keys (in
+    their order)."""
     x_training, x_selection = matrix(name, training), matrix(name, selection)
+    if not training.labelled:
+        raise ValueError(
+            "The training vectors carry no labels and weights: they are not of training batches"
+        )
     expected = list(zip(keys["t_ms"].tolist(), keys["account_id"].tolist(), strict=True))
     if list(selection.keys) != [(int(t), str(a)) for t, a in expected]:
         raise ValueError("The selection vectors are not those of the selection keys")
-    booster = fit(x_training, labels, weights, seed, COLUMNS[name])
+    booster = fit(x_training, training.labels, training.weights, seed, COLUMNS[name])
     rounds, chosen, history = choose(booster, x_selection, COLUMNS[name], keys)
     return Trees(name, seed, booster, rounds, chosen.score, chosen, history)
 

@@ -65,6 +65,7 @@ def test_the_defaults_are_the_designs_settings() -> None:
     assert optimiser == (0.001, 0.0001, 128)
     assert (training.max_epochs, training.patience, training.seeds) == (30, 5, (0, 1, 2, 3, 4))
     assert (training.prior_multiples, training.fixed_prior) == ((1, 3, 10), None)
+    assert (training.shuffle_seed, training.bootstrap_seed) == (0, 0)
     audit = DEFAULT_CONFIG.audit
     assert (audit.clock_probe_upper, audit.separation_auc) == (0.55, 0.95)
     near_pure = (audit.near_pure_tail, audit.near_pure_min_mule_share, audit.near_pure_purity)
@@ -202,6 +203,10 @@ def test_sections_refuse_values_outside_their_ranges() -> None:
         (lambda: TrainingConfig(seeds=5), "training.seeds"),  # pyright: ignore[reportArgumentType]
         (lambda: TrainingConfig(seeds=(0, 0)), "training.seeds repeats"),
         (lambda: TrainingConfig(seeds=(-1,)), "training.seeds"),
+        (lambda: TrainingConfig(shuffle_seed=-1), "training.shuffle_seed"),
+        (lambda: TrainingConfig(shuffle_seed=True), "training.shuffle_seed"),  # pyright: ignore[reportArgumentType]
+        (lambda: TrainingConfig(bootstrap_seed=-1), "training.bootstrap_seed"),
+        (lambda: TrainingConfig(bootstrap_seed=0.5), "training.bootstrap_seed"),  # pyright: ignore[reportArgumentType]
         (lambda: TrainingConfig(prior_multiples=()), "training.prior_multiples"),
         (lambda: TrainingConfig(prior_multiples=(1, 0)), "training.prior_multiples"),
         (lambda: TrainingConfig(prior_multiples=[1, 3]), "training.prior_multiples"),  # pyright: ignore[reportArgumentType]

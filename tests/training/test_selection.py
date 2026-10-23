@@ -10,6 +10,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from mule_pattern_learner.config import DEFAULT_CONFIG
+from mule_pattern_learner.training import selection
 from mule_pattern_learner.training.selection import (
     BUDGETS,
     Found,
@@ -20,6 +22,19 @@ from mule_pattern_learner.training.selection import (
 )
 
 M1, M2 = 1_000, 2_000
+AUDIT = DEFAULT_CONFIG.audit
+TRAINING = DEFAULT_CONFIG.training
+
+
+def _interval(first: Sequence[Found], second: Sequence[Found]) -> tuple[float, float]:
+    """The paired interval at the settings of config."""
+    return paired_interval(
+        first,
+        second,
+        replicates=AUDIT.replicates,
+        level=AUDIT.interval,
+        seed=TRAINING.bootstrap_seed,
+    )
 
 
 def _keys(
@@ -140,7 +155,7 @@ def _run(shares: Sequence[Sequence[float]], accounts: tuple[str, ...]) -> Found:
 def test_the_paired_interval_of_equal_runs_is_zero() -> None:
     accounts = ("m1", "m1", "m2", "m3")
     run = _run([[1, 1], [0, 1], [0, 0], [1, 1]], accounts)
-    assert paired_interval([run], [run]) == (0.0, 0.0)
+    assert _interval([run], [run]) == (0.0, 0.0)
 
 
 def test_the_paired_interval_resamples_mule_accounts() -> None:
@@ -149,13 +164,38 @@ def test_the_paired_interval_resamples_mule_accounts() -> None:
     accounts = tuple(f"m{index}" for index in range(30))
     found_all = _run([[1, 1]] * 30, accounts)
     found_none = _run([[0, 0]] * 30, accounts)
-    assert paired_interval([found_all], [found_none]) == (1.0, 1.0)
+    assert _interval([found_all], [found_none]) == (1.0, 1.0)
     # Runs that differ on half the mules: an interval around 0.5 that excludes zero.
     half = _run([[1, 1]] * 15 + [[0, 0]] * 15, accounts)
-    low, high = paired_interval([half], [found_none])
+    low, high = _interval([half], [found_none])
     assert 0.2 < low < 0.5 < high < 0.8
     # Seeds average within each side.
-    low, high = paired_interval([found_all, found_none], [half])
+    low, high = _interval([found_all, found_none], [half])
     assert low <= 0 <= high
     with pytest.raises(ValueError, match="different positives"):
-        paired_interval([found_all], [_run([[1, 1]] * 29, accounts[:29])])
+        _interval([found_all], [_run([[1, 1]] * 29, accounts[:29])])
+
+
+def test_the_paired_interval_reads_its_settings_from_the_caller() -> None:
+    """Nothing in this module fixes the replicates, the level or the seed: a narrower level
+    gives a narrower interval, another seed another draw, and none has a default."""
+    assert not {"REPLICATES", "LEVEL", "BOOTSTRAP_SEED"} & set(vars(selection))
+    accounts = tuple(f"m{index}" for index in range(30))
+    half = _run([[1, 1]] * 15 + [[0, 0]] * 15, accounts)
+    none = _run([[0, 0]] * 30, accounts)
+    wide = paired_interval([half], [none], replicates=1_000, level=0.95, seed=0)
+    narrow = paired_interval([half], [none], replicates=1_000, level=0.5, seed=0)
+    assert wide[0] < narrow[0] < narrow[1] < wide[1]
+    assert wide != paired_interval([half], [none], replicates=1_000, level=0.95, seed=1)
+    with pytest.raises(TypeError):
+        paired_interval([half], [none])  # pyright: ignore[reportCallIssue]
+
+
+def test_keys_out_of_the_order_of_their_mondays_are_refused() -> None:
+    """The ranking slices each Monday out of the sorted keys, so unsorted ones are refused
+    rather than ranked wrongly."""
+    keys = ranked_keys(pd.concat([_keys(M1, 100, {0: 1}), _keys(M2, 100, {1: 1})]))
+    scores = -np.arange(200, dtype=np.float64)
+    assert found(keys, scores).accounts == ("a000", "a001")
+    with pytest.raises(ValueError, match="not in the order of their Mondays"):
+        found(keys.iloc[::-1].reset_index(drop=True), scores)

@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from mule_pattern_learner.config import DEFAULT_CONFIG
 from mule_pattern_learner.data.population import list_population
 from mule_pattern_learner.subgraph.build import Batch
 from mule_pattern_learner.subgraph.cache import Cache
@@ -31,12 +32,13 @@ WORLD = "0123456789abcdef0123456789abcdef"
 
 @dataclass(frozen=True)
 class ComparisonWorld:
-    """The training batches of both Mondays with the mules positive, and the selection world
-    of T with the mules positive."""
+    """The training batches of both Mondays with the mules positive, each example weighing
+    its own number (weights), and the selection world of T with the mules positive."""
 
     training: list[Batch]
     selection: SelectionWorld
     mules: tuple[str, ...]
+    weights: dict[tuple[int, str], float]
 
 
 @pytest.fixture(scope="session")
@@ -49,8 +51,18 @@ def world(tmp_path_factory: pytest.TempPathFactory) -> ComparisonWorld:
     mondays = (T, T + 7 * DAY_MS)
     cache = Cache(folder / "cache")
     fetch(Spy(graph), cache, {t_ms: accounts for t_ms in mondays}, parity=parity)
+    # Every example weighs its own number, so that a weight read in another order is caught.
+    weights = {
+        (t_ms, account): 1.0 + 0.5 * day + index / 1_000
+        for day, t_ms in enumerate(mondays)
+        for index, account in enumerate(accounts)
+    }
     examples = pd.DataFrame(
-        [(t_ms, account, int(account in MULES), 1.0) for t_ms in mondays for account in accounts],
+        [
+            (t_ms, account, int(account in MULES), weights[t_ms, account])
+            for t_ms in mondays
+            for account in accounts
+        ],
         columns=["t_ms", "account_id", "label", "weight"],
     )
     keys = pd.DataFrame(
@@ -63,7 +75,8 @@ def world(tmp_path_factory: pytest.TempPathFactory) -> ComparisonWorld:
         }
     )
     return ComparisonWorld(
-        training_batches(cache, WORLD, examples, 64),
+        training_batches(cache, WORLD, examples, 64, seed=DEFAULT_CONFIG.training.shuffle_seed),
         SelectionWorld(cache, WORLD, keys, 64),
         MULES,
+        weights,
     )

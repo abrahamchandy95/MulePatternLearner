@@ -10,9 +10,22 @@ comparison switches", XGBoost inputs), so the trees see exactly what TigerGraph 
 
 The scored account's customer C_s is the one its ownership edge reaches, and D_s the devices and
 IPs of C_s's enrolment edges in the batch; a leaf among them has the row read_hubs gives it.
+B5's closure around the scored account's nodes also gives C_s an enrolment edge to a node seen
+on the account's payments that C_s is linked to beyond its 8 kept links, so with more than 8
+visible links of a kind D_s here holds a node that docs/features.md's D_s (the kept links)
+leaves out. Only past evidence is read, so it is no leak; whether B5 marks the kept links or
+features.md defines D_s as C_s's enrolment edges in the subgraph is the owner's to decide.
 Each value is the raw one the batch holds before encoding: counts, cents, shares and flags as
 they are, durations in seconds. No degree column is read, and no node or edge of another
 example, since each example is its own copy of its subgraph.
+
+The vectors are float32, as XGBoost reads them anyway, so a whole selection world's examples
+take half the memory (the seconds are divided in float64 first). A cent sum above 2**24 cents
+loses its last cents, which a tree never reads.
+
+A training batch's labels and weights travel with its vectors, row by row in the order of the
+keys, since the batches hold their examples shuffled and a label table in any other order would
+train the trees on the wrong labels without a word. The vectors of a scoring batch carry none.
 """
 
 from __future__ import annotations
@@ -82,11 +95,29 @@ MILLISECONDS = [
 @dataclass(frozen=True)
 class Vectors:
     """The XGBoost vectors of examples: each example's (Monday, account) key, and its own and
-    graph vectors, a row per example in the order of the keys."""
+    graph vectors, a row per example in the order of the keys, float32; and, for examples of
+    training batches, each one's label (1 identified, 0 unlabelled) and weight in the same
+    order, both empty for examples of scoring batches."""
 
     keys: tuple[tuple[int, str], ...]
-    own: NDArray[np.float64]
-    graph: NDArray[np.float64]
+    own: NDArray[np.float32]
+    graph: NDArray[np.float32]
+    labels: NDArray[np.int64]
+    weights: NDArray[np.float64]
+
+    def __post_init__(self) -> None:
+        examples = len(self.keys)
+        if len(self.own) != examples or len(self.graph) != examples:
+            raise ValueError(f"{examples} keys for {len(self.own)} and {len(self.graph)} rows")
+        if len(self.labels) != len(self.weights) or len(self.labels) not in (0, examples):
+            raise ValueError(
+                f"{len(self.labels)} labels and {len(self.weights)} weights for {examples} keys"
+            )
+
+    @property
+    def labelled(self) -> bool:
+        """Whether the vectors are of training batches, each with its label and weight."""
+        return len(self.labels) > 0
 
 
 def _numpy(tensor: Tensor) -> NDArray[np.float64]:
@@ -140,16 +171,32 @@ def vectors(batch: Batch) -> Vectors:
         parts.append(_mean_and_max(rows, example[sources], examples))
     parts.append(_numpy(data.community))
     keys = tuple((key.t_ms, key.account_id) for key in batch.keys)
-    return Vectors(keys, own, np.concatenate(parts, axis=1))
+    if "label" in data:
+        labels = data.label.detach().cpu().numpy().astype(np.int64)
+        weights = data.weight.detach().cpu().numpy().astype(np.float64)
+    else:
+        labels, weights = np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.float64)
+    return Vectors(
+        keys,
+        own.astype(np.float32),
+        np.concatenate(parts, axis=1).astype(np.float32),
+        labels,
+        weights,
+    )
 
 
 def vectors_of(batches: Iterable[Batch]) -> Vectors:
-    """The vectors of every example of batches, in their order."""
+    """The vectors of every example of batches, in their order; batches are all training
+    batches, whose labels and weights come with the vectors, or all scoring batches."""
     found = [vectors(batch) for batch in batches]
     if not found:
         raise ValueError("Vectors need at least one batch")
+    if len({part.labelled for part in found}) != 1:
+        raise ValueError("The batches are some training batches and some scoring batches")
     return Vectors(
         tuple(key for part in found for key in part.keys),
         np.concatenate([part.own for part in found]),
         np.concatenate([part.graph for part in found]),
+        np.concatenate([part.labels for part in found]),
+        np.concatenate([part.weights for part in found]),
     )

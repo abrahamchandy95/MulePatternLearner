@@ -20,7 +20,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from itertools import combinations
 
-from ..config import TrainingConfig
+from ..config import AuditConfig, TrainingConfig
 from .selection import Found, paired_interval
 
 # The multiple reported runs fix the prior at when the grid's priors do not differ.
@@ -82,9 +82,12 @@ class Decision:
         return found
 
 
-def decide(found: Mapping[float, Sequence[Found]]) -> Decision:
+def decide(
+    found: Mapping[float, Sequence[Found]], audit: AuditConfig, training: TrainingConfig
+) -> Decision:
     """The decision on the grid from what each multiple's selected model found on the
-    selection world, one Found per seed in the same order of seeds for every multiple."""
+    selection world, one Found per seed in the same order of seeds for every multiple; the
+    intervals take their replicates and level from audit and their seed from training."""
     if len(found) < 2:
         raise ValueError("A decision on the grid compares at least two priors")
     seeds = {len(runs) for runs in found.values()}
@@ -92,7 +95,13 @@ def decide(found: Mapping[float, Sequence[Found]]) -> Decision:
         raise ValueError("Every prior of a decision needs one selected run per seed")
     return Decision(
         {
-            (first, second): paired_interval(found[first], found[second])
+            (first, second): paired_interval(
+                found[first],
+                found[second],
+                replicates=audit.replicates,
+                level=audit.interval,
+                seed=training.bootstrap_seed,
+            )
             for first, second in combinations(found, 2)
         }
     )

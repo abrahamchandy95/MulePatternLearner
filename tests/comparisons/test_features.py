@@ -14,6 +14,7 @@ from torch_geometric.data import HeteroData
 from mule_pattern_learner.comparisons.features import (
     GRAPH_COLUMNS,
     OWN_COLUMNS,
+    Vectors,
     vectors,
     vectors_of,
 )
@@ -147,12 +148,13 @@ def test_every_value_of_a_hand_built_batch() -> None:
         )
     ]
     assert durations == [18, 45, 47, 49]
+    assert found.own.dtype == found.graph.dtype == np.float32
     for row, node in enumerate((0, 2)):
-        expected = [1000.0 * node + column for column in range(50)]
-        for column in durations:
-            expected[column] /= 1000
-        np.testing.assert_array_equal(found.own[row], expected)
-        np.testing.assert_array_equal(found.graph[row, :50], expected)
+        # The seconds are divided in float64 and then held as float32.
+        expected = np.array([1000.0 * node + column for column in range(50)])
+        expected[durations] /= 1000
+        np.testing.assert_array_equal(found.own[row], expected.astype(np.float32))
+        np.testing.assert_array_equal(found.graph[row, :50], expected.astype(np.float32))
         # The customer's columns 1 to 8, never its degree columns.
         np.testing.assert_array_equal(
             found.graph[row, 50:58], [10.0 * node + column for column in range(8)]
@@ -167,7 +169,9 @@ def test_every_value_of_a_hand_built_batch() -> None:
     np.testing.assert_array_equal(found.graph[1, 67:76], [2, 2, 2, 2, 2, 2, 0, 0, 0])
     np.testing.assert_array_equal(found.graph[1, 76:85], [5, 6, 1, 1, 2, 3, 1, 0, 0])
     np.testing.assert_array_equal(found.graph[1, 85:94], [5, 6, 1, 1, 2, 3, 1, 0, 0])
-    np.testing.assert_array_equal(found.graph[:, 94:], _hand_batch().data.community.numpy())
+    np.testing.assert_array_equal(
+        found.graph[:, 94:], _hand_batch().data.community.numpy().astype(np.float32)
+    )
     assert found.own.shape == (2, 50) and found.graph.shape == (2, 102)
 
 
@@ -193,15 +197,58 @@ def test_the_vectors_of_the_batch_world_read_its_rows(world: Any) -> None:
         for index, position in enumerate(scored):
             raw = data[ACCOUNT].x[position, :50].numpy().copy()
             raw[[18, 45, 47, 49]] /= 1000
-            np.testing.assert_array_equal(found.own[row], raw)
+            np.testing.assert_array_equal(found.own[row], raw.astype(np.float32))
             customer = customers[accounts == position][0]
             np.testing.assert_array_equal(
-                found.graph[row, 50:58], data[CUSTOMER].x[customer, :8].numpy()
+                found.graph[row, 50:58], data[CUSTOMER].x[customer, :8].numpy().astype(np.float32)
             )
-            np.testing.assert_array_equal(found.graph[row, 94:], data.community[index].numpy())
+            np.testing.assert_array_equal(
+                found.graph[row, 94:], data.community[index].numpy().astype(np.float32)
+            )
             row += 1
     # A ring member's customer is enrolled on the ring's device, which reaches its vector.
     ring = found.keys.index(next(key for key in found.keys if key[1] == "a_r1"))
     assert found.graph[ring, GRAPH_COLUMNS.index("device_max.customers_90d")] >= 2
     with pytest.raises(ValueError, match="at least one batch"):
         vectors_of([])
+
+
+def test_a_training_batchs_labels_and_weights_travel_with_its_vectors() -> None:
+    """The hand-built batch's examples are labelled 1 and 0 and weigh 2 and 0.5: row 0 of every
+    array is the first example whatever order the batch holds them in."""
+    batch = _hand_batch()
+    batch.data.label = torch.tensor([1, 0])
+    batch.data.weight = torch.tensor([2.0, 0.5], dtype=torch.float64)
+    found = vectors(batch)
+    assert found.labelled and found.labels.tolist() == [1, 0] and found.weights.tolist() == [2, 0.5]
+    assert found.labels.dtype == np.int64 and found.weights.dtype == np.float64
+    # A scoring batch carries none.
+    scoring = vectors(_hand_batch())
+    assert not scoring.labelled
+    assert scoring.labels.shape == scoring.weights.shape == (0,)
+
+
+def test_the_labels_and_weights_of_the_shuffled_batches_follow_their_keys(world: Any) -> None:
+    """The batch world's training batches hold their examples shuffled across both Mondays, so
+    their order is neither the examples' nor sorted, yet every row's label is whether its own
+    account is a mule and its weight is its own example's."""
+    found = vectors_of(world.training)
+    assert list(found.keys) != sorted(found.keys) and len(found.keys) == 448
+    assert found.labelled and len(found.labels) == len(found.weights) == 448
+    for row, (t_ms, account) in enumerate(found.keys):
+        assert found.labels[row] == int(account in world.mules)
+        assert found.weights[row] == world.weights[t_ms, account]
+    assert found.labels.sum() == 2 * len(world.mules)
+
+
+def test_vectors_refuse_mixed_batches_and_mismatched_rows(world: Any) -> None:
+    scoring = next(iter(world.selection.batches))
+    with pytest.raises(ValueError, match="some training batches and some scoring batches"):
+        vectors_of([world.training[0], scoring])
+    only = vectors(world.training[0])
+    with pytest.raises(ValueError, match="keys for"):
+        Vectors(only.keys[:-1], only.own, only.graph, only.labels, only.weights)
+    with pytest.raises(ValueError, match="labels and"):
+        Vectors(only.keys, only.own, only.graph, only.labels[:-1], only.weights[:-1])
+    with pytest.raises(ValueError, match="labels and"):
+        Vectors(only.keys, only.own, only.graph, only.labels, only.weights[:-1])

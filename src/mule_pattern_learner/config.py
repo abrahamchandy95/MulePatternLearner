@@ -428,6 +428,11 @@ class TrainingConfig:
     patience: int = 5
     # The model seeds: each varies only the initial weights, dropout and batch order.
     seeds: tuple[int, ...] = (0, 1, 2, 3, 4)
+    # The seed of the one shuffle of a world's training examples into batches, the same for
+    # every model seed, and the seed of the draws of the paired intervals that decide the
+    # prior grid. Both stay fixed, since the three worlds vary the data.
+    shuffle_seed: int = 0
+    bootstrap_seed: int = 0
     # The nnPU priors tried, as multiples of the identified active share of the training
     # world.
     prior_multiples: tuple[float, ...] = (1, 3, 10)
@@ -445,6 +450,8 @@ class TrainingConfig:
             raise ValueError("training.seeds must hold a seed")
         for seed in self.seeds:
             _integer("training.seeds", seed, SEEDS)
+        _integer("training.shuffle_seed", self.shuffle_seed, SEEDS)
+        _integer("training.bootstrap_seed", self.bootstrap_seed, SEEDS)
         if not _distinct("training.prior_multiples", self.prior_multiples):
             raise ValueError("training.prior_multiples must hold a multiple")
         for multiple in self.prior_multiples:

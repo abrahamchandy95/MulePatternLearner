@@ -6,13 +6,17 @@ other query versions or settings and names the fields that differ)."""
 from __future__ import annotations
 
 from dataclasses import asdict, replace
+import math
 from pathlib import Path
 
+import numpy as np
 import pytest
 import torch
 
 from mule_pattern_learner.config import DEFAULT_CONFIG
-from mule_pattern_learner.model.time_encoding import FREQUENCIES, SCALE
+from mule_pattern_learner.model import encode as encode_module
+from mule_pattern_learner.model.encode import Kind
+from mule_pattern_learner.model.time_encoding import FREQUENCIES, SCALE, encode_reference
 from mule_pattern_learner.subgraph.layouts import ACCOUNT_LAYOUT, RELATIONS
 from mule_pattern_learner.tigergraph.queries import VERSIONS
 from mule_pattern_learner.training import contract
@@ -38,7 +42,9 @@ def test_the_lock_holds_every_field_the_design_names() -> None:
     assert len(found["layout.relations"]) == len(RELATIONS) == 16
     assert found["layout.edge.account.pays.account"][0] == ["amount", "amount"]
     assert found["layout.scored"] == "account"
-    assert found["encoding.count"] == "log(1 + n)"
+    assert {name for name in found if name.startswith("encoding.")} == {
+        f"encoding.{kind.value}" for kind in Kind
+    }
     assert found["fourier.frequencies"] == FREQUENCIES.tolist()
     assert found["fourier.scale"] == SCALE
     assert found["degrees.customer"] == [
@@ -122,3 +128,79 @@ def test_a_file_that_is_no_model_file_is_refused(tmp_path: Path) -> None:
         load(path, _lock())
     with pytest.raises(ValueError, match="names neither"):
         save(tmp_path / "x.pt", _lock(), {"lock": {}})
+
+
+def _probe(kind: Kind, raw: tuple[float, ...]) -> list[float]:
+    """The encoded numbers the lock holds for the probe row raw of a kind."""
+    for held, encoded in _lock()[f"encoding.{kind.value}"]:
+        if held == list(raw):
+            return encoded
+    raise AssertionError(f"No probe row {raw} of {kind}")
+
+
+def test_every_kind_has_a_probe_and_the_lock_holds_what_the_encoder_makes_of_it() -> None:
+    """Worked out by hand: a flag and a share as they are; a count of 7 is log(1 + 7) = 2.0794,
+    12,345 cents are 123.45 dollars and log(1 + 123.45) = 4.8241, both to two decimals; an
+    absent duration is its presence bit 0 and 64 zeros, a present one its bit 1 and the 32 sines
+    then the 32 cosines of 2 pi f u, u = log1p(seconds) / log1p(10 years)."""
+    assert set(contract.PROBES) == set(Kind)
+    assert _probe(Kind.FLAG, (1.0,)) == [1.0]
+    assert _probe(Kind.SHARE, (0.25,)) == [0.25]
+    assert _probe(Kind.COUNT, (0.0,)) == [0.0]
+    assert _probe(Kind.COUNT, (7.0,)) == [2.08] and round(math.log(1 + 7), 2) == 2.08
+    assert _probe(Kind.AMOUNT, (12_345.0,)) == [4.82] and round(math.log(1 + 123.45), 2) == 4.82
+    assert _probe(Kind.DURATION, (0.0, 0.0)) == [0.0] * 65
+    for milliseconds in (3_600_000, 7_776_000_000):
+        expected = encode_reference(np.array([milliseconds]))[0]
+        found = _probe(Kind.DURATION, (1.0, float(milliseconds)))
+        assert found[0] == 1.0 and len(found) == 65
+        np.testing.assert_allclose(found[1:], expected, atol=0.006)
+
+
+def test_changing_the_amount_or_count_transform_changes_the_lock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """log(1 + cents) instead of log(1 + cents / 100), and another count transform, each
+    leave every other field equal and are named by their own."""
+    before = _lock()
+    monkeypatch.setattr(encode_module, "CENTS", 1.0)
+    cents = _lock()
+    assert [line.split(" (")[0] for line in differences(before, cents)] == ["encoding.amount"]
+    monkeypatch.undo()
+
+    def shifted(x: torch.Tensor) -> torch.Tensor:
+        return torch.log(x + 2.0)
+
+    monkeypatch.setattr(torch, "log1p", shifted)
+    counts = _lock()
+    changed = [line.split(" (")[0] for line in differences(before, counts)]
+    assert "encoding.count" in changed and "encoding.flag" not in changed
+    monkeypatch.undo()
+    assert differences(before, _lock()) == []
+
+
+def test_a_model_built_under_another_encoding_is_refused_by_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "model.pt"
+    save(path, _lock(), {"seed": 0})
+    monkeypatch.setattr(encode_module, "CENTS", 1.0)
+    with pytest.raises(ValueError, match=r"encoding\.amount"):
+        load(path, _lock())
+
+
+def test_the_probe_is_encoded_on_the_cpu(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A lock computed on a training machine with a GPU is the lock a laptop computes."""
+    devices: list[object] = []
+    real = contract.encode
+
+    def spy(raw: torch.Tensor, layout: object, device: object = None) -> torch.Tensor:
+        devices.append(device)
+        return real(raw, layout, device)  # pyright: ignore[reportArgumentType]
+
+    monkeypatch.setattr(contract, "encode", spy)
+    fields = contract.encoding_fields()
+    assert devices == ["cpu"] * len(Kind)
+    assert {name: len(value) for name, value in fields.items()} == {
+        f"encoding.{kind.value}": len(contract.PROBES[kind]) for kind in Kind
+    }

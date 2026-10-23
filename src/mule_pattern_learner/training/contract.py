@@ -7,6 +7,11 @@ basis, the community, degree and ablation flags, the seed count, and the subgrap
 model built under another lock would feed it numbers that do not mean what it learned, so
 load refuses such a model and names every field that differs.
 
+How each kind of column is encoded is read from the encoder itself, never written beside it:
+the lock holds what model.encode.encode makes of a fixed probe of every kind, so changing the
+amount or count transform, or the way a duration reaches the Fourier basis, changes the lock
+and refuses the models built before it.
+
 The lock is a flat mapping of dotted field names to plain values (strings, numbers, booleans
 and lists of them), so that two locks compare field by field and a difference names its
 field. A model file is written through a temporary file and a rename, so it appears whole or
@@ -26,21 +31,28 @@ import uuid
 import torch
 
 from ..config import SubgraphConfig, TrainingConfig
-from ..model.encode import BatchLayout, Kind, Layout
+from ..model.encode import BatchLayout, Column, Kind, Layout, encode
 from ..model.time_encoding import FREQUENCIES, SCALE, WIDTH
 from ..subgraph.layouts import DEGREES, LAYOUT
 from ..tigergraph.queries import VERSIONS
 
 # The version of the model files' format, which a change to their content raises.
 FORMAT = 1
-# How each kind of raw column is encoded (model.encode).
-ENCODINGS = {
-    Kind.FLAG: "as is",
-    Kind.COUNT: "log(1 + n)",
-    Kind.AMOUNT: "log(1 + cents / 100)",
-    Kind.SHARE: "as is",
-    Kind.DURATION: "presence bit and 64 Fourier numbers of log1p(seconds) / log1p(10 years)",
+# The raw rows that probe how each kind of column is encoded, each row one raw column of the
+# kind (a duration's two raw columns are its presence bit and its integer milliseconds): a flag
+# and a share at their ends, a count of 7, 12,345 cents, and a duration absent, of one hour and
+# of 90 days.
+PROBES: dict[Kind, tuple[tuple[float, ...], ...]] = {
+    Kind.FLAG: ((0.0,), (1.0,)),
+    Kind.COUNT: ((0.0,), (7.0,)),
+    Kind.AMOUNT: ((0.0,), (12_345.0,)),
+    Kind.SHARE: ((0.0,), (0.25,), (1.0,)),
+    Kind.DURATION: ((0.0, 0.0), (1.0, 3_600_000.0), (1.0, 7_776_000_000.0)),
 }
+# The decimals an encoded probe is kept to: the last bits of a float32 sine differ between
+# machines, and a model trained on one must still load on another, while any change of
+# transform moves the probe by far more than this.
+PROBE_DECIMALS = 2
 
 type Lock = dict[str, Any]
 
@@ -73,6 +85,22 @@ def layout_fields(layout: BatchLayout = LAYOUT) -> Lock:
     return found
 
 
+def encoding_fields() -> Lock:
+    """The lock's fields of how each kind of raw column is encoded: for every kind, its probe
+    rows with what model.encode.encode makes of each, to PROBE_DECIMALS decimals, computed on
+    the CPU."""
+    found: Lock = {}
+    for kind in Kind:
+        rows = PROBES[kind]
+        raw = torch.tensor(rows, dtype=torch.float64)
+        encoded = encode(raw, Layout((Column(kind.value, kind),)), "cpu")
+        found[f"encoding.{kind.value}"] = [
+            [list(row), [round(number, PROBE_DECIMALS) for number in out.tolist()]]
+            for row, out in zip(rows, encoded, strict=True)
+        ]
+    return found
+
+
 def lock(
     ranker: str,
     *,
@@ -91,7 +119,7 @@ def lock(
     }
     found |= {f"versions.{name}": version for name, version in sorted(VERSIONS.items())}
     found |= layout_fields()
-    found |= {f"encoding.{kind.value}": text for kind, text in ENCODINGS.items()}
+    found |= encoding_fields()
     found |= {
         "fourier.frequencies": FREQUENCIES.tolist(),
         "fourier.scale": SCALE,

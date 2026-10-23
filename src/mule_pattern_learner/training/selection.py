@@ -18,7 +18,8 @@ two pooled recalls; a later epoch or prior must be strictly better to be kept.
 
 paired_interval gives the interval of the difference between two runs' scores, the identified
 mule accounts resampled with all their positive Mondays (ring ids are evaluation's alone), for
-the prior grid's decision (training.priors).
+the prior grid's decision (training.priors). Its replicates, level and seed are settings the
+caller reads from config (audit.replicates, audit.interval and training.bootstrap_seed).
 """
 
 from __future__ import annotations
@@ -34,10 +35,6 @@ import pandas as pd
 BUDGETS = (0.01, 0.05)
 # The columns of the selection keys.
 SELECTION_COLUMNS = ("t_ms", "account_id", "positive", "ranked", "weight")
-# The resamples of a paired interval, its level, and the seed of its draws.
-REPLICATES = 1_000
-LEVEL = 0.95
-BOOTSTRAP_SEED = 0
 
 
 @dataclass(frozen=True)
@@ -96,9 +93,12 @@ def found(keys: pd.DataFrame, logits: NDArray[np.floating]) -> Found:
     weights = keys["weight"].to_numpy(dtype=np.float64)
     shares = np.zeros((len(keys), len(BUDGETS)))
     t_ms = keys["t_ms"].to_numpy(dtype=np.int64)
-    for day in np.unique(t_ms):
-        rows = np.flatnonzero(t_ms == day)
-        shares[rows] = _monday_shares(scores[rows], weights[rows])
+    if (t_ms[1:] < t_ms[:-1]).any():
+        raise ValueError("The selection keys are not in the order of their Mondays")
+    # The keys run Monday after Monday, so each Monday's rows are one slice.
+    starts = np.flatnonzero(np.r_[True, t_ms[1:] != t_ms[:-1]])
+    for first, last in zip(starts, np.r_[starts[1:], len(t_ms)], strict=True):
+        shares[first:last] = _monday_shares(scores[first:last], weights[first:last])
     return Found(
         tuple(str(account) for account in keys["account_id"].to_numpy()[positive]),
         weights[positive],
@@ -146,9 +146,9 @@ def paired_interval(
     first: Sequence[Found],
     second: Sequence[Found],
     *,
-    replicates: int = REPLICATES,
-    level: float = LEVEL,
-    seed: int = BOOTSTRAP_SEED,
+    replicates: int,
+    level: float,
+    seed: int,
 ) -> tuple[float, float]:
     """The central level interval of the difference between the mean score of the first runs
     and of the second (several seeds each, all on one selection world), over replicates that

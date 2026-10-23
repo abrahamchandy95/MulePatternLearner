@@ -18,6 +18,7 @@ from mule_pattern_learner.config import DEFAULT_CONFIG, TrainingConfig
 from mule_pattern_learner.subgraph.build import Batch
 from mule_pattern_learner.subgraph.switches import Switch
 from mule_pattern_learner.tigergraph import executor as executor_module
+from mule_pattern_learner.training import contract
 from mule_pattern_learner.training import trainer as trainer_module
 from mule_pattern_learner.training.batches import training_batches
 from mule_pattern_learner.training.priors import Prior
@@ -27,14 +28,17 @@ from mule_pattern_learner.training.trainer import (
     SelectionWorld,
     Trained,
     check_determinism,
+    checkpoint_fields,
     gnn_lock,
     load_trained,
     model_config,
     model_file,
     ranker_name,
     save_trained,
+    selection_passes,
     train,
     train_rotation,
+    training_digest,
 )
 
 MODEL = DEFAULT_CONFIG.model
@@ -54,7 +58,7 @@ def _small(world: Any) -> list[Batch]:
     frame = frame[frame["t_ms"] == world.mondays[0]].reset_index(drop=True)
     chosen = frame[(frame["label"] == 1) | (frame.index < 42)]
     assert len(chosen) == 48
-    return training_batches(world.cache, world.identity, chosen, 16)
+    return training_batches(world.cache, world.identity, chosen, 16, seed=SHORT.shuffle_seed)
 
 
 def _train(
@@ -91,7 +95,10 @@ def test_training_learns_the_planted_mules_and_not_shuffled_labels(
     selection = _selection(world)
     learned = _train(planted, selection)
     labels = world.examples(world.shuffled())
-    shuffled = _train(training_batches(world.cache, world.identity, labels, 32), selection)
+    shuffled = _train(
+        training_batches(world.cache, world.identity, labels, 32, seed=SHORT.shuffle_seed),
+        selection,
+    )
     assert learned.score >= 0.5
     assert shuffled.score <= 0.25
     assert learned.score > shuffled.score + 0.25
@@ -166,6 +173,158 @@ def test_a_checkpoint_of_another_lock_or_prior_is_refused(world: Any, tmp_path: 
         )
     with pytest.raises(ValueError, match="another prior"):
         _train(batches, selection, settings, [Prior(1.0, 0.04)], checkpoints=tmp_path)
+
+
+def test_a_finished_checkpoint_does_not_stand_in_for_a_run_of_other_settings(
+    world: Any, tmp_path: Path
+) -> None:
+    """A run of one epoch finishes at its max_epochs. Trained again into the same folder with
+    four epochs, another learning rate and another weight decay, it is refused with the first
+    of them named, not returned after its one epoch."""
+    batches, selection = _small(world), _selection(world)
+    first = _train(batches, selection, replace(SHORT, max_epochs=1), checkpoints=tmp_path)
+    assert len(first.history) == 1
+    longer = replace(SHORT, max_epochs=4, learning_rate=0.01, weight_decay=0.01)
+    with pytest.raises(ValueError) as refused:
+        _train(batches, selection, longer, checkpoints=tmp_path)
+    for name in ("max_epochs", "learning_rate", "weight_decay"):
+        assert f"gnn.{name} (the model's" in str(refused.value)
+    assert "gnn.patience" not in str(refused.value)
+
+
+@pytest.mark.parametrize(
+    ("changes", "field"),
+    [
+        ({"learning_rate": 0.002}, "gnn.learning_rate (the model's 0.001, now 0.002)"),
+        ({"weight_decay": 0.0002}, "gnn.weight_decay"),
+        ({"batch_size": 16}, "gnn.batch_size (the model's 32, now 16)"),
+        ({"max_epochs": 2}, "gnn.max_epochs (the model's 1, now 2)"),
+        ({"patience": 2}, "gnn.patience (the model's 3, now 2)"),
+    ],
+)
+def test_a_checkpoint_of_other_training_settings_is_refused_by_name(
+    world: Any, tmp_path: Path, changes: dict[str, Any], field: str
+) -> None:
+    batches, selection = _small(world), _selection(world)
+    _train(batches, selection, replace(SHORT, max_epochs=1), checkpoints=tmp_path)
+    with pytest.raises(ValueError) as refused:
+        _train(
+            batches, selection, replace(SHORT, **{"max_epochs": 1, **changes}), checkpoints=tmp_path
+        )
+    assert field.split(" (")[0] in str(refused.value)
+
+
+def test_a_checkpoint_of_another_model_seed_world_or_examples_is_refused_by_name(
+    world: Any, tmp_path: Path
+) -> None:
+    batches, selection = _small(world), _selection(world)
+    settings = replace(SHORT, max_epochs=1)
+    _train(batches, selection, settings, checkpoints=tmp_path)
+
+    def refused(match: str, **changes: Any) -> None:
+        with pytest.raises(ValueError, match=match):
+            _train(
+                changes.pop("batches", batches),
+                changes.pop("selection", selection),
+                settings,
+                checkpoints=tmp_path,
+                **changes,
+            )
+
+    # Another model: the hidden width, the dropout.
+    for name, value in (("hidden", 32), ("dropout", 0.3)):
+        with pytest.raises(ValueError, match=rf"gnn\.model\.{name} \(the model's"):
+            train(
+                batches,
+                selection,
+                [PRIOR],
+                0,
+                model=replace(MODEL, **{name: value}),
+                settings=settings,
+                subgraph=SUBGRAPH,
+                checkpoints=tmp_path,
+            )
+    # Another seed, from a checkpoint of seed 0 put in the place of seed 1's.
+    (tmp_path / "gnn_seed0_prior1.pt").rename(tmp_path / "gnn_seed1_prior1.pt")
+    with pytest.raises(ValueError, match=r"gnn\.seed \(the model's 0, now 1\)"):
+        train(
+            batches,
+            selection,
+            [PRIOR],
+            1,
+            model=MODEL,
+            settings=settings,
+            subgraph=SUBGRAPH,
+            checkpoints=tmp_path,
+        )
+    (tmp_path / "gnn_seed1_prior1.pt").rename(tmp_path / "gnn_seed0_prior1.pt")
+    # Another training world, with the same examples.
+    frame = world.examples()
+    frame = frame[frame["t_ms"] == world.mondays[0]].reset_index(drop=True)
+    chosen = frame[(frame["label"] == 1) | (frame.index < 42)]
+    elsewhere = "f" * 32
+    moved = training_batches(world.cache, elsewhere, chosen, 16, seed=SHORT.shuffle_seed)
+    assert training_digest(moved) == training_digest(batches)
+    refused(r"gnn\.training_worlds", batches=moved)
+    # Another selection world, with the same keys.
+    other = SelectionWorld(world.cache, elsewhere, world.selection_keys(), 64)
+    assert other.digest == selection.digest
+    refused(r"gnn\.selection_world", selection=other)
+    # The same worlds with other training labels, and with other selection weights.
+    flipped = chosen.copy()
+    flipped.loc[flipped.index[-1], "label"] = 1 - flipped["label"].iloc[-1]
+    relabelled = training_batches(world.cache, world.identity, flipped, 16, seed=SHORT.shuffle_seed)
+    refused(r"gnn\.training_examples", batches=relabelled)
+    keys = world.selection_keys()
+    keys.loc[keys["account_id"] == "a_r1", "positive"] = False
+    keys.loc[keys["account_id"] == "a_collector", "weight"] = 2.0
+    refused(
+        r"gnn\.selection_examples",
+        selection=SelectionWorld(world.cache, world.identity, keys, 64),
+    )
+    # With every one of them as it was, the checkpoint resumes.
+    assert len(_train(batches, selection, settings, checkpoints=tmp_path).history) == 1
+
+
+def test_the_checkpoint_fields_name_what_the_run_is(world: Any) -> None:
+    batches, selection = _small(world), _selection(world)
+    found = checkpoint_fields(batches, selection, MODEL, SHORT, 3)
+    assert found | {"training_examples": "", "selection_examples": ""} == {
+        "seed": 3,
+        "learning_rate": 0.001,
+        "weight_decay": 0.0001,
+        "batch_size": 32,
+        "max_epochs": 3,
+        "patience": 3,
+        "model.hidden": 64,
+        "model.heads": 4,
+        "model.dropout": 0.2,
+        "model.layers": 2,
+        "model.head_hidden": 32,
+        "model.community": True,
+        "training_worlds": [world.identity],
+        "training_examples": "",
+        "selection_world": world.identity,
+        "selection_examples": "",
+    }
+    assert len(found["training_examples"]) == len(found["selection_examples"]) == 32  # type: ignore[arg-type]
+    # The digest follows the examples, their order and their labels, and nothing else.
+    assert training_digest(batches) == training_digest(list(batches))
+    assert training_digest(batches[::-1]) != training_digest(batches)
+    assert training_digest(batches[:2]) != training_digest(batches)
+
+
+def test_every_epochs_model_keeps_the_contract_lock_alone(world: Any, tmp_path: Path) -> None:
+    """A checkpoint carries the run's own fields, but the models kept for evaluation, which
+    reads them with the lock of the current settings, do not."""
+    batches, selection = _small(world), _selection(world)
+    settings = replace(SHORT, max_epochs=1)
+    _train(batches, selection, settings, checkpoints=tmp_path / "c", epochs=tmp_path / "e")
+    plain = gnn_lock(None, MODEL, SUBGRAPH, settings)
+    kept = contract.load(tmp_path / "e" / "gnn_seed0_prior1_epoch1.pt", plain)
+    assert kept["epoch"] == 1 and kept["seed"] == 0
+    with pytest.raises(ValueError, match=r"gnn\.seed"):
+        contract.load(tmp_path / "c" / "gnn_seed0_prior1.pt", plain)
 
 
 def test_an_epoch_and_a_prior_are_kept_only_when_strictly_better(
@@ -346,3 +505,15 @@ def test_training_refuses_batches_without_labels_and_empty_inputs(world: Any) ->
         _train([], selection)
     with pytest.raises(ValueError, match="at least one prior"):
         _train(_small(world), selection, priors=())
+
+
+def test_the_passes_over_the_selection_world_are_counted_for_the_benchmark() -> None:
+    """Five seeds, each training the full model over 3 priors and the 4 ablations at one, for
+    at most 30 epochs: 5 x (3 + 4) x 30 = 1,050 passes; with the prior fixed, 5 x (1 + 4) x 30
+    = 750."""
+    assert len(Switch) == 4
+    assert selection_passes(DEFAULT_CONFIG.training, 3) == 1_050
+    assert selection_passes(DEFAULT_CONFIG.training, 1) == 750
+    assert selection_passes(replace(SHORT, seeds=(0,)), 2) == 18
+    with pytest.raises(ValueError, match="at least one prior"):
+        selection_passes(SHORT, 0)
