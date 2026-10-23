@@ -1,0 +1,82 @@
+"""The development checks beside the feature audit: no positive is an account hub, the leaf share
+of ring devices and IPs, and whether busy ordinary accounts' card spending fills the short
+dwell shares (docs/design.md, "The feature audit")."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+from mule_pattern_learner.evaluation.development_checks import (
+    OwnNodes,
+    card_spending,
+    flow_shares,
+    own_nodes,
+    positive_hubs,
+    ring_leaf_share,
+)
+from mule_pattern_learner.subgraph.build import read_rows
+from mule_pattern_learner.subgraph.cache import Cache
+from mule_pattern_learner.subgraph.fetch import fetch
+from mule_pattern_learner.testing.calendar import Spy
+from mule_pattern_learner.testing.reference import ReferenceGraph
+from mule_pattern_learner.testing.world import DAY_MS, T
+
+W = 7 * DAY_MS
+
+
+def test_an_active_mule_that_is_an_account_hub_is_found() -> None:
+    rows = [(T, "a_m1"), (T, "a_m2"), (T + W, "a_m1")]
+    hubs = {T: frozenset({"a_m2", "a_shop"}), T + W: frozenset({"a_shop"})}
+    assert positive_hubs(rows, hubs).values.tolist() == [[T, "a_m2"]]
+    assert positive_hubs(rows[:1], hubs).empty
+
+
+def test_a_mules_own_nodes_from_its_rows(
+    graph: ReferenceGraph, parity: Path, tmp_path: Path
+) -> None:
+    cache = Cache(tmp_path / "cache")
+    fetch(Spy(graph), cache, {T: ["a_hr1", "a_o00"]}, parity=parity)
+    hidden, ordinary = read_rows(cache, [(T, "a_hr1"), (T, "a_o00")])
+    # a_hr1's customer is enrolled on the ring's device, which its payment was also seen on.
+    assert own_nodes(hidden).nodes == {("device", "d_hidden"): False}
+    assert own_nodes(ordinary).nodes == {}
+    # a_o00 spent 20.00 by card, matched to no inflow; it sent one payment.
+    assert flow_shares(ordinary) == ([0.0, 0.0, 0.0, 0.0, 0.0], 1.0)
+
+
+def test_the_leaf_share_of_ring_nodes() -> None:
+    # Ring 1's two mules both reach d1 and i1 at T, i1 a leaf: two ring nodes, one leaf. Ring 2
+    # has one mule at T, and a_m4 no ring, so neither makes a ring node.
+    rows = [(T, "a_m1", 1), (T, "a_m2", 1), (T, "a_m3", 2), (T, "a_m4", -1), (T + W, "a_m1", 1)]
+    nodes = [
+        OwnNodes({("device", "d1"): False, ("ip", "i1"): True}),
+        OwnNodes({("device", "d1"): False, ("ip", "i1"): True}),
+        OwnNodes({("device", "d1"): False}),
+        OwnNodes({("device", "d1"): False}),
+        OwnNodes({("ip", "i1"): True}),
+    ]
+    found = ring_leaf_share(rows, nodes)
+    assert found.to_dict("records") == [{"ring_nodes": 2, "leaves": 1, "leaf_share": 0.5}]
+    assert np.isnan(ring_leaf_share(rows[2:4], nodes[2:4])["leaf_share"].iloc[0])
+
+
+def test_the_card_spending_report() -> None:
+    # Ten ordinary account-Mondays sending 1 to 10 payments, and two mules. The busy ones are
+    # those at or above the 90th percentile by weight, 9 payments (9 of the 10 send at most 9):
+    # the one sending 9, with nothing matched, and the one sending 10, whose left_1d is 0.8,
+    # 0.5 of it by card.
+    out_30d = np.array([*range(1, 11), 3, 4], dtype=np.float64)
+    positive = np.array([False] * 10 + [True] * 2)
+    shares = np.zeros((12, 5))
+    shares[9] = [0.1, 0.2, 0.4, 0.8, 0.5]
+    shares[10:] = [0.3, 0.6, 0.9, 1.0, 0.0]
+    found = card_spending(shares, out_30d, positive, np.ones(12)).set_index("group")
+    assert found.loc["busy_ordinary", "account_mondays"] == 2
+    assert found.loc["busy_ordinary", "left_1d"] == pytest.approx(0.4)
+    assert found.loc["busy_ordinary", "card_part_of_left_1d"] == pytest.approx(0.2)
+    assert found.loc["ordinary", "left_1d"] == pytest.approx(0.08)
+    assert found.loc["mules", "left_15m"] == pytest.approx(0.3)
+    assert found.loc["mules", "card_part_of_left_1d"] == 0
