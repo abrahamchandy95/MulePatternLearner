@@ -139,7 +139,7 @@ REGISTRY: dict[str, Query] = {
         Query(
             READ_PAYMENT_EVENTS,
             QUERIES_FOLDER,
-            "read_payment_events-a9233646b1bf",
+            "read_payment_events-46f6c5d2e2c5",
             read_payment_events.params,
             (
                 read_payment_events.EventAccount,
@@ -150,7 +150,7 @@ REGISTRY: dict[str, Query] = {
         Query(
             READ_SHARED_IDENTITY,
             QUERIES_FOLDER,
-            "read_shared_identity-ccebbca1bdd2",
+            "read_shared_identity-88d8813e926f",
             read_shared_identity.params,
             (
                 read_shared_identity.CustomerRow,

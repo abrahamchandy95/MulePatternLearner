@@ -239,7 +239,7 @@ def test_t_then_every_account_then_every_hub_is_checked_before_any_payment_is_re
         "ScoredReceived",
         "ScoredPicked",
         "Siblings",
-        "SiblingPicks",
+        "SiblingsRanked",
         "SiblingsPicked",
         "CustomerAccounts",
     ]
@@ -280,7 +280,7 @@ SELECT_ORDER = [
     "Hop1Picked",
     "Siblings",
     "Active",
-    "SiblingPicks",
+    "SiblingsRanked",
     "SiblingsPicked",
     "ExpandedOwners",
     "CustomerAccounts",
@@ -320,7 +320,7 @@ def test_every_value_a_select_reads_is_written_by_an_earlier_select() -> None:
     assert reads == {
         "ScoredPicked": {"scored_out", "scored_in"},
         "Hop1Picked": {"other_out", "other_in"},
-        "SiblingPicks": {"last_active"},
+        "SiblingsRanked": {"last_active"},
         "SiblingsPicked": {"siblings"},
         "Senders": {"hub"},
         "Receivers": {"hub"},
@@ -344,7 +344,7 @@ def test_every_value_a_select_reads_is_written_by_an_earlier_select() -> None:
         ("ScoredSent", "ScoredPicked", "ScoredPicked reads @scored_out, written by ScoredSent"),
         ("Hop1Received", "Hop1Picked", "Hop1Picked reads @other_in, written by Hop1Received"),
         # The other accounts picked before their latest payments are read: by id alone.
-        ("Active", "SiblingPicks", "SiblingPicks reads @last_active, written by Active"),
+        ("Active", "SiblingsRanked", "SiblingsRanked reads @last_active, written by Active"),
         # Hubs marked after the ends are read: no gap is ever absent at a hub end.
         ("Marked", "Senders", "Senders reads @hub, written by Marked"),
         # The ends read after the history: no pair is ever found.
@@ -484,7 +484,7 @@ BOTH_VISIBLE = VISIBLE | {
 OWNED = ["Account_Owned_By_Party", "Party_Owns_Account"]
 
 
-@pytest.mark.parametrize("target", ["Siblings", "SiblingPicks", "CustomerAccounts"])
+@pytest.mark.parametrize("target", ["Siblings", "SiblingsRanked", "CustomerAccounts"])
 def test_a_customers_accounts_are_read_through_visible_ownership(target: str) -> None:
     """The scored account's customer owns it through a visible ownership link, and the
     customer's accounts are those it owns through one too that exist at t, open or closed:
@@ -524,7 +524,7 @@ def test_the_newest_8_other_accounts_by_their_latest_payment_then_by_id() -> Non
     ]
     assert active.conjuncts == WINDOW | {"x != b"}
     assert accumulation_text(DEFINITION, "Active") == "b.@last_active += p.event_ts_ms"
-    assert accumulation_text(DEFINITION, "SiblingPicks") == normal(
+    assert accumulation_text(DEFINITION, "SiblingsRanked") == normal(
         "a.@siblings += Sibling(floor(b.@last_active / 1000), b.id)"
     )
     assert accumulation_text(DEFINITION, "SiblingsPicked") == normal(

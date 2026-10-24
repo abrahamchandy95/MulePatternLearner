@@ -284,7 +284,7 @@ CREATE OR REPLACE QUERY read_shared_identity(
         |Transfer_From_Account>|Transfer_To_Account>):f)- Account:x
       WHERE p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms AND x != b
       ACCUM b.@last_active += p.event_ts_ms;
-    SiblingPicks = SELECT a FROM Scored:a -(Account_Owned_By_Party>:o)- Party:q
+    SiblingsRanked = SELECT a FROM Scored:a -(Account_Owned_By_Party>:o)- Party:q
       -(Party_Owns_Account>:w)- Account:b
       WHERE o.valid_from_ms < t_ms
         AND (o.valid_to_ms == 0 OR o.valid_to_ms > t_ms - lookback_ms)
@@ -991,7 +991,7 @@ CREATE OR REPLACE QUERY read_shared_identity(
     AccountsListed = to_vertex_set(@@printed_accounts, "Account");
     Accounts = SELECT a FROM AccountsListed:a WHERE a.opened_ms < t_ms;
 
-    PRINT "ok" AS status, "read_shared_identity-ccebbca1bdd2" AS version;
+    PRINT "ok" AS status, "read_shared_identity-88d8813e926f" AS version;
     PRINT CustomersListed[CustomersListed.id AS customer_id,
       CustomersListed.@accounts_owned AS accounts_owned,
       CustomersListed.@devices_30d AS devices_30d, CustomersListed.@ips_30d AS ips_30d,

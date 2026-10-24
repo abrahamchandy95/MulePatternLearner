@@ -312,7 +312,7 @@ SELECT_ORDER = [
     "Hop1Picked",
     "Siblings",
     "Active",
-    "SiblingPicks",
+    "SiblingsRanked",
     "SiblingsPicked",
     "CustomerAccounts",
     "ExpandingMarked",
@@ -411,7 +411,7 @@ def test_every_value_a_select_reads_is_written_by_an_earlier_select() -> None:
     assert reads == {
         "ScoredPicked": {"scored_out", "scored_in"},
         "Hop1Picked": {"other_out", "other_in"},
-        "SiblingPicks": {"last_active"},
+        "SiblingsRanked": {"last_active"},
         "SiblingsPicked": {"siblings"},
         "ExpandingSeen": {"sender_id"},
         "Leaves": {"crowd_customers"},
@@ -466,7 +466,7 @@ def test_the_capped_payments_are_b4s_without_the_kind_of_payment(target: str) ->
     )
 
 
-@pytest.mark.parametrize("target", ["Hop1", "Siblings", "Active", "SiblingPicks"])
+@pytest.mark.parametrize("target", ["Hop1", "Siblings", "Active", "SiblingsRanked"])
 def test_the_expanded_accounts_and_the_customers_other_accounts_are_b4s(target: str) -> None:
     assert _code(DEFINITION, target) == _code(PAYMENT_EVENTS, target)
 
