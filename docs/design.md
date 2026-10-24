@@ -1308,6 +1308,12 @@ count: two accounts of one customer, each carrying that customer's enrolment, co
 node that only that customer reaches can be a ring's. The development checks build it so, from
 the audit sample, which holds every active true mule on each Monday it is scorable and active.
 
+Two reports of this design count a ring's devices and IPs and are not yet built: the share of
+positives with any ring-device link (see [Comparisons](#comparisons)), and the share of mules,
+by whether they hold a ring endpoint, whose community block differs from that of a customer who
+shares nothing (see [the community block](#read_community-b6-how-the-mule-network-formed)).
+When they are built they read a ring's devices and IPs as this paragraph defines them.
+
 The early-warning ring link of the [Metrics](#metrics) table does not use this rule. A mule on
 its early-warning Monday is not yet active, so it cannot be one of the two active mules, and its
 link is read as that table's Early warning row says.
