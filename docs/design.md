@@ -1302,10 +1302,11 @@ and that busy ordinary accounts' card spending does not fill B1's short dwell sh
 device or IP is a ring's on a Monday when the own edges of at least two of that ring's active
 true mules reach it. A mule's own edges are its account's owner-enrolment edges (its customer's
 enrolment, copied onto the account) and its seen edges in its fetched subgraph that Monday. A
-node that only one active true mule reaches is not the ring's, a mule with no ring has none, and
-a mule is an account, so two accounts of one customer count as two. The development checks build
-it so, from the audit sample, which holds every active true mule on each Monday it is scorable
-and active.
+node that only one active true mule reaches is not the ring's, and a mule with no ring has none.
+Mules are counted as accounts, the scored unit, and not as customers the way the sharing rules
+count: two accounts of one customer, each carrying that customer's enrolment, count as two, so a
+node that only that customer reaches can be a ring's. The development checks build it so, from
+the audit sample, which holds every active true mule on each Monday it is scorable and active.
 
 The early-warning ring link of the [Metrics](#metrics) table does not use this rule. A mule on
 its early-warning Monday is not yet active, so it cannot be one of the two active mules, and its

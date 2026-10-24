@@ -23,7 +23,7 @@ from mule_pattern_learner.subgraph.fetch import fetch
 from mule_pattern_learner.testing import fixtures
 from mule_pattern_learner.testing.calendar import Spy
 from mule_pattern_learner.testing.reference import ReferenceGraph
-from mule_pattern_learner.testing.world import DAY_MS, T, WorldBuilder
+from mule_pattern_learner.testing.world import DAY_MS, Mule, T, WorldBuilder
 
 W = 7 * DAY_MS
 
@@ -112,6 +112,24 @@ def test_a_node_reached_by_two_ringless_mules_is_no_ring_node() -> None:
     nodes = [OwnNodes({("device", "d1"): False})] * 2
     found = ring_leaf_share(rows, nodes)
     assert found["ring_nodes"].tolist() == [0] and np.isnan(found["leaf_share"].iloc[0])
+
+
+def test_two_accounts_of_one_customer_count_as_two_mules(parity: Path, tmp_path: Path) -> None:
+    # One customer holds two mule accounts of ring 7 and is enrolled on its home IP, which each
+    # account copies as its own. The ring's nodes count accounts, as the design states, so the
+    # IP is the ring's although no second customer reaches it.
+    w = WorldBuilder()
+    w.party("p_p", fixtures.JOINED)
+    for account in ("a_p1", "a_p2"):
+        w.account(account, "p_p", fixtures.JOINED, mule=Mule(T - 5 * DAY_MS, T, ring=7))
+    w.ip("p_p", "i_home", T - 60 * DAY_MS)
+    cache = Cache(tmp_path / "cache")
+    fetch(Spy(w.graph()), cache, {T: ["a_p1", "a_p2"]}, parity=parity)
+    rows = read_rows(cache, [(T, "a_p1"), (T, "a_p2")])
+    nodes = [own_nodes(row) for row in rows]
+    assert [held.nodes for held in nodes] == [{("ip", "i_home"): False}] * 2
+    found = ring_leaf_share([(T, "a_p1", 7), (T, "a_p2", 7)], nodes)
+    assert found.to_dict("records") == [{"ring_nodes": 1, "leaves": 0, "leaf_share": 0.0}]
 
 
 def test_the_card_spending_report() -> None:
