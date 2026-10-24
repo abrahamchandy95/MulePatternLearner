@@ -112,7 +112,7 @@ def test_a_fit_and_a_prediction_run_in_a_child_beside_a_busy_torch() -> None:
     busy = torch.randn(512, 512) @ torch.randn(512, 512)
     assert busy.shape == (512, 512)
     x, labels, weights, columns = _planted()
-    booster = process.fit(x, labels, weights, 3, columns)
+    booster = process.fit(x, labels, weights, columns)
     found = process.scores(booster, x, columns, 20)
     assert found.shape == (len(x),) and found.dtype == np.float64 and np.isfinite(found).all()
     assert found[labels == 1].mean() > found[labels == 0].mean() + 0.5
@@ -126,13 +126,13 @@ def test_the_childs_booster_and_scores_equal_an_in_process_fit() -> None:
         PLANTED,
         """
         # In this process, straight through XGBoost, with the weights at equal totals.
-        model = xgboost.XGBClassifier(n_estimators=MAX_ROUNDS, random_state=3)
+        model = xgboost.XGBClassifier(n_estimators=MAX_ROUNDS)
         model.fit(
             pd.DataFrame(x, columns=columns), labels, sample_weight=equal_totals(labels, weights)
         )
         direct = bytes(model.get_booster().save_raw("ubj"))
         # Through the child process.
-        child = process.fit(x, labels, weights, 3, columns)
+        child = process.fit(x, labels, weights, columns)
         assert child == direct, "the boosters differ"
         for rounds in (10, 370, 1000):
             here = boosting.scores(direct, x, columns, rounds)
@@ -179,7 +179,7 @@ def test_the_choice_of_a_round_count_in_the_child_equals_one_in_process() -> Non
                 "weight": 1.0,
             }
         )
-        raw = process.fit(x, labels, weights, 3, columns)
+        raw = process.fit(x, labels, weights, columns)
         here = boosting.choose(raw, x, columns, keys)
         there = process.choose(raw, x, columns, keys)
         assert here[0] == there[0] and here[2] == there[2] and len(there[2]) == 100
@@ -193,7 +193,7 @@ def test_the_choice_of_a_round_count_in_the_child_equals_one_in_process() -> Non
 
 
 def test_the_fit_keeps_xgboosts_defaults_and_names_its_columns() -> None:
-    """XGBoost's default settings, 1,000 rounds and the seed given, one tree per round."""
+    """XGBoost's default settings with 1,000 rounds and no seed, one tree per round."""
     found = fresh(
         PLANTED,
         """
@@ -205,8 +205,8 @@ def test_the_fit_keeps_xgboosts_defaults_and_names_its_columns() -> None:
             return real(**keywords)
 
         boosting.xgboost.XGBClassifier = recording
-        raw = boosting.fit(x, labels, equal_totals(labels, weights), 3, columns)
-        assert made == [{"n_estimators": MAX_ROUNDS, "random_state": 3}], made
+        raw = boosting.fit(x, labels, equal_totals(labels, weights), columns)
+        assert made == [{"n_estimators": MAX_ROUNDS}], made
         booster = xgboost.Booster()
         booster.load_model(bytearray(raw))
         assert booster.num_boosted_rounds() == MAX_ROUNDS and booster.feature_names == columns
@@ -221,7 +221,7 @@ def test_a_score_is_the_sum_of_the_trees_up_to_its_round() -> None:
     found = fresh(
         PLANTED,
         """
-        raw = boosting.fit(x, labels, equal_totals(labels, weights), 3, columns)
+        raw = boosting.fit(x, labels, equal_totals(labels, weights), columns)
         booster = xgboost.Booster()
         booster.load_model(bytearray(raw))
         frame = pd.DataFrame(x, columns=columns)
@@ -248,9 +248,9 @@ def test_the_parent_refuses_what_it_can_before_starting_a_child(
     monkeypatch.setattr(process.subprocess, "run", never)
     x, labels, weights, columns = _planted(20)
     with pytest.raises(ValueError, match="6 wide, not 5"):
-        process.fit(x, labels, weights, 0, columns[:5])
+        process.fit(x, labels, weights, columns[:5])
     with pytest.raises(ValueError, match="no label 1"):
-        process.fit(x, np.zeros(len(x), dtype=np.int64), weights, 0, columns)
+        process.fit(x, np.zeros(len(x), dtype=np.int64), weights, columns)
     with pytest.raises(ValueError, match="multiple of 10"):
         process.scores(b"", x, columns, 25)
 
@@ -301,7 +301,7 @@ def test_a_jobs_folder_is_removed_whether_the_child_succeeds_or_fails(
 ) -> None:
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     x, labels, weights, columns = _planted(60)
-    booster = process.fit(x, labels, weights, 3, columns)
+    booster = process.fit(x, labels, weights, columns)
     process.scores(booster, x, columns, 10)
     with pytest.raises(XGBoostProcessError):
         process.scores(b"not a booster", x, columns, 10)
@@ -322,7 +322,7 @@ def test_the_child_is_started_as_the_boosting_module_with_the_parents_environmen
 
     monkeypatch.setattr(process.subprocess, "run", recording)
     x, labels, weights, columns = _planted(40)
-    process.fit(x, labels, weights, 3, columns)
+    process.fit(x, labels, weights, columns)
     ((arguments, keywords),) = calls
     assert arguments[:3] == [sys.executable, "-m", process.MODULE]
     assert arguments[3] == "fit"

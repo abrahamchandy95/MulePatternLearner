@@ -268,11 +268,12 @@ def test_model_files_score_the_test_keys(
     # An XGBoost ranker's file scores its margin, summed up to its chosen rounds.
     vectors = vectors_of(batches)
     labels = np.array([account.startswith("a_hr") for _, account in vectors.keys], dtype=np.int64)
-    booster = rankers.fit(vectors.own, labels, np.ones(len(labels)), 0, rankers.OWN_COLUMNS)
+    booster = rankers.fit(vectors.own, labels, np.ones(len(labels)), rankers.OWN_COLUMNS)
     nothing = Found((), np.zeros(0), np.zeros((0, 2)))
-    trees = rankers.Trees(rankers.OWN, 0, booster, 20, 0.5, nothing, ())
+    trees = rankers.Trees(rankers.OWN, booster, 20, 0.5, nothing, ())
     trees_lock = rankers.lock(rankers.OWN, config.subgraph, config.training)
-    rankers.save(trees, tmp_path / "xgboost_own_seed0.pt", trees_lock)
-    scored = score_trees(tmp_path / "xgboost_own_seed0.pt", trees_lock, batches)
+    path = rankers.model_file(tmp_path, rankers.OWN)
+    rankers.save(trees, path, trees_lock)
+    scored = score_trees(path, trees_lock, batches)
     assert np.array_equal(scored["logit"].to_numpy(), trees.scores(vectors))
     assert scored["account_id"].tolist() == [account for _, account in vectors.keys]

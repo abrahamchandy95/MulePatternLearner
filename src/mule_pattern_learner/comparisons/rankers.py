@@ -10,13 +10,12 @@ asks what message passing adds beyond hand-made graph features (comparisons.feat
   against unlabelled ranks like one of positive against negative (Elkan and Noto, 2008). Each
   label's weights total half the number of examples, so their mean is 1 and XGBoost's
   defaults, which read the summed weight of a leaf, keep their usual scale.
-- It uses XGBoost's default settings, random_state the model seed, with at most MAX_ROUNDS
-  rounds. At those defaults (every row and column used by every tree) the seed changes no tree,
-  so the five seeds of a ranker are five identical models and their spread is 0; whether
-  XGBoost is seed-free and trained once, or its subsample and colsample_bytree are set below 1
-  so that the seed matters, is the owner's to decide. The round count is chosen among 10, 20,
-  ..., 1,000 by the selection score on the selection world (training.selection), as the GNN
-  chooses its epochs, a larger count only when strictly better.
+- It uses XGBoost's default settings, with at most MAX_ROUNDS rounds, and is trained once, with
+  no seed (the owner, 24 October 2026): at those defaults (every row and column used by every
+  tree) a seed changes no tree, five seeds gave byte-identical boosters, so a ranker is one
+  model with no seed spread, and the GNN's five seeds are compared with it. The round count is
+  chosen among 10, 20, ..., 1,000 by the selection score on the selection world
+  (training.selection), as the GNN chooses its epochs, a larger count only when strictly better.
 - An account's score is the sum of the outputs of the trees up to the chosen round, in
   float64: XGBoost's margin without its base score, which is the same for every account and so
   changes no ranking (comparisons.boosting).
@@ -24,8 +23,9 @@ asks what message passing adds beyond hand-made graph features (comparisons.feat
   (comparisons.process), so this module, which imports torch to save and load a ranker's file,
   never imports xgboost: a booster is its saved bytes here.
 
-A ranker's file holds its booster, its seed, its round count, its selection score and what it
-found, under the contract lock with its columns among the locked fields (training.contract).
+A ranker's file, named for the ranker alone (model_file), holds its booster, its round count,
+its selection score and what it found, under the contract lock with its columns among the
+locked fields (training.contract).
 """
 
 from __future__ import annotations
@@ -61,12 +61,11 @@ def matrix(name: str, vectors: Vectors) -> NDArray[np.float32]:
 
 @dataclass(frozen=True)
 class Trees:
-    """A trained XGBoost ranker: its name, seed and booster (as XGBoost saves it), the round
-    count selection chose, its score and what it found, and the score of every round count
-    tried."""
+    """A trained XGBoost ranker: its name and booster (as XGBoost saves it), the round count
+    selection chose, its score and what it found, and the score of every round count tried.
+    It is one model: there is no seed."""
 
     name: str
-    seed: int
     booster: bytes
     rounds: int
     score: float
@@ -78,16 +77,10 @@ class Trees:
         return scores(self.booster, matrix(self.name, vectors), COLUMNS[self.name], self.rounds)
 
 
-def train(
-    name: str,
-    training: Vectors,
-    selection: Vectors,
-    keys: pd.DataFrame,
-    seed: int,
-) -> Trees:
-    """The ranker of name trained on the training vectors with the labels and weights they
-    carry, its round count chosen on the selection vectors of the ranked selection keys (in
-    their order)."""
+def train(name: str, training: Vectors, selection: Vectors, keys: pd.DataFrame) -> Trees:
+    """The ranker of name trained once on the training vectors with the labels and weights
+    they carry, its round count chosen on the selection vectors of the ranked selection keys
+    (in their order)."""
     x_training, x_selection = matrix(name, training), matrix(name, selection)
     if not training.labelled:
         raise ValueError(
@@ -96,9 +89,9 @@ def train(
     expected = list(zip(keys["t_ms"].tolist(), keys["account_id"].tolist(), strict=True))
     if list(selection.keys) != [(int(t), str(a)) for t, a in expected]:
         raise ValueError("The selection vectors are not those of the selection keys")
-    booster = fit(x_training, training.labels, training.weights, seed, COLUMNS[name])
+    booster = fit(x_training, training.labels, training.weights, COLUMNS[name])
     rounds, chosen, history = choose(booster, x_selection, COLUMNS[name], keys)
-    return Trees(name, seed, booster, rounds, chosen.score, chosen, history)
+    return Trees(name, booster, rounds, chosen.score, chosen, history)
 
 
 def lock(name: str, subgraph: SubgraphConfig, training: TrainingConfig) -> Lock:
@@ -114,6 +107,12 @@ def lock(name: str, subgraph: SubgraphConfig, training: TrainingConfig) -> Lock:
     )
 
 
+def model_file(folder: Path, name: str) -> Path:
+    """The model file of an XGBoost ranker in a run's results folder: named for the ranker
+    alone, since it is trained once and has no seed."""
+    return folder / f"{name}.pt"
+
+
 def save(trees: Trees, path: Path, current: Lock) -> None:
     """Write a ranker's file under its lock."""
     contract.save(
@@ -121,7 +120,6 @@ def save(trees: Trees, path: Path, current: Lock) -> None:
         current,
         {
             "ranker": trees.name,
-            "seed": trees.seed,
             "booster": trees.booster,
             "rounds": trees.rounds,
             "score": trees.score,
@@ -144,7 +142,6 @@ def load(path: Path, current: Lock) -> Trees:
     history = tuple((int(rounds), float(score)) for rounds, score in stored["history"])
     return Trees(
         stored["ranker"],
-        stored["seed"],
         bytes(stored["booster"]),
         stored["rounds"],
         stored["score"],

@@ -36,14 +36,13 @@ def fit(
     x: NDArray[np.floating],
     labels: NDArray[np.integer],
     weights: NDArray[np.floating],
-    seed: int,
     columns: Sequence[str],
 ) -> bytes:
-    """XGBoost with its default settings, random_state seed and MAX_ROUNDS rounds on x, one
-    label per row, each row with its weight: the booster as XGBoost saves it (UBJSON)."""
+    """XGBoost with its default settings and MAX_ROUNDS rounds on x, one label per row,
+    each row with its weight: the booster as XGBoost saves it (UBJSON)."""
     if x.shape[1] != len(columns):
         raise ValueError(f"The vectors are {x.shape[1]} wide, not {len(columns)}")
-    model = xgboost.XGBClassifier(n_estimators=MAX_ROUNDS, random_state=seed)
+    model = xgboost.XGBClassifier(n_estimators=MAX_ROUNDS)
     model.fit(pd.DataFrame(x, columns=list(columns)), np.asarray(labels), sample_weight=weights)
     return bytes(model.get_booster().save_raw("ubj"))
 
@@ -113,13 +112,7 @@ def fold_scores(
 
 
 def _fit(arrays: Arrays, tables: Tables) -> Arrays:
-    raw = fit(
-        arrays["x"],
-        arrays["labels"],
-        arrays["weights"],
-        int(arrays["seed"]),
-        arrays["columns"].tolist(),
-    )
+    raw = fit(arrays["x"], arrays["labels"], arrays["weights"], arrays["columns"].tolist())
     return {"booster": np.frombuffer(raw, dtype=np.uint8)}
 
 

@@ -1048,7 +1048,7 @@ features](features.md) cites them by name for every feature.
 | Order-free ties | Same-second payments have no order (see [Time](#time)). | a fixture swapping same-second ids changes no B1, B2, B3 or B6 value; the loader refuses payment ids that follow event time |
 | Same rule for all | Caps, orders, hub handling and subgraph shape are identical for positives, unlabelled draws, neighbours and accounts scored in selection or test; one query with one set of settings builds all of them. Every setting is chosen on development worlds only, from label-free statistics (the bench histograms, cost) or the selection score, never the answer key; the pass or fail checks the owner approved (the feature audit, the hub and leaf checks, the gates) are the only reads of the truth there. On reported worlds a check only verifies and a failure stops the run. | the cache key holds query versions and settings; the contract lock; the manifest records what each setting was chosen from |
 | Keys chosen by their reader | Training, selection and scoring read only the cache keys they computed themselves, never the cache's index, so rows fetched for a test-role list chosen by the truth never steer them. | selection on a world after a test-role fallback fetch of it, with the answer key erased, gives byte-identical inputs |
-| Test worlds stay unseen | Nothing learned from a reported world's answer key changes the next reported result on the same worlds: missed mules are investigated on development worlds, a change prompted by a reported run needs new reported worlds from new seeds, and the number of seeds for every ranker is fixed at five before any result is seen. | the manifest records the worlds whose reports informed each change; the seed count is in the contract lock |
+| Test worlds stay unseen | Nothing learned from a reported world's answer key changes the next reported result on the same worlds: missed mules are investigated on development worlds, a change prompted by a reported run needs new reported worlds from new seeds, and the number of seeds of the GNN and of each ablation is fixed at five, and each XGBoost comparison is trained once, before any result is seen. | the manifest records the worlds whose reports informed each change; the seed count is in the contract lock |
 | No label conditioning | Graph-structure features are computed identically for every account whatever its label. | erasing the labels (above) |
 | Evaluation never feeds back | Time to first flag and every other evaluation output never become features (the owner: "dont sent this time to the model"). No query, data or training code imports evaluation, and nothing outside evaluation reads evaluation's output: `mule audit`'s pass records are read by `mule evaluate`, and, for pass or fail only, by the `mule train` command before any training code runs (the one exception, see [Gates](#gates)). | import contracts (the XGBoost package included); the path contract above |
 | Gates | A value is only as honest as PhantomLedger's behaviour. | `mule evaluate` refuses a reported result unless every gate mapped to a feature passed (see [Gates](#gates)) |
@@ -1165,16 +1165,19 @@ what TigerGraph gives the GNN.
   industry standard xgboost"). It learns identified against unlabelled with each label's
   weights rescaled to equal totals: when labels are selected completely at random, a classifier
   of labelled against unlabelled ranks like one of positive against negative (Elkan and Noto,
-  2008). It uses XGBoost's default settings, seeded by the model seed, with the number of
-  rounds chosen on the selection world by the same selection score, as the GNN chooses its
-  epochs. Every XGBoost fit and prediction, the clock probe's included, runs in a Python
-  process of its own that never imports torch, because torch and XGBoost load different
+  2008). It uses XGBoost's default settings, with the number of rounds chosen on the selection
+  world by the same selection score, as the GNN chooses its epochs. At those defaults a seed
+  changes nothing (five seeds gave byte-identical boosters), so each of the two comparisons is
+  trained once, with no seed: both have no seed spread, and the GNN's five seeds are compared
+  with that one model. Every XGBoost fit and prediction, the clock probe's included, runs in a
+  Python process of its own that never imports torch, because torch and XGBoost load different
   OpenMP runtimes and a process that holds both crashes in XGBoost's threads.
 - Each ablation trains and selects its epoch like the full model, at the prior the full model
   chose for that seed, with the same five seeds.
-- Every ranker has exactly five seeds, fixed before any result is seen. A difference is called
-  shown only when its paired, ring-resampled interval excludes zero; an interval that
-  straddles zero is reported as inconclusive, never answered with more seeds.
+- The GNN and each ablation have exactly five seeds, fixed before any result is seen, and each
+  XGBoost comparison is one model with no seed. A difference is called shown only when its
+  paired, ring-resampled interval excludes zero; an interval that straddles zero is reported as
+  inconclusive, never answered with more seeds.
 - What to expect: a model without message passing may come close to the GNN once it is given
   counts; plan for a close result. With a ring device
   on about 18% of mules, the device and IP ablation may move little; the share of
@@ -1239,7 +1242,8 @@ removes known cases:
 A ring bootstrap within each world resamples whole rings with all their account-Mondays, each
 ringless mule as its own cluster, and whole non-mule accounts with all their Mondays, since an
 account's 52 Mondays are correlated. Comparisons use paired replicates. The spread over the
-five seeds and the three rotations is reported beside it.
+five seeds (of the GNN and its ablations only, since each XGBoost comparison is one model) and
+the three rotations is reported beside it.
 
 ### The missed-mule report
 
@@ -1442,7 +1446,7 @@ Commands take no options: worlds, roles, dates and settings live in config.
 | `mule prepare` | data code: reads `read_world` and matches the configured world by its identity file, on the fields the two share; checks the scored Mondays and the lookback, the value sets and the labels from `read_labels`; reads the populations; writes the training examples and weights; reports counts, the identified active share and the weight balance per Monday |
 | `mule fetch` | fills the cache for every example the configured roles of the loaded world need: the training draw, and every scorable account of every Monday of a selection or test role |
 | `mule audit` | evaluation code, on the loaded world: reads the answer key into the evaluation store; checks PhantomLedger's gate record against the world's identity; builds and fetches a test-role fallback list if configured; runs the label checks, the clock probe and the identified share by onset month; on development worlds also the feature audit and the hub, leaf and card-spending checks; writes pass records to the evaluation store |
-| `mule train` | first reads the pass or fail of the audit records of its rotation's worlds, and nothing else of them, and stops on a failure that stops the run (see [Gates](#gates)); then trains the GNN over the prior grid and five seeds with selection after each epoch, the ablations and the two XGBoost comparisons; training code reads no gate or audit record |
+| `mule train` | first reads the pass or fail of the audit records of its rotation's worlds, and nothing else of them, and stops on a failure that stops the run (see [Gates](#gates)); then trains the GNN over the prior grid and five seeds with selection after each epoch, the ablations and the two XGBoost comparisons, once each; training code reads no gate or audit record |
 | `mule evaluate` | scores the test world and writes the metrics, groups, uncertainty, missed-mule report and identification bias; marks the results development only unless every gate passed |
 | `mule score` | scores the accounts and dates set in config with the model of the best-selection seed |
 | `mule bench` | measures cost on the loaded world and writes `results/bench/` |

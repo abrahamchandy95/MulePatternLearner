@@ -1,12 +1,14 @@
-"""The two XGBoost comparisons (docs/design.md, "Comparisons"): XGBoost's defaults seeded by the
-model seed, the round count chosen by the selection score, the same model from the same seed,
-and the ranker's file under its lock. Every fit and prediction runs in a child process
-(comparisons.process), so none of these tests imports xgboost."""
+"""The two XGBoost comparisons (docs/design.md, "Comparisons"): XGBoost's defaults with no seed,
+each ranker trained once, the round count chosen by the selection score, the same booster from
+the same data, and the ranker's file under its lock. Every fit and prediction runs in a child
+process (comparisons.process), so none of these tests imports xgboost."""
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import fields, replace
+import inspect
 from pathlib import Path
+import sys
 from typing import Any
 
 import numpy as np
@@ -23,9 +25,11 @@ from mule_pattern_learner.comparisons.features import (
 from mule_pattern_learner.comparisons.rankers import (
     GRAPH,
     OWN,
+    Trees,
     fit,
     load,
     lock,
+    model_file,
     save,
     scores,
     train,
@@ -68,9 +72,9 @@ def test_a_constant_feature_changes_nothing() -> None:
     vectors, _ = _planted(100, 2)
     labels, weights = vectors.labels, vectors.weights
     columns = OWN_COLUMNS[:10]
-    plain = fit(vectors.own[:, :10], labels, weights, 0, columns)
+    plain = fit(vectors.own[:, :10], labels, weights, columns)
     padded = np.concatenate([vectors.own[:, :10], np.full((200, 1), 7.0, np.float32)], axis=1)
-    widened = fit(padded, labels, weights, 0, (*columns, "constant"))
+    widened = fit(padded, labels, weights, (*columns, "constant"))
     np.testing.assert_array_equal(
         scores(plain, vectors.own[:, :10], columns, 100),
         scores(widened, padded, (*columns, "constant"), 100),
@@ -85,8 +89,8 @@ def test_the_rankers_learn_a_planted_cue_and_choose_their_rounds() -> None:
     perfect = selection_score(keys, keys["positive"].to_numpy(dtype=np.float64))
     assert 0.3 < perfect < 0.5
     for name in (OWN, GRAPH):
-        trees = train(name, training, selection, keys, 0)
-        assert trees.name == name and trees.seed == 0
+        trees = train(name, training, selection, keys)
+        assert trees.name == name
         assert trees.rounds % ROUND_STEP == 0 and 10 <= trees.rounds <= MAX_ROUNDS
         assert len(trees.history) == 100
         best = max(score for _, score in trees.history)
@@ -118,47 +122,67 @@ def test_the_labels_follow_their_rows_whatever_order_the_examples_come_in() -> N
     )
     assert list(shuffled.keys) != list(training.keys)
     for name in (OWN, GRAPH):
-        assert train(name, shuffled, selection, keys, 0).score > 0.9 * perfect
+        assert train(name, shuffled, selection, keys).score > 0.9 * perfect
     misaligned = replace(shuffled, labels=training.labels, weights=training.weights)
-    assert train(OWN, misaligned, selection, keys, 0).score < 0.5 * perfect
+    assert train(OWN, misaligned, selection, keys).score < 0.5 * perfect
 
 
-def test_the_same_seed_gives_the_same_model() -> None:
+def test_two_fits_on_the_same_data_give_identical_boosters() -> None:
+    """XGBoost's defaults take no seed, so a ranker trained twice on the same data is the same
+    model: the same booster, round count, score and history, and the same scores. The seed it
+    once took changed nothing at these defaults, which is why a ranker is trained once."""
     training, _ = _planted(150, 5)
     selection, keys = _planted(100, 6, labelled=False)
-    first = train(GRAPH, training, selection, keys, 1)
-    second = train(GRAPH, training, selection, keys, 1)
-    assert first.booster == second.booster
-    assert (first.rounds, first.score, first.history) == (
-        second.rounds,
-        second.score,
-        second.history,
-    )
-    np.testing.assert_array_equal(first.scores(selection), second.scores(selection))
+    first = fit(training.graph, training.labels, training.weights, GRAPH_COLUMNS)
+    second = fit(training.graph, training.labels, training.weights, GRAPH_COLUMNS)
+    assert first == second
+    one = train(GRAPH, training, selection, keys)
+    two = train(GRAPH, training, selection, keys)
+    assert one.booster == two.booster == first
+    assert (one.rounds, one.score, one.history) == (two.rounds, two.score, two.history)
+    np.testing.assert_array_equal(one.scores(selection), two.scores(selection))
+
+
+def test_a_ranker_is_one_model_with_no_seed(tmp_path: Path) -> None:
+    """A ranker has no seed anywhere: not in what trains it, not in what it is, not in the name
+    of its file; and nothing here loaded XGBoost into this process, which holds torch."""
+    assert [field.name for field in fields(Trees)] == [
+        "name",
+        "booster",
+        "rounds",
+        "score",
+        "found",
+        "history",
+    ]
+    assert list(inspect.signature(train).parameters) == ["name", "training", "selection", "keys"]
+    assert "seed" not in inspect.signature(fit).parameters
+    assert model_file(tmp_path, OWN) == tmp_path / "xgboost_own.pt"
+    assert model_file(tmp_path, GRAPH) == tmp_path / "xgboost_graph.pt"
+    assert "xgboost" not in sys.modules
 
 
 def test_selection_vectors_must_be_those_of_the_keys() -> None:
     training, _ = _planted(50, 7)
     selection, keys = _planted(50, 8, labelled=False)
     with pytest.raises(ValueError, match="not those of the selection keys"):
-        train(OWN, training, selection, keys.iloc[::-1], 0)
+        train(OWN, training, selection, keys.iloc[::-1])
     with pytest.raises(ValueError, match="No XGBoost ranker"):
-        train("xgboost_other", training, selection, keys, 0)
+        train("xgboost_other", training, selection, keys)
     # Vectors of scoring batches carry no labels to train on.
     with pytest.raises(ValueError, match="carry no labels and weights"):
-        train(OWN, selection, selection, keys, 0)
+        train(OWN, selection, selection, keys)
 
 
 def test_a_rankers_file_reads_back_under_its_lock(tmp_path: Path) -> None:
     training, _ = _planted(100, 9)
     selection, keys = _planted(100, 10, labelled=False)
-    trees = train(OWN, training, selection, keys, 2)
-    path = tmp_path / "xgboost_own_seed2.pt"
+    trees = train(OWN, training, selection, keys)
+    path = model_file(tmp_path, OWN)
     save(trees, path, lock(OWN, SUBGRAPH, TRAINING))
     back = load(path, lock(OWN, SUBGRAPH, TRAINING))
-    assert (back.name, back.seed, back.rounds, back.score, back.history) == (
+    assert (back.name, back.booster, back.rounds, back.score, back.history) == (
         OWN,
-        2,
+        trees.booster,
         trees.rounds,
         trees.score,
         trees.history,
@@ -178,6 +202,6 @@ def test_both_rankers_learn_the_batch_worlds_mules(world: Any) -> None:
     training = vectors_of(world.training)
     selection = vectors_of(world.selection.batches)
     for name in (OWN, GRAPH):
-        trees = train(name, training, selection, world.selection.keys, 0)
+        trees = train(name, training, selection, world.selection.keys)
         assert trees.score >= 0.5, name
         assert set(trees.found.accounts) == set(world.mules)

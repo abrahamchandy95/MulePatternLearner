@@ -100,12 +100,10 @@ def fit(
     x: NDArray[np.floating],
     labels: NDArray[np.integer],
     weights: NDArray[np.floating],
-    seed: int,
     columns: Sequence[str],
 ) -> bytes:
-    """XGBoost with its default settings and random_state seed on x, one label per row, the
-    weight of each label rescaled to equal totals (rounds.equal_totals), in a child process:
-    the booster."""
+    """XGBoost with its default settings on x, one label per row, the weight of each label
+    rescaled to equal totals (rounds.equal_totals), in a child process: the booster."""
     if x.shape[1] != len(columns):
         raise ValueError(f"The vectors are {x.shape[1]} wide, not {len(columns)}")
     found = run(
@@ -114,7 +112,6 @@ def fit(
             "x": x,
             "labels": np.asarray(labels),
             "weights": equal_totals(np.asarray(labels), weights),
-            "seed": np.asarray(seed),
             "columns": np.array(list(columns), dtype=np.str_),
         },
     )

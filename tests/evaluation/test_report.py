@@ -9,6 +9,7 @@ from dataclasses import replace
 import hashlib
 import json
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -173,7 +174,7 @@ def test_a_rotations_evaluation(
     world = ScoredWorld.of(identity, cache, keys)
     mules = {truth.account_id for truth in world.key.mules} - {"a_hr3"}
 
-    def run(ranker: str, seed: int, score: float, strength: float) -> Run:
+    def run(ranker: str, seed: int | None, score: float, strength: float) -> Run:
         logits = [
             strength * (account in mules) + _noise(f"{ranker}{seed}{t_ms}{account}")
             for t_ms, account in zip(keys["t_ms"], keys["account_id"], strict=True)
@@ -185,6 +186,8 @@ def test_a_rotations_evaluation(
         run("gnn", 1, 0.5, 2.0),
         run("gnn_scored_alone", 0, 0.2, 0.0),
         run("gnn_scored_alone", 1, 0.2, 0.0),
+        # An XGBoost comparison is one model, with no seed.
+        run("xgboost_own", None, 0.4, 1.0),
     ]
     assert selected(runs) is runs[1]
     audit = replace(DEFAULT_CONFIG.audit, replicates=30)
@@ -201,22 +204,73 @@ def test_a_rotations_evaluation(
         (str(row["ranker"]), str(row["metric"])): row
         for row in tables["comparisons"].to_dict("records")
     }
-    assert {ranker for ranker, _ in comparisons} == {"gnn_scored_alone"}
+    assert {ranker for ranker, _ in comparisons} == {"gnn_scored_alone", "xgboost_own"}
     # The GNN ranks the planted mules far above the ablation, which ranks them at random.
     assert comparisons[("gnn_scored_alone", "roc_auc")]["difference"] > 0.3
     assert comparisons[("gnn_scored_alone", "roc_auc")]["shown"]
-    assert len(tables["per_monday"]) == 4 * 3
+    assert len(tables["per_monday"]) == 5 * 3
     spread = {
         (str(row["ranker"]), str(row["group"]), str(row["metric"])): row
         for row in tables["spread"].to_dict("records")
     }
     assert spread[("gnn", "all", "roc_auc")]["max"] >= spread[("gnn", "all", "roc_auc")]["min"]
+    # An XGBoost comparison is one model: no seed in its rows, no spread over seeds, and the
+    # comparison sets the mean of the GNN's seeds against that one model.
+    assert {ranker for ranker, _, _ in spread} == {"gnn", "gnn_scored_alone"}
+    for name in ("metrics", "per_monday", "groups"):
+        held = tables[name]
+        assert str(held["seed"].dtype) == "Int64"
+        assert held.loc[held["ranker"] == "xgboost_own", "seed"].isna().all()
+        assert held.loc[held["ranker"] != "xgboost_own", "seed"].notna().all()
+    assert set(metrics.loc[metrics["ranker"] == "gnn", "seed"]) == {0, 1}
+    assert not metrics.loc[metrics["ranker"] == "xgboost_own", "selected"].any()
+    auc = metrics[(metrics["metric"] == "roc_auc") & (metrics["group"] == "all")]
+    gnn_mean = auc.loc[auc["ranker"] == "gnn", "value"].mean()
+    xgboost_auc = auc.loc[auc["ranker"] == "xgboost_own", "value"].item()
+    assert comparisons[("xgboost_own", "roc_auc")]["difference"] == pytest.approx(
+        gnn_mean - xgboost_auc
+    )
     assert "hidden_ring" in set(tables["groups"]["group"])
     assert "groups" in tables["mules"].columns and "selection_correlation" not in tables
     written = pd.read_parquet(folder / "metrics.parquet")
     assert written["development_only"].all() and (written["rotation"] == "D1D2D3").all()
+    assert written.loc[written["ranker"] == "xgboost_own", "seed"].isna().all()
     reported = pd.read_parquet(folder / "missed" / "mules.parquet")
     assert "a_hr3" in set(reported["account_id"]) and reported["development_only"].all()
+
+
+def _frame(logits: list[float]) -> pd.DataFrame:
+    return pd.DataFrame({"t_ms": T, "account_id": ["a"] * len(logits), "logit": logits})
+
+
+def test_an_xgboost_comparison_is_one_model_with_no_seed(tmp_path: Path) -> None:
+    """The evaluation refuses a seed on an XGBoost comparison, since it is trained once, a second
+    run of it, and a GNN run without a seed, before it reads anything."""
+    world: Any = None
+    audit = DEFAULT_CONFIG.audit
+    verdict_found = Verdict(())
+
+    def refused(runs: list[Run]) -> str:
+        with pytest.raises(ValueError) as caught:
+            evaluate(world, runs, audit, 0, tmp_path, rotation="r", verdict_found=verdict_found)
+        return str(caught.value)
+
+    gnn = Run("gnn", 0, 0.5, _frame([0.0]))
+    assert not Run("xgboost_graph", None, 0.5, _frame([0.0])).seeded
+    assert gnn.seeded and Run("gnn_without_community", 3, 0.5, _frame([0.0])).seeded
+    assert "trained once, with no seed" in refused([gnn, Run("xgboost_own", 0, 0.5, _frame([0.0]))])
+    assert "Two runs are of one ranker and seed" in refused(
+        [
+            gnn,
+            Run("xgboost_own", None, 0.5, _frame([0.0])),
+            Run("xgboost_own", None, 0.4, _frame([1.0])),
+        ]
+    )
+    assert "has no seed, and the ranker is trained with one" in refused(
+        [gnn, Run("gnn_scored_alone", None, 0.5, _frame([0.0]))]
+    )
+    with pytest.raises(ValueError, match="The run of gnn has no seed"):
+        selected([Run("gnn", None, 0.5, _frame([0.0]))])
 
 
 def test_the_spread_over_rotations() -> None:
@@ -239,3 +293,24 @@ def test_the_spread_over_rotations() -> None:
     assert rows["selected"]["min"] == pytest.approx(0.7) and rows["selected"][
         "max"
     ] == pytest.approx(0.8)
+
+
+def test_an_xgboost_comparisons_spread_over_rotations_is_of_the_model_itself() -> None:
+    """One model per rotation, no seeds: its value in each rotation, never a mean over seeds,
+    and it is never the selected model."""
+
+    def table(value: float) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "ranker": "xgboost_own",
+                "seed": pd.array([None], dtype="Int64"),
+                "group": "all",
+                "metric": "roc_auc",
+                "value": [value],
+                "selected": [False],
+            }
+        )
+
+    found = rotation_spread({"ABC": table(0.6), "BCA": table(0.8), "CAB": table(0.7)})
+    assert found["of"].tolist() == ["model"] and found["rotations"].tolist() == [3]
+    assert found["mean"].item() == pytest.approx(0.7) and found["min"].item() == pytest.approx(0.6)

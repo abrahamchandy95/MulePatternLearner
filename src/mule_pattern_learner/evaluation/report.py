@@ -30,6 +30,11 @@ kind, each with the rotation's name and a development_only column:
   hidden_recall_by_origin, identification_separation, and on the development rotation the
   selection_epochs and selection_correlation the caller rescored.
 
+An XGBoost comparison is one model, trained once with no seed (the owner, 24 October 2026; the
+design's Comparisons): its run has no seed (Run.seed is None), its rows in the tables above have
+no seed, it has no row of spread over seeds, and the comparisons set the GNN's five seeds, as
+their mean, against that one model. Its rotation_spread rows are of the model itself.
+
 The manifest records the code commit and whether the tree was dirty (a reported result refuses
 a dirty tree), the query versions, the world identities, the GPU name and count, the CUDA,
 torch, PyG and XGBoost versions, wall time per stage, TigerGraph calls and cache hits, what each
@@ -55,6 +60,7 @@ import pyarrow as pa
 import torch
 import torch_geometric
 
+from ..comparisons import rankers
 from ..config import AuditConfig, WorldConfig
 from ..subgraph.cache import Cache
 from ..tigergraph.queries import VERSIONS
@@ -148,12 +154,19 @@ def verdict(
 @dataclass(frozen=True)
 class Run:
     """A ranker's seed and its logits of the test keys (t_ms, account_id, logit), with the
-    selection score it was chosen by."""
+    selection score it was chosen by. An XGBoost comparison is one model with no seed (seed is
+    None); every other ranker is trained with a seed."""
 
     ranker: str
-    seed: int
+    seed: int | None
     selection_score: float
     scores: pd.DataFrame
+
+    @property
+    def seeded(self) -> bool:
+        """Whether the run is of a ranker trained with a seed, which is every ranker but an
+        XGBoost comparison."""
+        return self.ranker not in rankers.COLUMNS
 
 
 @dataclass(frozen=True)
@@ -180,14 +193,48 @@ def selected(runs: Sequence[Run]) -> Run:
     full = [run for run in runs if run.ranker == GNN]
     if not full:
         raise ValueError("Evaluation needs a run of the GNN")
-    return min(full, key=lambda run: (-run.selection_score, run.seed))
+    return min(full, key=lambda run: (-run.selection_score, _seed(run)))
 
 
-def _long(
-    ranker: str, seed: int, group: str, values: Mapping[str, float]
-) -> list[dict[str, object]]:
+def _seed(run: Run) -> int:
+    """The seed of a run of a ranker that is trained with one."""
+    if run.seed is None:
+        raise ValueError(f"The run of {run.ranker} has no seed")
+    return run.seed
+
+
+def _check_seeds(runs: Sequence[Run]) -> None:
+    """Refuse runs that are not one per ranker and seed, a seed on an XGBoost comparison, which
+    is one model trained once with no seed, or a ranker trained with seeds and a run without."""
+    if len({(run.ranker, run.seed) for run in runs}) != len(runs):
+        raise ValueError("Two runs are of one ranker and seed")
+    for run in runs:
+        if run.seeded and run.seed is None:
+            raise ValueError(
+                f"The run of {run.ranker} has no seed, and the ranker is trained with one"
+            )
+        if not run.seeded and run.seed is not None:
+            raise ValueError(
+                f"The run of {run.ranker} has the seed {run.seed}, but an XGBoost comparison is "
+                "trained once, with no seed"
+            )
+
+
+def _seeds(table: pd.DataFrame, run: Run) -> pd.DataFrame:
+    """The table with the run's ranker and its seed in every row, the seed missing for an
+    XGBoost comparison."""
+    return table.assign(ranker=run.ranker, seed=pd.array([run.seed] * len(table), dtype="Int64"))
+
+
+def _long(run: Run, group: str, values: Mapping[str, float]) -> list[dict[str, object]]:
     return [
-        {"ranker": ranker, "seed": seed, "group": group, "metric": name, "value": float(value)}
+        {
+            "ranker": run.ranker,
+            "seed": run.seed,
+            "group": group,
+            "metric": name,
+            "value": float(value),
+        }
         for name, value in values.items()
     ]
 
@@ -226,8 +273,7 @@ def evaluate(
     selected run's frame is kept, since the missed-mule report, the groups and the identification
     bias read it, and it is measured first: the ring bootstrap resamples its clusters, which every
     run shares, since every run ranks the same account-Mondays."""
-    if len({(run.ranker, run.seed) for run in runs}) != len(runs):
-        raise ValueError("Two runs are of one ranker and seed")
+    _check_seeds(runs)
     best = selected(runs)
 
     def frame_of(run: Run) -> pd.DataFrame:
@@ -239,7 +285,7 @@ def evaluate(
     hops = hop_distances(world.cache, scored_keys(frame, (ACTIVE,)), world.identified)
     surfaced = groups.surfaced_rings(world.key, world.identified)
 
-    measured: dict[tuple[str, int], _Measured] = {}
+    measured: dict[tuple[str, int | None], _Measured] = {}
     found_mules: pd.DataFrame | None = None
     rows_of_groups: dict[str, NDArray[np.bool_]] = {}
     clusters: Clusters | None = None
@@ -270,8 +316,8 @@ def evaluate(
         chosen = groups.group_rows(run_frame, surfaced, quiet, hops)
         measured[(run.ranker, run.seed)] = _Measured(
             found.values,
-            found.per_monday.assign(ranker=run.ranker, seed=run.seed),
-            groups.group_metrics(run_frame, chosen).assign(ranker=run.ranker, seed=run.seed),
+            _seeds(found.per_monday, run),
+            _seeds(groups.group_metrics(run_frame, chosen), run),
             replicate_matrix(
                 [ranking.headline],
                 clusters,
@@ -288,9 +334,9 @@ def evaluate(
 
     metrics_rows: list[dict[str, object]] = []
     for run in runs:
-        metrics_rows += _long(run.ranker, run.seed, "all", measured[(run.ranker, run.seed)].values)
-    metrics = pd.DataFrame(metrics_rows)
-    metrics["selected"] = (metrics["ranker"] == best.ranker) & (metrics["seed"] == best.seed)
+        rows = _long(run, "all", measured[(run.ranker, run.seed)].values)
+        metrics_rows += [{**row, "selected": run is best} for row in rows]
+    metrics = pd.DataFrame(metrics_rows).astype({"seed": "Int64"})
     metrics["low"] = np.nan
     metrics["high"] = np.nan
     low, high = percentiles(measured[(best.ranker, best.seed)].replicates, audit.interval)
@@ -301,7 +347,7 @@ def evaluate(
         metrics.loc[chosen_rows, "low"] = low[position]
         metrics.loc[chosen_rows, "high"] = high[position]
 
-    def headline(run: tuple[str, int]) -> NDArray[np.float64]:
+    def headline(run: tuple[str, int | None]) -> NDArray[np.float64]:
         return np.array([measured[run].values[name] for name in HEADLINE])
 
     comparisons: list[dict[str, object]] = []
@@ -337,9 +383,12 @@ def evaluate(
         [metrics.loc[:, ["ranker", "seed", "group", "metric", "value"]], every_group],
         ignore_index=True,
     )
+    # An XGBoost comparison is one model, so it has no spread over seeds.
     spread_rows = [
         {"ranker": ranker, "group": group, "metric": metric, **spread(held["value"].tolist())}
-        for (ranker, group, metric), held in combined.groupby(["ranker", "group", "metric"])
+        for (ranker, group, metric), held in combined[combined["seed"].notna()].groupby(
+            ["ranker", "group", "metric"]
+        )
     ]
     mules = found_mules.copy()
     names = groups.group_names(frame, rows_of_groups)
@@ -384,7 +433,8 @@ def evaluate(
 def rotation_spread(metrics: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
     """The spread over the rotations of each ranker's metrics, from the metrics table each
     rotation's evaluation wrote, by rotation: per ranker, group and metric, the spread of the
-    seeds' mean, and of the selected model's value for the GNN."""
+    seeds' mean (of "seed_mean"), or of the model's own value for an XGBoost comparison, which
+    has no seeds (of "model"), and of the selected model's value for the GNN."""
     rows: list[dict[str, object]] = []
     combined = pd.concat(
         [table.assign(rotation=name) for name, table in metrics.items()], ignore_index=True
@@ -396,7 +446,7 @@ def rotation_spread(metrics: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
                 "ranker": ranker,
                 "group": group,
                 "metric": metric,
-                "of": "seed_mean",
+                "of": "model" if held["seed"].isna().all() else "seed_mean",
                 "rotations": len(means),
                 **spread(means.tolist()),
             }
