@@ -1214,7 +1214,7 @@ logit above about 17.
 | ROC AUC, PR AUC | over all ranked account-Mondays, with ring-resampled intervals |
 | Share ever flagged while active | per mule, flagged on any active Monday |
 | Time to first flag | days from onset to the first Monday it is flagged while active |
-| Early warning | the share of mules flagged on their early-warning Monday, the one Monday with `mule_onset_ms - 7 days < t <= mule_onset_ms`, against that Monday's thresholds; also among mules whose ring link is visible that Monday. Reported as conditional on PhantomLedger's researched lead law, since tenures with no payment are not generated |
+| Early warning | the share of mules flagged on their early-warning Monday, the one Monday with `mule_onset_ms - 7 days < t <= mule_onset_ms`, against that Monday's thresholds; also among mules whose ring link is visible that Monday (a device or IP of the mule's own that the own edges of another true mule of its ring, scored that Monday in any status, also reach; this is not the ring's devices and IPs of [the feature audit](#the-feature-audit)). Reported as conditional on PhantomLedger's researched lead law, since tenures with no payment are not generated |
 | After activity | flags on Mondays after `mule_last_ms + 7 days`, reported apart |
 | Distinct accounts alerted | over the scored year at each budget, beside the share ever flagged, which otherwise rewards lists that churn. Counted only when every key is scored whole. When evaluation falls back to the weighted sample (see [If whole-world scoring is too slow](#if-whole-world-scoring-is-too-slow)) it is reported as not available, with the reason: it has no value, and the metrics table gives the reason beside it, that a weighted sample cannot count distinct accounts. The sample takes each non-mule account-Monday on its own, so an account is in it on only a few of its 52 Mondays, and a count over those few would come out low and favour the lists that churn most |
 
@@ -1298,14 +1298,18 @@ On development worlds the same command also checks that no positive is an accoun
 the share of ring devices and IPs that are leaves on their ring's active Mondays is near 0,
 and that busy ordinary accounts' card spending does not fill B1's short dwell shares.
 
-**A ring's devices and IPs.** Evaluation names a ring's devices and IPs one way, so that the
-leaf check above and any report that counts them agree: a device or IP is a ring's on a Monday
-when the own edges of at least two of that ring's active true mules reach it. A mule's own edges
-are its account's owner-enrolment edges (its customer's enrolment, copied onto the account) and
-its seen edges in its fetched subgraph that Monday. A node that only one active true mule reaches
-is not the ring's, a mule with no ring has none, and a mule is an account, so two accounts of one
-customer count as two. The development checks build it so, from the audit sample, which holds
-every active true mule on each Monday it is scorable and active.
+**A ring's devices and IPs.** The leaf check above names a ring's devices and IPs one way: a
+device or IP is a ring's on a Monday when the own edges of at least two of that ring's active
+true mules reach it. A mule's own edges are its account's owner-enrolment edges (its customer's
+enrolment, copied onto the account) and its seen edges in its fetched subgraph that Monday. A
+node that only one active true mule reaches is not the ring's, a mule with no ring has none, and
+a mule is an account, so two accounts of one customer count as two. The development checks build
+it so, from the audit sample, which holds every active true mule on each Monday it is scorable
+and active.
+
+The early-warning ring link of the [Metrics](#metrics) table does not use this rule. A mule on
+its early-warning Monday is not yet active, so it cannot be one of the two active mules, and its
+link is read as that table's Early warning row says.
 
 ### Identification bias
 
