@@ -613,7 +613,8 @@ once. A hub that is not the scored account gets a flag-only row and no B1 to B3.
   PhantomLedger's households and ring timing steps, counting customers, never accounts, and
   frozen before any reported run. On development worlds, read from the answer key in
   evaluation: no positive is an account hub, and the share of ring devices and IPs that are
-  leaves on their ring's active Mondays is near 0.
+  leaves on their ring's active Mondays is near 0 (what a ring's devices and IPs are is
+  defined under [the feature audit](#the-feature-audit)).
 
 **Sharing a device or IP.** A customer shares a device or IP that is not a leaf when it has a
 current enrolment link to it, or a deposit account it owns (visible ownership) that exists at
@@ -957,7 +958,8 @@ who shares nothing, and a large ring's device can become a crowd. The owner: "ju
 that it is a meaningful feature". So the block is checked on development worlds by the
 [feature audit](#the-feature-audit) (a column with no separation is researched or dropped),
 by the "without community" ablation, and by a report of the share of mules, by whether they
-hold a ring endpoint, whose block differs from that of a customer who shares nothing.
+hold a ring endpoint (a ring's device or IP, as [the feature audit](#the-feature-audit)
+defines it), whose block differs from that of a customer who shares nothing.
 
 **Never a library algorithm.** Connected components, Louvain and label propagation run on the
 whole graph with no as-of time, so future ring members would leak into training, and hubs and
@@ -1186,7 +1188,8 @@ what TigerGraph gives the GNN.
 - What to expect: a model without message passing may come close to the GNN once it is given
   counts; plan for a close result. With a ring device
   on about 18% of mules, the device and IP ablation may move little; the share of
-  positives with any ring-device link is reported beside it. Fix PhantomLedger's shortcuts
+  positives with any ring-device link (a link to a ring's device or IP, as [the feature
+  audit](#the-feature-audit) defines it) is reported beside it. Fix PhantomLedger's shortcuts
   first, since a shortcut favours the simple models.
 
 ## Evaluation
@@ -1294,6 +1297,15 @@ audited.
 On development worlds the same command also checks that no positive is an account hub, that
 the share of ring devices and IPs that are leaves on their ring's active Mondays is near 0,
 and that busy ordinary accounts' card spending does not fill B1's short dwell shares.
+
+**A ring's devices and IPs.** Evaluation names a ring's devices and IPs one way, so that the
+leaf check above and any report that counts them agree: a device or IP is a ring's on a Monday
+when the own edges of at least two of that ring's active true mules reach it. A mule's own edges
+are its account's owner-enrolment edges (its customer's enrolment, copied onto the account) and
+its seen edges in its fetched subgraph that Monday. A node that only one active true mule reaches
+is not the ring's, a mule with no ring has none, and a mule is an account, so two accounts of one
+customer count as two. The development checks build it so, from the audit sample, which holds
+every active true mule on each Monday it is scorable and active.
 
 ### Identification bias
 
