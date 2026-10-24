@@ -1154,7 +1154,7 @@ what TigerGraph gives the GNN.
 | Ranker | What it reads | Question it answers |
 |---|---|---|
 | XGBoost, own behaviour | the scored account's own row (50 numbers, durations as presence and seconds) | what graph learning adds at all |
-| XGBoost, graph features | the same plus its customer row (8), its owner's device and IP rows aggregated by mean and maximum, and its community block (8) | what message passing adds beyond hand-made graph features |
+| XGBoost, graph features | the same plus its customer row (8), the rows of the devices and IPs its customer has an enrolment edge to in the subgraph, aggregated by mean and maximum, and its community block (8) | what message passing adds beyond hand-made graph features |
 | GNN | everything | the model |
 | GNN, scored account alone | its own row and own payment edges; every other node zeroed, no other edge, no community | what neighbours add |
 | GNN without devices and IPs | no device and IP nodes or relations; customer rows keep `accounts_owned` only; no community | what shared identity adds |

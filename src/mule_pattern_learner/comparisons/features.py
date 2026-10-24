@@ -9,13 +9,12 @@ comparison switches", XGBoost inputs), so the trees see exactly what TigerGraph 
   8 = 102 numbers (GRAPH_COLUMNS).
 
 The scored account's customer C_s is the one its ownership edge reaches, and D_s the devices and
-IPs of C_s's enrolment edges in the batch; a leaf among them has the row read_hubs gives it.
-B5's closure around the scored account's nodes also gives C_s an enrolment edge to a node seen
-on the account's payments that C_s is linked to beyond its 8 kept links, so with more than 8
-visible links of a kind D_s here holds a node that docs/features.md's D_s (the kept links)
-leaves out. Only past evidence is read, so it is no leak; whether B5 marks the kept links or
-features.md defines D_s as C_s's enrolment edges in the subgraph is the owner's to decide.
-Each value is the raw one the batch holds before encoding: counts, cents, shares and flags as
+IPs of C_s's enrolment edges in the batch, exactly what the GNN sees (the owner, 24 October
+2026; docs/features.md says so); a leaf among them has the row read_hubs gives it. B5's closure
+around the scored account's nodes also gives C_s an enrolment edge to a node seen on the
+account's payments that C_s is linked to beyond its 8 kept links, so with more than 8 visible
+links of a kind D_s holds a node beyond the kept links. Only past evidence is read, so it is no
+leak. Each value is the raw one the batch holds before encoding: counts, cents, shares and flags as
 they are, durations in seconds. No degree column is read, and no node or edge of another
 example, since each example is its own copy of its subgraph.
 

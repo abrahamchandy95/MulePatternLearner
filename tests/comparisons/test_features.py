@@ -175,6 +175,31 @@ def test_every_value_of_a_hand_built_batch() -> None:
     assert found.own.shape == (2, 50) and found.graph.shape == (2, 102)
 
 
+def test_every_enrolment_edge_of_the_customer_is_read_however_many() -> None:
+    """D_s is every device the customer has an enrolment edge to in the subgraph, exactly what
+    the GNN sees (docs/features.md, XGBoost inputs), not 8 kept links: customer 0 is enrolled on
+    its devices 0 and 1 and on 7 more, 9 edges, and all 9 rows are aggregated. The 7 new devices
+    read 10, 20, ..., 70 customers in the last 30 days and nothing else, so the column of
+    customers_30d has the mean (1 + 3 + 280) / 9 and the maximum 70, and customers_90d, 2 for
+    devices 0 and 1 and 0 for the others, the mean 4 / 9 and the maximum 2."""
+    batch = _hand_batch()
+    data = batch.data
+    more = torch.zeros(7, 12, dtype=torch.float64)
+    more[:, 0] = torch.tensor([10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0])
+    data[DEVICE].x = torch.cat([data[DEVICE].x, more])
+    extra = torch.tensor([[0] * 7, list(range(4, 11))])
+    data[ENROLLED_ON_DEVICE].edge_index = torch.cat([data[ENROLLED_ON_DEVICE].edge_index, extra], 1)
+    found = vectors(batch)
+    mean_30d = GRAPH_COLUMNS.index("device_mean.customers_30d")
+    max_30d = GRAPH_COLUMNS.index("device_max.customers_30d")
+    mean_90d = GRAPH_COLUMNS.index("device_mean.customers_90d")
+    max_90d = GRAPH_COLUMNS.index("device_max.customers_90d")
+    assert found.graph[0, mean_30d] == pytest.approx(284 / 9) and found.graph[0, max_30d] == 70
+    assert found.graph[0, mean_90d] == pytest.approx(4 / 9) and found.graph[0, max_90d] == 2
+    # Example 1's customer is enrolled on one device, whatever customer 0 holds.
+    assert found.graph[1, mean_30d] == found.graph[1, max_30d] == 2
+
+
 def test_a_scored_account_without_its_customer_is_refused() -> None:
     batch = _hand_batch()
     batch.data[OWNED_BY].edge_index = torch.tensor([[1], [1]])

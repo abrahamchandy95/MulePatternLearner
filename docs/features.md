@@ -362,7 +362,12 @@ switch.
   duration as presence and seconds: 50 numbers.
 - **Graph features:** the same, plus its customer's columns 1 to 8, the mean and the maximum
   of each column of the device rows of D_s and of the IP rows of D_s (zeros when there are
-  none), and the community block: 50 + 8 + 18 + 18 + 8 = 102 numbers.
+  none), and the community block: 50 + 8 + 18 + 18 + 8 = 102 numbers. Here D_s is every device
+  and IP the scored account's customer has an enrolment edge to in the example's subgraph,
+  exactly what the GNN sees: the kept links of the subgraph's item 6, and any further
+  enrolment edge from C_s that the closure of item 9 adds (a node seen on s's payments that
+  C_s is linked to beyond its 8 kept links), so with more than 8 visible links of a kind the
+  rows aggregated can number more than 8. A leaf among them has the row `read_hubs` gives it.
 
 ## Coverage of the owner's proposed features
 
