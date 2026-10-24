@@ -1,0 +1,86 @@
+# Written by `mule parity`: the query versions that matched the reference graph on the
+# world named, committed with the code. A version with no entry here is never fetched.
+
+[[passed]]
+query = "list_accounts"
+version = "list_accounts-a270fbdf9620"
+tigergraph = "4.2.5"
+world = "ff23a76776bc4fda1c698d2cb3db729c"
+date = 2026-10-24
+
+[[passed]]
+query = "read_labels"
+version = "read_labels-e22e410b15e2"
+tigergraph = "4.2.5"
+world = "ff23a76776bc4fda1c698d2cb3db729c"
+date = 2026-10-24
+
+[[passed]]
+query = "read_hubs"
+version = "read_hubs-3b28b3433685"
+tigergraph = "4.2.5"
+world = "ff23a76776bc4fda1c698d2cb3db729c"
+date = 2026-10-24
+
+[[passed]]
+query = "read_world"
+version = "read_world-0c985b5f9e81"
+tigergraph = "4.2.5"
+world = "ff23a76776bc4fda1c698d2cb3db729c"
+date = 2026-10-24
+
+[[passed]]
+query = "profile_hubs"
+version = "profile_hubs-a4603a434498"
+tigergraph = "4.2.5"
+world = "ff23a76776bc4fda1c698d2cb3db729c"
+date = 2026-10-24
+
+[[passed]]
+query = "read_money_flow"
+version = "read_money_flow-04c652eeaf53"
+tigergraph = "4.2.5"
+world = "ff23a76776bc4fda1c698d2cb3db729c"
+date = 2026-10-24
+
+[[passed]]
+query = "read_counterparties"
+version = "read_counterparties-07a31e72fd65"
+tigergraph = "4.2.5"
+world = "ff23a76776bc4fda1c698d2cb3db729c"
+date = 2026-10-24
+
+[[passed]]
+query = "read_activity_change"
+version = "read_activity_change-fbaa2ddc1360"
+tigergraph = "4.2.5"
+world = "ff23a76776bc4fda1c698d2cb3db729c"
+date = 2026-10-24
+
+[[passed]]
+query = "read_payment_events"
+version = "read_payment_events-ee69e736b059"
+tigergraph = "4.2.5"
+world = "ff23a76776bc4fda1c698d2cb3db729c"
+date = 2026-10-24
+
+[[passed]]
+query = "read_shared_identity"
+version = "read_shared_identity-84ffb72a34b2"
+tigergraph = "4.2.5"
+world = "ff23a76776bc4fda1c698d2cb3db729c"
+date = 2026-10-24
+
+[[passed]]
+query = "read_community"
+version = "read_community-8406b3785a46"
+tigergraph = "4.2.5"
+world = "ff23a76776bc4fda1c698d2cb3db729c"
+date = 2026-10-24
+
+[[passed]]
+query = "read_answer_key"
+version = "read_answer_key-3d5467c23b01"
+tigergraph = "4.2.5"
+world = "ff23a76776bc4fda1c698d2cb3db729c"
+date = 2026-10-24
