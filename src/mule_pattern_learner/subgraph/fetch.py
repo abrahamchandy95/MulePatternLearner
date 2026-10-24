@@ -96,6 +96,10 @@ PARAMS: dict[str, Callable[[int, tuple[str, ...], Sequence[str]], dict[str, Any]
 # The tables B4 to B6 fill for scored accounts, and B1 to B3 for every account node.
 SUBGRAPH_TABLES: tuple[Table[Any], ...] = (PAYMENT_EVENTS, SHARED_IDENTITY, COMMUNITY)
 ACCOUNT_TABLES: tuple[Table[Any], ...] = (MONEY_FLOW, COUNTERPARTIES, ACTIVITY)
+# Each per-account query with the table its answer is parsed and kept by, B1 to B6 in order.
+PER_ACCOUNT: dict[str, Table[Any]] = {
+    table.query: table for table in (*ACCOUNT_TABLES, *SUBGRAPH_TABLES)
+}
 
 
 @dataclass
@@ -147,7 +151,7 @@ def account_bytes[R](table: Table[R], answer: R, asked: Sequence[str]) -> list[i
     return [sizes[account] for account in asked]
 
 
-def _chunks[T](items: Sequence[T], size: int) -> list[Sequence[T]]:
+def chunks[T](items: Sequence[T], size: int) -> list[Sequence[T]]:
     return [items[start : start + size] for start in range(0, len(items), size)]
 
 
@@ -203,7 +207,7 @@ class Fetcher:
         accounts at a time, each written as soon as its answers are in."""
         missing = self.cache.missing(table.name, t_ms, accounts)
         self.done.cached[table.query] += len(set(accounts)) - len(missing)
-        for part in _chunks(missing, self.part_accounts):
+        for part in chunks(missing, self.part_accounts):
             self.cache.write(table, t_ms, part, self.run(table, t_ms, part, hubs))
 
     def nodes(self, t_ms: int, scored: Sequence[str], hubs: Collection[str]) -> set[str]:
@@ -241,7 +245,7 @@ class Fetcher:
             return
         hubs = {account.account_id for account in self.hubs(t_ms).accounts}
         listed = sorted(hubs)
-        for part in _chunks(todo, self.part_accounts):
+        for part in chunks(todo, self.part_accounts):
             for table in SUBGRAPH_TABLES:
                 self.fill(table, t_ms, part, listed)
             nodes = self.nodes(t_ms, part, hubs)

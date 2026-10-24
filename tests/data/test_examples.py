@@ -32,6 +32,8 @@ from mule_pattern_learner.data.examples import (
     examples_folder,
     examples_key,
     monday,
+    read_first,
+    read_table,
     scored_frame,
     selection_frame,
     training_frame,
@@ -285,3 +287,23 @@ def test_the_keys_of_the_examples_tables_come_a_monday_at_a_time(tmp_path: Path)
         keys[T + 3 * W]
     with pytest.raises(FileNotFoundError, match="run `mule prepare` first"):
         ExampleKeys(tmp_path / "other", [TRAINING_FILE])
+
+
+def test_the_first_rows_of_a_table_are_its_first_row_group_alone(tmp_path: Path) -> None:
+    # A table written a Monday at a time holds a row group each: the first look reads the first.
+    writer = TableWriter(tmp_path / TEST_FILE, TEST_SCHEMA)
+    writer.write(pd.DataFrame({"t_ms": [T, T], "account_id": ["a_1", "a_2"]}))
+    writer.write(pd.DataFrame({"t_ms": [T + W], "account_id": ["a_3"]}))
+    writer.commit()
+    first = read_first(tmp_path / TEST_FILE, TEST_SCHEMA)
+    assert first["account_id"].tolist() == ["a_1", "a_2"] and first["t_ms"].dtype == "int64"
+    assert read_table(tmp_path / TEST_FILE, TEST_SCHEMA)["account_id"].tolist() == [
+        "a_1",
+        "a_2",
+        "a_3",
+    ]
+    # A table with no row has no row group, and an empty first look with the table's columns.
+    empty = TableWriter(tmp_path / "empty.parquet", TEST_SCHEMA)
+    empty.commit()
+    nothing = read_first(tmp_path / "empty.parquet", TEST_SCHEMA)
+    assert nothing.empty and list(nothing.columns) == ["t_ms", "account_id"]

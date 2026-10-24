@@ -58,8 +58,10 @@ fails, naming it:
   that the loaded world is a configured one with the calendar's 455 exported days, that one
   account can be fetched (into a scratch folder, never the cache) and that one training step
   runs;
-- `mule train` and `mule evaluate` check that every world of each rotation was prepared, that one
-  example can be read from the training world's cache and that one training step runs.
+- `mule train` and `mule evaluate` check, for every rotation before the first one starts, that
+  every world of it was prepared, that one example can be read from the cache of each world the
+  command reads (`mule train` the training world and the selection world, `mule evaluate` the test
+  world) and that one training step runs.
 
 `mule train` also reads the pass or fail of the audit records of every rotation's worlds before it
 trains anything, and stops, naming the checks, on any failed check of a reported world and on a
@@ -71,8 +73,11 @@ Three worlds make a rotation: one trains, one selects and one tests. `config.wor
 holds them, and `mule train` and `mule evaluate` run every one in order, so set it to the
 rotations whose worlds you have prepared. The results of a rotation are in
 `results/<train>-<select>-<test>/`: the model files, the tables, the manifest and `events.jsonl`.
-`results/bench/` holds the benchmark's tables and `results/commands/` the events of the other
-commands. Nothing under `data/` or `results/` is committed.
+`mule evaluate` also writes the spread over the rotations of each kind of world with two or more
+rotations, to `results/rotations/rotation_spread_<kind>.parquet`: the three reported rotations make
+one, and the development rotation is never pooled with them. `results/bench/` holds the
+benchmark's tables and `results/commands/` the events of the other commands. Nothing under
+`data/` or `results/` is committed.
 
 ## One world at a time
 
@@ -131,7 +136,8 @@ three things before any 300,000-person world is generated, each projected at the
 Beside them it holds the fetch time and bytes per query at 1, 2 and 4 concurrent requests, the
 subgraph sizes, the cache bytes per account, the seconds to build a batch and take a training
 step, the XGBoost file hand-off, `profile_hubs`' histograms and the whole-world scoring run
-against its fallback.
+against its fallback. TigerGraph's own memory in use is not in the table: the metrics endpoint
+answers 403 for this workspace's secret, so read it in the Cloud console while the bench runs.
 
 **The recommended training architecture is not written yet.** It follows from these tables, which
 need a loaded world, and none has been benchmarked: whether built batches stay on the GPU or in

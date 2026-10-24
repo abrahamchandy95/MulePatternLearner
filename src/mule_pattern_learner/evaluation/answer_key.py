@@ -31,16 +31,11 @@ from ..tigergraph.queries import READ_ANSWER_KEY, VERSIONS
 from ..tigergraph.queries import read_answer_key as answer_key_query
 from ..tigergraph.queries.read_answer_key import AccountTruth
 from ..tigergraph.queries.rows import DAY_MS, PAGE_LIMIT
+from .statuses import ACTIVE, AFTER, BEFORE, EARLY_WARNING, NON_MULE
 
 # How long after its last payment a mule stays active, and how long before its onset its
 # early-warning Monday may fall: a week each.
 WEEK_MS = 7 * DAY_MS
-# What a true mule or a non-mule is on a Monday.
-NON_MULE = "non_mule"
-ACTIVE = "active"
-EARLY_WARNING = "early_warning"
-BEFORE = "before"
-AFTER = "after"
 # The answer key's columns, in the order of its rows' fields.
 COLUMNS = tuple(field.name for field in fields(AccountTruth))
 

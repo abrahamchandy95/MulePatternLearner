@@ -36,6 +36,7 @@ from mule_pattern_learner.testing.parity import (
     differences,
     find_export,
     run,
+    run_on,
     sample_accounts,
     sample_mondays,
 )
@@ -271,6 +272,83 @@ def test_a_refusal_the_live_graph_words_otherwise_fails(
     assert "an unknown account" in mismatch.where and "invisible_account" in mismatch.what
 
 
+def _late_world() -> WorldBuilder:
+    """The batch world and one customer who joins two days after the first scored Monday: on that
+    Monday an account that does not exist yet, which the refusal probes of an account and of a
+    hub that do not exist at t are sent for (the module's other worlds have none)."""
+    w = fixtures.batch_world()
+    w.customer("late", T + 2 * DAY_MS)
+    return w
+
+
+PER_ACCOUNT_QUERIES = (
+    READ_MONEY_FLOW,
+    READ_COUNTERPARTIES,
+    READ_ACTIVITY_CHANGE,
+    READ_PAYMENT_EVENTS,
+    READ_SHARED_IDENTITY,
+    READ_COMMUNITY,
+)
+TAKES_HUBS_QUERIES = (
+    READ_COUNTERPARTIES,
+    READ_PAYMENT_EVENTS,
+    READ_SHARED_IDENTITY,
+    READ_COMMUNITY,
+)
+
+
+def test_an_account_and_a_hub_that_do_not_exist_at_t_are_refused_as_such(tmp_path: Path) -> None:
+    w = _late_world()
+    write_export(tmp_path / "exports" / "e", w.tables())
+    refused: dict[tuple[str, str], int] = {}
+
+    def record(
+        name: str, params: dict[str, Any], rows: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        status = rows[0].get("status", "")
+        if status in ("invisible_account", "invisible_hub"):
+            refused[(name, status)] = refused.get((name, status), 0) + 1
+        return rows
+
+    found = run(
+        Live(w.graph(), record), CONFIG, exports=tmp_path / "exports", record=tmp_path / "p.toml"
+    )
+    assert found.failed == ()
+    # On the first Monday, the one with an account that does not exist yet, every per-account
+    # query is sent that account, and each that takes the hubs is sent it as a hub too.
+    assert refused == {(name, "invisible_account"): 1 for name in PER_ACCOUNT_QUERIES} | {
+        (name, "invisible_hub"): 1 for name in TAKES_HUBS_QUERIES
+    }
+    # The probes are checks of their query: a request more for B1, two more for B2.
+    assert found.queries[READ_MONEY_FLOW].checks == 2 * (3 + 2 + 4) + 1
+    assert found.queries[READ_COUNTERPARTIES].checks == 2 * (3 + 2 + 4) + 2
+
+
+def test_a_late_account_or_hub_refused_in_other_words_fails(tmp_path: Path) -> None:
+    w = _late_world()
+    write_export(tmp_path / "exports" / "e", w.tables())
+
+    def tamper(
+        name: str, params: dict[str, Any], rows: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        if name == READ_MONEY_FLOW and rows == [{"status": "invisible_account"}]:
+            return [{"status": "unknown_account"}]
+        if name == READ_COMMUNITY and rows == [{"status": "invisible_hub"}]:
+            return [{"status": "invisible_account"}]
+        return rows
+
+    found = run(
+        Live(w.graph(), tamper), CONFIG, exports=tmp_path / "exports", record=tmp_path / "p.toml"
+    )
+    assert set(found.failed) == {READ_MONEY_FLOW, READ_COMMUNITY}
+    account = found.queries[READ_MONEY_FLOW].mismatches
+    assert len(account) == 1 and "an account that does not exist at t" in account[0].where
+    assert "unknown_account" in account[0].what and "invisible_account" in account[0].what
+    hub = found.queries[READ_COMMUNITY].mismatches
+    assert len(hub) == 1 and "a hub that does not exist at t" in hub[0].where
+    assert "invisible_hub" in hub[0].what
+
+
 def test_an_account_alone_must_equal_itself_among_the_others(
     graph: ReferenceGraph, exports: Path, tmp_path: Path
 ) -> None:
@@ -292,6 +370,30 @@ def test_an_account_alone_must_equal_itself_among_the_others(
     # others (a request of 8 holds the account and 7 others).
     assert any("8 accounts from" in place for place in where)
     assert any("alone against 7 others" in place for place in where)
+
+
+def test_an_account_alone_is_asked_of_the_live_graph_only(
+    tables: dict[str, pd.DataFrame], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The reference graph has no use for the alone answer, which is compared with the live
+    # answer among the others: no request of one account is sent to it, in 2 Mondays x 2
+    # accounts x 6 queries.
+    reference = ReferenceGraph(tables)
+    asked: list[tuple[str, int]] = []
+    original = reference.run
+
+    def counting(name: str, params: dict[str, Any], **keywords: Any) -> list[dict[str, Any]]:
+        asked.append((name, len(params.get("account_ids", []))))
+        return original(name, params, **keywords)
+
+    monkeypatch.setattr(reference, "run", counting)
+    live = ParityExecutor(Live(ReferenceGraph(tables)))
+    queries, _ = run_on(live, reference, (T, T + W), CONFIG.parity)
+    assert all(result.passed for result in queries.values())
+    assert any(size == 8 for _, size in asked) and not [name for name, size in asked if size == 1]
+    # The alone answers were still compared, with the live answers among the others: on each
+    # Monday 3 requests, 2 accounts alone and 4 refusals.
+    assert queries[READ_MONEY_FLOW].checks == 2 * (3 + 2 + 4)
 
 
 def _crowd_world() -> WorldBuilder:

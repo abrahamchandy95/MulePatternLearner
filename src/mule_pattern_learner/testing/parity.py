@@ -50,29 +50,18 @@ from typing import Any
 
 from ..config import DEFAULT_CONFIG, ParityConfig, RunConfig
 from ..paths import export_root, parity_record
-from ..subgraph.cache import (
-    ACTIVITY,
-    COMMUNITY,
-    COUNTERPARTIES,
-    HUBS,
-    MONEY_FLOW,
-    PAYMENT_EVENTS,
-    SHARED_IDENTITY,
-    Table,
-)
-from ..subgraph.fetch import PARAMS
+from ..subgraph.cache import HUBS, Table
+from ..subgraph.fetch import PARAMS, PER_ACCOUNT
 from ..tigergraph.executor import ConnectionExecutor, ParityExecutor
 from ..tigergraph.queries import (
     LIST_ACCOUNTS,
     PROFILE_HUBS,
     QUERY_FILES,
-    READ_ACTIVITY_CHANGE,
     READ_ANSWER_KEY,
     READ_COMMUNITY,
     READ_COUNTERPARTIES,
     READ_HUBS,
     READ_LABELS,
-    READ_MONEY_FLOW,
     READ_PAYMENT_EVENTS,
     READ_SHARED_IDENTITY,
     READ_WORLD,
@@ -99,15 +88,7 @@ from .shards import MANIFEST, read_export
 
 # The queries mule parity runs, which is every registered one, in the registry's order.
 QUERIES = tuple(QUERY_FILES)
-# The queries that take a request of accounts, and those of them that take the account hubs.
-PER_ACCOUNT: dict[str, Table[Any]] = {
-    READ_MONEY_FLOW: MONEY_FLOW,
-    READ_COUNTERPARTIES: COUNTERPARTIES,
-    READ_ACTIVITY_CHANGE: ACTIVITY,
-    READ_PAYMENT_EVENTS: PAYMENT_EVENTS,
-    READ_SHARED_IDENTITY: SHARED_IDENTITY,
-    READ_COMMUNITY: COMMUNITY,
-}
+# Those of the per-account queries (subgraph.fetch.PER_ACCOUNT) that take the account hubs.
 TAKES_HUBS = frozenset(
     {READ_COUNTERPARTIES, READ_PAYMENT_EVENTS, READ_SHARED_IDENTITY, READ_COMMUNITY}
 )
@@ -477,21 +458,28 @@ class _Comparison:
         except Exception as error:
             return Failure(f"{type(error).__name__}: {str(error)[:300]}")
 
+    def read[R](
+        self,
+        graph: bool,
+        query: str,
+        params: dict[str, Any],
+        read: Callable[[Sequence[object]], R],
+    ) -> R | Failure:
+        """A query's answer from one side, read by the query's own parser: a Failure when the
+        request raised or the parser refused the answer."""
+        rows = self.ask(graph, query, params)
+        if isinstance(rows, Failure):
+            return rows
+        try:
+            return read(rows)
+        except ValueError as error:
+            return Failure(f"{type(error).__name__}: {str(error)[:300]}")
+
     def both[R](
         self, query: str, params: dict[str, Any], read: Callable[[Sequence[object]], R]
     ) -> tuple[R | Failure, R | Failure]:
         """A query's answer from each side, each read by the query's own parser."""
-        answers: list[R | Failure] = []
-        for graph in (False, True):
-            rows = self.ask(graph, query, params)
-            if isinstance(rows, Failure):
-                answers.append(rows)
-                continue
-            try:
-                answers.append(read(rows))
-            except ValueError as error:
-                answers.append(Failure(f"{type(error).__name__}: {str(error)[:300]}"))
-        return answers[0], answers[1]
+        return self.read(False, query, params, read), self.read(True, query, params, read)
 
     def paged[R](
         self,
@@ -637,7 +625,8 @@ def _per_account(
         full = [chunk for chunk in chunks if len(chunk) == config.together] or chunks[:1]
         for account in _alone(run, accounts, full):
             params = PARAMS[query](t_ms, (account,), hub_ids)
-            lone, _ = run.both(
+            lone = run.read(
+                False,
                 query,
                 params,
                 lambda rows, account=account, table=table: table.parse(rows, [account]),

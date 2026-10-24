@@ -18,8 +18,11 @@ The commands that read the loaded world (parity, prepare, fetch, audit, bench an
 a readiness check that changes nothing in the graph or in the cache (check_ready): the installed
 queries are the repository's, the loaded world is a configured one, one account is fetched into
 a scratch folder, and one training step runs. mule train and mule evaluate never query
-TigerGraph, so theirs (check_trainable) reads what they read: the worlds of the rotation are
-registered, one example is read from the cache, and one training step runs.
+TigerGraph, so theirs (check_trainable, check_evaluable) reads what they read: the worlds of every
+rotation are registered, one example is read from the cache of each world the command reads
+(mule train the training and the selection world, mule evaluate the test world), and one training
+step runs. Both run for every rotation before the first rotation starts, so a cache that is not
+there is found before any rotation trains or is evaluated.
 
 A rotation is three configured worlds, one that trains, one that selects and one that tests, and
 the results of one are in results/<train>-<select>-<test>/ (run_name). mule train and mule
@@ -66,6 +69,7 @@ from .data.examples import (
     ExampleKeys,
     examples_folder,
     examples_key,
+    read_first,
     read_table,
 )
 from .data.labels import read_identified
@@ -285,11 +289,12 @@ def rotation_worlds(rotation: Rotation, config: RunConfig) -> RotationWorlds:
     return RotationWorlds(rotation, *found)
 
 
-def _check_cached(
+def _first_example(
     world: WorldConfig, held: Registered, config: RunConfig, keys: Callable[[], pd.DataFrame]
-) -> None:
+) -> Batch:
     """The readiness check of the commands that never query TigerGraph: the first example of a
-    world's keys is read from its cache, and one training step runs on it."""
+    world's keys is read from its cache and built, which is what the command's first pass over
+    the world reads. The batch."""
     try:
         first = keys().iloc[0]
         cache = Cache.of(held.identity, config.subgraph)
@@ -298,25 +303,43 @@ def _check_cached(
         raise NotReady(
             f"one example read: the cache and examples of {world.name} are not there: {error}"
         ) from error
-    batch = build(rows, held.identity, labels=[1], weights=[1.0])
     show(f"ready: read the example of {first['account_id']} of {world.name}")
-    _step(batch, config, _device())
-    show("ready: one training step ran")
+    return build(rows, held.identity, labels=[1], weights=[1.0])
 
 
 def check_trainable(worlds: RotationWorlds, config: RunConfig) -> None:
-    """The readiness check of mule train on a rotation: the training world's first example is
-    read from its cache, and one training step runs on it."""
-    world, held = worlds.train
-    folder = examples_folder(held.identity, examples_key(config.calendar, config.data), held.labels)
-    _check_cached(world, held, config, lambda: read_table(folder / TRAINING_FILE, TRAINING_SCHEMA))
+    """The readiness check of mule train on a rotation: the first example of the training world
+    and the first ranked example of the selection world are read from their caches (selection
+    reads its examples lazily, so a selection world that was never fetched would otherwise fail
+    after the first epoch), and one training step runs on the training one."""
+    key = examples_key(config.calendar, config.data)
+    train_world, train_held = worlds.train
+    train_folder = examples_folder(train_held.identity, key, train_held.labels)
+    batch = _first_example(
+        train_world,
+        train_held,
+        config,
+        lambda: read_first(train_folder / TRAINING_FILE, TRAINING_SCHEMA),
+    )
+    select_world, select_held = worlds.select
+    select_folder = examples_folder(select_held.identity, key, select_held.labels)
+    _first_example(
+        select_world,
+        select_held,
+        config,
+        lambda: ranked_keys(read_first(select_folder / SELECTION_FILE, SELECTION_SCHEMA)),
+    )
+    _step(batch, config, _device())
+    show("ready: one training step ran")
 
 
 def check_evaluable(worlds: RotationWorlds, config: RunConfig) -> None:
     """The readiness check of mule evaluate on a rotation: the test world's first example is
     read from its cache, and one training step runs on it."""
     world, held = worlds.test
-    _check_cached(world, held, config, lambda: _test_keys(worlds, config))
+    batch = _first_example(world, held, config, lambda: _test_keys(worlds, config, read_first))
+    _step(batch, config, _device())
+    show("ready: one training step ran")
 
 
 # The commands.
@@ -519,18 +542,23 @@ def _logged[T](folder: Path, command: str, work: Callable[[], T]) -> T:
 def train_command(config: RunConfig, open_graph: Connect) -> None:
     del open_graph  # training never queries TigerGraph
     rotations = [rotation_worlds(rotation, config) for rotation in config.worlds.rotations]
-    stops = train_may_run(
-        [(world, held.identity) for worlds in rotations for world, held in worlds.worlds]
-    )
+    # Each world once, though a world is in up to three rotations.
+    audited = {
+        world.name: (world, held.identity)
+        for rotation in rotations
+        for world, held in rotation.worlds
+    }
+    stops = train_may_run(list(audited.values()))
     if stops:
         raise CommandError(
             f"training stops: {'; '.join(stops)}. Run `mule audit` on each world, and fix a check "
             "that failed"
         )
+    for worlds in rotations:
+        check_trainable(worlds, config)
     device = _device()
     for worlds in rotations:
         folder = results_dir(worlds.name)
-        check_trainable(worlds, config)
         began = time.monotonic()
         _logged(
             folder, "train", lambda worlds=worlds: train_rotation_command(worlds, config, device)
@@ -582,17 +610,22 @@ def _runs(
     return runs
 
 
-def _test_keys(worlds: RotationWorlds, config: RunConfig) -> pd.DataFrame:
+def _test_keys(
+    worlds: RotationWorlds,
+    config: RunConfig,
+    read: Callable[[Path, pa.Schema], pd.DataFrame] = read_table,
+) -> pd.DataFrame:
     """The test world's keys with their weights (t_ms, account_id, weight): every scorable
     account of every Monday under whole scoring, each weighing 1, or the fallback list mule audit
-    stored, with its weights."""
+    stored, with its weights. read reads the examples table, read_table (the whole table) unless
+    the readiness check asks only for its first rows (read_first)."""
     _, test_registered = worlds.test
     if config.data.scoring == "fallback":
         return Store(test_registered.identity).fallback()
     folder = examples_folder(
         test_registered.identity, examples_key(config.calendar, config.data), test_registered.labels
     )
-    return read_table(folder / TEST_FILE, TEST_SCHEMA).assign(weight=1.0)
+    return read(folder / TEST_FILE, TEST_SCHEMA).assign(weight=1.0)
 
 
 def _verdict(worlds: RotationWorlds, config: RunConfig) -> Verdict:
@@ -693,25 +726,44 @@ def evaluate_rotation(
     return tables["metrics"]
 
 
+def rotation_spreads(
+    metrics: Mapping[str, pd.DataFrame], kinds: Mapping[str, str]
+) -> dict[str, pd.DataFrame]:
+    """The spread over the rotations (evaluation.report.rotation_spread) of each kind of world:
+    metrics are each rotation's metrics table by its name, and kinds the kind of each rotation's
+    worlds. The design's spread is over the three reported rotations, so the development
+    rotation, whose worlds are smaller and tune the settings, is never pooled with them. A kind
+    with fewer than two rotations has no spread."""
+    by_kind: dict[str, dict[str, pd.DataFrame]] = {}
+    for name, table in metrics.items():
+        by_kind.setdefault(kinds[name], {})[name] = table
+    return {kind: rotation_spread(held) for kind, held in by_kind.items() if len(held) > 1}
+
+
 def evaluate_command(config: RunConfig, open_graph: Connect) -> None:
     del open_graph  # evaluation never queries TigerGraph
     rotations = [rotation_worlds(rotation, config) for rotation in config.worlds.rotations]
+    for worlds in rotations:
+        check_evaluable(worlds, config)
     device = _device()
     metrics: dict[str, pd.DataFrame] = {}
     for worlds in rotations:
-        check_evaluable(worlds, config)
         metrics[worlds.name] = _logged(
             results_dir(worlds.name),
             "evaluate",
             lambda worlds=worlds: evaluate_rotation(worlds, config, device),
         )
-    if len(metrics) > 1:
-        spread = rotation_spread(metrics)
+    kinds = {worlds.name: worlds.train[0].kind for worlds in rotations}
+    for kind, spread in rotation_spreads(metrics, kinds).items():
         write_parquet(
-            results_dir(ROTATIONS_RUN) / "rotation_spread.parquet",
+            results_dir(ROTATIONS_RUN) / f"rotation_spread_{kind}.parquet",
             pa.Table.from_pandas(spread, preserve_index=False),
         )
-        show(f"the spread over {len(metrics)} rotations is in results/{ROTATIONS_RUN}/")
+        count = list(kinds.values()).count(kind)
+        show(
+            f"the spread over {plural(count, f'{kind} rotation')} is in "
+            f"results/{ROTATIONS_RUN}/rotation_spread_{kind}.parquet"
+        )
 
 
 def score_command(config: RunConfig, open_graph: Connect) -> None:
@@ -774,9 +826,6 @@ RUNNERS: dict[str, Callable[[RunConfig, Connect], None]] = {
     "score": score_command,
     "bench": bench_command,
 }
-# Where each command's events go: its own folder under results/, else results/commands/.
-EVENT_FOLDERS: dict[str, Callable[[], Path]] = {"bench": bench_dir}
-
 
 # What `mule --help` says: the module's docstring is for a reader of the code.
 DESCRIPTION = (
@@ -797,7 +846,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     """Run a command of the command line. A command that stops for a reason a person can act on
     ends with its message and status 1."""
     command: str = build_parser().parse_args(argv).command
-    events = EVENT_FOLDERS.get(command, lambda: results_dir(COMMANDS_RUN))()
+    # The events go to results/bench/ for the benchmark, else to results/commands/.
+    events = bench_dir() if command == "bench" else results_dir(COMMANDS_RUN)
     try:
         _logged(events, command, lambda: RUNNERS[command](DEFAULT_CONFIG, connect))
     except STOPS as error:

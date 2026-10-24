@@ -247,6 +247,15 @@ def read_table(path: Path, schema: pa.Schema) -> pd.DataFrame:
     return pq.read_table(path, schema=schema).to_pandas()
 
 
+def read_first(path: Path, schema: pa.Schema) -> pd.DataFrame:
+    """The first row group of a table of an examples folder (an empty table when it has none),
+    to look at its first rows without reading the millions a whole test world's table holds."""
+    held = pq.ParquetFile(path)
+    if held.num_row_groups == 0:
+        return schema.empty_table().to_pandas()
+    return held.read_row_group(0).cast(schema).to_pandas()
+
+
 class ExampleKeys(Mapping[int, list[str]]):
     """The accounts of each Monday that the examples tables of a folder hold, read a Monday at a
     time: mule fetch asks for the keys of a whole world, which run to millions of rows, and holds

@@ -18,6 +18,7 @@ from dataclasses import dataclass, replace
 from datetime import date
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tomllib
@@ -77,6 +78,11 @@ CONFIG = replace(
         prior_multiples=(1, 3),
     ),
     audit=replace(DEFAULT_CONFIG.audit, replicates=30, nonmule_sample=60),
+)
+# Two rotations of the development worlds: D2 never trains in the pipeline and D1 never tests, so
+# each rotation's second half has no examples of its own.
+TWO_ROTATIONS = replace(
+    CONFIG, worlds=WorldsConfig(rotations=(ROTATION, Rotation("D2", "D3", "D1")))
 )
 PASSING = {
     GATE_RECORD: True,
@@ -402,6 +408,12 @@ def test_a_command_stops_at_a_failed_readiness_check_before_its_work(
         worked.append("prepare")
 
     monkeypatch.setattr(cli, "prepare", prepares)
+    # mule score looks for a model of its run before it asks for the graph, so the run holds one
+    # (an empty file: the readiness check stops it before the file is read).
+    stub = paths.results_dir("stub-run")
+    stub.mkdir(parents=True, exist_ok=True)
+    (stub / "gnn_seed0.pt").write_bytes(b"")
+    config = replace(CONFIG, score=ScoreConfig(("a_mule",), (date(2024, 7, 1),), "stub-run"))
     for command in (
         cli.parity_command,
         cli.prepare_command,
@@ -410,10 +422,8 @@ def test_a_command_stops_at_a_failed_readiness_check_before_its_work(
         cli.bench_command,
         cli.score_command,
     ):
-        config = replace(CONFIG, score=ScoreConfig(("a_mule",), (date(2024, 7, 1),), "D1-D2-D3"))
-        with pytest.raises((cli.NotReady, cli.CommandError)) as stopped:
+        with pytest.raises(cli.NotReady, match=r"^installed queries: "):
             command(config, pipeline.connect("D1"))
-        assert "installed queries" in str(stopped.value) or command is cli.score_command
     assert worked == []
 
 
@@ -533,6 +543,49 @@ def test_train_names_a_world_that_was_never_prepared(
         cli.train_command(config, cli.connect)
 
 
+def test_train_names_each_world_of_a_failed_audit_once(pipeline: Pipeline) -> None:
+    # D2 is in both rotations, and its failed audit is named once.
+    _records(pipeline, {"D2": {FEATURE_AUDIT: False}})
+    try:
+        with pytest.raises(cli.CommandError, match=r"^training stops: D2: feature_audit\. Run"):
+            cli.train_command(TWO_ROTATIONS, cli.connect)
+    finally:
+        _records(pipeline, {"D2": {FEATURE_AUDIT: True}})
+
+
+def test_train_checks_every_rotation_before_the_first_one_trains(
+    pipeline: Pipeline, monkeypatch: pytest.MonkeyPatch, shown: list[str]
+) -> None:
+    trained_rotations: list[str] = []
+
+    def trains(worlds: cli.RotationWorlds, config: RunConfig, device: object) -> None:
+        trained_rotations.append(worlds.name)
+
+    monkeypatch.setattr(cli, "train_rotation_command", trains)
+    # The second rotation trains on D2, which was prepared to select and has no training examples.
+    with pytest.raises(cli.NotReady, match=r"^one example read: the cache and examples of D2 are"):
+        cli.train_command(TWO_ROTATIONS, cli.connect)
+    # The first rotation's own check passed, and nothing trained.
+    assert any(line.startswith("ready: read the example of") and "of D1" in line for line in shown)
+    assert trained_rotations == []
+
+
+def test_train_finds_a_selection_world_that_was_never_fetched_before_it_trains(
+    pipeline: Pipeline, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # A copy of the data folder in which D2, the selection world, was prepared and never fetched:
+    # its selection pass would fail with a missing hub after the first epoch.
+    copy = tmp_path / "data"
+    shutil.copytree(paths.DATA_DIR, copy)
+    monkeypatch.setattr(paths, "DATA_DIR", copy)
+    shutil.rmtree(paths.cache_dir(pipeline.identity("D2")))
+    worlds = cli.rotation_worlds(ROTATION, CONFIG)
+    with pytest.raises(cli.NotReady, match=r"^one example read: the cache and examples of D2 are"):
+        cli.check_trainable(worlds, CONFIG)
+    with pytest.raises(cli.NotReady, match=r"^one example read: the cache and examples of D2 are"):
+        cli.train_command(CONFIG, cli.connect)
+
+
 @pytest.fixture(scope="module")
 def trained(pipeline: Pipeline) -> Path:
     """mule train, run on the rotation once."""
@@ -609,6 +662,86 @@ def test_evaluate_writes_the_tables_marked_development_only(evaluated: Path) -> 
     assert (evaluated / "missed" / "mules.parquet").is_file()
     events = [json.loads(line) for line in (evaluated / "events.jsonl").read_text().splitlines()]
     assert ("evaluate", "finished") in [(e["command"], e["event"]) for e in events]
+
+
+def test_evaluate_checks_every_rotation_before_the_first_one_is_evaluated(
+    pipeline: Pipeline, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    evaluated_rotations: list[str] = []
+
+    def evaluates(worlds: cli.RotationWorlds, config: RunConfig, device: object) -> pd.DataFrame:
+        evaluated_rotations.append(worlds.name)
+        return pd.DataFrame()
+
+    monkeypatch.setattr(cli, "evaluate_rotation", evaluates)
+    # The second rotation tests on D1, which was prepared to train and has no test examples.
+    with pytest.raises(cli.NotReady, match=r"^one example read: the cache and examples of D1 are"):
+        cli.evaluate_command(TWO_ROTATIONS, cli.connect)
+    assert evaluated_rotations == []
+
+
+def _metrics(value: float) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "ranker": ["gnn"],
+            "seed": [0],
+            "group": ["all"],
+            "metric": ["roc_auc"],
+            "value": [value],
+            "selected": [True],
+        }
+    )
+
+
+def test_the_spread_over_rotations_pools_only_rotations_of_one_kind() -> None:
+    metrics = {
+        "A-B-C": _metrics(0.6),
+        "B-C-A": _metrics(0.8),
+        "C-A-B": _metrics(0.7),
+        "D1-D2-D3": _metrics(0.1),
+    }
+    kinds = dict.fromkeys(("A-B-C", "B-C-A", "C-A-B"), "reported") | {"D1-D2-D3": "development"}
+    found = cli.rotation_spreads(metrics, kinds)
+    # The development rotation, alone of its kind, has no spread, and is not pooled with the
+    # three reported ones: their mean is 0.7 over 3 rotations, not 0.55 over 4.
+    assert set(found) == {"reported"}
+    mean = found["reported"][found["reported"]["of"] == "seed_mean"]
+    assert mean["rotations"].tolist() == [3] and mean["mean"].item() == pytest.approx(0.7)
+    # Two development rotations make a spread of their own.
+    both = cli.rotation_spreads(
+        {**metrics, "D2-D3-D1": _metrics(0.3)}, {**kinds, "D2-D3-D1": "development"}
+    )
+    assert set(both) == {"reported", "development"}
+    assert both["development"]["rotations"].tolist() == [2, 2]
+    assert cli.rotation_spreads({}, {}) == {}
+
+
+def test_evaluate_writes_one_spread_for_each_kind_with_two_rotations(
+    pipeline: Pipeline,
+    monkeypatch: pytest.MonkeyPatch,
+    shown: list[str],
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(paths, "RESULTS_DIR", tmp_path / "results")
+
+    def ready(worlds: cli.RotationWorlds, config: RunConfig) -> None:
+        return None
+
+    monkeypatch.setattr(cli, "check_evaluable", ready)
+
+    def evaluates(worlds: cli.RotationWorlds, config: RunConfig, device: object) -> pd.DataFrame:
+        return _metrics(0.6 if worlds.name == "D1-D2-D3" else 0.8)
+
+    monkeypatch.setattr(cli, "evaluate_rotation", evaluates)
+    cli.evaluate_command(TWO_ROTATIONS, cli.connect)
+    written = sorted(path.name for path in paths.results_dir(cli.ROTATIONS_RUN).glob("*"))
+    assert written == ["rotation_spread_development.parquet"]
+    spread = pd.read_parquet(paths.results_dir(cli.ROTATIONS_RUN) / written[0])
+    assert set(spread["rotations"]) == {2}
+    assert shown[-1] == (
+        "the spread over 2 development rotations is in "
+        "results/rotations/rotation_spread_development.parquet"
+    )
 
 
 # mule score.

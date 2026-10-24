@@ -1459,16 +1459,23 @@ Commands take no options: worlds, roles, dates and settings live in config.
 | `mule audit` | evaluation code, on the loaded world: reads the answer key into the evaluation store; checks PhantomLedger's gate record against the world's identity; builds and fetches a test-role fallback list if configured; runs the label checks, the clock probe and the identified share by onset month; on development worlds also the feature audit and the hub, leaf and card-spending checks; writes pass records to the evaluation store |
 | `mule train` | first reads the pass or fail of the audit records of its rotation's worlds, and nothing else of them, and stops on a failure that stops the run (see [Gates](#gates)); then trains the GNN over the prior grid and five seeds with selection after each epoch, the ablations and the two XGBoost comparisons, once each; training code reads no gate or audit record |
 | `mule evaluate` | scores the test world and writes the metrics, groups, uncertainty, missed-mule report and identification bias; marks the results development only unless every gate passed |
-| `mule score` | scores the accounts and dates set in config with the model of the best-selection seed |
+| `mule score` | scores the accounts and dates set in config (`score.accounts`, `score.dates`) with the model of the best-selection seed among the full models of the run `score.run` names, a results folder such as `A-B-C` |
 | `mule bench` | measures cost on the loaded world and writes `results/bench/` |
 
 Every long command first runs a read-only readiness check: installed versions, the world's
 identity, one account fetched, one training step. `mule train` and `mule evaluate` never query
-TigerGraph, so theirs reads what they read: the worlds of the rotation are registered, one
-example is read from the cache, and one training step runs.
+TigerGraph, so theirs reads what they read: the worlds of every rotation are registered, one
+example is read from the cache of each world the command reads (`mule train` the training world
+and the selection world, whose examples are read lazily and would otherwise fail after the first
+epoch; `mule evaluate` the test world), and one training step runs. The check runs for every
+rotation before the first rotation starts, so a cache that is missing is found before any
+rotation trains or is evaluated.
 
 `mule train` and `mule evaluate` run every rotation of the config, in order, and a rotation's
 results are in `results/<train>-<select>-<test>/`; a config that holds one rotation runs one.
+`mule evaluate` also writes the spread over the rotations of each kind of world that has two or
+more rotations (`results/rotations/rotation_spread_<kind>.parquet`), so the three reported
+rotations make one spread and the development rotation is never pooled with them.
 Each command appends to an `events.jsonl`, in the run's folder for these two, in
 `results/bench/` for `mule bench` and in `results/commands/` for the rest.
 
@@ -1495,8 +1502,9 @@ per world to `results/bench/`:
   about 2,000 hop-2 accounts), at 1, 2 and 4 concurrent requests;
 - B1's worst account and its steps;
 - subgraph sizes by type, community sizes, cache bytes per account and in total;
-- TigerGraph's memory in use and install time per query (the old full install took about 50
-  minutes, and one install timed out after 5,402 seconds);
+- install time per query (the old full install took about 50 minutes, and one install timed
+  out after 5,402 seconds); TigerGraph's memory in use is read in the Cloud console, since the
+  metrics endpoint answers 403 for this workspace's secret;
 - parse and build time per batch, GPU step time and peak memory, examples per second;
 - the cost of the XGBoost file hand-off (`comparisons.process`): the bytes the parent writes
   under `TMPDIR` and the seconds to write, read and score each selection or test matrix, which

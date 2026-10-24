@@ -7,8 +7,9 @@ open and filter by hand. The sample is a few scored Mondays (bench.mondays: the 
 and those between), and on each the accounts of a training draw (data.examples), unlabelled
 accounts and the identified active mules, reported apart. The table holds, by section:
 
-- world: the loaded world, TigerGraph's version, its memory in use (when the secret may read it)
-  and the seconds read_world took;
+- world: the loaded world, TigerGraph's version, its counts of vertices and edges and the seconds
+  read_world took (TigerGraph's memory in use is read in the Cloud console, since the metrics
+  endpoint answers 403 for this workspace's secret);
 - fetch: per query and request, at each of bench.concurrency concurrent requests, the seconds,
   the request and response bytes and the work counters; B1's worst account and its steps;
 - subgraph and cache: the sizes of the fetched subgraphs by type, the community sizes, and the
@@ -18,7 +19,8 @@ accounts and the identified active mules, reported apart. The table holds, by se
 - handoff: the bytes the parent writes under TMPDIR for the XGBoost process
   (comparisons.process), and the seconds to write, read and score a matrix;
 - hubs and profile: profile_hubs' histograms, the hubs and crowds against the thresholds, and
-  the share of the sample's identified mules that are account hubs, which must be 0;
+  the count and share of every Monday's identified active mules (all of them, not only the ones
+  fetched) that are account hubs, which must be 0;
 - install: the seconds to install each query again, with INSTALL QUERY -FORCE;
 - co_users: what the choice between co-user rows per Monday for every customer and on demand
   needs; the rule is the same either way;
@@ -83,8 +85,8 @@ from .data.examples import monday, unlabelled
 from .data.labels import Labels, read_identified
 from .data.population import list_population
 from .data.worlds import LoadedWorld, find_world
-from .evaluation.answer_key import ACTIVE, NON_MULE
 from .evaluation.rankings import Ranking
+from .evaluation.statuses import ACTIVE, NON_MULE
 from .evaluation.store import write_parquet
 from .evaluation.uncertainty import Clusters, replicate_matrix
 from .model.encode import encode_batch
@@ -93,30 +95,16 @@ from .model.loss import NonNegativePULoss
 from .paths import bench_dir
 from .runtime.console import show
 from .subgraph.build import Batch, account_nodes, build, read_rows
-from .subgraph.cache import (
-    ACTIVITY,
-    COMMUNITY,
-    COUNTERPARTIES,
-    MONEY_FLOW,
-    PAYMENT_EVENTS,
-    SHARED_IDENTITY,
-    Cache,
-    Table,
-)
-from .subgraph.fetch import PARAMS, Fetcher
+from .subgraph.cache import Cache, Table
+from .subgraph.fetch import PARAMS, PER_ACCOUNT, Fetcher, chunks
 from .subgraph.layouts import LAYOUT
 from .subgraph.switches import Switch
 from .tigergraph.executor import BenchExecutor, ConnectionExecutor
 from .tigergraph.queries import (
     PROFILE_HUBS,
     QUERY_FILES,
-    READ_ACTIVITY_CHANGE,
-    READ_COMMUNITY,
-    READ_COUNTERPARTIES,
     READ_HUBS,
     READ_MONEY_FLOW,
-    READ_PAYMENT_EVENTS,
-    READ_SHARED_IDENTITY,
     profile_hubs,
     read_hubs,
 )
@@ -128,15 +116,6 @@ from .training.batches import ScoringBatches
 from .training.trainer import logits, selection_passes
 
 COLUMNS = ("section", "name", "variant", "value", "unit", "note")
-# The per-account queries, with the table each one's answer is parsed and kept by.
-PER_ACCOUNT: dict[str, Table[Any]] = {
-    READ_MONEY_FLOW: MONEY_FLOW,
-    READ_COUNTERPARTIES: COUNTERPARTIES,
-    READ_ACTIVITY_CHANGE: ACTIVITY,
-    READ_PAYMENT_EVENTS: PAYMENT_EVENTS,
-    READ_SHARED_IDENTITY: SHARED_IDENTITY,
-    READ_COMMUNITY: COMMUNITY,
-}
 UNLABELLED = "unlabelled"
 POSITIVES = "positives"
 SECONDS_PER_DAY = 86_400.0
@@ -171,13 +150,6 @@ class Measures:
         return found.astype(
             {"section": "str", "name": "str", "variant": "str", "value": "float64", "unit": "str"}
         ).astype({"note": "str"})
-
-    def value(self, section: str, name: str, variant: str = "") -> float:
-        """The value of one row, which must be there once."""
-        found = [row[3] for row in self.rows if row[:3] == (section, name, variant)]
-        if len(found) != 1:
-            raise KeyError(f"The bench table holds {len(found)} rows of {section}.{name} {variant}")
-        return found[0]
 
     def spread(
         self, section: str, name: str, variant: str, values: Sequence[float], unit: str
@@ -228,10 +200,6 @@ def seconds_projected(rate: float, count: float, passes: float = 1.0) -> float:
 def _bytes(value: object) -> int:
     """The bytes of a request or an answer as compact JSON."""
     return len(json.dumps(value, separators=(",", ":")))
-
-
-def _chunks[T](items: Sequence[T], size: int) -> list[Sequence[T]]:
-    return [items[start : start + size] for start in range(0, len(items), size)]
 
 
 @dataclass(frozen=True)
@@ -288,16 +256,20 @@ def time_requests(executor: BenchExecutor, requests: Sequence[Request], concurre
 
 @dataclass(frozen=True)
 class Sample:
-    """The accounts measured on one Monday: how many are scorable, the identified active mules
-    (positives, the first of them) and the unlabelled draw (the first of it), and the Monday's
-    hubs."""
+    """The accounts measured on one Monday: how many are scorable, every identified active mule
+    (identified), of which the first bench.positives are fetched (positives), the first of the
+    unlabelled draw, which is fetched, and the Monday's hubs."""
 
     t_ms: int
     scorable: int
-    identified_active: int
+    identified: tuple[str, ...]
     positives: tuple[str, ...]
     unlabelled: tuple[str, ...]
     hubs: Hubs
+
+    @property
+    def identified_active(self) -> int:
+        return len(self.identified)
 
     def group(self, name: str) -> tuple[str, ...]:
         return self.positives if name == POSITIVES else self.unlabelled
@@ -325,7 +297,7 @@ def take_samples(
             Sample(
                 t_ms,
                 len(accounts),
-                len(day.positives),
+                day.positives,
                 day.positives[: config.bench.positives],
                 draw.drawn[: config.bench.unlabelled],
                 hubs,
@@ -340,7 +312,7 @@ def _requests(query: str, samples: Sequence[Sample], group: str, per_request: in
     found: list[Request] = []
     for sample in samples:
         hubs = [hub.account_id for hub in sample.hubs.accounts]
-        for chunk in _chunks(sample.group(group), per_request):
+        for chunk in chunks(sample.group(group), per_request):
             params = PARAMS[query](sample.t_ms, tuple(chunk), hubs)
             found.append(Request(query, sample.t_ms, tuple(chunk), params))
     return found
@@ -684,7 +656,7 @@ def measure_profile(
         measures.add("hubs", "account_hubs", variant, len(sample.hubs.accounts), "accounts")
         measures.add("hubs", "device_leaves", variant, len(sample.hubs.devices), "nodes")
         measures.add("hubs", "ip_leaves", variant, len(sample.hubs.ips), "nodes")
-        active = sample.positives
+        active = sample.identified
         measures.add(
             "hubs",
             "identified_active_that_are_hubs",
@@ -774,19 +746,11 @@ def measure_installs(executor: ConnectionExecutor, measures: Measures) -> None:
 
 
 def measure_server(executor: ConnectionExecutor, world: World, measures: Measures) -> None:
-    """TigerGraph's version, its memory in use when the secret may read it, and the seconds
-    read_world takes on the loaded world."""
+    """TigerGraph's version and the loaded world's counts of vertices and edges. Its memory in
+    use is not measured here: the metrics endpoint answers 403 for this workspace's secret, so
+    it is read in the Cloud console."""
     version = str(executor.call(lambda conn: conn.getVer(), what="getVer"))
     measures.add("world", "tigergraph", "", 1.0, "version", version)
-    note = ""
-    try:
-        reading = executor.call(
-            lambda conn: conn.getSystemMetrics(what="mem", latest=1), what="getSystemMetrics"
-        )
-        note = json.dumps(reading, default=str)[:400]
-    except Exception as error:
-        note = f"not readable: {type(error).__name__}: {str(error)[:200]}"
-    measures.add("world", "tigergraph_memory", "", float("nan"), "bytes", note)
     for name, count in world.vertices.items():
         measures.add("world", "vertices", name, count, "vertices")
     for name, count in world.edges.items():

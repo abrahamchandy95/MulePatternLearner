@@ -8,6 +8,7 @@ prepare's calendar check asks for. Its two scored Mondays are T, 2024-07-01, and
 
 from __future__ import annotations
 
+import ast
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from dataclasses import replace
@@ -25,15 +26,18 @@ from mule_pattern_learner.config import (
     CalendarConfig,
     RunConfig,
 )
+from mule_pattern_learner.data.labels import read_identified
 from mule_pattern_learner.testing import fixtures
 from mule_pattern_learner.testing.calendar import DAY_0, Spy, identity_text, world_of
 from mule_pattern_learner.testing.reference import ReferenceGraph
 from mule_pattern_learner.testing.world import DAY_MS, HOUR_MS, T
+from mule_pattern_learner.tigergraph.executor import BenchExecutor
 from mule_pattern_learner.tigergraph.queries import (
     PROFILE_HUBS,
     QUERY_FILES,
     READ_ANSWER_KEY,
     READ_HUBS,
+    read_hubs,
 )
 
 W = 7 * DAY_MS
@@ -66,8 +70,8 @@ class FakeClient:
 
 class Live(Spy):
     """The loaded world as a connection executor: a spy over a reference graph, and a
-    connection that reinstalls queries, tells its version and refuses its metrics, as
-    TigerGraph Cloud's secret does."""
+    connection that reinstalls queries and tells its version, and has no operation that reads
+    TigerGraph's metrics, which the bench never asks for."""
 
     graph_name = "Mule_Pattern_Learner"
 
@@ -85,9 +89,6 @@ class Live(Spy):
         class Connection:
             def getVer(self) -> str:  # noqa: N802
                 return "4.2.5"
-
-            def getSystemMetrics(self, **keywords: Any) -> Any:  # noqa: N802
-                raise RuntimeError("403 Client Error: Forbidden")
 
             def installQueries(self, names: list[str], flag: str | None = None) -> str:  # noqa: N802
                 installed.append((names, flag))
@@ -167,10 +168,10 @@ def test_the_bench_writes_a_table_named_for_the_world(
         "bootstrap",
         "scoring",
     }
-    # No number is missing but the memory a secret may not read, and the notes say why.
-    missing = table[table["value"].isna()]
-    assert set(missing["name"]) == {"tigergraph_memory"}
-    assert "not readable" in missing["note"].iloc[0]
+    # No number is missing, and TigerGraph's memory, which this workspace's secret may not
+    # read, is no row of the table: it is read in the Cloud console.
+    assert table["value"].notna().all()
+    assert "tigergraph_memory" not in set(table["name"])
 
 
 def test_the_bench_runs_no_query_it_may_not(measured: tuple[Live, pd.DataFrame, Path]) -> None:
@@ -297,6 +298,52 @@ def test_what_is_measured_of_the_sample_is_consistent(
     above = table[table["name"] == "accounts_above_hub"]
     assert above["value"].max() == 1
     assert set(table[table["section"] == "install"]["variant"]) == set(QUERY_FILES)
+
+
+def test_a_sample_keeps_every_identified_active_mule_and_fetches_the_first_few(
+    graph: ReferenceGraph,
+) -> None:
+    executor = BenchExecutor(Live(graph))
+    config = replace(CONFIG, bench=replace(CONFIG.bench, positives=1))
+    [sample] = bench.take_samples(
+        executor, [T], read_identified(executor), config, bench.Measures()
+    )
+    # a_mule and a_r1 are identified and active on T, and the fetched sample holds the first.
+    assert sample.identified == ("a_mule", "a_r1") and sample.identified_active == 2
+    assert sample.positives == ("a_mule",)
+
+
+def test_an_identified_mule_that_is_a_hub_is_counted_beyond_the_fetched_sample(
+    graph: ReferenceGraph,
+) -> None:
+    executor = BenchExecutor(Live(graph))
+    hubs = read_hubs.parse(executor.run(READ_HUBS, read_hubs.params(T)))
+    assert len(hubs.accounts) == 1
+    hub = hubs.accounts[0].account_id
+    # Three identified active mules, the hub last; only the first is fetched.
+    sample = bench.Sample(T, 224, ("a_mule", "a_r1", hub), ("a_mule",), (), hubs)
+    measures = bench.Measures()
+    bench.measure_profile(executor, [sample], CONFIG, measures)
+    table = measures.frame()
+    variant = f"t={T}"
+    assert _row(table, "hubs", "identified_active_that_are_hubs", variant) == 1
+    assert _row(table, "hubs", "identified_active_hub_share", variant) == pytest.approx(1 / 3)
+
+
+def test_the_bench_imports_nothing_of_the_answer_key() -> None:
+    """The benchmark never reads the truth (docs/design.md, "Scaling and the benchmark"), and no
+    import contract holds it to that: its imports name no module or name of the answer key."""
+    tree = ast.parse(Path(bench.__file__).read_text())
+    named = [
+        name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom | ast.Import)
+        for name in [
+            *(getattr(node, "module", None) or "").split("."),
+            *(alias.name for alias in node.names),
+        ]
+    ]
+    assert not [name for name in named if "answer_key" in name.lower()]
 
 
 def test_every_query_is_installed_again_with_force_and_one_that_fails_is_named(
