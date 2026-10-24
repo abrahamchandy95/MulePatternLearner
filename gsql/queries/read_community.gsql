@@ -1,72 +1,37 @@
 USE GRAPH Mule_Pattern_Learner
 
-/* How the account's network formed, B6 (docs/design.md, "read_community (B6): how the mule
-   network formed", and docs/features.md, "The community block"): for each account of the
-   request at one Monday t, the community of customers around its owner as of t, and the 8
-   numbers of its block.
+/* read_community (B6): how each scored account's network formed, read from the community of
+   customers around its owner as of t.
 
-   The members, each in the first round that reaches it:
-   - round 0 is the scored account's owner, through a visible ownership link. An account with
-     none has no member, and every number of its block is 0;
-   - round 1 adds the customers that share a device or IP that is no leaf with the owner, and
-     round 2 those that share one with a member kept in round 1;
-   - the payment round adds the owners, through a visible ownership link, of internal
-     accounts that exist at t and are no hub and that paid, or were paid by, an account of a
-     member kept in rounds 0 to 2 in [t - 30 days, t).
+   Inputs: t_ms, a Monday at 00:00 UTC; account_ids, the scored accounts, each once;
+   hub_accounts, read_hubs' account hubs of the same t.
+   Prints: accounts, per scored account its community block (docs/features.md, "The community
+   block"): members, capped, shared_nodes, density, new_link_share_30d, internal_amount_30d,
+   isolation and member_payments_30d. An account with no owner has no member, and every
+   number of its block is 0.
+   Refuses: invalid_parameters, duplicate_account, unknown_account, invisible_account and
+   invisible_hub (a hub that does not exist at t).
+
+   A ring is a small, dense cluster, formed recently, that pays itself, and how a cluster
+   formed lies beyond the GNN's two hops (docs/design.md, "read_community (B6): how the mule
+   network formed"). The members, each in the first round that reaches it:
+   - round 0 is the scored account's owner, through a visible ownership link;
+   - round 1 adds the customers that share a device or IP with the owner, and round 2 those
+     that share one with a member kept in round 1;
+   - the payment round adds the owners of the internal accounts, no hub, that paid or were
+     paid by an account of a member in the last 30 days. It finds the rings whose members
+     share no device or IP, as most mules do not; it adds members, never links.
    Each round's candidates are kept newest first, ties by customer id, while the community
-   holds fewer than 64. A sharing candidate's time is the latest, over the nodes it shares
-   with a member kept in the round before, of the later of the two sharing starts; a payment
-   candidate's time is its latest such payment. One heap per scored account, ordered by round,
-   then newest first, then by id, with the community's cap as its capacity, keeps exactly
-   these members whatever order the candidates come in. capped says that some candidate was
-   left out: more were proposed, the owner included, than the heap holds.
+   holds fewer than 64; capped says that some candidate was left out.
 
-   Sharing is read_shared_identity's rule (B5). A customer shares a node that is no leaf when
-   it has a link to it held in the last 30 days, or a deposit account it owns, existing at t
-   through a visible ownership link, sent a payment seen on it in the last 30 days. Its
-   sharing start there is the earliest of its link start (the earliest start of its visible
-   links to the node) and its first use seen from such an account in the lookback, each
-   t - 90 days when it is not known. A start s is known when s > t - 90 days, s > its
-   joined_ms, and an account it owns through a visible ownership link sent a payment in
-   [t - 90 days, s) not seen on that node. Every device and IP a customer shares is tested
-   inline by read_hubs' crowd rule: one with more than 8 customers is a leaf, shared by no one
-   and never stepped through.
-
-   The rounds run in one loop of five passes. Each pass first reads the sharing of the
-   customers handed to it that no pass has read yet: their links, their own payments of the
-   lookback and the nodes seen on them, their sharing starts, and the leaf test of the nodes
-   they share. Then pass 1 proposes round 1's candidates, pass 2 round 2's, each from the
-   nodes of the members kept in the round before, and pass 3 the payment round's; every pass
-   then keeps its round's members in the heaps (pass 0 keeps the owners, round 0). Passes 0
-   and 1 hand the next pass the customers that share a node of the members they kept, so
-   that each candidate of rounds 1 and 2 is read before it is proposed; passes 2 and 3 hand
-   it the members they kept, so that pass 4 reads the payment round's members.
-
-   The block (docs/features.md, "The community block"):
-   - members: the members kept, the owner included; capped, as above.
-   - shared_nodes: the nodes that are no leaf and that two members or more share. A link is a
-     member sharing one of them; density is the links over members times shared nodes, 0 with
-     no shared node. The payment round adds members, never links.
-   - new_link_share_30d: the links whose member's sharing start there is in the last 30 days,
-     over the links; 0 with none.
-   - A member's accounts exist at t through a visible ownership link, open or closed, and are
-     no hub. A payment of the last 30 days between accounts of two different members is
-     internal, and its cents, floor(amount x 100 + 0.5) summed in INT, make
-     internal_amount_30d; one between a member's account and any other account, an account
-     hub included, is external; one between two accounts of one member is neither.
-     isolation is the internal payments over internal and external ones, 0 with none, and
-     member_payments_30d is their sum.
-   A self-payment is read nowhere but in the crowd count, which is read_hubs' measure. No
-   library algorithm builds the community: those read the whole graph with no as-of time.
-
-   Per-request state is kept by the scored account: on its own vertex, or in maps keyed by its
-   id. Every other map and flag holds what one customer, account, node or payment is at t,
-   whichever scored account reached it, so that a customer read or a node tested once is read
-   or tested for every scored account. The account hubs of t come as hub_accounts, read_hubs'
-   account hubs of the same t; each must exist at t. Reads no label. t must be a Monday at
-   00:00 UTC after the lookback's length, and the request must name at least one account,
-   each once, each in the graph and existing at t; the accounts come as ids, as
-   read_money_flow says why. */
+   Sharing, known starts and leaves follow read_shared_identity's (B5) rules, read the same
+   way. No library algorithm builds the community: connected components and the like read the
+   whole graph with no as-of time, so future ring members would leak in, and hubs and crowds
+   would merge strangers. A self-payment is read nowhere but in the crowd count, which is
+   read_hubs' measure. Per-request state is kept by the scored account, on its own vertex or
+   in maps keyed by its id; every other map and flag holds what one customer, account, node
+   or payment is at t, so that a customer read or a node tested once serves every scored
+   account. The accounts come as ids, as read_money_flow explains. */
 CREATE OR REPLACE QUERY read_community(
     UINT t_ms,
     LIST<STRING> account_ids,
@@ -101,8 +66,8 @@ CREATE OR REPLACE QUERY read_community(
        not seen on the node, its first use from a deposit account, and its sharing start. Per
        customer: its earliest own payment in the lookback, the nodes its own payments were
        seen on, and the nodes it shares; per node, the customers sharing it; the leaves. */
-    MapAccum<STRING, MapAccum<STRING, MinAccum<UINT>>> @@link_start, @@first_unseen, @@deposit_first_use,
-      @@share_start;
+    MapAccum<STRING, MapAccum<STRING, MinAccum<UINT>>> @@link_start, @@first_unseen,
+      @@deposit_first_use, @@share_start;
     MapAccum<STRING, MinAccum<UINT>> @@first_own;
     MapAccum<STRING, SetAccum<STRING>> @@own_seen, @@shares, @@sharers;
     SetAccum<STRING> @@leaf_ids;
@@ -127,6 +92,9 @@ CREATE OR REPLACE QUERY read_community(
         PRINT "invalid_parameters" AS status;
         RETURN;
     END;
+    /* The ids: at least one; none twice, which a list keeps and a set would drop; each an
+       account of the graph, since to_vertex_set drops an unknown id; each existing at t. Then
+       the hubs, which must exist at t too. */
     FOREACH account_id IN account_ids DO
         @@ids += account_id;
         @@given += 1;
@@ -157,14 +125,23 @@ CREATE OR REPLACE QUERY read_community(
     END;
     Marked = SELECT h FROM HubAccounts:h POST-ACCUM h.@hub += TRUE;
 
-    /* Round 0: each scored account's owner, through a visible ownership link. */
+    /* Round 0: each scored account's owner goes first into its heap. The heap is ordered by
+       round, then newest first, then by id, and holds the community's cap, so it keeps
+       exactly each round's newest candidates while there is room, whatever order they come
+       in: a later round never displaces an earlier one. */
     Owners = SELECT q FROM Scored:a -(Account_Owned_By_Party>:o)- Party:q
       WHERE o.valid_from_ms < t_ms
         AND (o.valid_to_ms == 0 OR o.valid_to_ms > t_ms - lookback_ms)
       ACCUM a.@community += Member(0, 0, q.id), a.@proposed += 1;
     Pending (ANY) = Owners;
 
-    /* The five passes. */
+    /* The rounds run in one loop of five passes. Each pass first reads the customers handed
+       to it that no pass has read yet. Then pass 1 proposes round 1's candidates, pass 2
+       round 2's and pass 3 the payment round's, and every pass keeps its round's members (pass
+       0 kept the owners above). Passes 0 and 1 hand the next pass the customers sharing a
+       node of the members they kept, so that every candidate of rounds 1 and 2 is read before
+       it is proposed; passes 2 and 3 hand on the members they kept, so that pass 4 reads the
+       payment round's members, whose sharing the block needs. */
     WHILE community_round < 5 DO
         @@candidate_time.clear();
 
@@ -218,10 +195,10 @@ CREATE OR REPLACE QUERY read_community(
                     @@first_unseen += (p.@owner_id -> (n -> p.event_ts_ms))
                 END
             END;
-        /* Their sharing starts: a link start or a first use from a deposit account is known
-           when it is after the lookback's start, after the customer joined, and after a
-           payment of the customer's own not seen on the node; each is t - 90 days when not
-           known, and the sharing start is the earliest. */
+        /* Their sharing starts, by read_shared_identity's known-start test: a link start or a
+           first use from a deposit account is known when it is after the lookback's start,
+           after the customer joined, and after an own payment not seen on the node; each is
+           t - 90 days when not known, and the sharing start is the earliest. */
         FreshStarts = SELECT q FROM Fresh:q
           POST-ACCUM
             UINT unseen_ms = 0, BOOL found = FALSE,
@@ -256,9 +233,10 @@ CREATE OR REPLACE QUERY read_community(
                 END
             END;
 
-        /* The leaves among the nodes they share that no pass has tested, by read_hubs' crowd
-           rule; payments are read only for a node that 8 enrolled customers or fewer do not
-           already make a leaf. */
+        /* The leaves among the nodes they share that no pass has tested, by read_hubs' own
+           crowd rule, so that a leaf here is read_hubs' crowd. Payments are read only for a
+           node that 8 enrolled customers or fewer do not already make a leaf, which changes
+           the cost and never the flag. */
         FreshNodes = FreshLinks UNION FreshSeen;
         Untested = SELECT n FROM FreshNodes:n
           WHERE @@sharers.containsKey(n.id) AND NOT n.@tested
@@ -306,34 +284,18 @@ CREATE OR REPLACE QUERY read_community(
                     END
                 END;
         END;
-        /* The payment round: the owners, through a visible ownership link, of the internal
-           accounts that exist at t and are no hub at the other end of a payment of the last
-           30 days, but self-payments, of a member's account, that are no member yet, at
-           their latest such payment. */
+        /* The payment round: the owners of the internal accounts, existing at t and no hub,
+           at the other end of a payment of the last 30 days, either way, of a member's account
+           that is no hub; each that is no member yet is proposed at its latest such payment.
+           r != b drops the member's own end of each payment, and so every self-payment. */
         IF community_round == 3 THEN
-            PayingMembers = to_vertex_set(@@member_ids, "Party");
-            Payees = SELECT c FROM PayingMembers:q -(Party_Owns_Account>:w)- Account:b
-              -((Account_Initiated_Transaction>|Account_Sent_Zelle_Transfer>):e)-
+            Members = to_vertex_set(@@member_ids, "Party");
+            Counterparties = SELECT c FROM Members:q -(Party_Owns_Account>:w)- Account:b
+              -((Account_Initiated_Transaction>|Account_Received_Transaction>
+                |Account_Sent_Zelle_Transfer>|Account_Received_Zelle_Transfer>):e)-
               (Payment_Transaction|Zelle_Transfer):p
-              -((Transaction_To_Account>|Transfer_To_Account>):f)- Account:r
-              -(Account_Owned_By_Party>:o)- Party:c
-              WHERE w.valid_from_ms < t_ms
-                AND (w.valid_to_ms == 0 OR w.valid_to_ms > t_ms - lookback_ms)
-                AND b.opened_ms < t_ms AND NOT b.@hub
-                AND p.event_ts_ms >= t_ms - 2592000000 AND p.event_ts_ms < t_ms AND r != b
-                AND NOT r.is_external AND NOT r.@hub AND r.opened_ms < t_ms
-                AND o.valid_from_ms < t_ms
-                AND (o.valid_to_ms == 0 OR o.valid_to_ms > t_ms - lookback_ms)
-              ACCUM
-                FOREACH s IN @@member_of.get(q.id) DO
-                    IF NOT @@members.get(s).contains(c.id) THEN
-                        @@candidate_time += (s -> (c.id -> p.event_ts_ms))
-                    END
-                END;
-            Payers = SELECT c FROM PayingMembers:q -(Party_Owns_Account>:w)- Account:b
-              -((Account_Received_Transaction>|Account_Received_Zelle_Transfer>):e)-
-              (Payment_Transaction|Zelle_Transfer):p
-              -((Transaction_From_Account>|Transfer_From_Account>):f)- Account:r
+              -((Transaction_From_Account>|Transaction_To_Account>
+                |Transfer_From_Account>|Transfer_To_Account>):f)- Account:r
               -(Account_Owned_By_Party>:o)- Party:c
               WHERE w.valid_from_ms < t_ms
                 AND (w.valid_to_ms == 0 OR w.valid_to_ms > t_ms - lookback_ms)
@@ -432,7 +394,8 @@ CREATE OR REPLACE QUERY read_community(
         FOREACH s IN @@member_of.get(q.id) DO b.@communities += s END;
     /* Their payments of the last 30 days, but self-payments: one sent to an account of
        another member is internal, counted once from its sender, with its cents; one with an
-       account of no member is external, counted from the member's side. */
+       account of no member, an account hub included, is external, counted from the member's
+       side; one between two accounts of one member is neither. */
     MemberSent = SELECT b FROM MemberAccounts:b
       -((Account_Initiated_Transaction>|Account_Sent_Zelle_Transfer>):e)-
       (Payment_Transaction|Zelle_Transfer):p
@@ -460,8 +423,12 @@ CREATE OR REPLACE QUERY read_community(
             IF NOT r.@communities.contains(s) THEN @@external += (s -> 1) END
         END;
 
-    /* Per scored account, each node that is no leaf with the members sharing it, and those
-       whose sharing start there is in the last 30 days; then the block. */
+    /* The block. A link is a member sharing a node that is no leaf, and a shared node is one
+       two members or more share; the payment round's members count here only through their
+       own sharing. density is the links over members times shared nodes; new_link_share_30d,
+       the links whose member's sharing start there is in the last 30 days, over the links;
+       isolation, the internal payments over internal and external ones. Each share is 0
+       with an empty denominator. */
     NodeLinks = SELECT s FROM Scored:s
       POST-ACCUM
         FOREACH x IN s.@community DO
@@ -497,7 +464,7 @@ CREATE OR REPLACE QUERY read_community(
         IF payments > 0 THEN s.@isolation += internal * 1.0 / payments END,
         s.@member_payments_30d += payments;
 
-    PRINT "ok" AS status, "read_community-ab8a2ab9f96f" AS version;
+    PRINT "ok" AS status, "read_community-8406b3785a46" AS version;
     PRINT Blocks[Blocks.id AS account_id, Blocks.@members AS members,
       Blocks.@capped AS capped, Blocks.@shared_nodes AS shared_nodes,
       Blocks.@density AS density, Blocks.@new_link_share_30d AS new_link_share_30d,

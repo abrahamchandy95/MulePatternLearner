@@ -231,15 +231,7 @@ def test_the_hub_parameter_is_the_only_hub_input() -> None:
     reads a hub, and no account hub is counted here."""
     code = normal(DEFINITION)
     assert code.count("hub_accounts") == 2
-    assert re.findall(r"\S*@hub\b\S*", code) == [
-        "@hub",
-        "h.@hub",
-        "b.@hub",
-        "r.@hub",
-        "b.@hub",
-        "r.@hub",
-        "b.@hub",
-    ]
+    assert re.findall(r"\S*@hub\b\S*", code) == ["@hub", "h.@hub", "b.@hub", "r.@hub", "b.@hub"]
     assert not re.search(r"outdegree|hub_threshold|@@hub", code)
 
 
@@ -261,8 +253,7 @@ SELECT_ORDER = [
     "Leaves",
     "LeafIds",
     "Proposed",
-    "Payees",
-    "Payers",
+    "Counterparties",
     "Ranked",
     "Kept",
     "FrontierReceivers",
@@ -281,7 +272,7 @@ OTHERS = [
     "WHILE community_round < 5 DO @@candidate_time.clear ( )",
     "FreshNodes = FreshLinks UNION FreshSeen",
     "END",
-    'IF community_round == 3 THEN PayingMembers = to_vertex_set ( @@member_ids , "Party" )',
+    'IF community_round == 3 THEN Members = to_vertex_set ( @@member_ids , "Party" )',
     "END",
     "@@frontier.clear ( )",
     "@@frontier_ids.clear ( )",
@@ -559,23 +550,19 @@ def test_rounds_1_and_2_propose_the_sharers_of_the_nodes_of_the_members_kept_bef
     )
 
 
-@pytest.mark.parametrize(
-    ("target", "way", "end"),
-    [("Payees", SENT_FROM, SENT_TO), ("Payers", RECEIVED_BY, FROM)],
-)
-def test_the_payment_round_proposes_the_owners_of_the_members_counterparties(
-    target: str, way: frozenset[str], end: frozenset[str]
-) -> None:
+def test_the_payment_round_proposes_the_owners_of_the_members_counterparties() -> None:
     """From every account of a member kept in rounds 0 to 2 that is no hub and exists at t
-    through a visible ownership link, each payment of the last 30 days, but self-payments,
-    with an internal account that exists at t and is no hub: its owner through a visible
-    ownership link, when no member yet, at its latest such payment. By hand, on
-    t = 2024-04-01: a member's account paid c_06's deposit account on 2024-03-05 and
-    2024-03-20, and received from c_07's card account on 2024-03-25 and from a payroll
-    account of another bank: c_06 at 2024-03-20 and c_07 at 2024-03-25; the payroll's owner
-    is no candidate."""
+    through a visible ownership link, each payment of the last 30 days either way, but
+    self-payments, with an internal account that exists at t and is no hub: its owner through
+    a visible ownership link, when no member yet, at its latest such payment. Payments sent
+    and received are one pattern, every edge to a payment and every end of it; r != b keeps
+    the other end, which also leaves out a self-payment. By hand, on t = 2024-04-01: a
+    member's account paid c_06's deposit account on 2024-03-05 and 2024-03-20, and received
+    from c_07's card account on 2024-03-25 and from a payroll account of another bank: c_06
+    at 2024-03-20 and c_07 at 2024-03-25; the payroll's owner is no candidate."""
+    target = "Counterparties"
     select = _select(target)
-    assert _source(select) == "PayingMembers" and select.selected == "c"
+    assert _source(select) == "Members" and select.selected == "c"
     assert [(step.alias, step.types, step.chosen) for step in select.vertices] == [
         ("q", PARTY, False),
         ("b", ACCOUNT, False),
@@ -583,7 +570,12 @@ def test_the_payment_round_proposes_the_owners_of_the_members_counterparties(
         ("r", ACCOUNT, False),
         ("c", PARTY, False),
     ]
-    assert [edge.types for edge in select.edges] == [OWNS, way, end, OWNED_BY]
+    assert [edge.types for edge in select.edges] == [
+        OWNS,
+        SENT_FROM | RECEIVED_BY,
+        SENT_TO | FROM,
+        OWNED_BY,
+    ]
     assert select.conjuncts == VISIBLE_W | VISIBLE_O | WINDOW_30D | {
         "b.opened_ms < t_ms",
         "NOT b.@hub",
@@ -753,15 +745,15 @@ def test_no_bound_at_t_takes_t_itself_and_every_window_lies_in_the_lookback() ->
     code = normal(DEFINITION)
     assert not re.search(r"<= t_ms\b|(?<![\w.@])t_ms >(?!= lookback)(?! lookback)", code)
     assert set(re.findall(r"t_ms - (\d+)", code)) == {str(WINDOW_30D_MS)}
-    # Every payment read lies in the lookback: by its own window in the 8 SELECTs that step to
+    # Every payment read lies in the lookback: by its own window in the 7 SELECTs that step to
     # a payment, or as one chosen by them. Customers are read over the whole lookback; sharing,
     # the payment round and the block over its last 30 days.
     assert code.count("p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms") == 2
-    assert code.count(f"p.event_ts_ms >= t_ms - {WINDOW_30D_MS} AND p.event_ts_ms < t_ms") == 6
+    assert code.count(f"p.event_ts_ms >= t_ms - {WINDOW_30D_MS} AND p.event_ts_ms < t_ms") == 5
 
 
 def test_a_link_end_is_read_only_by_the_visible_and_current_tests() -> None:
-    """valid_to_ms is never a value, an order or a test against t but those two: 11 visible
+    """valid_to_ms is never a value, an order or a test against t but those two: 9 visible
     tests, one per link a pattern steps along, and 2 current ones."""
     code = normal(DEFINITION)
     visible = re.findall(
@@ -774,7 +766,7 @@ def test_a_link_end_is_read_only_by_the_visible_and_current_tests() -> None:
         rf"t_ms - {WINDOW_30D_MS} \)",
         code,
     )
-    assert (len(visible), len(current)) == (11, 2)
+    assert (len(visible), len(current)) == (9, 2)
     assert code.count("valid_to_ms") == 2 * (len(visible) + len(current))
 
 
@@ -788,7 +780,7 @@ def test_it_reads_no_label_and_dates_of_record_only_as_existence_and_known_start
         "s.opened_ms",
     }
     assert set(re.findall(r'\.account_type == "(\w+)"', code)) == {"deposit"}
-    assert re.findall(r"\w+\.is_external", code) == ["r.is_external", "r.is_external"]
+    assert re.findall(r"\w+\.is_external", code) == ["r.is_external"]
 
 
 def test_no_library_algorithm_and_no_other_query_builds_it() -> None:
@@ -815,26 +807,8 @@ SLIPS = [
         "no allowed form at t",
     ),
     (
-        "AND NOT r.is_external AND NOT r.@hub AND r.opened_ms < t_ms\n"
-        "                AND o.valid_from_ms < t_ms\n"
-        "                AND (o.valid_to_ms == 0 OR o.valid_to_ms > t_ms - lookback_ms)\n"
-        "              ACCUM\n"
-        "                FOREACH s IN @@member_of.get(q.id) DO\n"
-        "                    IF NOT @@members.get(s).contains(c.id) THEN\n"
-        "                        @@candidate_time += (s -> (c.id -> p.event_ts_ms))\n"
-        "                    END\n"
-        "                END;\n"
-        "            Payers",
-        "AND NOT r.is_external AND NOT r.@hub\n"
-        "                AND o.valid_from_ms < t_ms\n"
-        "                AND (o.valid_to_ms == 0 OR o.valid_to_ms > t_ms - lookback_ms)\n"
-        "              ACCUM\n"
-        "                FOREACH s IN @@member_of.get(q.id) DO\n"
-        "                    IF NOT @@members.get(s).contains(c.id) THEN\n"
-        "                        @@candidate_time += (s -> (c.id -> p.event_ts_ms))\n"
-        "                    END\n"
-        "                END;\n"
-        "            Payers",
+        "AND NOT r.is_external AND NOT r.@hub AND r.opened_ms < t_ms\n",
+        "AND NOT r.is_external AND NOT r.@hub\n",
         "reaches an account that may not exist at t",
     ),
     (

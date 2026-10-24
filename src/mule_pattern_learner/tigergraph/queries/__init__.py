@@ -164,7 +164,7 @@ REGISTRY: dict[str, Query] = {
         Query(
             READ_COMMUNITY,
             QUERIES_FOLDER,
-            "read_community-ab8a2ab9f96f",
+            "read_community-8406b3785a46",
             read_community.params,
             (read_community.Community,),
         ),
