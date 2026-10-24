@@ -1593,6 +1593,26 @@ usage edges per person-year from them, and a PhantomLedger world check enforces 
 world (PhantomLedger's plan, "Households, devices and IPs"). `mule bench`'s IP crowd counts,
 subgraph sizes and memory then show what those edges cost here.
 
+## Proof-of-concept settings (25 October 2026)
+
+The owner agreed on 25 October 2026 ("First trained result") to one trained result on the
+development rotation D1, D2, D3 (30,000 people each, seeds 1001 to 1003) in about 7 hours of
+machine time, through TigerGraph as designed. The benchmark of world T priced selection at
+about 702 days a rotation at 30,000 people (`mule bench`, 24 October 2026), because every
+selection example was rebuilt on every epoch of every prior, seed and ablation, and fetching
+cost about 3 s an account-Monday.
+
+The design above is unchanged: it is what the reported runs build. These settings replace the
+design's values in the defaults of `config.py`, and each is marked in the code with a comment
+that begins "Proof of concept (25 October 2026)" and names the full design's value. Going back
+to the full design is putting the listed value back, and nothing else. The commands still take
+no options. Every result of the proof of concept is development only, from worlds whose
+PhantomLedger steps are not all in.
+
+| Setting | Proof of concept | Full design | Why |
+|---|---|---|---|
+| `training.reuse_built_examples` | True: the selection world's and the test world's examples are built once and kept in memory, and every epoch of selection and every run of the test world replays them | False: every pass builds them anew | An example costs about 0.022 s to build and 0.001 s to score, so rebuilding it on every pass was almost all of the selection cost. Kept in memory they fit only because the worlds are sampled (see below); the full design's whole worlds do not. The training world's batches were already built once and shared by every seed, prior, epoch and ablation of a rotation. A test shows that kept batches equal freshly built ones and that training gives the same result |
+
 ## Package layout
 
 | Path | Holds |

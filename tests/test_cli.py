@@ -26,6 +26,7 @@ from typing import Any
 
 import pandas as pd
 import pytest
+import torch
 
 from mule_pattern_learner import cli, paths
 from mule_pattern_learner.config import (
@@ -56,6 +57,7 @@ from mule_pattern_learner.testing.world import DAY_MS, HOUR_MS, T, WorldBuilder
 from mule_pattern_learner.tigergraph import installer
 from mule_pattern_learner.tigergraph.queries import QUERY_FILES, VERSIONS
 from mule_pattern_learner.tigergraph.world import cache_key
+from mule_pattern_learner.training.batches import ScoringBatches
 
 W = 7 * DAY_MS
 CALENDAR = CalendarConfig(history_days=182, scored_mondays=3)
@@ -662,6 +664,29 @@ def test_evaluate_writes_the_tables_marked_development_only(evaluated: Path) -> 
     assert (evaluated / "missed" / "mules.parquet").is_file()
     events = [json.loads(line) for line in (evaluated / "events.jsonl").read_text().splitlines()]
     assert ("evaluate", "finished") in [(e["command"], e["event"]) for e in events]
+
+
+def test_evaluate_builds_each_test_example_once_when_the_examples_are_kept(
+    evaluated: Path, pipeline: Pipeline, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Proof of concept (docs/design.md, "Proof-of-concept settings (25 October 2026)"): the test
+    world's examples are built once for all seven runs, and once per run in the full design."""
+    made: list[ScoringBatches] = []
+
+    class Recording(ScoringBatches):
+        def __init__(self, *args: Any, **keywords: Any) -> None:
+            super().__init__(*args, **keywords)
+            made.append(self)
+
+    monkeypatch.setattr(cli, "ScoringBatches", Recording)
+    worlds = cli.rotation_worlds(ROTATION, CONFIG)
+    cli.evaluate_rotation(worlds, CONFIG, torch.device("cpu"))
+    test_world = made[0]
+    assert test_world.built == len(test_world)
+    made.clear()
+    anew = replace(CONFIG, training=replace(CONFIG.training, reuse_built_examples=False))
+    cli.evaluate_rotation(worlds, anew, torch.device("cpu"))
+    assert made[0].built == 7 * len(made[0])
 
 
 def test_evaluate_checks_every_rotation_before_the_first_one_is_evaluated(

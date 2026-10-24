@@ -35,7 +35,9 @@ Mondays, and never changes a design: it prices what the design says.
   (training.trainer.selection_passes: seeds x (priors + ablations) x epochs). The table gives the
   seconds to build one example, the examples a pass scores, the passes a rotation makes, with the
   prior grid and with the prior fixed, and the projected seconds a rotation spends on selection,
-  for the build alone and with the forward pass, at each of bench.projected_people.
+  for the build alone and with the forward pass, at each of bench.projected_people. When
+  training.reuse_built_examples keeps the examples (the proof of concept), the first pass builds
+  them and every pass runs only the forward pass: the build is priced once.
 - audit (docs/design.md, "mule audit"): mule audit fetches every active true-mule account-Monday
   and audit.nonmule_sample non-mule account-Mondays on every world. The sparse sample's seconds
   per account-Monday are measured, and priced at the sample size plus the identified mules' active
@@ -49,7 +51,8 @@ Mondays, and never changes a design: it prices what the design says.
   with five seeds; with each comparison trained once the runs are 27.
 - scoring: the whole-world scoring run, against its fallback (data.scoring): the fetch it needs
   at the sparse rate (an upper bound, since a whole world's neighbours are shared), and one
-  scoring pass of every run of the test world, which builds the batches anew for each.
+  scoring pass of every run of the test world, which builds the batches anew for each, or once
+  when training.reuse_built_examples keeps them.
 
 The table is written through a temporary file and a rename.
 """
@@ -192,6 +195,16 @@ def runs_of(seeds: int, ablations: int, comparisons: int) -> int:
 def seconds_projected(rate: float, count: float, passes: float = 1.0) -> float:
     """Seconds for count units at rate seconds each, over passes passes."""
     return rate * count * passes
+
+
+def pass_seconds(
+    build: float, forward: float, examples: float, passes: float, *, reuse: bool
+) -> tuple[float, float]:
+    """The seconds passes passes over a world's examples spend building them, and with the
+    forward pass too: every pass builds every example anew, or, when reuse keeps the examples
+    (training.batches.ScoringBatches), the first pass builds them and the others do not."""
+    built = seconds_projected(build, examples, 1.0 if reuse else passes)
+    return built, built + seconds_projected(forward, examples, passes)
 
 
 # Measuring.
@@ -826,6 +839,7 @@ def project(
         "grid": selection_passes(config.training, grid),
         "fixed": selection_passes(config.training, 1),
     }
+    reuse = config.training.reuse_built_examples
     for name, count in passes.items():
         measures.add("selection", "passes_per_rotation", name, count, "passes")
     measures.add(
@@ -837,10 +851,17 @@ def project(
         examples = examples_at(per_person, people, mondays)
         measures.add("selection", "examples_per_pass", variant, examples, "examples")
         for name, count in passes.items():
-            for cost, rate in (("build", rates.build), ("build+forward", rates.scoring)):
-                seconds = seconds_projected(rate, examples, count)
+            built, scored = pass_seconds(rates.build, rates.forward, examples, count, reuse=reuse)
+            for cost, seconds in (("build", built), ("build+forward", scored)):
                 label = f"{variant},priors={name},cost={cost}"
-                measures.add("selection", "projected_seconds_per_rotation", label, seconds, "s")
+                measures.add(
+                    "selection",
+                    "projected_seconds_per_rotation",
+                    label,
+                    seconds,
+                    "s",
+                    "built once and kept" if reuse else "built anew on every pass",
+                )
                 measures.add(
                     "selection",
                     "projected_days_per_rotation",
@@ -892,9 +913,10 @@ def project(
                 "scoring",
                 "test_scoring_seconds_all_runs",
                 label,
-                seconds_projected(rates.scoring, count, runs),
+                pass_seconds(rates.build, rates.forward, count, runs, reuse=reuse)[1],
                 "s",
-                f"{runs} runs, each building the test batches anew",
+                f"{runs} runs, "
+                + ("the test batches built once and kept" if reuse else "each building them anew"),
             )
         measures.add(
             "handoff",

@@ -494,6 +494,7 @@ def train_rotation_command(worlds: RotationWorlds, config: RunConfig, device: to
         select_registered.identity,
         selection_keys,
         batch_size,
+        keep=config.training.reuse_built_examples,
     )
     priors = grid(identified_active_share(report), config.training)
     folder = results_dir(worlds.name)
@@ -661,6 +662,7 @@ def evaluate_rotation(
         test_registered.identity,
         keys.loc[:, ["t_ms", "account_id"]],
         config.training.batch_size,
+        keep=config.training.reuse_built_examples,
     )
     scored = ScoredWorld.of(test_registered.identity, cache, keys)
     runs = _runs(worlds, config, batches, device)
@@ -686,6 +688,7 @@ def evaluate_rotation(
                 select_registered.identity,
                 ranked,
                 config.training.batch_size,
+                keep=config.training.reuse_built_examples,
             ),
             ranked.loc[:, ["t_ms", "account_id", "weight"]],
             chosen.answer_key(),

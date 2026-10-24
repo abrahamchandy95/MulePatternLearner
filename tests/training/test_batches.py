@@ -171,3 +171,68 @@ def test_a_pass_counts_the_examples_it_built_and_the_time_it_took(world: Any) ->
     seconds = batches.seconds
     list(batches)
     assert batches.built == 200 and batches.seconds > seconds
+
+
+def _same_batch(left: Batch, right: Batch) -> bool:
+    """Whether two batches hold the same keys and, store by store, the same tensors."""
+    if left.keys != right.keys:
+        return False
+    ours, theirs = list(left.data.stores), list(right.data.stores)
+    if len(ours) != len(theirs):
+        return False
+    for mine, other in zip(ours, theirs, strict=True):
+        if list(mine.keys()) != list(other.keys()):
+            return False
+        for name in mine.keys():
+            if not torch.equal(torch.as_tensor(mine[name]), torch.as_tensor(other[name])):
+                return False
+    return True
+
+
+def test_kept_scoring_batches_are_built_once_and_equal_fresh_ones(
+    world: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Proof of concept (docs/design.md, "Proof-of-concept settings (25 October 2026)"): with
+    keep, every pass after the first replays the batches the first one built, which are the
+    batches a fresh pass builds, and reads no row of the cache."""
+    keys = world.examples()[["t_ms", "account_id"]].iloc[::-1]
+    kept = ScoringBatches(world.cache, world.identity, keys, 100, keep=True)
+    fresh = ScoringBatches(world.cache, world.identity, keys, 100)
+    reads: list[int] = []
+    real = batches_module.read_rows
+
+    def counting(cache: Any, examples: Any) -> Any:
+        reads.append(len(examples))
+        return real(cache, examples)
+
+    monkeypatch.setattr(batches_module, "read_rows", counting)
+    first, second, third = list(kept), list(kept), list(kept)
+    assert reads == [224, 224] and kept.built == 448
+    assert [len(batch.keys) for batch in first] == [100, 100, 24, 100, 100, 24]
+    # The later passes hold the very batches the first one built, and so does a fresh pass.
+    assert all(a is b for a, b in zip(first, second, strict=True))
+    assert all(a is b for a, b in zip(first, third, strict=True))
+    reads.clear()
+    rebuilt = list(fresh)
+    assert reads == [224, 224] and fresh.built == 448
+    assert len(rebuilt) == len(first)
+    assert all(_same_batch(a, b) for a, b in zip(first, rebuilt, strict=True))
+    list(fresh)
+    assert fresh.built == 896
+
+
+def test_a_kept_pass_that_stops_early_keeps_nothing(world: Any) -> None:
+    """Only a whole pass is kept: one abandoned after its first batch leaves the next pass to
+    build every batch, as a fresh one does."""
+    keys = world.examples()[["t_ms", "account_id"]]
+    kept = ScoringBatches(world.cache, world.identity, keys, 100, keep=True)
+    pass_ = iter(kept)
+    next(pass_)
+    del pass_
+    whole = list(kept)
+    assert kept.built == 100 + 448
+    assert [(key.t_ms, key.account_id) for batch in whole for key in batch.keys] == list(
+        zip(kept.keys["t_ms"], kept.keys["account_id"], strict=True)
+    )
+    list(kept)
+    assert kept.built == 100 + 448

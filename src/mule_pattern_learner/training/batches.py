@@ -14,6 +14,12 @@ selection": batches are built once, shuffled across Mondays and labels, and reus
   prior, seed and ablation (training.trainer.selection_passes), so the time spent reading rows
   and building is counted (ScoringBatches.seconds over ScoringBatches.built), for mule bench
   to multiply by the passes before whole-world selection is accepted.
+- Proof of concept (25 October 2026): with keep, the first whole pass keeps the batches it
+  built and every later pass replays them, so each example of a world is built once for every
+  epoch, prior, seed and ablation, and for the test world's every run (docs/design.md,
+  "Proof-of-concept settings (25 October 2026)"). The kept batches are the same ones a fresh
+  pass builds, and they are held in memory, so keep is for the sampled worlds of the proof of
+  concept; the full design's whole worlds do not fit, and keep is off for them.
 
 Every key is one the caller computed itself, from its own examples table: the cache is only
 asked for the rows of those keys (the Keys chosen by their reader guard).
@@ -85,9 +91,12 @@ def training_batches(
 class ScoringBatches:
     """The scoring batches of keys (t_ms, account_id) of a world, at most size examples each,
     built anew on every pass, Monday by Monday in increasing order, each Monday's accounts in
-    increasing order. keys holds them in that order; the scores of a pass follow it."""
+    increasing order, or, with keep, built by the first whole pass and replayed by every later
+    one. keys holds them in that order; the scores of a pass follow it."""
 
-    def __init__(self, cache: Cache, world: str, keys: pd.DataFrame, size: int) -> None:
+    def __init__(
+        self, cache: Cache, world: str, keys: pd.DataFrame, size: int, *, keep: bool = False
+    ) -> None:
         if size < 1:
             raise ValueError(f"A batch holds at least one example, not {size}")
         _check_keys(keys, KEY_COLUMNS, "scoring keys")
@@ -98,6 +107,9 @@ class ScoringBatches:
         self.cache = cache
         self.world = world
         self.size = size
+        self.keep = keep
+        # The batches of the first whole pass, when keep says to hold them.
+        self._kept: list[Batch] | None = None
         # The examples built over every pass so far, and the seconds spent reading their rows
         # and building them (not the consumer's own time between batches).
         self.built = 0
@@ -108,6 +120,11 @@ class ScoringBatches:
         return len(self.keys)
 
     def __iter__(self) -> Iterator[Batch]:
+        if self._kept is not None:
+            yield from self._kept
+            return
+        # A pass that stops before its end keeps nothing, so a kept pass is always whole.
+        held: list[Batch] = []
         t_ms = self.keys["t_ms"].to_numpy(dtype=np.int64)
         accounts = [str(account) for account in self.keys["account_id"]]
         # The keys run Monday after Monday, so each Monday's examples are one slice of them.
@@ -126,4 +143,8 @@ class ScoringBatches:
                     batch = build(found[chunk : chunk + self.size], self.world)
                     self.seconds += time.perf_counter() - began
                     self.built += len(batch.keys)
+                    if self.keep:
+                        held.append(batch)
                     yield batch
+        if self.keep:
+            self._kept = held

@@ -109,6 +109,24 @@ def test_training_learns_the_planted_mules_and_not_shuffled_labels(
     assert learned.found.score == learned.score
 
 
+def test_reusing_the_selection_batches_changes_no_training_result(world: Any) -> None:
+    """Proof of concept (docs/design.md, "Proof-of-concept settings (25 October 2026)"): the
+    selection world's examples built once and replayed on every epoch train to the weights, the
+    history and the selection results of ones built anew on every epoch, and are built once."""
+    batches = _small(world)
+    fresh = _selection(world)
+    kept = SelectionWorld(world.cache, world.identity, world.selection_keys(), 64, keep=True)
+    first = _train(batches, fresh)
+    second = _train(batches, kept)
+    assert _same_weights(first.model, second.model)
+    assert first.history == second.history and len(first.history) == 3
+    assert (first.epoch, first.score) == (second.epoch, second.score)
+    assert first.found.accounts == second.found.accounts
+    assert np.array_equal(first.found.shares, second.found.shares)
+    # Three epochs rebuilt the 224 examples three times; kept, they were built once.
+    assert fresh.batches.built == 3 * 224 and kept.batches.built == 224
+
+
 def test_two_runs_of_one_seed_are_identical(world: Any) -> None:
     batches, selection = _small(world), _selection(world)
     settings = replace(SHORT, max_epochs=2)

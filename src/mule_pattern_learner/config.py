@@ -447,6 +447,11 @@ class TrainingConfig:
     # None runs the grid; a multiple fixes the prior at it, as the design fixes it at 1 for
     # reported runs when no pair of the grid's priors differs on the development rotation.
     fixed_prior: float | None = None
+    # Proof of concept (25 October 2026, docs/design.md, "Proof-of-concept settings (25 October
+    # 2026)"): the selection and test worlds' examples are built once and kept in memory, and
+    # every later pass replays them. The full design's value is False: its whole worlds' examples
+    # do not fit in memory, so every pass builds them anew.
+    reuse_built_examples: bool = True
 
     def __post_init__(self) -> None:
         _fraction("training.learning_rate", self.learning_rate, zero=False)
@@ -466,6 +471,7 @@ class TrainingConfig:
             _positive("training.prior_multiples", multiple)
         if self.fixed_prior is not None:
             _positive("training.fixed_prior", self.fixed_prior)
+        _instance("training.reuse_built_examples", self.reuse_built_examples, bool)
 
 
 @dataclass(frozen=True)

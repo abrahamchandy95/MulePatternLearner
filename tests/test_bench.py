@@ -47,6 +47,8 @@ CALENDAR = CalendarConfig(export_start=date(2024, 1, 1), history_days=182, score
 CONFIG = replace(
     DEFAULT_CONFIG,
     calendar=CALENDAR,
+    # The full design's way of scoring: every pass builds the selection examples anew.
+    training=replace(DEFAULT_CONFIG.training, reuse_built_examples=False),
     bench=BenchConfig(
         mondays=2,
         unlabelled=8,
@@ -230,6 +232,27 @@ def test_selection_is_priced_by_its_passes(measured: tuple[Live, pd.DataFrame, P
                 assert seconds == pytest.approx(rate * examples * passes)
                 days = _row(table, "selection", "projected_days_per_rotation", label)
                 assert days == pytest.approx(seconds / 86_400)
+
+
+def test_passes_are_priced_by_one_build_when_the_examples_are_kept() -> None:
+    """Proof of concept (docs/design.md, "Proof-of-concept settings (25 October 2026)"): with the
+    examples kept, the first pass builds them and every pass runs the forward pass, so the build
+    is priced once, for the selection world's passes and the test world's runs alike."""
+    built, scored = bench.pass_seconds(0.02, 0.001, 1_000, 750, reuse=True)
+    assert built == pytest.approx(20.0) and scored == pytest.approx(20.0 + 750.0)
+    # Built anew on every pass, the full design's way: the build is priced 750 times.
+    built, scored = bench.pass_seconds(0.02, 0.001, 1_000, 750, reuse=False)
+    assert built == pytest.approx(15_000.0) and scored == pytest.approx(15_750.0)
+
+
+def test_the_selection_rows_say_whether_the_examples_are_kept(
+    measured: tuple[Live, pd.DataFrame, Path],
+) -> None:
+    _, table, _ = measured
+    held = table[
+        (table["section"] == "selection") & (table["name"] == "projected_seconds_per_rotation")
+    ]
+    assert len(held) and set(held["note"]) == {"built anew on every pass"}
 
 
 def test_the_audit_and_the_bootstrap_are_priced_by_their_counts(

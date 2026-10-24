@@ -93,6 +93,13 @@ def test_the_defaults_are_the_designs_settings() -> None:
     assert DEFAULT_CONFIG.score == ScoreConfig((), (), "")
 
 
+def test_the_proof_of_concept_settings() -> None:
+    """The settings of docs/design.md, "Proof-of-concept settings (25 October 2026)", each with the
+    full design's value beside it; going back to the full design is putting these back."""
+    # Build each example once per world and reuse it (full design: False).
+    assert DEFAULT_CONFIG.training.reuse_built_examples is True
+
+
 def test_the_worlds_are_the_fixed_seeds_and_sizes() -> None:
     worlds = {world.name: (world.seed, world.people, world.kind) for world in WORLDS}
     assert worlds == {
@@ -229,6 +236,7 @@ def test_sections_refuse_values_outside_their_ranges() -> None:
         (lambda: TrainingConfig(prior_multiples=(1, 0)), "training.prior_multiples"),
         (lambda: TrainingConfig(prior_multiples=[1, 3]), "training.prior_multiples"),  # pyright: ignore[reportArgumentType]
         (lambda: TrainingConfig(fixed_prior=0), "training.fixed_prior"),
+        (lambda: TrainingConfig(reuse_built_examples=1), "training.reuse_built_examples"),  # pyright: ignore[reportArgumentType]
         (lambda: RunConfig(training=0), "training must be"),  # pyright: ignore[reportArgumentType]
         (lambda: AuditConfig(clock_probe_upper=0.5), "audit.clock_probe_upper"),
         (lambda: AuditConfig(separation_auc=1.0), "audit.separation_auc"),

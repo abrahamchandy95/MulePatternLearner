@@ -169,9 +169,10 @@ def model_file(folder: Path, ranker: str, seed: int) -> Path:
 def selection_passes(settings: TrainingConfig, priors: int) -> int:
     """The most passes over the selection world one rotation makes. Every seed trains the full
     model over priors priors and then each ablation at one prior, and each of those runs at
-    most max_epochs epochs, each ending in one pass that builds every selection example anew
-    (training.batches.ScoringBatches). mule bench multiplies its build time per example by
-    this, and by the selection world's examples, before whole-world selection is accepted."""
+    most max_epochs epochs, each ending in one pass over the selection world, which builds
+    every selection example anew (training.batches.ScoringBatches) unless
+    settings.reuse_built_examples keeps them. mule bench multiplies its build time per example
+    by this, and by the selection world's examples, before whole-world selection is accepted."""
     if priors < 1:
         raise ValueError(f"A rotation tries at least one prior, not {priors}")
     return len(settings.seeds) * (priors + len(Switch)) * settings.max_epochs
@@ -179,11 +180,14 @@ def selection_passes(settings: TrainingConfig, priors: int) -> int:
 
 class SelectionWorld:
     """The selection world a run scores after every epoch: its ranked keys (training.selection)
-    and their scoring batches, built anew on every pass."""
+    and their scoring batches, built anew on every pass, or built once and kept when keep says
+    so (training.batches.ScoringBatches)."""
 
-    def __init__(self, cache: Cache, world: str, keys: pd.DataFrame, size: int) -> None:
+    def __init__(
+        self, cache: Cache, world: str, keys: pd.DataFrame, size: int, *, keep: bool = False
+    ) -> None:
         self.keys = ranked_keys(keys)
-        self.batches = ScoringBatches(cache, world, self.keys, size)
+        self.batches = ScoringBatches(cache, world, self.keys, size, keep=keep)
         ordered = self.batches.keys
         if not (
             ordered["t_ms"].tolist() == self.keys["t_ms"].tolist()
