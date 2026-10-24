@@ -1612,6 +1612,7 @@ PhantomLedger steps are not all in.
 | Setting | Proof of concept | Full design | Why |
 |---|---|---|---|
 | `training.reuse_built_examples` | True: the selection world's and the test world's examples are built once and kept in memory, and every epoch of selection and every run of the test world replays them | False: every pass builds them anew | An example costs about 0.022 s to build and 0.001 s to score, so rebuilding it on every pass was almost all of the selection cost. Kept in memory they fit only because the worlds are sampled (see below); the full design's whole worlds do not. The training world's batches were already built once and shared by every seed, prior, epoch and ablation of a rotation. A test shows that kept batches equal freshly built ones and that training gives the same result |
+| `transport.concurrent_requests` | 2: the requests of one query run two at a time, a query's accounts cut into at least two requests when it has two or more accounts | 1: one request at a time | The benchmark of world T fetched B4's accounts 3.4 times as fast at 2 requests at once, and B1 to B3, B5 and B6 1.3 to 1.6 times as fast, which is 1.5 times as fast for a sparse account-Monday (3.04 s at 1, 1.99 s at 2). Four gave no more for B4. The requests of a round go out in the order of their accounts and their answers are kept in that order, so the cache and the counts are those of one at a time; each request keeps its own retries, whose backoff the threads share |
 
 ## Package layout
 

@@ -8,7 +8,7 @@ the roles, the dates and every other setting live here (docs/design.md, "Command
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, timedelta
 
 # The ranges of the transport settings; the executor checks the ones it is given too.
@@ -292,6 +292,10 @@ class TransportConfig:
     # Accounts of one Monday in a part of the cache, which is written once: a fetch that stops
     # loses at most the part it was filling.
     accounts_per_part: int = 1_024
+    # Proof of concept (25 October 2026, docs/design.md, "Proof-of-concept settings (25 October
+    # 2026)"): the requests of one query that are in flight at once. At 2 the benchmark of
+    # world T fetched B4's accounts 3.4 times as fast as at 1. The full design's value is 1.
+    concurrent_requests: int = 2
 
     def __post_init__(self) -> None:
         _integer("transport.max_query_attempts", self.max_query_attempts, QUERY_ATTEMPTS)
@@ -299,6 +303,7 @@ class TransportConfig:
         _integer("transport.accounts_per_request", self.accounts_per_request, ACCOUNTS_PER_REQUEST)
         _integer("transport.response_budget_bytes", self.response_budget_bytes, RESPONSE_BUDGETS)
         _integer("transport.accounts_per_part", self.accounts_per_part, ACCOUNTS_PER_PART)
+        _integer("transport.concurrent_requests", self.concurrent_requests, CONCURRENCY)
 
 
 @dataclass(frozen=True)
@@ -641,3 +646,12 @@ class RunConfig:
 
 
 DEFAULT_CONFIG = RunConfig()
+# Proof of concept (25 October 2026): DEFAULT_CONFIG holds the proof of concept's settings, and this
+# holds the full design's value of each one of them (docs/design.md, "Proof-of-concept settings (25
+# October 2026)"), for the tests of what the full design runs and for a run of it. Every change of
+# a default made for the proof of concept is undone here.
+FULL_DESIGN_CONFIG = replace(
+    DEFAULT_CONFIG,
+    transport=replace(DEFAULT_CONFIG.transport, concurrent_requests=1),
+    training=replace(DEFAULT_CONFIG.training, reuse_built_examples=False),
+)

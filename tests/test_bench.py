@@ -22,6 +22,7 @@ import pytest
 from mule_pattern_learner import bench
 from mule_pattern_learner.config import (
     DEFAULT_CONFIG,
+    FULL_DESIGN_CONFIG,
     BenchConfig,
     CalendarConfig,
     RunConfig,
@@ -48,7 +49,7 @@ CONFIG = replace(
     DEFAULT_CONFIG,
     calendar=CALENDAR,
     # The full design's way of scoring: every pass builds the selection examples anew.
-    training=replace(DEFAULT_CONFIG.training, reuse_built_examples=False),
+    training=FULL_DESIGN_CONFIG.training,
     bench=BenchConfig(
         mondays=2,
         unlabelled=8,

@@ -7,14 +7,16 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 import copy
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 import json
 from pathlib import Path
+import threading
 from typing import Any
 
 import pytest
+import requests
 
-from mule_pattern_learner.config import TransportConfig
+from mule_pattern_learner.config import FULL_DESIGN_CONFIG, TransportConfig
 from mule_pattern_learner.subgraph.cache import (
     ACTIVITY,
     COMMUNITY,
@@ -37,6 +39,7 @@ from mule_pattern_learner.subgraph.fetch import (
 from mule_pattern_learner.testing.calendar import Spy
 from mule_pattern_learner.testing.reference import ReferenceGraph
 from mule_pattern_learner.testing.world import DAY_MS, T
+from mule_pattern_learner.tigergraph.executor import TigerGraphExecutor
 from mule_pattern_learner.tigergraph.queries import (
     READ_ACTIVITY_CHANGE,
     READ_COMMUNITY,
@@ -54,6 +57,11 @@ from mule_pattern_learner.tigergraph.queries import (
 )
 
 W = 7 * DAY_MS
+# The requests of the full design, one query's at a time: the tests of how a fetch sizes, orders
+# and resumes its requests read them in the order they were sent, which concurrent requests
+# (the proof of concept's setting, TWO below) leave to the timing of the answers.
+SEQUENTIAL = FULL_DESIGN_CONFIG.transport
+TWO = replace(SEQUENTIAL, concurrent_requests=2)
 SCORED = ["a_mule", "a_collector", "a_landlord", "a_h1", "a_r1", "a_c000"]
 SHOPPERS = [f"a_c{index:03d}" for index in range(33)]
 FORTY = [f"a_c{index:03d}" for index in range(40)]
@@ -208,7 +216,7 @@ def test_a_fetch_stopped_between_parts_keeps_the_scored_accounts_it_completed(
 ) -> None:
     # Forty scored accounts in parts of 8. Each part's nodes are its own 8 accounts (the hub
     # a_shop is not given B1), so B1 makes one request a part; the third is stopped.
-    transport = TransportConfig(accounts_per_part=8)
+    transport = replace(SEQUENTIAL, accounts_per_part=8)
     cache = Cache(tmp_path)
     with pytest.raises(KeyboardInterrupt):
         fetch(Stopping(Spy(graph), READ_MONEY_FLOW, after=2), cache, {T: FORTY}, transport, parity)
@@ -230,7 +238,7 @@ def test_a_fetch_stopped_inside_a_table_resumes_at_the_part_it_was_filling(
 ) -> None:
     # a_shop's subgraph holds 33 accounts, itself and the payers of its newest 32 payments, and
     # all 33 get B1 to B3 rows, in parts of 8: 8, 8, 8, 8 and 1.
-    transport = TransportConfig(accounts_per_part=8)
+    transport = replace(SEQUENTIAL, accounts_per_part=8)
     cache = Cache(tmp_path)
     stopped = Stopping(Spy(graph), READ_MONEY_FLOW, after=2)
     with pytest.raises(KeyboardInterrupt):
@@ -353,7 +361,7 @@ def test_a_fetch_of_33_accounts_makes_requests_of_32_and_1(
     graph: ReferenceGraph, tmp_path: Path, parity: Path
 ) -> None:
     spy = Spy(graph)
-    fetch(spy, Cache(tmp_path), {T: SHOPPERS}, parity=parity)
+    fetch(spy, Cache(tmp_path), {T: SHOPPERS}, SEQUENTIAL, parity)
     for query in SUBGRAPH_QUERIES:
         assert spy.sizes(query) == [32, 1]
 
@@ -362,10 +370,10 @@ def test_a_request_refused_for_its_size_is_halved(
     graph: ReferenceGraph, tmp_path: Path, parity: Path
 ) -> None:
     whole = Cache(tmp_path / "whole")
-    fetch(Spy(graph), whole, {T: SHOPPERS}, parity=parity)
+    fetch(Spy(graph), whole, {T: SHOPPERS}, SEQUENTIAL, parity)
     spy = Spy(graph, too_large=(READ_PAYMENT_EVENTS, 8))
     halved = Cache(tmp_path / "halved")
-    done = fetch(spy, halved, {T: SHOPPERS}, parity=parity)
+    done = fetch(spy, halved, {T: SHOPPERS}, SEQUENTIAL, parity)
     # 32 is refused, then each 16, and the four 8s answer; then the last account alone.
     assert spy.sizes(READ_PAYMENT_EVENTS) == [32, 16, 8, 8, 16, 8, 8, 1]
     assert done.requests[READ_PAYMENT_EVENTS] == 5
@@ -457,7 +465,7 @@ def test_requests_are_sized_by_the_bytes_measured_so_far(
     graph: ReferenceGraph, tmp_path: Path, parity: Path
 ) -> None:
     spy = Spy(graph)
-    transport = TransportConfig(response_budget_bytes=3_000)
+    transport = replace(SEQUENTIAL, response_budget_bytes=3_000)
     fetch(spy, Cache(tmp_path), {T: FORTY, T + W: FORTY}, transport, parity)
     # Forty accounts a Monday. Every query's first request holds 32, as nothing has been
     # measured; every later request is sized by the answers before it, within a Monday's
@@ -490,7 +498,7 @@ def test_a_request_is_sized_by_the_90th_percentile_of_its_accounts_not_their_mea
     busy = ["a_collector", "a_landlord", "a_mule", "a_split"]
     scored = [*FORTY[:4], *busy, "a_tenant1", "a_tenant2", "a_vic1", "a_z"]
     spy = Spy(graph)
-    transport = TransportConfig(accounts_per_request=8, response_budget_bytes=30_000)
+    transport = replace(SEQUENTIAL, accounts_per_request=8, response_budget_bytes=30_000)
     fetch(spy, Cache(tmp_path), {T: scored}, transport, parity)
     # The twelve accounts, sorted: the first eight are the request above; then 3, and the last
     # account alone.
@@ -502,9 +510,9 @@ def test_the_request_size_never_changes_a_result(
 ) -> None:
     keys = {T: FORTY, T + W: FORTY}
     whole = Cache(tmp_path / "whole")
-    fetch(Spy(graph), whole, keys, parity=parity)
+    fetch(Spy(graph), whole, keys, SEQUENTIAL, parity)
     small = Cache(tmp_path / "small")
-    fetch(Spy(graph), small, keys, TransportConfig(response_budget_bytes=3_000), parity=parity)
+    fetch(Spy(graph), small, keys, replace(SEQUENTIAL, response_budget_bytes=3_000), parity)
     for t_ms, scored in keys.items():
         for table in SUBGRAPH_TABLES:
             assert small.rows(table, t_ms, scored) == whole.rows(table, t_ms, scored)
@@ -534,3 +542,153 @@ def test_a_key_that_is_not_a_monday_at_midnight_is_refused(
     with pytest.raises(ValueError, match="Monday at 00:00 UTC"):
         fetch(spy, Cache(tmp_path), {T + 3_600_000: SCORED}, parity=parity)
     assert spy.calls == []
+
+
+# Proof of concept (25 October 2026, docs/design.md, "Proof-of-concept settings (25 October
+# 2026)"): the requests of one query run concurrent_requests at a time.
+
+
+class Together:
+    """An executor that holds each request of the queries it is given until another request of
+    the same query has arrived, which only a fetch that sends two at once can give it: a
+    sequential fetch waits out the barrier and fails."""
+
+    def __init__(self, spy: Spy, *queries: str) -> None:
+        self.spy = spy
+        self.barriers = {query: threading.Barrier(2, timeout=30) for query in queries}
+
+    def run(self, name: str, params: dict[str, Any], **keywords: Any) -> list[dict[str, Any]]:
+        if name in self.barriers:
+            self.barriers[name].wait()
+        return self.spy.run(name, params, **keywords)
+
+
+def test_two_requests_of_a_query_are_in_flight_at_once(
+    graph: ReferenceGraph, tmp_path: Path, parity: Path
+) -> None:
+    spy = Spy(graph)
+    fetch(Together(spy, *SUBGRAPH_QUERIES), Cache(tmp_path), {T: FORTY}, TWO, parity)
+    # Forty accounts go to each of B4 to B6 in two requests of 20, not one of 32 and one of 8.
+    for query in SUBGRAPH_QUERIES:
+        assert spy.sizes(query) == [20, 20]
+    with pytest.raises(threading.BrokenBarrierError):
+        sequential = Together(Spy(graph), READ_PAYMENT_EVENTS)
+        sequential.barriers[READ_PAYMENT_EVENTS] = threading.Barrier(2, timeout=0.2)
+        fetch(sequential, Cache(tmp_path / "one"), {T: FORTY}, SEQUENTIAL, parity)
+
+
+def test_a_query_is_cut_into_as_many_requests_as_run_at_once(
+    graph: ReferenceGraph, tmp_path: Path, parity: Path
+) -> None:
+    # The 33 accounts of a_c000 to a_c032 go in 32 and 1 one at a time, and in 17 and 16, or 11,
+    # 11 and 11, when two or three go at once.
+    for concurrent, sizes in ((1, [32, 1]), (2, [17, 16]), (3, [11, 11, 11])):
+        spy = Spy(graph)
+        transport = replace(SEQUENTIAL, concurrent_requests=concurrent)
+        fetch(spy, Cache(tmp_path / str(concurrent)), {T: SHOPPERS}, transport, parity)
+        for query in SUBGRAPH_QUERIES:
+            assert sorted(spy.sizes(query), reverse=True) == sizes
+
+
+def test_concurrent_requests_fill_the_same_cache_and_count_the_same_accounts(
+    graph: ReferenceGraph, tmp_path: Path, parity: Path
+) -> None:
+    keys = {T: FORTY, T + W: FORTY}
+    one = Cache(tmp_path / "one")
+    alone = fetch(Spy(graph), one, keys, SEQUENTIAL, parity)
+    for concurrent in (2, 4):
+        cache = Cache(tmp_path / str(concurrent))
+        done = fetch(
+            Spy(graph), cache, keys, replace(SEQUENTIAL, concurrent_requests=concurrent), parity
+        )
+        for t_ms, scored in keys.items():
+            for table in (*SUBGRAPH_TABLES, *ACCOUNT_TABLES):
+                assert cache.rows(table, t_ms, scored) == one.rows(table, t_ms, scored)
+        assert done.accounts == alone.accounts and done.cached == alone.cached
+
+
+def test_requests_sized_by_the_measured_bytes_stay_the_same_run_after_run(
+    graph: ReferenceGraph, tmp_path: Path, parity: Path
+) -> None:
+    # Forty accounts a Monday and a budget of 3,000 bytes, two requests at a time. The first
+    # round of each query is sized by nothing measured and holds two requests of 20; every later
+    # round is sized by the answers before it, so B4's 533 bytes an account give requests of 5 on
+    # the second Monday, in rounds of two.
+    transport = replace(TWO, response_budget_bytes=3_000)
+    found: list[dict[str, list[int]]] = []
+    for run in range(3):
+        spy = Spy(graph)
+        fetch(spy, Cache(tmp_path / str(run)), {T: FORTY, T + W: FORTY}, transport, parity)
+        found.append({query: sorted(spy.sizes(query)) for query in SUBGRAPH_QUERIES})
+    assert found[0] == found[1] == found[2]
+    assert found[0][READ_PAYMENT_EVENTS] == [5] * 8 + [20, 20]
+
+
+def test_a_request_refused_for_its_size_is_halved_inside_its_round(
+    graph: ReferenceGraph, tmp_path: Path, parity: Path
+) -> None:
+    whole = Cache(tmp_path / "whole")
+    fetch(Spy(graph), whole, {T: SHOPPERS}, SEQUENTIAL, parity)
+    halved = Cache(tmp_path / "halved")
+    done = fetch(Spy(graph, too_large=(READ_PAYMENT_EVENTS, 8)), halved, {T: SHOPPERS}, TWO, parity)
+    # 17 is refused and halved to 9 and 8, and the 9 to 5 and 4: three answers; 16 is refused and
+    # halved to 8 and 8: two. The cache is the whole one's.
+    assert done.requests[READ_PAYMENT_EVENTS] == 5
+    for table in SUBGRAPH_TABLES:
+        assert halved.rows(table, T, SHOPPERS) == whole.rows(table, T, SHOPPERS)
+
+
+def test_the_failure_raised_is_that_of_the_first_request_that_failed(
+    graph: ReferenceGraph, tmp_path: Path, parity: Path
+) -> None:
+    # Every request of B5 is refused for its size down to one account, in both requests of the
+    # round, and the one raised is the first request's, whichever ended first.
+    for run in range(3):
+        spy = Spy(graph, too_large=(READ_SHARED_IDENTITY, 0))
+        with pytest.raises(Exception, match="more than the response limit") as refused:
+            fetch(spy, Cache(tmp_path / str(run)), {T: SHOPPERS}, TWO, parity)
+        assert "for the account a_c000 alone" in " ".join(getattr(refused.value, "__notes__", []))
+
+
+class Connection:
+    """A pyTigerGraph connection that answers through the reference graph, and fails the first
+    request of one query with a connection error, which the executor retries."""
+
+    def __init__(self, graph: ReferenceGraph, flaky: str) -> None:
+        self.graph = graph
+        self.flaky = flaky
+        self.lock = threading.Lock()
+        self.failed = False
+        self.calls = 0
+
+    def runInstalledQuery(self, name: str, params: dict[str, Any], **keywords: Any) -> Any:  # noqa: N802
+        with self.lock:
+            self.calls += 1
+            if name == self.flaky and not self.failed:
+                self.failed = True
+                raise requests.ConnectionError("reset")
+        return self.graph.run(name, params)
+
+
+class Client:
+    def __init__(self, conn: Connection) -> None:
+        self.conn = conn
+        self.graphname = "Mule_Pattern_Learner"
+
+
+def test_a_request_that_is_retried_changes_no_answer_and_is_retried_once(
+    graph: ReferenceGraph, tmp_path: Path, parity: Path
+) -> None:
+    whole = Cache(tmp_path / "whole")
+    fetch(Spy(graph), whole, {T: FORTY}, SEQUENTIAL, parity)
+    connection = Connection(graph, READ_PAYMENT_EVENTS)
+    pauses: list[float] = []
+    executor = TigerGraphExecutor(client=Client(connection), sleep=pauses.append)
+    cache = Cache(tmp_path / "retried")
+    done = fetch(executor, cache, {T: FORTY}, TWO, parity)
+    # One request of B4 failed once, was retried after a pause (the other request of the round may
+    # wait out the shared backoff too, so a pause or two), and answered; every request counts once.
+    assert executor.retries[READ_PAYMENT_EVENTS] == 1 and 1 <= len(pauses) <= 2
+    assert done.requests[READ_PAYMENT_EVENTS] == 2
+    for table in (*SUBGRAPH_TABLES, *ACCOUNT_TABLES):
+        assert cache.rows(table, T, FORTY) == whole.rows(table, T, FORTY)

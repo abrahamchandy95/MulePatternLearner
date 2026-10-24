@@ -4,13 +4,14 @@ refuse."""
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import FrozenInstanceError, replace
+from dataclasses import FrozenInstanceError, fields, replace
 from datetime import UTC, date, datetime
 
 import pytest
 
 from mule_pattern_learner.config import (
     DEFAULT_CONFIG,
+    FULL_DESIGN_CONFIG,
     ROTATIONS,
     WORLDS,
     AuditConfig,
@@ -98,6 +99,32 @@ def test_the_proof_of_concept_settings() -> None:
     full design's value beside it; going back to the full design is putting these back."""
     # Build each example once per world and reuse it (full design: False).
     assert DEFAULT_CONFIG.training.reuse_built_examples is True
+    # Two requests of a query at once (full design: 1).
+    assert DEFAULT_CONFIG.transport.concurrent_requests == 2
+
+
+def _differences(left: RunConfig, right: RunConfig) -> set[str]:
+    """The settings, as "section.setting", in which two configs differ."""
+    return {
+        f"{section.name}.{setting.name}"
+        for section in fields(left)
+        for setting in fields(getattr(left, section.name))
+        if getattr(getattr(left, section.name), setting.name)
+        != getattr(getattr(right, section.name), setting.name)
+    }
+
+
+def test_the_full_design_config_differs_from_the_defaults_in_the_proof_of_concepts_settings() -> (
+    None
+):
+    """Every setting the proof of concept changes has the full design's value in
+    FULL_DESIGN_CONFIG, and no other setting differs."""
+    assert _differences(FULL_DESIGN_CONFIG, DEFAULT_CONFIG) == {
+        "transport.concurrent_requests",
+        "training.reuse_built_examples",
+    }
+    assert FULL_DESIGN_CONFIG.transport.concurrent_requests == 1
+    assert FULL_DESIGN_CONFIG.training.reuse_built_examples is False
 
 
 def test_the_worlds_are_the_fixed_seeds_and_sizes() -> None:
@@ -177,6 +204,8 @@ def test_sections_refuse_values_outside_their_ranges() -> None:
         (lambda: TransportConfig(max_outage_s=-1), "transport.max_outage_s"),
         (lambda: TransportConfig(max_outage_s=1.5), "transport.max_outage_s"),  # pyright: ignore[reportArgumentType]
         (lambda: TransportConfig(accounts_per_request=0), "transport.accounts_per_request"),
+        (lambda: TransportConfig(concurrent_requests=0), "transport.concurrent_requests"),
+        (lambda: TransportConfig(concurrent_requests=True), "transport.concurrent_requests"),  # pyright: ignore[reportArgumentType]
         (lambda: TransportConfig(accounts_per_part=0), "transport.accounts_per_part"),
         (lambda: TransportConfig(accounts_per_part=100_001), "transport.accounts_per_part"),
         # Half of the response limit at most.

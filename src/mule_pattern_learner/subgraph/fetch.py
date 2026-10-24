@@ -24,12 +24,25 @@ at the 90th percentile of the bytes per account its answers took, which each req
 anew from the answers before it. A request TigerGraph refuses for its size or that times out
 is halved, down to one account (tigergraph.executor.run_in_halves). The number of accounts in
 a request never changes a result.
+
+Proof of concept (25 October 2026, docs/design.md, "Proof-of-concept settings (25 October
+2026)"): the requests of one query run transport.concurrent_requests at a time. A query's
+accounts are cut into rounds of that many requests, each of at most the size the answers before
+the round give, and of fewer accounts when a smaller request keeps every slot of the round in use
+(a Monday of 30 accounts goes to B4 in two requests of 15, not one of 30). The requests of a
+round are sent in the order of their accounts, and their answers are parsed, measured, counted
+and kept in that order, so the same accounts make the same requests, fill the same cache and
+count the same whatever the timing of the answers; a request that fails raises the failure of
+the first request of its round that failed, after the others of the round have ended. Each
+request keeps its own retries (tigergraph.executor), whose backoff the threads share. At 1 no
+thread is started and the requests are those of the full design.
 """
 
 from __future__ import annotations
 
 from collections import Counter, defaultdict, deque
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 import json
 from pathlib import Path
@@ -70,6 +83,9 @@ from .cache import (
     Table,
 )
 
+# The replies to one request: each half it was halved into (tigergraph.executor.run_in_halves), as
+# the accounts that half asked for and the rows it answered.
+type Replies = list[tuple[tuple[str, ...], list[dict[str, Any]]]]
 # Every query fetch runs; the parity record must hold each one's version.
 FETCHED = (
     READ_HUBS,
@@ -163,6 +179,7 @@ class Fetcher:
         self.executor = FetchExecutor(executor)
         self.cache = cache
         self.part_accounts = transport.accounts_per_part
+        self.concurrent = transport.concurrent_requests
         self.sizer = Sizer(transport)
         self.done = Fetched()
 
@@ -178,25 +195,52 @@ class Fetcher:
         self.cache.write_hubs(t_ms, found)
         return found
 
+    def next_round(self, query: str, accounts: Sequence[str]) -> list[Sequence[str]]:
+        """The requests of the next round for the accounts still to fetch: up to
+        concurrent_requests of them, in order, each of at most the size the answers so far give
+        and of at most the accounts over the requests of the round, rounded up, so that a few
+        accounts still use every slot of the round. At one request at a time this is the next
+        size accounts, the request of the full design."""
+        size = min(self.sizer.size(query), -(-len(accounts) // self.concurrent))
+        return chunks(accounts[: size * self.concurrent], size)
+
+    def send(
+        self, query: str, requests: Sequence[Sequence[str]], t_ms: int, hubs: Sequence[str]
+    ) -> list[Replies]:
+        """The replies of a round's requests, in the order of the requests, each as its halves
+        (tigergraph.executor.run_in_halves). The requests of a round that holds more than one
+        run at once, and a failure is raised in the order of the requests, after every request
+        of the round has ended."""
+
+        def one(chunk: Sequence[str]) -> Replies:
+            return run_in_halves(
+                self.executor, query, chunk, lambda part: PARAMS[query](t_ms, part, hubs)
+            )
+
+        if len(requests) == 1:
+            return [one(requests[0])]
+        with ThreadPoolExecutor(max_workers=len(requests)) as pool:
+            sent = [pool.submit(one, chunk) for chunk in requests]
+            return [future.result() for future in sent]
+
     def run[R](
         self, table: Table[R], t_ms: int, accounts: Sequence[str], hubs: Sequence[str]
     ) -> list[R]:
-        """The answers of table's query for accounts, each request sized from the answers
-        before it, and halved when refused for its size or timing out."""
+        """The answers of table's query for accounts, each round of requests sized from the
+        answers before it, each request halved when refused for its size or timing out, and the
+        answers in the order of the accounts."""
         query = table.query
         answers: list[R] = []
         start = 0
         while start < len(accounts):
-            chunk = accounts[start : start + self.sizer.size(query)]
-            start += len(chunk)
-            replies = run_in_halves(
-                self.executor, query, chunk, lambda part: PARAMS[query](t_ms, part, hubs)
-            )
-            for part, rows in replies:
-                self.done.requests[query] += 1
-                answer = table.parse(rows, part)
-                self.sizer.measure(query, account_bytes(table, answer, part))
-                answers.append(answer)
+            requests = self.next_round(query, accounts[start:])
+            start += sum(len(chunk) for chunk in requests)
+            for replies in self.send(query, requests, t_ms, hubs):
+                for part, rows in replies:
+                    self.done.requests[query] += 1
+                    answer = table.parse(rows, part)
+                    self.sizer.measure(query, account_bytes(table, answer, part))
+                    answers.append(answer)
         self.done.accounts[query] += len(accounts)
         return answers
 
