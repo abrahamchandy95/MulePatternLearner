@@ -1485,6 +1485,10 @@ per world to `results/bench/`:
 - TigerGraph's memory in use and install time per query (the old full install took about 50
   minutes, and one install timed out after 5,402 seconds);
 - parse and build time per batch, GPU step time and peak memory, examples per second;
+- the cost of the XGBoost file hand-off (`comparisons.process`): the bytes the parent writes
+  under `TMPDIR` and the seconds to write, read and score each selection or test matrix, which
+  at 300,000 people is about 9 GB of `.npy` per matrix (about 23 million rows of 102 `float32`
+  numbers for the graph features);
 - `profile_hubs`' histograms and the share of positives that are hubs, which must be 0;
 - a projection of a whole-world scoring run, against its fallback;
 - whether co-user rows are cheaper per Monday for every customer or on demand; the rule is
