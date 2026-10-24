@@ -176,7 +176,7 @@ def test_every_value_of_a_hand_built_batch() -> None:
 
 
 def test_every_enrolment_edge_of_the_customer_is_read_however_many() -> None:
-    """D_s is every device the customer has an enrolment edge to in the subgraph, exactly what
+    """E_s is every device the customer has an enrolment edge to in the subgraph, exactly what
     the GNN sees (docs/features.md, XGBoost inputs), not 8 kept links: customer 0 is enrolled on
     its devices 0 and 1 and on 7 more, 9 edges, and all 9 rows are aggregated. The 7 new devices
     read 10, 20, ..., 70 customers in the last 30 days and nothing else, so the column of
