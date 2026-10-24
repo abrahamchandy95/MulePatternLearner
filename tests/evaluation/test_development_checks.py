@@ -10,8 +10,10 @@ import numpy as np
 import pytest
 
 from mule_pattern_learner.evaluation.development_checks import (
+    ActiveMule,
     OwnNodes,
     card_spending,
+    customer_of,
     flow_shares,
     own_nodes,
     positive_hubs,
@@ -83,9 +85,16 @@ def test_a_scored_accounts_own_nodes_are_only_those_of_its_own_edges(
 
 
 def test_the_leaf_share_of_ring_nodes() -> None:
-    # Ring 1's two mules both reach d1 and i1 at T, i1 a leaf: two ring nodes, one leaf. Ring 2
-    # has one mule at T, and a_m4 no ring, so neither makes a ring node.
-    rows = [(T, "a_m1", 1), (T, "a_m2", 1), (T, "a_m3", 2), (T, "a_m4", -1), (T + W, "a_m1", 1)]
+    # Ring 1's two mules, of two customers, both reach d1 and i1 at T, i1 a leaf: two ring nodes,
+    # one leaf. Ring 2 has one mule at T, and a_m4 no ring, so neither makes a ring node. a_m1 is
+    # alone on i1 on T + W, so that Monday makes none.
+    rows = [
+        ActiveMule(T, "a_m1", "c1", 1),
+        ActiveMule(T, "a_m2", "c2", 1),
+        ActiveMule(T, "a_m3", "c3", 2),
+        ActiveMule(T, "a_m4", "c4", -1),
+        ActiveMule(T + W, "a_m1", "c1", 1),
+    ]
     nodes = [
         OwnNodes({("device", "d1"): False, ("ip", "i1"): True}),
         OwnNodes({("device", "d1"): False, ("ip", "i1"): True}),
@@ -100,7 +109,7 @@ def test_the_leaf_share_of_ring_nodes() -> None:
 
 def test_a_node_reached_by_mules_of_two_rings_is_no_ring_node() -> None:
     # Each ring has one active mule on d1: neither ring has two.
-    rows = [(T, "a_m1", 1), (T, "a_m2", 2)]
+    rows = [ActiveMule(T, "a_m1", "c1", 1), ActiveMule(T, "a_m2", "c2", 2)]
     nodes = [OwnNodes({("device", "d1"): False})] * 2
     found = ring_leaf_share(rows, nodes)
     assert found["ring_nodes"].tolist() == [0] and np.isnan(found["leaf_share"].iloc[0])
@@ -108,27 +117,42 @@ def test_a_node_reached_by_mules_of_two_rings_is_no_ring_node() -> None:
 
 def test_a_node_reached_by_two_ringless_mules_is_no_ring_node() -> None:
     # A ringless mule (ring -1) belongs to no ring, so two of them are not a ring's two mules.
-    rows = [(T, "a_m1", -1), (T, "a_m2", -1)]
+    rows = [ActiveMule(T, "a_m1", "c1", -1), ActiveMule(T, "a_m2", "c2", -1)]
     nodes = [OwnNodes({("device", "d1"): False})] * 2
     found = ring_leaf_share(rows, nodes)
     assert found["ring_nodes"].tolist() == [0] and np.isnan(found["leaf_share"].iloc[0])
 
 
-def test_two_accounts_of_one_customer_count_as_two_mules(parity: Path, tmp_path: Path) -> None:
+def test_a_mule_with_no_known_customer_makes_no_ring_node() -> None:
+    # a_m2's customer is unknown at T, so only one known customer reaches d1.
+    rows = [ActiveMule(T, "a_m1", "c1", 1), ActiveMule(T, "a_m2", None, 1)]
+    nodes = [OwnNodes({("device", "d1"): False})] * 2
+    assert ring_leaf_share(rows, nodes)["ring_nodes"].tolist() == [0]
+
+
+def test_two_accounts_of_one_customer_make_no_ring_node_and_two_customers_do(
+    parity: Path, tmp_path: Path
+) -> None:
     # One customer holds two mule accounts of ring 7 and is enrolled on its home IP, which each
-    # account copies as its own. The ring's nodes count accounts, as the design states, so the
-    # IP is the ring's although no second customer reaches it.
+    # account copies as its own. A second customer's mule account of ring 7 is enrolled on that
+    # IP too. The ring's nodes count customers, as the sharing rules do: the two accounts of the
+    # first customer alone make no ring node, and with the second customer the IP is one.
     w = WorldBuilder()
     w.party("p_p", fixtures.JOINED)
     for account in ("a_p1", "a_p2"):
         w.account(account, "p_p", fixtures.JOINED, mule=Mule(T - 5 * DAY_MS, T, ring=7))
+    w.customer("q", fixtures.JOINED, mule=Mule(T - 5 * DAY_MS, T, ring=7))
     w.ip("p_p", "i_home", T - 60 * DAY_MS)
+    w.ip("p_q", "i_home", T - 60 * DAY_MS)
     cache = Cache(tmp_path / "cache")
-    fetch(Spy(w.graph()), cache, {T: ["a_p1", "a_p2"]}, parity=parity)
-    rows = read_rows(cache, [(T, "a_p1"), (T, "a_p2")])
+    accounts = ["a_p1", "a_p2", "a_q"]
+    fetch(Spy(w.graph()), cache, {T: accounts}, parity=parity)
+    rows = read_rows(cache, [(T, account) for account in accounts])
     nodes = [own_nodes(row) for row in rows]
-    assert [held.nodes for held in nodes] == [{("ip", "i_home"): False}] * 2
-    found = ring_leaf_share([(T, "a_p1", 7), (T, "a_p2", 7)], nodes)
+    assert [held.nodes for held in nodes] == [{("ip", "i_home"): False}] * 3
+    mules = [ActiveMule(T, row.scored, customer_of(row), 7) for row in rows]
+    assert ring_leaf_share(mules[:2], nodes[:2])["ring_nodes"].tolist() == [0]
+    found = ring_leaf_share(mules, nodes)
     assert found.to_dict("records") == [{"ring_nodes": 1, "leaves": 0, "leaf_share": 0.0}]
 
 

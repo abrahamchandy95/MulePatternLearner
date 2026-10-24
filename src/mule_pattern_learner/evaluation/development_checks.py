@@ -6,8 +6,9 @@ the answer key and the cache of the audit sample (evaluation.sample):
   read_hubs on a Monday it is active. It passes or fails.
 - The share of ring devices and IPs that are leaves on their ring's active Mondays, reported
   and judged near 0 by the owner. A device or IP is a ring node of a ring on a Monday when the
-  own edges (owner-enrolment or seen) of at least two of the ring's active true mules reach it
-  in their subgraphs that Monday; it is a leaf when B5 reads it as one.
+  own edges (owner-enrolment or seen) of active true mules of the ring that belong to at least
+  two different customers reach it in their subgraphs that Monday; it is a leaf when B5 reads
+  it as one.
 - Whether busy ordinary accounts' card spending fills B1's short dwell shares, reported: the
   weighted means of left_15m to left_1d and left_by_card, and the card part of left_1d
   (left_1d times left_by_card), over busy non-mule account-Mondays (those at or above the 90th
@@ -67,26 +68,57 @@ def positive_hubs(
     )
 
 
-def ring_leaf_share(
-    mule_rows: Sequence[tuple[int, str, int]], nodes: Sequence[OwnNodes]
-) -> pd.DataFrame:
-    """The ring nodes and the leaves among them, over every ring and Monday: mule_rows gives
-    each active true-mule account-Monday (Monday, account, ring) and nodes its own nodes. A
-    ringless mule has no ring nodes."""
-    reached: dict[tuple[int, int, tuple[str, str]], set[str]] = defaultdict(set)
-    leaf: dict[tuple[str, str, int], bool] = {}
-    for (t_ms, account, ring), own in zip(mule_rows, nodes, strict=True):
-        if ring < 0:
+@dataclass(frozen=True)
+class ActiveMule:
+    """An active true mule on a Monday, as the ring nodes read it: the Monday, its account, the
+    customer that owns the account that Monday (None when none is known) and its ring (-1 for
+    none)."""
+
+    t_ms: int
+    account_id: str
+    customer_id: str | None
+    ring: int
+
+
+def customer_of(rows: ExampleRows) -> str | None:
+    """The customer that owns the scored account, by its ownership edge in the subgraph."""
+    for edge in rows.payments.owned_by:
+        if edge.account_id == rows.scored:
+            return edge.customer_id
+    return None
+
+
+def other_customer(mine: str | None, theirs: str | None) -> bool:
+    """Whether two accounts belong to two different customers, both of them known."""
+    return mine is not None and theirs is not None and mine != theirs
+
+
+def ring_nodes(
+    mules: Sequence[ActiveMule], nodes: Sequence[OwnNodes]
+) -> dict[tuple[int, int, tuple[str, str]], bool]:
+    """The ring nodes, as (ring, Monday, (kind, id)) with whether B5 reads the node as a leaf.
+    A device or IP is a ring's on a Monday when the own edges of active true mules of that
+    ring, belonging to at least two different customers, reach it that Monday. nodes holds each
+    mule's own nodes, in the order of mules. A ringless mule, or one with no known customer,
+    makes no ring node."""
+    customers: dict[tuple[int, int, tuple[str, str]], set[str]] = defaultdict(set)
+    leaf: dict[tuple[int, int, tuple[str, str]], bool] = {}
+    for mule, own in zip(mules, nodes, strict=True):
+        if mule.ring < 0 or mule.customer_id is None:
             continue
         for node, is_leaf in own.nodes.items():
-            reached[(ring, t_ms, node)].add(account)
-            leaf[(*node, t_ms)] = is_leaf
-    ring_nodes = [key for key, accounts in reached.items() if len(accounts) >= 2]
-    leaves = sum(1 for _, t_ms, node in ring_nodes if leaf[(*node, t_ms)])
-    share = leaves / len(ring_nodes) if ring_nodes else float("nan")
-    return pd.DataFrame(
-        {"ring_nodes": [len(ring_nodes)], "leaves": [leaves], "leaf_share": [share]}
-    )
+            key = (mule.ring, mule.t_ms, node)
+            customers[key].add(mule.customer_id)
+            leaf[key] = is_leaf
+    return {key: leaf[key] for key, held in customers.items() if len(held) >= 2}
+
+
+def ring_leaf_share(mules: Sequence[ActiveMule], nodes: Sequence[OwnNodes]) -> pd.DataFrame:
+    """The ring nodes (ring_nodes) and the leaves among them, over every ring and Monday."""
+    found = ring_nodes(mules, nodes)
+    leaves = sum(found.values())
+    share = leaves / len(found) if found else float("nan")
+    return pd.DataFrame({"ring_nodes": [len(found)], "leaves": [leaves], "leaf_share": [share]})
 
 
 def _mean(values: NDArray[np.float64], weight: NDArray[np.float64]) -> float:

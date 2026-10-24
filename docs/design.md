@@ -1299,14 +1299,15 @@ the share of ring devices and IPs that are leaves on their ring's active Mondays
 and that busy ordinary accounts' card spending does not fill B1's short dwell shares.
 
 **A ring's devices and IPs.** The leaf check above names a ring's devices and IPs one way: a
-device or IP is a ring's on a Monday when the own edges of at least two of that ring's active
-true mules reach it. A mule's own edges are its account's owner-enrolment edges (its customer's
-enrolment, copied onto the account) and its seen edges in its fetched subgraph that Monday. A
-node that only one active true mule reaches is not the ring's, and a mule with no ring has none.
-Mules are counted as accounts, the scored unit, and not as customers the way the sharing rules
-count: two accounts of one customer, each carrying that customer's enrolment, count as two, so a
-node that only that customer reaches can be a ring's. The development checks build it so, from
-the audit sample, which holds every active true mule on each Monday it is scorable and active.
+device or IP is a ring's on a Monday when the own edges of active true mules of that ring that
+belong to at least two different customers reach it. A mule's own edges are its account's
+owner-enrolment edges (its customer's enrolment, copied onto the account) and its seen edges in
+its fetched subgraph that Monday. A node that the own edges of one customer's mules alone reach
+is not the ring's, and a mule with no ring has none. Mules are counted as customers, as the
+sharing rules count them: two accounts of one customer, each carrying that customer's enrolment,
+count as one, so a node that only that customer reaches is no ring's. The development checks
+build it so, from the audit sample, which holds every active true mule on each Monday it is
+scorable and active, and each mule's customer as its scored example holds it.
 
 Two reports of this design count a ring's devices and IPs and are not yet built: the share of
 positives with any ring-device link (see [Comparisons](#comparisons)), and the share of mules,

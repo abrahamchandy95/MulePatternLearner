@@ -90,13 +90,15 @@ def audit_settings(config: RunConfig) -> str:
 class Measured:
     """What the audit reads of each account-Monday of its sample, in the sample's order: its
     clock values for the probe, and on a development world its audited columns, its own
-    devices and IPs, its short dwell shares with left_by_card and its out_30d."""
+    devices and IPs, the customer that owns it, its short dwell shares with left_by_card and
+    its out_30d."""
 
     clock: list[NDArray[np.float64]] = field(default_factory=lambda: list[NDArray[np.float64]]())
     columns: list[NDArray[np.float64]] = field(default_factory=lambda: list[NDArray[np.float64]]())
     nodes: list[development_checks.OwnNodes] = field(
         default_factory=lambda: list[development_checks.OwnNodes]()
     )
+    customers: list[str | None] = field(default_factory=lambda: list[str | None]())
     shares: list[list[float]] = field(default_factory=lambda: list[list[float]]())
     out_30d: list[float] = field(default_factory=lambda: list[float]())
 
@@ -119,6 +121,7 @@ def measure(cache: Cache, world: str, sample: pd.DataFrame, development: bool) -
             found.columns += list(feature_audit.audit_columns(batch))
         for example in rows:
             found.nodes.append(development_checks.own_nodes(example))
+            found.customers.append(development_checks.customer_of(example))
             shares, out_30d = development_checks.flow_shares(example)
             found.shares.append(shares)
             found.out_30d.append(out_30d)
@@ -224,19 +227,19 @@ def audit(
         checks[NO_POSITIVE_HUB] = hub_rows.empty
         store.write_table("positive_hubs", hub_rows)
         chosen = np.flatnonzero(positive)
+        active = [
+            development_checks.ActiveMule(int(t_ms), str(account), measured.customers[index], ring)
+            for index, t_ms, account, ring in zip(
+                chosen.tolist(),
+                mules["t_ms"].tolist(),
+                mules["account_id"].tolist(),
+                mules["ring"].tolist(),
+                strict=True,
+            )
+        ]
         store.write_table(
             "ring_leaf_share",
-            development_checks.ring_leaf_share(
-                list(
-                    zip(
-                        mules["t_ms"].tolist(),
-                        mules["account_id"].tolist(),
-                        mules["ring"].tolist(),
-                        strict=True,
-                    )
-                ),
-                [measured.nodes[index] for index in chosen],
-            ),
+            development_checks.ring_leaf_share(active, [measured.nodes[index] for index in chosen]),
         )
         store.write_table(
             "card_spending",
