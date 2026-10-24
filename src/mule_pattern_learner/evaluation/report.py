@@ -28,6 +28,9 @@ kind, each with the rotation's name and a development_only column:
   when the interval excludes 0, inconclusive otherwise;
 - mules: the selected model's table of true mules (evaluation.rankings.mule_table);
 - the missed-mule report (evaluation.missed) of the selected model;
+- ring_endpoints and ring_community (evaluation.ring_reports): how many positives hold a ring
+  device or IP, and, by whether they hold one, how many have a community block that differs by
+  sharing and how many by payments from that of a customer who shares nothing;
 - identification bias (evaluation.bias): victim_origin, origin_by_identification,
   hidden_recall_by_origin, identification_separation, and on the development rotation the
   selection_epochs and selection_correlation the caller rescored.

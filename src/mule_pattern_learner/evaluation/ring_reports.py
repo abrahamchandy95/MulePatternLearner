@@ -7,7 +7,9 @@ the cache, and nothing else. They are evaluation outputs, never features.
   that the own edges of active true mules of their ring, at two or more customers, reach
   (development_checks.ring_nodes).
 - ring_community: the positives by whether they hold a ring node, and how many of each have a
-  community block that differs from that of a customer who shares nothing.
+  community block that differs from that of a customer who shares nothing, counted twice: by
+  sharing (shared nodes, density, new link share) and by payments (members, internal amount,
+  isolation).
 """
 
 from __future__ import annotations
@@ -26,18 +28,17 @@ ENDPOINTS = "ring_endpoints"
 COMMUNITY = "ring_community"
 
 
-def differs_from_sharing_nothing(block: Community) -> bool:
-    """Whether a community block differs from that of a customer who shares nothing: one member
-    (its owner), no shared node and no money moving between members. That customer's members,
-    shared nodes, density, new link share, internal amount and isolation read 1, 0, 0, 0, 0, 0."""
-    return (
-        block.members != 1
-        or block.shared_nodes != 0
-        or block.density != 0
-        or block.new_link_share_30d != 0
-        or block.internal_amount_30d != 0
-        or block.isolation != 0
-    )
+def differs_by_sharing(block: Community) -> bool:
+    """Whether a community block differs by sharing from that of a customer who shares nothing,
+    whose shared nodes, density and new link share read 0, 0, 0."""
+    return block.shared_nodes != 0 or block.density != 0 or block.new_link_share_30d != 0
+
+
+def differs_by_payments(block: Community) -> bool:
+    """Whether a community block differs by payments from that of a customer who shares nothing,
+    whose members, internal amount and isolation read 1, 0, 0: its owner alone, and no money
+    moving between members."""
+    return block.members != 1 or block.internal_amount_30d != 0 or block.isolation != 0
 
 
 def ring_reports(cache: Cache, frame: pd.DataFrame) -> dict[str, pd.DataFrame]:
@@ -51,7 +52,8 @@ def ring_reports(cache: Cache, frame: pd.DataFrame) -> dict[str, pd.DataFrame]:
         accounts_of.setdefault(int(t_ms), []).append(str(account))
         ring_of[(int(t_ms), str(account))] = int(ring)
     holds: list[bool] = []
-    differs: list[bool] = []
+    by_sharing: list[bool] = []
+    by_payments: list[bool] = []
     for t_ms, accounts in accounts_of.items():
         rows = read_rows(cache, [(t_ms, account) for account in accounts])
         mules = [
@@ -62,7 +64,8 @@ def ring_reports(cache: Cache, frame: pd.DataFrame) -> dict[str, pd.DataFrame]:
         found = ring_nodes(mules, own)
         for mule, held, row in zip(mules, own, rows, strict=True):
             holds.append(any((mule.ring, mule.t_ms, node) in found for node in held.nodes))
-            differs.append(differs_from_sharing_nothing(row.community))
+            by_sharing.append(differs_by_sharing(row.community))
+            by_payments.append(differs_by_payments(row.community))
     positives = len(holds)
     with_node = sum(holds)
     endpoints = pd.DataFrame(
@@ -72,16 +75,21 @@ def ring_reports(cache: Cache, frame: pd.DataFrame) -> dict[str, pd.DataFrame]:
             "share": [with_node / positives if positives else math.nan],
         }
     )
-    by_holding = pd.DataFrame({"holds": holds, "differs": differs}, dtype=bool)
+    by_holding = pd.DataFrame(
+        {"holds": holds, "sharing": by_sharing, "payments": by_payments}, dtype=bool
+    )
     community: list[dict[str, object]] = []
     for held in (True, False):
-        chosen = by_holding.loc[by_holding["holds"] == held, "differs"]
+        chosen = by_holding.loc[by_holding["holds"] == held]
+        count = len(chosen)
         community.append(
             {
                 "holds_ring_node": held,
-                "positives": len(chosen),
-                "differing": int(chosen.sum()),
-                "share": float(chosen.mean()) if len(chosen) else math.nan,
+                "positives": count,
+                "differs_by_sharing": int(chosen["sharing"].sum()),
+                "share_by_sharing": float(chosen["sharing"].mean()) if count else math.nan,
+                "differs_by_payments": int(chosen["payments"].sum()),
+                "share_by_payments": float(chosen["payments"].mean()) if count else math.nan,
             }
         )
     return {ENDPOINTS: endpoints, COMMUNITY: pd.DataFrame(community)}

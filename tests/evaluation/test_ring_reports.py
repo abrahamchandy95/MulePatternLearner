@@ -1,7 +1,7 @@
 """The two ring reports on a reference world, with the values worked out by hand (docs/design.md,
 "Comparisons" and "The payment round"): the share of positives holding a ring node, and the share
-of positives whose community block differs from that of a customer who shares nothing, by whether
-they hold one."""
+of positives whose community block differs from that of a customer who shares nothing, by sharing
+and by payments, by whether they hold a ring node."""
 
 from __future__ import annotations
 
@@ -80,11 +80,26 @@ def test_the_ring_reports_of_a_reference_world(parity: Path, tmp_path: Path) -> 
     assert tables[ENDPOINTS].to_dict("records") == [
         {"positives": 4, "with_ring_node": 2, "share": 0.5}
     ]
-    # a_r1 and a_r2 differ (members r1, r2 and e1 through d_r, and a shared node), a_b1 differs
-    # (member c, money moving between the two), and a_b2 does not.
+    # By sharing, a_r1 and a_r2 differ (a shared node, d_r) and a_b1 and a_b2 do not (no shared
+    # node). By payments, a_r1 and a_r2 differ (members r1, r2 and e1 through d_r), a_b1 differs
+    # (member c, money moving between the two) and a_b2 does not.
     assert tables[COMMUNITY].to_dict("records") == [
-        {"holds_ring_node": True, "positives": 2, "differing": 2, "share": 1.0},
-        {"holds_ring_node": False, "positives": 2, "differing": 1, "share": 0.5},
+        {
+            "holds_ring_node": True,
+            "positives": 2,
+            "differs_by_sharing": 2,
+            "share_by_sharing": 1.0,
+            "differs_by_payments": 2,
+            "share_by_payments": 1.0,
+        },
+        {
+            "holds_ring_node": False,
+            "positives": 2,
+            "differs_by_sharing": 0,
+            "share_by_sharing": 0.0,
+            "differs_by_payments": 1,
+            "share_by_payments": 0.5,
+        },
     ]
 
 

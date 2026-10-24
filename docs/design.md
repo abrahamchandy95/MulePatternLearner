@@ -1336,13 +1336,17 @@ ring nodes are read from every active true mule of the frame on each Monday.
   with any ring-device link that [Comparisons](#comparisons) reads beside the device and IP
   ablation.
 - `ring_community` is one row for each of the two groups, positives that hold a ring node and
-  positives that hold none. Each row gives the positives of its group, how many have a community
-  block that differs from that of a customer who shares nothing, and that share. A customer who
-  shares nothing has one member (its owner), no shared node and no money moving between members,
-  so its members, shared nodes, density, new link share, internal amount and isolation read 1, 0,
-  0, 0, 0 and 0. A block differs when any of those six numbers differs (see [the payment
-  round](#read_community-b6-how-the-mule-network-formed)). The reference is that fixed block, not
-  a sample of real customers: matched non-mule comparisons are not built.
+  positives that hold none. Each row gives the positives of its group and, twice, how many have
+  a community block that differs from that of a customer who shares nothing, and that share:
+  differs by sharing and differs by payments. A customer who shares nothing has one member (its
+  owner), no shared node and no money moving between members, so its members, shared nodes,
+  density, new link share, internal amount and isolation read 1, 0, 0, 0, 0 and 0. A block
+  differs by sharing when its shared nodes, density or new link share is not 0, and by payments
+  when its members is not 1 or its internal amount or isolation is not 0 (see [the payment
+  round](#read_community-b6-how-the-mule-network-formed)). The two are kept apart because a
+  block can differ by payments alone, through members and money that share no device or IP, and
+  only a difference by sharing reads a ring's devices and IPs. The reference is that fixed block,
+  not a sample of real customers: matched non-mule comparisons are not built.
 
 ### Identification bias
 
