@@ -185,8 +185,8 @@ visible within the clause, it is O(n + m) and avoids the n x m scans.
   WHILE or HeapAccum. The recommended design uses none of the excluded features. The
   repository installs every query non-distributed (`CREATE OR REPLACE QUERY`).
 - **Numbers.** The sketch adds 2 new SELECTs, or 3 with the suffix-minimum pass, and changes 5
-  existing ones: Outflows and Inflows (step 1), the flatten SELECT (step 2), AccountRows and
-  PaymentRows (step 5).
+  existing ones: Outflows and Inflows (the recording step), the flatten SELECT (the flatten step), AccountRows and
+  PaymentRows (the median step).
 - **Source.** Distributed Query Mode (4.2), its Unsupported Features section:
   <https://www.tigergraph.com/docs/gsql-ref/4.2/querying/distributed-query-mode>.
 - **Confidence.** Medium.
@@ -333,21 +333,21 @@ The capacity of `@chunks` is a variable because the grammar's `simpleSize` admit
 a variable name or a parameter name, not an expression; that this form compiles belongs in
 the compile probe.
 
-**Step 1**, in the existing Inflows and Outflows ACCUM, inside the `since_30d` branch:
+**The recording step**, in the existing Inflows and Outflows ACCUM, inside the `since_30d` branch:
 
 ```gsql
 a.@dwell_in += Recent(p.event_ts_ms, p.id, floor(p.amount * 100 + 0.5))
 a.@dwell_out += Recent(p.event_ts_ms, p.id, floor(p.amount * 100 + 0.5))
 ```
 
-**Step 2**, in the existing flatten POST-ACCUM: copy each heap into its lists, newest at index
+**The flatten step**, in the existing flatten POST-ACCUM: copy each heap into its lists, newest at index
 0. While copying, compare each tuple with the previous one; if a heap does not iterate in sort
 order, set `@@unsorted` and add the account to `@@unsorted_accounts`. A POST-ACCUM cannot PRINT
 or RETURN (neither is a DML-sub statement in the SELECT grammar), so right after the SELECT:
 if `@@unsorted`, PRINT the status `unsorted_heap` with the accounts, and RETURN. The same check
-covers the FOREACH order of `@chunks`, which step 5's median walk depends on.
+covers the FOREACH order of `@chunks`, which the median step's walk depends on.
 
-**Step 3**, a new SELECT that merges the two lists and records the levels:
+**The merge step**, a new SELECT that merges the two lists and records the levels:
 
 ```gsql
 Full = SELECT a FROM Full:a POST-ACCUM
@@ -376,12 +376,12 @@ Full = SELECT a FROM Full:a POST-ACCUM
 The drop keeps an inflow whose key equals the oldest kept outflow's (a self-payment's inflow,
 which comes before its own outflow), and keeping it is exact.
 
-**Step 3b, the suffix minima**, a new SELECT: walk `@dout_level` from its last outflow back to
+**The suffix minima step**, a new SELECT: walk `@dout_level` from its last outflow back to
 its first, keeping the lowest level seen, and append it to `@dout_sufmin`, so that
 `a.@dout_sufmin.get(m-1-j)` is the lowest level from outflow j to the last. No outflow from j
 on can lower an inflow's running minimum once that value is at or above it.
 
-**Step 4**, a new SELECT with one scan per kept inflow. The kept inflows are the newest n, so
+**The scan step**, a new SELECT with one scan per kept inflow. The kept inflows are the newest n, so
 the k-th oldest is at index n-1-k:
 
 ```gsql
@@ -416,9 +416,9 @@ Full = SELECT a FROM Full:a POST-ACCUM
   END END;
 ```
 
-The third condition of the WHILE is the suffix-minimum stop of step 3b.
+The third condition of the WHILE is the suffix-minimum stop of the suffix minima step.
 
-**Step 5**, in the existing AccountRows POST-ACCUM: walk `a.@chunks` (dwell ascending) adding
+**The median step**, in the existing AccountRows POST-ACCUM: walk `a.@chunks` (dwell ascending) adding
 up cents. The median is the dwell of the first piece where `2 x cumulative >= a.@d_total`; if no
 piece gets there (more than half the cents still held), the median is absent. Then add
 `d_total`, `d_15m` to `d_7d`, `d_held`, `median_present` and `median_ms` to the row. Payment
