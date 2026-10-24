@@ -23,6 +23,7 @@ from mule_pattern_learner.paths import (
     pl_gate_record,
     pl_identity_files,
     results_dir,
+    world_registry,
 )
 from mule_pattern_learner.tigergraph.connection import ConnectionSettings
 
@@ -60,6 +61,9 @@ def test_what_the_code_writes_lives_under_the_git_ignored_data_and_results() -> 
     assert evaluation_store_dir(IDENTITY) == DATA_DIR / "evaluation" / IDENTITY
     assert results_dir("dev-2026-10-17") == RESULTS_DIR / "dev-2026-10-17"
     assert bench_dir() == RESULTS_DIR / "bench"
+    # The worlds mule prepare registered by name, which the commands that never query
+    # TigerGraph read.
+    assert world_registry() == DATA_DIR / "worlds.toml"
     # The parity record is committed with the code, in TOML since git ignores JSON.
     assert parity_record() == GSQL_DIR / "parity.toml"
     ignored = (REPOSITORY_ROOT / ".gitignore").read_text().splitlines()

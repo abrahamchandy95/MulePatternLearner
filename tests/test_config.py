@@ -14,9 +14,11 @@ from mule_pattern_learner.config import (
     ROTATIONS,
     WORLDS,
     AuditConfig,
+    BenchConfig,
     CalendarConfig,
     DataConfig,
     ModelConfig,
+    ParityConfig,
     Rotation,
     RunConfig,
     ScoreConfig,
@@ -72,7 +74,23 @@ def test_the_defaults_are_the_designs_settings() -> None:
     assert near_pure == (0.001, 0.01, 0.5)
     assert (audit.report_budget, audit.replicates, audit.interval) == (0.05, 1000, 0.95)
     assert (audit.nonmule_sample, audit.horizon_level) == (200_000, 1 - 0.01 / 12)
-    assert DEFAULT_CONFIG.score == ScoreConfig((), ())
+    # mule parity: 8 Mondays and 200 accounts each, a quarter of them true mules, an account
+    # alone checked against itself among 31 others.
+    parity = DEFAULT_CONFIG.parity
+    assert (parity.mondays, parity.accounts, parity.mule_share) == (8, 200, 0.25)
+    assert (parity.together, parity.alone, parity.seed) == (32, 2, 0)
+    assert parity.tolerance == 1e-12
+    # mule bench: three Mondays, 1, 2 and 4 concurrent requests, projected to 30,000 and
+    # 300,000 people.
+    bench = DEFAULT_CONFIG.bench
+    assert (bench.mondays, bench.unlabelled, bench.positives) == (3, 64, 32)
+    assert (bench.concurrency, bench.projected_people) == ((1, 2, 4), (30_000, 300_000))
+    assert (bench.bootstrap_rows, bench.bootstrap_replicates, bench.handoff_rows) == (
+        1_000_000,
+        3,
+        100_000,
+    )
+    assert DEFAULT_CONFIG.score == ScoreConfig((), (), "")
 
 
 def test_the_worlds_are_the_fixed_seeds_and_sizes() -> None:
@@ -223,10 +241,35 @@ def test_sections_refuse_values_outside_their_ranges() -> None:
         (lambda: AuditConfig(nonmule_sample=0), "audit.nonmule_sample"),
         (lambda: AuditConfig(horizon_level=1), "audit.horizon_level"),
         (lambda: RunConfig(audit=0), "audit must be"),  # pyright: ignore[reportArgumentType]
+        (lambda: ParityConfig(mondays=0), "parity.mondays"),
+        (lambda: ParityConfig(accounts=0), "parity.accounts"),
+        (lambda: ParityConfig(mule_share=0), "parity.mule_share"),
+        (lambda: ParityConfig(mule_share=1), "parity.mule_share"),
+        # An account is checked alone against itself among others, so a request holds two.
+        (lambda: ParityConfig(together=1), "parity.together"),
+        (lambda: ParityConfig(alone=0), "parity.alone"),
+        (lambda: ParityConfig(seed=-1), "parity.seed"),
+        (lambda: ParityConfig(tolerance=0), "parity.tolerance"),
+        (lambda: ParityConfig(tolerance=1), "parity.tolerance"),
+        (lambda: RunConfig(parity=0), "parity must be"),  # pyright: ignore[reportArgumentType]
+        (lambda: BenchConfig(mondays=0), "bench.mondays"),
+        (lambda: BenchConfig(unlabelled=0), "bench.unlabelled"),
+        (lambda: BenchConfig(positives=0), "bench.positives"),
+        (lambda: BenchConfig(concurrency=()), "bench.concurrency"),
+        (lambda: BenchConfig(concurrency=(1, 1)), "bench.concurrency repeats"),
+        (lambda: BenchConfig(concurrency=(0,)), "bench.concurrency"),
+        (lambda: BenchConfig(concurrency=[1, 2]), "bench.concurrency"),  # pyright: ignore[reportArgumentType]
+        (lambda: BenchConfig(bootstrap_rows=0), "bench.bootstrap_rows"),
+        (lambda: BenchConfig(bootstrap_replicates=0), "bench.bootstrap_replicates"),
+        (lambda: BenchConfig(handoff_rows=1), "bench.handoff_rows"),
+        (lambda: BenchConfig(projected_people=()), "bench.projected_people"),
+        (lambda: BenchConfig(projected_people=(0,)), "bench.projected_people"),
+        (lambda: RunConfig(bench=0), "bench must be"),  # pyright: ignore[reportArgumentType]
         (lambda: ScoreConfig(accounts=("a", "a")), "score.accounts repeats"),
         (lambda: ScoreConfig(accounts=("",)), "score.accounts"),
         (lambda: ScoreConfig(dates=(date(2024, 4, 2),)), "score.dates must be Mondays"),
         (lambda: ScoreConfig(dates=("2024-04-01",)), "score.dates must be a date"),  # pyright: ignore[reportArgumentType]
+        (lambda: ScoreConfig(run=1), "score.run must be a str"),  # pyright: ignore[reportArgumentType]
         (lambda: RunConfig(score=()), "score must be"),  # pyright: ignore[reportArgumentType]
     ]
     for build, name in bad:

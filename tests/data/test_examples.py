@@ -10,15 +10,25 @@ from __future__ import annotations
 
 from dataclasses import replace
 from fractions import Fraction
+from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from mule_pattern_learner.config import DEFAULT_CONFIG, DataConfig
 from mule_pattern_learner.data.draw import lowest, sampled
 from mule_pattern_learner.data.examples import (
     POSITIVE,
+    SELECTION_FILE,
+    SELECTION_SCHEMA,
+    TEST_FILE,
+    TEST_SCHEMA,
+    TRAINING_FILE,
+    TRAINING_SCHEMA,
     UNLABELLED,
+    ExampleKeys,
     Monday,
+    TableWriter,
     examples_folder,
     examples_key,
     monday,
@@ -225,3 +235,53 @@ def test_the_examples_are_keyed_by_the_settings_they_read(monkeypatch: pytest.Mo
     for bad in ("", "../x", key.upper()):
         with pytest.raises(ValueError, match="32 hex digits"):
             examples_folder(IDENTITY, bad, IDENTITY)
+
+
+def _write(folder: Path, name: str, schema: object, frame: pd.DataFrame) -> None:
+    writer = TableWriter(folder / name, schema)  # pyright: ignore[reportArgumentType]
+    writer.write(frame)
+    writer.commit()
+
+
+def test_the_keys_of_the_examples_tables_come_a_monday_at_a_time(tmp_path: Path) -> None:
+    # The training table holds a_1 and a_2 on T and a_2 on T + 1 week; the selection table holds
+    # a_2 (ranked) and a_3 (not ranked) on T and a_4 on T + 2 weeks; the test table a_5 on T.
+    _write(
+        tmp_path,
+        TRAINING_FILE,
+        TRAINING_SCHEMA,
+        pd.DataFrame(
+            {
+                "t_ms": [T, T, T + W],
+                "account_id": ["a_2", "a_1", "a_2"],
+                "label": [1, 0, 0],
+                "weight": [1.0, 1.0, 1.0],
+            }
+        ),
+    )
+    _write(
+        tmp_path,
+        SELECTION_FILE,
+        SELECTION_SCHEMA,
+        pd.DataFrame(
+            {
+                "t_ms": [T, T, T + 2 * W],
+                "account_id": ["a_2", "a_3", "a_4"],
+                "positive": [False, False, False],
+                "ranked": [True, False, True],
+                "weight": [1.0, 1.0, 1.0],
+            }
+        ),
+    )
+    _write(tmp_path, TEST_FILE, TEST_SCHEMA, pd.DataFrame({"t_ms": [T], "account_id": ["a_5"]}))
+    keys = ExampleKeys(tmp_path, [TRAINING_FILE, SELECTION_FILE, TEST_FILE])
+    # Each Monday once, the accounts of every table together by increasing id, and an account
+    # the selection table does not rank left out.
+    assert list(keys) == [T, T + W, T + 2 * W] and len(keys) == 3
+    assert keys[T] == ["a_1", "a_2", "a_5"]
+    assert keys[T + W] == ["a_2"] and keys[T + 2 * W] == ["a_4"]
+    assert ExampleKeys(tmp_path, [SELECTION_FILE])[T] == ["a_2"]
+    with pytest.raises(KeyError):
+        keys[T + 3 * W]
+    with pytest.raises(FileNotFoundError, match="run `mule prepare` first"):
+        ExampleKeys(tmp_path / "other", [TRAINING_FILE])

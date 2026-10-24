@@ -14,6 +14,12 @@ code: not the commit, the clean-tree flag or the code-gate certificate.
 
 A TOML key with dots is either a quoted key or a path of tables; both read here as the same
 dotted name, and a file that holds one name both ways is refused.
+
+Only one world is loaded in TigerGraph at a time, and mule train and mule evaluate never query it,
+so mule prepare registers each world it prepares under its configured name (register): its identity
+and its label identity, which name its cache and its examples. registered gives them back by name.
+A world prepared again, such as one regenerated, replaces its entry, so a name always means the
+world prepared last. The registry holds names and hashes, and no label.
 """
 
 from __future__ import annotations
@@ -23,9 +29,10 @@ from dataclasses import dataclass
 from pathlib import Path
 import tomllib
 from typing import Any
+import uuid
 
 from ..config import Rotation, WorldConfig, WorldsConfig
-from ..paths import pl_identity_files
+from ..paths import IDENTITY, pl_identity_files, world_registry
 from ..tigergraph.executor import QueryExecutor
 from ..tigergraph.queries import READ_WORLD, read_world
 from ..tigergraph.queries.read_world import World
@@ -139,6 +146,69 @@ def find_world(
     return match_world(
         load_world(executor), pl_identity_files() if files is None else files, worlds
     )
+
+
+@dataclass(frozen=True)
+class Registered:
+    """A world as mule prepare registered it: its configured name, the identity of the world it
+    prepared, and the identity of the labels its examples were made from."""
+
+    name: str
+    identity: str
+    labels: str
+
+
+def _entries() -> dict[str, Registered]:
+    """Every registered world, by name; none when no world has been prepared."""
+    path = world_registry()
+    if not path.is_file():
+        return {}
+    found = tomllib.loads(path.read_text()).get("world", {})
+    if not isinstance(found, dict):
+        raise ValueError(f"{path} must hold one [world.<name>] table per world")
+    entries: dict[str, Registered] = {}
+    for name, entry in found.items():
+        if (
+            not isinstance(entry, dict)
+            or set(entry) != {"identity", "labels"}
+            or not all(
+                isinstance(value, str) and IDENTITY.fullmatch(value) for value in entry.values()
+            )
+        ):
+            raise ValueError(f"{path} holds {name} without an identity and a label identity")
+        entries[str(name)] = Registered(str(name), entry["identity"], entry["labels"])
+    return entries
+
+
+def register(world: LoadedWorld, labels: str) -> None:
+    """Register the loaded world under its configured name, replacing the world of that name
+    prepared before, through a temporary file and a rename."""
+    if not IDENTITY.fullmatch(labels):
+        raise ValueError(f"A label identity is 32 hex digits, got {labels!r}")
+    entries = _entries()
+    entries[world.config.name] = Registered(world.config.name, world.identity, labels)
+    text = "".join(
+        f'[world.{name}]\nidentity = "{entry.identity}"\nlabels = "{entry.labels}"\n\n'
+        for name, entry in sorted(entries.items())
+    )
+    path = world_registry()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(text)
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def registered(name: str) -> Registered:
+    """The world prepared under the configured name; refused when no world was."""
+    found = _entries().get(name)
+    if found is None:
+        raise ValueError(
+            f"No world is registered as {name}: load it in TigerGraph and run `mule prepare`"
+        )
+    return found
 
 
 def roles(name: str, rotations: Sequence[Rotation]) -> frozenset[str]:

@@ -238,6 +238,30 @@ def test_a_rotations_evaluation(
     reported = pd.read_parquet(folder / "missed" / "mules.parquet")
     assert "a_hr3" in set(reported["account_id"]) and reported["development_only"].all()
 
+    # Runs handed their scores as functions, as mule evaluate hands them, give the same tables,
+    # and each function is called once: the frame of a run exists while it is measured only.
+    calls: dict[tuple[str, int | None], int] = {}
+
+    def lazily(held: Run) -> Run:
+        def make() -> pd.DataFrame:
+            calls[(held.ranker, held.seed)] = calls.get((held.ranker, held.seed), 0) + 1
+            return held.logits()
+
+        return Run(held.ranker, held.seed, held.selection_score, make)
+
+    lazy = evaluate(
+        world,
+        [lazily(held) for held in runs],
+        audit,
+        0,
+        tmp_path / "lazy",
+        rotation="D1D2D3",
+        verdict_found=Verdict(("C failed",)),
+    )
+    assert calls == dict.fromkeys([(held.ranker, held.seed) for held in runs], 1)
+    pd.testing.assert_frame_equal(lazy["metrics"], tables["metrics"])
+    pd.testing.assert_frame_equal(lazy["groups"], tables["groups"])
+
 
 def _frame(logits: list[float]) -> pd.DataFrame:
     return pd.DataFrame({"t_ms": T, "account_id": ["a"] * len(logits), "logit": logits})

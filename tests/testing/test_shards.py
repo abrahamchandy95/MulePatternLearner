@@ -17,64 +17,10 @@ import pytest
 from mule_pattern_learner.contract import TABLES
 from mule_pattern_learner.testing.reference import ReferenceGraph
 from mule_pattern_learner.testing.reference.infrastructure import world
-from mule_pattern_learner.testing.shards import MANIFEST, read_export
+from mule_pattern_learner.testing.shards import MANIFEST, read_export, write_export
 from mule_pattern_learner.testing.world import DAY_MS, HOUR_MS, Mule, T, WorldBuilder
 
 D = DAY_MS
-
-
-def _text(value: object) -> str:
-    """A value as COPY TEXT writes it: a boolean as true or false."""
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    return repr(value) if isinstance(value, float) else str(value)
-
-
-def _write(directory: Path, tables: dict[str, pd.DataFrame]) -> dict[str, Any]:
-    """An export of tables in the loader's format: each dataset with two or more rows cut into
-    two shards, one with one row into one, and an empty one into none. Shard paths are
-    absolute, as the loader writes them. The manifest."""
-    shards_dir = directory / "shards" / "5f1c0de2"
-    shards_dir.mkdir(parents=True)
-    datasets: dict[str, Any] = {}
-    for index, table in enumerate(TABLES, 1):
-        lines = [
-            "|".join(_text(value) for value in row) + "\n"
-            for row in tables[table.name].itertuples(index=False, name=None)
-        ]
-        half = (len(lines) + 1) // 2
-        pieces = [piece for piece in (lines[:half], lines[half:]) if piece]
-        shards: list[dict[str, Any]] = []
-        for number, piece in enumerate(pieces, 1):
-            path = shards_dir / f"{index:02d}_{table.name.lower()}_{number:05d}.psv"
-            data = "".join(piece).encode()
-            path.write_bytes(data)
-            digest = hashlib.sha256(data).hexdigest()
-            shards.append(
-                {
-                    "path": str(path.resolve()),
-                    "bytes": len(data),
-                    "rows": len(piece),
-                    "sha256": digest,
-                }
-            )
-        datasets[table.name] = {
-            "view": f'mule_temporal."mt_{table.name}"',
-            "loading_job": f"load_{table.name.lower()}",
-            "columns": [[column.name, column.graph_type] for column in table.columns],
-            "rows": len(lines),
-            "bytes": sum(shard["bytes"] for shard in shards),
-            "shards": shards,
-        }
-    manifest = {
-        "format_version": 9,
-        "graphname": "Mule_Pattern_Learner",
-        "separator": "|",
-        "header": False,
-        "datasets": datasets,
-    }
-    (directory / MANIFEST).write_text(json.dumps(manifest))
-    return manifest
 
 
 def _world() -> WorldBuilder:
@@ -95,7 +41,7 @@ def _world() -> WorldBuilder:
 
 def test_the_reader_gives_back_every_table_of_a_two_shard_export(tmp_path: Path) -> None:
     tables = _world().tables()
-    manifest = _write(tmp_path, tables)
+    manifest = write_export(tmp_path, tables)
     assert len(manifest["datasets"]["Account"]["shards"]) == 2
     assert len(manifest["datasets"]["Zelle_Transfer"]["shards"]) == 1
     assert manifest["datasets"]["Transfer_Used_Device"]["shards"] == []
@@ -107,7 +53,7 @@ def test_the_reader_gives_back_every_table_of_a_two_shard_export(tmp_path: Path)
 
 
 def test_a_shard_line_is_read_as_copy_text_writes_it(tmp_path: Path) -> None:
-    manifest = _write(tmp_path, WorldBuilder().tables())
+    manifest = write_export(tmp_path, WorldBuilder().tables())
     lines = {
         "Account": "a_1|deposit|false|1704067200000|0|1|0|7|1704153600000|1704240000000\n"
         "x_1|unknown|true|1600000000000|0|-1|-1|-1|0|0\n",
@@ -238,7 +184,7 @@ REFUSED: list[tuple[str, Callable[[Path, dict[str, Any]], None], str]] = [
 def test_the_reader_refuses_an_export_unlike_the_contract_or_its_manifest(
     tmp_path: Path, plant: Callable[[Path, dict[str, Any]], None], message: str
 ) -> None:
-    manifest = _write(tmp_path, _world().tables())
+    manifest = write_export(tmp_path, _world().tables())
     read_export(tmp_path)
     plant(tmp_path, manifest)
     with pytest.raises(ValueError, match=message):

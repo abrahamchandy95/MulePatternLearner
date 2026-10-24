@@ -28,7 +28,7 @@ a rename.
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 import uuid
@@ -245,3 +245,42 @@ class TableWriter:
 def read_table(path: Path, schema: pa.Schema) -> pd.DataFrame:
     """A table of an examples folder."""
     return pq.read_table(path, schema=schema).to_pandas()
+
+
+class ExampleKeys(Mapping[int, list[str]]):
+    """The accounts of each Monday that the examples tables of a folder hold, read a Monday at a
+    time: mule fetch asks for the keys of a whole world, which run to millions of rows, and holds
+    one Monday's accounts at once. The tables are the training table (every example), the
+    selection table (the ranked ones) and the test table (every one), whichever the folder
+    holds; a Monday's accounts are those of every table together, once each, by increasing id."""
+
+    def __init__(self, folder: Path, tables: Sequence[str]) -> None:
+        self._tables: list[tuple[Path, list[tuple[str, str, bool]]]] = []
+        for name in tables:
+            path = folder / name
+            if not path.is_file():
+                raise FileNotFoundError(f"{path} is missing: run `mule prepare` first")
+            filters = [("ranked", "=", True)] if name == SELECTION_FILE else []
+            self._tables.append((path, filters))  # pyright: ignore[reportArgumentType]
+        mondays: set[int] = set()
+        for path, filters in self._tables:
+            column = pq.read_table(path, columns=["t_ms"], filters=filters or None)["t_ms"]
+            mondays |= {int(t_ms) for t_ms in column.unique().to_pylist()}
+        self._mondays = sorted(mondays)
+
+    def __iter__(self) -> Iterator[int]:
+        return iter(self._mondays)
+
+    def __len__(self) -> int:
+        return len(self._mondays)
+
+    def __getitem__(self, t_ms: int) -> list[str]:
+        if t_ms not in self._mondays:
+            raise KeyError(t_ms)
+        found: set[str] = set()
+        for path, filters in self._tables:
+            chosen = pq.read_table(
+                path, columns=["account_id"], filters=[("t_ms", "=", t_ms), *filters]
+            )
+            found |= set(chosen["account_id"].to_pylist())
+        return sorted(found)

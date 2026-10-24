@@ -53,6 +53,14 @@ BATCH_SIZES = range(1, 100_001)
 # The ranges of the audit settings.
 REPLICATES = range(1, 1_000_001)
 SAMPLE_SIZES = range(1, 1_000_000_001)
+# The ranges of the parity and benchmark settings.
+SAMPLED_MONDAYS = range(1, 1_001)
+SAMPLED_ACCOUNTS = range(1, 1_000_001)
+REQUEST_ACCOUNTS = range(2, 1_025)
+CONCURRENCY = range(1, 65)
+PROJECTED_PEOPLE = range(1, 1_000_000_001)
+# The rows of the matrix the XGBoost hand-off is timed on: two at least, one of each label.
+HANDOFF_ROWS = range(2, 1_000_000_001)
 
 
 def _integer(name: str, value: object, bounds: range) -> int:
@@ -501,13 +509,88 @@ class AuditConfig:
 
 
 @dataclass(frozen=True)
+class ParityConfig:
+    """The sample mule parity compares the live graph and the reference graph on (docs/design.md,
+    "Commands"): a seeded sample of scored Mondays, and on each a seeded sample of accounts with
+    true mules oversampled to a share."""
+
+    # Scored Mondays sampled, and accounts sampled on each.
+    mondays: int = 8
+    accounts: int = 200
+    # The share of each Monday's accounts that are true mules, as far as it has them.
+    mule_share: float = 0.25
+    # Accounts a request holds when a Monday's sample is asked for: an account alone is checked
+    # against its rows among this many, the 31 others and itself.
+    together: int = 32
+    # Accounts of each Monday fetched alone, a true mule first.
+    alone: int = 2
+    # The seed of the samples.
+    seed: int = 0
+    # The relative difference at which two doubles are one: TigerGraph prints a double to 16
+    # digits, so a share of two integers differs from its reference in the last one at times.
+    tolerance: float = 1e-12
+
+    def __post_init__(self) -> None:
+        _integer("parity.mondays", self.mondays, SAMPLED_MONDAYS)
+        _integer("parity.accounts", self.accounts, SAMPLED_ACCOUNTS)
+        _fraction("parity.mule_share", self.mule_share, zero=False)
+        _integer("parity.together", self.together, REQUEST_ACCOUNTS)
+        _integer("parity.alone", self.alone, SAMPLED_ACCOUNTS)
+        _integer("parity.seed", self.seed, SEEDS)
+        _between("parity.tolerance", self.tolerance, 0, 1)
+
+
+@dataclass(frozen=True)
+class BenchConfig:
+    """What mule bench measures on the loaded world and projects (docs/design.md, "Scaling and
+    the benchmark")."""
+
+    # Scored Mondays measured: the first, the last and those evenly between.
+    mondays: int = 3
+    # Accounts measured on each: unlabelled ones from the training draw (data.examples), and the
+    # identified active mules, reported apart.
+    unlabelled: int = 64
+    positives: int = 32
+    # The concurrent requests each query is timed at.
+    concurrency: tuple[int, ...] = (1, 2, 4)
+    # The rows of the synthetic ranking the bootstrap is timed on, and the replicates timed.
+    bootstrap_rows: int = 1_000_000
+    bootstrap_replicates: int = 3
+    # The rows of the matrix the XGBoost file hand-off is timed on.
+    handoff_rows: int = 100_000
+    # The people of the worlds the projections are made for.
+    projected_people: tuple[int, ...] = (30_000, 300_000)
+
+    def __post_init__(self) -> None:
+        _integer("bench.mondays", self.mondays, SAMPLED_MONDAYS)
+        _integer("bench.unlabelled", self.unlabelled, SAMPLED_ACCOUNTS)
+        _integer("bench.positives", self.positives, SAMPLED_ACCOUNTS)
+        if not _distinct("bench.concurrency", self.concurrency):
+            raise ValueError("bench.concurrency must hold a number of concurrent requests")
+        for requests in self.concurrency:
+            _integer("bench.concurrency", requests, CONCURRENCY)
+        _integer("bench.bootstrap_rows", self.bootstrap_rows, SAMPLE_SIZES)
+        _integer("bench.bootstrap_replicates", self.bootstrap_replicates, REPLICATES)
+        _integer("bench.handoff_rows", self.handoff_rows, HANDOFF_ROWS)
+        if not _distinct("bench.projected_people", self.projected_people):
+            raise ValueError("bench.projected_people must hold a number of people")
+        for people in self.projected_people:
+            _integer("bench.projected_people", people, PROJECTED_PEOPLE)
+
+
+@dataclass(frozen=True)
 class ScoreConfig:
-    """The accounts and Mondays mule score scores (docs/design.md, "Commands")."""
+    """The accounts and Mondays mule score scores, and the run whose model scores them
+    (docs/design.md, "Commands")."""
 
     accounts: tuple[str, ...] = ()
     dates: tuple[date, ...] = ()
+    # The results folder whose full models mule score chooses its best-selection seed among: a
+    # run's name, a rotation's world names joined by dashes (cli.run_name), such as A-B-C.
+    run: str = ""
 
     def __post_init__(self) -> None:
+        _instance("score.run", self.run, str)
         for account in _distinct("score.accounts", self.accounts):
             if not isinstance(account, str) or not account:
                 raise ValueError(f"score.accounts must be account ids, got {account!r}")
@@ -528,6 +611,8 @@ class RunConfig:
     model: ModelConfig = ModelConfig()
     training: TrainingConfig = TrainingConfig()
     audit: AuditConfig = AuditConfig()
+    parity: ParityConfig = ParityConfig()
+    bench: BenchConfig = BenchConfig()
     score: ScoreConfig = ScoreConfig()
 
     def __post_init__(self) -> None:
@@ -539,6 +624,8 @@ class RunConfig:
         _instance("model", self.model, ModelConfig)
         _instance("training", self.training, TrainingConfig)
         _instance("audit", self.audit, AuditConfig)
+        _instance("parity", self.parity, ParityConfig)
+        _instance("bench", self.bench, BenchConfig)
         _instance("score", self.score, ScoreConfig)
         if self.calendar.lookback_days != self.subgraph.lookback_days:
             raise ValueError(

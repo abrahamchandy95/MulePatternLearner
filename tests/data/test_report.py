@@ -10,6 +10,7 @@ from mule_pattern_learner.data.labels import Labels, Unscored, label_identity
 from mule_pattern_learner.data.report import (
     REPORT_SCHEMA,
     build_report,
+    identified_active_share,
     lines,
     refuse_selection,
 )
@@ -91,3 +92,12 @@ def test_the_report_reads_as_lines() -> None:
     assert found[1] == "3 positives and 0 unlabelled examples over 3 Mondays"
     assert found[2] == "1 identified mule active on no scored Monday: c"
     assert found[3] == "1 identified mule never scorable on a Monday of its activity: d"
+
+
+def test_the_identified_active_share_is_read_from_the_table_mule_prepare_wrote() -> None:
+    report = build_report(TALLIES, LABELS, UNSCORED, DRAWS, training_frame(TALLIES, DRAWS))
+    # 1 of 10 scorable accounts on T1, 2 of 20 on T2, and T3, with none scorable, is left out:
+    # the mean of 1/10 and 2/20.
+    assert identified_active_share(report.mondays) == pytest.approx(0.1)
+    assert report.identified_active_share == identified_active_share(report.mondays)
+    assert identified_active_share(report.mondays.iloc[2:]) == 0.0

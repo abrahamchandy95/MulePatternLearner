@@ -10,15 +10,19 @@ from pathlib import Path
 
 import pytest
 
+from mule_pattern_learner import paths
 from mule_pattern_learner.config import DEFAULT_CONFIG, ROTATIONS
 from mule_pattern_learner.data.worlds import (
     SELECT,
     TEST,
     TRAIN,
     LoadedWorld,
+    Registered,
     find_world,
     match_world,
     read_record,
+    register,
+    registered,
     roles,
 )
 from mule_pattern_learner.testing.calendar import (
@@ -193,3 +197,59 @@ def test_the_roles_of_each_world() -> None:
     assert roles("D3", ROTATIONS) == {TEST}
     # The 5,000-person test world and the bench world play no role.
     assert roles("T", ROTATIONS) == roles("P100", ROTATIONS) == frozenset()
+
+
+def _loaded(records: Records, name_seed: int) -> LoadedWorld:
+    world = _world()
+    path = records(f"world_{name_seed}.identity.toml", identity_text(world, name_seed))
+    return match_world(world, [path], WORLDS)
+
+
+def test_a_prepared_world_is_found_again_by_its_name(records: Records, data_dir: Path) -> None:
+    first = _loaded(records, 1001)
+    second = _loaded(records, 2001)
+    assert (first.config.name, second.config.name) == ("D1", "A")
+    with pytest.raises(ValueError, match="No world is registered as D1: .*mule prepare"):
+        registered("D1")
+    register(first, "a" * 32)
+    register(second, "b" * 32)
+    assert registered("D1") == Registered("D1", first.identity, "a" * 32)
+    assert registered("A") == Registered("A", second.identity, "b" * 32)
+    # The file is TOML, a table per world by name, and no temporary file is left behind.
+    text = paths.world_registry().read_text()
+    assert text.index("[world.A]") < text.index("[world.D1]")
+    assert f'identity = "{first.identity}"' in text and 'labels = "' + "a" * 32 + '"' in text
+    assert [path.name for path in data_dir.iterdir()] == ["worlds.toml"]
+
+
+def test_a_world_prepared_again_replaces_its_entry(records: Records, data_dir: Path) -> None:
+    loaded = _loaded(records, 1001)
+    register(loaded, "a" * 32)
+    register(loaded, "c" * 32)
+    assert registered("D1").labels == "c" * 32
+    assert paths.world_registry().read_text().count("[world.") == 1
+
+
+@pytest.mark.parametrize("labels", ["", "abc", "A" * 32, "g" * 32])
+def test_a_world_needs_a_label_identity_to_register(
+    records: Records, data_dir: Path, labels: str
+) -> None:
+    with pytest.raises(ValueError, match="label identity is 32 hex digits"):
+        register(_loaded(records, 1001), labels)
+    assert not paths.world_registry().exists()
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        'world = "D1"\n',
+        '[world.D1]\nidentity = "' + "a" * 32 + '"\n',
+        '[world.D1]\nidentity = "x"\nlabels = "' + "a" * 32 + '"\n',
+        '[world.D1]\nidentity = "' + "a" * 32 + '"\nlabels = "' + "a" * 32 + '"\nseed = 1\n',
+    ],
+)
+def test_a_registry_that_is_not_one_is_refused(data_dir: Path, text: str) -> None:
+    data_dir.mkdir()
+    paths.world_registry().write_text(text)
+    with pytest.raises(ValueError, match="worlds.toml"):
+        registered("D1")

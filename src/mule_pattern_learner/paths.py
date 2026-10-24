@@ -81,6 +81,13 @@ def cache_dir(identity: str) -> Path:
     return DATA_DIR / "cache" / _identity(identity)
 
 
+def world_registry() -> Path:
+    """The file that says, per configured world, which loaded world mule prepare last prepared
+    under its name: its identity and its label identity, so that the commands that never query
+    TigerGraph (train, evaluate) find the cache and the examples of a world by its name."""
+    return DATA_DIR / "worlds.toml"
+
+
 def examples_dir(identity: str) -> Path:
     """The training examples and weights of a world, in a folder per label identity."""
     return DATA_DIR / "examples" / _identity(identity)

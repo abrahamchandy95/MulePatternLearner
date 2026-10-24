@@ -45,7 +45,7 @@ and each command appends to events.jsonl.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from importlib.metadata import version
@@ -155,12 +155,21 @@ def verdict(
 class Run:
     """A ranker's seed and its logits of the test keys (t_ms, account_id, logit), with the
     selection score it was chosen by. An XGBoost comparison is one model with no seed (seed is
-    None); every other ranker is trained with a seed."""
+    None); every other ranker is trained with a seed.
+
+    scores is the frame of logits, or a function that makes it: a reported world's frame is 23
+    million rows, and evaluate measures the runs one at a time, so mule evaluate hands each run
+    its model file's scoring as a function, which evaluate calls when it measures the run and
+    drops the frame after (logits)."""
 
     ranker: str
     seed: int | None
     selection_score: float
-    scores: pd.DataFrame
+    scores: pd.DataFrame | Callable[[], pd.DataFrame]
+
+    def logits(self) -> pd.DataFrame:
+        """The run's logits of the test keys: the frame itself, or what the function makes."""
+        return self.scores() if callable(self.scores) else self.scores
 
     @property
     def seeded(self) -> bool:
@@ -277,7 +286,7 @@ def evaluate(
     best = selected(runs)
 
     def frame_of(run: Run) -> pd.DataFrame:
-        return evaluation_frame(run.scores, world.keys, world.key, world.identified)
+        return evaluation_frame(run.logits(), world.keys, world.key, world.identified)
 
     frame = frame_of(best)
     links = ring_links(world.cache, frame, scored_keys(frame, (EARLY_WARNING,)))

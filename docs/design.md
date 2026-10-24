@@ -1392,6 +1392,12 @@ taken while the world is loaded.
 - The cache, the evaluation store and the training examples live under the repository's
   `/data/` folder (`data/cache/`, `data/evaluation/`, `data/examples/`), which `.gitignore`
   already keeps out of git, as it does PhantomLedger's exports and `.env`.
+- **The world registry**, `data/worlds.toml`, records for each configured world name the
+  identity and the label identity of the world `mule prepare` last prepared under it. Only one
+  world is loaded in TigerGraph at a time and `mule train` and `mule evaluate` never query it,
+  so they find a rotation's worlds, their caches and their examples by name in the registry. A
+  world prepared again, such as a regenerated one, replaces its entry. It holds names and hashes
+  and no label.
 
 ### Results
 
@@ -1457,7 +1463,14 @@ Commands take no options: worlds, roles, dates and settings live in config.
 | `mule bench` | measures cost on the loaded world and writes `results/bench/` |
 
 Every long command first runs a read-only readiness check: installed versions, the world's
-identity, one account fetched, one training step.
+identity, one account fetched, one training step. `mule train` and `mule evaluate` never query
+TigerGraph, so theirs reads what they read: the worlds of the rotation are registered, one
+example is read from the cache, and one training step runs.
+
+`mule train` and `mule evaluate` run every rotation of the config, in order, and a rotation's
+results are in `results/<train>-<select>-<test>/`; a config that holds one rotation runs one.
+Each command appends to an `events.jsonl`, in the run's folder for these two, in
+`results/bench/` for `mule bench` and in `results/commands/` for the rest.
 
 ## Scaling and the benchmark
 
@@ -1492,7 +1505,17 @@ per world to `results/bench/`:
 - `profile_hubs`' histograms and the share of positives that are hubs, which must be 0;
 - a projection of a whole-world scoring run, against its fallback;
 - whether co-user rows are cheaper per Monday for every customer or on demand; the rule is
-  the same either way.
+  the same either way;
+- what selection costs, priced by its passes: the seconds to build one selection example, the
+  examples a selection pass scores, the passes a rotation makes (seeds x (priors + ablations)
+  x epochs, 1,050 with the prior grid) and the projected selection seconds per rotation, at 30,000
+  and 300,000 people, so that whole-world selection is accepted or replaced by its fallback
+  with its price in view;
+- what `mule audit` and `mule evaluate` cost at those sizes: the audit's fetch of every active
+  true-mule account-Monday and 200,000 non-mule ones, from the measured seconds to fetch a
+  sparse account-Monday (the mule term counts the identified mules alone, a lower bound, since
+  the bench never reads the truth), and the paired bootstrap, `audit.replicates` x the runs x
+  the ranked account-Mondays, from the measured seconds a replicate takes per ranked row.
 
 Whole-world scoring is settled against its fallback on the 30,000-person bench before any
 300,000-person world is generated. The README's recommended training architecture follows

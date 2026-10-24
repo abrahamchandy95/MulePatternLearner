@@ -1,19 +1,201 @@
-"""mule has the design's nine commands, and each is a stub that exits with status 1."""
+"""mule, the command line (docs/design.md, "Commands"): nine commands with no option, the readiness
+check each long command runs first, and the commands run end to end on three small worlds.
+
+The worlds are testing.fixtures.batch_world, three times, each with one more payment than the
+last on the first days of the export so that each has an identity of its own, and the two
+payments that span the export window (the first on day 0, the last on its last day) that
+mule prepare's calendar check asks for. They are the loaded worlds D1, D2 and D3 of the
+rotation, each behind a spy executor, and mule prepare, mule fetch, mule train and mule evaluate
+run on them as they run on three worlds loaded in turn. The calendar has three scored Mondays,
+T, 2024-07-01, T + 1 week and T + 2 weeks. Two of the world's mules, a_mule and a_r1, are
+identified and active on T only.
+"""
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass, replace
+from datetime import date
+import json
+from pathlib import Path
 import subprocess
 import sys
 import tomllib
+from typing import Any
 
+import pandas as pd
 import pytest
 
-from mule_pattern_learner import cli
-from mule_pattern_learner.paths import REPOSITORY_ROOT
+from mule_pattern_learner import cli, paths
+from mule_pattern_learner.config import (
+    DEFAULT_CONFIG,
+    CalendarConfig,
+    Rotation,
+    RunConfig,
+    ScoreConfig,
+    WorldsConfig,
+)
+from mule_pattern_learner.data.labels import read_identified
+from mule_pattern_learner.data.worlds import LoadedWorld, registered
+from mule_pattern_learner.evaluation import audit as auditing
+from mule_pattern_learner.evaluation.answer_key import read_answer_key
+from mule_pattern_learner.evaluation.audit import (
+    CLOCK_PROBE,
+    FEATURE_AUDIT,
+    GATE_RECORD,
+    audit_settings,
+)
+from mule_pattern_learner.evaluation.label_checks import IDENTIFICATION_HORIZON, LABEL_CHECKS
+from mule_pattern_learner.evaluation.store import AuditRecord, Store
+from mule_pattern_learner.testing import fixtures
+from mule_pattern_learner.testing.calendar import DAY_0, Spy, identity_text, world_of
+from mule_pattern_learner.testing.parity import Communities, Parity, QueryParity
+from mule_pattern_learner.testing.reference import ReferenceGraph
+from mule_pattern_learner.testing.world import DAY_MS, HOUR_MS, T, WorldBuilder
+from mule_pattern_learner.tigergraph import installer
+from mule_pattern_learner.tigergraph.queries import QUERY_FILES, VERSIONS
+from mule_pattern_learner.tigergraph.world import cache_key
+
+W = 7 * DAY_MS
+CALENDAR = CalendarConfig(history_days=182, scored_mondays=3)
+LAST_DAY = DAY_0 + (CALENDAR.export_days - 1) * DAY_MS
+ROTATION = Rotation("D1", "D2", "D3")
+# Three scored Mondays; one rotation of the development worlds; small, fast settings: batches of
+# 32, two epochs, one seed, the grid of two priors, a few replicates.
+CONFIG = replace(
+    DEFAULT_CONFIG,
+    calendar=CALENDAR,
+    worlds=WorldsConfig(rotations=(ROTATION,)),
+    data=replace(DEFAULT_CONFIG.data, min_selection_identified=1),
+    training=replace(
+        DEFAULT_CONFIG.training,
+        learning_rate=0.01,
+        batch_size=32,
+        max_epochs=2,
+        patience=2,
+        seeds=(0,),
+        prior_multiples=(1, 3),
+    ),
+    audit=replace(DEFAULT_CONFIG.audit, replicates=30, nonmule_sample=60),
+)
+PASSING = {
+    GATE_RECORD: True,
+    **dict.fromkeys(LABEL_CHECKS, True),
+    IDENTIFICATION_HORIZON: True,
+    CLOCK_PROBE: False,
+    FEATURE_AUDIT: True,
+}
+
+
+def _world(k: int) -> WorldBuilder:
+    """The batch world with the payments that give it an identity of its own, and the two that
+    span the export window."""
+    w = fixtures.batch_world()
+    w.external("x_far", fixtures.OPENED)
+    w.pay("x_first", "a_h1", "x_far", DAY_0 + HOUR_MS, 25.0, "ach")
+    w.pay("x_last", "x_far", "a_h2", LAST_DAY + 23 * HOUR_MS, 40.0, "ach")
+    w.pay("x_variant", "a_h1", "x_far", DAY_0 + 2 * DAY_MS, 1.0 + k, "ach")
+    return w
+
+
+class Live(Spy):
+    """A loaded world as a connection executor: a spy over a reference graph, which the
+    commands run their queries through."""
+
+    graph_name = "Mule_Pattern_Learner"
+    client: Any = None
+
+    def call[T](
+        self, operation: Callable[[Any], T], *, what: str, attempts: int | None = None
+    ) -> T:
+        raise AssertionError("these commands run no connection operation")
+
+    def gsql(self, text: str, *, what: str = "gsql", attempts: int | None = None) -> str:
+        raise AssertionError("these commands run no GSQL statement")
+
+
+def _verified(executor: object) -> None:
+    """installer.verify, when the installed queries are the repository's."""
+
+
+def _no_roles(name: str, rotations: object) -> frozenset[str]:
+    """data.worlds.roles of a world that plays none."""
+    return frozenset()
+
+
+@dataclass(frozen=True)
+class Pipeline:
+    """Three loaded worlds, their folders, and what the commands have made of them."""
+
+    graphs: dict[str, ReferenceGraph]
+    seeds: dict[str, int]
+    records: Path
+    results: Path
+
+    def connect(self, name: str) -> Callable[[], Live]:
+        return lambda: Live(self.graphs[name])
+
+    def identity(self, name: str) -> str:
+        return registered(name).identity
+
+
+@pytest.fixture(autouse=True)
+def installed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The installed queries are the repository's: the readiness check's first step, which
+    needs a live server, passes."""
+    monkeypatch.setattr(installer, "verify", _verified)
+
+
+@pytest.fixture(scope="module")
+def pipeline(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Pipeline]:
+    """mule prepare and mule fetch run on each of the three worlds in turn, the audit records
+    are written as a passing audit writes them, and mule train and mule evaluate run on the
+    rotation, all under folders of the test's own."""
+    folder = tmp_path_factory.mktemp("cli")
+    records = folder / "records"
+    records.mkdir()
+    graphs = {name: _world(k).graph() for k, name in enumerate(("D1", "D2", "D3"))}
+    seeds = {"D1": 1001, "D2": 1002, "D3": 1003}
+    for name, graph in graphs.items():
+        (records / f"world_{seeds[name]}.identity.toml").write_text(
+            identity_text(world_of(graph), seeds[name])
+        )
+    gsql = folder / "gsql"
+    gsql.mkdir()
+    fixtures.write_parity_record(gsql / "parity.toml")
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(paths, "DATA_DIR", folder / "data")
+        patch.setattr(paths, "RESULTS_DIR", folder / "results")
+        patch.setattr(paths, "GSQL_DIR", gsql)
+        patch.setattr(installer, "verify", _verified)
+        patch.setenv("MULE_PL_RECORDS_DIR", str(records))
+        found = Pipeline(graphs, seeds, records, folder / "results")
+        for name in graphs:
+            cli.prepare_command(CONFIG, found.connect(name))
+            cli.fetch_command(CONFIG, found.connect(name))
+            identity = found.identity(name)
+            store = Store(identity)
+            store.write_answer_key(read_answer_key(Spy(graphs[name])))
+            store.write_labels(read_identified(Spy(graphs[name])))
+            store.write_record(
+                AuditRecord(
+                    name,
+                    "development",
+                    identity,
+                    cache_key(CONFIG.subgraph),
+                    audit_settings(CONFIG),
+                    dict(VERSIONS),
+                    dict(PASSING),
+                )
+            )
+        yield found
+
+
+# The command line.
 
 
 def test_mule_is_the_command_line_with_the_designs_commands() -> None:
-    project = tomllib.loads((REPOSITORY_ROOT / "pyproject.toml").read_text())
+    project = tomllib.loads((paths.REPOSITORY_ROOT / "pyproject.toml").read_text())
     assert project["project"]["scripts"] == {"mule": "mule_pattern_learner.cli:main"}
     names = (
         "install",
@@ -26,22 +208,77 @@ def test_mule_is_the_command_line_with_the_designs_commands() -> None:
         "score",
         "bench",
     )
-    assert tuple(cli.COMMANDS) == names
+    assert tuple(cli.COMMANDS) == names and tuple(cli.RUNNERS) == names
+
+
+@pytest.fixture
+def results(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    monkeypatch.setattr(paths, "RESULTS_DIR", tmp_path / "results")
+    return tmp_path / "results"
 
 
 @pytest.mark.parametrize("command", list(cli.COMMANDS))
-def test_each_command_says_it_is_not_built_yet(command: str) -> None:
-    with pytest.raises(SystemExit) as stopped:
-        cli.main([command])
-    assert stopped.value.code == (
-        f"mule {command} is not built yet: the code is being rebuilt to docs/design.md"
+def test_each_command_parses_and_dispatches_with_the_default_config(
+    command: str, results: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[tuple[RunConfig, object]] = []
+    monkeypatch.setitem(
+        cli.RUNNERS, command, lambda config, connect: seen.append((config, connect))
     )
+    cli.main([command])
+    assert seen == [(DEFAULT_CONFIG, cli.connect)]
+    # The command appends that it started and finished, in results/commands/ (bench's in its own
+    # folder).
+    folder = paths.bench_dir() if command == "bench" else results / "commands"
+    events = [json.loads(line) for line in (folder / "events.jsonl").read_text().splitlines()]
+    assert [(event["command"], event["event"]) for event in events] == [
+        (command, "started"),
+        (command, "finished"),
+    ]
+
+
+@pytest.mark.parametrize("command", list(cli.COMMANDS))
+@pytest.mark.parametrize("argument", ["--anything", "--help", "-h", "D1", "extra"])
+def test_a_command_refuses_every_argument(
+    command: str, argument: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit) as stopped:
+        cli.main([command, argument])
+    assert stopped.value.code == 2
+    assert f"unrecognized arguments: {argument}" in capsys.readouterr().err
 
 
 def test_a_command_is_required(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit) as stopped:
         cli.main([])
     assert stopped.value.code == 2 and "COMMAND" in capsys.readouterr().err
+
+
+def test_a_command_that_stops_ends_with_its_message_and_its_event(
+    results: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def stops(config: RunConfig, connect: object) -> None:
+        raise cli.CommandError("the audit of D2 failed")
+
+    monkeypatch.setitem(cli.RUNNERS, "audit", stops)
+    with pytest.raises(SystemExit) as stopped:
+        cli.main(["audit"])
+    assert stopped.value.code == "mule audit stopped: the audit of D2 failed"
+    events = [
+        json.loads(line)
+        for line in (results / "commands" / "events.jsonl").read_text().splitlines()
+    ]
+    assert [event["event"] for event in events] == ["started", "stopped"]
+    assert events[1]["error"] == "CommandError: the audit of D2 failed"
+
+
+def test_a_bug_keeps_its_traceback(results: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def breaks(config: RunConfig, connect: object) -> None:
+        raise KeyError("a_missing")
+
+    monkeypatch.setitem(cli.RUNNERS, "fetch", breaks)
+    with pytest.raises(KeyError):
+        cli.main(["fetch"])
 
 
 def test_python_dash_m_runs_the_same_command_line() -> None:
@@ -52,7 +289,444 @@ def test_python_dash_m_runs_the_same_command_line() -> None:
         check=True,
     )
     assert all(command in result.stdout for command in cli.COMMANDS)
-    stub = subprocess.run(
-        [sys.executable, "-m", "mule_pattern_learner", "train"], capture_output=True, text=True
+    refused = subprocess.run(
+        [sys.executable, "-m", "mule_pattern_learner", "prepare", "--anything"],
+        capture_output=True,
+        text=True,
     )
-    assert stub.returncode == 1 and "mule train is not built yet" in stub.stderr
+    assert refused.returncode == 2 and "unrecognized arguments: --anything" in refused.stderr
+
+
+# The readiness check.
+
+
+@pytest.fixture
+def shown(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """What the commands print."""
+    lines: list[str] = []
+    monkeypatch.setattr(cli, "show", lines.append)
+    return lines
+
+
+def test_readiness_passes_on_a_loaded_world_and_changes_nothing(
+    pipeline: Pipeline, shown: list[str]
+) -> None:
+    before = sorted(path for path in paths.DATA_DIR.rglob("*") if path.is_file())
+    spy = Live(pipeline.graphs["D2"])
+    loaded = cli.check_ready(spy, CONFIG)
+    assert loaded.config.name == "D2"
+    assert [line.split(":")[0] for line in shown] == ["ready", "ready", "ready"]
+    assert "one training step ran" in shown[-1]
+    # The first scorable account of the first Monday was fetched, into a scratch folder.
+    assert {name for name in spy.names()} >= {"read_world", "list_accounts", "read_payment_events"}
+    assert sorted(path for path in paths.DATA_DIR.rglob("*") if path.is_file()) == before
+
+
+def test_readiness_names_the_installed_queries_that_are_not_the_repositorys(
+    pipeline: Pipeline, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def refuse(executor: object) -> None:
+        raise ValueError("The installed queries are not the repository's: read_hubs is missing")
+
+    monkeypatch.setattr(installer, "verify", refuse)
+    with pytest.raises(cli.NotReady, match=r"^installed queries: .*read_hubs is missing"):
+        cli.check_ready(Live(pipeline.graphs["D1"]), CONFIG)
+
+
+def test_readiness_names_a_world_that_is_no_configured_one(
+    pipeline: Pipeline, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # No identity file of the folder matches the loaded world.
+    monkeypatch.setenv("MULE_PL_RECORDS_DIR", str(tmp_path))
+    with pytest.raises(cli.NotReady, match=r"^the world's identity: No identity file of 0 matches"):
+        cli.check_ready(Live(pipeline.graphs["D1"]), CONFIG)
+    # The world does not hold the calendar's window: its last payment is not on the last day.
+    w = _world(0)
+    w.pay("x_after", "a_h1", "x_far", LAST_DAY + 30 * DAY_MS, 1.0, "ach")
+    graph = w.graph()
+    (tmp_path / "world_1001.identity.toml").write_text(identity_text(world_of(graph), 1001))
+    with pytest.raises(cli.NotReady, match=r"^the world's identity: .* last payment"):
+        cli.check_ready(Live(graph), CONFIG)
+
+
+def test_readiness_names_a_world_with_no_account_to_fetch(
+    pipeline: Pipeline, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    w = WorldBuilder()
+    w.external("x_a", fixtures.OPENED)
+    w.external("x_b", fixtures.OPENED)
+    w.pay("x_first", "x_a", "x_b", DAY_0 + HOUR_MS, 1.0, "ach")
+    w.pay("x_last", "x_b", "x_a", LAST_DAY + HOUR_MS, 1.0, "ach")
+    graph = w.graph()
+    monkeypatch.setenv("MULE_PL_RECORDS_DIR", str(tmp_path))
+    (tmp_path / "world_1001.identity.toml").write_text(identity_text(world_of(graph), 1001))
+    with pytest.raises(cli.NotReady, match=r"^one account fetched: .* no scorable account"):
+        cli.check_ready(Live(graph), CONFIG)
+
+
+def test_readiness_names_a_fetch_that_fails(pipeline: Pipeline) -> None:
+    class Failing(Live):
+        def run(  # pyright: ignore[reportIncompatibleMethodOverride]
+            self,
+            name: str,
+            params: dict[str, Any],
+            *,
+            timeout_s: float | None = None,
+            attempts: int | None = None,
+            timeout_retries: int = 1,
+        ) -> list[dict[str, Any]]:
+            if name == "read_payment_events":
+                raise RuntimeError("TigerGraph timed out")
+            return super().run(
+                name,
+                params,
+                timeout_s=timeout_s,
+                attempts=attempts,
+                timeout_retries=timeout_retries,
+            )
+
+    with pytest.raises(cli.NotReady, match=r"^one account fetched: .*timed out"):
+        cli.check_ready(Failing(pipeline.graphs["D1"]), CONFIG)
+
+
+def test_a_command_stops_at_a_failed_readiness_check_before_its_work(
+    pipeline: Pipeline, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def refuse(executor: object) -> None:
+        raise ValueError("The installed queries are not the repository's: read_hubs is missing")
+
+    monkeypatch.setattr(installer, "verify", refuse)
+    worked: list[str] = []
+
+    def prepares(*args: object, **keywords: object) -> None:
+        worked.append("prepare")
+
+    monkeypatch.setattr(cli, "prepare", prepares)
+    for command in (
+        cli.parity_command,
+        cli.prepare_command,
+        cli.fetch_command,
+        cli.audit_command,
+        cli.bench_command,
+        cli.score_command,
+    ):
+        config = replace(CONFIG, score=ScoreConfig(("a_mule",), (date(2024, 7, 1),), "D1-D2-D3"))
+        with pytest.raises((cli.NotReady, cli.CommandError)) as stopped:
+            command(config, pipeline.connect("D1"))
+        assert "installed queries" in str(stopped.value) or command is cli.score_command
+    assert worked == []
+
+
+# The commands on the worlds.
+
+
+def test_prepare_registered_each_world_and_wrote_the_examples_of_its_role(
+    pipeline: Pipeline,
+) -> None:
+    for name, tables in {
+        "D1": {"training.parquet", "report.parquet"},
+        "D2": {"selection.parquet", "report.parquet"},
+        "D3": {"test.parquet", "report.parquet"},
+    }.items():
+        held = registered(name)
+        found = list(paths.examples_dir(held.identity).glob("*/*/*.parquet"))
+        assert {path.name for path in found} == tables
+    # The caches hold the keys the roles need: the training draw, the ranked selection keys and
+    # every scorable account of every Monday of the test world.
+    assert len(list(paths.cache_dir(registered("D3").identity).glob("*/*"))) == 3
+
+
+def test_fetch_makes_no_request_for_a_cache_that_is_full(
+    pipeline: Pipeline, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spy = Live(pipeline.graphs["D3"])
+    cli.fetch_command(CONFIG, lambda: spy)
+    requested = {name for name in spy.names()}
+    # The readiness check fetches one account, a scratch folder's, and the world is read; the
+    # real fetch finds every row of the test world cached, and asks for the hubs of no Monday
+    # (the account of the readiness check apart).
+    assert requested <= {
+        "read_world",
+        "read_labels",
+        "list_accounts",
+        "read_hubs",
+        "read_payment_events",
+        "read_shared_identity",
+        "read_community",
+        "read_money_flow",
+        "read_counterparties",
+        "read_activity_change",
+    }
+    scored = [params["account_ids"] for name, params in spy.calls if name == "read_community"]
+    assert len(scored) == 1 and len(scored[0]) == 1
+
+
+def test_fetch_of_a_world_that_plays_no_role_fetches_nothing_and_says_so(
+    pipeline: Pipeline, shown: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The 5,000-person test world, and any world no rotation names, plays no role.
+    spy = Live(pipeline.graphs["D1"])
+    monkeypatch.setattr(cli, "roles", _no_roles)
+    cli.fetch_command(CONFIG, lambda: spy)
+    assert shown[-1].startswith("nothing to fetch: D1 plays no role")
+    assert "read_payment_events" not in spy.names()[spy.names().index("read_labels") :]
+
+
+def test_the_tables_a_role_needs_fetched(pipeline: Pipeline) -> None:
+    assert cli.role_tables(frozenset(), "whole") == []
+    assert cli.role_tables(frozenset({"train", "select", "test"}), "whole") == [
+        "training.parquet",
+        "selection.parquet",
+        "test.parquet",
+    ]
+    # Under the fallback the test world's keys are mule audit's, not mule fetch's.
+    assert cli.role_tables(frozenset({"test"}), "fallback") == []
+
+
+# mule train.
+
+
+def _records(pipeline: Pipeline, changes: dict[str, dict[str, bool]]) -> None:
+    for name, checks in changes.items():
+        store = Store(pipeline.identity(name))
+        held = store.record()
+        assert held is not None
+        store.write_record(replace(held, checks={**held.checks, **checks}))
+
+
+def test_train_stops_on_a_failed_feature_audit_and_names_it(
+    pipeline: Pipeline, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _records(pipeline, {"D2": {FEATURE_AUDIT: False}})
+    try:
+        with pytest.raises(cli.CommandError, match="training stops: D2: feature_audit"):
+            cli.train_command(CONFIG, cli.connect)
+    finally:
+        _records(pipeline, {"D2": {FEATURE_AUDIT: True}})
+
+
+def test_train_stops_on_a_failed_label_check_and_a_missing_record(pipeline: Pipeline) -> None:
+    label = sorted(LABEL_CHECKS)[0]
+    _records(pipeline, {"D1": {label: False}})
+    try:
+        with pytest.raises(cli.CommandError, match=f"D1: {label}"):
+            cli.train_command(CONFIG, cli.connect)
+    finally:
+        _records(pipeline, {"D1": {label: True}})
+    # A failed clock probe of a development world does not stop it (D1's, D2's and D3's all
+    # fail it): a world with no record does.
+    record = Store(pipeline.identity("D3")).folder / "audit.toml"
+    kept = record.read_text()
+    record.unlink()
+    try:
+        with pytest.raises(cli.CommandError, match="D3: no audit record"):
+            cli.train_command(CONFIG, cli.connect)
+    finally:
+        record.write_text(kept)
+
+
+def test_train_names_a_world_that_was_never_prepared(
+    pipeline: Pipeline, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = replace(CONFIG, worlds=WorldsConfig(rotations=(Rotation("A", "B", "C"),)))
+    with pytest.raises(cli.NotReady, match=r"^the world's identity: No world is registered as A"):
+        cli.train_command(config, cli.connect)
+
+
+@pytest.fixture(scope="module")
+def trained(pipeline: Pipeline) -> Path:
+    """mule train, run on the rotation once."""
+    cli.train_command(CONFIG, cli.connect)
+    return paths.results_dir(cli.run_name(ROTATION))
+
+
+def test_train_writes_every_model_file_of_the_rotation(trained: Path) -> None:
+    names = {path.name for path in trained.glob("*.pt")}
+    # One seed of the full model and of each of the four ablations, and each XGBoost comparison
+    # once, with no seed.
+    assert names == {
+        "gnn_seed0.pt",
+        "gnn_scored_alone_seed0.pt",
+        "gnn_without_devices_and_ips_seed0.pt",
+        "gnn_without_community_seed0.pt",
+        "gnn_without_payment_timing_seed0.pt",
+        "xgboost_own.pt",
+        "xgboost_graph.pt",
+    }
+    # The development rotation keeps every epoch of seed 0, and decides on the prior grid.
+    assert len(list((trained / "epochs").glob("*.pt"))) == 2 * 2
+    decision = (trained / "prior_decision.txt").read_text()
+    assert "prior 1x against 3x" in decision and "reported runs" in decision
+    events = [json.loads(line) for line in (trained / "events.jsonl").read_text().splitlines()]
+    assert [(event["command"], event["event"]) for event in events] == [
+        ("train", "started"),
+        ("train", "finished"),
+    ]
+
+
+# mule evaluate.
+
+
+@pytest.fixture(scope="module")
+def evaluated(trained: Path) -> Path:
+    cli.evaluate_command(CONFIG, cli.connect)
+    return trained
+
+
+def test_evaluate_writes_the_tables_marked_development_only(evaluated: Path) -> None:
+    for name in (
+        "metrics",
+        "per_monday",
+        "groups",
+        "spread",
+        "comparisons",
+        "mules",
+        "victim_origin",
+        "selection_epochs",
+        "selection_correlation",
+    ):
+        table = pd.read_parquet(evaluated / f"{name}.parquet")
+        assert table["development_only"].all() and (table["rotation"] == "D1-D2-D3").all()
+    metrics = pd.read_parquet(evaluated / "metrics.parquet")
+    # Seven runs: five seeds' worth is one seed here, of five rankers, and two XGBoost models
+    # with no seed.
+    assert set(metrics["ranker"]) == {
+        "gnn",
+        "gnn_scored_alone",
+        "gnn_without_devices_and_ips",
+        "gnn_without_community",
+        "gnn_without_payment_timing",
+        "xgboost_own",
+        "xgboost_graph",
+    }
+    assert metrics.loc[metrics["ranker"].str.startswith("xgboost"), "seed"].isna().all()
+    manifest = json.loads((evaluated / "manifest.json").read_text())
+    assert manifest["reported"] is False and manifest["world_identities"].keys() == {
+        "D1",
+        "D2",
+        "D3",
+    }
+    assert (evaluated / "missed" / "mules.parquet").is_file()
+    events = [json.loads(line) for line in (evaluated / "events.jsonl").read_text().splitlines()]
+    assert ("evaluate", "finished") in [(e["command"], e["event"]) for e in events]
+
+
+# mule score.
+
+
+def test_score_ranks_the_accounts_asked_with_the_best_selection_seed(
+    pipeline: Pipeline, evaluated: Path, shown: list[str]
+) -> None:
+    config = replace(
+        CONFIG,
+        score=ScoreConfig(("a_mule", "a_h1", "a_collector"), (date(2024, 7, 1),), "D1-D2-D3"),
+    )
+    cli.score_command(config, pipeline.connect("D3"))
+    scored = pd.read_parquet(evaluated / "scores.parquet")
+    assert sorted(scored["account_id"]) == ["a_collector", "a_h1", "a_mule"]
+    assert set(scored["date"].astype(str)) == {"2024-07-01"} and set(scored["t_ms"]) == {T}
+    assert sorted(scored["rank"]) == [1, 2, 3]
+    assert any("scored with the seed 0 model" in line for line in shown)
+
+
+def test_score_needs_its_accounts_dates_and_run_and_a_trained_run(
+    pipeline: Pipeline,
+) -> None:
+    with pytest.raises(cli.CommandError, match="set score.accounts, score.dates and score.run"):
+        cli.score_command(CONFIG, pipeline.connect("D3"))
+    config = replace(CONFIG, score=ScoreConfig(("a_mule",), (date(2024, 7, 1),), "A-B-C"))
+    with pytest.raises(cli.CommandError, match="holds no model file of the full model"):
+        cli.score_command(config, pipeline.connect("D3"))
+
+
+# The other commands, on what they call.
+
+
+def test_install_says_what_it_installed(monkeypatch: pytest.MonkeyPatch, shown: list[str]) -> None:
+    def installs(executor: object) -> list[str]:
+        return ["read_hubs", "read_world"]
+
+    def installs_nothing(executor: object) -> list[str]:
+        return []
+
+    monkeypatch.setattr(installer, "install", installs)
+    cli.install_command(CONFIG, lambda: Live(ReferenceGraph(WorldBuilder().tables())))
+    assert "installed 2 queries in" in shown[0] and shown[0].endswith("read_hubs, read_world")
+    monkeypatch.setattr(installer, "install", installs_nothing)
+    cli.install_command(CONFIG, lambda: Live(ReferenceGraph(WorldBuilder().tables())))
+    assert shown[-1] == "every query is current: nothing to install"
+
+
+def _parity(failed: tuple[str, ...]) -> Parity:
+    queries = {
+        name: QueryParity(name, VERSIONS[name], checks=3, mismatched=int(name in failed))
+        for name in QUERY_FILES
+    }
+    return Parity("0" * 32, "4.2.5", Path("/exports/x"), (T,), queries, Communities(10, 2, 1))
+
+
+def test_parity_reports_a_query_that_did_not_match(
+    pipeline: Pipeline, monkeypatch: pytest.MonkeyPatch, shown: list[str]
+) -> None:
+
+    def matches(executor: object, config: object) -> Parity:
+        return _parity(())
+
+    def differs(executor: object, config: object) -> Parity:
+        return _parity(("read_hubs",))
+
+    monkeypatch.setattr(cli.parity, "run", matches)
+    cli.parity_command(CONFIG, pipeline.connect("D1"))
+    assert shown[-1].startswith("every query matched the reference graph")
+    monkeypatch.setattr(cli.parity, "run", differs)
+    with pytest.raises(cli.CommandError, match=r"1 query did not match .*: read_hubs; .* the 11"):
+        cli.parity_command(CONFIG, pipeline.connect("D1"))
+    assert any(line.startswith("read_hubs: FAILED") for line in shown)
+
+
+def test_audit_fails_the_command_with_the_checks_that_failed(
+    pipeline: Pipeline, monkeypatch: pytest.MonkeyPatch, shown: list[str]
+) -> None:
+    record = AuditRecord(
+        "D1", "development", "0" * 32, "c" * 32, "s" * 32, {}, {"a": True, "b": False}
+    )
+
+    def fails(executor: object, config: object) -> auditing.Audited:
+        return auditing.Audited(record, {"b": ("why",)})
+
+    def passes(executor: object, config: object) -> auditing.Audited:
+        return auditing.Audited(replace(record, checks={"a": True}), {})
+
+    monkeypatch.setattr(cli.auditing, "audit", fails)
+    with pytest.raises(cli.CommandError, match=r"1 check failed: b; the pass record was written"):
+        cli.audit_command(CONFIG, pipeline.connect("D1"))
+    assert "  FAILED  b" in shown and "  b: why" in shown
+    monkeypatch.setattr(cli.auditing, "audit", passes)
+    cli.audit_command(CONFIG, pipeline.connect("D1"))
+    assert "  passed  a" in shown
+
+
+def test_bench_prints_the_headline_numbers_and_where_its_table_is(
+    pipeline: Pipeline, monkeypatch: pytest.MonkeyPatch, shown: list[str], tmp_path: Path
+) -> None:
+    table = pd.DataFrame(
+        [("bootstrap", "projected_seconds", "people=30000", 12.5, "s", "")],
+        columns=["section", "name", "variant", "value", "unit", "note"],
+    )
+    loaded = cli.check_ready(Live(pipeline.graphs["D1"]), CONFIG)
+
+    def benches(executor: object, config: object) -> tuple[LoadedWorld, pd.DataFrame, Path]:
+        return loaded, table, tmp_path / "D1.parquet"
+
+    monkeypatch.setattr(cli.bench, "run", benches)
+    cli.bench_command(CONFIG, pipeline.connect("D1"))
+    assert "bootstrap, seconds, people=30000: 12.5" in shown
+    assert shown[-1] == f"the bench table of D1 is in {tmp_path / 'D1.parquet'}"
+
+
+def test_a_prepared_world_is_registered_once_more_when_prepared_again(pipeline: Pipeline) -> None:
+    before = registered("D1")
+    cli.prepare_command(CONFIG, pipeline.connect("D1"))
+    assert registered("D1") == before
+    # The registry holds all three worlds, each its own.
+    assert len({registered(name).identity for name in ("D1", "D2", "D3")}) == 3

@@ -14,6 +14,9 @@ shard whose bytes or rows are not the manifest's, and a value that is not of its
 type, a NULL included. An export holds label columns, so only testing/ and evaluation/ open
 one (the Files that carry labels guard); finding the export of the loaded world under the
 export root is parity's.
+
+write_export writes the contract frames of a world as such an export, for the tests of the
+reader and of parity: it is the loader's format as the reader expects it, not the loader.
 """
 
 from __future__ import annotations
@@ -32,6 +35,8 @@ from ..contract import TABLES, Table
 from .reference.graph import CONTRACT_DTYPES, DTYPES, frame
 
 MANIFEST = "export_manifest.json"
+# The version of the loader's manifest format the writer writes.
+FORMAT_VERSION = 9
 SEPARATOR = "|"
 LINE_END = "\n"
 # The text each graph type's value must be, whole: a string of at least one character (an
@@ -144,3 +149,56 @@ def _column(texts: pd.Series, graph_type: str, where: str) -> pd.Series:
         row = int((~finite).argmax())
         raise ValueError(f"{where} row {row + 1} is {texts.iloc[row]!r}, beyond a finite double")
     return values
+
+
+def _text(value: object) -> str:
+    """A value as COPY TEXT writes it: a boolean as true or false."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return repr(value) if isinstance(value, float) else str(value)
+
+
+def write_export(directory: Path, tables: Mapping[str, pd.DataFrame]) -> dict[str, Any]:
+    """An export of the contract frames in the loader's format: each dataset with two or more
+    rows cut into two shards, one with one row into one, and an empty one into none. Shard paths
+    are absolute, as the loader writes them. The manifest, which is also written."""
+    shards_dir = directory / "shards" / "5f1c0de2"
+    shards_dir.mkdir(parents=True)
+    datasets: dict[str, Any] = {}
+    for index, table in enumerate(TABLES, 1):
+        lines = [
+            "|".join(_text(value) for value in row) + "\n"
+            for row in tables[table.name].itertuples(index=False, name=None)
+        ]
+        half = (len(lines) + 1) // 2
+        pieces = [piece for piece in (lines[:half], lines[half:]) if piece]
+        shards: list[dict[str, Any]] = []
+        for number, piece in enumerate(pieces, 1):
+            path = shards_dir / f"{index:02d}_{table.name.lower()}_{number:05d}.psv"
+            data = "".join(piece).encode()
+            path.write_bytes(data)
+            shards.append(
+                {
+                    "path": str(path.resolve()),
+                    "bytes": len(data),
+                    "rows": len(piece),
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                }
+            )
+        datasets[table.name] = {
+            "view": f'mule_temporal."mt_{table.name}"',
+            "loading_job": f"load_{table.name.lower()}",
+            "columns": [[column.name, column.graph_type] for column in table.columns],
+            "rows": len(lines),
+            "bytes": sum(shard["bytes"] for shard in shards),
+            "shards": shards,
+        }
+    manifest = {
+        "format_version": FORMAT_VERSION,
+        "graphname": "Mule_Pattern_Learner",
+        "separator": SEPARATOR,
+        "header": False,
+        "datasets": datasets,
+    }
+    (directory / MANIFEST).write_text(json.dumps(manifest))
+    return manifest

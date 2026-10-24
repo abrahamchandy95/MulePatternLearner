@@ -42,6 +42,16 @@ REPORT_SCHEMA = pa.schema(
 )
 
 
+def identified_active_share(mondays: pd.DataFrame) -> float:
+    """Identified active mules over scorable accounts, averaged over the Mondays of a per-Monday
+    table (REPORT_SCHEMA's columns) that have a scorable account. mule train reads it from the
+    table mule prepare wrote, to set the prior grid."""
+    held = mondays[mondays["scorable"] > 0]
+    if held.empty:
+        return 0.0
+    return float((held["positives"] / held["scorable"]).mean())
+
+
 @dataclass(frozen=True)
 class Report:
     """The per-Monday table, in REPORT_SCHEMA's columns, and the world's counts."""
@@ -53,12 +63,8 @@ class Report:
 
     @property
     def identified_active_share(self) -> float:
-        """Identified active mules over scorable accounts, averaged over the Mondays with a
-        scorable account."""
-        held = self.mondays[self.mondays["scorable"] > 0]
-        if held.empty:
-            return 0.0
-        return float((held["positives"] / held["scorable"]).mean())
+        """The share of the per-Monday table (identified_active_share)."""
+        return identified_active_share(self.mondays)
 
 
 def build_report(
