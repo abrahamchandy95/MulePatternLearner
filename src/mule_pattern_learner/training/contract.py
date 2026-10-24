@@ -2,8 +2,9 @@
 
 A model file holds what its ranker learned beside the lock it was built under: every query
 version, every layout of a batch with how each kind of column is encoded and the Fourier
-basis, the community, degree and ablation flags, the seed count, and the subgraph settings
-(lookback, caps, time-ordered lists, community, hub and crowd thresholds). Scoring with a
+basis, the community, degree and ablation flags, the seed count (of the GNN and its ablations: an XGBoost
+ranker is trained once and has none), and the subgraph settings (lookback, caps, time-ordered
+lists, community, hub and crowd thresholds). Scoring with a
 model built under another lock would feed it numbers that do not mean what it learned, so
 load refuses such a model and names every field that differs.
 
@@ -30,7 +31,7 @@ import uuid
 
 import torch
 
-from ..config import SubgraphConfig, TrainingConfig
+from ..config import SubgraphConfig
 from ..model.encode import BatchLayout, Column, Kind, Layout, encode
 from ..model.time_encoding import FREQUENCIES, SCALE, WIDTH
 from ..subgraph.layouts import DEGREES, LAYOUT
@@ -106,12 +107,14 @@ def lock(
     *,
     community: bool,
     subgraph: SubgraphConfig,
-    training: TrainingConfig,
+    seeds: int | None = None,
     extra: Mapping[str, object] | None = None,
 ) -> Lock:
     """The lock of a ranker: its name, which says which ablation it is, whether it reads the
-    community block, and the fields of this module's docstring; extra holds a ranker's own,
-    such as the columns of an XGBoost vector."""
+    community block, and the fields of this module's docstring; seeds is the number of seeds of
+    the GNN or an ablation, left out of the lock of a ranker with no seed (an XGBoost
+    comparison, trained once); extra holds a ranker's own fields, such as the columns of an
+    XGBoost vector."""
     found: Lock = {"format": FORMAT, "ranker": ranker, "community": community}
     found |= {
         f"degrees.{kind}": [relation[1] for relation in relations]
@@ -125,7 +128,8 @@ def lock(
         "fourier.scale": SCALE,
         "fourier.width": WIDTH,
     }
-    found["seeds"] = len(training.seeds)
+    if seeds is not None:
+        found["seeds"] = seeds
     found |= {f"settings.{name}": value for name, value in asdict(subgraph).items()}
     found |= {f"{ranker}.{name}": value for name, value in (extra or {}).items()}
     return _plain(found)

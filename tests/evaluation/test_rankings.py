@@ -271,7 +271,7 @@ def test_model_files_score_the_test_keys(
     booster = rankers.fit(vectors.own, labels, np.ones(len(labels)), rankers.OWN_COLUMNS)
     nothing = Found((), np.zeros(0), np.zeros((0, 2)))
     trees = rankers.Trees(rankers.OWN, booster, 20, 0.5, nothing, ())
-    trees_lock = rankers.lock(rankers.OWN, config.subgraph, config.training)
+    trees_lock = rankers.lock(rankers.OWN, config.subgraph)
     path = rankers.model_file(tmp_path, rankers.OWN)
     rankers.save(trees, path, trees_lock)
     scored = score_trees(path, trees_lock, batches)

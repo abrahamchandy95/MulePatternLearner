@@ -106,7 +106,7 @@ def gnn_lock(
         ranker_name(switch),
         community=model_config(model, switch).community,
         subgraph=subgraph,
-        training=training,
+        seeds=len(training.seeds),
         extra=extra,
     )
 

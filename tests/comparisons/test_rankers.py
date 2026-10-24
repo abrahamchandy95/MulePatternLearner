@@ -39,7 +39,6 @@ from mule_pattern_learner.config import DEFAULT_CONFIG
 from mule_pattern_learner.training.selection import selection_score
 
 SUBGRAPH = DEFAULT_CONFIG.subgraph
-TRAINING = DEFAULT_CONFIG.training
 M1, M2 = 1_000, 2_000
 EMPTY_LABELS = np.zeros(0, dtype=np.int64)
 EMPTY_WEIGHTS = np.zeros(0, dtype=np.float64)
@@ -145,7 +144,8 @@ def test_two_fits_on_the_same_data_give_identical_boosters() -> None:
 
 def test_a_ranker_is_one_model_with_no_seed(tmp_path: Path) -> None:
     """A ranker has no seed anywhere: not in what trains it, not in what it is, not in the name
-    of its file; and nothing here loaded XGBoost into this process, which holds torch."""
+    of its file, not in its lock (so the number of seeds the GNN trains never decides whether
+    its file loads); and nothing here loaded XGBoost into this process, which holds torch."""
     assert [field.name for field in fields(Trees)] == [
         "name",
         "booster",
@@ -158,6 +158,8 @@ def test_a_ranker_is_one_model_with_no_seed(tmp_path: Path) -> None:
     assert "seed" not in inspect.signature(fit).parameters
     assert model_file(tmp_path, OWN) == tmp_path / "xgboost_own.pt"
     assert model_file(tmp_path, GRAPH) == tmp_path / "xgboost_graph.pt"
+    assert list(inspect.signature(lock).parameters) == ["name", "subgraph"]
+    assert not any("seed" in field for name in (OWN, GRAPH) for field in lock(name, SUBGRAPH))
     assert "xgboost" not in sys.modules
 
 
@@ -178,8 +180,8 @@ def test_a_rankers_file_reads_back_under_its_lock(tmp_path: Path) -> None:
     selection, keys = _planted(100, 10, labelled=False)
     trees = train(OWN, training, selection, keys)
     path = model_file(tmp_path, OWN)
-    save(trees, path, lock(OWN, SUBGRAPH, TRAINING))
-    back = load(path, lock(OWN, SUBGRAPH, TRAINING))
+    save(trees, path, lock(OWN, SUBGRAPH))
+    back = load(path, lock(OWN, SUBGRAPH))
     assert (back.name, back.booster, back.rounds, back.score, back.history) == (
         OWN,
         trees.booster,
@@ -190,10 +192,10 @@ def test_a_rankers_file_reads_back_under_its_lock(tmp_path: Path) -> None:
     assert back.found.accounts == trees.found.accounts
     np.testing.assert_array_equal(back.scores(selection), trees.scores(selection))
     with pytest.raises(ValueError, match=r"settings\.devices_ips \(the model's 8, now 4\)"):
-        load(path, lock(OWN, replace(SUBGRAPH, devices_ips=4), TRAINING))
+        load(path, lock(OWN, replace(SUBGRAPH, devices_ips=4)))
     with pytest.raises(ValueError, match="xgboost_graph.columns"):
-        load(path, lock(GRAPH, SUBGRAPH, TRAINING))
-    assert lock(OWN, SUBGRAPH, TRAINING)["xgboost_own.columns"] == list(OWN_COLUMNS)
+        load(path, lock(GRAPH, SUBGRAPH))
+    assert lock(OWN, SUBGRAPH)["xgboost_own.columns"] == list(OWN_COLUMNS)
 
 
 def test_both_rankers_learn_the_batch_worlds_mules(world: Any) -> None:

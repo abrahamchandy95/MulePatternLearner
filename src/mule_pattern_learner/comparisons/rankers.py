@@ -38,7 +38,7 @@ from numpy.typing import NDArray
 import pandas as pd
 import torch
 
-from ..config import SubgraphConfig, TrainingConfig
+from ..config import SubgraphConfig
 from ..training import contract
 from ..training.contract import Lock
 from ..training.selection import Found
@@ -94,15 +94,14 @@ def train(name: str, training: Vectors, selection: Vectors, keys: pd.DataFrame) 
     return Trees(name, booster, rounds, chosen.score, chosen, history)
 
 
-def lock(name: str, subgraph: SubgraphConfig, training: TrainingConfig) -> Lock:
-    """The contract lock of an XGBoost ranker: the fields of every ranker's lock, with the
-    community flag set when its vectors hold the community block, and its columns and round
-    counts."""
+def lock(name: str, subgraph: SubgraphConfig) -> Lock:
+    """The contract lock of an XGBoost ranker: the fields of every ranker's lock but a seed
+    count, which it has none of, with the community flag set when its vectors hold the community
+    block, and its columns and round counts."""
     return contract.lock(
         name,
         community=name == GRAPH,
         subgraph=subgraph,
-        training=training,
         extra={"columns": COLUMNS[name], "max_rounds": MAX_ROUNDS, "round_step": ROUND_STEP},
     )
 

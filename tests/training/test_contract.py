@@ -28,7 +28,7 @@ TRAINING = DEFAULT_CONFIG.training
 
 def _lock(**changes: object) -> contract.Lock:
     subgraph = replace(SUBGRAPH, **changes)
-    return lock("gnn", community=True, subgraph=subgraph, training=TRAINING)
+    return lock("gnn", community=True, subgraph=subgraph, seeds=len(TRAINING.seeds))
 
 
 def test_the_lock_holds_every_field_the_design_names() -> None:
@@ -106,19 +106,24 @@ def test_every_differing_field_is_named() -> None:
 
 
 def test_the_ablation_and_community_flags_and_a_rankers_own_fields_are_locked() -> None:
-    base = lock("gnn", community=True, subgraph=SUBGRAPH, training=TRAINING)
-    ablation = lock("gnn_without_community", community=False, subgraph=SUBGRAPH, training=TRAINING)
+    seeds = len(TRAINING.seeds)
+    base = lock("gnn", community=True, subgraph=SUBGRAPH, seeds=seeds)
+    ablation = lock("gnn_without_community", community=False, subgraph=SUBGRAPH, seeds=seeds)
     assert [line.split(" (")[0] for line in differences(base, ablation)] == ["community", "ranker"]
-    trees = lock(
-        "xgboost_own",
-        community=False,
-        subgraph=SUBGRAPH,
-        training=TRAINING,
-        extra={"columns": ("a", "b")},
-    )
+    trees = lock("xgboost_own", community=False, subgraph=SUBGRAPH, extra={"columns": ("a", "b")})
     assert trees["xgboost_own.columns"] == ["a", "b"]
-    fewer = replace(TRAINING, seeds=(0, 1, 2))
-    assert lock("gnn", community=True, subgraph=SUBGRAPH, training=fewer)["seeds"] == 3
+    assert lock("gnn", community=True, subgraph=SUBGRAPH, seeds=3)["seeds"] == 3
+
+
+def test_a_ranker_with_no_seed_has_no_seed_count_in_its_lock() -> None:
+    """The seed count is the GNN's and its ablations': a lock made with none leaves the field
+    out, so a ranker trained once, like each XGBoost comparison, reads as a model with no seed
+    and the number of GNN seeds never reaches its file."""
+    alone = lock("xgboost_own", community=False, subgraph=SUBGRAPH)
+    assert "seeds" not in alone
+    assert differences(alone, lock("xgboost_own", community=False, subgraph=SUBGRAPH)) == []
+    counted = lock("xgboost_own", community=False, subgraph=SUBGRAPH, seeds=5)
+    assert differences(counted, alone) == ['seeds (the model\'s 5, now "missing")']
 
 
 def test_a_file_that_is_no_model_file_is_refused(tmp_path: Path) -> None:
