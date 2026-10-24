@@ -1,13 +1,17 @@
 USE GRAPH Mule_Pattern_Learner
 
-/* The identified mules and their activity period, a page at a time by strictly increasing id
-   (docs/design.md, "read_labels"): every account with pu_label 1, the bank identified it as a
-   mule, with its mule_onset_ms and mule_last_ms. It is the only training signal and the only
-   reader of pu_label. It reads the dates only of the accounts the pu_label 1 selection keeps,
-   so a hidden mule's dates never leave the graph.
+/* read_labels: the mules the bank identified, and when each was active.
 
-   It refuses the page, naming its accounts, when an account of it lacks
-   0 < mule_onset_ms <= mule_last_ms. A page holds 1 to 10,000 accounts. */
+   Inputs: after_id and page, to read the accounts a page at a time by increasing id, 1 to
+   10,000 a page.
+   Prints: accounts, the account_id, mule_onset_ms and mule_last_ms of the accounts with
+   pu_label 1 and an id above after_id, at most page of them.
+   Refuses: invalid_parameters, for a page out of range; invalid_activity, naming the accounts
+   of the page that lack 0 < mule_onset_ms <= mule_last_ms.
+
+   These are the only training labels, and this is the only query that reads pu_label
+   (docs/design.md, "read_labels"). The dates are read only from the accounts the pu_label 1
+   selection keeps, so a hidden mule's dates never leave the graph. */
 CREATE OR REPLACE QUERY read_labels(
     STRING after_id,
     INT page

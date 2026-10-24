@@ -1,17 +1,17 @@
 USE GRAPH Mule_Pattern_Learner
 
-/* For mule bench only (docs/design.md, "profile_hubs"): exact whole-world histograms, on one
-   Monday t, of the measures behind read_hubs' two thresholds, so the owner can set them.
+/* profile_hubs: the histograms behind read_hubs' two thresholds, for mule bench only.
 
-   - accounts: every account that exists at t, by the distinct customers owning the other
-     accounts of its payments in [t - 90 days, t), read_hubs' account hub measure, with no
-     prefilter.
-   - Devices and IPs: each with at least one customer, by its distinct customers over the
-     lookback, read_hubs' crowd measure: registered when a customer has a visible enrolment
-     link to it, observed-only otherwise.
+   Inputs: t_ms, a Monday at 00:00 UTC.
+   Prints: accounts, registered_devices, observed_devices, registered_ips and observed_ips,
+   each a map from a measure to the number of accounts, devices or IPs that have it.
+   Refuses: invalid_parameters, for a t that is not a Monday after the 90-day lookback.
 
-   Each histogram maps a measure to the number of accounts, devices or IPs that have it. Reads
-   no label. t must be a Monday at 00:00 UTC after the lookback's length. */
+   The measures are read_hubs' own, counted over the whole graph so that the owner can set the
+   two thresholds from them (docs/design.md, "profile_hubs"): every account that exists at t
+   by its account hub measure, with no prefilter; every device and IP with at least one
+   customer by its crowd measure, registered when a customer has a visible enrolment link to
+   it and observed-only otherwise. */
 CREATE OR REPLACE QUERY profile_hubs(
     UINT t_ms
 ) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {

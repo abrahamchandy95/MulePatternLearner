@@ -1,23 +1,24 @@
 USE GRAPH Mule_Pattern_Learner
 
-/* The leaves of one Monday t (docs/design.md, "Shared rules" and "read_hubs"): the accounts,
-   devices and IPs too connected to expand, each with its measure, the distinct customers
-   over the 90 days before t.
+/* read_hubs: the accounts, devices and IPs too connected to expand on Monday t.
 
-   - An account hub: more than 200 distinct customers own the other accounts of its payments
-     in [t - 90 days, t), through a visible ownership link; an ownerless counterparty is not
-     counted, and a self-payment has no other account. An account with at most 200 payments
-     in all time cannot be one, so it skips the test: that prefilter reads all-time degrees,
-     which changes the cost and never an answer.
-   - A crowd: a device or IP with more than 8 distinct customers, registered or not: those
-     with a visible enrolment link to it, and the owners, through a visible ownership link, of
-     deposit accounts that exist at t and sent a payment seen on it in the lookback. A device
-     or IP hub has more than 200 of them.
+   Inputs: t_ms, a Monday at 00:00 UTC.
+   Prints: accounts, each account hub with customers_90d; devices and ips, each crowd (device
+   and IP hubs among them) with customers_90d, observed_only (no customer has a visible
+   enrolment link to it) and hub.
+   Refuses: invalid_parameters, for a t that is not a Monday after the 90-day lookback.
 
-   Every account hub, crowd and device or IP hub is printed with its measure; a device or IP
-   also with observed_only (no customer has a visible enrolment link to it) and hub. B5 and B6
-   test leaves inline by the same crowd rule, and the batch builder joins these rows by id.
-   Reads no label. t must be a Monday at 00:00 UTC after the lookback's length. */
+   Without leaves one biller or carrier IP would flood every subgraph, and "shares an IP with
+   5,000 people" means nothing (docs/design.md, "Shared rules"). Every measure counts distinct
+   customers over [t - 90 days, t):
+   - an account hub has more than 200: the owners, through a visible ownership link, of the
+     other accounts of its payments. 200 is above the largest ring PhantomLedger makes.
+   - a crowd is a device or IP with more than 8, and a device or IP hub one with more than
+     200: the customers with a visible enrolment link to it, and the owners of deposit
+     accounts that exist at t and sent a payment seen on it. 8 is above a household and below
+     a public terminal or a carrier line.
+   B5 and B6 test devices and IPs inline by the same crowd rule, and the batch builder joins
+   these rows by id. */
 CREATE OR REPLACE QUERY read_hubs(
     UINT t_ms
 ) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
@@ -34,7 +35,10 @@ CREATE OR REPLACE QUERY read_hubs(
         RETURN;
     END;
 
-    /* Account hubs. */
+    /* Account hubs. An account with at most 200 payments in all time cannot have more than
+       200 customers on their other side, so it skips the count: the all-time degree changes
+       the cost, never an answer. An ownerless counterparty is not counted, and a self-payment
+       has no other account. */
     Busy = SELECT a FROM Account:a
       WHERE a.opened_ms < t_ms
         AND a.outdegree("Account_Initiated_Transaction")
@@ -57,8 +61,9 @@ CREATE OR REPLACE QUERY read_hubs(
       WHERE a.@hub_customers.size() > hub_threshold
       POST-ACCUM a.@customers_90d += a.@hub_customers.size();
 
-    /* Crowds and device and IP hubs: the customers of each device and IP, through a visible
-       enrolment link and through payments seen on it. */
+    /* Crowds, and device and IP hubs. Customers count alike whether they registered the
+       device or IP or were only seen on it, so a carrier line or public terminal is a crowd
+       however its users reached it. */
     Nodes = {Device.*, IP.*};
     Enrolled = SELECT d FROM Nodes:d -((Device_Used_By_Party>|IP_Used_By_Party>):l)- Party:q
       WHERE l.valid_from_ms < t_ms

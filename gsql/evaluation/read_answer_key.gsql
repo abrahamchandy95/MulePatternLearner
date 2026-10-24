@@ -1,15 +1,19 @@
 USE GRAPH Mule_Pattern_Learner
 
-/* The answer key, for evaluation only, a page at a time by strictly increasing id
-   (docs/design.md, "read_answer_key"): every internal account's truth (is_mule, 1 or 0),
-   the ring of its first landing payment or the ring that recruited it (mule_ring_id, -1 for
-   none) and its activity period (mule_onset_ms, mule_last_ms), whether or not the bank
-   identified it, since evaluation builds its groups and early warning from every mule; and
-   its opened_ms (for the group of accounts opened within 90 days of t), its account_type and
-   whether it has an ownership link at all (owned, for the population check).
+/* read_answer_key: the truth about every internal account, for evaluation only.
 
-   The fetch executor refuses to run it, and only evaluation and testing import its parser.
-   A page holds 1 to 10,000 accounts. */
+   Inputs: after_id and page, to read the accounts a page at a time by increasing id, 1 to
+   10,000 a page.
+   Prints: accounts, for the internal accounts with an id above after_id, at most page of
+   them: is_mule (1 or 0); mule_ring_id, the ring of its first landing payment or the ring that
+   recruited it, -1 for none; its activity period, mule_onset_ms and mule_last_ms; opened_ms;
+   account_type; and owned, whether it has an ownership link at all.
+   Refuses: invalid_parameters, for a page out of range.
+
+   Evaluation builds its groups and early warning from every mule, identified or hidden, so it
+   needs every mule's dates; opened_ms gives the group of accounts opened within 90 days of t,
+   and owned the population check (docs/design.md, "read_answer_key"). The fetch executor
+   refuses to run this query, and only evaluation and testing import its parser. */
 CREATE OR REPLACE QUERY read_answer_key(
     STRING after_id,
     INT page

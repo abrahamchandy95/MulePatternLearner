@@ -1,28 +1,27 @@
 USE GRAPH Mule_Pattern_Learner
 
-/* What identifies the loaded world (docs/design.md, "Cache"), all integers, for the cache key
-   and the lookback check:
+/* read_world: what identifies the loaded world, for the cache key and the lookback check.
 
-   - vertices, the count of each vertex type; edges, the count of each of the 15 forward edge
-     types; account_types and payment_rails, the count of each value; external_accounts, the
-     accounts with is_external true;
-   - seconds, keyed "<type>.<attribute>": the sums over rows of floor(ms / 1,000) of
-     Party.joined_ms, Account.opened_ms and closed_ms, each link type's valid_from_ms and
-     valid_to_ms, and each payment type's event_ts_ms;
-   - cents, per payment type, the sum over rows of floor(amount x 100 + 0.5);
-   - per forward edge type, the sum of its sources' squared degrees (squared_degrees), the sum
-     of its targets' squared degrees (squared_target_degrees, which are the squared source
-     degrees of its reverse type) and, over its edges, the sum of the product of both ends'
-     degrees (degree_products; a reverse edge joins the same two ends, so its sum is the
-     same): one link moving between vertices of degrees 2 and 1 leaves the squared sums
-     unchanged, but not the products;
-   - the first joined_ms, and the first and last payment's event_ts_ms.
+   Inputs: none.
+   Prints: one row of integers (docs/design.md, "Cache"):
+   - vertices and edges, the count of each vertex type and of each of the 15 forward edge
+     types; account_types and payment_rails, the count of each value; external_accounts;
+   - seconds, keyed "<type>.<attribute>", the sum over rows of floor(ms / 1,000) of every
+     time: joined_ms, opened_ms, closed_ms, each link type's valid_from_ms and valid_to_ms,
+     and each payment type's event_ts_ms; cents, per payment type, the sum over rows of
+     floor(amount x 100 + 0.5);
+   - squared_degrees and squared_target_degrees, per forward edge type the sum of its
+     sources' and of its targets' squared degrees; degree_products, the sum over its edges of
+     the product of both ends' degrees;
+   - first_joined_ms, first_event_ms and last_event_ms.
 
-   A reverse edge type is its forward type read from the other end, so its count is the
-   forward type's and is not printed again. PhantomLedger's world record carries the counts,
-   the second and cent sums and the three times under these names; the degree sums are
-   read_world's own. Every degree is counted from the source of a forward edge, so no step
-   goes from a device or IP to its users. Reads no label. */
+   A world regenerated or changed gets another identity, so stale cache rows are never read.
+   PhantomLedger's world record carries every field but the degree sums under these names, and
+   mule prepare compares the two. The degree products are there because one link moving
+   between vertices of degrees 2 and 1 leaves both squared sums unchanged. A reverse edge type
+   is its forward type read from the other end, so it is not counted again. Every degree is
+   counted from the source of a forward edge, so no step goes from a device or IP to its
+   users. Reads no label. */
 CREATE OR REPLACE QUERY read_world() FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
     MapAccum<STRING, SumAccum<INT>> @out_degree, @in_degree;
     MapAccum<STRING, SumAccum<INT>> @@vertices, @@edges, @@account_types, @@payment_rails,
@@ -31,7 +30,7 @@ CREATE OR REPLACE QUERY read_world() FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
     MinAccum<UINT> @@first_joined_ms, @@first_event_ms;
     MaxAccum<UINT> @@last_event_ms;
 
-    /* The vertices. */
+    /* Each vertex type: its count, its times in seconds and, for payments, its cents. */
     Parties = SELECT q FROM Party:q
       POST-ACCUM @@vertices += ("Party" -> 1),
         @@seconds += ("Party.joined_ms" -> floor(q.joined_ms / 1000)),
@@ -57,8 +56,8 @@ CREATE OR REPLACE QUERY read_world() FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
         @@cents += ("Zelle_Transfer" -> floor(p.amount * 100 + 0.5)),
         @@first_event_ms += p.event_ts_ms, @@last_event_ms += p.event_ts_ms;
 
-    /* Each forward edge type from its sources: the degree at both its ends, and a link's
-       times. */
+    /* Each forward edge type, stepped along from its sources: the degree at both its ends, and
+       a link's times. */
     PartyEnds = SELECT x FROM Parties:q
       -((Party_Owns_Account>|Party_Uses_Token>|Party_Uses_Device>|Party_Uses_IP>):e)-
       (Account|Token|Device|IP):x
@@ -94,7 +93,8 @@ CREATE OR REPLACE QUERY read_world() FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
             @@squared_target_degrees += (kind -> degree * degree)
         END;
 
-    /* The products of both ends' degrees, over each edge. */
+    /* The products of both ends' degrees, over each edge: a second pass along the same edges,
+       since a product needs both degrees complete. */
     PartyProducts = SELECT x FROM Parties:q
       -((Party_Owns_Account>|Party_Uses_Token>|Party_Uses_Device>|Party_Uses_IP>):e)-
       (Account|Token|Device|IP):x

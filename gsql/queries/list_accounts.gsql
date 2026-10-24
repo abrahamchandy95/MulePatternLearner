@@ -1,14 +1,20 @@
 USE GRAPH Mule_Pattern_Learner
 
-/* The scorable accounts of one Monday t, with their owner, a page at a time by strictly
-   increasing id (docs/design.md, "The scored population" and "list_accounts"): the internal
-   deposit accounts that exist at t (opened_ms < t), are open at t (closed_ms 0 or at or
-   after t) and have a visible ownership link (it began before t and had not ended by
-   t - 90 days). Every account has at most one owner, which the loader checks.
+/* list_accounts: which accounts are scored on Monday t, and who owns each.
 
-   It prints no opened_ms, since a date of record in every world's cache is one edit away
-   from a feature, and reads no label. t must be a Monday at 00:00 UTC after the lookback's
-   length, and a page holds 1 to 10,000 accounts. */
+   Inputs: t_ms, a Monday at 00:00 UTC; after_id and page, to read the accounts a page at a
+   time by increasing id, 1 to 10,000 a page.
+   Prints: accounts, the account_id and owner_id of the scorable accounts with an id above
+   after_id, at most page of them.
+   Refuses: invalid_parameters, for a t that is not a Monday after the 90-day lookback or a
+   page out of range.
+
+   A scorable account is an internal deposit account that exists at t (opened_ms < t), is
+   still open at t, and has a visible ownership link: one that began before t and had not
+   ended by t - 90 days (docs/design.md, "The scored population"). An account that did not
+   exist at t would let the future in. opened_ms is not printed: a date of record in every
+   world's cache is one edit away from a feature. The loader checks that every account has at
+   most one owner. */
 CREATE OR REPLACE QUERY list_accounts(
     UINT t_ms,
     STRING after_id,
