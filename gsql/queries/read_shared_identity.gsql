@@ -32,7 +32,9 @@ USE GRAPH Mule_Pattern_Learner
      self-payment is read nowhere but in the crowd count, which is read_hubs' measure.
    Per-request state is kept by the scored account, on its own vertex or in maps keyed by its
    id; every other map holds what one customer, account, node or payment is at t, whichever
-   scored account reached it. The accounts come as ids, as read_money_flow explains. */
+   scored account reached it. The query calls no subquery and no user-defined function, so a
+   rule needed in several places, such as the known-start test or the fields of an edge, is
+   written out in each. The accounts come as ids, as read_money_flow explains. */
 CREATE OR REPLACE QUERY read_shared_identity(
     UINT t_ms,
     LIST<STRING> account_ids,
