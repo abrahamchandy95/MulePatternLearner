@@ -46,13 +46,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-from numpy.typing import NDArray
 import pandas as pd
 import torch
 
 from ..comparisons import rankers
 from ..comparisons.features import vectors_of
-from ..metrics import TEST_BUDGETS, MondayRanking, budget_name, ever_flagged, first_flag
+from ..metrics import TEST_BUDGETS, budget_name, ever_flagged, first_flag
 from ..subgraph.build import read_rows
 from ..subgraph.cache import Cache
 from ..subgraph.switches import Switch
@@ -63,7 +62,7 @@ from ..training.trainer import load_trained
 from .answer_key import ACTIVE, AFTER, EARLY_WARNING, NON_MULE, AnswerKey, statuses
 from .development_checks import customer_of, other_customer, own_nodes
 from .label_checks import JOINED_COLUMNS, truth_join_columns
-from .uncertainty import Ranked
+from .ranking import Ranking
 
 DAY_MS = 86_400_000
 # The columns of a test frame.
@@ -154,66 +153,6 @@ def evaluation_frame(
     frame["identified"] = frame["account_id"].isin(set(identified))
     frame = frame.loc[:, list(COLUMNS)].astype({"logit": "float64", "weight": "float64"})
     return frame.sort_values(["t_ms", "account_id"], ignore_index=True)
-
-
-@dataclass(frozen=True)
-class Ranking:
-    """A ranking of rows of a test frame: the rows (non-mules, and the positives chosen), which
-    are positive, and their Monday ranking and pooled ranking."""
-
-    frame: pd.DataFrame
-    positive: NDArray[np.bool_]
-    order: MondayRanking
-    pooled: Ranked
-
-    @classmethod
-    def of(cls, frame: pd.DataFrame, positive: NDArray[np.bool_]) -> Ranking:
-        """The ranking of the non-mule rows of frame and the rows positive marks."""
-        kept = positive | (frame["status"] == NON_MULE).to_numpy()
-        rows = frame.loc[kept].reset_index(drop=True)
-        chosen = positive[kept]
-        logits = rows["logit"].to_numpy(dtype=np.float64)
-        return cls(
-            rows,
-            chosen,
-            MondayRanking(rows["t_ms"].to_numpy(dtype=np.int64), logits),
-            Ranked(logits, chosen),
-        )
-
-    @property
-    def weight(self) -> NDArray[np.float64]:
-        return self.frame["weight"].to_numpy(dtype=np.float64)
-
-    def headline(self, weight: NDArray[np.float64] | None = None) -> NDArray[np.float64]:
-        """The headline metrics (HEADLINE) under weight, each row's weight by default: pooled
-        recall and precision at each budget, ROC AUC and PR AUC; NaN where undefined."""
-        used = self.weight if weight is None else weight
-        shares = self.order.shares(used)
-        found, positives, sizes = self.order.budget_found(shares, self.positive, used)
-        total = positives.sum()
-        recall = found.sum(axis=0) / total if total > 0 else np.full(len(TEST_BUDGETS), np.nan)
-        precision = found.sum(axis=0) / sizes.sum(axis=0)
-        return np.r_[
-            recall, precision, self.pooled.roc_auc(used), self.pooled.average_precision(used)
-        ]
-
-    def per_monday(self) -> pd.DataFrame:
-        """Recall and precision at each budget on each Monday, with its positives' weight."""
-        weight = self.weight
-        found, positives, sizes = self.order.budget_found(
-            self.order.shares(weight), self.positive, weight
-        )
-        table = pd.DataFrame({"t_ms": self.order.mondays, "positives": positives})
-        for column, budget in enumerate(TEST_BUDGETS):
-            name = budget_name(budget)
-            table[f"recall_at_{name}"] = np.divide(
-                found[:, column],
-                positives,
-                out=np.full(len(positives), np.nan),
-                where=positives > 0,
-            )
-            table[f"precision_at_{name}"] = found[:, column] / sizes[:, column]
-        return table
 
 
 def ring_links(

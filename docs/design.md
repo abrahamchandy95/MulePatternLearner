@@ -1611,12 +1611,14 @@ GSQL: `gsql/schema/schema.gsql` (no loading job); `gsql/queries/` (`list_account
 record (TOML, since `.gitignore` keeps every JSON file out of git).
 
 The import contracts in `pyproject.toml` keep every layer exhaustive: no package but
-`evaluation/` and `testing/` imports the answer-key reader; none of `tigergraph/`, `data/`,
-`subgraph/`, `model/`, `training/` or `comparisons/` imports `evaluation/` or `testing/`; and
-the path contract of the Files that carry labels guard holds. `testing/` may read every
-column because it checks queries and builds no example, batch or model. The README says to run
-`pip install -e` after a pull, and pytest filters the torch_geometric deprecation warnings
-(about 14,700 a run) for that module only.
+`evaluation/` and `testing/` imports the answer-key reader, and `bench.py` is held to it too,
+reaching `evaluation/` only through `evaluation.ranking`, `evaluation.atomic`,
+`evaluation.statuses` and `evaluation.uncertainty`, which read no truth; none of `tigergraph/`,
+`data/`, `subgraph/`, `model/`, `training/` or `comparisons/` imports `evaluation/` or
+`testing/`; and the path contract of the Files that carry labels guard holds. `testing/` may
+read every column because it checks queries and builds no example, batch or model. The README
+says to run `pip install -e` after a pull, and pytest filters the torch_geometric deprecation
+warnings (about 14,700 a run) for that module only.
 
 ## Order of work
 

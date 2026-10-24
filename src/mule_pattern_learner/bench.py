@@ -85,9 +85,9 @@ from .data.examples import monday, unlabelled
 from .data.labels import Labels, read_identified
 from .data.population import list_population
 from .data.worlds import LoadedWorld, find_world
-from .evaluation.rankings import Ranking
+from .evaluation.atomic import write_parquet
+from .evaluation.ranking import Ranking
 from .evaluation.statuses import ACTIVE, NON_MULE
-from .evaluation.store import write_parquet
 from .evaluation.uncertainty import Clusters, replicate_matrix
 from .model.encode import encode_batch
 from .model.hetero import HeteroModel

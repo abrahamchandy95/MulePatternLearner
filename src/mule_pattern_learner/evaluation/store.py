@@ -20,12 +20,11 @@ kind and identity. No value, bound or count of a check is in it.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 import json
 from pathlib import Path
 import tomllib
-import uuid
 
 import pandas as pd
 import pyarrow as pa
@@ -35,6 +34,7 @@ from ..data.labels import Labels, label_identity
 from ..paths import evaluation_store_dir
 from ..tigergraph.queries import READ_LABELS, VERSIONS, read_labels
 from .answer_key import COLUMNS, AnswerKey, parse_rows
+from .atomic import write_bytes, write_parquet
 
 ANSWER_KEY_FILE = "answer_key.parquet"
 LABELS_FILE = "labels.parquet"
@@ -79,26 +79,6 @@ class AuditRecord:
     def failed(self) -> tuple[str, ...]:
         """The checks that failed, by name, sorted."""
         return tuple(sorted(name for name, passed in self.checks.items() if not passed))
-
-
-def _temporary(path: Path) -> Path:
-    return path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-
-
-def _write_bytes(path: Path, write: Callable[[Path], object]) -> None:
-    """Write a file through a temporary file and a rename; write takes the temporary path."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = _temporary(path)
-    try:
-        write(temporary)
-        temporary.replace(path)
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
-def write_parquet(path: Path, table: pa.Table) -> None:
-    """Write a Parquet table through a temporary file and a rename."""
-    _write_bytes(path, lambda temporary: pq.write_table(table, temporary))
 
 
 def _quoted(text: str) -> str:
@@ -230,7 +210,7 @@ class Store:
                 f"{self.identity}'s"
             )
         text = record_text(record)
-        _write_bytes(self.folder / RECORD_FILE, lambda temporary: temporary.write_text(text))
+        write_bytes(self.folder / RECORD_FILE, lambda temporary: temporary.write_text(text))
 
     def record(self) -> AuditRecord | None:
         """The stored pass record, or None when mule audit has not written one; one of another
