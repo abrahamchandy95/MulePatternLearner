@@ -81,11 +81,13 @@ CREATE OR REPLACE QUERY read_shared_identity(
       @kept_seen_ips;
     MapAccum<STRING, MaxAccum<UINT>> @candidate_evidence;
     HeapAccum<Ranked>(48, ts DESC, id ASC) @kept_co_users;
-    /* A payment's sender; its sender's owner, a customer of a row or another user, and
-       whether that is a deposit account; its receiver; and the nodes it was seen on. */
-    MaxAccum<STRING> @sender_id, @owner_id, @user_id, @receiver_id;
-    OrAccum @deposit_sender;
-    SetAccum<STRING> @seen_on;
+    /* A payment's sender; its sender's owner and whether that is a deposit account; its
+       receiver; and the nodes it was seen on. The owners' payments are read before the caps,
+       so they have accumulators of their own (`@early_...`); the new rows' use `@owner_id`,
+       `@deposit_sender` and `@seen_on`, and the other users' `@user_id` and `@seen_on`. */
+    MaxAccum<STRING> @sender_id, @early_owner_id, @owner_id, @user_id, @receiver_id;
+    OrAccum @early_deposit_sender, @deposit_sender;
+    SetAccum<STRING> @early_seen_on, @seen_on;
     /* A node's crowd count, its leaf flag, and the accounts seen on it in the last 30 days.
        A node first reached through a customer of a row has a count of its own, since its row
        is never printed. */
@@ -130,7 +132,7 @@ CREATE OR REPLACE QUERY read_shared_identity(
     MapAccum<STRING, SetAccum<STRING>> @@own_seen;
     MapAccum<STRING, MapAccum<STRING, MinAccum<UINT>>> @@first_unseen;
     /* The nodes: which are IPs, which are leaves, which some customer of a row shares, and
-       which are a scored account's before the caps; per node, its co-user candidates, its
+       which are an open node of some scored account; per node, its co-user candidates, its
        users, and the accounts whose customer has a visible link to it, with that customer. */
     SetAccum<STRING> @@ip_ids, @@leaf_ids, @@shared_ids, @@scored_node_ids;
     MapAccum<STRING, SetAccum<STRING>> @@candidates, @@node_users;
@@ -350,16 +352,152 @@ CREATE OR REPLACE QUERY read_shared_identity(
       POST-ACCUM d.@leaf += d.@crowd_customers.size() > crowd_threshold;
     LeafIds = SELECT d FROM Discovered:d WHERE d.@leaf POST-ACCUM @@leaf_ids += d.id;
 
-    /* The scored accounts' nodes before the caps: C_s's links and the nodes seen on s's
-       payments. On those that are no leaf, the customers the crowd rule counts are the
-       co-user candidates. The caps come later: they need the known starts, which need the
-       customers' own payments, read below for the owners and the candidates together. */
-    ScoredNodes = SELECT a FROM Scored:a
+    /* The owners' own payments come first, since the caps below need them: an owner's own
+       payments are those its accounts sent in the lookback, but self-payments, with the nodes
+       each was seen on; a use from a deposit account in the last 30 days shares the node.
+       Then, per customer and node, its earliest own payment not seen there. Every customer
+       read after the caps gets the same three steps. */
+    OwnerSent = SELECT p FROM Owners:q -(Party_Owns_Account>:w)- Account:b
+      -((Account_Initiated_Transaction>|Account_Sent_Zelle_Transfer>):e)-
+      (Payment_Transaction|Zelle_Transfer):p
+      -((Transaction_To_Account>|Transfer_To_Account>):f)- Account:r
+      WHERE w.valid_from_ms < t_ms
+        AND (w.valid_to_ms == 0 OR w.valid_to_ms > t_ms - lookback_ms)
+        AND b.opened_ms < t_ms
+        AND p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms AND r != b
+      ACCUM
+        p.@early_owner_id += q.id,
+        p.@early_deposit_sender += b.account_type == "deposit",
+        @@first_own += (q.id -> p.event_ts_ms);
+    OwnerSeen = SELECT n FROM OwnerSent:p
+      -((Transaction_Used_Device>|Transaction_Used_IP>
+        |Transfer_Used_Device>|Transfer_Used_IP>):u)- (Device|IP):n
+      ACCUM
+        p.@early_seen_on += n.id,
+        @@own_seen += (p.@early_owner_id -> n.id),
+        @@last_seen += (p.@early_owner_id -> (n.id -> p.event_ts_ms)),
+        IF p.@early_deposit_sender THEN
+            @@deposit_first_use += (p.@early_owner_id -> (n.id -> p.event_ts_ms)),
+            @@deposit_last_use += (p.@early_owner_id -> (n.id -> p.event_ts_ms)),
+            IF p.event_ts_ms >= t_ms - 2592000000 THEN
+                @@shares += (p.@early_owner_id -> n.id),
+                @@shared_ids += n.id
+            END
+        END,
+        IF n.type == "IP" THEN @@ip_ids += n.id END;
+    OwnerUnseen = SELECT p FROM OwnerSent:p
       POST-ACCUM
-        FOREACH (n, last_ms) IN @@last_use.get(a.id) DO @@scored_node_ids += n END,
-        FOREACH (n, start_ms) IN @@link_start.get(@@owner_of.get(a.id)) DO
-            @@scored_node_ids += n
+        FOREACH n IN @@own_seen.get(p.@early_owner_id) DO
+            IF NOT p.@early_seen_on.contains(n) THEN
+                @@first_unseen += (p.@early_owner_id -> (n -> p.event_ts_ms))
+            END
         END;
+
+    /* The known-start test, on every start of a customer on a node: a link start, a first
+       use from a deposit account, and an account's first use. A start is known when it is
+       after the lookback's start, after the customer joined, and after an own payment not seen
+       on the node (on a node its payments were never seen on, after its first own payment).
+       A start before the lookback dates the data, one at sign-up dates the customer, and one
+       with no earlier own payment elsewhere is the customer's own beginning rather than a
+       change in behaviour (docs/design.md, "Time"). A sharing start is the earliest of a
+       customer's starts on the node, each t - 90 days when it is not known. The owners' starts
+       are worked out here, since the caps need their known link starts; every other
+       customer's follow, once its own payments are read. */
+    OwnerStarts = SELECT q FROM Owners:q
+      POST-ACCUM
+        UINT unseen_ms = 0, BOOL found = FALSE,
+        FOREACH (n, start_ms) IN @@link_start.get(q.id) DO
+            IF @@own_seen.get(q.id).contains(n) THEN
+                found = @@first_unseen.get(q.id).containsKey(n),
+                unseen_ms = @@first_unseen.get(q.id).get(n)
+            ELSE
+                found = @@first_own.containsKey(q.id),
+                unseen_ms = @@first_own.get(q.id)
+            END,
+            IF start_ms > t_ms - lookback_ms AND start_ms > q.joined_ms
+              AND found AND unseen_ms < start_ms THEN
+                @@known_link_start += (q.id -> (n -> start_ms)),
+                @@share_start += (q.id -> (n -> start_ms))
+            ELSE
+                @@share_start += (q.id -> (n -> t_ms - lookback_ms))
+            END
+        END,
+        FOREACH (n, start_ms) IN @@deposit_first_use.get(q.id) DO
+            IF @@own_seen.get(q.id).contains(n) THEN
+                found = @@first_unseen.get(q.id).containsKey(n),
+                unseen_ms = @@first_unseen.get(q.id).get(n)
+            ELSE
+                found = @@first_own.containsKey(q.id),
+                unseen_ms = @@first_own.get(q.id)
+            END,
+            IF start_ms > t_ms - lookback_ms AND start_ms > q.joined_ms
+              AND found AND unseen_ms < start_ms THEN
+                @@share_start += (q.id -> (n -> start_ms))
+            ELSE
+                @@share_start += (q.id -> (n -> t_ms - lookback_ms))
+            END
+        END;
+
+    /* The caps. Each expanded account's customer keeps its 8 links of each kind with the
+       newest evidence, the later of the link's known start and its latest payment seen on the
+       node; a link with neither has 0 and comes last. Each expanded account keeps its 8
+       latest seen nodes of each kind. Ties go by node id, and no order reads a link's end. */
+    KeptLinks = SELECT q FROM Owners:q
+      POST-ACCUM
+        UINT evidence = 0,
+        FOREACH (n, start_ms) IN @@link_start.get(q.id) DO
+            evidence = 0,
+            IF @@known_link_start.get(q.id).containsKey(n) THEN
+                evidence = @@known_link_start.get(q.id).get(n)
+            END,
+            IF @@last_seen.get(q.id).containsKey(n)
+              AND @@last_seen.get(q.id).get(n) > evidence THEN
+                evidence = @@last_seen.get(q.id).get(n)
+            END,
+            IF @@ip_ids.contains(n) THEN
+                q.@kept_ips += Ranked(evidence, n)
+            ELSE
+                q.@kept_devices += Ranked(evidence, n)
+            END
+        END;
+    KeptLinksListed = SELECT q FROM Owners:q
+      POST-ACCUM
+        FOREACH x IN q.@kept_devices DO @@kept_links += (q.id -> x.id) END,
+        FOREACH x IN q.@kept_ips DO @@kept_links += (q.id -> x.id) END;
+    KeptSeen = SELECT a FROM Expanding:a
+      POST-ACCUM
+        FOREACH (n, last_ms) IN @@last_use.get(a.id) DO
+            IF @@ip_ids.contains(n) THEN
+                a.@kept_seen_ips += Ranked(last_ms, n)
+            ELSE
+                a.@kept_seen_devices += Ranked(last_ms, n)
+            END
+        END;
+    KeptSeenListed = SELECT a FROM Expanding:a
+      POST-ACCUM
+        FOREACH x IN a.@kept_seen_devices DO @@kept_seen += (a.id -> x.id) END,
+        FOREACH x IN a.@kept_seen_ips DO @@kept_seen += (a.id -> x.id) END;
+
+    /* Each scored account's open nodes, its kept nodes that are no leaf. They are the only
+       nodes whose co-user candidates are read: a customer found on a dropped node alone is
+       read as a user of it, for its own payments alone. */
+    ScoredOpen = SELECT a FROM Scored:a
+      POST-ACCUM
+        FOREACH n IN @@kept_links.get(@@owner_of.get(a.id)) DO
+            IF NOT @@leaf_ids.contains(n) THEN
+                @@open_nodes += (a.id -> n),
+                @@scored_node_ids += n
+            END
+        END,
+        FOREACH n IN @@kept_seen.get(a.id) DO
+            IF NOT @@leaf_ids.contains(n) THEN
+                @@open_nodes += (a.id -> n),
+                @@scored_node_ids += n
+            END
+        END;
+
+    /* The co-user candidates, on the open nodes of the scored accounts: on each, the customers
+       the crowd rule counts. */
     CandidateNodes = SELECT d FROM Discovered:d
       WHERE NOT d.@leaf AND @@scored_node_ids.contains(d.id);
     LinkedCandidates = SELECT q FROM CandidateNodes:d
@@ -382,12 +520,13 @@ CREATE OR REPLACE QUERY read_shared_identity(
     Candidates = LinkedCandidates UNION SeenCandidates;
 
     /* The customers that may get a row: the expanded accounts' customers and the co-user
-       candidates. Their links (the owners' were read above), their accounts, and their
-       payments sent in the lookback, but self-payments, with the nodes each was seen on; a
-       use from a deposit account in the last 30 days shares the node. */
+       candidates. The candidates' links, their accounts, and their payments sent in the
+       lookback, but self-payments, with the nodes each was seen on; a use from a deposit
+       account in the last 30 days shares the node. The owners' links and payments were read
+       above. */
     RowCustomers = Owners UNION Candidates;
     NewRows = Candidates MINUS Owners;
-    RowLinks = SELECT n FROM NewRows:q -((Party_Uses_Device>|Party_Uses_IP>):l)- (Device|IP):n
+    NewLinks = SELECT n FROM NewRows:q -((Party_Uses_Device>|Party_Uses_IP>):l)- (Device|IP):n
       WHERE l.valid_from_ms < t_ms
         AND (l.valid_to_ms == 0 OR l.valid_to_ms > t_ms - lookback_ms)
       ACCUM
@@ -406,7 +545,7 @@ CREATE OR REPLACE QUERY read_shared_identity(
       ACCUM
         q.@accounts_owned += 1,
         IF b.account_type == "deposit" THEN @@deposit_accounts += (q.id -> b.id) END;
-    RowSent = SELECT p FROM RowCustomers:q -(Party_Owns_Account>:w)- Account:b
+    NewSent = SELECT p FROM NewRows:q -(Party_Owns_Account>:w)- Account:b
       -((Account_Initiated_Transaction>|Account_Sent_Zelle_Transfer>):e)-
       (Payment_Transaction|Zelle_Transfer):p
       -((Transaction_To_Account>|Transfer_To_Account>):f)- Account:r
@@ -418,7 +557,7 @@ CREATE OR REPLACE QUERY read_shared_identity(
         p.@owner_id += q.id,
         p.@deposit_sender += b.account_type == "deposit",
         @@first_own += (q.id -> p.event_ts_ms);
-    RowSeen = SELECT n FROM RowSent:p
+    NewSeen = SELECT n FROM NewSent:p
       -((Transaction_Used_Device>|Transaction_Used_IP>
         |Transfer_Used_Device>|Transfer_Used_IP>):u)- (Device|IP):n
       ACCUM
@@ -437,7 +576,7 @@ CREATE OR REPLACE QUERY read_shared_identity(
 
     /* The leaves among the nodes those customers share that were not tested yet, by the
        same crowd rule. */
-    Reached = RowLinks UNION RowSeen;
+    Reached = OwnerSeen UNION NewLinks UNION NewSeen;
     SharedReached = SELECT n FROM Reached:n WHERE @@shared_ids.contains(n.id);
     Untested = SharedReached MINUS Discovered;
     UntestedEnrolledCrowd = SELECT d FROM Untested:d
@@ -536,8 +675,8 @@ CREATE OR REPLACE QUERY read_shared_identity(
       ACCUM @@node_link_accounts += (d.id -> (b.id -> q.id));
 
     /* The known-start test needs each user's own payments sent in the lookback, but
-       self-payments, and the nodes each was seen on (the customers of a row have theirs
-       already); then, per customer and node, its earliest own payment not seen there. */
+       self-payments, and the nodes each was seen on (the owners and the new rows have
+       theirs already); then, per customer and node, its earliest own payment not seen there. */
     Users = LinkUsers UNION SeenUsers;
     OtherUsers = Users MINUS RowCustomers;
     OtherSent = SELECT p FROM OtherUsers:q -(Party_Owns_Account>:w)- Account:b
@@ -557,7 +696,7 @@ CREATE OR REPLACE QUERY read_shared_identity(
       ACCUM
         p.@seen_on += n.id,
         @@own_seen += (p.@user_id -> n.id);
-    RowUnseen = SELECT p FROM RowSent:p
+    NewUnseen = SELECT p FROM NewSent:p
       POST-ACCUM
         FOREACH n IN @@own_seen.get(p.@owner_id) DO
             IF NOT p.@seen_on.contains(n) THEN
@@ -572,16 +711,10 @@ CREATE OR REPLACE QUERY read_shared_identity(
             END
         END;
 
-    /* The known-start test, on every start of a customer on a node: a link start, a first
-       use from a deposit account, and an account's first use. A start is known when it is
-       after the lookback's start, after the customer joined, and after an own payment not seen
-       on the node (on a node its payments were never seen on, after its first own payment).
-       A start before the lookback dates the data, one at sign-up dates the customer, and one
-       with no earlier own payment elsewhere is the customer's own beginning rather than a
-       change in behaviour (docs/design.md, "Time"). A sharing start is the earliest of a
-       customer's starts on the node, each t - 90 days when it is not known. */
-    AllUsers = RowCustomers UNION Users;
-    Starts = SELECT q FROM AllUsers:q
+    /* The same known-start test for every other customer, now that its own payments are read:
+       the new rows' customers and the other users. */
+    LaterUsers = NewRows UNION OtherUsers;
+    LaterStarts = SELECT q FROM LaterUsers:q
       POST-ACCUM
         UINT unseen_ms = 0, BOOL found = FALSE,
         FOREACH (n, start_ms) IN @@link_start.get(q.id) DO
@@ -635,60 +768,11 @@ CREATE OR REPLACE QUERY read_shared_identity(
             END
         END;
 
-    /* The caps. Each expanded account's customer keeps its 8 links of each kind with the
-       newest evidence, the later of the link's known start and its latest payment seen on the
-       node; a link with neither has 0 and comes last. Each expanded account keeps its 8
-       latest seen nodes of each kind. Ties go by node id, and no order reads a link's end. */
-    KeptLinks = SELECT q FROM Owners:q
-      POST-ACCUM
-        UINT evidence = 0,
-        FOREACH (n, start_ms) IN @@link_start.get(q.id) DO
-            evidence = 0,
-            IF @@known_link_start.get(q.id).containsKey(n) THEN
-                evidence = @@known_link_start.get(q.id).get(n)
-            END,
-            IF @@last_seen.get(q.id).containsKey(n)
-              AND @@last_seen.get(q.id).get(n) > evidence THEN
-                evidence = @@last_seen.get(q.id).get(n)
-            END,
-            IF @@ip_ids.contains(n) THEN
-                q.@kept_ips += Ranked(evidence, n)
-            ELSE
-                q.@kept_devices += Ranked(evidence, n)
-            END
-        END;
-    KeptLinksListed = SELECT q FROM Owners:q
-      POST-ACCUM
-        FOREACH x IN q.@kept_devices DO @@kept_links += (q.id -> x.id) END,
-        FOREACH x IN q.@kept_ips DO @@kept_links += (q.id -> x.id) END;
-    KeptSeen = SELECT a FROM Expanding:a
-      POST-ACCUM
-        FOREACH (n, last_ms) IN @@last_use.get(a.id) DO
-            IF @@ip_ids.contains(n) THEN
-                a.@kept_seen_ips += Ranked(last_ms, n)
-            ELSE
-                a.@kept_seen_devices += Ranked(last_ms, n)
-            END
-        END;
-    KeptSeenListed = SELECT a FROM Expanding:a
-      POST-ACCUM
-        FOREACH x IN a.@kept_seen_devices DO @@kept_seen += (a.id -> x.id) END,
-        FOREACH x IN a.@kept_seen_ips DO @@kept_seen += (a.id -> x.id) END;
-
-    /* Each scored account's open nodes, its kept nodes that are no leaf. On them, each
-       co-user candidate but its own customer, by its newest evidence there: the later of its
-       known link start and its latest use from a deposit account, t - 90 days with neither.
-       The newest 48 are kept, ties by customer id. Each brings one deposit account: the one
-       seen last on the open nodes, else the one with the latest payment in the lookback, but
-       self-payments, else one with none, ties by account id. */
-    ScoredOpen = SELECT a FROM Scored:a
-      POST-ACCUM
-        FOREACH n IN @@kept_links.get(@@owner_of.get(a.id)) DO
-            IF NOT @@leaf_ids.contains(n) THEN @@open_nodes += (a.id -> n) END
-        END,
-        FOREACH n IN @@kept_seen.get(a.id) DO
-            IF NOT @@leaf_ids.contains(n) THEN @@open_nodes += (a.id -> n) END
-        END;
+    /* On the open nodes, each co-user candidate but its own customer, by its newest evidence
+       there: the later of its known link start and its latest use from a deposit account,
+       t - 90 days with neither. The newest 48 are kept, ties by customer id. Each brings one
+       deposit account: the one seen last on the open nodes, else the one with the latest
+       payment in the lookback, but self-payments, else one with none, ties by account id. */
     CoUserEvidence = SELECT a FROM Scored:a
       POST-ACCUM
         UINT evidence = 0,
@@ -990,7 +1074,7 @@ CREATE OR REPLACE QUERY read_shared_identity(
     AccountsListed = to_vertex_set(@@printed_accounts, "Account");
     Accounts = SELECT a FROM AccountsListed:a WHERE a.opened_ms < t_ms;
 
-    PRINT "ok" AS status, "read_shared_identity-4a7c069e90e6" AS version;
+    PRINT "ok" AS status, "read_shared_identity-84ffb72a34b2" AS version;
     PRINT CustomersListed[CustomersListed.id AS customer_id,
       CustomersListed.@accounts_owned AS accounts_owned,
       CustomersListed.@devices_30d AS devices_30d, CustomersListed.@ips_30d AS ips_30d,

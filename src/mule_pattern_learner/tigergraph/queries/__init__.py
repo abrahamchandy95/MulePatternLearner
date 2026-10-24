@@ -150,7 +150,7 @@ REGISTRY: dict[str, Query] = {
         Query(
             READ_SHARED_IDENTITY,
             QUERIES_FOLDER,
-            "read_shared_identity-4a7c069e90e6",
+            "read_shared_identity-84ffb72a34b2",
             read_shared_identity.params,
             (
                 read_shared_identity.CustomerRow,

@@ -193,9 +193,9 @@ DECLARATIONS = [
     "@kept_seen_ips",
     "MapAccum<STRING, MaxAccum<UINT>> @candidate_evidence",
     f"HeapAccum<Ranked>({CO_USERS}, ts DESC, id ASC) @kept_co_users",
-    "MaxAccum<STRING> @sender_id, @owner_id, @user_id, @receiver_id",
-    "OrAccum @deposit_sender",
-    "SetAccum<STRING> @seen_on",
+    "MaxAccum<STRING> @sender_id, @early_owner_id, @owner_id, @user_id, @receiver_id",
+    "OrAccum @early_deposit_sender, @deposit_sender",
+    "SetAccum<STRING> @early_seen_on, @seen_on",
     "SetAccum<VERTEX<Party>> @crowd_customers, @crowd_enrolled, @crowd_reached",
     "OrAccum @leaf",
     "SetAccum<STRING> @seen_accounts",
@@ -324,14 +324,22 @@ SELECT_ORDER = [
     "SeenCrowd",
     "Leaves",
     "LeafIds",
-    "ScoredNodes",
+    "OwnerSent",
+    "OwnerSeen",
+    "OwnerUnseen",
+    "OwnerStarts",
+    "KeptLinks",
+    "KeptLinksListed",
+    "KeptSeen",
+    "KeptSeenListed",
+    "ScoredOpen",
     "CandidateNodes",
     "LinkedCandidates",
     "SeenCandidates",
-    "RowLinks",
+    "NewLinks",
     "RowAccounts",
-    "RowSent",
-    "RowSeen",
+    "NewSent",
+    "NewSeen",
     "SharedReached",
     "UntestedEnrolledCrowd",
     "UntestedSeenCrowd",
@@ -345,15 +353,10 @@ SELECT_ORDER = [
     "LinkedAccounts",
     "OtherSent",
     "OtherSeen",
-    "RowUnseen",
+    "NewUnseen",
     "OtherUnseen",
-    "Starts",
+    "LaterStarts",
     "FirstUses",
-    "KeptLinks",
-    "KeptLinksListed",
-    "KeptSeen",
-    "KeptSeenListed",
-    "ScoredOpen",
     "CoUserEvidence",
     "CoUsersPicked",
     "CoUsersListed",
@@ -380,12 +383,12 @@ SETS = [
     "Candidates = LinkedCandidates UNION SeenCandidates",
     "RowCustomers = Owners UNION Candidates",
     "NewRows = Candidates MINUS Owners",
-    "Reached = RowLinks UNION RowSeen",
+    "Reached = OwnerSeen UNION NewLinks UNION NewSeen",
     "Untested = SharedReached MINUS Discovered",
     "Tested = Discovered UNION Untested",
     "Users = LinkUsers UNION SeenUsers",
     "OtherUsers = Users MINUS RowCustomers",
-    "AllUsers = RowCustomers UNION Users",
+    "LaterUsers = NewRows UNION OtherUsers",
     'SeenAccounts = to_vertex_set ( @@seen_account_ids , "Account" )',
     'CoUserDeposits = to_vertex_set ( @@co_user_deposit_ids , "Account" )',
     'CustomersListed = to_vertex_set ( @@printed_customers , "Party" )',
@@ -415,14 +418,16 @@ def test_every_value_a_select_reads_is_written_by_an_earlier_select() -> None:
         "SiblingsPicked": {"siblings"},
         "ExpandingSeen": {"sender_id"},
         "Leaves": {"crowd_customers"},
-        "RowSeen": {"owner_id", "deposit_sender"},
+        "OwnerSeen": {"early_owner_id", "early_deposit_sender"},
+        "OwnerUnseen": {"early_owner_id", "early_seen_on"},
+        "KeptLinksListed": {"kept_devices", "kept_ips"},
+        "KeptSeenListed": {"kept_seen_devices", "kept_seen_ips"},
+        "NewSeen": {"owner_id", "deposit_sender"},
         "UntestedLeaves": {"crowd_reached"},
         "OpenActivity": {"expanding"},
         "OtherSeen": {"user_id"},
-        "RowUnseen": {"owner_id", "seen_on"},
+        "NewUnseen": {"owner_id", "seen_on"},
         "OtherUnseen": {"user_id", "seen_on"},
-        "KeptLinksListed": {"kept_devices", "kept_ips"},
-        "KeptSeenListed": {"kept_seen_devices", "kept_seen_ips"},
         "CoUsersPicked": {"candidate_evidence"},
         "CoUsersListed": {"kept_co_users"},
         "CustomerRows": {"pair_start", "device_co_users", "ip_co_users"},
@@ -435,8 +440,16 @@ def test_every_value_a_select_reads_is_written_by_an_earlier_select() -> None:
     [
         ("ExpandingSent", "ExpandingSeen", "ExpandingSeen reads @sender_id, written by"),
         ("SeenCrowd", "Leaves", "Leaves reads @crowd_customers, written by EnrolledCrowd, Seen"),
-        ("RowSent", "RowSeen", "RowSeen reads @owner_id, written by RowSent"),
-        ("OtherSeen", "OtherUnseen", "OtherUnseen reads @seen_on, written by RowSeen, OtherSeen"),
+        ("OwnerSent", "OwnerSeen", "OwnerSeen reads @early_owner_id, written by OwnerSent"),
+        ("OwnerSeen", "OwnerUnseen", "OwnerUnseen reads @early_seen_on, written by OwnerSeen"),
+        ("NewSent", "NewSeen", "NewSeen reads @owner_id, written by NewSent"),
+        ("NewSeen", "NewUnseen", "NewUnseen reads @seen_on, written by OtherSeen, NewSeen"),
+        ("OtherSeen", "OtherUnseen", "OtherUnseen reads @seen_on, written by NewSeen, OtherSeen"),
+        (
+            "KeptLinks",
+            "KeptLinksListed",
+            "KeptLinksListed reads @kept_devices, written by KeptLinks",
+        ),
         ("ExpandingMarked", "OpenActivity", "OpenActivity reads @expanding, written by"),
         ("CoUserEvidence", "CoUsersPicked", "CoUsersPicked reads @candidate_evidence"),
         ("Pairs", "CustomerRows", "CustomerRows reads @device_co_users, written by Pairs"),
@@ -590,7 +603,7 @@ LINK_FACTS = f"""@@link_start += (q.id -> (n.id -> l.valid_from_ms)),
     IF n.type == "IP" THEN @@ip_ids += n.id END"""
 
 
-@pytest.mark.parametrize(("target", "source"), [("OwnerLinks", "Owners"), ("RowLinks", "NewRows")])
+@pytest.mark.parametrize(("target", "source"), [("OwnerLinks", "Owners"), ("NewLinks", "NewRows")])
 def test_a_customers_visible_links_give_its_nodes(target: str, source: str) -> None:
     """Every visible link, its start, and whether it is held in the last 30 days, the current
     test, which also shares the node; the links of one node are one link with the earliest
@@ -661,20 +674,21 @@ def test_a_leaf_is_a_node_with_more_customers_than_the_crowd_threshold() -> None
 # The co-user candidates.
 
 
-def test_each_scored_accounts_nodes_before_the_caps_and_their_candidates() -> None:
-    """A scored account's nodes are its customer's links and the nodes seen on its own
-    payments; on those that are no leaf, the candidates are the customers of the crowd rule,
-    read_hubs' measure, whose deposit account's payment may be one to itself."""
-    assert accumulation_text(DEFINITION, "ScoredNodes") == normal(
-        """FOREACH (n, last_ms) IN @@last_use.get(a.id) DO @@scored_node_ids += n END,
-        FOREACH (n, start_ms) IN @@link_start.get(@@owner_of.get(a.id)) DO
-            @@scored_node_ids += n
-        END"""
-    )
+def test_the_co_user_candidates_are_read_on_the_open_nodes_of_the_scored_accounts() -> None:
+    """The candidates are the customers of the crowd rule, read_hubs' measure, whose deposit
+    account's payment may be one to itself, on the open nodes of the scored accounts alone: the
+    nodes the caps kept that are no leaf. A node a cap dropped gives no candidate, so a
+    customer found on such a node alone is read as a user of it and costs its own payments
+    only, never its links, accounts and onward nodes."""
+    assert "ScoredNodes" not in [target for target, _, _ in select_flows(DEFINITION)]
+    # The set is filled by the one SELECT that fills the open nodes, with the same nodes.
+    assert normal(DEFINITION).count("@@scored_node_ids +=") == 2
+    assert accumulation_text(DEFINITION, "ScoredOpen").count("@@scored_node_ids += n") == 2
     assert select_of(DEFINITION, "CandidateNodes").conjuncts == {
         "NOT d.@leaf",
         "@@scored_node_ids.contains ( d.id )",
     }
+    assert _source(select_of(DEFINITION, "CandidateNodes").statement) == "Discovered"
     linked = select_of(DEFINITION, "LinkedCandidates")
     assert [edge.types for edge in linked.edges] == [LINKED_BY]
     assert linked.conjuncts == VISIBLE_L | {"NOT d.@leaf"}
@@ -684,6 +698,41 @@ def test_each_scored_accounts_nodes_before_the_caps_and_their_candidates() -> No
     for target in ("LinkedCandidates", "SeenCandidates"):
         assert _source(select_of(DEFINITION, target).statement) == "CandidateNodes"
         assert accumulation_text(DEFINITION, target) == "@@candidates += ( d.id -> q.id )"
+
+
+def test_the_owners_are_read_before_the_caps_and_the_candidates_after_them() -> None:
+    """The caps need the owners' known link starts and latest uses, so the owners' own payments
+    and starts come first; nothing that reads a candidate, whose customers get a row, or the
+    nodes of a scored account, runs before the caps. Each customer's payments are read once: by
+    the owners' statements, the new rows' or the other users', three sets with no customer in
+    two."""
+    order = [target for target, _, _ in select_flows(DEFINITION)]
+    owners = ["OwnerSent", "OwnerSeen", "OwnerUnseen", "OwnerStarts"]
+    caps = ["KeptLinks", "KeptLinksListed", "KeptSeen", "KeptSeenListed", "ScoredOpen"]
+    later = [
+        "CandidateNodes",
+        "LinkedCandidates",
+        "SeenCandidates",
+        "NewLinks",
+        "RowAccounts",
+        "NewSent",
+        "NewSeen",
+        "OpenActivity",
+        "LinkedAccounts",
+        "OtherSent",
+        "LaterStarts",
+    ]
+    assert order[order.index(owners[0]) : order.index(caps[-1]) + 1] == [*owners, *caps]
+    assert all(order.index(capped) < order.index(read) for capped in caps for read in later)
+    assert [_source(select_of(DEFINITION, target).statement) for target in owners[:1]] == ["Owners"]
+    assert _source(select_of(DEFINITION, "OwnerStarts").statement) == "Owners"
+    assert _source(select_of(DEFINITION, "NewSent").statement) == "NewRows"
+    assert _source(select_of(DEFINITION, "OtherSent").statement) == "OtherUsers"
+    assert _source(select_of(DEFINITION, "LaterStarts").statement) == "LaterUsers"
+    # Owners, new rows and other users are disjoint, and the later starts cover the last two.
+    assert normal(DEFINITION).count("NewRows = Candidates MINUS Owners") == 1
+    assert normal(DEFINITION).count("OtherUsers = Users MINUS RowCustomers") == 1
+    assert normal(DEFINITION).count("LaterUsers = NewRows UNION OtherUsers") == 1
 
 
 # The customers of a row, and every user's own payments for the known-start test.
@@ -713,7 +762,11 @@ def test_a_customers_own_payments_but_self_payments_with_the_nodes_each_was_seen
     its earliest payment on 2024-02-01, its latest on d_01 on 2024-03-25, and its first and
     latest from a deposit account on d_01 on 2024-02-01, more than 30 days before t, so it
     does not share d_01 through payments."""
-    for target, source in (("RowSent", "RowCustomers"), ("OtherSent", "OtherUsers")):
+    for target, source in (
+        ("OwnerSent", "Owners"),
+        ("NewSent", "NewRows"),
+        ("OtherSent", "OtherUsers"),
+    ):
         select = select_of(DEFINITION, target)
         assert _source(select.statement) == source and select.selected == "p"
         assert [step.alias for step in select.vertices] == ["q", "b", "p", "r"]
@@ -723,32 +776,42 @@ def test_a_customers_own_payments_but_self_payments_with_the_nodes_each_was_seen
             SENT_TO,
         ]
         assert select.conjuncts == OWN_SENT
-    assert accumulation_text(DEFINITION, "RowSent") == normal(
+    assert accumulation_text(DEFINITION, "NewSent") == normal(
         """p.@owner_id += q.id,
         p.@deposit_sender += b.account_type == "deposit",
+        @@first_own += (q.id -> p.event_ts_ms)"""
+    )
+    assert accumulation_text(DEFINITION, "OwnerSent") == normal(
+        """p.@early_owner_id += q.id,
+        p.@early_deposit_sender += b.account_type == "deposit",
         @@first_own += (q.id -> p.event_ts_ms)"""
     )
     assert accumulation_text(DEFINITION, "OtherSent") == normal(
         "p.@user_id += q.id, @@first_own += (q.id -> p.event_ts_ms)"
     )
-    assert accumulation_text(DEFINITION, "RowSeen") == normal(
-        f"""p.@seen_on += n.id,
-        @@own_seen += (p.@owner_id -> n.id),
-        @@last_seen += (p.@owner_id -> (n.id -> p.event_ts_ms)),
-        IF p.@deposit_sender THEN
-            @@deposit_first_use += (p.@owner_id -> (n.id -> p.event_ts_ms)),
-            @@deposit_last_use += (p.@owner_id -> (n.id -> p.event_ts_ms)),
-            IF p.event_ts_ms >= t_ms - {WINDOW_30D_MS} THEN
-                @@shares += (p.@owner_id -> n.id),
-                @@shared_ids += n.id
-            END
-        END,
-        IF n.type == "IP" THEN @@ip_ids += n.id END"""
-    )
+    for target, early in (("NewSeen", ""), ("OwnerSeen", "early_")):
+        assert accumulation_text(DEFINITION, target) == normal(
+            f"""p.@{early}seen_on += n.id,
+            @@own_seen += (p.@{early}owner_id -> n.id),
+            @@last_seen += (p.@{early}owner_id -> (n.id -> p.event_ts_ms)),
+            IF p.@{early}deposit_sender THEN
+                @@deposit_first_use += (p.@{early}owner_id -> (n.id -> p.event_ts_ms)),
+                @@deposit_last_use += (p.@{early}owner_id -> (n.id -> p.event_ts_ms)),
+                IF p.event_ts_ms >= t_ms - {WINDOW_30D_MS} THEN
+                    @@shares += (p.@{early}owner_id -> n.id),
+                    @@shared_ids += n.id
+                END
+            END,
+            IF n.type == "IP" THEN @@ip_ids += n.id END"""
+        )
     assert accumulation_text(DEFINITION, "OtherSeen") == normal(
         "p.@seen_on += n.id, @@own_seen += (p.@user_id -> n.id)"
     )
-    for target, source in (("RowSeen", "RowSent"), ("OtherSeen", "OtherSent")):
+    for target, source in (
+        ("OwnerSeen", "OwnerSent"),
+        ("NewSeen", "NewSent"),
+        ("OtherSeen", "OtherSent"),
+    ):
         select = select_of(DEFINITION, target)
         assert _source(select.statement) == source
         assert [edge.types for edge in select.edges] == [USED]
@@ -759,10 +822,14 @@ def test_each_customers_earliest_payment_not_seen_on_each_node() -> None:
     """For each node its payments were seen on, a customer's earliest own payment not seen on
     it; for any other node, its earliest own payment. By hand: payments on 2024-02-01 from
     d_01 and on 2024-02-10 from d_02 give d_01 2024-02-10 and d_02 2024-02-01."""
-    for target, owner in (("RowUnseen", "p.@owner_id"), ("OtherUnseen", "p.@user_id")):
+    for target, owner, seen_on in (
+        ("OwnerUnseen", "p.@early_owner_id", "p.@early_seen_on"),
+        ("NewUnseen", "p.@owner_id", "p.@seen_on"),
+        ("OtherUnseen", "p.@user_id", "p.@seen_on"),
+    ):
         assert accumulation_text(DEFINITION, target) == normal(
             f"""FOREACH n IN @@own_seen.get({owner}) DO
-                IF NOT p.@seen_on.contains(n) THEN
+                IF NOT {seen_on}.contains(n) THEN
                     @@first_unseen += ({owner} -> (n -> p.event_ts_ms))
                 END
             END"""
@@ -871,25 +938,26 @@ def test_a_link_start_or_a_first_use_counts_only_when_it_is_known() -> None:
     d_01 that evening has a link from 2024-03-10 21:00 that is not known (no earlier own
     payment), so it shares d_01 from 2024-01-02, t - 90 days; one that paid from d_02 on
     2024-02-01 and enrolled d_01 on 2024-03-20 has a known start there, 12 days before t."""
-    assert accumulation_text(DEFINITION, "Starts") == normal(
-        f"""UINT unseen_ms = 0, BOOL found = FALSE,
-        FOREACH (n, start_ms) IN @@link_start.get(q.id) DO
-            {_known("start_ms", "q.joined_ms", "q.id")}
-                @@known_link_start += (q.id -> (n -> start_ms)),
-                @@share_start += (q.id -> (n -> start_ms))
-            ELSE
-                @@share_start += (q.id -> (n -> t_ms - lookback_ms))
-            END
-        END,
-        FOREACH (n, start_ms) IN @@deposit_first_use.get(q.id) DO
-            {_known("start_ms", "q.joined_ms", "q.id")}
-                @@share_start += (q.id -> (n -> start_ms))
-            ELSE
-                @@share_start += (q.id -> (n -> t_ms - lookback_ms))
-            END
-        END"""
-    )
-    assert _source(select_of(DEFINITION, "Starts").statement) == "AllUsers"
+    for target, source in (("OwnerStarts", "Owners"), ("LaterStarts", "LaterUsers")):
+        assert accumulation_text(DEFINITION, target) == normal(
+            f"""UINT unseen_ms = 0, BOOL found = FALSE,
+            FOREACH (n, start_ms) IN @@link_start.get(q.id) DO
+                {_known("start_ms", "q.joined_ms", "q.id")}
+                    @@known_link_start += (q.id -> (n -> start_ms)),
+                    @@share_start += (q.id -> (n -> start_ms))
+                ELSE
+                    @@share_start += (q.id -> (n -> t_ms - lookback_ms))
+                END
+            END,
+            FOREACH (n, start_ms) IN @@deposit_first_use.get(q.id) DO
+                {_known("start_ms", "q.joined_ms", "q.id")}
+                    @@share_start += (q.id -> (n -> start_ms))
+                ELSE
+                    @@share_start += (q.id -> (n -> t_ms - lookback_ms))
+                END
+            END"""
+        )
+        assert _source(select_of(DEFINITION, target).statement) == source
     first = select_of(DEFINITION, "FirstUses")
     assert [(step.alias, step.types) for step in first.vertices] == [
         ("a", frozenset({"Account"})),
@@ -904,8 +972,9 @@ def test_a_link_start_or_a_first_use_counts_only_when_it_is_known() -> None:
             END
         END"""
     )
-    # joined_ms is read in these three tests alone.
-    assert len(re.findall(r"\w+\.joined_ms", without_comments(DEFINITION))) == 3
+    # joined_ms is read in these five tests alone: the owners' two, every other customer's two,
+    # and an account's first use.
+    assert len(re.findall(r"\w+\.joined_ms", without_comments(DEFINITION))) == 5
 
 
 # The caps.
@@ -965,10 +1034,16 @@ def test_the_newest_48_co_users_by_their_evidence_on_the_scored_accounts_nodes()
     id."""
     assert accumulation_text(DEFINITION, "ScoredOpen") == normal(
         """FOREACH n IN @@kept_links.get(@@owner_of.get(a.id)) DO
-            IF NOT @@leaf_ids.contains(n) THEN @@open_nodes += (a.id -> n) END
+            IF NOT @@leaf_ids.contains(n) THEN
+                @@open_nodes += (a.id -> n),
+                @@scored_node_ids += n
+            END
         END,
         FOREACH n IN @@kept_seen.get(a.id) DO
-            IF NOT @@leaf_ids.contains(n) THEN @@open_nodes += (a.id -> n) END
+            IF NOT @@leaf_ids.contains(n) THEN
+                @@open_nodes += (a.id -> n),
+                @@scored_node_ids += n
+            END
         END"""
     )
     assert accumulation_text(DEFINITION, "CoUserEvidence") == normal(
@@ -1276,13 +1351,13 @@ def test_no_bound_at_t_takes_t_itself_and_every_window_lies_in_the_lookback() ->
     code = normal(DEFINITION)
     assert not re.search(r"<= t_ms\b|(?<![\w.@])t_ms >(?!= lookback)(?! lookback)", code)
     assert set(re.findall(r"t_ms - (\d+)", code)) == {str(WINDOW_7D_MS), str(WINDOW_30D_MS)}
-    # Every payment read lies in the lookback, by its own window in the 15 SELECTs that step
+    # Every payment read lies in the lookback, by its own window in the 16 SELECTs that step
     # to a payment, or as one chosen by them.
-    assert code.count("p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms") == 15
+    assert code.count("p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms") == 16
 
 
 def test_a_link_end_is_read_only_by_the_visible_and_current_tests() -> None:
-    """valid_to_ms is never a value, an order or a test against t but those two: 23 visible
+    """valid_to_ms is never a value, an order or a test against t but those two: 24 visible
     tests, one per link a pattern steps along, and 3 current ones."""
     code = normal(DEFINITION)
     visible = re.findall(
@@ -1295,7 +1370,7 @@ def test_a_link_end_is_read_only_by_the_visible_and_current_tests() -> None:
         rf"t_ms - {WINDOW_30D_MS} \)",
         code,
     )
-    assert (len(visible), len(current)) == (23, 3)
+    assert (len(visible), len(current)) == (24, 3)
     assert code.count("valid_to_ms") == 2 * (len(visible) + len(current))
 
 

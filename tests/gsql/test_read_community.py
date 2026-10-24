@@ -434,14 +434,14 @@ def test_a_customers_own_payments_are_read_as_b5_reads_them() -> None:
     account, the customer's earliest, and, per node seen on its payments, its earliest payment
     not seen there; B5's own reading of a customer of a row."""
     sent = _select("FreshSent")
-    theirs = select_of(SHARED_IDENTITY, "RowSent")
+    theirs = select_of(SHARED_IDENTITY, "NewSent")
     assert _source(sent) == "Fresh" and sent.selected == "p"
     assert sent.paths == theirs.paths
     assert sent.conjuncts == theirs.conjuncts
     assert _accumulation("FreshSent") == " ".join(theirs.accumulations)
     assert _source(_select("FreshUnseen")) == "FreshSent"
     assert _accumulation("FreshUnseen") == " ".join(
-        select_of(SHARED_IDENTITY, "RowUnseen").accumulations
+        select_of(SHARED_IDENTITY, "NewUnseen").accumulations
     )
 
 
@@ -480,7 +480,7 @@ def test_a_sharing_start_counts_only_when_it_is_known_as_in_b5() -> None:
     customer that joined on 2024-03-10 and first paid from its new phone d_01 that evening
     shares d_01 from 2024-01-02, t - 90 days; one that paid from d_02 on 2024-02-01 and
     enrolled d_01 on 2024-03-20 shares d_01 from 2024-03-20."""
-    theirs = " ".join(select_of(SHARED_IDENTITY, "Starts").accumulations)
+    theirs = " ".join(select_of(SHARED_IDENTITY, "LaterStarts").accumulations)
     known_link = "@@known_link_start += ( q.id -> ( n -> start_ms ) ) , "
     assert theirs.count(known_link) == 1
     assert _accumulation("FreshStarts") == theirs.replace(known_link, "")
