@@ -1216,7 +1216,7 @@ logit above about 17.
 | Time to first flag | days from onset to the first Monday it is flagged while active |
 | Early warning | the share of mules flagged on their early-warning Monday, the one Monday with `mule_onset_ms - 7 days < t <= mule_onset_ms`, against that Monday's thresholds; also among mules whose ring link is visible that Monday. Reported as conditional on PhantomLedger's researched lead law, since tenures with no payment are not generated |
 | After activity | flags on Mondays after `mule_last_ms + 7 days`, reported apart |
-| Distinct accounts alerted | over the scored year at each budget, beside the share ever flagged, which otherwise rewards lists that churn |
+| Distinct accounts alerted | over the scored year at each budget, beside the share ever flagged, which otherwise rewards lists that churn. Counted only when every key is scored whole. When evaluation falls back to the weighted sample (see [If whole-world scoring is too slow](#if-whole-world-scoring-is-too-slow)) it is reported as not available, with the reason: a weighted sample cannot count distinct accounts. The sample takes each non-mule account-Monday on its own, so an account is in it on only a few of its 52 Mondays, and a count over those few would come out low and favour the lists that churn most |
 
 Lift is never printed beside recall at the same budget. The top of the list leads because a
 bank works its alert list from the top, and PR AUC can be carried by a few mules ranked above
