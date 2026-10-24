@@ -72,6 +72,7 @@ from .audit import CLOCK_PROBE, DEVELOPMENT, FEATURE_AUDIT, GATE_RECORD, REPORTE
 from .hops import hop_distances
 from .label_checks import IDENTIFICATION_HORIZON, LABEL_CHECKS
 from .rankings import HEADLINE, evaluation_frame, ring_links, run_metrics, scored_keys
+from .ring_reports import ring_reports
 from .store import Store, write_parquet
 from .uncertainty import Clusters, cluster_keys, percentiles, replicate_matrix, spread
 
@@ -433,6 +434,7 @@ def evaluate(
             world.cache, frame, world.identity
         ),
     }
+    tables |= ring_reports(world.cache, frame)
     if epochs is not None:
         tables["selection_epochs"] = epochs
         tables["selection_correlation"] = bias.selection_correlation(epochs)

@@ -240,6 +240,11 @@ def test_a_rotations_evaluation(
     )
     assert "hidden_ring" in set(tables["groups"]["group"])
     assert "groups" in tables["mules"].columns and "selection_correlation" not in tables
+    # The two ring reports are written with the other results of the rotation.
+    assert {"ring_endpoints", "ring_community"} <= set(tables)
+    assert (folder / "ring_endpoints.parquet").exists() and (
+        folder / "ring_community.parquet"
+    ).exists()
     written = pd.read_parquet(folder / "metrics.parquet")
     assert written["development_only"].all() and (written["rotation"] == "D1D2D3").all()
     assert written.loc[written["ranker"] == "xgboost_own", "seed"].isna().all()

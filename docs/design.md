@@ -957,9 +957,9 @@ endpoints, which about 82% of mules do not hold; for them the block would read l
 who shares nothing, and a large ring's device can become a crowd. The owner: "just ensure
 that it is a meaningful feature". So the block is checked on development worlds by the
 [feature audit](#the-feature-audit) (a column with no separation is researched or dropped),
-by the "without community" ablation, and by a report of the share of mules, by whether they
-hold a ring endpoint (a ring's device or IP, as [the feature audit](#the-feature-audit)
-defines it), whose block differs from that of a customer who shares nothing.
+by the "without community" ablation, and by [the ring reports](#the-ring-reports): the share of
+positives whose block differs from that of a customer who shares nothing, by whether they hold a
+ring node (a ring's device or IP, as [the feature audit](#the-feature-audit) defines it).
 
 **Never a library algorithm.** Connected components, Louvain and label propagation run on the
 whole graph with no as-of time, so future ring members would leak into training, and hubs and
@@ -1189,8 +1189,9 @@ what TigerGraph gives the GNN.
   counts; plan for a close result. With a ring device
   on about 18% of mules, the device and IP ablation may move little; the share of
   positives with any ring-device link (a link to a ring's device or IP, as [the feature
-  audit](#the-feature-audit) defines it) is reported beside it. Fix PhantomLedger's shortcuts
-  first, since a shortcut favours the simple models.
+  audit](#the-feature-audit) defines it) is reported beside it, as the `ring_endpoints` table of
+  [the ring reports](#the-ring-reports). Fix PhantomLedger's shortcuts first, since a shortcut
+  favours the simple models.
 
 ## Evaluation
 
@@ -1317,15 +1318,31 @@ count as one, so a node that only that customer reaches is no ring's. The develo
 build it so, from the audit sample, which holds every active true mule on each Monday it is
 scorable and active, and each mule's customer as its scored example holds it.
 
-Two reports of this design count a ring's devices and IPs and are not yet built: the share of
-positives with any ring-device link (see [Comparisons](#comparisons)), and the share of mules,
-by whether they hold a ring endpoint, whose community block differs from that of a customer who
-shares nothing (see [the community block](#read_community-b6-how-the-mule-network-formed)).
-When they are built they read a ring's devices and IPs as this paragraph defines them.
-
 The early-warning ring link of the [Metrics](#metrics) table does not use this definition. A mule
 on its early-warning Monday is not yet active, so it is not one of the active true mules that make
 ring nodes, and its link is read as that table's Early warning row says.
+
+### The ring reports
+
+Two reports count a ring's devices and IPs by [the rule above](#the-feature-audit). `mule
+evaluate` writes both for every rotation, from that rotation's test world, into its results
+folder beside the metrics and comparisons tables. They are evaluation outputs that nothing reads
+back, and neither is a feature. Their positives are the active true mules of the test world, the
+account-Mondays of [the positives](#positives-dropped-mondays-and-the-activity-period), and their
+ring nodes are read from every active true mule of the frame on each Monday.
+
+- `ring_endpoints` is one row: the positives, how many of them hold any ring node on their
+  Monday (a device or IP of their ring, as above), and that share. It is the share of positives
+  with any ring-device link that [Comparisons](#comparisons) reads beside the device and IP
+  ablation.
+- `ring_community` is one row for each of the two groups, positives that hold a ring node and
+  positives that hold none. Each row gives the positives of its group, how many have a community
+  block that differs from that of a customer who shares nothing, and that share. A customer who
+  shares nothing has one member (its owner), no shared node and no money moving between members,
+  so its members, shared nodes, density, new link share, internal amount and isolation read 1, 0,
+  0, 0, 0 and 0. A block differs when any of those six numbers differs (see [the payment
+  round](#read_community-b6-how-the-mule-network-formed)). The reference is that fixed block, not
+  a sample of real customers: matched non-mule comparisons are not built.
 
 ### Identification bias
 
@@ -1490,7 +1507,7 @@ Commands take no options: worlds, roles, dates and settings live in config.
 | `mule fetch` | fills the cache for every example the configured roles of the loaded world need: the training draw, and every scorable account of every Monday of a selection or test role |
 | `mule audit` | evaluation code, on the loaded world: reads the answer key into the evaluation store; checks PhantomLedger's gate record against the world's identity; builds and fetches a test-role fallback list if configured; runs the label checks, the clock probe and the identified share by onset month; on development worlds also the feature audit and the hub, leaf and card-spending checks; writes pass records to the evaluation store |
 | `mule train` | first reads the pass or fail of the audit records of its rotation's worlds, and nothing else of them, and stops on a failure that stops the run (see [Gates](#gates)); then trains the GNN over the prior grid and five seeds with selection after each epoch, the ablations and the two XGBoost comparisons, once each; training code reads no gate or audit record |
-| `mule evaluate` | scores the test world and writes the metrics, groups, uncertainty, missed-mule report and identification bias; marks the results development only unless every gate passed |
+| `mule evaluate` | scores the test world and writes the metrics, groups, uncertainty, missed-mule report, identification bias and the [ring reports](#the-ring-reports); marks the results development only unless every gate passed |
 | `mule score` | scores the accounts and dates set in config (`score.accounts`, `score.dates`) with the model of the best-selection seed among the full models of the run `score.run` names, a results folder such as `A-B-C` |
 | `mule bench` | measures cost on the loaded world and writes `results/bench/` |
 
