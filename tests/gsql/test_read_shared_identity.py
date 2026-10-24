@@ -215,22 +215,22 @@ DECLARATIONS = [
     "MapAccum<STRING, MapAccum<STRING, MaxAccum<UINT>>> @@last_use",
     "MapAccum<STRING, SetAccum<STRING>> @@first_use_known, @@node_senders",
     "SetAccum<STRING> @@seen_account_ids",
-    "MapAccum<STRING, MapAccum<STRING, MinAccum<UINT>>> @@link_start, @@known_link, "
-    "@@dep_first, @@share_start",
-    "MapAccum<STRING, MapAccum<STRING, MaxAccum<UINT>>> @@any_last, @@dep_last",
-    "MapAccum<STRING, SetAccum<STRING>> @@link_current, @@dep_recent",
+    "MapAccum<STRING, MapAccum<STRING, MinAccum<UINT>>> @@link_start, @@known_link_start, "
+    "@@deposit_first_use, @@share_start",
+    "MapAccum<STRING, MapAccum<STRING, MaxAccum<UINT>>> @@last_seen, @@deposit_last_use",
+    "MapAccum<STRING, SetAccum<STRING>> @@link_current, @@shares",
     "MapAccum<STRING, MinAccum<UINT>> @@first_own",
     "MapAccum<STRING, SetAccum<STRING>> @@own_seen",
     "MapAccum<STRING, MapAccum<STRING, MinAccum<UINT>>> @@first_unseen",
-    "SetAccum<STRING> @@ip_ids, @@leaf_ids, @@shared_ids",
-    "MapAccum<STRING, SetAccum<STRING>> @@node_scored, @@candidates, @@node_users",
+    "SetAccum<STRING> @@ip_ids, @@leaf_ids, @@shared_ids, @@scored_node_ids",
+    "MapAccum<STRING, SetAccum<STRING>> @@candidates, @@node_users",
     "MapAccum<STRING, MapAccum<STRING, MaxAccum<STRING>>> @@node_link_accounts",
     "MapAccum<STRING, SetAccum<STRING>> @@deposit_accounts, @@kept_links, @@kept_seen, "
-    "@@s_open, @@kept_co_users",
+    "@@open_nodes, @@kept_co_users",
     "SetAccum<STRING> @@co_user_deposit_ids",
     "MapAccum<STRING, MaxAccum<UINT>> @@last_active",
     "MapAccum<STRING, SetAccum<STRING>> @@subgraph_customers, @@subgraph_nodes, "
-    "@@co_user_accounts, @@s_accounts",
+    "@@co_user_accounts, @@edge_accounts",
     "MapAccum<STRING, SetAccum<Enrolled>> @@enrolled",
     "MapAccum<STRING, SetAccum<OwnerEnrolled>> @@owner_enrolled",
     "MapAccum<STRING, SetAccum<Seen>> @@seen",
@@ -325,7 +325,7 @@ SELECT_ORDER = [
     "Leaves",
     "LeafIds",
     "ScoredNodes",
-    "SNodes",
+    "CandidateNodes",
     "LinkedCandidates",
     "SeenCandidates",
     "RowLinks",
@@ -584,6 +584,7 @@ LINK_FACTS = f"""@@link_start += (q.id -> (n.id -> l.valid_from_ms)),
     IF l.valid_from_ms < t_ms
       AND (l.valid_to_ms == 0 OR l.valid_to_ms > t_ms - {WINDOW_30D_MS}) THEN
         @@link_current += (q.id -> n.id),
+        @@shares += (q.id -> n.id),
         @@shared_ids += n.id
     END,
     IF n.type == "IP" THEN @@ip_ids += n.id END"""
@@ -592,9 +593,10 @@ LINK_FACTS = f"""@@link_start += (q.id -> (n.id -> l.valid_from_ms)),
 @pytest.mark.parametrize(("target", "source"), [("OwnerLinks", "Owners"), ("RowLinks", "NewRows")])
 def test_a_customers_visible_links_give_its_nodes(target: str, source: str) -> None:
     """Every visible link, its start, and whether it is held in the last 30 days, the current
-    test; the links of one node are one link with the earliest start. By hand: links to d_01
-    from 2023-12-01 to 2024-01-10 and from 2024-02-20, open, start on 2023-12-01 and are
-    current; a link ended on 2024-03-01, 31 days before t, is visible but not current."""
+    test, which also shares the node; the links of one node are one link with the earliest
+    start. By hand: links to d_01 from 2023-12-01 to 2024-01-10 and from 2024-02-20, open,
+    start on 2023-12-01 and are current; a link ended on 2024-03-01, 31 days before t, is
+    visible but not current."""
     select = select_of(DEFINITION, target)
     assert _source(select.statement) == source and select.selected == "n"
     assert [(step.alias, step.types) for step in select.vertices] == [
@@ -664,14 +666,14 @@ def test_each_scored_accounts_nodes_before_the_caps_and_their_candidates() -> No
     payments; on those that are no leaf, the candidates are the customers of the crowd rule,
     read_hubs' measure, whose deposit account's payment may be one to itself."""
     assert accumulation_text(DEFINITION, "ScoredNodes") == normal(
-        """FOREACH (n, last_ms) IN @@last_use.get(a.id) DO @@node_scored += (n -> a.id) END,
+        """FOREACH (n, last_ms) IN @@last_use.get(a.id) DO @@scored_node_ids += n END,
         FOREACH (n, start_ms) IN @@link_start.get(@@owner_of.get(a.id)) DO
-            @@node_scored += (n -> a.id)
+            @@scored_node_ids += n
         END"""
     )
-    assert select_of(DEFINITION, "SNodes").conjuncts == {
+    assert select_of(DEFINITION, "CandidateNodes").conjuncts == {
         "NOT d.@leaf",
-        "@@node_scored.containsKey ( d.id )",
+        "@@scored_node_ids.contains ( d.id )",
     }
     linked = select_of(DEFINITION, "LinkedCandidates")
     assert [edge.types for edge in linked.edges] == [LINKED_BY]
@@ -680,7 +682,7 @@ def test_each_scored_accounts_nodes_before_the_caps_and_their_candidates() -> No
     assert _shape(seen)[1] == _shape(select_of(HUBS, "Seen"))[1]
     assert seen.conjuncts == select_of(HUBS, "Seen").conjuncts | {"NOT d.@leaf"}
     for target in ("LinkedCandidates", "SeenCandidates"):
-        assert _source(select_of(DEFINITION, target).statement) == "SNodes"
+        assert _source(select_of(DEFINITION, target).statement) == "CandidateNodes"
         assert accumulation_text(DEFINITION, target) == "@@candidates += ( d.id -> q.id )"
 
 
@@ -732,12 +734,12 @@ def test_a_customers_own_payments_but_self_payments_with_the_nodes_each_was_seen
     assert accumulation_text(DEFINITION, "RowSeen") == normal(
         f"""p.@seen_on += n.id,
         @@own_seen += (p.@owner_id -> n.id),
-        @@any_last += (p.@owner_id -> (n.id -> p.event_ts_ms)),
+        @@last_seen += (p.@owner_id -> (n.id -> p.event_ts_ms)),
         IF p.@deposit_sender THEN
-            @@dep_first += (p.@owner_id -> (n.id -> p.event_ts_ms)),
-            @@dep_last += (p.@owner_id -> (n.id -> p.event_ts_ms)),
+            @@deposit_first_use += (p.@owner_id -> (n.id -> p.event_ts_ms)),
+            @@deposit_last_use += (p.@owner_id -> (n.id -> p.event_ts_ms)),
             IF p.event_ts_ms >= t_ms - {WINDOW_30D_MS} THEN
-                @@dep_recent += (p.@owner_id -> n.id),
+                @@shares += (p.@owner_id -> n.id),
                 @@shared_ids += n.id
             END
         END,
@@ -785,7 +787,8 @@ def test_an_open_nodes_users_through_links_and_payments_but_self_payments() -> N
         f"""@@link_start += (q.id -> (d.id -> l.valid_from_ms)),
         IF l.valid_from_ms < t_ms
           AND (l.valid_to_ms == 0 OR l.valid_to_ms > t_ms - {WINDOW_30D_MS}) THEN
-            @@link_current += (q.id -> d.id)
+            @@link_current += (q.id -> d.id),
+            @@shares += (q.id -> d.id)
         END,
         @@node_users += (d.id -> q.id)"""
     )
@@ -801,12 +804,12 @@ def test_an_open_nodes_users_through_links_and_payments_but_self_payments() -> N
         "b.id != p.@receiver_id",
     }
     assert accumulation_text(DEFINITION, "SeenUsers") == normal(
-        f"""@@any_last += (q.id -> (d.id -> p.event_ts_ms)),
+        f"""@@last_seen += (q.id -> (d.id -> p.event_ts_ms)),
         IF b.account_type == "deposit" THEN
-            @@dep_first += (q.id -> (d.id -> p.event_ts_ms)),
-            @@dep_last += (q.id -> (d.id -> p.event_ts_ms)),
+            @@deposit_first_use += (q.id -> (d.id -> p.event_ts_ms)),
+            @@deposit_last_use += (q.id -> (d.id -> p.event_ts_ms)),
             @@node_users += (d.id -> q.id),
-            IF p.event_ts_ms >= t_ms - {WINDOW_30D_MS} THEN @@dep_recent += (q.id -> d.id) END
+            IF p.event_ts_ms >= t_ms - {WINDOW_30D_MS} THEN @@shares += (q.id -> d.id) END
         END"""
     )
 
@@ -824,7 +827,7 @@ def test_an_open_nodes_activity_and_the_accounts_seen_on_a_scored_accounts_node(
             d.@seen_accounts += b.id,
             d.@payments_seen_30d += 1
         END,
-        IF NOT b.@expanding AND @@node_scored.containsKey(d.id) THEN
+        IF NOT b.@expanding AND @@scored_node_ids.contains(d.id) THEN
             @@uses += (b.id -> (d.id -> 1)),
             @@first_use += (b.id -> (d.id -> p.event_ts_ms)),
             @@last_use += (b.id -> (d.id -> p.event_ts_ms)),
@@ -833,7 +836,7 @@ def test_an_open_nodes_activity_and_the_accounts_seen_on_a_scored_accounts_node(
         END"""
     )
     linked = select_of(DEFINITION, "LinkedAccounts")
-    assert _source(linked.statement) == "SNodes"
+    assert _source(linked.statement) == "CandidateNodes"
     assert [edge.types for edge in linked.edges] == [
         LINKED_BY,
         frozenset({"Party_Owns_Account"}),
@@ -872,13 +875,13 @@ def test_a_link_start_or_a_first_use_counts_only_when_it_is_known() -> None:
         f"""UINT unseen_ms = 0, BOOL found = FALSE,
         FOREACH (n, start_ms) IN @@link_start.get(q.id) DO
             {_known("start_ms", "q.joined_ms", "q.id")}
-                @@known_link += (q.id -> (n -> start_ms)),
+                @@known_link_start += (q.id -> (n -> start_ms)),
                 @@share_start += (q.id -> (n -> start_ms))
             ELSE
                 @@share_start += (q.id -> (n -> t_ms - lookback_ms))
             END
         END,
-        FOREACH (n, start_ms) IN @@dep_first.get(q.id) DO
+        FOREACH (n, start_ms) IN @@deposit_first_use.get(q.id) DO
             {_known("start_ms", "q.joined_ms", "q.id")}
                 @@share_start += (q.id -> (n -> start_ms))
             ELSE
@@ -917,12 +920,12 @@ def test_each_customer_keeps_its_newest_8_links_of_each_kind() -> None:
         """UINT evidence = 0,
         FOREACH (n, start_ms) IN @@link_start.get(q.id) DO
             evidence = 0,
-            IF @@known_link.get(q.id).containsKey(n) THEN
-                evidence = @@known_link.get(q.id).get(n)
+            IF @@known_link_start.get(q.id).containsKey(n) THEN
+                evidence = @@known_link_start.get(q.id).get(n)
             END,
-            IF @@any_last.get(q.id).containsKey(n)
-              AND @@any_last.get(q.id).get(n) > evidence THEN
-                evidence = @@any_last.get(q.id).get(n)
+            IF @@last_seen.get(q.id).containsKey(n)
+              AND @@last_seen.get(q.id).get(n) > evidence THEN
+                evidence = @@last_seen.get(q.id).get(n)
             END,
             IF @@ip_ids.contains(n) THEN
                 q.@kept_ips += Ranked(evidence, n)
@@ -962,25 +965,25 @@ def test_the_newest_48_co_users_by_their_evidence_on_the_scored_accounts_nodes()
     id."""
     assert accumulation_text(DEFINITION, "ScoredOpen") == normal(
         """FOREACH n IN @@kept_links.get(@@owner_of.get(a.id)) DO
-            IF NOT @@leaf_ids.contains(n) THEN @@s_open += (a.id -> n) END
+            IF NOT @@leaf_ids.contains(n) THEN @@open_nodes += (a.id -> n) END
         END,
         FOREACH n IN @@kept_seen.get(a.id) DO
-            IF NOT @@leaf_ids.contains(n) THEN @@s_open += (a.id -> n) END
+            IF NOT @@leaf_ids.contains(n) THEN @@open_nodes += (a.id -> n) END
         END"""
     )
     assert accumulation_text(DEFINITION, "CoUserEvidence") == normal(
         """UINT evidence = 0,
-        FOREACH n IN @@s_open.get(a.id) DO
+        FOREACH n IN @@open_nodes.get(a.id) DO
             FOREACH c IN @@candidates.get(n) DO
                 IF c != @@owner_of.get(a.id) THEN
                     evidence = t_ms - lookback_ms,
-                    IF @@known_link.get(c).containsKey(n)
-                      AND @@known_link.get(c).get(n) > evidence THEN
-                        evidence = @@known_link.get(c).get(n)
+                    IF @@known_link_start.get(c).containsKey(n)
+                      AND @@known_link_start.get(c).get(n) > evidence THEN
+                        evidence = @@known_link_start.get(c).get(n)
                     END,
-                    IF @@dep_last.get(c).containsKey(n)
-                      AND @@dep_last.get(c).get(n) > evidence THEN
-                        evidence = @@dep_last.get(c).get(n)
+                    IF @@deposit_last_use.get(c).containsKey(n)
+                      AND @@deposit_last_use.get(c).get(n) > evidence THEN
+                        evidence = @@deposit_last_use.get(c).get(n)
                     END,
                     a.@candidate_evidence += (c -> evidence)
                 END
@@ -1017,7 +1020,7 @@ def test_each_co_user_brings_the_deposit_account_seen_last_on_the_nodes() -> Non
             best = "", best_seen = 0, best_active = 0,
             FOREACH b IN @@deposit_accounts.get(c) DO
                 seen_ms = 0, active_ms = 0,
-                FOREACH n IN @@s_open.get(a.id) DO
+                FOREACH n IN @@open_nodes.get(a.id) DO
                     IF @@last_use.get(b).containsKey(n) AND @@last_use.get(b).get(n) > seen_ms THEN
                         seen_ms = @@last_use.get(b).get(n)
                     END
@@ -1056,7 +1059,7 @@ def test_each_subgraphs_customers_nodes_and_accounts_that_may_carry_an_edge() ->
             END
         END,
         FOREACH c IN @@kept_co_users.get(a.id) DO
-            FOREACH n IN @@s_open.get(a.id) DO
+            FOREACH n IN @@open_nodes.get(a.id) DO
                 IF @@link_start.get(c).containsKey(n) THEN
                     @@subgraph_customers += (a.id -> c)
                 END
@@ -1077,10 +1080,10 @@ def test_each_subgraphs_customers_nodes_and_accounts_that_may_carry_an_edge() ->
     )
     assert accumulation_text(DEFINITION, "ScoredAccounts") == normal(
         """FOREACH b IN @@subgraph_accounts.get(a.id) DO
-            IF b == a.id OR NOT @@hub_ids.contains(b) THEN @@s_accounts += (a.id -> b) END
+            IF b == a.id OR NOT @@hub_ids.contains(b) THEN @@edge_accounts += (a.id -> b) END
         END,
         FOREACH b IN @@co_user_accounts.get(a.id) DO
-            IF b == a.id OR NOT @@hub_ids.contains(b) THEN @@s_accounts += (a.id -> b) END
+            IF b == a.id OR NOT @@hub_ids.contains(b) THEN @@edge_accounts += (a.id -> b) END
         END"""
     )
     assert accumulation_text(DEFINITION, "Printed") == normal(
@@ -1094,12 +1097,12 @@ def test_each_subgraphs_customers_nodes_and_accounts_that_may_carry_an_edge() ->
 
 def _link(customer: str) -> str:
     """The fields of a customer's link to node n, into the edge's locals."""
-    return f"""start_present = @@known_link.get({customer}).containsKey(n),
+    return f"""start_present = @@known_link_start.get({customer}).containsKey(n),
     start_ms = 0,
-    IF start_present THEN start_ms = t_ms - @@known_link.get({customer}).get(n) END,
-    seen_present = @@any_last.get({customer}).containsKey(n),
+    IF start_present THEN start_ms = t_ms - @@known_link_start.get({customer}).get(n) END,
+    seen_present = @@last_seen.get({customer}).containsKey(n),
     seen_ms = 0,
-    IF seen_present THEN seen_ms = t_ms - @@any_last.get({customer}).get(n) END,"""
+    IF seen_present THEN seen_ms = t_ms - @@last_seen.get({customer}).get(n) END,"""
 
 
 def test_enrolment_edges_from_c_s_and_around_the_scored_accounts_open_nodes() -> None:
@@ -1116,7 +1119,7 @@ def test_enrolment_edges_from_c_s_and_around_the_scored_accounts_open_nodes() ->
             @@enrolled += (a.id -> Enrolled(owner, n, start_present, start_ms, seen_present,
               seen_ms))
         END,
-        FOREACH n IN @@s_open.get(a.id) DO
+        FOREACH n IN @@open_nodes.get(a.id) DO
             FOREACH c IN @@subgraph_customers.get(a.id) DO
                 IF @@link_start.get(c).containsKey(n) THEN
                     {_link("c")}
@@ -1137,7 +1140,7 @@ def test_owner_enrolment_edges_copy_the_customers_link_onto_its_accounts() -> No
         f"""STRING owner = @@owner_of.get(a.id), STRING customer = "", BOOL start_present = FALSE,
         UINT start_ms = 0, BOOL seen_present = FALSE, UINT seen_ms = 0,
         FOREACH b IN @@customer_accounts.get(a.id) DO
-            IF @@s_accounts.get(a.id).contains(b) THEN
+            IF @@edge_accounts.get(a.id).contains(b) THEN
                 FOREACH n IN @@kept_links.get(owner) DO
                     {_link("owner")}
                     @@owner_enrolled += (a.id -> OwnerEnrolled(b, n, start_present, start_ms,
@@ -1153,9 +1156,9 @@ def test_owner_enrolment_edges_copy_the_customers_link_onto_its_accounts() -> No
                   seen_present, seen_ms))
             END
         END,
-        FOREACH n IN @@s_open.get(a.id) DO
+        FOREACH n IN @@open_nodes.get(a.id) DO
             FOREACH (b, linked) IN @@node_link_accounts.get(n) DO
-                IF @@s_accounts.get(a.id).contains(b) THEN
+                IF @@edge_accounts.get(a.id).contains(b) THEN
                     {_link("linked")}
                     @@owner_enrolled += (a.id -> OwnerEnrolled(b, n, start_present, start_ms,
                       seen_present, seen_ms))
@@ -1186,36 +1189,15 @@ def test_seen_edges_from_the_expanded_accounts_and_around_the_open_nodes() -> No
         FOREACH e IN @@expanded_of.get(a.id) DO
             FOREACH n IN @@kept_seen.get(e) DO {_seen("e")} END
         END,
-        FOREACH n IN @@s_open.get(a.id) DO
+        FOREACH n IN @@open_nodes.get(a.id) DO
             FOREACH b IN @@node_senders.get(n) DO
-                IF @@s_accounts.get(a.id).contains(b) THEN {_seen("b")} END
+                IF @@edge_accounts.get(a.id).contains(b) THEN {_seen("b")} END
             END
         END"""
     )
 
 
 # The rows.
-
-
-def _pair(nodes: str) -> str:
-    return f"""FOREACH n IN {nodes} DO
-        IF NOT @@leaf_ids.contains(n) THEN
-            FOREACH c IN @@node_users.get(n) DO
-                IF c != q.id AND (@@link_current.get(c).contains(n)
-                  OR @@dep_recent.get(c).contains(n)) THEN
-                    own_ms = @@share_start.get(q.id).get(n),
-                    other_ms = @@share_start.get(c).get(n),
-                    q.@pair_start += (c -> CASE WHEN own_ms > other_ms THEN own_ms
-                      ELSE other_ms END),
-                    IF @@ip_ids.contains(n) THEN
-                        q.@ip_co_users += c
-                    ELSE
-                        q.@device_co_users += c
-                    END
-                END
-            END
-        END
-    END"""
 
 
 def test_a_customers_co_users_share_a_node_with_it_that_is_no_leaf() -> None:
@@ -1226,15 +1208,30 @@ def test_a_customers_co_users_share_a_node_with_it_that_is_no_leaf() -> None:
     started on both on 2024-03-25: one co-user, from 2024-03-25 on d_01 and on i_01, so new
     over 30 days, sharing a device and an IP."""
     assert accumulation_text(DEFINITION, "Pairs") == normal(
-        f"""UINT own_ms = 0, UINT other_ms = 0,
-        {_pair("@@link_current.get(q.id)")},
-        {_pair("@@dep_recent.get(q.id)")}"""
+        """UINT own_ms = 0, UINT other_ms = 0,
+        FOREACH n IN @@shares.get(q.id) DO
+            IF NOT @@leaf_ids.contains(n) THEN
+                FOREACH c IN @@node_users.get(n) DO
+                    IF c != q.id AND @@shares.get(c).contains(n) THEN
+                        own_ms = @@share_start.get(q.id).get(n),
+                        other_ms = @@share_start.get(c).get(n),
+                        q.@pair_start += (c -> CASE WHEN own_ms > other_ms THEN own_ms
+                          ELSE other_ms END),
+                        IF @@ip_ids.contains(n) THEN
+                            q.@ip_co_users += c
+                        ELSE
+                            q.@device_co_users += c
+                        END
+                    END
+                END
+            END
+        END"""
     )
     assert accumulation_text(DEFINITION, "CustomerRows") == normal(
         f"""FOREACH n IN @@link_current.get(q.id) DO
             IF @@ip_ids.contains(n) THEN q.@ips_30d += 1 ELSE q.@devices_30d += 1 END
         END,
-        FOREACH (n, start_ms) IN @@known_link.get(q.id) DO
+        FOREACH (n, start_ms) IN @@known_link_start.get(q.id) DO
             IF start_ms >= t_ms - {WINDOW_30D_MS} THEN
                 IF @@ip_ids.contains(n) THEN q.@new_ips_30d += 1 ELSE q.@new_devices_30d += 1 END
             END
@@ -1257,9 +1254,7 @@ def test_a_nodes_row_counts_its_sharers_and_its_new_customers() -> None:
     assert _source(rows.statement) == "NodesListed" and rows.conjuncts == {"NOT d.@leaf"}
     assert accumulation_text(DEFINITION, "NodeRows") == normal(
         f"""FOREACH c IN @@node_users.get(d.id) DO
-            IF @@link_current.get(c).contains(d.id) OR @@dep_recent.get(c).contains(d.id) THEN
-                d.@customers_30d += 1
-            END,
+            IF @@shares.get(c).contains(d.id) THEN d.@customers_30d += 1 END,
             IF @@share_start.get(c).get(d.id) >= t_ms - {WINDOW_7D_MS} THEN
                 d.@new_customers_7d += 1
             END,

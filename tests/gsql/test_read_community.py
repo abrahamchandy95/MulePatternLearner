@@ -171,7 +171,7 @@ DECLARATIONS = [
     "OrAccum @capped",
     "SumAccum<DOUBLE> @density, @new_link_share_30d, @isolation",
     "MapAccum<STRING, MapAccum<STRING, MinAccum<UINT>>> @@link_start, @@first_unseen, "
-    "@@dep_first, @@share_start",
+    "@@deposit_first_use, @@share_start",
     "MapAccum<STRING, MinAccum<UINT>> @@first_own",
     "MapAccum<STRING, SetAccum<STRING>> @@own_seen, @@shares, @@sharers",
     "SetAccum<STRING> @@leaf_ids",
@@ -472,7 +472,7 @@ def test_the_nodes_seen_on_them_and_those_a_deposit_account_shares() -> None:
         f"""p.@seen_on += n.id,
         @@own_seen += (p.@owner_id -> n.id),
         IF p.@deposit_sender THEN
-            @@dep_first += (p.@owner_id -> (n.id -> p.event_ts_ms)),
+            @@deposit_first_use += (p.@owner_id -> (n.id -> p.event_ts_ms)),
             IF p.event_ts_ms >= t_ms - {WINDOW_30D_MS} THEN
                 @@shares += (p.@owner_id -> n.id),
                 @@sharers += (n.id -> p.@owner_id)
@@ -490,7 +490,7 @@ def test_a_sharing_start_counts_only_when_it_is_known_as_in_b5() -> None:
     shares d_01 from 2024-01-02, t - 90 days; one that paid from d_02 on 2024-02-01 and
     enrolled d_01 on 2024-03-20 shares d_01 from 2024-03-20."""
     theirs = " ".join(select_of(SHARED_IDENTITY, "Starts").accumulations)
-    known_link = "@@known_link += ( q.id -> ( n -> start_ms ) ) , "
+    known_link = "@@known_link_start += ( q.id -> ( n -> start_ms ) ) , "
     assert theirs.count(known_link) == 1
     assert _accumulation("FreshStarts") == theirs.replace(known_link, "")
     assert _source(_select("FreshStarts")) == "Fresh"

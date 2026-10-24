@@ -101,7 +101,7 @@ CREATE OR REPLACE QUERY read_community(
        not seen on the node, its first use from a deposit account, and its sharing start. Per
        customer: its earliest own payment in the lookback, the nodes its own payments were
        seen on, and the nodes it shares; per node, the customers sharing it; the leaves. */
-    MapAccum<STRING, MapAccum<STRING, MinAccum<UINT>>> @@link_start, @@first_unseen, @@dep_first,
+    MapAccum<STRING, MapAccum<STRING, MinAccum<UINT>>> @@link_start, @@first_unseen, @@deposit_first_use,
       @@share_start;
     MapAccum<STRING, MinAccum<UINT>> @@first_own;
     MapAccum<STRING, SetAccum<STRING>> @@own_seen, @@shares, @@sharers;
@@ -205,7 +205,7 @@ CREATE OR REPLACE QUERY read_community(
             p.@seen_on += n.id,
             @@own_seen += (p.@owner_id -> n.id),
             IF p.@deposit_sender THEN
-                @@dep_first += (p.@owner_id -> (n.id -> p.event_ts_ms)),
+                @@deposit_first_use += (p.@owner_id -> (n.id -> p.event_ts_ms)),
                 IF p.event_ts_ms >= t_ms - 2592000000 THEN
                     @@shares += (p.@owner_id -> n.id),
                     @@sharers += (n.id -> p.@owner_id)
@@ -240,7 +240,7 @@ CREATE OR REPLACE QUERY read_community(
                     @@share_start += (q.id -> (n -> t_ms - lookback_ms))
                 END
             END,
-            FOREACH (n, start_ms) IN @@dep_first.get(q.id) DO
+            FOREACH (n, start_ms) IN @@deposit_first_use.get(q.id) DO
                 IF @@own_seen.get(q.id).contains(n) THEN
                     found = @@first_unseen.get(q.id).containsKey(n),
                     unseen_ms = @@first_unseen.get(q.id).get(n)
@@ -497,7 +497,7 @@ CREATE OR REPLACE QUERY read_community(
         IF payments > 0 THEN s.@isolation += internal * 1.0 / payments END,
         s.@member_payments_30d += payments;
 
-    PRINT "ok" AS status, "read_community-9c2ad9e04eda" AS version;
+    PRINT "ok" AS status, "read_community-ab8a2ab9f96f" AS version;
     PRINT Blocks[Blocks.id AS account_id, Blocks.@members AS members,
       Blocks.@capped AS capped, Blocks.@shared_nodes AS shared_nodes,
       Blocks.@density AS density, Blocks.@new_link_share_30d AS new_link_share_30d,
