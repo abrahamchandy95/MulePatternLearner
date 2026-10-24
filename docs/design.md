@@ -1613,6 +1613,37 @@ PhantomLedger steps are not all in.
 |---|---|---|---|
 | `training.reuse_built_examples` | True: the selection world's and the test world's examples are built once and kept in memory, and every epoch of selection and every run of the test world replays them | False: every pass builds them anew | An example costs about 0.022 s to build and 0.001 s to score, so rebuilding it on every pass was almost all of the selection cost. Kept in memory they fit only because the worlds are sampled (see below); the full design's whole worlds do not. The training world's batches were already built once and shared by every seed, prior, epoch and ablation of a rotation. A test shows that kept batches equal freshly built ones and that training gives the same result |
 | `transport.concurrent_requests` | 2: the requests of one query run two at a time, a query's accounts cut into at least two requests when it has two or more accounts | 1: one request at a time | The benchmark of world T fetched B4's accounts 3.4 times as fast at 2 requests at once, and B1 to B3, B5 and B6 1.3 to 1.6 times as fast, which is 1.5 times as fast for a sparse account-Monday (3.04 s at 1, 1.99 s at 2). Four gave no more for B4. The requests of a round go out in the order of their accounts and their answers are kept in that order, so the cache and the counts are those of one at a time; each request keeps its own retries, whose backoff the threads share |
+| `data.scoring` and `data.fallback_weight` | "fallback" and 6,000: the selection world is every identified active mule account-Monday and a keyed sample of the other non-mule account-Mondays, each standing for 6,000, and the test world is scored on [the fallback list](#if-whole-world-scoring-is-too-slow) at the same weight. About 410 non-mule account-Mondays a world, 8 a Monday. The bound `FALLBACK_WEIGHTS` is raised from 1,000 to 100,000 | "whole" and 10: every scorable account on every Monday, and where a fallback is needed, no sampled account standing for more than about 10 | A 30,000-person world has 47,326 scorable accounts a Monday and 2.46 million account-Mondays a year, which is about 57 days of fetching at 2 s each. The fallback of the design is a sample at weight 10, 246,000 account-Mondays, which is 5.7 days a world. Nothing smaller than a weight in the thousands fits a run of hours. Under the fallback the selection world reads `pu_label` alone and the answer key never chooses a sample, as before |
+| `data.min_unlabelled` and `data.per_positive` | 8 and 1: a training Monday draws the larger of 8 and one unlabelled account for each positive, the lowest keyed hashes of its pool, so the draw is fixed and seeded, and every identified active mule account-Monday is kept. About 460 unlabelled account-Mondays beside the positives | 500 and 15: at least 500, and 15 for each positive | At 15 for each positive, and about 300 positive account-Mondays in a world, the training world alone is more than 4,500 account-Mondays, 2.5 hours of fetching. Each unlabelled example stands for its Monday's pool over the draw, about 5,900, so the weights still make the draw stand for the Monday's population |
+| `audit.nonmule_sample` | 300 | 200,000 | The audit's non-mule account-Mondays are the lowest keyed hashes of the year and a fallback sample is every account-Monday under a hash threshold, so while the audit asks for fewer than a fallback sample holds, they are all in it and the audit fetches none a second time. The selection and test worlds hold about 410 a world, and 300 lies inside that by four standard deviations (a test pins it). The training world's draw takes the lowest of each Monday and not of the year, so about a quarter of the audit's sample is fetched again there |
+
+What the weight of 6,000 does to a result. The top 1% and the top 5% of a Monday are 473 and 2,366 of its 47,326 accounts, and one sampled ordinary account weighs 6,000, so on a Monday both budgets end inside the first sampled account. Each reads the share of positives that score above the best of that Monday's sampled ordinary accounts, about 8 of them: the estimate is unbiased, and the two budgets read the same number. It is coarse, and noisy with few positives, and a PR AUC over a sample this thin is fragile, which is why the design bounds a sampled account's weight at about 10. Selection by it picks an epoch by a rough score, and every result is development only.
+
+### The projection
+
+The run is, for each of D1, D2 and D3 in turn, PhantomLedger's generation, `mule-load push`, `mule prepare`, `mule fetch`, `mule audit` and `mule-load clear`, then `mule train` and `mule evaluate`, on the machine the benchmark ran on, this laptop's CPU. Its seconds are projected from the rates of the 24 October 2026 benchmark of world T (5,000 people; `tests/test_proof_of_concept.py` holds every rate and prints this table with `pytest -s`), scaled to 30,000 people, which is 6 times:
+
+- generation 40.4 s at 455 days, 1.6 times that for the 730 simulated days; the push 529 s; `mule prepare` 113 s; a command's readiness check 34 s, of which `read_world` 15.6 s; `read_hubs` 1.6 s for each Monday; the clear 60 s and the first wipe 100 s;
+- the fetch of a sparse account-Monday 3.04 s one request at a time, and 1.99 s two at a time, from the benchmark's accounts a second for each query at 1 and 2 requests at once;
+- allowances for what the benchmark did not time: 60 s for the answer key and the labels, 300 s of computing in each `mule audit`, and 900 s for `mule train` and `mule evaluate` together.
+
+Every world has `mules` true-mule account-Mondays that `mule audit` fetches and the test world's fallback list holds. The benchmark never read the truth, so this is the design's expectation and not a measurement: about 700 where the calibration holds (75 identified customers in a 30,000-person world, about half of the true mules, 3.9 active Mondays each and an early-warning Monday), 900 as a high case, and 200 at the rate of world T, whose 14 mules in 5,000 people are uncalibrated.
+
+| Stage, in hours | World T's rate (200 mules a world) | Expected (700) | High (900) |
+|---|---|---|---|
+| generate three worlds | 0.32 | 0.32 | 0.32 |
+| `mule-load push` of three worlds | 2.65 | 2.65 | 2.65 |
+| wipe and clear | 0.08 | 0.08 | 0.08 |
+| `mule prepare` of three worlds | 0.56 | 0.56 | 0.56 |
+| `mule fetch`: readiness checks | 0.09 | 0.09 | 0.09 |
+| `mule fetch`: `read_hubs` for 156 Mondays | 0.42 | 0.42 | 0.42 |
+| `mule fetch` and the audit's fetch: accounts (1,953, 3,453 or 4,053) | 1.08 | 1.91 | 2.25 |
+| `mule audit`: readiness checks and answer keys | 0.14 | 0.14 | 0.14 |
+| `mule audit`: computing | 0.25 | 0.25 | 0.25 |
+| `mule train` and `mule evaluate` | 0.25 | 0.25 | 0.25 |
+| **Total** | **5.85** | **6.68** | **7.01** |
+
+Not in it, and why the totals are not padded further: the benchmark never timed a mule's account-Monday (world T had one identified mule), and a mule's subgraph is likely larger than a sparse sample's, so that at 1.5 times the cost of a sparse one the expected case is 0.58 hours longer (a test prices it); generating the next world while the last one loads would save up to 0.3 hours; and the training and scoring rates are this laptop's CPU's. The push is 40% of the expected total, and the stages that no sampling shortens come to 4.8 hours.
 
 ## Package layout
 

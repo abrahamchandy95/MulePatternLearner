@@ -41,7 +41,10 @@ PEOPLE = range(1, 1_000_000_001)
 PER_POSITIVE = range(1, 1_001)
 MIN_UNLABELLED = range(1, 10_000_001)
 MIN_IDENTIFIED = range(1, 1_000_001)
-FALLBACK_WEIGHTS = range(1, 1_001)
+# Proof of concept (25 October 2026, docs/design.md, "Proof-of-concept settings (25 October
+# 2026)"): a sampled account may stand for up to 100,000 account-Mondays. The full design's bound
+# is 1,000, and its weight about 10.
+FALLBACK_WEIGHTS = range(1, 100_001)
 # blake2b takes a key of at most 64 bytes.
 DRAW_KEY_BYTES = range(1, 65)
 # The ranges of the model and training settings.
@@ -373,19 +376,28 @@ SCORING_MODES = ("whole", "fallback")
 @dataclass(frozen=True)
 class DataConfig:
     """The training examples, the keyed draws and the scoring mode (docs/design.md,
-    "Worlds, examples and weights")."""
+    "Worlds, examples and weights"). The values marked proof of concept are those of
+    docs/design.md, "Proof-of-concept settings (25 October 2026)", each with the full design's
+    value beside it; FULL_DESIGN_CONFIG holds the full design's."""
 
-    # Unlabelled accounts drawn on a training Monday per positive, and at least this many.
-    per_positive: int = 15
-    min_unlabelled: int = 500
+    # Unlabelled accounts drawn on a training Monday per positive, and at least this many. Proof of
+    # concept: 1 per positive and at least 8, the training world's fixed, seeded sample of
+    # non-mule account-Mondays beside every identified active mule's; the full design's values are
+    # 15 and 500.
+    per_positive: int = 1
+    min_unlabelled: int = 8
     # The key of the blake2b draws, pinned by a golden test.
     draw_key: bytes = b"mule-draw-v1\x00\x00\x00\x00"
     # mule prepare refuses a selection world with fewer identified active mules.
     min_selection_identified: int = 5
-    scoring: str = "whole"
-    # Under the fallback, each sampled account stands for this many: its inclusion chance
-    # is the inverse.
-    fallback_weight: int = 10
+    # Proof of concept: "fallback", so the selection world is its identified mules and a sample of
+    # the rest and the test world is scored on the fallback list; the full design's value is
+    # "whole".
+    scoring: str = "fallback"
+    # Under the fallback, each sampled account stands for this many: its inclusion chance is the
+    # inverse. Proof of concept: 6,000, about 410 non-mule account-Mondays in a world of 30,000
+    # people; the full design's value is 10.
+    fallback_weight: int = 6_000
 
     def __post_init__(self) -> None:
         _integer("data.per_positive", self.per_positive, PER_POSITIVE)
@@ -500,8 +512,11 @@ class AuditConfig:
     # Ring-resampled replicates, and the level of every interval.
     replicates: int = 1000
     interval: float = 0.95
-    # Non-mule account-Mondays the clock probe samples.
-    nonmule_sample: int = 200_000
+    # Non-mule account-Mondays the clock probe samples. Proof of concept (docs/design.md,
+    # "Proof-of-concept settings (25 October 2026)"): 300, which the fallback samples of the
+    # selection and test worlds hold, so that the audit fetches no non-mule account-Monday they
+    # did not; the full design's value is 200,000.
+    nonmule_sample: int = 300
     # The level of each onset month's binomial band in the identification horizon check: a
     # 1% chance over the 12 months that a month falls outside by chance (Bonferroni).
     horizon_level: float = 1 - 0.01 / 12
@@ -653,5 +668,13 @@ DEFAULT_CONFIG = RunConfig()
 FULL_DESIGN_CONFIG = replace(
     DEFAULT_CONFIG,
     transport=replace(DEFAULT_CONFIG.transport, concurrent_requests=1),
+    data=replace(
+        DEFAULT_CONFIG.data,
+        per_positive=15,
+        min_unlabelled=500,
+        scoring="whole",
+        fallback_weight=10,
+    ),
     training=replace(DEFAULT_CONFIG.training, reuse_built_examples=False),
+    audit=replace(DEFAULT_CONFIG.audit, nonmule_sample=200_000),
 )

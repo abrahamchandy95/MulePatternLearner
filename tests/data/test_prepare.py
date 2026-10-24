@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from mule_pattern_learner.config import DEFAULT_CONFIG, RunConfig
+from mule_pattern_learner.config import DEFAULT_CONFIG, FULL_DESIGN_CONFIG, RunConfig
 from mule_pattern_learner.data import prepare as prepare_module
 from mule_pattern_learner.data.examples import (
     POSITIVE,
@@ -38,8 +38,10 @@ Records = Callable[[str, str], Path]
 # Selection needs 3 identified active mules here: the calendar world has a_long, a_short and
 # a_edge.
 CONFIG = replace(
-    DEFAULT_CONFIG,
-    data=replace(DEFAULT_CONFIG.data, per_positive=2, min_unlabelled=3, min_selection_identified=3),
+    FULL_DESIGN_CONFIG,
+    data=replace(
+        FULL_DESIGN_CONFIG.data, per_positive=2, min_unlabelled=3, min_selection_identified=3
+    ),
 )
 W = 7 * DAY_MS
 

@@ -35,7 +35,9 @@ def _day(ms: int) -> datetime:
     return datetime.fromtimestamp(ms / 1000, UTC)
 
 
-def test_the_defaults_are_the_designs_settings() -> None:
+def test_the_defaults_are_the_designs_settings_but_the_proof_of_concepts() -> None:
+    """The full design's value of every setting the proof of concept changes is in
+    FULL_DESIGN_CONFIG, which this test reads them from."""
     assert RunConfig() == DEFAULT_CONFIG
     calendar = DEFAULT_CONFIG.calendar
     assert calendar.export_start == date(2024, 1, 1)
@@ -56,7 +58,7 @@ def test_the_defaults_are_the_designs_settings() -> None:
     assert identity == (8, 48, 64)
     assert (subgraph.hub_threshold, subgraph.crowd_threshold) == (200, 8)
     assert (subgraph.new_windows, subgraph.sharing_days) == ((7, 30), 30)
-    data = DEFAULT_CONFIG.data
+    data = FULL_DESIGN_CONFIG.data
     assert (data.per_positive, data.min_unlabelled, data.min_selection_identified) == (15, 500, 5)
     assert data.draw_key == b"mule-draw-v1\x00\x00\x00\x00" and len(data.draw_key) == 16
     assert (data.scoring, data.fallback_weight) == ("whole", 10)
@@ -74,7 +76,10 @@ def test_the_defaults_are_the_designs_settings() -> None:
     near_pure = (audit.near_pure_tail, audit.near_pure_min_mule_share, audit.near_pure_purity)
     assert near_pure == (0.001, 0.01, 0.5)
     assert (audit.report_budget, audit.replicates, audit.interval) == (0.05, 1000, 0.95)
-    assert (audit.nonmule_sample, audit.horizon_level) == (200_000, 1 - 0.01 / 12)
+    assert (FULL_DESIGN_CONFIG.audit.nonmule_sample, audit.horizon_level) == (
+        200_000,
+        1 - 0.01 / 12,
+    )
     # mule parity: 8 Mondays and 200 accounts each, a quarter of them true mules, an account
     # alone checked against itself among 31 others.
     parity = DEFAULT_CONFIG.parity
@@ -101,6 +106,14 @@ def test_the_proof_of_concept_settings() -> None:
     assert DEFAULT_CONFIG.training.reuse_built_examples is True
     # Two requests of a query at once (full design: 1).
     assert DEFAULT_CONFIG.transport.concurrent_requests == 2
+    # Sampled worlds: the training draw is 1 per positive and at least 8 a Monday (full design: 15
+    # and 500), the selection and test worlds are scored on the fallback (whole), each sampled
+    # account standing for 6,000 (10), and the audit samples 300 non-mule account-Mondays
+    # (200,000).
+    data = DEFAULT_CONFIG.data
+    assert (data.per_positive, data.min_unlabelled, data.min_selection_identified) == (1, 8, 5)
+    assert (data.scoring, data.fallback_weight) == ("fallback", 6_000)
+    assert DEFAULT_CONFIG.audit.nonmule_sample == 300
 
 
 def _differences(left: RunConfig, right: RunConfig) -> set[str]:
@@ -122,9 +135,17 @@ def test_the_full_design_config_differs_from_the_defaults_in_the_proof_of_concep
     assert _differences(FULL_DESIGN_CONFIG, DEFAULT_CONFIG) == {
         "transport.concurrent_requests",
         "training.reuse_built_examples",
+        "data.per_positive",
+        "data.min_unlabelled",
+        "data.scoring",
+        "data.fallback_weight",
+        "audit.nonmule_sample",
     }
     assert FULL_DESIGN_CONFIG.transport.concurrent_requests == 1
     assert FULL_DESIGN_CONFIG.training.reuse_built_examples is False
+    assert (
+        FULL_DESIGN_CONFIG.data.scoring == "whole" and FULL_DESIGN_CONFIG.data.fallback_weight == 10
+    )
 
 
 def test_the_worlds_are_the_fixed_seeds_and_sizes() -> None:

@@ -31,6 +31,7 @@ import torch
 from mule_pattern_learner import cli, paths
 from mule_pattern_learner.config import (
     DEFAULT_CONFIG,
+    FULL_DESIGN_CONFIG,
     CalendarConfig,
     Rotation,
     RunConfig,
@@ -66,12 +67,15 @@ ROTATION = Rotation("D1", "D2", "D3")
 # Three scored Mondays; one rotation of the development worlds; small, fast settings: batches of
 # 32, two epochs, one seed, the grid of two priors, a few replicates.
 CONFIG = replace(
-    DEFAULT_CONFIG,
+    FULL_DESIGN_CONFIG,
     calendar=CALENDAR,
     worlds=WorldsConfig(rotations=(ROTATION,)),
-    data=replace(DEFAULT_CONFIG.data, min_selection_identified=1),
+    data=replace(FULL_DESIGN_CONFIG.data, min_selection_identified=1),
     training=replace(
-        DEFAULT_CONFIG.training,
+        FULL_DESIGN_CONFIG.training,
+        # The proof of concept's reuse of built examples; the other settings are the full design's,
+        # since the reference worlds hold a few hundred accounts, too few to sample.
+        reuse_built_examples=True,
         learning_rate=0.01,
         batch_size=32,
         max_epochs=2,
@@ -79,7 +83,7 @@ CONFIG = replace(
         seeds=(0,),
         prior_multiples=(1, 3),
     ),
-    audit=replace(DEFAULT_CONFIG.audit, replicates=30, nonmule_sample=60),
+    audit=replace(FULL_DESIGN_CONFIG.audit, replicates=30, nonmule_sample=60),
 )
 # Two rotations of the development worlds: D2 never trains in the pipeline and D1 never tests, so
 # each rotation's second half has no examples of its own.

@@ -9,7 +9,12 @@ from pathlib import Path
 
 import pytest
 
-from mule_pattern_learner.config import DEFAULT_CONFIG, RunConfig, WorldConfig
+from mule_pattern_learner.config import (
+    DEFAULT_CONFIG,
+    FULL_DESIGN_CONFIG,
+    RunConfig,
+    WorldConfig,
+)
 from mule_pattern_learner.evaluation.audit import (
     CLOCK_PROBE,
     FEATURE_AUDIT,
@@ -146,4 +151,5 @@ def test_a_world_without_a_record_or_with_another_worlds_stops_training(data_dir
 def test_the_default_audit_settings_are_the_designs() -> None:
     assert DEFAULT_CONFIG.audit.clock_probe_upper == 0.55
     assert DEFAULT_CONFIG.audit.separation_auc == 0.95
-    assert DEFAULT_CONFIG.audit.nonmule_sample == 200_000
+    assert FULL_DESIGN_CONFIG.audit.nonmule_sample == 200_000
+    assert DEFAULT_CONFIG.audit.nonmule_sample == 300

@@ -15,7 +15,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from mule_pattern_learner.config import DEFAULT_CONFIG, DataConfig
+from mule_pattern_learner.config import DEFAULT_CONFIG, FULL_DESIGN_CONFIG, DataConfig
 from mule_pattern_learner.data.draw import lowest, sampled
 from mule_pattern_learner.data.examples import (
     POSITIVE,
@@ -176,7 +176,7 @@ def test_the_unlabelled_draw_stands_for_its_mondays_pool(
 def test_the_draw_is_at_least_the_minimum_and_at_most_the_pool() -> None:
     day = Monday(T, tuple(POOL), (), 0)
     assert len(unlabelled(day, (), DATA).drawn) == 3
-    assert len(unlabelled(day, (), DEFAULT_CONFIG.data).drawn) == 13
+    assert len(unlabelled(day, (), FULL_DESIGN_CONFIG.data).drawn) == 13
     busy = Monday(T, tuple(POOL), tuple(POOL[:5]), 0)
     assert len(unlabelled(busy, POOL[:5], DATA).drawn) == 8
     assert unlabelled(Monday(T, (), (), 0), (), DATA).weight == 0.0
@@ -184,7 +184,7 @@ def test_the_draw_is_at_least_the_minimum_and_at_most_the_pool() -> None:
 
 def test_the_selection_keys_rank_by_pu_label_alone(days: tuple[Labels, list[Monday]]) -> None:
     labels, found = days
-    frame = selection_frame(_on(found, T + W), labels.accounts, DEFAULT_CONFIG.data)
+    frame = selection_frame(_on(found, T + W), labels.accounts, FULL_DESIGN_CONFIG.data)
     assert len(frame) == 17 and frame["weight"].eq(1.0).all()
     by_id = frame.set_index("account_id")
     assert by_id.loc["a_long", "positive"] and by_id.loc["a_long", "ranked"]
@@ -198,7 +198,7 @@ def test_the_selection_keys_rank_by_pu_label_alone(days: tuple[Labels, list[Mond
 
 def test_the_fallback_selection_keys_sample_the_rest(days: tuple[Labels, list[Monday]]) -> None:
     labels, found = days
-    data = replace(DEFAULT_CONFIG.data, scoring="fallback")
+    data = replace(FULL_DESIGN_CONFIG.data, scoring="fallback")
     frame = selection_frame(_on(found, T), labels.accounts, data)
     sample = sampled(data.draw_key, POOL, T, 10)
     assert sorted(frame["account_id"]) == sorted(["a_long", *sample])
@@ -307,3 +307,33 @@ def test_the_first_rows_of_a_table_are_its_first_row_group_alone(tmp_path: Path)
     empty.commit()
     nothing = read_first(tmp_path / "empty.parquet", TEST_SCHEMA)
     assert nothing.empty and list(nothing.columns) == ["t_ms", "account_id"]
+
+
+def test_the_proof_of_concept_keeps_every_positive_and_a_fixed_sample_of_the_rest() -> None:
+    """Proof of concept (docs/design.md, "Proof-of-concept settings (25 October 2026)"): on a
+    Monday of a 30,000-person world, 47,326 scorable accounts of which 6 are identified mules
+    active, the training draw is every positive's account-Monday beside 8 unlabelled ones, and the
+    selection keys are the 6 positives beside a keyed sample of the others, each standing for
+    6,000; both are the same on every run."""
+    data = DEFAULT_CONFIG.data
+    accounts = tuple(f"a_{index:05d}" for index in range(47_326))
+    mules = tuple(accounts[index] for index in (5, 900, 4_100, 30_000, 41_000, 47_000))
+    day = Monday(MONDAYS[10], accounts, mules, 2)
+    identified = set(mules) | {accounts[7], accounts[8]}
+    draw = unlabelled(day, identified, data)
+    assert len(draw.drawn) == 8 and draw.pool == 47_326 - 8
+    assert not set(draw.drawn) & identified
+    assert unlabelled(day, identified, data) == draw
+    keys = selection_frame(day, identified, data)
+    positives = keys[keys["positive"]]
+    assert positives["account_id"].tolist() == sorted(mules)
+    assert positives["weight"].eq(1.0).all()
+    rest = keys[~keys["positive"]]
+    assert rest["weight"].eq(6_000.0).all() and keys["ranked"].all()
+    assert not set(rest["account_id"]) & identified
+    # Each of the 47,318 others is in with chance 1 in 6,000: about 8 of them, 11 under this key.
+    assert len(rest) == 11
+    assert selection_frame(day, identified, data).equals(keys)
+    # More positives draw more: one unlabelled account for each.
+    busy = Monday(MONDAYS[10], accounts, accounts[:20], 0)
+    assert len(unlabelled(busy, set(accounts[:20]), data).drawn) == 20

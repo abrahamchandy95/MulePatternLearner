@@ -6,28 +6,33 @@ with the answer key erased, reads byte-identical inputs."""
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 
 import pandas as pd
 import torch
 
-from mule_pattern_learner.config import DEFAULT_CONFIG
+from mule_pattern_learner.config import FULL_DESIGN_CONFIG
 from mule_pattern_learner.data.examples import monday, selection_frame
 from mule_pattern_learner.data.labels import read_identified
 from mule_pattern_learner.data.population import list_population
-from mule_pattern_learner.evaluation.answer_key import read_answer_key
+from mule_pattern_learner.evaluation.answer_key import AnswerKey, read_answer_key
 from mule_pattern_learner.evaluation.fallback import by_monday, fallback_keys
+from mule_pattern_learner.evaluation.sample import audit_sample
 from mule_pattern_learner.subgraph.build import Batch
 from mule_pattern_learner.subgraph.cache import Cache
 from mule_pattern_learner.subgraph.fetch import fetch
 from mule_pattern_learner.testing.calendar import Spy
 from mule_pattern_learner.testing.reference import ReferenceGraph
 from mule_pattern_learner.testing.world import NO_RING, T
+from mule_pattern_learner.tigergraph.queries.read_answer_key import AccountTruth
 from mule_pattern_learner.training.trainer import SelectionWorld
 
 W = 7 * 86_400_000
 MONDAYS = (T, T + W, T + 2 * W)
-DATA = DEFAULT_CONFIG.data
+# The full design's fallback, a sampled account standing for 10: the reference world holds 224
+# accounts a Monday, too few for the proof of concept's weight of 6,000 to sample any.
+DATA = FULL_DESIGN_CONFIG.data
 WORLD = "0123456789abcdef0123456789abcdef"
 
 
@@ -120,3 +125,41 @@ def test_selection_after_a_fallback_fetch_reads_byte_identical_inputs(
     # 34 scorable accounts each Monday; a_mule is out of the ranking at T + 1 week and T + 2
     # weeks, a_drop at T + 2 weeks: batches of 16 of 34, 33 and 32 ranked accounts.
     assert first == second and len(first) == 3 + 3 + 2
+
+
+def _truth(account: str, mule: bool = False) -> AccountTruth:
+    return AccountTruth(
+        account,
+        int(mule),
+        0 if mule else -1,
+        T if mule else 0,
+        T + W if mule else 0,
+        0,
+        "deposit",
+        True,
+    )
+
+
+def test_the_audit_sample_lies_inside_the_samples_the_selection_and_test_worlds_fetch() -> None:
+    """Proof of concept (docs/design.md, "Proof-of-concept settings (25 October 2026)"): the
+    audit's non-mule account-Mondays are the lowest keyed hashes of the year, and the fallback
+    sample of a world is every account-Monday under a hash threshold, so while the audit asks for
+    fewer than the fallback samples hold, every one of them is in the sample the selection and
+    test worlds fetch, and the audit fetches no non-mule account-Monday twice."""
+    accounts = [f"a_{index:05d}" for index in range(2_000)]
+    mules = {"a_00007", "a_00900"}
+    key = AnswerKey(tuple(_truth(account, account in mules) for account in accounts))
+    populations = {t_ms: accounts for t_ms in MONDAYS}
+    # 6,000 account-Mondays at weight 40 are about 150 in the sample.
+    data = replace(FULL_DESIGN_CONFIG.data, fallback_weight=40)
+    fallback = fallback_keys(key, populations, data)
+    sampled = fallback[fallback["weight"] == 40.0]
+    held = set(zip(sampled["t_ms"], sampled["account_id"], strict=True))
+    assert 100 < len(held) < 200
+    for size in (20, 100, len(held) - 10):
+        audit = audit_sample(key, populations, size, data.draw_key)
+        asked = audit[~audit["positive"]]
+        assert len(asked) == size
+        assert set(zip(asked["t_ms"], asked["account_id"], strict=True)) <= held
+        # The mules are in the audit's sample on every Monday of their activity, all of them.
+        assert set(audit.loc[audit["positive"], "account_id"]) == mules

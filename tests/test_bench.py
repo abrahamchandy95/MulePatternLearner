@@ -49,7 +49,9 @@ CONFIG = replace(
     DEFAULT_CONFIG,
     calendar=CALENDAR,
     # The full design's way of scoring: every pass builds the selection examples anew.
+    data=FULL_DESIGN_CONFIG.data,
     training=FULL_DESIGN_CONFIG.training,
+    audit=FULL_DESIGN_CONFIG.audit,
     bench=BenchConfig(
         mondays=2,
         unlabelled=8,
