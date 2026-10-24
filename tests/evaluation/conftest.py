@@ -29,7 +29,7 @@ import pandas as pd
 import pytest
 
 from mule_pattern_learner import paths
-from mule_pattern_learner.config import DEFAULT_CONFIG, CalendarConfig, RunConfig
+from mule_pattern_learner.config import FULL_DESIGN_CONFIG, CalendarConfig, RunConfig
 from mule_pattern_learner.evaluation.gate_records import CODE, GATES, WORLD
 from mule_pattern_learner.testing import fixtures
 from mule_pattern_learner.testing.calendar import identity_text, world_of
@@ -45,11 +45,12 @@ ORDINARY = tuple(f"o{index:02d}" for index in range(12))
 # The calendar of the tests: three scored Mondays from T.
 CALENDAR = CalendarConfig(export_start=date(2024, 1, 1), history_days=182, scored_mondays=3)
 MONDAYS = (T, T + W, T + 2 * W)
-# Small samples and few replicates, so that an audit runs in seconds.
+# The full design's settings (its four rotations, whole scoring), with small samples and few
+# replicates, so that an audit runs in seconds.
 CONFIG = replace(
-    DEFAULT_CONFIG,
+    FULL_DESIGN_CONFIG,
     calendar=CALENDAR,
-    audit=replace(DEFAULT_CONFIG.audit, replicates=40, nonmule_sample=60),
+    audit=replace(FULL_DESIGN_CONFIG.audit, replicates=40, nonmule_sample=60),
 )
 
 

@@ -14,19 +14,20 @@ import numpy as np
 import pytest
 import torch
 
-from mule_pattern_learner.config import DEFAULT_CONFIG, TrainingConfig
+from mule_pattern_learner.config import DEFAULT_CONFIG, FULL_DESIGN_CONFIG, TrainingConfig
 from mule_pattern_learner.subgraph.build import Batch
 from mule_pattern_learner.subgraph.switches import Switch
 from mule_pattern_learner.tigergraph import executor as executor_module
 from mule_pattern_learner.training import contract
 from mule_pattern_learner.training import trainer as trainer_module
 from mule_pattern_learner.training.batches import training_batches
-from mule_pattern_learner.training.priors import Prior
+from mule_pattern_learner.training.priors import Prior, grid
 from mule_pattern_learner.training.selection import Found
 from mule_pattern_learner.training.trainer import (
     GNN,
     SelectionWorld,
     Trained,
+    ablations,
     check_determinism,
     checkpoint_fields,
     gnn_lock,
@@ -44,7 +45,9 @@ from mule_pattern_learner.training.trainer import (
 MODEL = DEFAULT_CONFIG.model
 SUBGRAPH = DEFAULT_CONFIG.subgraph
 # Short runs at the design's learning rate.
-SHORT = replace(DEFAULT_CONFIG.training, batch_size=32, max_epochs=3, patience=3)
+# The full design's training settings (five seeds, the four ablations), which the proof of concept
+# trims, at the design's learning rate.
+SHORT = replace(FULL_DESIGN_CONFIG.training, batch_size=32, max_epochs=3, patience=3)
 PRIOR = Prior(1.0, 0.03)
 
 
@@ -477,6 +480,29 @@ def test_a_rotation_trains_every_seed_and_ablation_and_keeps_epochs_of_one(
     ]
 
 
+def test_the_proof_of_concept_trains_the_full_model_alone_at_its_fixed_prior(
+    world: Any, tmp_path: Path
+) -> None:
+    """Proof of concept (docs/design.md, "Proof-of-concept settings (25 October 2026)"): with the
+    ablations off a rotation trains the full model of each seed and none of the four ablations,
+    at the one prior the setting fixes, which no grid decides."""
+    batches, selection = _small(world), _selection(world)
+    settings = replace(SHORT, max_epochs=1, seeds=(0,), ablations=False, fixed_prior=1.0)
+    assert ablations(settings) == () and ablations(SHORT) == tuple(Switch)
+    found = train_rotation(
+        batches,
+        selection,
+        grid(0.03, settings),
+        tmp_path,
+        model=MODEL,
+        settings=settings,
+        subgraph=SUBGRAPH,
+    )
+    assert list(found) == [GNN] and [run.seed for run in found[GNN]] == [0]
+    assert len(found[GNN][0].runs) == 1 and found[GNN][0].prior.multiple == 1.0
+    assert sorted(path.name for path in tmp_path.glob("*.pt")) == ["gnn_seed0.pt"]
+
+
 def test_training_runs_no_query(
     world: Any, planted: list[Batch], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -530,8 +556,10 @@ def test_the_passes_over_the_selection_world_are_counted_for_the_benchmark() -> 
     at most 30 epochs: 5 x (3 + 4) x 30 = 1,050 passes; with the prior fixed, 5 x (1 + 4) x 30
     = 750."""
     assert len(Switch) == 4
-    assert selection_passes(DEFAULT_CONFIG.training, 3) == 1_050
-    assert selection_passes(DEFAULT_CONFIG.training, 1) == 750
+    assert selection_passes(FULL_DESIGN_CONFIG.training, 3) == 1_050
+    assert selection_passes(FULL_DESIGN_CONFIG.training, 1) == 750
     assert selection_passes(replace(SHORT, seeds=(0,)), 2) == 18
+    # The proof of concept, one seed and no ablation at the prior it fixes: at most 30 passes.
+    assert selection_passes(DEFAULT_CONFIG.training, 1) == 30
     with pytest.raises(ValueError, match="at least one prior"):
         selection_passes(SHORT, 0)

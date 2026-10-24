@@ -247,6 +247,9 @@ ROTATIONS = (
     Rotation("C", "A", "B"),
     Rotation("D1", "D2", "D3"),
 )
+# Proof of concept (25 October 2026, docs/design.md, "Proof-of-concept settings (25 October
+# 2026)"): the development rotation alone. The full design's rotations are ROTATIONS.
+PROOF_OF_CONCEPT_ROTATIONS = (Rotation("D1", "D2", "D3"),)
 
 
 @dataclass(frozen=True)
@@ -254,7 +257,7 @@ class WorldsConfig:
     """The worlds and the rotations of their roles that the commands run."""
 
     worlds: tuple[WorldConfig, ...] = WORLDS
-    rotations: tuple[Rotation, ...] = ROTATIONS
+    rotations: tuple[Rotation, ...] = PROOF_OF_CONCEPT_ROTATIONS
 
     def __post_init__(self) -> None:
         for world in _distinct("worlds.worlds", self.worlds):
@@ -451,8 +454,10 @@ class TrainingConfig:
     # Epochs at most per prior, and epochs without a better selection score before it stops.
     max_epochs: int = 30
     patience: int = 5
-    # The model seeds: each varies only the initial weights, dropout and batch order.
-    seeds: tuple[int, ...] = (0, 1, 2, 3, 4)
+    # The model seeds: each varies only the initial weights, dropout and batch order. Proof of
+    # concept (25 October 2026, docs/design.md, "Proof-of-concept settings (25 October 2026)"):
+    # one seed; the full design's value is (0, 1, 2, 3, 4).
+    seeds: tuple[int, ...] = (0,)
     # The seed of the one shuffle of a world's training examples into batches, the same for
     # every model seed, and the seed of the draws of the paired intervals that decide the
     # prior grid. Both stay fixed, since the three worlds vary the data.
@@ -462,8 +467,12 @@ class TrainingConfig:
     # world.
     prior_multiples: tuple[float, ...] = (1, 3, 10)
     # None runs the grid; a multiple fixes the prior at it, as the design fixes it at 1 for
-    # reported runs when no pair of the grid's priors differs on the development rotation.
-    fixed_prior: float | None = None
+    # reported runs when no pair of the grid's priors differs on the development rotation. Proof
+    # of concept: fixed at 1 without running the grid; the full design's value is None.
+    fixed_prior: float | None = 1.0
+    # Whether each seed also trains the four ablations. Proof of concept: none; the full design's
+    # value is True.
+    ablations: bool = False
     # Proof of concept (25 October 2026, docs/design.md, "Proof-of-concept settings (25 October
     # 2026)"): the selection and test worlds' examples are built once and kept in memory, and
     # every later pass replays them. The full design's value is False: its whole worlds' examples
@@ -489,6 +498,7 @@ class TrainingConfig:
         if self.fixed_prior is not None:
             _positive("training.fixed_prior", self.fixed_prior)
         _instance("training.reuse_built_examples", self.reuse_built_examples, bool)
+        _instance("training.ablations", self.ablations, bool)
 
 
 @dataclass(frozen=True)
@@ -667,6 +677,7 @@ DEFAULT_CONFIG = RunConfig()
 # a default made for the proof of concept is undone here.
 FULL_DESIGN_CONFIG = replace(
     DEFAULT_CONFIG,
+    worlds=replace(DEFAULT_CONFIG.worlds, rotations=ROTATIONS),
     transport=replace(DEFAULT_CONFIG.transport, concurrent_requests=1),
     data=replace(
         DEFAULT_CONFIG.data,
@@ -675,6 +686,12 @@ FULL_DESIGN_CONFIG = replace(
         scoring="whole",
         fallback_weight=10,
     ),
-    training=replace(DEFAULT_CONFIG.training, reuse_built_examples=False),
+    training=replace(
+        DEFAULT_CONFIG.training,
+        seeds=(0, 1, 2, 3, 4),
+        fixed_prior=None,
+        ablations=True,
+        reuse_built_examples=False,
+    ),
     audit=replace(DEFAULT_CONFIG.audit, nonmule_sample=200_000),
 )

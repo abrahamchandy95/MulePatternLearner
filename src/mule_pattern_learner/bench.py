@@ -101,7 +101,6 @@ from .subgraph.build import Batch, account_nodes, build, read_rows
 from .subgraph.cache import Cache, Table
 from .subgraph.fetch import PARAMS, PER_ACCOUNT, Fetcher, chunks
 from .subgraph.layouts import LAYOUT
-from .subgraph.switches import Switch
 from .tigergraph.executor import BenchExecutor, ConnectionExecutor
 from .tigergraph.queries import (
     PROFILE_HUBS,
@@ -116,7 +115,7 @@ from .tigergraph.queries.read_money_flow import MoneyFlows
 from .tigergraph.queries.read_world import World
 from .tigergraph.world import identity
 from .training.batches import ScoringBatches
-from .training.trainer import logits, selection_passes
+from .training.trainer import ablations, logits, selection_passes
 
 COLUMNS = ("section", "name", "variant", "value", "unit", "note")
 UNLABELLED = "unlabelled"
@@ -831,7 +830,9 @@ def project(
     identified = float(np.mean([sample.identified_active for sample in samples]))
     identified_per_person = identified / loaded.config.people
     grid = len(config.training.prior_multiples)
-    runs = runs_of(len(config.training.seeds), len(Switch), len(XGBOOST_RANKERS))
+    runs = runs_of(
+        len(config.training.seeds), len(ablations(config.training)), len(XGBOOST_RANKERS)
+    )
     measures.add("selection", "scorable_accounts_per_person_monday", "", per_person, "accounts")
     measures.add("selection", "build_seconds_per_example", "", rates.build, "s")
     measures.add("selection", "forward_seconds_per_example", "", rates.forward, "s")

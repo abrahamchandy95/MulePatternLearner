@@ -128,6 +128,7 @@ from .training.trainer import (
     EPOCHS,
     SelectionWorld,
     Trained,
+    ablations,
     gnn_lock,
     load_trained,
     model_file,
@@ -471,7 +472,9 @@ def _write_text(path: Path, text: str) -> None:
 def train_rotation_command(worlds: RotationWorlds, config: RunConfig, device: torch.device) -> None:
     """Train one rotation: the full model over the prior grid and every seed, each ablation at
     the prior the full model chose, and the two XGBoost comparisons once, each selected on the
-    selection world; the model files go to the rotation's results folder."""
+    selection world; the model files go to the rotation's results folder. With the proof of
+    concept's settings (training.ablations off, training.fixed_prior set) there is no ablation and
+    the grid is the one prior."""
     train_world, train_registered = worlds.train
     _, select_registered = worlds.select
     key = examples_key(config.calendar, config.data)
@@ -577,7 +580,9 @@ def _runs(
     folder = results_dir(worlds.name)
     runs: list[Run] = []
     expected: list[tuple[Switch | None, int]] = [
-        (switch, seed) for switch in (None, *Switch) for seed in config.training.seeds
+        (switch, seed)
+        for switch in (None, *ablations(config.training))
+        for seed in config.training.seeds
     ]
     for switch, seed in expected:
         path = model_file(folder, ranker_name(switch), seed)

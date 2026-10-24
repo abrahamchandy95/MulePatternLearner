@@ -39,6 +39,7 @@ from mule_pattern_learner.config import (
     WorldsConfig,
 )
 from mule_pattern_learner.data.labels import read_identified
+from mule_pattern_learner.data.population import list_population
 from mule_pattern_learner.data.worlds import LoadedWorld, registered
 from mule_pattern_learner.evaluation import audit as auditing
 from mule_pattern_learner.evaluation.answer_key import read_answer_key
@@ -48,6 +49,7 @@ from mule_pattern_learner.evaluation.audit import (
     GATE_RECORD,
     audit_settings,
 )
+from mule_pattern_learner.evaluation.fallback import fallback_keys
 from mule_pattern_learner.evaluation.label_checks import IDENTIFICATION_HORIZON, LABEL_CHECKS
 from mule_pattern_learner.evaluation.store import AuditRecord, Store
 from mule_pattern_learner.testing import fixtures
@@ -771,6 +773,50 @@ def test_evaluate_writes_one_spread_for_each_kind_with_two_rotations(
         "the spread over 2 development rotations is in "
         "results/rotations/rotation_spread_development.parquet"
     )
+
+
+# The proof of concept (docs/design.md, "Proof-of-concept settings (25 October 2026)"): the sampled
+# worlds and the trimmed training, on the pipeline's worlds with a weight of 10 for the reference
+# worlds' few hundred accounts.
+
+
+def test_the_proof_of_concept_trains_one_seed_and_evaluates_on_sampled_worlds(
+    pipeline: Pipeline, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(paths, "RESULTS_DIR", tmp_path / "results")
+    poc = replace(
+        CONFIG,
+        data=replace(
+            CONFIG.data, scoring="fallback", fallback_weight=10, per_positive=1, min_unlabelled=8
+        ),
+        training=replace(CONFIG.training, ablations=False, fixed_prior=1.0),
+    )
+    for name in ("D1", "D2", "D3"):
+        cli.prepare_command(poc, pipeline.connect(name))
+    # The test world's fallback list is mule audit's: the true mules and a sample of the rest.
+    graph = pipeline.graphs["D3"]
+    populations = {
+        t_ms: [row.account_id for row in list_population(graph, t_ms)]
+        for t_ms in poc.calendar.mondays()
+    }
+    listed = fallback_keys(read_answer_key(Spy(graph)), populations, poc.data)
+    Store(pipeline.identity("D3")).write_fallback(listed)
+    assert 0 < len(listed) < sum(len(accounts) for accounts in populations.values())
+    cli.train_command(poc, cli.connect)
+    folder = paths.results_dir(cli.run_name(ROTATION))
+    # The full model of the one seed and each XGBoost comparison, no ablation and no grid.
+    assert {path.name for path in folder.glob("*.pt")} == {
+        "gnn_seed0.pt",
+        "xgboost_own.pt",
+        "xgboost_graph.pt",
+    }
+    assert not (folder / "prior_decision.txt").exists()
+    cli.evaluate_command(poc, cli.connect)
+    metrics = pd.read_parquet(folder / "metrics.parquet")
+    assert set(metrics["ranker"]) == {"gnn", "xgboost_own", "xgboost_graph"}
+    assert metrics["development_only"].all()
+    per_monday = pd.read_parquet(folder / "per_monday.parquet")
+    assert set(per_monday["ranker"]) == {"gnn", "xgboost_own", "xgboost_graph"}
 
 
 # mule score.

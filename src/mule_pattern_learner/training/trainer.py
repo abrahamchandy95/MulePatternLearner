@@ -86,6 +86,12 @@ def ranker_name(switch: Switch | None) -> str:
     return GNN if switch is None else f"{GNN}_{switch.value}"
 
 
+def ablations(settings: TrainingConfig) -> tuple[Switch, ...]:
+    """The ablations each seed trains: each of the design's four, or none when
+    settings.ablations is off (the proof of concept's setting)."""
+    return tuple(Switch) if settings.ablations else ()
+
+
 def model_config(config: ModelConfig, switch: Switch | None) -> ModelConfig:
     """The model of the full model, or of the ablation of switch: an ablation reads the
     community block only when its switch keeps it."""
@@ -175,7 +181,7 @@ def selection_passes(settings: TrainingConfig, priors: int) -> int:
     by this, and by the selection world's examples, before whole-world selection is accepted."""
     if priors < 1:
         raise ValueError(f"A rotation tries at least one prior, not {priors}")
-    return len(settings.seeds) * (priors + len(Switch)) * settings.max_epochs
+    return len(settings.seeds) * (priors + len(ablations(settings))) * settings.max_epochs
 
 
 class SelectionWorld:
@@ -712,7 +718,7 @@ def train_rotation(
         )
         save_trained(full, model_file(folder, GNN, seed), gnn_lock(None, model, subgraph, settings))
         found.setdefault(GNN, []).append(full)
-        for switch in Switch:
+        for switch in ablations(settings):
             ablation = train(
                 training,
                 selection,

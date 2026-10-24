@@ -40,6 +40,7 @@ from mule_pattern_learner.tigergraph.queries import (
     READ_HUBS,
     read_hubs,
 )
+from mule_pattern_learner.training.trainer import ablations
 
 W = 7 * DAY_MS
 CALENDAR = CalendarConfig(export_start=date(2024, 1, 1), history_days=182, scored_mondays=2)
@@ -436,6 +437,15 @@ def test_the_projections_are_products_of_what_was_measured() -> None:
     assert bench.runs_of(5, 4, 2) == 27
     # The estimate of 35 gave each XGBoost comparison five seeds, as the GNN has: 5 x (1 + 4 + 2).
     assert bench.runs_of(5, 4, 0) + 2 * 5 == 35
+
+
+def test_the_proof_of_concepts_runs_are_the_full_model_and_the_two_comparisons() -> None:
+    """Proof of concept: one seed of the full model and no ablation make 1 run, and with the two
+    XGBoost comparisons 3, where the full design's five seeds of five rankers make 27."""
+    training = DEFAULT_CONFIG.training
+    assert bench.runs_of(len(training.seeds), len(ablations(training)), 2) == 3
+    full = FULL_DESIGN_CONFIG.training
+    assert bench.runs_of(len(full.seeds), len(ablations(full)), 2) == 27
 
 
 def test_the_headline_numbers_read_back(measured: tuple[Live, pd.DataFrame, Path]) -> None:

@@ -8,11 +8,12 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from mule_pattern_learner.config import DEFAULT_CONFIG
+from mule_pattern_learner.config import DEFAULT_CONFIG, FULL_DESIGN_CONFIG
 from mule_pattern_learner.training.priors import FIXED_MULTIPLE, Prior, decide, grid
 from mule_pattern_learner.training.selection import Found
 
-TRAINING = DEFAULT_CONFIG.training
+# The grid of the full design, which the proof of concept replaces by a fixed prior.
+TRAINING = FULL_DESIGN_CONFIG.training
 AUDIT = DEFAULT_CONFIG.audit
 MULES = tuple(f"m{index:02d}" for index in range(40))
 

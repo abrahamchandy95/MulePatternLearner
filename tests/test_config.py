@@ -12,6 +12,7 @@ import pytest
 from mule_pattern_learner.config import (
     DEFAULT_CONFIG,
     FULL_DESIGN_CONFIG,
+    PROOF_OF_CONCEPT_ROTATIONS,
     ROTATIONS,
     WORLDS,
     AuditConfig,
@@ -65,11 +66,12 @@ def test_the_defaults_are_the_designs_settings_but_the_proof_of_concepts() -> No
     model = DEFAULT_CONFIG.model
     assert (model.hidden, model.heads, model.dropout) == (64, 4, 0.2)
     assert (model.layers, model.head_hidden, model.community) == (2, 32, True)
-    training = DEFAULT_CONFIG.training
+    training = FULL_DESIGN_CONFIG.training
     optimiser = (training.learning_rate, training.weight_decay, training.batch_size)
     assert optimiser == (0.001, 0.0001, 128)
     assert (training.max_epochs, training.patience, training.seeds) == (30, 5, (0, 1, 2, 3, 4))
     assert (training.prior_multiples, training.fixed_prior) == ((1, 3, 10), None)
+    assert training.ablations is True
     assert (training.shuffle_seed, training.bootstrap_seed) == (0, 0)
     audit = DEFAULT_CONFIG.audit
     assert (audit.clock_probe_upper, audit.separation_auc) == (0.55, 0.95)
@@ -114,6 +116,13 @@ def test_the_proof_of_concept_settings() -> None:
     assert (data.per_positive, data.min_unlabelled, data.min_selection_identified) == (1, 8, 5)
     assert (data.scoring, data.fallback_weight) == ("fallback", 6_000)
     assert DEFAULT_CONFIG.audit.nonmule_sample == 300
+    # Train less: one seed, no ablation, the prior fixed at 1 and no grid, and the development
+    # rotation D1, D2, D3 alone (full design: five seeds, the four ablations, the grid of 1, 3 and
+    # 10 times, and all four rotations).
+    training = DEFAULT_CONFIG.training
+    assert training.seeds == (0,) and training.ablations is False and training.fixed_prior == 1.0
+    assert PROOF_OF_CONCEPT_ROTATIONS == (Rotation("D1", "D2", "D3"),)
+    assert DEFAULT_CONFIG.worlds.rotations == PROOF_OF_CONCEPT_ROTATIONS
 
 
 def _differences(left: RunConfig, right: RunConfig) -> set[str]:
@@ -140,12 +149,18 @@ def test_the_full_design_config_differs_from_the_defaults_in_the_proof_of_concep
         "data.scoring",
         "data.fallback_weight",
         "audit.nonmule_sample",
+        "training.seeds",
+        "training.fixed_prior",
+        "training.ablations",
+        "worlds.rotations",
     }
     assert FULL_DESIGN_CONFIG.transport.concurrent_requests == 1
     assert FULL_DESIGN_CONFIG.training.reuse_built_examples is False
     assert (
         FULL_DESIGN_CONFIG.data.scoring == "whole" and FULL_DESIGN_CONFIG.data.fallback_weight == 10
     )
+    assert FULL_DESIGN_CONFIG.training.seeds == (0, 1, 2, 3, 4)
+    assert FULL_DESIGN_CONFIG.training.fixed_prior is None and FULL_DESIGN_CONFIG.training.ablations
 
 
 def test_the_worlds_are_the_fixed_seeds_and_sizes() -> None:
@@ -160,7 +175,8 @@ def test_the_worlds_are_the_fixed_seeds_and_sizes() -> None:
         "T": (3001, 5_000, "test"),
         "P100": (4001, 100_000, "bench"),
     }
-    assert DEFAULT_CONFIG.worlds == WorldsConfig(WORLDS, ROTATIONS)
+    assert FULL_DESIGN_CONFIG.worlds == WorldsConfig(WORLDS, ROTATIONS)
+    assert DEFAULT_CONFIG.worlds == WorldsConfig(WORLDS, PROOF_OF_CONCEPT_ROTATIONS)
 
 
 def test_each_reported_world_plays_each_role_once() -> None:
@@ -286,6 +302,7 @@ def test_sections_refuse_values_outside_their_ranges() -> None:
         (lambda: TrainingConfig(prior_multiples=(1, 0)), "training.prior_multiples"),
         (lambda: TrainingConfig(prior_multiples=[1, 3]), "training.prior_multiples"),  # pyright: ignore[reportArgumentType]
         (lambda: TrainingConfig(fixed_prior=0), "training.fixed_prior"),
+        (lambda: TrainingConfig(ablations=0), "training.ablations"),  # pyright: ignore[reportArgumentType]
         (lambda: TrainingConfig(reuse_built_examples=1), "training.reuse_built_examples"),  # pyright: ignore[reportArgumentType]
         (lambda: RunConfig(training=0), "training must be"),  # pyright: ignore[reportArgumentType]
         (lambda: AuditConfig(clock_probe_upper=0.5), "audit.clock_probe_upper"),

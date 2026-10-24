@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 import torch
 
-from mule_pattern_learner.config import DEFAULT_CONFIG
+from mule_pattern_learner.config import DEFAULT_CONFIG, FULL_DESIGN_CONFIG
 from mule_pattern_learner.model import encode as encode_module
 from mule_pattern_learner.model.encode import Kind
 from mule_pattern_learner.model.time_encoding import FREQUENCIES, SCALE, encode_reference
@@ -23,7 +23,8 @@ from mule_pattern_learner.training import contract
 from mule_pattern_learner.training.contract import differences, load, lock, save
 
 SUBGRAPH = DEFAULT_CONFIG.subgraph
-TRAINING = DEFAULT_CONFIG.training
+# The five seeds of the full design, which the lock counts.
+TRAINING = FULL_DESIGN_CONFIG.training
 
 
 def _lock(**changes: object) -> contract.Lock:
