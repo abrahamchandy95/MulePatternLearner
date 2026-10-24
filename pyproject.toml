@@ -18,6 +18,8 @@ dependencies = [
     "pydantic>=2.10",
     "pydantic-settings>=2.7",
     "requests>=2.31",
+    # Not imported by src: xgboost.XGBClassifier (comparisons/boosting.py) raises an ImportError
+    # without it. The tests also import it.
     "scikit-learn>=1.6",
     # Not imported here: pyTigerGraph parses query responses with orjson when it is
     # installed, which is faster than the standard json module on every batch.
