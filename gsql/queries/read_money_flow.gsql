@@ -1,60 +1,38 @@
 USE GRAPH Mule_Pattern_Learner
 
-/* Velocity, B1 (docs/design.md, "read_money_flow (B1): velocity", and B1's walk in
-   docs/features.md, "Account node"): for each account of the request at one Monday t, the
-   money it received and sent over the last 7, 30 and 90 days, and how fast the money it
-   received in the last 30 days left again, matched last in, first out. Every amount is
-   integer cents, floor(amount x 100 + 0.5), summed in INT. A self-payment is read nowhere.
+/* read_money_flow (B1, velocity): how fast each account passes on the money it receives.
 
-   The walk:
-   - The lists: the newest 256 payments received in [t - 30 days, t) with positive cents, and
-     the newest 256 sent then, each kept in a heap ordered (ts DESC, rail DESC, id DESC) that
-     holds one more, the 257th: the newest payment left out of its list, when the list was cut.
-     An inflow has the rail "", so for inflows the order is (ts DESC, id DESC).
-   - The span: when neither list was cut, all of [t - 30 days, t); otherwise (b, t), b the
-     latest second, over the cut lists, of the payment left out, and every payment of either
-     list at or before the second b is dropped. Both lists are then complete inside the span,
-     so the walk is exact last in, first out for every inflow it keeps.
-   - The lots: the inflows of one second are one lot, which comes before every outflow of its
-     second, so the order of payments in one second never matters to a lot.
-   - The outflows of one second are walked in the order the heap gives them, oldest first:
-     by the name of their rail (ach, card, cash, check, internal, unknown, zelle), then by
-     payment id. The levels, windows, held cents, median and each lot's values do not depend
-     on that order. The split by rail does depend on which of two outflows took the newest
-     cents, so a rail decides it and no payment id does: of two outflows of one second the
-     one whose rail comes first in that list spends first, and two of one rail change no
-     value whichever goes first.
-   - The matching, without a stack: count cents as heights. A lot of c cents arriving at level
-     L holds the band [L, L + c), and still holds max(0, min(lowest level since, L + c) - L)
-     cents; each fall of that lowest level inside its band is a portion that left at that
-     outflow's time. An outflow larger than the level empties it to 0: the rest spent money
-     from before the span. The scan of a lot stops once no later outflow can lower its lowest
-     level, read from the suffix minima of the levels.
-   - Dwell, in whole seconds: an outflow's second minus its lot's second. A window w holds
-     the portions with dwell < w, and only outflows before t exist, so an inflow received less
-     than w before t shows only what left by t.
+   Inputs: t_ms, a Monday at 00:00 UTC; account_ids, the accounts to read, each once.
+   Prints: accounts, per account its 18 velocity columns (docs/features.md, "Account node":
+   the amounts in and out, flow_present, the left_* shares, held_share, median_dwell as
+   presence and milliseconds, and left_by_*) and scan_steps, a work counter for mule bench
+   that no feature reads; tracked_inflows, one row per inflow the walk kept, with its lot's
+   left_24h and dwell, which the batch builder puts on that payment's edge.
+   Refuses: invalid_parameters, duplicate_account, unknown_account, invisible_account (an
+   account that does not exist at t), and unsorted_heap.
 
-   Per account it prints the 18 velocity columns of docs/features.md (the median dwell as
-   presence and milliseconds) and the steps of its scan, a work counter for mule bench that
-   no feature reads; and one row per inflow of each lot, with its lot's left_24h and dwell.
-   The shares are each one division of two sums of cents. Transfer means ach, check, internal
-   and zelle; unknown counts in the denominator of the rail shares only.
+   The money an account received in the last 30 days is matched to the money it sent after,
+   last in, first out: an outflow spends the money that arrived most recently, which is what
+   passing money through means (docs/design.md, "read_money_flow (B1): velocity"). First in,
+   first out would make victim money wait until an old salary was spent, and hide the
+   pass-through.
 
-   FOREACH is taken to walk a heap in its sort order, which the documentation does not
-   promise, so every step of every heap walked is checked against the one before, and a heap
-   out of order stops the query with the status unsorted_heap. Every value a walk reads later
-   is read in a later SELECT than the one that wrote it, or kept in a local variable.
-
-   Reads no label and no hub: a hub that is not the scored account is never requested. t must
-   be a Monday at 00:00 UTC after the lookback's length, and the request must name at least
-   one account, each once, each in the graph and existing at t. The accounts come as ids, not
-   as a SET<VERTEX> parameter, from which an installed query drops an id the graph lacks
-   without a word. */
+   - Every amount is integer cents, floor(amount x 100 + 0.5), summed in INT: float sums broke
+     parity, and INT mixed with UINT wraps below 0.
+   - A self-payment is read nowhere. No hub is read: a hub that is not the scored account is
+     never requested.
+   - The accounts come as ids, not as a SET<VERTEX>, from which an installed query drops an
+     unknown id without a word, so that the query can refuse one.
+   - FOREACH is taken to walk a heap in its sort order, which TigerGraph's documentation does
+     not promise, so every heap walked is checked step by step, and one out of order stops
+     the query with unsorted_heap.
+   - Every value a step reads was written by an earlier SELECT or is a local variable, since
+     the POST-ACCUM of one SELECT runs over its vertices in parallel. */
 CREATE OR REPLACE QUERY read_money_flow(
     UINT t_ms,
     LIST<STRING> account_ids
 ) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
-    /* A payment of a list, a portion matched, and the row of an inflow of a lot. */
+    /* A payment of a heap, a portion of a lot that left, and the row of a kept inflow. */
     TYPEDEF TUPLE<UINT ts, STRING id, INT cents, STRING rail> Paid;
     TYPEDEF TUPLE<INT dwell, INT cents> Portion;
     TYPEDEF TUPLE<
@@ -67,19 +45,21 @@ CREATE OR REPLACE QUERY read_money_flow(
     /* The cents received and sent over the last 7, 30 and 90 days. */
     SumAccum<INT> @in_amount_7d, @in_amount_30d, @in_amount_90d, @out_amount_7d,
       @out_amount_30d, @out_amount_90d;
-    /* Each list and its 257th, and the lists newest first: the inflows' seconds, ids and
-       cents, the outflows' seconds, cents and rails; the latest second left out of a list. */
+    /* The heaps of the last 30 days, each holding its list's newest 256 and one more; the
+       lists newest first, the inflows' seconds, ids and cents and the outflows' seconds, cents
+       and rails; and the latest second left out of either list. */
     HeapAccum<Paid>(257, ts DESC, rail DESC, id DESC) @inflows, @outflows;
     ListAccum<INT> @in_s, @in_cents, @out_s, @out_cents;
     ListAccum<STRING> @in_id, @out_rail;
     MaxAccum<INT> @cut_s;
-    /* Inside the span, oldest first: each lot's second, cents, level before it, first outflow
-       after it, and first inflow and inflow count; each outflow's level after it; the
-       lowest level from each outflow on, last outflow first; the inflows kept. */
+    /* The walk inside the span, oldest first: each lot's second, cents, level before it,
+       first outflow after it, first inflow and number of inflows; each outflow's level after
+       it; the lowest level from each outflow on, last outflow first; the inflows kept. */
     ListAccum<INT> @lot_s, @lot_cents, @lot_base, @lot_next, @lot_first, @lot_count,
       @out_level, @out_lowest;
     SumAccum<INT> @kept_in;
-    /* The portions by dwell, at most one per lot and one per outflow, and their sums. */
+    /* The portions by dwell, at most one per lot and one per outflow; their sums by window
+       and by rail; the steps of the scan. */
     HeapAccum<Portion>(512, dwell ASC) @portions;
     SumAccum<INT> @received, @matched, @within_15m, @within_1h, @within_6h, @within_1d,
       @within_3d, @within_7d, @by_transfer, @by_card, @by_cash, @scan_steps;
@@ -88,6 +68,7 @@ CREATE OR REPLACE QUERY read_money_flow(
     SumAccum<INT> @median_dwell_ms;
     SumAccum<DOUBLE> @left_15m, @left_1h, @left_6h, @left_1d, @left_3d, @left_7d, @held_share,
       @left_by_transfer, @left_by_card, @left_by_cash;
+    /* The kept inflows' rows, and the accounts whose heaps came out of order. */
     ListAccum<TrackedInflow> @@tracked_inflows;
     OrAccum @@unsorted;
     SetAccum<STRING> @@unsorted_accounts;
@@ -101,6 +82,8 @@ CREATE OR REPLACE QUERY read_money_flow(
         PRINT "invalid_parameters" AS status;
         RETURN;
     END;
+    /* The ids: at least one; none twice, which a list keeps and a set would drop; each an
+       account of the graph, since to_vertex_set drops an unknown id; each existing at t. */
     FOREACH account_id IN account_ids DO
         @@ids += account_id;
         @@given += 1;
@@ -124,7 +107,10 @@ CREATE OR REPLACE QUERY read_money_flow(
         RETURN;
     END;
 
-    /* The payments of the lookback, each way, but self-payments. */
+    /* The payments of the lookback, each way, but self-payments. Every one counts in the
+       amounts; those of the last 30 days go into the heaps, inflows only with positive cents.
+       An inflow's rail is "", so the inflows' heap orders by time, then id. Zelle transfers
+       are sent apart because they carry no payment_rail: their rail is zelle. */
     Received = SELECT a FROM Scored:a
       -((Account_Received_Transaction>|Account_Received_Zelle_Transfer>):e)-
       (Payment_Transaction|Zelle_Transfer):p
@@ -163,9 +149,9 @@ CREATE OR REPLACE QUERY read_money_flow(
         END,
         IF p.event_ts_ms >= t_ms - 604800000 THEN a.@out_amount_7d += cents END;
 
-    /* The heaps as lists, newest first, each payment checked against the one before in the
-       order of its heap, (ts, rail, id) descending; a heap's 257th payment is the newest left
-       out of its list. */
+    /* The heaps as lists, newest first, each payment checked against the one before in its
+       heap's order, (ts, rail, id) descending. A heap's 257th payment is the newest one its
+       list left out, and only its second is kept: it cuts the span below. */
     Listed = SELECT a FROM Scored:a
       POST-ACCUM
         INT k = 0, UINT previous_ts = 0, STRING previous_rail = "", STRING previous_id = "",
@@ -199,10 +185,19 @@ CREATE OR REPLACE QUERY read_money_flow(
         RETURN;
     END;
 
-    /* The span: the payments of each list after the cut second, a prefix of the list (with no
-       cut, the cut second is MaxAccum's least INT, below every second). Then the walk in event
-       order, the lists read from their ends: a lot before the outflows of its second; the
-       level of tracked cents after each outflow, never below 0. */
+    /* The span: with no list cut, all of [t - 30 days, t); otherwise only the payments after
+       the cut second, the latest second left out of either list, so that both lists are
+       complete inside the span and the walk is exact for every inflow it keeps. They are a
+       prefix of each list; with no cut, the cut second is MaxAccum's least INT, below every
+       second.
+
+       Then the walk in time order, reading each list from its end. The inflows of one second
+       form one lot, which comes before every outflow of its second, so the order of payments
+       inside a second never matters to a lot. The level is the cents tracked, never below 0:
+       an outflow larger than it spent money from before the span. The outflows of one second
+       come in the heap's order, oldest first by rail name (ach, card, cash, check, internal,
+       unknown, zelle), then by id. Only the split by rail depends on which of them took the
+       newest cents, so a rail decides it and an id never does. */
     Levels = SELECT a FROM Scored:a
       POST-ACCUM
         INT cut = a.@cut_s, INT n = 0, INT m = 0, INT i = 0, INT j = 0, INT level = 0,
@@ -227,8 +222,9 @@ CREATE OR REPLACE QUERY read_money_flow(
         END,
         a.@kept_in += n;
 
-    /* The suffix minima: the lowest level from each outflow to the last, appended from the
-       last outflow back, so that of outflow j is at index m - 1 - j. */
+    /* The lowest level from each outflow to the last, appended from the last outflow back, so
+       that of outflow j is at index m - 1 - j. It stops a lot's scan below as soon as no later
+       outflow can take more of the lot. */
     Lowest = SELECT a FROM Scored:a
       POST-ACCUM
         INT m = a.@out_level.size(), INT j = m - 1, INT low = 0,
@@ -239,8 +235,18 @@ CREATE OR REPLACE QUERY read_money_flow(
             j = j - 1
         END;
 
-    /* One scan per lot, from the first outflow after it, while the lot holds cents and a
-       later outflow falls below its lowest level: each fall inside its band is a portion. */
+    /* The matching, without a stack: count cents as heights. A lot of c cents that arrived
+       at level base holds the band [base, base + c), and still holds max(0, low - base) of
+       them, low being the lowest level since it arrived, which starts at base + c. Each lot is
+       scanned from the first outflow after it, while it holds cents and a later outflow falls
+       below low; each such fall is a portion of the lot that left with that outflow.
+
+       A portion's dwell is the outflow's second minus the lot's. A window w holds the
+       portions with dwell < w, and only outflows before t exist, so an inflow received less
+       than w before t shows only what left by t. Transfer means ach, check, internal and
+       zelle; unknown counts in the rail shares' denominator only. A lot's dwell is the one at
+       which half its cents had left, absent when less than half left by t, and each of its
+       inflows gets the lot's left_24h and dwell. */
     Matched = SELECT a FROM Scored:a
       POST-ACCUM
         INT m = a.@out_level.size(), INT n = a.@kept_in, INT j = 0, INT c = 0, INT base = 0,
@@ -292,8 +298,10 @@ CREATE OR REPLACE QUERY read_money_flow(
         END,
         a.@scan_steps += steps;
 
-    /* The median dwell, from the portions by dwell, each checked against the one before; then
-       the shares, each 0 with an empty denominator. */
+    /* The median dwell: the dwell at which the portions, by ascending dwell, first hold half
+       the cents received, absent when less than half left; the heap of portions is checked in
+       order as it is walked. Then the shares, each one division of two sums of cents, and 0
+       with an empty denominator, which flow_present or left_1d shows. */
     Rows = SELECT a FROM Scored:a
       POST-ACCUM
         INT cumulative = 0, INT previous = 0, BOOL started = FALSE, INT median = -1,
