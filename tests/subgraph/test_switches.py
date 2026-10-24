@@ -12,16 +12,23 @@ from torch import Tensor
 from mule_pattern_learner.model.encode import encode_batch
 from mule_pattern_learner.subgraph.build import Batch
 from mule_pattern_learner.subgraph.layouts import (
+    ACCOUNT,
     ACCOUNT_LAYOUT,
     CUSTOMER_LAYOUT,
     FORWARD,
     IDENTITY_RELATIONS,
     LAYOUT,
+    NODE_LAYOUTS,
+    NODE_TYPES,
     OWNED_BY,
     PAYMENT_LAYOUT,
     PAYS,
     RELATIONS,
+    degree_name,
     reverse,
+)
+from mule_pattern_learner.subgraph.layouts import (
+    DEGREES as DEGREE_RELATIONS,
 )
 from mule_pattern_learner.subgraph.switches import Switch, apply
 from mule_pattern_learner.testing.world import HOUR_MS
@@ -91,6 +98,36 @@ def test_the_scored_account_alone(hand_batch: Batch) -> None:
     assert torch.equal(data.scored_index, built.scored_index)
     assert torch.equal(data.label, built.label) and torch.equal(data.weight, built.weight)
     _reverses_match(switched)
+
+
+def test_the_scored_account_alone_zeroes_the_degrees_of_every_other_node(
+    hand_batch: Batch,
+) -> None:
+    """docs/features.md: the switch zeroes every other node's features, degree columns
+    included, though degrees are counted after the switch, from the edges it keeps. The built
+    batch has degrees on those nodes, and the switch leaves none. The difference shows on the
+    accounts s pays or is paid by: the payments it keeps would count a degree on them again
+    (a_hub, node 1, receives p2), so only zeroing the whole row leaves them 0. No other edge is
+    kept, so a customer, a device or an IP would count 0 whatever is zeroed. Each scored
+    account keeps its own degrees, counted after the switch."""
+    built, data = hand_batch.data, apply(hand_batch, Switch.SCORED_ALONE).data
+    scored = set(built.scored_index.tolist())
+    for kind in NODE_TYPES:
+        degree_columns = [NODE_LAYOUTS[kind].index(degree_name(r)) for r in DEGREE_RELATIONS[kind]]
+        others = [
+            row for row in range(built[kind].x.shape[0]) if kind != ACCOUNT or row not in scored
+        ]
+        assert built[kind].x[others][:, degree_columns].any(), f"no {kind} has a degree to lose"
+        assert not data[kind].x[others][:, degree_columns].any(), kind
+    hub, pays = 1, ACCOUNT_LAYOUT.index("degree_pays")
+    kept = data[PAYS].edge_index
+    assert (
+        1 in kept[1].tolist()
+        and built[ACCOUNT].x[hub, pays] > 0
+        and data[ACCOUNT].x[hub, pays] == 0
+    )
+    x = data[ACCOUNT].x
+    assert x[A_S1, DEGREES:].any() and x[A_S2, DEGREES:].any()
 
 
 def test_without_devices_and_ips(hand_batch: Batch) -> None:
