@@ -145,6 +145,30 @@ def test_the_childs_booster_and_scores_equal_an_in_process_fit() -> None:
     assert found == "equal"
 
 
+def test_at_xgboosts_defaults_neither_a_seed_nor_a_thread_count_changes_the_booster() -> None:
+    """The premise of training each comparison once with no seed (docs/design.md, "Comparisons"):
+    at XGBoost's default settings every row and column is used by every tree, so no seed has
+    anything to draw and the booster is byte for byte the same with no seed, seed 0 and seed 1,
+    and on one thread or four. A default that drew a subsample would make the one model of a
+    comparison an arbitrary draw, and this test would fail on the library that changed it."""
+    found = fresh(
+        PLANTED,
+        """
+        frame = pd.DataFrame(x, columns=columns)
+        weighted = equal_totals(labels, weights)
+        boosters = set()
+        for seed in (None, 0, 1):
+            for jobs in (1, 4):
+                model = xgboost.XGBClassifier(n_estimators=50, random_state=seed, n_jobs=jobs)
+                model.fit(frame, labels, sample_weight=weighted)
+                boosters.add(bytes(model.get_booster().save_raw("ubj")))
+        assert len(boosters) == 1, f"{len(boosters)} boosters from 6 seeds and thread counts"
+        print("identical")
+        """,
+    )
+    assert found == "identical"
+
+
 def test_the_clock_probes_folds_equal_an_in_process_fit() -> None:
     found = fresh(
         PLANTED,
