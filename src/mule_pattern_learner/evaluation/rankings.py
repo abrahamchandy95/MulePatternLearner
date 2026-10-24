@@ -33,7 +33,8 @@ What one run (a ranker's seed) found, beside the headline metrics of the main ra
   account is in it on about five of its 52 Mondays, and the chance of a flag over those rows is
   the chance over five Mondays, not 52: the count would come out low and reward the lists that
   churn most (an account flagged on 1% of its Mondays at random would add 0.049 and not 0.407).
-  Under weighted keys it is NaN.
+  Under weighted keys it is NaN, and run_metrics gives the reason beside it (RunMetrics.
+  not_available), which the metrics table carries.
 
 Lift is never computed.
 """
@@ -78,6 +79,10 @@ COLUMNS = (
     "opened_ms",
     "identified",
 )
+# The distinct-accounts-alerted metrics, one per budget, and why they have no value when the test
+# keys are the fallback's weighted sample.
+ACCOUNTS_ALERTED = tuple(f"accounts_alerted_at_{budget_name(b)}" for b in TEST_BUDGETS)
+WEIGHTED_SAMPLE = "a weighted sample cannot count distinct accounts"
 # The headline metrics of a ranking, in the order of headline's values.
 HEADLINE = (
     *(f"recall_at_{budget_name(b)}" for b in TEST_BUDGETS),
@@ -248,12 +253,14 @@ def ring_links(
 class RunMetrics:
     """What one run found on the test world: its headline metrics and the others of the
     module's docstring by name, its per-Monday table, its table of true mules, and the ranking
-    they were found from."""
+    they were found from. not_available names each metric that has no value (NaN) because of
+    how the test keys are scored, with the reason; it is empty when every key is scored whole."""
 
     values: Mapping[str, float]
     per_monday: pd.DataFrame
     mules: pd.DataFrame
     ranking: Ranking
+    not_available: Mapping[str, str]
 
 
 def mule_table(
@@ -360,7 +367,7 @@ def run_metrics(frame: pd.DataFrame, links: Collection[tuple[int, str]]) -> RunM
         values[f"after_activity_at_{name}"] = (
             float(after_shares[:, column].mean()) if len(after) else float("nan")
         )
-        values[f"accounts_alerted_at_{name}"] = (
+        values[ACCOUNTS_ALERTED[column]] = (
             float(ever_flagged(shares[:, column], account_index, len(accounts)).sum())
             if whole
             else float("nan")
@@ -370,7 +377,8 @@ def run_metrics(frame: pd.DataFrame, links: Collection[tuple[int, str]]) -> RunM
     values["early_warning_ring_link_mules"] = float(warned["ring_link_visible"].sum())
     values["after_activity_account_mondays"] = float(len(after))
     values["ranked_account_mondays"] = float(len(ranking.frame))
-    return RunMetrics(values, ranking.per_monday(), mules, ranking)
+    not_available = {} if whole else dict.fromkeys(ACCOUNTS_ALERTED, WEIGHTED_SAMPLE)
+    return RunMetrics(values, ranking.per_monday(), mules, ranking, not_available)
 
 
 def scored_keys(frame: pd.DataFrame, statuses_kept: Sequence[str]) -> list[tuple[int, str]]:

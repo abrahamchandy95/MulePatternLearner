@@ -155,9 +155,8 @@ def _noise(name: str) -> float:
     return int.from_bytes(hashlib.blake2b(name.encode(), digest_size=4).digest()) / 2**32
 
 
-def test_a_rotations_evaluation(
-    graph: ReferenceGraph, parity: Path, data_dir: Path, tmp_path: Path
-) -> None:
+def _scored_world(graph: ReferenceGraph, parity: Path, tmp_path: Path) -> ScoredWorld:
+    """The evaluation world scored whole on its three Mondays: every key at weight 1."""
     identity = "ab" * 16
     store = Store(identity)
     store.write_answer_key(read_answer_key(Spy(graph)))
@@ -171,23 +170,32 @@ def test_a_rotations_evaluation(
         [(t_ms, account, 1.0) for t_ms, accounts in populations.items() for account in accounts],
         columns=["t_ms", "account_id", "weight"],
     )
-    world = ScoredWorld.of(identity, cache, keys)
+    return ScoredWorld.of(identity, cache, keys)
+
+
+def _run(world: ScoredWorld, ranker: str, seed: int | None, score: float, strength: float) -> Run:
+    """A run whose logits rank the planted mules (every true mule but a_hr3) by strength above
+    noise."""
     mules = {truth.account_id for truth in world.key.mules} - {"a_hr3"}
+    keys = world.keys
+    logits = [
+        strength * (account in mules) + _noise(f"{ranker}{seed}{t_ms}{account}")
+        for t_ms, account in zip(keys["t_ms"], keys["account_id"], strict=True)
+    ]
+    return Run(ranker, seed, score, keys.loc[:, ["t_ms", "account_id"]].assign(logit=logits))
 
-    def run(ranker: str, seed: int | None, score: float, strength: float) -> Run:
-        logits = [
-            strength * (account in mules) + _noise(f"{ranker}{seed}{t_ms}{account}")
-            for t_ms, account in zip(keys["t_ms"], keys["account_id"], strict=True)
-        ]
-        return Run(ranker, seed, score, keys.loc[:, ["t_ms", "account_id"]].assign(logit=logits))
 
+def test_a_rotations_evaluation(
+    graph: ReferenceGraph, parity: Path, data_dir: Path, tmp_path: Path
+) -> None:
+    world = _scored_world(graph, parity, tmp_path)
     runs = [
-        run("gnn", 0, 0.3, 2.0),
-        run("gnn", 1, 0.5, 2.0),
-        run("gnn_scored_alone", 0, 0.2, 0.0),
-        run("gnn_scored_alone", 1, 0.2, 0.0),
+        _run(world, "gnn", 0, 0.3, 2.0),
+        _run(world, "gnn", 1, 0.5, 2.0),
+        _run(world, "gnn_scored_alone", 0, 0.2, 0.0),
+        _run(world, "gnn_scored_alone", 1, 0.2, 0.0),
         # An XGBoost comparison is one model, with no seed.
-        run("xgboost_own", None, 0.4, 1.0),
+        _run(world, "xgboost_own", None, 0.4, 1.0),
     ]
     assert selected(runs) is runs[1]
     audit = replace(DEFAULT_CONFIG.audit, replicates=30)
@@ -261,6 +269,49 @@ def test_a_rotations_evaluation(
     assert calls == dict.fromkeys([(held.ranker, held.seed) for held in runs], 1)
     pd.testing.assert_frame_equal(lazy["metrics"], tables["metrics"])
     pd.testing.assert_frame_equal(lazy["groups"], tables["groups"])
+
+
+def test_distinct_accounts_alerted_are_not_available_under_the_fallback_sample(
+    graph: ReferenceGraph, parity: Path, data_dir: Path, tmp_path: Path
+) -> None:
+    """A weighted fallback sample cannot count distinct accounts, so the metrics table has no
+    value for them and gives the reason beside it; a world scored whole has a value and no
+    reason anywhere."""
+    whole = _scored_world(graph, parity, tmp_path)
+    mules = {truth.account_id for truth in whole.key.mules}
+    # The fallback list: each non-mule stands for ten accounts, every mule for itself.
+    weights = [1.0 if account in mules else 10.0 for account in whole.keys["account_id"]]
+    sampled = replace(whole, keys=whole.keys.assign(weight=weights))
+    audit = replace(DEFAULT_CONFIG.audit, replicates=30)
+    alerted = ["accounts_alerted_at_1pct", "accounts_alerted_at_5pct"]
+
+    def metrics_of(world: ScoredWorld, folder: Path) -> pd.DataFrame:
+        evaluate(
+            world,
+            [_run(world, "gnn", 0, 0.5, 2.0)],
+            audit,
+            0,
+            folder,
+            rotation="D1D2D3",
+            verdict_found=Verdict(("C failed",)),
+        )
+        return pd.read_parquet(folder / "metrics.parquet")
+
+    counted = metrics_of(whole, tmp_path / "whole")
+    assert counted.loc[counted["metric"].isin(alerted), "value"].notna().all()
+    assert counted["not_available"].isna().all()
+
+    found = metrics_of(sampled, tmp_path / "sampled")
+    unavailable = found["metric"].isin(alerted)
+    assert found.loc[unavailable, "metric"].tolist() == alerted
+    assert found.loc[unavailable, "value"].isna().all()
+    assert (
+        found.loc[unavailable, "not_available"].tolist()
+        == ["a weighted sample cannot count distinct accounts"] * 2
+    )
+    # Every other metric has a reason of none, and the headline metrics a value.
+    assert found.loc[~unavailable, "not_available"].isna().all()
+    assert found.loc[found["metric"].isin(HEADLINE), "value"].notna().all()
 
 
 def _frame(logits: list[float]) -> pd.DataFrame:

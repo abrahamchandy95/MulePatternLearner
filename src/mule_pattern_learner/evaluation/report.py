@@ -16,7 +16,9 @@ kind, each with the rotation's name and a development_only column:
 
 - metrics: per ranker and seed, the headline metrics of the main ranking and the others of
   evaluation.rankings, and for the model mule score uses (the GNN seed with the best selection
-  score, marked selected) each headline metric's ring-resampled interval;
+  score, marked selected) each headline metric's ring-resampled interval; and in not_available,
+  for a metric with no value because of how the test keys are scored (distinct accounts alerted
+  under the fallback's weighted sample), the reason, empty for every other row;
 - per_monday: recall and precision at each budget per Monday, per ranker and seed;
 - groups: each group's metrics (evaluation.groups), per ranker and seed;
 - spread: per ranker, group and metric, the mean, standard deviation, least and greatest over
@@ -251,10 +253,12 @@ def _long(run: Run, group: str, values: Mapping[str, float]) -> list[dict[str, o
 @dataclass(frozen=True)
 class _Measured:
     """What one run's measurement leaves, small enough to keep for every run at once: its
-    metrics by name, its per-Monday table, its group table and its headline metrics on each
-    replicate of the ring bootstrap (replicates by HEADLINE)."""
+    metrics by name, why some have no value (RunMetrics.not_available), its per-Monday table,
+    its group table and its headline metrics on each replicate of the ring bootstrap
+    (replicates by HEADLINE)."""
 
     values: Mapping[str, float]
+    not_available: Mapping[str, str]
     per_monday: pd.DataFrame
     groups: pd.DataFrame
     replicates: NDArray[np.float64]
@@ -325,6 +329,7 @@ def evaluate(
         chosen = groups.group_rows(run_frame, surfaced, quiet, hops)
         measured[(run.ranker, run.seed)] = _Measured(
             found.values,
+            found.not_available,
             _seeds(found.per_monday, run),
             _seeds(groups.group_metrics(run_frame, chosen), run),
             replicate_matrix(
@@ -343,9 +348,16 @@ def evaluate(
 
     metrics_rows: list[dict[str, object]] = []
     for run in runs:
-        rows = _long(run, "all", measured[(run.ranker, run.seed)].values)
-        metrics_rows += [{**row, "selected": run is best} for row in rows]
-    metrics = pd.DataFrame(metrics_rows).astype({"seed": "Int64"})
+        held = measured[(run.ranker, run.seed)]
+        metrics_rows += [
+            {
+                **row,
+                "selected": run is best,
+                "not_available": held.not_available.get(str(row["metric"])),
+            }
+            for row in _long(run, "all", held.values)
+        ]
+    metrics = pd.DataFrame(metrics_rows).astype({"seed": "Int64", "not_available": "string"})
     metrics["low"] = np.nan
     metrics["high"] = np.nan
     low, high = percentiles(measured[(best.ranker, best.seed)].replicates, audit.interval)

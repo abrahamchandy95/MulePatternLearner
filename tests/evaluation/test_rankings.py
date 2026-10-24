@@ -166,9 +166,14 @@ def test_what_one_run_found() -> None:
     assert values["after_activity_account_mondays"] == 1
     assert np.isnan(values["early_warning_ring_link_at_1pct"])
     assert values["first_flag_mean_days_at_1pct"] == 2 and values["mules_scored"] == 3
-    # The non-mules stand for 25 accounts each, so the keys are weighted: no distinct count.
+    # The non-mules stand for 25 accounts each, so the keys are weighted: no distinct count, and
+    # the run says why.
     assert np.isnan(values["accounts_alerted_at_1pct"])
     assert np.isnan(values["accounts_alerted_at_5pct"])
+    assert found.not_available == {
+        "accounts_alerted_at_1pct": "a weighted sample cannot count distinct accounts",
+        "accounts_alerted_at_5pct": "a weighted sample cannot count distinct accounts",
+    }
 
 
 def test_distinct_accounts_alerted_are_counted_when_every_key_is_scored_whole() -> None:
@@ -183,18 +188,21 @@ def test_distinct_accounts_alerted_are_counted_when_every_key_is_scored_whole() 
     ]
     scores = pd.DataFrame(rows, columns=["t_ms", "account_id", "logit"])
     keys = scores.loc[:, ["t_ms", "account_id"]].assign(weight=1.0)
-    values = run_metrics(evaluation_frame(scores, keys, KEY, frozenset()), frozenset()).values
+    whole = run_metrics(evaluation_frame(scores, keys, KEY, frozenset()), frozenset())
+    values = whole.values
     assert values["accounts_alerted_at_1pct"] == pytest.approx(1 - 0.91**2)
     assert values["accounts_alerted_at_5pct"] == pytest.approx(1 - 0.55**2)
+    assert whole.not_available == {}
     # Under the fallback list the non-mules are a sample, each of one in ten and standing for
     # ten, and an account is in the list on a few of its Mondays only: a flag on any of them
     # would be counted over those few, so the count is not reported.
     sampled = keys.assign(
         weight=[1.0 if account == "m1" else 10.0 for account in keys["account_id"]]
     )
-    found = run_metrics(evaluation_frame(scores, sampled, KEY, frozenset()), frozenset()).values
-    assert np.isnan(found["accounts_alerted_at_1pct"])
-    assert np.isnan(found["accounts_alerted_at_5pct"])
+    found = run_metrics(evaluation_frame(scores, sampled, KEY, frozenset()), frozenset())
+    assert np.isnan(found.values["accounts_alerted_at_1pct"])
+    assert np.isnan(found.values["accounts_alerted_at_5pct"])
+    assert set(found.not_available) == {"accounts_alerted_at_1pct", "accounts_alerted_at_5pct"}
 
 
 def test_a_ring_link_visible_on_the_early_warning_monday(
