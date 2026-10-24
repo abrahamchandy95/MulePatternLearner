@@ -667,7 +667,10 @@ customers over 90 days), and each device's and IP's `observed_only`, under the r
   to each device or IP they touch, stopping at the ninth customer, since they need only
   whether it is a leaf. A leaf's row (its measure, kind and `observed_only`) is joined by id
   from `read_hubs`' cached output when the batch is built, and the batch builder refuses a
-  node whose inline leaf flag disagrees with `read_hubs`; parity checks the two agree.
+  node whose B5 inline leaf flag disagrees with `read_hubs`; parity checks that B5's flags
+  agree. B6 prints no per-node flag, so its hubs and crowds are checked by the parity of its
+  whole community block with the reference graph, whose test world has a crowd between two
+  members.
 
 ### `read_world`
 
@@ -1442,7 +1445,7 @@ Commands take no options: worlds, roles, dates and settings live in config.
 | Command | What it does |
 |---|---|
 | `mule install` | installs the changed queries of `gsql/queries/` and `gsql/evaluation/` |
-| `mule parity` | testing code: runs every installed query on the loaded world, and the reference graph on the same export (the loader's shards whose `read_world` identity equals the live graph's, found under the configured export folder), on a seeded sample of Mondays and accounts with mules oversampled; compares the canonical answers and refusals, that an account fetched alone equals itself among 31 others, and that B5's and B6's inline leaf flags equal `read_hubs`; writes the versions that pass, the TigerGraph version and the world identity to `gsql/parity.toml`, committed with the code |
+| `mule parity` | testing code: runs every installed query on the loaded world, and the reference graph on the same export (the loader's shards whose `read_world` identity equals the live graph's, found under the configured export folder), on a seeded sample of Mondays and accounts with mules oversampled; compares the canonical answers and refusals (B6's hubs and crowds are checked by the parity of its whole community block, since it prints no leaf flag), that an account fetched alone equals itself among 31 others, and that B5's inline leaf flags equal `read_hubs`; writes the versions that pass, the TigerGraph version and the world identity to `gsql/parity.toml`, committed with the code |
 | `mule prepare` | data code: reads `read_world` and matches the configured world by its identity file, on the fields the two share; checks the scored Mondays and the lookback, the value sets and the labels from `read_labels`; reads the populations; writes the training examples and weights; reports counts, the identified active share and the weight balance per Monday |
 | `mule fetch` | fills the cache for every example the configured roles of the loaded world need: the training draw, and every scorable account of every Monday of a selection or test role |
 | `mule audit` | evaluation code, on the loaded world: reads the answer key into the evaluation store; checks PhantomLedger's gate record against the world's identity; builds and fetches a test-role fallback list if configured; runs the label checks, the clock probe and the identified share by onset month; on development worlds also the feature audit and the hub, leaf and card-spending checks; writes pass records to the evaluation store |

@@ -2,8 +2,9 @@
 docs/features.md ("The community block") and docs/design.md ("read_community (B6): how the
 mule network formed"): the rounds by sharing, which never step through a leaf, the payment
 round, the block by hand, a closed account of a member, an account with no owner, a hub's own
-payments, the cap of 64 and its order in every round, a start and a payment exactly 30 days
-before t, the hub parameter and the refusals.
+payments, a crowd that sits between two members (which B6 checks by the parity of its whole
+block, since it prints no per-node leaf flag), the cap of 64 and its order in every round, a
+start and a payment exactly 30 days before t, the hub parameter and the refusals.
 
 Every answer goes through ReferenceGraph.run and the query's own parser, so it has the shape
 TigerGraph prints and the parser's checks hold of it. Amounts are in cents. The leak tests
@@ -19,7 +20,12 @@ import pytest
 from mule_pattern_learner.testing import fixtures
 from mule_pattern_learner.testing.reference import ReferenceGraph
 from mule_pattern_learner.testing.world import DAY_MS, T, WorldBuilder
-from mule_pattern_learner.tigergraph.queries import READ_COMMUNITY, read_community
+from mule_pattern_learner.tigergraph.queries import (
+    READ_COMMUNITY,
+    READ_HUBS,
+    read_community,
+    read_hubs,
+)
 from mule_pattern_learner.tigergraph.queries.read_community import Community
 from mule_pattern_learner.tigergraph.queries.rows import QueryRefused
 
@@ -135,6 +141,67 @@ def test_the_hubs_are_those_of_the_parameter_alone() -> None:
     graph = _world().graph()
     assert _blocks(graph, ["a_s"], []) == (expected,)
     assert _blocks(graph, ["a_s"], ["x_nowhere"]) == (expected,)
+
+
+def _between(*, unregistered: bool) -> WorldBuilder:
+    """Two members with a crowd between them and nothing else shared.
+
+    - p_s holds a_s; p_m's a_m paid a_s 50.00 five days before t, so p_m joins p_s's community
+      in the payment round and no other way.
+    - p_s, p_m and p_k1 to p_k6 have been enrolled on the carrier device d_crowd since joining:
+      8 customers, which is no crowd. When unregistered is set, p_u, who never enrolled on it,
+      sent a payment from a_u seen on d_crowd 20 days before t: a ninth customer by the crowd
+      rule, which counts registered and unregistered customers alike, so d_crowd is a crowd.
+    """
+    w = WorldBuilder()
+    w.external("x_ext", OPENED)
+    for name in ("s", "m", *(f"k{n}" for n in range(1, 7))):
+        w.customer(name, JOINED)
+        w.device(f"p_{name}", "d_crowd", JOINED)
+    w.pay("z_m_s", "a_m", "a_s", T - 5 * D, 50.0, "zelle")
+    if unregistered:
+        w.customer("u", JOINED)
+        w.pay("x_u_seen", "a_u", "x_ext", T - 20 * D, 5.0, "ach", device="d_crowd")
+    return w
+
+
+def _crowds(graph: ReferenceGraph) -> set[str]:
+    """The devices read_hubs lists as crowds on t."""
+    leaves = read_hubs.parse(graph.run(READ_HUBS, read_hubs.params(T)))
+    return {leaf.node_id for leaf in (*leaves.devices, *leaves.ips)}
+
+
+def test_a_crowd_between_two_members_is_no_shared_node_and_brings_no_member() -> None:
+    # d_crowd holds 9 customers, p_u counted though it never enrolled: read_hubs lists it, so
+    # the community does not step through it. p_s and p_m are both enrolled on it and are
+    # members, p_m by a payment, yet the community holds those two and no more: no shared
+    # node, so no link, density 0 and no new link; p_k1 to p_k6 and p_u are no members. The
+    # one payment of the last 30 days, a_m to a_s, is between two members: 5,000 cents, an
+    # isolation of 1 and a count of 1. From p_m's account the block is the same two members.
+    graph = _between(unregistered=True).graph()
+    assert _crowds(graph) == {"d_crowd"}
+    assert _blocks(graph, ["a_s", "a_m"], []) == (
+        Community("a_m", 2, False, 0, 0.0, 0.0, 5_000, 1.0, 1),
+        Community("a_s", 2, False, 0, 0.0, 0.0, 5_000, 1.0, 1),
+    )
+    # A customer of the crowd alone is no community but itself. So is p_u, who never enrolled
+    # on d_crowd: its one payment of the last 30 days, a_u's to another bank 20 days before t,
+    # is external, so an isolation of 0 over a count of 1.
+    assert _blocks(graph, ["a_k1", "a_u"], []) == (
+        Community("a_k1", 1, False, 0, 0.0, 0.0, 0, 0.0, 0),
+        Community("a_u", 1, False, 0, 0.0, 0.0, 0, 0.0, 1),
+    )
+
+
+def test_the_same_node_with_one_customer_fewer_is_no_crowd_and_joins_its_users() -> None:
+    # Without p_u, d_crowd holds 8 customers, which is no crowd (a leaf holds more than 8): the
+    # community steps through it. Round 1 adds p_m and p_k1 to p_k6, 7 candidates, all
+    # members; the payment round adds nobody, p_m being one already. d_crowd is shared by the
+    # 8 members: 8 links over 8 members x 1 node, a density of 1, and none new, every link
+    # having begun before the lookback. The payment is between two members as before.
+    graph = _between(unregistered=False).graph()
+    assert _crowds(graph) == set()
+    assert _blocks(graph, ["a_s"], []) == (Community("a_s", 8, False, 1, 1.0, 0.0, 5_000, 1.0, 1),)
 
 
 def _crowded(
