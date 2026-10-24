@@ -341,7 +341,8 @@ switch.
 
 - **Scored account alone:**
   - keeps s's row and s's own payment edges (`pays` and `rev_pays`), drops every other edge and
-    zeroes every other node's features;
+    zeroes every other node's features (their degree columns included, zeroed after the
+    recount; only each scored account keeps degrees counted from the edges it kept);
   - zeroes the fields measured at the other end: `dwell_tracked`, `left_24h`, `dwell` and
     `receiver_gap` on s's outflows, `sender_gap` on s's inflows; keeps `amount`, `rail`, `age`
     and the pair fields;
