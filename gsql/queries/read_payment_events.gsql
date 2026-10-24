@@ -39,11 +39,11 @@ CREATE OR REPLACE QUERY read_payment_events(
     LIST<STRING> account_ids,
     SET<VERTEX<Account>> hub_accounts
 ) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
-    /* A payment of a capped list: its second, its id, the account at its other end and
-       whether it is a Zelle transfer. Another account of a scored account's customer: the
-       second of its latest payment in the lookback, 0 with none, and its id. An ownership
-       edge: the account and its customer. */
-    TYPEDEF TUPLE<INT sec, STRING id, STRING other, BOOL zelle> Picked;
+    /* A payment of a capped list: its second, its id and the account at its other end.
+       Another account of a scored account's customer: the second of its latest payment in
+       the lookback, 0 with none, and its id. An ownership edge: the account and its
+       customer. */
+    TYPEDEF TUPLE<INT sec, STRING id, STRING other> Picked;
     TYPEDEF TUPLE<INT sec, STRING id> Sibling;
     TYPEDEF TUPLE<STRING account_id, STRING customer_id> OwnedBy;
     /* The account hubs of t. */
@@ -69,7 +69,7 @@ CREATE OR REPLACE QUERY read_payment_events(
       @@reached_by;
     MapAccum<STRING, SetAccum<OwnedBy>> @@owned_by;
     /* The hop-1 accounts, the accounts and the payments of every subgraph, by id. */
-    SetAccum<STRING> @@hop1_ids, @@account_ids, @@transaction_ids, @@transfer_ids;
+    SetAccum<STRING> @@hop1_ids, @@account_ids, @@payment_ids;
     /* The request's ids, each once, and how many it gave. */
     SetAccum<STRING> @@ids;
     SumAccum<INT> @@given;
@@ -121,16 +121,14 @@ CREATE OR REPLACE QUERY read_payment_events(
       -((Transaction_To_Account>|Transfer_To_Account>):f)- Account:b
       WHERE p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms AND b != a
       ACCUM
-        a.@scored_out += Picked(floor(p.event_ts_ms / 1000), p.id, b.id,
-          p.type == "Zelle_Transfer");
+        a.@scored_out += Picked(floor(p.event_ts_ms / 1000), p.id, b.id);
     ScoredReceived = SELECT a FROM Scored:a
       -((Account_Received_Transaction>|Account_Received_Zelle_Transfer>):e)-
       (Payment_Transaction|Zelle_Transfer):p
       -((Transaction_From_Account>|Transfer_From_Account>):f)- Account:b
       WHERE p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms AND b != a
       ACCUM
-        a.@scored_in += Picked(floor(p.event_ts_ms / 1000), p.id, b.id,
-          p.type == "Zelle_Transfer");
+        a.@scored_in += Picked(floor(p.event_ts_ms / 1000), p.id, b.id);
     ScoredPicked = SELECT a FROM Scored:a
       POST-ACCUM
         @@subgraph_accounts += (a.id -> a.id),
@@ -141,7 +139,7 @@ CREATE OR REPLACE QUERY read_payment_events(
             @@account_ids += x.other,
             @@hop1_ids += x.other,
             @@reached_by += (x.other -> a.id),
-            IF x.zelle THEN @@transfer_ids += x.id ELSE @@transaction_ids += x.id END
+            @@payment_ids += x.id
         END,
         FOREACH x IN a.@scored_in DO
             @@subgraph_payments += (a.id -> x.id),
@@ -149,7 +147,7 @@ CREATE OR REPLACE QUERY read_payment_events(
             @@account_ids += x.other,
             @@hop1_ids += x.other,
             @@reached_by += (x.other -> a.id),
-            IF x.zelle THEN @@transfer_ids += x.id ELSE @@transaction_ids += x.id END
+            @@payment_ids += x.id
         END;
 
     /* The hop-1 accounts that are no hub are expanded: their newest 16 payments each way,
@@ -164,16 +162,14 @@ CREATE OR REPLACE QUERY read_payment_events(
       -((Transaction_To_Account>|Transfer_To_Account>):f)- Account:b
       WHERE p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms AND b != c
       ACCUM
-        c.@other_out += Picked(floor(p.event_ts_ms / 1000), p.id, b.id,
-          p.type == "Zelle_Transfer");
+        c.@other_out += Picked(floor(p.event_ts_ms / 1000), p.id, b.id);
     Hop1Received = SELECT c FROM Hop1:c
       -((Account_Received_Transaction>|Account_Received_Zelle_Transfer>):e)-
       (Payment_Transaction|Zelle_Transfer):p
       -((Transaction_From_Account>|Transfer_From_Account>):f)- Account:b
       WHERE p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms AND b != c
       ACCUM
-        c.@other_in += Picked(floor(p.event_ts_ms / 1000), p.id, b.id,
-          p.type == "Zelle_Transfer");
+        c.@other_in += Picked(floor(p.event_ts_ms / 1000), p.id, b.id);
     Hop1Picked = SELECT c FROM Hop1:c
       POST-ACCUM
         FOREACH x IN c.@other_out DO
@@ -182,7 +178,7 @@ CREATE OR REPLACE QUERY read_payment_events(
                 @@subgraph_accounts += (i -> x.other)
             END,
             @@account_ids += x.other,
-            IF x.zelle THEN @@transfer_ids += x.id ELSE @@transaction_ids += x.id END
+            @@payment_ids += x.id
         END,
         FOREACH x IN c.@other_in DO
             FOREACH i IN @@reached_by.get(c.id) DO
@@ -190,7 +186,7 @@ CREATE OR REPLACE QUERY read_payment_events(
                 @@subgraph_accounts += (i -> x.other)
             END,
             @@account_ids += x.other,
-            IF x.zelle THEN @@transfer_ids += x.id ELSE @@transaction_ids += x.id END
+            @@payment_ids += x.id
         END;
 
     /* The other accounts of each scored account's customer, ranked by their latest payment
@@ -255,9 +251,10 @@ CREATE OR REPLACE QUERY read_payment_events(
 
     /* The payments of every subgraph, each with its cents, its rail (zelle for a Zelle
        transfer, which has no payment_rail) and its age; then its ends, and whether each is a
-       hub. */
-    TransactionsListed = to_vertex_set(@@transaction_ids, "Payment_Transaction");
-    TransfersListed = to_vertex_set(@@transfer_ids, "Zelle_Transfer");
+       hub. The ids of both kinds are one set, each resolved to its own kind: to_vertex_set
+       drops an id the type lacks, and no id is of both kinds. */
+    TransactionsListed = to_vertex_set(@@payment_ids, "Payment_Transaction");
+    TransfersListed = to_vertex_set(@@payment_ids, "Zelle_Transfer");
     Transactions = SELECT p FROM TransactionsListed:p
       WHERE p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms
       POST-ACCUM
@@ -332,7 +329,7 @@ CREATE OR REPLACE QUERY read_payment_events(
             p.@receiver_gap_ms += p.event_ts_ms - p.@receiver_last
         END;
 
-    PRINT "ok" AS status, "read_payment_events-46f6c5d2e2c5" AS version;
+    PRINT "ok" AS status, "read_payment_events-ee69e736b059" AS version;
     PRINT Accounts[Accounts.id AS account_id, Accounts.is_external AS is_external] AS accounts;
     PRINT Rows[Rows.id AS payment_id, Rows.@sender_id AS sender_id,
       Rows.@receiver_id AS receiver_id, Rows.@amount AS amount, Rows.@rail AS rail,

@@ -129,7 +129,7 @@ def test_the_registry_holds_its_builder_and_rows() -> None:
 # What the query declares, exactly, in order. Every heap has its cap as its capacity and keeps
 # the newest by second, ties by id; every cent is INT, never mixed with UINT.
 DECLARATIONS = [
-    "TYPEDEF TUPLE<INT sec, STRING id, STRING other, BOOL zelle> Picked",
+    "TYPEDEF TUPLE<INT sec, STRING id, STRING other> Picked",
     "TYPEDEF TUPLE<INT sec, STRING id> Sibling",
     "TYPEDEF TUPLE<STRING account_id, STRING customer_id> OwnedBy",
     "OrAccum @hub",
@@ -146,7 +146,7 @@ DECLARATIONS = [
     "SumAccum<UINT> @age_ms, @pair_gap_ms, @pair_age_ms, @sender_gap_ms, @receiver_gap_ms",
     "MapAccum<STRING, SetAccum<STRING>> @@subgraph_accounts, @@subgraph_payments, @@reached_by",
     "MapAccum<STRING, SetAccum<OwnedBy>> @@owned_by",
-    "SetAccum<STRING> @@hop1_ids, @@account_ids, @@transaction_ids, @@transfer_ids",
+    "SetAccum<STRING> @@hop1_ids, @@account_ids, @@payment_ids",
     "SetAccum<STRING> @@ids",
     "SumAccum<INT> @@given",
     f"UINT lookback_ms = {LOOKBACK_MS}",
@@ -308,8 +308,8 @@ def test_the_selects_run_in_the_order_the_parts_need() -> None:
         "Hubs = { hub_accounts }",
         'Hop1Listed = to_vertex_set ( @@hop1_ids , "Account" )',
         'AccountsListed = to_vertex_set ( @@account_ids , "Account" )',
-        'TransactionsListed = to_vertex_set ( @@transaction_ids , "Payment_Transaction" )',
-        'TransfersListed = to_vertex_set ( @@transfer_ids , "Zelle_Transfer" )',
+        'TransactionsListed = to_vertex_set ( @@payment_ids , "Payment_Transaction" )',
+        'TransfersListed = to_vertex_set ( @@payment_ids , "Zelle_Transfer" )',
         "Payments = Transactions UNION Transfers",
     ]
 
@@ -389,8 +389,8 @@ def test_each_capped_list_reads_the_lookbacks_payments_but_self_payments(
     target: str, alias: str, edges: list[set[str]], heap: str
 ) -> None:
     """Every payment of the lookback, of either kind, one way, goes into the account's heap
-    with its second, its id, the account at its other end and whether it is a Zelle transfer.
-    A payment whose other end is the account itself is read nowhere."""
+    with its second, its id and the account at its other end, whatever its kind. A payment
+    whose other end is the account itself is read nowhere."""
     select = select_of(DEFINITION, target)
     assert [step.alias for step in select.vertices] == [alias, "p", "b"]
     assert select.vertices[0].chosen and select.vertices[1].types == PAYMENTS
@@ -398,8 +398,7 @@ def test_each_capped_list_reads_the_lookbacks_payments_but_self_payments(
     assert [set(edge.types) for edge in select.edges] == edges
     assert select.conjuncts == WINDOW | {f"b != {alias}"}
     assert accumulation_text(DEFINITION, target) == normal(
-        f"""{alias}.{heap} += Picked(floor(p.event_ts_ms / 1000), p.id, b.id,
-          p.type == "Zelle_Transfer")"""
+        f"{alias}.{heap} += Picked(floor(p.event_ts_ms / 1000), p.id, b.id)"
     )
 
 
@@ -423,8 +422,8 @@ def test_the_caps_keep_the_newest_by_second_and_break_ties_by_id() -> None:
 
 def test_the_scored_accounts_payments_join_its_subgraph_with_their_ends() -> None:
     """The scored account, each of its kept payments and the account at the other end of
-    each join its subgraph; each such account is a hop-1 account of it, and the payment is a
-    transaction or a transfer by its kind. By hand: a scored a_01 that paid c_01 twice and was
+    each join its subgraph; each such account is a hop-1 account of it, and its payment id
+    is kept, whatever its kind. By hand: a scored a_01 that paid c_01 twice and was
     paid by c_02 has the accounts a_01, c_01 and c_02, three payments, and is the scored
     account c_01 and c_02 were reached by."""
     picked = """@@subgraph_payments += (a.id -> x.id),
@@ -432,7 +431,7 @@ def test_the_scored_accounts_payments_join_its_subgraph_with_their_ends() -> Non
         @@account_ids += x.other,
         @@hop1_ids += x.other,
         @@reached_by += (x.other -> a.id),
-        IF x.zelle THEN @@transfer_ids += x.id ELSE @@transaction_ids += x.id END"""
+        @@payment_ids += x.id"""
     assert accumulation_text(DEFINITION, "ScoredPicked") == normal(
         f"""@@subgraph_accounts += (a.id -> a.id),
         @@account_ids += a.id,
@@ -456,7 +455,7 @@ def test_only_hop1_accounts_that_are_no_hub_are_expanded() -> None:
             @@subgraph_accounts += (i -> x.other)
         END,
         @@account_ids += x.other,
-        IF x.zelle THEN @@transfer_ids += x.id ELSE @@transaction_ids += x.id END"""
+        @@payment_ids += x.id"""
     assert accumulation_text(DEFINITION, "Hop1Picked") == normal(
         f"""FOREACH x IN c.@other_out DO {picked} END,
         FOREACH x IN c.@other_in DO {picked} END"""

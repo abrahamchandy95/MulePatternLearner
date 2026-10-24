@@ -139,7 +139,7 @@ REGISTRY: dict[str, Query] = {
         Query(
             READ_PAYMENT_EVENTS,
             QUERIES_FOLDER,
-            "read_payment_events-46f6c5d2e2c5",
+            "read_payment_events-ee69e736b059",
             read_payment_events.params,
             (
                 read_payment_events.EventAccount,
