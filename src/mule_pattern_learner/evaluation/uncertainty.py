@@ -14,8 +14,8 @@ resamples identified mule accounts instead (training.selection).
 
 Ranked holds account-Mondays ordered by score in blocks of tied scores, so that the weighted
 ROC AUC and the weighted average precision of any weights, a replicate's among them, take one
-pass over the rows: tied scores count half, as one threshold of the curves (metrics.roc_curve
-and metrics.precision_recall_curve).
+pass over the rows: tied scores count half, as one threshold of the ROC and precision-recall
+curves.
 """
 
 from __future__ import annotations
