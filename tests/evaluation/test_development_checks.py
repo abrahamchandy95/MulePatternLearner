@@ -20,9 +20,10 @@ from mule_pattern_learner.evaluation.development_checks import (
 from mule_pattern_learner.subgraph.build import read_rows
 from mule_pattern_learner.subgraph.cache import Cache
 from mule_pattern_learner.subgraph.fetch import fetch
+from mule_pattern_learner.testing import fixtures
 from mule_pattern_learner.testing.calendar import Spy
 from mule_pattern_learner.testing.reference import ReferenceGraph
-from mule_pattern_learner.testing.world import DAY_MS, T
+from mule_pattern_learner.testing.world import DAY_MS, T, WorldBuilder
 
 W = 7 * DAY_MS
 
@@ -47,6 +48,40 @@ def test_a_mules_own_nodes_from_its_rows(
     assert flow_shares(ordinary) == ([0.0, 0.0, 0.0, 0.0, 0.0], 1.0)
 
 
+def test_a_scored_accounts_own_nodes_are_only_those_of_its_own_edges(
+    parity: Path, tmp_path: Path
+) -> None:
+    # a_s's customer is enrolled on d_enrolled and i_enrolled, which no payment of a_s was seen
+    # on, and on i_crowd, which nine more customers are enrolled on (a leaf). a_s's one payment,
+    # to a_c, was seen on d_seen and i_seen, which its customer is not enrolled on. a_c's
+    # customer is enrolled on d_other and i_other: a_s's subgraph holds them on a_c's edges,
+    # and they are not a_s's own.
+    w = WorldBuilder()
+    w.customer("s", fixtures.JOINED)
+    w.customer("c", fixtures.JOINED)
+    for node in ("i_enrolled", "i_crowd"):
+        w.ip("p_s", node, T - 60 * DAY_MS)
+    w.device("p_s", "d_enrolled", T - 60 * DAY_MS)
+    w.device("p_c", "d_other", T - 60 * DAY_MS)
+    w.ip("p_c", "i_other", T - 60 * DAY_MS)
+    for index in range(9):
+        w.customer(f"k{index}", fixtures.JOINED)
+        w.ip(f"p_k{index}", "i_crowd", T - 60 * DAY_MS)
+    w.pay("s_c", "a_s", "a_c", T - 3 * DAY_MS, 50.0, "ach", device="d_seen", ip="i_seen")
+    cache = Cache(tmp_path / "cache")
+    fetch(Spy(w.graph()), cache, {T: ["a_s"]}, parity=parity)
+    (rows,) = read_rows(cache, [(T, "a_s")])
+    in_subgraph = {node.node_id for node in (*rows.identity.devices, *rows.identity.ips)}
+    assert {"d_other", "i_other"} <= in_subgraph
+    assert own_nodes(rows).nodes == {
+        ("device", "d_enrolled"): False,
+        ("ip", "i_enrolled"): False,
+        ("ip", "i_crowd"): True,
+        ("device", "d_seen"): False,
+        ("ip", "i_seen"): False,
+    }
+
+
 def test_the_leaf_share_of_ring_nodes() -> None:
     # Ring 1's two mules both reach d1 and i1 at T, i1 a leaf: two ring nodes, one leaf. Ring 2
     # has one mule at T, and a_m4 no ring, so neither makes a ring node.
@@ -61,6 +96,22 @@ def test_the_leaf_share_of_ring_nodes() -> None:
     found = ring_leaf_share(rows, nodes)
     assert found.to_dict("records") == [{"ring_nodes": 2, "leaves": 1, "leaf_share": 0.5}]
     assert np.isnan(ring_leaf_share(rows[2:4], nodes[2:4])["leaf_share"].iloc[0])
+
+
+def test_a_node_reached_by_mules_of_two_rings_is_no_ring_node() -> None:
+    # Each ring has one active mule on d1: neither ring has two.
+    rows = [(T, "a_m1", 1), (T, "a_m2", 2)]
+    nodes = [OwnNodes({("device", "d1"): False})] * 2
+    found = ring_leaf_share(rows, nodes)
+    assert found["ring_nodes"].tolist() == [0] and np.isnan(found["leaf_share"].iloc[0])
+
+
+def test_a_node_reached_by_two_ringless_mules_is_no_ring_node() -> None:
+    # A ringless mule (ring -1) belongs to no ring, so two of them are not a ring's two mules.
+    rows = [(T, "a_m1", -1), (T, "a_m2", -1)]
+    nodes = [OwnNodes({("device", "d1"): False})] * 2
+    found = ring_leaf_share(rows, nodes)
+    assert found["ring_nodes"].tolist() == [0] and np.isnan(found["leaf_share"].iloc[0])
 
 
 def test_the_card_spending_report() -> None:
