@@ -48,9 +48,10 @@ from mule_pattern_learner.model.hetero import HeteroModel
 from mule_pattern_learner.subgraph.cache import Cache
 from mule_pattern_learner.subgraph.fetch import fetch
 from mule_pattern_learner.subgraph.layouts import LAYOUT
+from mule_pattern_learner.testing import fixtures
 from mule_pattern_learner.testing.calendar import Spy
 from mule_pattern_learner.testing.reference import ReferenceGraph
-from mule_pattern_learner.testing.world import DAY_MS, T
+from mule_pattern_learner.testing.world import DAY_MS, Mule, T, WorldBuilder
 from mule_pattern_learner.tigergraph.queries.read_answer_key import AccountTruth
 from mule_pattern_learner.training import contract
 from mule_pattern_learner.training.batches import ScoringBatches
@@ -238,6 +239,40 @@ def test_a_ring_link_visible_on_the_early_warning_monday(
     # Without its ring-mates on the Monday, nothing shares its device.
     alone = frame[frame["account_id"].isin(["a_late", "a_o00"])]
     assert ring_links(cache, alone, [(T1, "a_late")]) == frozenset()
+
+
+def _mules_of_ring_four(accounts: list[str]) -> pd.DataFrame:
+    """The frame of the accounts, each a mule of ring 4 active on T, with a logit of 0."""
+    key = AnswerKey(
+        tuple(
+            AccountTruth(account, 1, 4, T - 5 * D, T + 2 * D, 0, "deposit", True)
+            for account in accounts
+        )
+    )
+    scores = pd.DataFrame({"t_ms": [T] * len(accounts), "account_id": accounts, "logit": 0.0})
+    return evaluation_frame(
+        scores, scores.loc[:, ["t_ms", "account_id"]].assign(weight=1.0), key, frozenset()
+    )
+
+
+def test_a_ring_link_needs_a_mate_of_another_customer(parity: Path, tmp_path: Path) -> None:
+    # p_s owns two mules of ring 4, a_s1 and a_s2, each copying p_s's enrolment on the device
+    # d_home. Between them they link to nothing, since each one's mate is its own customer's
+    # account. a_o, of another customer on ring 4 and enrolled on d_home too, is linked, and it
+    # links both of them.
+    w = WorldBuilder()
+    w.party("p_s", fixtures.JOINED)
+    for account in ("a_s1", "a_s2"):
+        w.account(account, "p_s", fixtures.JOINED, mule=Mule(T - 5 * D, T + 2 * D, ring=4))
+    w.device("p_s", "d_home", T - 60 * D)
+    w.customer("o", fixtures.JOINED, mule=Mule(T - 5 * D, T + 2 * D, ring=4))
+    w.device("p_o", "d_home", T - 60 * D)
+    cache = Cache(tmp_path / "cache")
+    fetch(Spy(w.graph()), cache, {T: ["a_s1", "a_s2", "a_o"]}, parity=parity)
+    own = [(T, "a_s1"), (T, "a_s2")]
+    assert ring_links(cache, _mules_of_ring_four(["a_s1", "a_s2"]), own) == frozenset()
+    together = _mules_of_ring_four(["a_s1", "a_s2", "a_o"])
+    assert ring_links(cache, together, [*own, (T, "a_o")]) == {*own, (T, "a_o")}
 
 
 def test_model_files_score_the_test_keys(

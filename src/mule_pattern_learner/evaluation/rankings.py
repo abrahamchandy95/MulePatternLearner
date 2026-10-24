@@ -23,8 +23,8 @@ What one run (a ranker's seed) found, beside the headline metrics of the main ra
   onset to its first flag while active, its median rank over its active Mondays, its share on
   its early-warning Monday, and the chance it is flagged after its activity;
 - early warning: the mean share on the early-warning Mondays, and among the mules whose ring
-  link is visible that Monday (a node of the mule's own that another account of its ring
-  reaches that Monday, evaluation.development_checks.own_nodes);
+  link is visible that Monday (a node of the mule's own that an account of its ring at another
+  customer reaches that Monday, evaluation.development_checks.own_nodes);
 - after activity: the mean share of the account-Mondays after mule_last_ms + 7 days;
 - distinct accounts alerted over the scored year at each budget: the expected number of
   ranked accounts flagged on at least one Monday, which beside the share of mules ever flagged
@@ -61,7 +61,7 @@ from ..training.contract import Lock
 from ..training.scoring import score
 from ..training.trainer import load_trained
 from .answer_key import ACTIVE, AFTER, EARLY_WARNING, NON_MULE, AnswerKey, statuses
-from .development_checks import own_nodes
+from .development_checks import customer_of, other_customer, own_nodes
 from .label_checks import JOINED_COLUMNS, truth_join_columns
 from .uncertainty import Ranked
 
@@ -220,8 +220,10 @@ def ring_links(
     cache: Cache, frame: pd.DataFrame, rows: Iterable[tuple[int, str]]
 ) -> frozenset[tuple[int, str]]:
     """Of rows, (Monday, mule account), those whose ring link is visible that Monday: a device
-    or IP of the mule's own (its owner-enrolment or seen edges) that the own edges of another
-    account of its ring scored that Monday reach too, read from the cache."""
+    or IP of the mule's own (its owner-enrolment or seen edges) that the own edges of an account
+    of its ring reach too, read from the cache, when that account belongs to another customer.
+    Two accounts of one customer copy the same enrolment, so an account of the mule's own
+    customer is no mate."""
     members = frame.loc[frame["mule_ring_id"] >= 0, ["t_ms", "account_id", "mule_ring_id"]]
     ring_of = {
         (int(t_ms), str(account)): int(ring)
@@ -235,14 +237,20 @@ def ring_links(
         mates = sorted(
             account for (day, account), ring in ring_of.items() if day == t_ms and ring in rings
         )
-        nodes = {
-            example.scored: set(own_nodes(example).nodes)
+        examples = {
+            example.scored: example
             for example in read_rows(cache, [(t_ms, account) for account in mates])
         }
+        nodes = {account: set(own_nodes(example).nodes) for account, example in examples.items()}
+        customers = {account: customer_of(example) for account, example in examples.items()}
         for account in mine:
             ring = ring_of[(t_ms, account)]
             others = [
-                nodes[mate] for mate in mates if mate != account and ring_of[(t_ms, mate)] == ring
+                nodes[mate]
+                for mate in mates
+                if mate != account
+                and ring_of[(t_ms, mate)] == ring
+                and other_customer(customers[account], customers[mate])
             ]
             if nodes[account] & set[tuple[str, str]]().union(*others):
                 found.add((t_ms, account))

@@ -1214,13 +1214,21 @@ logit above about 17.
 | ROC AUC, PR AUC | over all ranked account-Mondays, with ring-resampled intervals |
 | Share ever flagged while active | per mule, flagged on any active Monday |
 | Time to first flag | days from onset to the first Monday it is flagged while active |
-| Early warning | the share of mules flagged on their early-warning Monday, the one Monday with `mule_onset_ms - 7 days < t <= mule_onset_ms`, against that Monday's thresholds; also among mules whose ring link is visible that Monday (a device or IP of the mule's own that the own edges of another true mule of its ring, scored that Monday in any status, also reach; this is not the ring's devices and IPs of [the feature audit](#the-feature-audit)). Reported as conditional on PhantomLedger's researched lead law, since tenures with no payment are not generated |
+| Early warning | the share of mules flagged on their early-warning Monday, the one Monday with `mule_onset_ms - 7 days < t <= mule_onset_ms`, against that Monday's thresholds; also among mules whose ring link is visible that Monday (a device or IP of the mule's own that the own edges of a true mule of its ring at another customer, scored that Monday in any status, also reach; this is not the ring's devices and IPs of [the feature audit](#the-feature-audit)). Reported as conditional on PhantomLedger's researched lead law, since tenures with no payment are not generated |
 | After activity | flags on Mondays after `mule_last_ms + 7 days`, reported apart |
 | Distinct accounts alerted | over the scored year at each budget, beside the share ever flagged, which otherwise rewards lists that churn. Counted only when every key is scored whole. When evaluation falls back to the weighted sample (see [If whole-world scoring is too slow](#if-whole-world-scoring-is-too-slow)) it is reported as not available, with the reason: it has no value, and the metrics table gives the reason beside it, that a weighted sample cannot count distinct accounts. The sample takes each non-mule account-Monday on its own, so an account is in it on only a few of its 52 Mondays, and a count over those few would come out low and favour the lists that churn most |
 
 Lift is never printed beside recall at the same budget. The top of the list leads because a
 bank works its alert list from the top, and PR AUC can be carried by a few mules ranked above
 every normal account.
+
+**The early-warning ring link** is an evaluation slice, not a detection rule. It reads the answer
+key only for each account's ring and status, to choose which mules it reports on and which
+accounts are their ring-mates. The model never reads it, and no feature says whether an account
+is a mule. A link to a ring is a signal the GNN may learn from the graph, never proof: the account
+linked to may well be innocent, since a shared household phone or a carrier's shared address links
+innocent accounts too. A mate counts only when it belongs to another customer, since two accounts
+of one customer copy the same enrolment.
 
 ### Groups
 
@@ -1315,9 +1323,9 @@ by whether they hold a ring endpoint, whose community block differs from that of
 shares nothing (see [the community block](#read_community-b6-how-the-mule-network-formed)).
 When they are built they read a ring's devices and IPs as this paragraph defines them.
 
-The early-warning ring link of the [Metrics](#metrics) table does not use this rule. A mule on
-its early-warning Monday is not yet active, so it cannot be one of the two active mules, and its
-link is read as that table's Early warning row says.
+The early-warning ring link of the [Metrics](#metrics) table does not use this definition. A mule
+on its early-warning Monday is not yet active, so it is not one of the active true mules that make
+ring nodes, and its link is read as that table's Early warning row says.
 
 ### Identification bias
 
