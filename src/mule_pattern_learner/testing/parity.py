@@ -13,7 +13,9 @@ reference graph, which holds every column):
   parser and compared in the form the cache stores it (subgraph.cache's tables), the rows of
   each kind sorted, doubles compared to parity.tolerance and everything else exactly: TigerGraph
   prints a double to 16 digits, so a share of two integers differs from the reference's in the
-  last digit at times (the cents sums are integers, and equal exactly);
+  last digit at times (the cents sums are integers, and equal exactly); the work counters a
+  query prints for mule bench (WORK_COUNTERS) are left out, since the reference does not mirror
+  them;
 - an account fetched alone against the same account among the others of its request, on the
   live graph (per-request state is kept by the scored account, never in a vertex flag two
   accounts of a request could share);
@@ -62,6 +64,7 @@ from ..tigergraph.queries import (
     READ_COUNTERPARTIES,
     READ_HUBS,
     READ_LABELS,
+    READ_MONEY_FLOW,
     READ_PAYMENT_EVENTS,
     READ_SHARED_IDENTITY,
     READ_WORLD,
@@ -98,6 +101,10 @@ MOST_DIFFERENCES = 4
 # The id no account has, and the days a true mule stays active after its last payment.
 NO_ACCOUNT = "~no_such_account~"
 WEEK_MS = 7 * 86_400_000
+# The work counters a query prints for mule bench alone, by query. No feature reads them and the
+# reference graph does not mirror them, so parity leaves them out of every comparison
+# (docs/design.md, "Query plumbing").
+WORK_COUNTERS: Mapping[str, frozenset[str]] = {READ_MONEY_FLOW: frozenset({"scan_steps"})}
 
 type Rows = dict[str, list[dict[str, Any]]]
 type Node = tuple[str, str]
@@ -260,8 +267,17 @@ class Failure:
 
 
 def _canonical[R](table: Table[R], answer: R) -> Rows:
-    """An answer in the form the cache keeps it, each kind's rows sorted."""
-    return {name: _sorted(rows) for name, rows in table.encode(answer).items()}
+    """An answer in the form the cache keeps it, each kind's rows sorted, less the work counters
+    of its query (WORK_COUNTERS)."""
+    counters = WORK_COUNTERS.get(table.query, frozenset())
+
+    def without_counters(row: dict[str, Any]) -> dict[str, Any]:
+        return {key: value for key, value in row.items() if key not in counters}
+
+    return {
+        name: _sorted([without_counters(row) for row in rows])
+        for name, rows in table.encode(answer).items()
+    }
 
 
 def _of_account(table: Table[Any], rows: Rows, account: str) -> Rows:

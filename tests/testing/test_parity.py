@@ -12,7 +12,7 @@ oversamples, and whose 224 scorable accounts of T, 2024-07-01, and of T + 1 week
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import fields, replace
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -26,12 +26,15 @@ from mule_pattern_learner.config import (
     ParityConfig,
     RunConfig,
 )
+from mule_pattern_learner.subgraph.cache import MONEY_FLOW
 from mule_pattern_learner.testing import fixtures
 from mule_pattern_learner.testing.calendar import Spy, world_of
 from mule_pattern_learner.testing.parity import (
+    WORK_COUNTERS,
     Communities,
     Failure,
     ParityError,
+    _canonical,  # pyright: ignore[reportPrivateUsage]
     _Comparison,  # pyright: ignore[reportPrivateUsage]
     differences,
     find_export,
@@ -60,7 +63,9 @@ from mule_pattern_learner.tigergraph.queries import (
     READ_SHARED_IDENTITY,
     READ_WORLD,
     VERSIONS,
+    read_money_flow,
 )
+from mule_pattern_learner.tigergraph.queries.read_money_flow import MoneyFlows
 
 W = 7 * DAY_MS
 MULES = {"a_collector", "a_mule", "a_mule2", "a_mule3", "a_r1", "a_r2"}
@@ -213,6 +218,76 @@ def test_an_integer_is_exact_where_a_double_has_a_tolerance(
     found = run(Live(graph, tamper), CONFIG, exports=exports, record=tmp_path / "parity.toml")
     assert found.failed == (READ_MONEY_FLOW,)
     assert "in_amount_90d" in found.queries[READ_MONEY_FLOW].mismatches[0].what
+
+
+def _steps(name: str, params: dict[str, Any], rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Live B1 prints the steps of its walk, positive and the same for an account however the
+    request is cut; the reference prints 0 (docs/design.md, "Query plumbing")."""
+    if name == READ_MONEY_FLOW and rows[0].get("status") == "ok":
+        for vertex in _blocks(rows, "accounts"):
+            vertex["attributes"]["scan_steps"] = 1 + len(vertex["attributes"]["account_id"])
+    return rows
+
+
+def test_a_work_counter_is_not_compared(
+    graph: ReferenceGraph, exports: Path, tmp_path: Path
+) -> None:
+    record = tmp_path / "parity.toml"
+    found = run(Live(graph, _steps), CONFIG, exports=exports, record=record)
+    assert found.failed == ()
+    assert (READ_MONEY_FLOW, VERSIONS[READ_MONEY_FLOW]) in parity_versions(record)
+
+
+def test_a_changed_field_fails_beside_a_changed_work_counter(
+    graph: ReferenceGraph, exports: Path, tmp_path: Path
+) -> None:
+    def tamper(
+        name: str, params: dict[str, Any], rows: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        rows = _steps(name, params, rows)
+        if name == READ_MONEY_FLOW and rows[0].get("status") == "ok":
+            for vertex in _blocks(rows, "accounts"):
+                vertex["attributes"]["in_amount_90d"] += 1
+        return rows
+
+    found = run(Live(graph, tamper), CONFIG, exports=exports, record=tmp_path / "parity.toml")
+    assert found.failed == (READ_MONEY_FLOW,)
+    what = found.queries[READ_MONEY_FLOW].mismatches[0].what
+    assert "in_amount_90d" in what and "scan_steps" not in what
+
+
+def test_only_the_work_counters_of_b1_are_left_out_of_what_parity_compares(
+    graph: ReferenceGraph,
+) -> None:
+    assert WORK_COUNTERS == {READ_MONEY_FLOW: frozenset({"scan_steps"})}
+    accounts = ["a_collector", "a_mule"]
+    answer = read_money_flow.parse(
+        graph.run(READ_MONEY_FLOW, read_money_flow.params(T, accounts)), accounts
+    )
+    assert answer.accounts and answer.tracked_inflows
+
+    def changed(value: object) -> object:
+        if isinstance(value, bool):
+            return not value
+        if isinstance(value, int):
+            return value + 1
+        if isinstance(value, float):
+            return value + 0.5
+        return f"{value}x"
+
+    def compared(other: MoneyFlows) -> bool:
+        """Whether parity sees a difference between the answer and other."""
+        return bool(
+            differences(_canonical(MONEY_FLOW, answer), _canonical(MONEY_FLOW, other), TOLERANCE)
+        )
+
+    equal: set[str] = set()
+    for key, rows in (("accounts", answer.accounts), ("tracked_inflows", answer.tracked_inflows)):
+        for field in fields(rows[0]):
+            row = replace(rows[0], **{field.name: changed(getattr(rows[0], field.name))})
+            if not compared(replace(answer, **{key: (row, *rows[1:])})):
+                equal.add(field.name)
+    assert equal == {"scan_steps"}
 
 
 def test_a_live_answer_the_parser_refuses_fails_its_query(
