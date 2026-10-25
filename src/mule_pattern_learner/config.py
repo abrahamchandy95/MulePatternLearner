@@ -14,6 +14,7 @@ from datetime import date, timedelta
 # The ranges of the transport settings; the executor checks the ones it is given too.
 QUERY_ATTEMPTS = range(1, 21)
 OUTAGE_SECONDS = range(0, 86_401)
+QUERY_TIMEOUT_SECONDS = range(1, 86_401)
 ACCOUNTS_PER_REQUEST = range(1, 1_025)
 ACCOUNTS_PER_PART = range(1, 100_001)
 # The response size above which TigerGraph refuses a query's answer, as the executor asks
@@ -291,6 +292,9 @@ class TransportConfig:
     max_query_attempts: int = 6
     # Wall-clock seconds one operation keeps retrying while TigerGraph is unavailable.
     max_outage_s: int = 900
+    # Seconds one query may run before TigerGraph stops it: 24 hours, so that a slow request
+    # is waited for, never lost (the owner, 25 October 2026).
+    query_timeout_s: int = 86_400
     # Accounts of one Monday per per-account request; a refused request is halved.
     accounts_per_request: int = 32
     # The bytes a request's answer is sized to stay under: half of the response limit.
@@ -306,6 +310,7 @@ class TransportConfig:
     def __post_init__(self) -> None:
         _integer("transport.max_query_attempts", self.max_query_attempts, QUERY_ATTEMPTS)
         _integer("transport.max_outage_s", self.max_outage_s, OUTAGE_SECONDS)
+        _integer("transport.query_timeout_s", self.query_timeout_s, QUERY_TIMEOUT_SECONDS)
         _integer("transport.accounts_per_request", self.accounts_per_request, ACCOUNTS_PER_REQUEST)
         _integer("transport.response_budget_bytes", self.response_budget_bytes, RESPONSE_BUDGETS)
         _integer("transport.accounts_per_part", self.accounts_per_part, ACCOUNTS_PER_PART)
@@ -478,6 +483,10 @@ class TrainingConfig:
     # every later pass replays them. The full design's value is False: its whole worlds' examples
     # do not fit in memory, so every pass builds them anew.
     reuse_built_examples: bool = True
+    # Proof of concept (25 October 2026, docs/design.md, "Proof-of-concept settings (25 October
+    # 2026)"): a development world's failed or missing audit is reported, and training goes on;
+    # a reported world's still stops it. The full design's value is True.
+    development_audit_stops: bool = False
 
     def __post_init__(self) -> None:
         _fraction("training.learning_rate", self.learning_rate, zero=False)
@@ -498,6 +507,7 @@ class TrainingConfig:
         if self.fixed_prior is not None:
             _positive("training.fixed_prior", self.fixed_prior)
         _instance("training.reuse_built_examples", self.reuse_built_examples, bool)
+        _instance("training.development_audit_stops", self.development_audit_stops, bool)
         _instance("training.ablations", self.ablations, bool)
 
 
@@ -525,7 +535,8 @@ class AuditConfig:
     # Non-mule account-Mondays the clock probe samples. Proof of concept (docs/design.md,
     # "Proof-of-concept settings (25 October 2026)"): 300, which the fallback samples of the
     # selection and test worlds hold, so that the audit fetches no non-mule account-Monday they
-    # did not; the full design's value is 200,000.
+    # did not; the full design's value is 200,000. At 300 one sampled non-mule outweighs the
+    # feature audit's 0.1% tails, which it reports as not measured.
     nonmule_sample: int = 300
     # The level of each onset month's binomial band in the identification horizon check: a
     # 1% chance over the 12 months that a month falls outside by chance (Bonferroni).
@@ -692,6 +703,7 @@ FULL_DESIGN_CONFIG = replace(
         fixed_prior=None,
         ablations=True,
         reuse_built_examples=False,
+        development_audit_stops=True,
     ),
     audit=replace(DEFAULT_CONFIG.audit, nonmule_sample=200_000),
 )

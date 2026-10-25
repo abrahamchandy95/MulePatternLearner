@@ -543,6 +543,35 @@ def test_train_stops_on_a_failed_label_check_and_a_missing_record(pipeline: Pipe
         record.write_text(kept)
 
 
+def test_train_reports_a_development_world_s_failed_audit_and_goes_on_in_the_proof_of_concept(
+    pipeline: Pipeline, monkeypatch: pytest.MonkeyPatch, shown: list[str]
+) -> None:
+    trained_rotations: list[str] = []
+
+    def trains(worlds: cli.RotationWorlds, config: RunConfig, device: object) -> None:
+        trained_rotations.append(worlds.name)
+
+    monkeypatch.setattr(cli, "train_rotation_command", trains)
+    # The events are collected here, not appended to the rotation's results folder.
+    events: list[tuple[str, str]] = []
+
+    def collects(
+        folder: Path, command: str, event: str, error: BaseException | None = None
+    ) -> None:
+        events.append((command, event))
+
+    monkeypatch.setattr(cli, "append_event", collects)
+    config = replace(CONFIG, training=replace(CONFIG.training, development_audit_stops=False))
+    _records(pipeline, {"D2": {FEATURE_AUDIT: False}})
+    try:
+        cli.train_command(config, cli.connect)
+    finally:
+        _records(pipeline, {"D2": {FEATURE_AUDIT: True}})
+    assert trained_rotations == [cli.run_name(ROTATION)]
+    assert "D1-D2-D3: audit not passed, and training goes on: D2: feature_audit" in shown
+    assert ("train", "audit not passed: D2: feature_audit") in events
+
+
 def test_train_names_a_world_that_was_never_prepared(
     pipeline: Pipeline, monkeypatch: pytest.MonkeyPatch
 ) -> None:

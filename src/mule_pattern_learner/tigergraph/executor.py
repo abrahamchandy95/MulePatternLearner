@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Callable, Collection, Sequence
+import errno
 import json
 import random
 import re
@@ -76,6 +77,38 @@ _DETERMINISTIC_MESSAGE = re.compile(r"cannot parse json|out of memory", re.IGNOR
 _TOO_LARGE_MESSAGE = re.compile(r"response.?(?:size|limit)|size limit", re.IGNORECASE)
 
 
+# The errors the operating system gives a connection that died under a request: a peer or a
+# middlebox that stopped answering (ETIMEDOUT, after the kernel's retransmissions run out), a
+# reset, or a path that went away. urllib3 reports ETIMEDOUT, which Python raises as
+# TimeoutError, as "Read timed out", so requests raises ReadTimeout for it: but nothing timed
+# out on the server, and the request is repeated on a new connection.
+_DEAD_CONNECTION_ERRNOS = frozenset(
+    {
+        errno.ETIMEDOUT,
+        errno.ECONNRESET,
+        errno.ECONNABORTED,
+        errno.EPIPE,
+        errno.ENETDOWN,
+        errno.ENETUNREACH,
+        errno.EHOSTUNREACH,
+    }
+)
+
+
+def _dead_connection(error: BaseException) -> bool:
+    """Whether a failure was caused by an operating-system error of the connection itself
+    (_DEAD_CONNECTION_ERRNOS), found anywhere in its chain of causes. A socket's own read
+    timeout carries no errno, so a request TigerGraph was still answering stays a timeout."""
+    seen: set[int] = set()
+    found: BaseException | None = error
+    while found is not None and id(found) not in seen:
+        seen.add(id(found))
+        if isinstance(found, OSError) and found.errno in _DEAD_CONNECTION_ERRNOS:
+            return True
+        found = found.__cause__ or found.__context__
+    return False
+
+
 def looks_like_html(text: str) -> bool:
     head = text[:2048].lstrip().lower()
     return head.startswith(("<!doctype html", "<html")) or "starting workspace" in head
@@ -130,6 +163,9 @@ def failure_class(error: BaseException) -> str | None:
       overload or not-ready messages.
     - Server timeout: code REST-3002, a timeout message, and a client read
       timeout (pyTigerGraph sets it 30 s beyond the server-side query timeout).
+      A read timeout caused by the operating system dropping the connection
+      (ETIMEDOUT after unanswered retransmissions, a reset) is availability:
+      the connection died, not the query.
     - Suspected deterministic: a bare HTTP 500, a response that is neither JSON
       nor an HTML page, and query out-of-memory.
     Contract and validation errors (ValueError and the like) are permanent.
@@ -148,7 +184,7 @@ def failure_class(error: BaseException) -> str | None:
     if isinstance(error, requests.ConnectionError | requests.exceptions.ChunkedEncodingError):
         return AVAILABILITY
     if isinstance(error, requests.Timeout):
-        return SERVER_TIMEOUT
+        return AVAILABILITY if _dead_connection(error) else SERVER_TIMEOUT
     if isinstance(error, TigerGraphException):
         if str(getattr(error, "code", "") or "") in _TIMEOUT_CODES:
             return SERVER_TIMEOUT
@@ -350,7 +386,7 @@ class TigerGraphExecutor:
         *,
         max_attempts: int = DEFAULT_CONFIG.transport.max_query_attempts,
         max_outage_s: float = DEFAULT_CONFIG.transport.max_outage_s,
-        timeout_s: float = 300.0,
+        timeout_s: float = DEFAULT_CONFIG.transport.query_timeout_s,
         base_delay_s: float = 4.0,
         max_delay_s: float = 60.0,
         slow_attempt_s: float = 30.0,

@@ -7,12 +7,14 @@ and request halving, and the entry points that run only the queries their role a
 from __future__ import annotations
 
 from collections.abc import Callable
+import errno
 import json
 from typing import Any
 
 import pytest
 from pyTigerGraph.common.exception import TigerGraphException
 import requests
+from urllib3.exceptions import ReadTimeoutError
 
 from mule_pattern_learner.config import DEFAULT_CONFIG
 from mule_pattern_learner.tigergraph.executor import (
@@ -147,7 +149,7 @@ def test_availability_failures_are_retried_with_capped_exponential_backoff() -> 
     bases = [4, 8, 10, 10, 10]  # capped at max_delay_s
     assert all(b / 2 <= s <= b for b, s in zip(bases, tg.sleeps, strict=True))
     kwargs = conn.calls[0][2]
-    assert kwargs["usePost"] is True and kwargs["timeout"] == 300_000
+    assert kwargs["usePost"] is True and kwargs["timeout"] == 86_400_000
 
 
 @pytest.mark.parametrize(
@@ -191,6 +193,41 @@ def test_availability_failures_are_retried_with_capped_exponential_backoff() -> 
 def test_failure_classes(error: BaseException, kind: str | None) -> None:
     assert failure_class(error) == kind
     assert (failure_class(error) is not None) is (kind is not None)
+
+
+def _read_timeout_caused_by(cause: OSError) -> requests.ReadTimeout:
+    """A ReadTimeout chained as requests and urllib3 chain it: requests raises it while
+    handling urllib3's ReadTimeoutError, which urllib3 raised from the socket's error."""
+    try:
+        try:
+            raise cause
+        except OSError as socket_error:
+            raise ReadTimeoutError(None, "/query", "Read timed out.") from socket_error  # pyright: ignore[reportArgumentType]
+    except ReadTimeoutError as urllib3_error:
+        try:
+            raise requests.ReadTimeout(urllib3_error)
+        except requests.ReadTimeout as raised:
+            return raised
+
+
+def test_a_connection_the_kernel_dropped_is_availability_not_a_server_timeout() -> None:
+    # D2's audit, 25 October 2026: a keep-alive connection idle for an hour was dropped by
+    # the kernel (tcp_drop, so_error 60) 84 s into a request, and requests said ReadTimeout.
+    dropped = _read_timeout_caused_by(TimeoutError(errno.ETIMEDOUT, "Operation timed out"))
+    assert failure_class(dropped) == AVAILABILITY
+    reset = _read_timeout_caused_by(ConnectionResetError(errno.ECONNRESET, "reset"))
+    assert failure_class(reset) == AVAILABILITY
+    # The socket's own read timeout has no errno: TigerGraph was still answering.
+    slow = _read_timeout_caused_by(TimeoutError("timed out"))
+    assert failure_class(slow) == SERVER_TIMEOUT
+
+
+def test_one_account_on_a_dropped_connection_is_retried_not_lost() -> None:
+    dropped = _read_timeout_caused_by(TimeoutError(errno.ETIMEDOUT, "Operation timed out"))
+    conn = FakeConn([dropped, [{"status": "ok", "accounts": ["a"]}]])
+    answers = run_in_halves(FetchExecutor(executor(conn)), "read_payment_events", "a", _accounts)
+    assert [chunk for chunk, _ in answers] == [("a",)]
+    assert len(conn.calls) == 2
 
 
 # The page a TigerGraph Cloud workspace answers while it starts, as pyTigerGraph raises it.

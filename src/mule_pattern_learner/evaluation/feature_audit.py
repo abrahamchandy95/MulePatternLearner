@@ -31,6 +31,10 @@ An aggregate over no row is 0, as the model sees no edge.
   are a few hundredths of a percent of the scored account-Mondays, under a tail of 0.1%: in a
   column that is zero on most rows, the edge of the top tail is that zero, and taking the tie
   in would make the region every row and hide a marker only a few mules hold.
+- The tails are read only when the sample measures them (tails_measured): when a tail's share
+  of the weight is at least one sampled non-mule's. Otherwise a tail's edge is the most extreme
+  sampled non-mule, and the region beyond it holds mules alone by construction. The table
+  reports the tails as not measured, and they stop nothing (the owner, 25 October 2026).
 """
 
 from __future__ import annotations
@@ -164,8 +168,8 @@ def audit_columns(batch: Batch) -> NDArray[np.float64]:
 @dataclass(frozen=True)
 class FeatureAudit:
     """The audit's table, a row per column: its ROC AUC and interval, whether it has no
-    separation, whether it separates almost perfectly, and its near-pure regions; and whether
-    the run may go on."""
+    separation, whether it separates almost perfectly, its near-pure regions and whether its
+    tails were measured; and whether the run may go on."""
 
     table: pd.DataFrame
 
@@ -192,6 +196,18 @@ def _edge(
     return float(values[order][min(reached, len(order) - 1)])
 
 
+def tails_measured(
+    positive: NDArray[np.bool_], weight: NDArray[np.float64], audit: AuditConfig
+) -> bool:
+    """Whether the sample measures a tail: whether near_pure_tail of the weight is at least one
+    sampled non-mule's weight. At the proof of concept's 300 sampled non-mules one stands for
+    about 8,150 account-Mondays of a 30,000-person world, whose 0.1% tail weighs about 2,450."""
+    non_mules = weight[~positive]
+    return non_mules.size > 0 and audit.near_pure_tail * float(weight.sum()) >= float(
+        non_mules.max()
+    )
+
+
 def near_pure(
     values: NDArray[np.float64],
     positive: NDArray[np.bool_],
@@ -199,13 +215,15 @@ def near_pure(
     audit: AuditConfig,
 ) -> list[str]:
     """The near-pure regions of one column, by name: value=<v> for a flag value, top and
-    bottom for its tails, each the values strictly beyond the edge of its tail."""
+    bottom for its tails, each the values strictly beyond the edge of its tail, read only when
+    the sample measures the tails."""
     regions: list[tuple[str, NDArray[np.bool_]]] = []
     if np.isin(values, (0.0, 1.0)).all():
         regions += [(f"value={value:g}", values == value) for value in (0.0, 1.0)]
-    top = _edge(values, weight, audit.near_pure_tail, top=True)
-    bottom = _edge(values, weight, audit.near_pure_tail, top=False)
-    regions += [("top", values > top), ("bottom", values < bottom)]
+    if tails_measured(positive, weight, audit):
+        top = _edge(values, weight, audit.near_pure_tail, top=True)
+        bottom = _edge(values, weight, audit.near_pure_tail, top=False)
+        regions += [("top", values > top), ("bottom", values < bottom)]
     mules = float(weight[positive].sum())
     found: list[str] = []
     for name, region in regions:
@@ -246,6 +264,7 @@ def feature_audit(
         level=audit.interval,
         seed=seed,
     )
+    measured = tails_measured(positive, weight, audit)
     rows: list[dict[str, object]] = []
     for column, (name, rank, bounds) in enumerate(zip(columns, ranked, found, strict=True)):
         auc = rank.roc_auc(weight)
@@ -262,6 +281,7 @@ def feature_audit(
                     and (auc >= audit.separation_auc or auc <= 1 - audit.separation_auc)
                 ),
                 "near_pure": ",".join(near_pure(matrix[:, column], positive, weight, audit)),
+                "tails_measured": measured,
             }
         )
     return FeatureAudit(pd.DataFrame(rows))

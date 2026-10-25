@@ -543,6 +543,12 @@ def _logged[T](folder: Path, command: str, work: Callable[[], T]) -> T:
     return found
 
 
+def _gates(world: WorldConfig, config: RunConfig) -> bool:
+    """Whether a world's failed or missing audit stops mule train: a reported world's always, a
+    development world's unless training.development_audit_stops is off (proof of concept)."""
+    return world.kind != DEVELOPMENT or config.training.development_audit_stops
+
+
 def train_command(config: RunConfig, open_graph: Connect) -> None:
     del open_graph  # training never queries TigerGraph
     rotations = [rotation_worlds(rotation, config) for rotation in config.worlds.rotations]
@@ -552,7 +558,7 @@ def train_command(config: RunConfig, open_graph: Connect) -> None:
         for rotation in rotations
         for world, held in rotation.worlds
     }
-    stops = train_may_run(list(audited.values()))
+    stops = train_may_run([held for held in audited.values() if _gates(held[0], config)])
     if stops:
         raise CommandError(
             f"training stops: {'; '.join(stops)}. Run `mule audit` on each world, and fix a check "
@@ -563,6 +569,12 @@ def train_command(config: RunConfig, open_graph: Connect) -> None:
     device = _device()
     for worlds in rotations:
         folder = results_dir(worlds.name)
+        ungated = [
+            (world, held.identity) for world, held in worlds.worlds if not _gates(world, config)
+        ]
+        for stop in train_may_run(ungated):
+            show(f"{worlds.name}: audit not passed, and training goes on: {stop}")
+            append_event(folder, "train", f"audit not passed: {stop}")
         began = time.monotonic()
         _logged(
             folder, "train", lambda worlds=worlds: train_rotation_command(worlds, config, device)

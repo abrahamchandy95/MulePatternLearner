@@ -47,6 +47,8 @@ def test_the_defaults_are_the_designs_settings_but_the_proof_of_concepts() -> No
     assert calendar.export_days == 455
     transport = DEFAULT_CONFIG.transport
     assert (transport.max_query_attempts, transport.max_outage_s) == (6, 900)
+    # A query may run for 24 hours.
+    assert transport.query_timeout_s == 86_400
     # 32 accounts a request, sized under half of the 64,000,000-byte response limit.
     assert (transport.accounts_per_request, transport.response_budget_bytes) == (32, 32_000_000)
     # A part of the cache holds 1,024 accounts of a Monday.
@@ -123,6 +125,9 @@ def test_the_proof_of_concept_settings() -> None:
     assert training.seeds == (0,) and training.ablations is False and training.fixed_prior == 1.0
     assert PROOF_OF_CONCEPT_ROTATIONS == (Rotation("D1", "D2", "D3"),)
     assert DEFAULT_CONFIG.worlds.rotations == PROOF_OF_CONCEPT_ROTATIONS
+    # A development world's failed or missing audit is reported and training goes on (full
+    # design: it stops training).
+    assert training.development_audit_stops is False
 
 
 def _differences(left: RunConfig, right: RunConfig) -> set[str]:
@@ -152,6 +157,7 @@ def test_the_full_design_config_differs_from_the_defaults_in_the_proof_of_concep
         "training.seeds",
         "training.fixed_prior",
         "training.ablations",
+        "training.development_audit_stops",
         "worlds.rotations",
     }
     assert FULL_DESIGN_CONFIG.transport.concurrent_requests == 1
@@ -240,6 +246,8 @@ def test_sections_refuse_values_outside_their_ranges() -> None:
         (lambda: TransportConfig(max_query_attempts=True), "transport.max_query_attempts"),
         (lambda: TransportConfig(max_outage_s=-1), "transport.max_outage_s"),
         (lambda: TransportConfig(max_outage_s=1.5), "transport.max_outage_s"),  # pyright: ignore[reportArgumentType]
+        (lambda: TransportConfig(query_timeout_s=0), "transport.query_timeout_s"),
+        (lambda: TransportConfig(query_timeout_s=86_401), "transport.query_timeout_s"),
         (lambda: TransportConfig(accounts_per_request=0), "transport.accounts_per_request"),
         (lambda: TransportConfig(concurrent_requests=0), "transport.concurrent_requests"),
         (lambda: TransportConfig(concurrent_requests=True), "transport.concurrent_requests"),  # pyright: ignore[reportArgumentType]
@@ -304,6 +312,7 @@ def test_sections_refuse_values_outside_their_ranges() -> None:
         (lambda: TrainingConfig(fixed_prior=0), "training.fixed_prior"),
         (lambda: TrainingConfig(ablations=0), "training.ablations"),  # pyright: ignore[reportArgumentType]
         (lambda: TrainingConfig(reuse_built_examples=1), "training.reuse_built_examples"),  # pyright: ignore[reportArgumentType]
+        (lambda: TrainingConfig(development_audit_stops=1), "training.development_audit_stops"),  # pyright: ignore[reportArgumentType]
         (lambda: RunConfig(training=0), "training must be"),  # pyright: ignore[reportArgumentType]
         (lambda: AuditConfig(clock_probe_upper=0.5), "audit.clock_probe_upper"),
         (lambda: AuditConfig(separation_auc=1.0), "audit.separation_auc"),

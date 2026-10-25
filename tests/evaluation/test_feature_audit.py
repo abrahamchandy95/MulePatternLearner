@@ -17,6 +17,7 @@ from mule_pattern_learner.evaluation.feature_audit import (
     audit_columns,
     feature_audit,
     near_pure,
+    tails_measured,
 )
 from mule_pattern_learner.subgraph.build import build, read_rows
 from mule_pattern_learner.subgraph.cache import Cache
@@ -159,3 +160,26 @@ def test_a_tie_at_the_edge_of_a_tail_is_left_out_of_it() -> None:
     # The bottom tail likewise: 180 mules at -1 beneath ordinary rows at 0, 1 and 2.
     values[:180] = -1.0
     assert near_pure(values, positive, weight, AUDIT) == ["bottom"]
+
+
+def test_a_tail_the_sample_cannot_measure_is_reported_and_stops_nothing() -> None:
+    # D1's audit in the proof of concept: 188 mules and 300 sampled non-mules, each standing for
+    # 2,445,228 / 300, about 8,151 account-Mondays, more than the 0.1% tail (about 2,445). The
+    # top tail's edge would be the highest sampled non-mule, and 3 mules above every one of them
+    # would make a region of mules alone, though nothing tells the classes apart.
+    positive = np.array([True] * 188 + [False] * 300)
+    weight = np.where(positive, 1.0, 2_445_228 / 300)
+    keys = [f"account:{i}" for i in range(len(positive))]
+    values = 1 + np.random.default_rng(2).random(len(positive))
+    values[:3] = (5.0, 6.0, 7.0)
+    assert not tails_measured(positive, weight, AUDIT)
+    assert near_pure(values, positive, weight, AUDIT) == []
+    found = feature_audit(values[:, None], positive, weight, keys, AUDIT, seed=0, columns=("v",))
+    assert found.passed and not found.table.loc[0, "tails_measured"]
+    # A flag's values are still read: a flag only mules hold is a region.
+    flag = np.zeros(len(positive))
+    flag[:10] = 1
+    assert near_pure(flag, positive, weight, AUDIT) == ["value=1"]
+    # The full design's sample measures them: 1,200 mules and 20,000 non-mules of weight 115.
+    measured, measured_weight, _ = _sample()
+    assert tails_measured(measured, measured_weight, AUDIT)
