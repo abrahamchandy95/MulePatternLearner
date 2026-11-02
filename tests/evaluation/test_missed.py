@@ -24,14 +24,14 @@ def test_missed_and_weak_mules_on_planted_ranks() -> None:
     mules = pd.DataFrame(
         {
             "account_id": ["x1", "x2", "x3", "x4", "x5"],
-            "active_mondays": [2, 3, 2, 0, 1],
+            "active_weeks": [2, 3, 2, 0, 1],
             "ever_at_5pct": [0.0, 0.6, 1.0, 0.0, 1.0],
             "median_rank": [0.3, 0.2, 0.01, np.nan, 0.05],
         }
     )
     found = missed_mules(mules, 0.05)
-    # x1 is never in the top 5%; x2 is, on some Monday, but its median rank is outside it; x3
-    # ranks high; x4 has no active Monday; x5's median is exactly at 5%, which is inside.
+    # x1 is never in the top 5%; x2 is, in some week, but its median rank is outside it; x3
+    # ranks high; x4 has no active week; x5's median is exactly at 5%, which is inside.
     assert found[["account_id", "outcome"]].values.tolist() == [["x1", MISSED], ["x2", WEAK]]
 
 
@@ -44,7 +44,7 @@ def test_the_report_of_a_missed_mule(graph: ReferenceGraph, parity: Path, tmp_pa
     logits = [5.0, 4.0, -5.0, *(float(i) / 10 for i in range(12))]
     scores = pd.DataFrame({"t_ms": [T] * len(accounts), "account_id": accounts, "logit": logits})
     keys = scores.loc[:, ["t_ms", "account_id"]].assign(weight=[1.0] * 3 + [100.0] * 12)
-    frame = evaluation_frame(scores, keys, read_answer_key(Spy(graph)), frozenset())
+    frame = evaluation_frame(scores, keys, read_answer_key(Spy(graph)), frozenset(), (T,))
     ranking = Ranking.of(frame, (frame["status"] == ACTIVE).to_numpy())
     reported = missed_mules(mule_table(frame, ranking, frozenset()), 0.05)
     assert reported["account_id"].tolist() == ["a_hr3"]

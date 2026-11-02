@@ -3,7 +3,9 @@
 
 The loaded world is testing.fixtures.batch_world behind a spy executor, with the two payments
 that span the export window (the first on day 0, the last on the window's last day) that mule
-prepare's calendar check asks for. Its two scored Mondays are T, 2024-07-01, and T + 1 week.
+prepare's calendar check asks for. Its two scored weeks start on T - 1 week, 2024-06-24, and T,
+so that the world's mules, active in the days before T, are inside the label rule's window at the
+first week's scoring time, in the last days of that week for the seed of D1.
 """
 
 from __future__ import annotations
@@ -43,8 +45,8 @@ from mule_pattern_learner.tigergraph.queries import (
 from mule_pattern_learner.training.trainer import ablations
 
 W = 7 * DAY_MS
-CALENDAR = CalendarConfig(export_start=date(2024, 1, 1), history_days=182, scored_mondays=2)
-# Two Mondays, 8 unlabelled accounts and 4 identified mules on each, at 1 and 2 concurrent
+CALENDAR = CalendarConfig(export_start=date(2024, 1, 1), history_days=175, scored_weeks=2)
+# Two weeks, 8 unlabelled accounts and 4 identified mules on each, at 1 and 2 concurrent
 # requests; a small synthetic ranking and matrix; projected to 1,000 and 100,000 people.
 CONFIG = replace(
     DEFAULT_CONFIG,
@@ -54,7 +56,7 @@ CONFIG = replace(
     training=FULL_DESIGN_CONFIG.training,
     audit=FULL_DESIGN_CONFIG.audit,
     bench=BenchConfig(
-        mondays=2,
+        weeks=2,
         unlabelled=8,
         positives=4,
         concurrency=(1, 2),
@@ -196,7 +198,7 @@ def test_each_query_is_timed_at_each_concurrency_with_its_bytes(
     for query in ("read_money_flow", "read_payment_events", "read_shared_identity"):
         for concurrency in (1, 2):
             variant = f"unlabelled,concurrency={concurrency}"
-            # 2 Mondays of 8 accounts, 32 to a request: a request a Monday.
+            # 2 weeks of 8 accounts, 32 to a request: a request a week.
             assert _row(table, "fetch", f"{query}.requests", variant) == 2
             assert _row(table, "fetch", f"{query}.accounts", variant) == 16
             assert _row(table, "fetch", f"{query}.wall_seconds", variant) > 0
@@ -204,7 +206,7 @@ def test_each_query_is_timed_at_each_concurrency_with_its_bytes(
             assert _row(table, "fetch", f"{query}.response_bytes_max", variant) > 100
     # 2 concurrencies, a bench fill and the other uses: B1 ran for every group at each.
     assert fetch["name"].str.endswith("response_bytes_per_account_p90").any()
-    # The account-hub parameter is in the request: a Monday's request names its hubs.
+    # The account-hub parameter is in the request: a week's request names its hubs.
     sent = [params for name, params in live.calls if name == "read_counterparties"]
     assert any(params["hub_accounts"] for params in sent)
     # B1's work counter, and its worst account.
@@ -221,12 +223,12 @@ def test_selection_is_priced_by_its_passes(measured: tuple[Live, pd.DataFrame, P
     build_rate = _row(table, "selection", "build_seconds_per_example")
     forward_rate = _row(table, "selection", "forward_seconds_per_example")
     assert build_rate > 0 and forward_rate > 0
-    per_person = _row(table, "selection", "scorable_accounts_per_person_monday")
-    # The world has 224 scorable accounts on each Monday and D1 is configured at 30,000 people.
+    per_person = _row(table, "selection", "scorable_accounts_per_person_week")
+    # The world has 224 scorable accounts in each week and D1 is configured at 30,000 people.
     assert per_person == pytest.approx(224 / 30_000)
     for people in (1_000, 30_000, 100_000):
         variant = f"people={people}"
-        # Two scored Mondays of the test calendar.
+        # Two scored weeks of the test calendar.
         examples = _row(table, "selection", "examples_per_pass", variant)
         assert examples == pytest.approx(per_person * people * 2)
         for priors, passes in (("grid", 1_050), ("fixed", 750)):
@@ -263,7 +265,7 @@ def test_the_audit_and_the_bootstrap_are_priced_by_their_counts(
     measured: tuple[Live, pd.DataFrame, Path],
 ) -> None:
     _, table, _ = measured
-    per_person = _row(table, "selection", "scorable_accounts_per_person_monday")
+    per_person = _row(table, "selection", "scorable_accounts_per_person_week")
     # The sparse fetch rate: the seconds of both groups over the accounts of both.
     fetch = table[table["section"] == "fetch"]
     fill = (
@@ -272,7 +274,7 @@ def test_the_audit_and_the_bootstrap_are_priced_by_their_counts(
     )
     positives = table[
         (table["section"] == "hubs") & (table["name"] == "read_hubs_seconds")
-    ]  # one per sampled Monday
+    ]  # one per sampled week
     assert len(positives) == 2
     runs = _row(table, "bootstrap", "runs")
     # 5 seeds of the full model and of each of 4 ablations, and each XGBoost comparison once.
@@ -282,20 +284,20 @@ def test_the_audit_and_the_bootstrap_are_priced_by_their_counts(
     for people in (1_000, 100_000):
         variant = f"people={people}"
         examples = per_person * people * 2
-        # 1,000 replicates x 27 runs x the ranked account-Mondays.
+        # 1,000 replicates x 27 runs x the ranked account-weeks.
         assert _row(table, "bootstrap", "projected_seconds", variant) == pytest.approx(
             1_000 * 27 * examples * rate
         )
-        # The audit fetches 200,000 non-mule account-Mondays, and at least the identified
+        # The audit fetches 200,000 non-mule account-weeks, and at least the identified
         # mules' active ones.
-        fetched = _row(table, "audit", "account_mondays_fetched_at_least", variant)
+        fetched = _row(table, "audit", "account_weeks_fetched_at_least", variant)
         assert fetched >= 200_000
         assert _row(table, "audit", "projected_fetch_seconds_at_least", variant) == pytest.approx(
             fill * fetched
         )
     # The whole world against its fallback: a tenth of the other accounts, and the mules.
-    whole = _row(table, "scoring", "account_mondays", "people=100000,scoring=whole")
-    fallback = _row(table, "scoring", "account_mondays", "people=100000,scoring=fallback")
+    whole = _row(table, "scoring", "account_weeks", "people=100000,scoring=whole")
+    fallback = _row(table, "scoring", "account_weeks", "people=100000,scoring=fallback")
     assert whole == pytest.approx(per_person * 100_000 * 2)
     assert whole / 10 <= fallback < whole
     runs_pass = _row(table, "scoring", "scoring_pass_seconds", "people=100000,scoring=whole")
@@ -308,7 +310,7 @@ def test_what_is_measured_of_the_sample_is_consistent(
     measured: tuple[Live, pd.DataFrame, Path],
 ) -> None:
     _, table, _ = measured
-    # Examples built: the unlabelled and the identified accounts of both Mondays.
+    # Examples built: the unlabelled and the identified accounts of both weeks.
     built = _row(table, "build", "examples", "sample")
     assert 16 <= built <= 24
     assert _row(table, "cache", "bytes_total", "sample") > 0
@@ -332,8 +334,9 @@ def test_a_sample_keeps_every_identified_active_mule_and_fetches_the_first_few(
 ) -> None:
     executor = BenchExecutor(Live(graph))
     config = replace(CONFIG, bench=replace(CONFIG.bench, positives=1))
+    times = CONFIG.calendar.week_starts()
     [sample] = bench.take_samples(
-        executor, [T], read_identified(executor), config, bench.Measures()
+        executor, [T], read_identified(executor), config, bench.Measures(), times
     )
     # a_mule and a_r1 are identified and active on T, and the fetched sample holds the first.
     assert sample.identified == ("a_mule", "a_r1") and sample.identified_active == 2
@@ -416,17 +419,17 @@ def test_a_request_tigergraph_refuses_is_a_row_of_the_table_not_the_end_of_the_b
     assert _row(table, "build", "examples", "sample") > 0
 
 
-def test_the_mondays_measured_are_the_first_the_last_and_those_between() -> None:
-    mondays = list(range(52))
-    assert bench.chosen_mondays(mondays, 3) == (0, 26, 51)
-    assert bench.chosen_mondays(mondays, 2) == (0, 51)
-    assert bench.chosen_mondays(mondays, 1) == (0,)
-    assert bench.chosen_mondays(mondays, 5) == (0, 13, 26, 38, 51)
-    assert bench.chosen_mondays(mondays[:2], 3) == (0, 1)
+def test_the_weeks_measured_are_the_first_the_last_and_those_between() -> None:
+    times = list(range(52))
+    assert bench.chosen_weeks(times, 3) == (0, 26, 51)
+    assert bench.chosen_weeks(times, 2) == (0, 51)
+    assert bench.chosen_weeks(times, 1) == (0,)
+    assert bench.chosen_weeks(times, 5) == (0, 13, 26, 38, 51)
+    assert bench.chosen_weeks(times[:2], 3) == (0, 1)
 
 
 def test_the_projections_are_products_of_what_was_measured() -> None:
-    # 1.5 scorable accounts per person on a Monday, 30,000 people, 52 Mondays: 2,340,000.
+    # 1.5 scorable accounts per person in a week, 30,000 people, 52 weeks: 2,340,000.
     examples = bench.examples_at(1.5, 30_000, 52)
     assert examples == 2_340_000
     # A millisecond an example over the 1,050 passes of a rotation: 2,457,000 s, 28.4 days.
@@ -458,4 +461,4 @@ def test_the_headline_numbers_read_back(measured: tuple[Live, pd.DataFrame, Path
 
 def test_a_bench_config_is_part_of_the_run_config() -> None:
     assert isinstance(CONFIG, RunConfig) and CONFIG.bench.concurrency == (1, 2)
-    assert CONFIG.calendar.mondays()[:2] == (T, T + W)
+    assert CONFIG.calendar.week_starts()[:2] == (T - W, T)

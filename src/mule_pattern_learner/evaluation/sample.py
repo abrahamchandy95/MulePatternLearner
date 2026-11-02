@@ -1,14 +1,15 @@
-"""The audit sample: the account-Mondays mule audit's clock probe, feature audit and development
-checks read (docs/design.md, the Clock guard and "The feature audit").
+"""The audit sample: the account-weeks mule audit's clock gain test, feature audit and development
+checks read, and, on a test world, the ones mule evaluate's clock invariance test scores
+(docs/design.md, the Clock guard and "The feature audit").
 
-- Every active true mule on every scored Monday it is scorable and active, each weighing 1.
-- A keyed sample of audit.nonmule_sample of the non-mule account-Mondays (is_mule 0, scorable
-  on that Monday): those with the lowest keyed hash of (account, Monday) over the whole scored
+- Every active true mule in every scored week it is scorable and active, each weighing 1.
+- A keyed sample of audit.nonmule_sample of the non-mule account-weeks (is_mule 0, scorable
+  in that week): those with the lowest keyed hash of (account, t) over the whole scored
   year (data.draw.draw_hash, the hash of the training draw), each weighing the non-mule
-  account-Mondays over the sample's size, so that the sample stands for every one of them.
+  account-weeks over the sample's size, so that the sample stands for every one of them.
 
 True mules outside their activity are in neither class, as in every ranking. An account the
-answer key lacks is left out; the label checks fail on it. Each account-Monday carries its
+answer key lacks is left out; the label checks fail on it. Each account-week carries its
 cluster of the ring bootstrap (evaluation.uncertainty): its ring, its own account for a
 ringless mule, and its own account for a non-mule.
 """
@@ -29,16 +30,21 @@ COLUMNS = ("t_ms", "account_id", "positive", "ring", "weight", "cluster")
 
 
 def audit_sample(
-    key: AnswerKey, populations: Mapping[int, Sequence[str]], size: int, draw_key: bytes
+    key: AnswerKey,
+    populations: Mapping[int, Sequence[str]],
+    size: int,
+    draw_key: bytes,
+    scoring_times: Sequence[int],
 ) -> pd.DataFrame:
-    """The audit sample, by Monday and account: t_ms, account_id, positive (an active true
-    mule), ring, weight and cluster."""
+    """The audit sample, by week and account: t_ms, account_id, positive (an active true
+    mule), ring, weight and cluster. scoring_times are the world's, which the active state
+    reads (answer_key.status)."""
 
     def non_mules() -> Iterator[tuple[int, str]]:
         for t_ms, accounts in populations.items():
             for account in accounts:
                 truth = key.by_id.get(account)
-                if truth is not None and status(truth, t_ms) == NON_MULE:
+                if truth is not None and status(truth, t_ms, scoring_times) == NON_MULE:
                     yield t_ms, account
 
     total = sum(1 for _ in non_mules())
@@ -51,7 +57,7 @@ def audit_sample(
     for t_ms, accounts in populations.items():
         for account in accounts:
             truth = key.by_id.get(account)
-            if truth is not None and status(truth, t_ms) == ACTIVE:
+            if truth is not None and status(truth, t_ms, scoring_times) == ACTIVE:
                 rows.append((t_ms, account, True, truth.mule_ring_id, 1.0))
     found = pd.DataFrame(rows, columns=list(COLUMNS[:-1])).astype(
         {"t_ms": "int64", "account_id": "str", "positive": "bool", "ring": "int64"}

@@ -4,35 +4,36 @@
 Every ranker scores the same test keys from the cache, after selection is frozen: the GNN and
 its ablations from their model files (training.scoring), the two XGBoost comparisons from
 theirs (comparisons.rankers), each key's logit in float64. The test keys are those the
-evaluation reads itself: every scorable account on every Monday (the examples' test table), or
+evaluation reads itself: every scorable account in every week (the examples' test table), or
 under the fallback the stored fallback list with its weights (evaluation.fallback).
 
-On each test Monday the ranking holds every scored account but the true mules outside their
-activity: positives are the true mules active that Monday, the rest non-mules. A mule is
-flagged on a Monday when it ranks within that Monday's top 1% or top 5% of the ranked weight,
-tie-aware (metrics.MondayRanking): a flag is a share, the chance of being within the budget
-when tied logits are ordered at random. A true mule on its early-warning Monday, or after its
-activity, is not ranked; its share is read against that Monday's ranked rows (against).
+In each test week the ranking holds every scored account but the true mules outside their
+activity: positives are the true mules active that week, the rest non-mules. A mule is
+flagged in a week when it ranks within that week's top 1% or top 5% of the ranked weight,
+tie-aware (metrics.WeekRanking): a flag is a share, the chance of being within the budget
+when tied logits are ordered at random. A true mule at an early-warning time, or after its
+activity, is not ranked; its share is read against that week's ranked rows (against).
 
 What one run (a ranker's seed) found, beside the headline metrics of the main ranking:
 
-- per Monday, recall and precision at each budget, and pooled over Mondays (the weight found
-  on every Monday over every positive's weight, or over every budget's size);
-- ROC AUC and PR AUC over every ranked account-Monday;
-- per true mule: the chance it is flagged on any active Monday, the expected days from its
-  onset to its first flag while active, its median rank over its active Mondays, its share on
-  its early-warning Monday, and the chance it is flagged after its activity;
-- early warning: the mean share on the early-warning Mondays, and among the mules whose ring
-  link is visible that Monday (a node of the mule's own that an account of its ring at another
-  customer reaches that Monday, evaluation.development_checks.own_nodes);
-- after activity: the mean share of the account-Mondays after mule_last_ms + 7 days;
+- per week, recall and precision at each budget, and pooled over weeks (the weight found
+  in every week over every positive's weight, or over every budget's size);
+- ROC AUC and PR AUC over every ranked account-week;
+- per true mule: the chance it is flagged in any active week, the expected days from its
+  onset to its first flag while active, its median rank over its active weeks, its share at
+  its early-warning time, and the chance it is flagged after its activity;
+- early warning: the mean share at the early-warning time of each mule, and among the
+  mules whose ring link is visible then (a node of the mule's own that an account of its ring at
+  another customer reaches that week, evaluation.development_checks.own_nodes);
+- after activity: the mean share of the account-weeks at which a true mule has started and is
+  no longer active (answer_key.AFTER);
 - distinct accounts alerted over the scored year at each budget: the expected number of
-  ranked accounts flagged on at least one Monday, which beside the share of mules ever flagged
+  ranked accounts flagged in at least one week, which beside the share of mules ever flagged
   shows a list that churns. It is defined only when every key is scored whole, at weight 1. The
-  fallback list samples each (account, Monday) of the non-mules alone, at one in ten, so an
-  account is in it on about five of its 52 Mondays, and the chance of a flag over those rows is
-  the chance over five Mondays, not 52: the count would come out low and reward the lists that
-  churn most (an account flagged on 1% of its Mondays at random would add 0.049 and not 0.407).
+  fallback list samples each (account, week) of the non-mules alone, at one in ten, so an
+  account is in it in about five of its 52 weeks, and the chance of a flag over those rows is
+  the chance over five weeks, not 52: the count would come out low and reward the lists that
+  churn most (an account flagged in 1% of its weeks at random would add 0.049 and not 0.407).
   Under weighted keys it is NaN, and run_metrics gives the reason beside it (RunMetrics.
   not_available), which the metrics table carries.
 
@@ -99,14 +100,14 @@ def score_gnn(
     device: torch.device | str = "cpu",
 ) -> pd.DataFrame:
     """The logit of every key of batches under the GNN model file at path (refused under
-    another lock), by Monday and account."""
+    another lock), by week and account."""
     found = score(load_trained(path, lock, device), batches, switch, device)
     return found.loc[:, ["t_ms", "account_id", "logit"]]
 
 
 def score_trees(path: Path, lock: Lock, batches: ScoringBatches) -> pd.DataFrame:
     """The logit of every key of batches under the XGBoost ranker file at path, its margin
-    summed in float64 up to its chosen rounds, by Monday and account."""
+    summed in float64 up to its chosen rounds, by week and account."""
     trees = rankers.load(path, lock)
     vectors = vectors_of(batches)
     return pd.DataFrame(
@@ -119,11 +120,16 @@ def score_trees(path: Path, lock: Lock, batches: ScoringBatches) -> pd.DataFrame
 
 
 def evaluation_frame(
-    scores: pd.DataFrame, keys: pd.DataFrame, key: AnswerKey, identified: Collection[str]
+    scores: pd.DataFrame,
+    keys: pd.DataFrame,
+    key: AnswerKey,
+    identified: Collection[str],
+    scoring_times: Sequence[int],
 ) -> pd.DataFrame:
-    """Every scored test key, by Monday and account, with its logit, its weight (keys:
-    t_ms, account_id, weight), what it is that Monday (answer_key.status), its truth and
-    whether the bank identified it. Every key needs a logit and a truth."""
+    """Every scored test key, by week and account, with its logit, its weight (keys:
+    t_ms, account_id, weight), what it is that week (answer_key.status, which reads the
+    world's scoring_times), its truth and whether the bank identified it. Every key needs a
+    logit and a truth."""
     joined = keys.loc[:, ["t_ms", "account_id", "weight"]].merge(
         scores.loc[:, ["t_ms", "account_id", "logit"]],
         on=["t_ms", "account_id"],
@@ -149,6 +155,7 @@ def evaluation_frame(
         frame["is_mule"].to_numpy(dtype=np.int64),
         frame["mule_onset_ms"].to_numpy(dtype=np.int64),
         frame["mule_last_ms"].to_numpy(dtype=np.int64),
+        scoring_times,
     )
     frame["identified"] = frame["account_id"].isin(set(identified))
     frame = frame.loc[:, list(COLUMNS)].astype({"logit": "float64", "weight": "float64"})
@@ -158,7 +165,7 @@ def evaluation_frame(
 def ring_links(
     cache: Cache, frame: pd.DataFrame, rows: Iterable[tuple[int, str]]
 ) -> frozenset[tuple[int, str]]:
-    """Of rows, (Monday, mule account), those whose ring link is visible that Monday: a device
+    """Of rows, (t, mule account), those whose ring link is visible at that t: a device
     or IP of the mule's own (its owner-enrolment or seen edges) that the own edges of an account
     of its ring reach too, read from the cache, when that account belongs to another customer.
     Two accounts of one customer copy the same enrolment, so an account of the mule's own
@@ -199,12 +206,12 @@ def ring_links(
 @dataclass(frozen=True)
 class RunMetrics:
     """What one run found on the test world: its headline metrics and the others of the
-    module's docstring by name, its per-Monday table, its table of true mules, and the ranking
+    module's docstring by name, its per-week table, its table of true mules, and the ranking
     they were found from. not_available names each metric that has no value (NaN) because of
     how the test keys are scored, with the reason; it is empty when every key is scored whole."""
 
     values: Mapping[str, float]
-    per_monday: pd.DataFrame
+    per_week: pd.DataFrame
     mules: pd.DataFrame
     ranking: Ranking
     not_available: Mapping[str, str]
@@ -213,9 +220,9 @@ class RunMetrics:
 def mule_table(
     frame: pd.DataFrame, ranking: Ranking, links: Collection[tuple[int, str]]
 ) -> pd.DataFrame:
-    """Per true mule with a scored Monday: its ring and identification, its chance of a flag
+    """Per true mule with a scored week: its ring and identification, its chance of a flag
     while active at each budget, the expected days to its first flag at each budget, its median
-    rank fraction over its active Mondays, its share on its early-warning Monday, whether its
+    rank fraction over its active weeks, its share at its early-warning time, whether its
     ring link was visible then, and its chance of a flag after its activity.
 
     Each mule's rows are found once, by account, in the active rows of the ranking and in the
@@ -250,7 +257,7 @@ def mule_table(
         chosen = ranked_rows.get(account, nothing)
         days = (ranked_t[chosen] - int(first["mule_onset_ms"])) / DAY_MS
         mine = shares[chosen]
-        row["active_mondays"] = len(chosen)
+        row["active_weeks"] = len(chosen)
         for column, budget in enumerate(TEST_BUDGETS):
             ever, expected = first_flag(days, mine[:, column]) if len(days) else (0.0, np.nan)
             row[f"ever_at_{budget_name(budget)}"] = ever
@@ -269,7 +276,7 @@ def mule_table(
                     0
                 ]
             )
-        row["early_warning_monday"] = int(outside_t[warned[0]]) if len(warned) else 0
+        row["early_warning_t_ms"] = int(outside_t[warned[0]]) if len(warned) else 0
         row["ring_link_visible"] = len(warned) > 0 and (int(outside_t[warned[0]]), account) in links
         rows.append(row)
     return pd.DataFrame(rows)
@@ -281,8 +288,8 @@ def run_metrics(frame: pd.DataFrame, links: Collection[tuple[int, str]]) -> RunM
     ranking = Ranking.of(frame, (frame["status"] == ACTIVE).to_numpy())
     values: dict[str, float] = dict(zip(HEADLINE, ranking.headline().tolist(), strict=True))
     mules = mule_table(frame, ranking, links)
-    scored = mules[mules["active_mondays"] > 0]
-    warned = mules[mules["early_warning_monday"] > 0]
+    scored = mules[mules["active_weeks"] > 0]
+    warned = mules[mules["early_warning_t_ms"] > 0]
     weight = ranking.weight
     shares = ranking.order.shares(weight)
     # Distinct accounts alerted are counted only when every key is scored whole, at weight 1.
@@ -322,14 +329,14 @@ def run_metrics(frame: pd.DataFrame, links: Collection[tuple[int, str]]) -> RunM
     values["mules_scored"] = float(len(scored))
     values["early_warning_mules"] = float(len(warned))
     values["early_warning_ring_link_mules"] = float(warned["ring_link_visible"].sum())
-    values["after_activity_account_mondays"] = float(len(after))
-    values["ranked_account_mondays"] = float(len(ranking.frame))
+    values["after_activity_account_weeks"] = float(len(after))
+    values["ranked_account_weeks"] = float(len(ranking.frame))
     not_available = {} if whole else dict.fromkeys(ACCOUNTS_ALERTED, WEIGHTED_SAMPLE)
-    return RunMetrics(values, ranking.per_monday(), mules, ranking, not_available)
+    return RunMetrics(values, ranking.per_week(), mules, ranking, not_available)
 
 
 def scored_keys(frame: pd.DataFrame, statuses_kept: Sequence[str]) -> list[tuple[int, str]]:
-    """The (Monday, account) of the rows of a test frame of the statuses given."""
+    """The (t, account) of the rows of a test frame of the statuses given."""
     chosen = frame[frame["status"].isin(list(statuses_kept))]
     return [
         (int(t_ms), str(account))

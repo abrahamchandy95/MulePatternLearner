@@ -2,7 +2,7 @@
 model", and docs/features.md, "What one example's subgraph holds" and "The other tensors of a
 batch").
 
-An example is an (account, Monday t) pair with its own copy of its two-hop subgraph, so no node
+An example is an (account, t) pair with its own copy of its two-hop subgraph, so no node
 is shared between examples, and a node reached by two paths appears once in its example, which
 keeps cycles visible. The examples' nodes are laid out one example after another, each
 example's nodes of a type sorted by id.
@@ -13,8 +13,8 @@ example's nodes of a type sorted by id.
   hub_customers_90d with every other column 0; the scored account keeps its full row even
   when it is a hub.
 - Customer nodes are B5's customers; device and IP nodes are B5's. A leaf's row is joined from
-  read_hubs' cached leaves by id: its measure customers_90d, observed_only, crowd 1 and hub,
-  every other column 0. A node whose inline leaf flag in B5 disagrees with read_hubs is
+  mark_crowds' cached crowds by id: its measure customers_90d, observed_only, crowd 1 and hub,
+  every other column 0. A node whose inline leaf flag in B5 disagrees with mark_crowds is
   refused (read_community prints no per-node flag, so its own inline flags are left to
   parity).
 - Payment edges are B4's, from sender to receiver. B1's tracked inflow of the receiver joins
@@ -47,10 +47,11 @@ from torch import Tensor
 from torch_geometric.data import HeteroData
 
 from ..model.encode import Column, EdgeType, Layout
+from ..tigergraph.queries.mark_crowds import Crowd, Crowds
 from ..tigergraph.queries.read_activity_change import ActivityChange
 from ..tigergraph.queries.read_community import Community
 from ..tigergraph.queries.read_counterparties import Counterparties
-from ..tigergraph.queries.read_hubs import Hubs, Leaf
+from ..tigergraph.queries.read_hubs import Hubs
 from ..tigergraph.queries.read_money_flow import MoneyFlow, TrackedInflow
 from ..tigergraph.queries.read_payment_events import RAILS, PaymentEvent, PaymentGraph
 from ..tigergraph.queries.read_shared_identity import IdentityGraph, NodeRow
@@ -109,7 +110,7 @@ B4_TIMING = tuple(
 
 @dataclass(frozen=True)
 class Example:
-    """An example's key: its world's identity, its Monday t and its scored account. Keys stay
+    """An example's key: its world's identity, its scoring time t and its scored account. Keys stay
     in a list on the CPU and never reach the model."""
 
     world: str
@@ -119,25 +120,25 @@ class Example:
 
 @dataclass(frozen=True)
 class Leaves:
-    """A Monday's leaves by id, from read_hubs: each account hub's measure, and each device
-    and IP leaf."""
+    """The leaves of a scoring time by id: each account hub's measure, from read_hubs, and each
+    device and IP crowd, from mark_crowds."""
 
     accounts: Mapping[str, int]
-    devices: Mapping[str, Leaf]
-    ips: Mapping[str, Leaf]
+    devices: Mapping[str, Crowd]
+    ips: Mapping[str, Crowd]
 
     @classmethod
-    def of(cls, hubs: Hubs) -> Leaves:
+    def of(cls, hubs: Hubs, crowds: Crowds) -> Leaves:
         return cls(
             {hub.account_id: hub.customers_90d for hub in hubs.accounts},
-            {leaf.node_id: leaf for leaf in hubs.devices},
-            {leaf.node_id: leaf for leaf in hubs.ips},
+            {crowd.node_id: crowd for crowd in crowds.devices},
+            {crowd.node_id: crowd for crowd in crowds.ips},
         )
 
 
 @dataclass(frozen=True)
 class ExampleRows:
-    """Every row one example is built from: its Monday's leaves, its scored account's B4, B5
+    """Every row one example is built from: the leaves of its t, its scored account's B4, B5
     and B6 answers, and, by account, the B1 to B3 rows of every account node that is no hub,
     the scored account always among them; and, by payment id, the tracked inflows of its
     payments."""
@@ -180,26 +181,30 @@ def account_nodes(payments: PaymentGraph, identity: IdentityGraph) -> dict[str, 
 
 
 def read_rows(cache: Cache, examples: Sequence[tuple[int, str]]) -> list[ExampleRows]:
-    """The rows of each example, (Monday t, scored account), from the cache, in the order
-    given. Every row must be cached: the Monday's hubs, B4 to B6 of each scored account, and
-    B1 to B3 of every account node of its subgraph that is no hub, and of the scored account."""
-    by_monday: dict[int, set[str]] = defaultdict(set)
+    """The rows of each example, (t, scored account), from the cache, in the order
+    given. Every row must be cached: the hubs and the crowds of t, B4 to B6 of each scored
+    account, and B1 to B3 of every account node of its subgraph that is no hub, and of the
+    scored account."""
+    by_week: dict[int, set[str]] = defaultdict(set)
     for t_ms, account in examples:
-        by_monday[t_ms].add(account)
+        by_week[t_ms].add(account)
     found: dict[tuple[int, str], ExampleRows] = {}
-    for t_ms in sorted(by_monday):
+    for t_ms in sorted(by_week):
         try:
-            found.update(_monday_rows(cache, t_ms, sorted(by_monday[t_ms])))
+            found.update(_week_rows(cache, t_ms, sorted(by_week[t_ms])))
         finally:
             cache.forget(t_ms)
     return [found[key] for key in examples]
 
 
-def _monday_rows(cache: Cache, t_ms: int, scored: list[str]) -> dict[tuple[int, str], ExampleRows]:
+def _week_rows(cache: Cache, t_ms: int, scored: list[str]) -> dict[tuple[int, str], ExampleRows]:
     hubs = cache.hubs(t_ms)
     if hubs is None:
-        raise KeyError(f"The cache holds no hubs of the Monday {t_ms}")
-    leaves = Leaves.of(hubs)
+        raise KeyError(f"The cache holds no hubs at the time {t_ms}")
+    crowds = cache.crowds(t_ms)
+    if crowds is None:
+        raise KeyError(f"The cache holds no crowds at the time {t_ms}")
+    leaves = Leaves.of(hubs, crowds)
     payments = {graph.scored_id: graph for graph in cache.rows(PAYMENT_EVENTS, t_ms, scored)}
     identity = {graph.scored_id: graph for graph in cache.rows(SHARED_IDENTITY, t_ms, scored)}
     community = {row.account_id: row for row in cache.rows(COMMUNITY, t_ms, scored)}
@@ -366,17 +371,17 @@ def _account_row(rows: ExampleRows, account: str, is_external: bool) -> list[flo
     return values + _degree_zeros(ACCOUNT_LAYOUT, len(values))
 
 
-def _node_row(scored: str, kind: str, row: NodeRow, leaf: Leaf | None) -> list[float]:
-    """A device's or IP's raw row; a leaf's from read_hubs."""
-    if row.leaf != (leaf is not None):
+def _node_row(scored: str, kind: str, row: NodeRow, crowd: Crowd | None) -> list[float]:
+    """A device's or IP's raw row; a crowd's from mark_crowds."""
+    if row.leaf != (crowd is not None):
         raise ValueError(
             f"The subgraph of {scored} reads the {kind} {row.node_id} as "
-            f"{'a leaf' if row.leaf else 'no leaf'}, unlike read_hubs"
+            f"{'a leaf' if row.leaf else 'no leaf'}, unlike mark_crowds"
         )
     layout = NODE_LAYOUTS[kind]
-    if leaf is not None:
-        values = [0.0, float(leaf.customers_90d), 0.0, 0.0, 0.0, 0.0]
-        values += [float(leaf.observed_only), 1.0, float(leaf.hub)]
+    if crowd is not None:
+        values = [0.0, float(crowd.customers_90d), 0.0, 0.0, 0.0, 0.0]
+        values += [float(crowd.observed_only), 1.0, float(crowd.hub)]
     else:
         # B5's columns 1 to 7, then crowd and hub, both 0 on a node that is no leaf.
         values = _read(NODE_COLUMNS[:7], row) + [0.0, 0.0]

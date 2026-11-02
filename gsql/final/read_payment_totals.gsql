@@ -1,0 +1,120 @@
+USE GRAPH Mule_Pattern_Learner
+CREATE OR REPLACE QUERY read_payment_totals(
+    UINT t_ms, // The scoring time after the first 90 days
+    LIST<STRING> account_ids // The accounts to total
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+
+    /* Constants */
+    UINT LOOKBACK_MS = 7776000000; // 90 days
+    UINT MONTH_MS = 2592000000; // 30 days
+    UINT WEEK_MS = 604800000; // 7 days
+
+    /* Vertex and edge types, each a set so that one pattern serves transactions and transfers */
+    SetAccum<STRING> @@payment_vertex_type; // A transaction or a transfer
+    SetAccum<STRING> @@receiver_to_payment_edge_type; // Account -> the payments it received
+    SetAccum<STRING> @@payment_to_sender_edge_type; // Payment -> the account that sent it
+    SetAccum<STRING> @@sender_to_payment_edge_type; // Account -> the payments it sent
+    SetAccum<STRING> @@payment_to_receiver_edge_type; // Payment -> the account that received it
+    @@payment_vertex_type += "Payment_Transaction";
+    @@payment_vertex_type += "Zelle_Transfer";
+    @@receiver_to_payment_edge_type += "Account_Received_Transaction";
+    @@receiver_to_payment_edge_type += "Account_Received_Zelle_Transfer";
+    @@payment_to_sender_edge_type += "Transaction_From_Account";
+    @@payment_to_sender_edge_type += "Transfer_From_Account";
+    @@sender_to_payment_edge_type += "Account_Initiated_Transaction";
+    @@sender_to_payment_edge_type += "Account_Sent_Zelle_Transfer";
+    @@payment_to_receiver_edge_type += "Transaction_To_Account";
+    @@payment_to_receiver_edge_type += "Transfer_To_Account";
+
+    /* Accumulators */
+    SumAccum<INT> @in_7d, @in_30d, @in_90d; // Payments received from other accounts
+    SumAccum<INT> @out_7d, @out_30d, @out_90d; // Payments sent to other accounts
+    SumAccum<INT> @in_amount_7d, @in_amount_30d, @in_amount_90d; // Their cents
+    SumAccum<INT> @out_amount_7d, @out_amount_30d, @out_amount_90d; // Their cents
+    SetAccum<STRING> @@ids; // The account ids given, each once
+    SumAccum<INT> @@given; // How many were given
+
+    IF t_ms <= LOOKBACK_MS OR t_ms % 1000 != 0 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+    FOREACH account_id IN account_ids DO
+        @@ids += account_id;
+        @@given += 1;
+    END;
+    IF @@given == 0 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+    IF @@ids.size() != @@given THEN
+        PRINT "duplicate_account" AS status;
+        RETURN;
+    END;
+    requested = to_vertex_set(@@ids, "Account");
+    IF requested.size() != @@ids.size() THEN
+        PRINT "unknown_account" AS status;
+        RETURN;
+    END;
+    accounts = SELECT s FROM requested:s WHERE s.opened_ms < t_ms;
+    IF accounts.size() != requested.size() THEN
+        PRINT "invisible_account" AS status;
+        RETURN;
+    END;
+
+    /* Traverse: Account -> Payment -> its sender, received in the 90 days before t, self-payments aside */
+    received = SELECT a
+        FROM accounts:a - (@@receiver_to_payment_edge_type>:e) - @@payment_vertex_type:p
+            - (@@payment_to_sender_edge_type>:f) - Account:b
+        WHERE p.event_ts_ms >= t_ms - LOOKBACK_MS AND p.event_ts_ms < t_ms AND b != a
+        ACCUM
+            INT cents = floor(p.amount * 100 + 0.5),
+            a.@in_90d += 1,
+            a.@in_amount_90d += cents,
+            IF p.event_ts_ms >= t_ms - MONTH_MS THEN
+                a.@in_30d += 1,
+                a.@in_amount_30d += cents
+            END,
+            IF p.event_ts_ms >= t_ms - WEEK_MS THEN
+                a.@in_7d += 1,
+                a.@in_amount_7d += cents
+            END
+    ;
+
+    /* Traverse: Account -> Payment -> its receiver, sent in the 90 days before t, self-payments aside */
+    sent = SELECT a
+        FROM accounts:a - (@@sender_to_payment_edge_type>:e) - @@payment_vertex_type:p
+            - (@@payment_to_receiver_edge_type>:f) - Account:b
+        WHERE p.event_ts_ms >= t_ms - LOOKBACK_MS AND p.event_ts_ms < t_ms AND b != a
+        ACCUM
+            INT cents = floor(p.amount * 100 + 0.5),
+            a.@out_90d += 1,
+            a.@out_amount_90d += cents,
+            IF p.event_ts_ms >= t_ms - MONTH_MS THEN
+                a.@out_30d += 1,
+                a.@out_amount_30d += cents
+            END,
+            IF p.event_ts_ms >= t_ms - WEEK_MS THEN
+                a.@out_7d += 1,
+                a.@out_amount_7d += cents
+            END
+    ;
+
+    /* Printing the accounts */
+    PRINT "ok" AS status;
+    PRINT accounts[
+        accounts.id AS account_id,
+        accounts.@in_7d AS in_7d,
+        accounts.@in_30d AS in_30d,
+        accounts.@in_90d AS in_90d,
+        accounts.@out_7d AS out_7d,
+        accounts.@out_30d AS out_30d,
+        accounts.@out_90d AS out_90d,
+        accounts.@in_amount_7d AS in_amount_7d,
+        accounts.@in_amount_30d AS in_amount_30d,
+        accounts.@in_amount_90d AS in_amount_90d,
+        accounts.@out_amount_7d AS out_amount_7d,
+        accounts.@out_amount_30d AS out_amount_30d,
+        accounts.@out_amount_90d AS out_amount_90d
+    ] AS accounts;
+
+}

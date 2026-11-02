@@ -3,9 +3,10 @@
 
 It measures a sample of the loaded world and writes one long table to results/bench/<world>.parquet:
 the columns section, name, variant, value, unit and note, a row per number, which a person can
-open and filter by hand. The sample is a few scored Mondays (bench.mondays: the first, the last
-and those between), and on each the accounts of a training draw (data.examples), unlabelled
-accounts and the identified active mules, reported apart. The table holds, by section:
+open and filter by hand. The sample is a few scored weeks (bench.weeks: the first, the last
+and those between), each at its scoring time, and on each the accounts of a training draw
+(data.examples), unlabelled accounts and the identified active mules, reported apart. The table
+holds, by section:
 
 - world: the loaded world, TigerGraph's version, its counts of vertices and edges and the seconds
   read_world took (TigerGraph's memory in use is read in the Cloud console, since the metrics
@@ -19,16 +20,16 @@ accounts and the identified active mules, reported apart. The table holds, by se
 - handoff: the bytes the parent writes under TMPDIR for the XGBoost process
   (comparisons.process), and the seconds to write, read and score a matrix;
 - hubs and profile: profile_hubs' histograms, the hubs and crowds against the thresholds, and
-  the count and share of every Monday's identified active mules (all of them, not only the ones
+  the count and share of every week's identified active mules (all of them, not only the ones
   fetched) that are account hubs, which must be 0;
 - install: the seconds to install each query again, with INSTALL QUERY -FORCE;
-- co_users: what the choice between co-user rows per Monday for every customer and on demand
+- co_users: what the choice between co-user rows per week for every customer and on demand
   needs; the rule is the same either way;
 - selection, audit, bootstrap and scoring: the projections the owner asked for (below).
 
 The projections. Each takes a measured rate and the counts of a world of that many people,
-people times the loaded world's scorable accounts per person per Monday times the scored
-Mondays, and never changes a design: it prices what the design says.
+people times the loaded world's scorable accounts per person per week times the scored
+weeks, and never changes a design: it prices what the design says.
 
 - selection (docs/design.md, "Training and selection"): the selection world's examples are built
   anew on every pass (training.batches), and a rotation makes passes_per_rotation passes
@@ -38,16 +39,16 @@ Mondays, and never changes a design: it prices what the design says.
   for the build alone and with the forward pass, at each of bench.projected_people. When
   training.reuse_built_examples keeps the examples (the proof of concept), the first pass builds
   them and every pass runs only the forward pass: the build is priced once.
-- audit (docs/design.md, "mule audit"): mule audit fetches every active true-mule account-Monday
-  and audit.nonmule_sample non-mule account-Mondays on every world. The sparse sample's seconds
-  per account-Monday are measured, and priced at the sample size plus the identified mules' active
-  account-Mondays, a lower bound on the mules' share: the answer key is evaluation's alone, so
+- audit (docs/design.md, "mule audit"): mule audit fetches every active true-mule account-week
+  and audit.nonmule_sample non-mule account-weeks on every world. The sparse sample's seconds
+  per account-week are measured, and priced at the sample size plus the identified mules' active
+  account-weeks, a lower bound on the mules' share: the answer key is evaluation's alone, so
   the bench never reads the true mules.
 - bootstrap (docs/design.md, "Uncertainty"): mule evaluate's paired bootstrap costs
-  audit.replicates x runs x ranked account-Mondays. The seconds one replicate's headline metrics
+  audit.replicates x runs x ranked account-weeks. The seconds one replicate's headline metrics
   take per ranked row are measured on a synthetic ranking, and priced at the replicates, at the
   runs (training.seeds x (the full model and its ablations), and each XGBoost comparison once) and
-  at the ranked account-Mondays of each size. The reported estimate of 35 runs came from XGBoost
+  at the ranked account-weeks of each size. The reported estimate of 35 runs came from XGBoost
   with five seeds; with each comparison trained once the runs are 27.
 - scoring: the whole-world scoring run, against its fallback (data.scoring): the fetch it needs
   at the sparse rate (an upper bound, since a whole world's neighbours are shared), and one
@@ -84,7 +85,7 @@ from .comparisons.rankers import COLUMNS as XGBOOST_RANKERS
 from .comparisons.rounds import MAX_ROUNDS
 from .config import DEFAULT_CONFIG, RunConfig
 from .data.calendar import check_window
-from .data.examples import monday, unlabelled
+from .data.examples import unlabelled, week
 from .data.labels import Labels, read_identified
 from .data.population import list_population
 from .data.worlds import LoadedWorld, find_world
@@ -168,21 +169,21 @@ class Measures:
 # The projections, as plain functions of what was measured.
 
 
-def chosen_mondays(mondays: Sequence[int], count: int) -> tuple[int, ...]:
-    """count of the Mondays, evenly spread, the first and the last among them: all of them when
-    there are no more than count."""
-    if len(mondays) <= count:
-        return tuple(mondays)
+def chosen_weeks(times: Sequence[int], count: int) -> tuple[int, ...]:
+    """The scoring times of count of the weeks, evenly spread, the first and the last among
+    them: all of them when there are no more than count."""
+    if len(times) <= count:
+        return tuple(times)
     if count == 1:
-        return (mondays[0],)
-    last = len(mondays) - 1
-    return tuple(mondays[round(index * last / (count - 1))] for index in range(count))
+        return (times[0],)
+    last = len(times) - 1
+    return tuple(times[round(index * last / (count - 1))] for index in range(count))
 
 
-def examples_at(per_person: float, people: int, mondays: int) -> float:
-    """The account-Mondays of a world of that many people: its scorable accounts per person on
-    a Monday, over the scored Mondays."""
-    return per_person * people * mondays
+def examples_at(per_person: float, people: int, weeks: int) -> float:
+    """The account-weeks of a world of that many people: its scorable accounts per person in
+    a week, over the scored weeks."""
+    return per_person * people * weeks
 
 
 def runs_of(seeds: int, ablations: int, comparisons: int) -> int:
@@ -216,7 +217,7 @@ def _bytes(value: object) -> int:
 
 @dataclass(frozen=True)
 class Request:
-    """One request of a query: its Monday, its accounts and its parameters."""
+    """One request of a query: its scoring time, its accounts and its parameters."""
 
     query: str
     t_ms: int
@@ -268,9 +269,9 @@ def time_requests(executor: BenchExecutor, requests: Sequence[Request], concurre
 
 @dataclass(frozen=True)
 class Sample:
-    """The accounts measured on one Monday: how many are scorable, every identified active mule
-    (identified), of which the first bench.positives are fetched (positives), the first of the
-    unlabelled draw, which is fetched, and the Monday's hubs."""
+    """The accounts measured at one scoring time: how many are scorable, every identified active
+    mule (identified), of which the first bench.positives are fetched (positives), the first of
+    the unlabelled draw, which is fetched, and the hubs of that time."""
 
     t_ms: int
     scorable: int
@@ -289,16 +290,18 @@ class Sample:
 
 def take_samples(
     executor: BenchExecutor,
-    mondays: Sequence[int],
+    chosen: Sequence[int],
     labels: Labels,
     config: RunConfig,
     measures: Measures,
+    scoring_times: Sequence[int],
 ) -> list[Sample]:
-    """The sample of each chosen Monday, the hubs read and timed."""
+    """The sample of each chosen scoring time, the hubs read and timed; scoring_times are all of
+    the world's, of which chosen are a sample, and give the label rule its active state."""
     found: list[Sample] = []
-    for t_ms in mondays:
+    for t_ms in chosen:
         accounts = [row.account_id for row in list_population(executor, t_ms)]
-        day = monday(t_ms, accounts, labels.mules)
+        day = week(t_ms, accounts, labels.mules, scoring_times)
         draw = unlabelled(day, labels.accounts, config.data)
         began = time.perf_counter()
         hubs = read_hubs.parse(executor.run(READ_HUBS, read_hubs.params(t_ms)))
@@ -319,7 +322,7 @@ def take_samples(
 
 
 def _requests(query: str, samples: Sequence[Sample], group: str, per_request: int) -> list[Request]:
-    """The requests of a per-account query for a group of every sample: the Monday's hubs go
+    """The requests of a per-account query for a group of every sample: the hubs of its time go
     with every one."""
     found: list[Request] = []
     for sample in samples:
@@ -429,7 +432,7 @@ def fill_cache(
         for sample in samples:
             chosen = sample.group(group)
             if chosen:
-                fetcher.monday(sample.t_ms, chosen)
+                fetcher.week(sample.t_ms, chosen)
                 accounts += len(chosen)
             keys[group] += [(sample.t_ms, account) for account in chosen]
         seconds = time.perf_counter() - began
@@ -438,7 +441,7 @@ def fill_cache(
             measures.add("fetch", "fill_accounts", group, accounts, "accounts")
             measures.add(
                 "fetch",
-                "fill_seconds_per_account_monday",
+                "fill_seconds_per_account_week",
                 group,
                 seconds / accounts,
                 "s",
@@ -689,18 +692,18 @@ def measure_profile(
 
 def measure_bootstrap(config: RunConfig, measures: Measures) -> float:
     """The seconds one replicate of the paired bootstrap takes per ranked row: the headline
-    metrics of a synthetic ranking of bench.bootstrap_rows account-Mondays over the scored
-    Mondays, with mules in rings, resampled by cluster as mule evaluate resamples them
+    metrics of a synthetic ranking of bench.bootstrap_rows account-weeks over the scored
+    weeks, with mules in rings, resampled by cluster as mule evaluate resamples them
     (evaluation.uncertainty). The rate."""
     rows = config.bench.bootstrap_rows
-    mondays = len(config.calendar.mondays())
+    weeks = len(config.calendar.week_starts())
     rng = np.random.default_rng(0)
     mules = max(2, rows // 1_000)
     status = np.full(rows, NON_MULE, dtype=object)
     status[:mules] = ACTIVE
     frame = pd.DataFrame(
         {
-            "t_ms": np.arange(rows, dtype=np.int64) % mondays,
+            "t_ms": np.arange(rows, dtype=np.int64) % weeks,
             "logit": rng.normal(size=rows) + 2.0 * (np.arange(rows) < mules),
             "weight": np.ones(rows),
             "status": status.astype(str),
@@ -708,7 +711,7 @@ def measure_bootstrap(config: RunConfig, measures: Measures) -> float:
     )
     positive = (frame["status"] == ACTIVE).to_numpy()
     ranking = Ranking.of(frame, positive)
-    accounts = np.arange(rows) // mondays
+    accounts = np.arange(rows) // weeks
     keys = [
         f"ring:{index % max(1, mules // 4)}" if mule else f"account:{account}"
         for index, (mule, account) in enumerate(
@@ -775,21 +778,21 @@ def measure_co_users(
     measures: Measures,
     keys: dict[str, list[tuple[int, str]]],
 ) -> None:
-    """What the choice of co-user rows per Monday for every customer, against on demand per
+    """What the choice of co-user rows per week for every customer, against on demand per
     scored account, turns on: the co-user accounts a subgraph holds, how many of those are in
-    more than one sampled subgraph of a Monday (the reuse a per-Monday computation would
-    share), and the customers a Monday has. The rule is the same either way."""
+    more than one sampled subgraph of a week (the reuse a per-week computation would
+    share), and the customers a week has. The rule is the same either way."""
     held = [key for group in keys.values() for key in group]
     if not held:
         return
     rows = read_rows(cache, held)
     per_subgraph = [len(example.identity.accounts) for example in rows]
     measures.spread("co_users", "co_user_accounts", "sample", per_subgraph, "accounts")
-    by_monday: dict[int, list[set[str]]] = {}
+    by_week: dict[int, list[set[str]]] = {}
     for (t_ms, _), example in zip(held, rows, strict=True):
-        by_monday.setdefault(t_ms, []).append({a.account_id for a in example.identity.accounts})
+        by_week.setdefault(t_ms, []).append({a.account_id for a in example.identity.accounts})
     total = shared = 0
-    for sets in by_monday.values():
+    for sets in by_week.values():
         seen: dict[str, int] = {}
         for accounts in sets:
             for account in accounts:
@@ -802,7 +805,7 @@ def measure_co_users(
         "sample",
         shared / total if total else 0.0,
         "share",
-        "of the distinct co-user accounts of a Monday's sampled subgraphs",
+        "of the distinct co-user accounts of a week's sampled subgraphs",
     )
     for sample in samples:
         measures.add(
@@ -824,7 +827,7 @@ def project(
     measures: Measures,
 ) -> None:
     """The projections of the module's docstring, from what was measured."""
-    mondays = len(config.calendar.mondays())
+    weeks = len(config.calendar.week_starts())
     scorable = float(np.mean([sample.scorable for sample in samples]))
     per_person = scorable / loaded.config.people
     identified = float(np.mean([sample.identified_active for sample in samples]))
@@ -833,7 +836,7 @@ def project(
     runs = runs_of(
         len(config.training.seeds), len(ablations(config.training)), len(XGBOOST_RANKERS)
     )
-    measures.add("selection", "scorable_accounts_per_person_monday", "", per_person, "accounts")
+    measures.add("selection", "scorable_accounts_per_person_week", "", per_person, "accounts")
     measures.add("selection", "build_seconds_per_example", "", rates.build, "s")
     measures.add("selection", "forward_seconds_per_example", "", rates.forward, "s")
     passes = {
@@ -849,7 +852,7 @@ def project(
     measures.add("bootstrap", "replicates", "", config.audit.replicates, "replicates")
     for people in sorted({loaded.config.people, *config.bench.projected_people}):
         variant = f"people={people}"
-        examples = examples_at(per_person, people, mondays)
+        examples = examples_at(per_person, people, weeks)
         measures.add("selection", "examples_per_pass", variant, examples, "examples")
         for name, count in passes.items():
             built, scored = pass_seconds(rates.build, rates.forward, examples, count, reuse=reuse)
@@ -870,13 +873,13 @@ def project(
                     seconds / SECONDS_PER_DAY,
                     "days",
                 )
-        sparse = config.audit.nonmule_sample + examples_at(identified_per_person, people, mondays)
+        sparse = config.audit.nonmule_sample + examples_at(identified_per_person, people, weeks)
         measures.add(
             "audit",
-            "account_mondays_fetched_at_least",
+            "account_weeks_fetched_at_least",
             variant,
             sparse,
-            "account-Mondays",
+            "account-weeks",
             "the sample plus the identified active mules, a lower bound on the true mules'",
         )
         measures.add(
@@ -894,11 +897,11 @@ def project(
             "s",
             f"{config.audit.replicates} replicates x {runs} runs x {examples:,.0f} ranked rows",
         )
-        mules = examples_at(identified_per_person, people, mondays)
+        mules = examples_at(identified_per_person, people, weeks)
         fallback = examples / config.data.fallback_weight + mules
         for name, count in (("whole", examples), ("fallback", fallback)):
             label = f"{variant},scoring={name}"
-            measures.add("scoring", "account_mondays", label, count, "account-Mondays")
+            measures.add("scoring", "account_weeks", label, count, "account-weeks")
             measures.add(
                 "scoring", "fetch_seconds_at_most", label, seconds_projected(fill_rate, count), "s"
             )
@@ -962,9 +965,10 @@ def run(
     measure_server(executor, loaded.world, measures)
     labels = read_identified(bench)
     measures.add("world", "identified_mules", "", len(labels.mules), "accounts")
-    mondays = chosen_mondays(config.calendar.mondays(), config.bench.mondays)
-    samples = take_samples(bench, mondays, labels, config, measures)
-    show(f"bench: {len(samples)} Mondays, measuring {loaded.config.name}")
+    scoring_times = config.calendar.scoring_times(loaded.config.seed)
+    chosen = chosen_weeks(scoring_times, config.bench.weeks)
+    samples = take_samples(bench, chosen, labels, config, measures, scoring_times)
+    show(f"bench: {len(samples)} weeks, measuring {loaded.config.name}")
     measure_fetch(bench, samples, config, measures)
     with tempfile.TemporaryDirectory(prefix="mule-bench-cache-") as name:
         cache = Cache(Path(name) / "cache")

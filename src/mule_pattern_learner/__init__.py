@@ -1,5 +1,5 @@
 """Money-mule accounts found on TigerGraph: a temporal heterogeneous graph neural network
-ranks a bank's accounts every Monday (docs/design.md). `mule` runs each step."""
+ranks a bank's accounts every week (docs/design.md). `mule` runs each step."""
 
 from importlib.metadata import version
 

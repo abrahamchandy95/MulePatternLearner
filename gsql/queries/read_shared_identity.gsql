@@ -1,40 +1,7 @@
 USE GRAPH Mule_Pattern_Learner
 
-/* read_shared_identity (B5, the device and IP graph): the devices and IPs around each scored
-   account, who else uses each one, and since when.
-
-   Inputs: t_ms, a Monday at 00:00 UTC; account_ids, the scored accounts, each once;
-   hub_accounts, read_hubs' account hubs of the same t.
-   Prints, for all the scored accounts' subgraphs together: customers, devices and ips, each
-   once with its row; accounts, the co-users' accounts with is_external; and per scored
-   account, by its id: subgraph_customers, subgraph_nodes and co_user_accounts, and its
-   enrolled, owner_enrolled and seen edges with their fields (docs/features.md, the customer,
-   device and IP node tables and the enrolment and seen edge tables). Each duration that may
-   be absent is printed as presence and milliseconds.
-   Refuses: invalid_parameters, duplicate_account, unknown_account, invisible_account and
-   invisible_hub (a hub that does not exist at t).
-
-   A ring's device or IP shows on its members' payments even when no member registered it, so
-   the query reads both kinds of link, enrolment (the customer registered the node) and seen
-   (the node was on the account's own payments), and counts who else uses each node
-   (docs/design.md, "read_shared_identity (B5): the device and IP graph"). The names below are
-   those of docs/features.md, "What one example's subgraph holds", for a scored account s:
-   - C_s is s's customer; D_s, C_s's kept links, up to 8 devices and 8 IPs; S_s, the nodes
-     seen on s's payments, up to 8 of each kind; the open nodes, those of D_s and S_s that
-     are no leaf.
-   - A leaf is a device or IP with more than 8 customers by read_hubs' crowd rule, tested
-     inline: it stays a node with its flag, is never expanded, and counts for no sharing.
-   - A customer shares a node that is no leaf through a link held in the last 30 days, or a
-     payment seen on it in the last 30 days from a deposit account it owns.
-   - A start of a customer on a node counts only when it is known (docs/design.md, "Time");
-     an unknown start counts as t - 90 days wherever a sharing start is needed.
-   - No link end is a value: valid_to_ms appears only in the visible and current tests. A
-     self-payment is read nowhere but in the crowd count, which is read_hubs' measure.
-   Per-request state is kept by the scored account, on its own vertex or in maps keyed by its
-   id; every other map holds what one customer, account, node or payment is at t, whichever
-   scored account reached it. The query calls no subquery and no user-defined function, so a
-   rule needed in several places, such as the known-start test or the fields of an edge, is
-   written out in each. The accounts come as ids, as read_money_flow explains. */
+/* reads the devices and IPs around each scored account, as of time t: the ones its customer
+   registered and the ones seen on its payments, who else uses each one, and since when. */
 CREATE OR REPLACE QUERY read_shared_identity(
     UINT t_ms,
     LIST<STRING> account_ids,
@@ -159,8 +126,7 @@ CREATE OR REPLACE QUERY read_shared_identity(
     UINT lookback_ms = 7776000000;
     UINT crowd_threshold = 8;
 
-    /* Mondays are 4 days after the Thursday of 1970-01-01, modulo a week. */
-    IF t_ms <= lookback_ms OR t_ms % 604800000 != 345600000 THEN
+    IF t_ms <= lookback_ms OR t_ms % 1000 != 0 THEN
         PRINT "invalid_parameters" AS status;
         RETURN;
     END;
@@ -1074,7 +1040,7 @@ CREATE OR REPLACE QUERY read_shared_identity(
     AccountsListed = to_vertex_set(@@printed_accounts, "Account");
     Accounts = SELECT a FROM AccountsListed:a WHERE a.opened_ms < t_ms;
 
-    PRINT "ok" AS status, "read_shared_identity-84ffb72a34b2" AS version;
+    PRINT "ok" AS status, "read_shared_identity-59f0ed612e93" AS version;
     PRINT CustomersListed[CustomersListed.id AS customer_id,
       CustomersListed.@accounts_owned AS accounts_owned,
       CustomersListed.@devices_30d AS devices_30d, CustomersListed.@ips_30d AS ips_30d,

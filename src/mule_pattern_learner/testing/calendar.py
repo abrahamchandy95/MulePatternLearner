@@ -1,22 +1,30 @@
-"""A reference world that spans the configured calendar, with identified mules on chosen Mondays;
+"""A reference world that spans the configured calendar, with identified mules on chosen weeks;
 the identity file the loader writes for a world from PhantomLedger's world record; and a spy
 executor that answers through a reference graph and records every query it runs.
 
 The world of calendar_world holds the export window of the default calendar (its first payment
 on 2024-01-01, day 0, and its last on 2025-03-30, day 454) and these identified mules, around
-T, the scored Monday 2024-07-01 (the 14th of 52):
+T, the start of the 14th of the 52 scored weeks, Monday 2024-07-01. A mule is positive at a
+scoring time t when its onset < t and t <= its last payment + W(t), W(t) being the longer of 7
+days and the time since the previous scoring time (7 days when there is none); positive_times
+works that out for any scoring times, and early_warning_times the one time each mule is at its
+early warning:
 
 - a_long, active from the Sunday before T (onset T - 1 day) until T + 24 weeks (last), so
-  positive on the 26 Mondays from T to T + 25 weeks;
-- a_short, active from Wednesday T + 8 weeks + 2 days to the next day, so positive on the one
-  Monday T + 9 weeks;
-- a_edge, whose onset and last payment are both exactly at the Monday T + 30 weeks: not active
-  at T + 30 weeks, since an onset at t is not in view, and active at T + 31 weeks, since its
-  last payment plus 7 days is exactly then; one positive Monday;
-- a_gone, active from T + 2 days to T + 3 days, whose account closed at T - 30 days: active on
-  the Monday T + 1 week but never scorable;
-- a_early, active in February 2024, before the first scored Monday (2024-04-01): active on no
-  scored Monday.
+  positive at every scoring time after its onset up to about T + 25 weeks, where its last
+  payment leaves the window;
+- a_short, active from Wednesday T + 8 weeks + 2 days to the next day, positive at the scoring
+  times in (T + 8 weeks + 2 days, T + 9 weeks + 3 days] and, when the gap between scoring times
+  that holds its last payment is longer than a week, at the scoring time that ends the gap;
+- a_edge, whose onset and last payment are both exactly at the Monday T + 30 weeks: not positive
+  at a scoring time exactly then, since an onset at t is not in view, but positive at the times
+  after it up to T + 31 weeks, and at the scoring time that ends the gap holding its last
+  payment when that is longer than a week;
+- a_gone, active from T + 2 days to T + 3 days, whose account closed at T - 30 days: positive in
+  the same way as a_short, but never scorable;
+- a_early, active in February 2024, before the first scored week (2024-04-01): positive at no
+  scoring time, since the first one is more than 7 days after its last payment, so in
+  Unscored.no_active_week.
 
 a_hidden is a mule the bank never identified. Twelve ordinary customers own a_n00 to a_n11;
 c_card is a credit card a_n00's customer owns; x_far is another bank's account.
@@ -24,7 +32,7 @@ c_card is a credit card a_n00's customer owns; x_far is another bank's account.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -49,6 +57,37 @@ GONE = Mule(T + 2 * D, T + 3 * D, ring=4, identified=True)
 EARLY = Mule(DAY_0 + 31 * D, DAY_0 + 40 * D, ring=5, identified=True)
 HIDDEN = Mule(T - 2 * D, T + 2 * W, ring=1)
 ORDINARY = tuple(f"n{index:02d}" for index in range(12))
+
+
+def _window(t_ms: int, scoring_times: Sequence[int]) -> int:
+    """W(t) of the label rule, from its words: the longer of 7 days and the time since the
+    previous scoring time, the largest below t, and 7 days when there is none."""
+    earlier = [s for s in scoring_times if s < t_ms]
+    return max(W, t_ms - max(earlier)) if earlier else W
+
+
+def positive_times(mule: Mule, scoring_times: Sequence[int]) -> tuple[int, ...]:
+    """The scoring times, in increasing order, at which a mule is positive, by the label rule of
+    docs/design.md read literally: the onset before t, and t no later than the last payment plus
+    W(t). Written apart from data.labels, so that a test of that module compares two."""
+    return tuple(
+        t_ms
+        for t_ms in scoring_times
+        if mule.onset_ms < t_ms <= mule.last_ms + _window(t_ms, scoring_times)
+    )
+
+
+def early_warning_times(mule: Mule, scoring_times: Sequence[int]) -> tuple[int, ...]:
+    """The scoring times, in increasing order, at which a mule is at its early warning, by the
+    rule of docs/design.md read literally: t at or before the onset, and the onset before the
+    next scoring time, the smallest above t, which is t plus 7 days when there is none. Written
+    apart from evaluation.answer_key, so that a test of that module compares two."""
+    found: list[int] = []
+    for t_ms in scoring_times:
+        later = [s for s in scoring_times if s > t_ms]
+        if t_ms <= mule.onset_ms < (min(later) if later else t_ms + W):
+            found.append(t_ms)
+    return tuple(found)
 
 
 def calendar_world() -> WorldBuilder:
@@ -143,7 +182,7 @@ def identity_text(
         "days": 455,
         "burn_in_days": 275,
         "label_tail_days": 90,
-        "first_scored_monday": DEFAULT_CONFIG.calendar.mondays()[0],
+        "first_scored_monday": DEFAULT_CONFIG.calendar.week_starts()[0],
         **shared_fields(world),
         **(changed or {}),
     }

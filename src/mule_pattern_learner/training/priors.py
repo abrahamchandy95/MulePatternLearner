@@ -2,7 +2,7 @@
 
 The share of hidden active mules among the unlabelled is unknown, as in a bank, so the prior
 is chosen from a grid of multiples of the identified active share measured in the training
-world (data.report: identified active mules over scorable accounts, averaged over Mondays):
+world (data.report: identified active mules over scorable accounts, averaged over weeks):
 1, 3 and 10 times it. Config may fix the multiple instead (training.fixed_prior). The prior
 is never set from PhantomLedger's identified-share report or from the answer key.
 

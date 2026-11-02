@@ -19,10 +19,11 @@ from mule_pattern_learner.subgraph.cache import INDEX_FILE
 from mule_pattern_learner.testing import fixtures
 from mule_pattern_learner.testing.reference import ReferenceGraph
 from mule_pattern_learner.testing.world import DAY_MS, HOUR_MS, T
+from mule_pattern_learner.tigergraph.queries.mark_crowds import Crowd, Crowds
 from mule_pattern_learner.tigergraph.queries.read_activity_change import ActivityChange
 from mule_pattern_learner.tigergraph.queries.read_community import Community
 from mule_pattern_learner.tigergraph.queries.read_counterparties import Counterparties
-from mule_pattern_learner.tigergraph.queries.read_hubs import HubAccount, Hubs, Leaf
+from mule_pattern_learner.tigergraph.queries.read_hubs import HubAccount, Hubs
 from mule_pattern_learner.tigergraph.queries.read_money_flow import MoneyFlow, TrackedInflow
 from mule_pattern_learner.tigergraph.queries.read_payment_events import (
     EventAccount,
@@ -57,8 +58,8 @@ def parity(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def index_reads(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
-    """The part indexes the cache reads from now on, in order: a cache holds a Monday's indexes
-    in memory, so each read is one that was not held."""
+    """The part indexes the cache reads from now on, in order: a cache holds one scoring time's
+    indexes in memory, so each read is one that was not held."""
     reads: list[Path] = []
     read_table = pq.read_table
 
@@ -80,9 +81,9 @@ def index_reads(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
 # account too, seen on i_home, so it is reached by a payment and by an IP. a_s1's payments were
 # seen on d_home and on d_crowd, a crowd.
 #
-# Example 1, at T + 1 week, scores a_s2, itself an account hub that Monday, whose customer is
+# Example 1, at T + 1 week, scores a_s2, itself an account hub at that time, whose customer is
 # p_c2. x_payer pays it (p5), and it pays a_three (p6); a_s2's payments were seen on i_crowd, an
-# IP hub. x_payer is in both examples, each with its own Monday's rows.
+# IP hub. x_payer is in both examples, each with its own time's rows.
 #
 # Each account's B1 to B3 rows are numbered by k, so that every column of every row differs.
 HAND_T1 = T + 7 * DAY_MS
@@ -198,7 +199,9 @@ def _payment(
 
 def hand_rows() -> list[ExampleRows]:
     """The rows of the two examples of the hand-built batch."""
-    leaves0 = Leaves.of(Hubs((HubAccount("a_hub", 250),), (Leaf("d_crowd", 12, True, False),), ()))
+    leaves0 = Leaves.of(
+        Hubs((HubAccount("a_hub", 250),), (), ()), Crowds((Crowd("d_crowd", 12, True, False),), ())
+    )
     payments0 = PaymentGraph(
         "a_s1",
         tuple(
@@ -278,7 +281,9 @@ def hand_rows() -> list[ExampleRows]:
         "p1": TrackedInflow("a_s1", "p1", 0.95, True, 10 * MIN),
         "p3": TrackedInflow("x_payer", "p3", 0.0, False, 0),
     }
-    leaves1 = Leaves.of(Hubs((HubAccount("a_s2", 300),), (), (Leaf("i_crowd", 220, False, True),)))
+    leaves1 = Leaves.of(
+        Hubs((HubAccount("a_s2", 300),), (), ()), Crowds((), (Crowd("i_crowd", 220, False, True),))
+    )
     payments1 = PaymentGraph(
         "a_s2",
         (

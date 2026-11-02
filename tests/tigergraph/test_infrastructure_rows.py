@@ -1,5 +1,5 @@
-"""The parameter builders and row parsers of the six infrastructure queries, on answers written
-by hand in TigerGraph's shape: a status row first, then one row per PRINT, a printed vertex set
+"""The parameter builders and row parsers of the six infrastructure queries and of mark_crowds,
+on answers written by hand in TigerGraph's shape: a status row first, then one row per PRINT, a printed vertex set
 as a list of vertices with their projected fields under "attributes".
 
 Each parser refuses a status row, an answer of another version, a page out of id order, and the
@@ -19,13 +19,14 @@ import pytest
 import mule_pattern_learner
 from mule_pattern_learner.tigergraph.queries import (
     LIST_ACCOUNTS,
+    MARK_CROWDS,
     PROFILE_HUBS,
     READ_ANSWER_KEY,
     READ_HUBS,
     READ_LABELS,
     READ_WORLD,
-    VERSIONS,
     list_accounts,
+    mark_crowds,
     profile_hubs,
     read_hubs,
     read_labels,
@@ -48,7 +49,8 @@ T_MS = 1_711_929_600_000  # 2024-04-01 00:00 UTC, a Monday
 
 
 def _head(name: str, **fields: object) -> dict[str, object]:
-    return {"status": "ok", "version": VERSIONS[name], **fields}
+    del name
+    return {"status": "ok", **fields}
 
 
 def _vertices(kind: str, rows: list[dict[str, Any]], id_field: str) -> list[dict[str, Any]]:
@@ -59,21 +61,33 @@ def _vertices(kind: str, rows: list[dict[str, Any]], id_field: str) -> list[dict
 # The builders.
 
 
-def test_a_query_with_t_takes_a_monday_at_midnight_after_the_lookback() -> None:
-    for build in (read_hubs.params, profile_hubs.params):
+def test_a_query_with_t_takes_a_whole_second_after_the_lookback() -> None:
+    for build in (read_hubs.params, mark_crowds.params, profile_hubs.params):
         assert build(T_MS) == {"t_ms": T_MS}
     assert list_accounts.params(T_MS, "", 500) == {"t_ms": T_MS, "after_id": "", "page": 500}
-    # A Tuesday, a Monday at 01:00, a Monday a millisecond late, 1970-01-05 (the first Monday,
-    # inside the lookback's length) and a boolean are refused.
-    for t_ms in (T_MS + DAY_MS, T_MS + 3_600_000, T_MS + 1, 4 * DAY_MS, True):
-        with pytest.raises(ValueError, match="Monday"):
+    # Any whole second is a time, mid-week and mid-day as well as a Monday at midnight: a
+    # Tuesday at 13:47:21, a Sunday a second before midnight.
+    for t_ms in (T_MS + DAY_MS + 49_641_000, T_MS + 7 * DAY_MS - 1_000, T_MS + 1_000):
+        assert read_hubs.params(t_ms) == {"t_ms": t_ms}
+        assert profile_hubs.params(t_ms) == {"t_ms": t_ms}
+        assert list_accounts.params(t_ms, "", 1)["t_ms"] == t_ms
+    # A millisecond that is no whole second, in the middle of a second or a millisecond late
+    # on a Monday, and a boolean are refused.
+    for t_ms in (T_MS + 1, T_MS + DAY_MS + 500, T_MS - 999, True):
+        with pytest.raises(ValueError, match="whole second"):
             read_hubs.params(t_ms)  # pyright: ignore[reportArgumentType]
-    # Mondays fall on day 4 + 7k of epoch time. The lookback is 90 days, so day 88 (k = 12) is
-    # too early and day 95 (k = 13) the earliest t.
+        with pytest.raises(ValueError, match="whole second"):
+            mark_crowds.params(t_ms)  # pyright: ignore[reportArgumentType]
+        with pytest.raises(ValueError, match="whole second"):
+            list_accounts.params(t_ms, "", 1)  # pyright: ignore[reportArgumentType]
+    # The lookback is 90 days: t at the lookback's length or inside it is too early, a second
+    # after it the earliest t.
     assert LOOKBACK_MS == 90 * DAY_MS
-    assert read_world.params() == {} and profile_hubs.params(95 * DAY_MS) == {"t_ms": 95 * DAY_MS}
-    with pytest.raises(ValueError, match="Monday"):
-        profile_hubs.params(88 * DAY_MS)
+    assert read_world.params() == {}
+    assert profile_hubs.params(LOOKBACK_MS + 1_000) == {"t_ms": LOOKBACK_MS + 1_000}
+    for t_ms in (0, 88 * DAY_MS, LOOKBACK_MS - 1_000, LOOKBACK_MS):
+        with pytest.raises(ValueError, match="whole second"):
+            profile_hubs.params(t_ms)
 
 
 def _page_of_accounts(after_id: str, page: int) -> dict[str, Any]:
@@ -129,20 +143,19 @@ PARSERS: list[tuple[str, Callable[[list[object]], object]]] = [
     (READ_LABELS, lambda rows: read_labels.parse(rows, "", 10)),
     (READ_ANSWER_KEY, lambda rows: answer_key.parse(rows, "", 10)),
     (READ_HUBS, read_hubs.parse),
+    (MARK_CROWDS, mark_crowds.parse),
     (READ_WORLD, read_world.parse),
     (PROFILE_HUBS, profile_hubs.parse),
 ]
 
 
 @pytest.mark.parametrize(("name", "parse"), PARSERS)
-def test_every_parser_refuses_a_status_row_and_another_version(
+def test_every_parser_refuses_a_status_row(
     name: str, parse: Callable[[list[object]], object]
 ) -> None:
     with pytest.raises(QueryRefused) as refused:
         parse([{"status": "invalid_parameters"}])
     assert (refused.value.query, refused.value.status) == (name, "invalid_parameters")
-    with pytest.raises(ValueError, match="mule install"):
-        parse([{"status": "ok", "version": f"{name}-0123456789ab"}])
 
 
 def test_a_printed_set_needs_its_vertices_attributes() -> None:
@@ -309,6 +322,46 @@ def test_a_hub_or_crowd_below_its_threshold_or_repeated_is_refused(
 ) -> None:
     with pytest.raises(ValueError, match=message):
         read_hubs.parse(_hubs(accounts, devices, ips))
+
+
+# The crowds.
+
+
+def _crowds(devices: list[dict[str, Any]], ips: list[dict[str, Any]]) -> list[object]:
+    return [
+        _head(MARK_CROWDS),
+        {"devices": _vertices("Device", devices, "node_id")},
+        {"ips": _vertices("IP", ips, "node_id")},
+    ]
+
+
+def test_the_crowds_parse_sorted_by_id_with_their_measures() -> None:
+    crowds = mark_crowds.parse(
+        _crowds([_leaf("d_2", 9), _leaf("d_1", 12, observed_only=True)], [_leaf("ip_1", 201)])
+    )
+    assert [(d.node_id, d.customers_90d, d.observed_only, d.hub) for d in crowds.devices] == [
+        ("d_1", 12, True, False),
+        ("d_2", 9, False, False),
+    ]
+    assert [(i.node_id, i.customers_90d, i.hub) for i in crowds.ips] == [("ip_1", 201, True)]
+    assert mark_crowds.parse(_crowds([], [])) == mark_crowds.Crowds((), ())
+
+
+@pytest.mark.parametrize(
+    ("devices", "ips", "message"),
+    [
+        ([_leaf("d_1", 8)], [], "among its devices"),
+        ([], [{**_leaf("ip_1", 201), "hub": False}], "among its ips"),
+        ([], [{**_leaf("ip_1", 200), "hub": True}], "among its ips"),
+        ([_leaf("d_1", 9), _leaf("d_1", 10)], [], "repeated id in devices"),
+        ([{**_leaf("d_1", 9), "crowd_at_ms": T_MS}], [], "has the fields"),
+    ],
+)
+def test_a_crowd_below_its_threshold_with_a_wrong_hub_flag_or_repeated_is_refused(
+    devices: list[dict[str, Any]], ips: list[dict[str, Any]], message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        mark_crowds.parse(_crowds(devices, ips))
 
 
 HISTOGRAMS: dict[str, dict[str, int]] = {

@@ -1,6 +1,6 @@
 """The loaded world's identity: the hash of read_world's fields that names every cache and store
 folder, and the fields PhantomLedger's world record shares with read_world; and the rest of a
-cached row's key, the folder of the query versions and settings and the folder of each Monday
+cached row's key, the folder of the query versions and settings and the folder of each week
 (docs/design.md, "Cache")."""
 
 from __future__ import annotations
@@ -28,8 +28,8 @@ from mule_pattern_learner.tigergraph.world import (
     CACHED_QUERIES,
     cache_key,
     identity,
-    monday_folder,
     shared_fields,
+    time_folder,
 )
 
 # read_world's answer for a small world, as TigerGraph prints it: no key for a type or value
@@ -38,7 +38,6 @@ WORLD = read_world.parse(
     [
         {
             "status": "ok",
-            "version": VERSIONS[READ_WORLD],
             "vertices": {"Party": 3, "Account": 4, "Payment_Transaction": 5, "Device": 1},
             "edges": {"Party_Owns_Account": 4, "Transaction_From_Account": 5},
             "account_types": {"deposit": 3, "gl": 1},
@@ -136,10 +135,14 @@ def test_the_cache_key_names_the_query_versions_and_the_settings(
     assert cache_key(SubgraphConfig()) != key
 
 
-def test_a_mondays_folder_is_its_date() -> None:
-    assert monday_folder(1_711_929_600_000) == "2024-04-01"
-    assert monday_folder(1_742_774_400_000) == "2025-03-24"
-    # Only a Monday at 00:00 UTC has a folder.
-    for t_ms in (1_711_929_600_001, 1_711_929_600_000 + 86_400_000, 1_711_926_000_000):
-        with pytest.raises(ValueError, match="Monday at 00:00 UTC"):
-            monday_folder(t_ms)
+def test_a_scoring_times_folder_is_its_utc_time_to_the_second() -> None:
+    assert time_folder(1_711_929_600_000) == "2024-04-01T00-00-00Z"
+    assert time_folder(1_742_774_400_000) == "2025-03-24T00-00-00Z"
+    # A time inside a week has a folder of its own, its colons written as hyphens: Wednesday
+    # 2024-04-03 at 14:37:12.
+    assert time_folder(1_712_155_032_000) == "2024-04-03T14-37-12Z"
+    assert time_folder(1_712_155_033_000) == "2024-04-03T14-37-13Z"
+    # Only a whole second after the lookback has a folder.
+    for t_ms in (1_711_929_600_001, 1_711_929_600_000 - 1, 86_400_000):
+        with pytest.raises(ValueError, match="whole second"):
+            time_folder(t_ms)

@@ -1,8 +1,8 @@
 """The feature audit of mule audit, on development worlds only (docs/design.md, "The feature
 audit").
 
-Over the audit sample's account-Mondays (evaluation.sample: every active true mule, and a keyed
-sample of non-mule account-Mondays, each standing for its share of them), each column's
+Over the audit sample's account-weeks (evaluation.sample: every active true mule, and a keyed
+sample of non-mule account-weeks, each standing for its share of them), each column's
 univariate separation of active true mules from non-mules: its weighted ROC AUC against
 is_mule, with a ring-resampled interval (evaluation.uncertainty). The columns are read from the
 built batch, raw before encoding (each duration as its presence bit and its milliseconds):
@@ -23,12 +23,12 @@ An aggregate over no row is 0, as the model sees no edge.
   separates almost perfectly: a suspected leak or shortcut, which stops the run.
 - A near-pure region stops the run too, since a marker held by a minority of mules and by no
   ordinary account keeps its ROC AUC near 0.5: for each column, each value of a flag (a column
-  holding only 0 and 1) and its top and bottom audit.near_pure_tail of the account-Mondays by
+  holding only 0 and 1) and its top and bottom audit.near_pure_tail of the account-weeks by
   weight, a region holding at least audit.near_pure_min_mule_share of the active true-mule
-  account-Mondays in which true mules are more than audit.near_pure_purity of the weight. A
+  account-weeks in which true mules are more than audit.near_pure_purity of the weight. A
   tail holds the values strictly beyond its edge value, so a tie at the edge is left out and a
   tail never holds more than its share of the weight. This matters because active true mules
-  are a few hundredths of a percent of the scored account-Mondays, under a tail of 0.1%: in a
+  are a few hundredths of a percent of the scored account-weeks, under a tail of 0.1%: in a
   column that is zero on most rows, the edge of the top tail is that zero, and taking the tie
   in would make the region every row and hide a marker only a few mules hold.
 - The tails are read only when the sample measures them (tails_measured): when a tail's share
@@ -201,7 +201,7 @@ def tails_measured(
 ) -> bool:
     """Whether the sample measures a tail: whether near_pure_tail of the weight is at least one
     sampled non-mule's weight. At the proof of concept's 300 sampled non-mules one stands for
-    about 8,150 account-Mondays of a 30,000-person world, whose 0.1% tail weighs about 2,450."""
+    about 8,150 account-weeks of a 30,000-person world, whose 0.1% tail weighs about 2,450."""
     non_mules = weight[~positive]
     return non_mules.size > 0 and audit.near_pure_tail * float(weight.sum()) >= float(
         non_mules.max()
@@ -248,7 +248,7 @@ def feature_audit(
     seed: int,
     columns: Sequence[str] = COLUMNS,
 ) -> FeatureAudit:
-    """The audit of every column of matrix (a row per account-Monday of the audit sample, in
+    """The audit of every column of matrix (a row per account-week of the audit sample, in
     the order of positive, weight and the cluster names keys)."""
     if matrix.shape != (len(positive), len(columns)):
         raise ValueError(

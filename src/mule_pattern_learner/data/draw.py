@@ -1,14 +1,14 @@
 """The keyed draws (docs/design.md, "Training world" and "If whole-world scoring is too slow").
 
-Every (account, Monday) has one keyed hash: blake2b, keyed by the draw key of config and 8 bytes
-long, of "<account id>|<Monday in epoch milliseconds>", read as a big-endian integer below
+Every (account, t) has one keyed hash: blake2b, keyed by the draw key of config and 8 bytes
+long, of "<account id>|<t in epoch milliseconds>", read as a big-endian integer below
 2^64. tests/data/test_draw.py pins its outputs.
 
-- The training draw of a Monday takes the n accounts of its pool with the lowest hashes (ties,
+- The training draw of a week takes the n accounts of its pool with the lowest hashes (ties,
   which a 64-bit hash practically never has, by account id). So it is uniform, and it nests:
   when a few accounts join or leave the pool, the rest of the draw stays, and with it their
   cached rows.
-- The fallback sample of a Monday takes each account whose hash is below 2^64 divided by the
+- The fallback sample of a week takes each account whose hash is below 2^64 divided by the
   sample's weight, so each is included with chance 1 over the weight, and stands for that many.
 
 The training draw and the fallback sample read the same hash, so in a world that trains in
@@ -27,14 +27,14 @@ SCALE = 2 ** (8 * DIGEST_BYTES)
 
 
 def draw_hash(key: bytes, account_id: str, t_ms: int) -> int:
-    """The keyed hash of an account on the Monday t."""
+    """The keyed hash of an account at the time t."""
     message = f"{account_id}|{t_ms}".encode()
     digest = hashlib.blake2b(message, key=key, digest_size=DIGEST_BYTES).digest()
     return int.from_bytes(digest, "big")
 
 
 def lowest(key: bytes, accounts: Iterable[str], t_ms: int, n: int) -> list[str]:
-    """The n accounts with the lowest keyed hashes on the Monday t, ties by id, in that order;
+    """The n accounts with the lowest keyed hashes at the time t, ties by id, in that order;
     every account when there are at most n."""
     if n < 0:
         raise ValueError(f"A draw takes a number of accounts that is not negative, got {n}")
@@ -43,7 +43,7 @@ def lowest(key: bytes, accounts: Iterable[str], t_ms: int, n: int) -> list[str]:
 
 
 def sampled(key: bytes, accounts: Iterable[str], t_ms: int, weight: int) -> list[str]:
-    """The accounts the fallback sample of the Monday t includes, each with chance 1 / weight,
+    """The accounts the fallback sample of the time t includes, each with chance 1 / weight,
     in the order given."""
     if weight < 1:
         raise ValueError(f"A sample's weight is at least 1, got {weight}")

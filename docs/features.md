@@ -18,8 +18,8 @@ checked by two adversarial reviews, one hunting leaks only.
 
 ## In short
 
-- A batch is a set of examples. An example is an (account, Monday t) pair with its own copy of
-  a two-hop subgraph, so no node is shared between examples.
+- A batch is a set of examples. An example is an (account, t) pair, with t the scoring time of a
+  week, with its own copy of a two-hop subgraph, so no node is shared between examples.
 - The model receives four node feature matrices (account, customer, device, IP), sixteen
   relations (eight and their reverses), each with an edge index and, for fourteen of them,
   edge attributes, one community row per example, the index of each scored account, and, in
@@ -399,9 +399,14 @@ switch.
   clamps them, and the owner ruled first-seen time out.
 - **Link ends:** `active`, `since_end`, `held`, and any count or order of links active at t.
 - **Closure:** a closed flag, open and closed account counts, the ownership end as a value.
-- **Clock:** hour, weekday, day of month, second of the minute, the Monday's index, days since
-  the data start, the world or its role. A keyed per-date offset of t was considered and
-  rejected: a fixed-clock salary reveals it, and it breaks the Monday 00:00 rule.
+- **Clock:** hour, weekday, day of month, second of the minute, the week's index, days since
+  the data start, the world or its role. Each week is scored at a random time inside it, so a
+  duration does not give its event's clock time back (the design's [Time](design.md#time));
+  an earlier note rejected a keyed offset of t because a fixed-clock salary reveals it and it
+  broke the Monday 00:00 rule, and the owner reversed that on 27 October 2026. An event that
+  keeps a fixed clock, a salary on the same hour of every month, could still show a model a
+  week's offset, which is why the [clock tests](design.md#the-clock-tests) check what clock
+  times add and what the trained model does with them.
 - **Payment id order:** used only to break ties at subgraph caps, and only once ids are
   pseudonyms.
 - **Token and its links**, `token_present`, `token_age`: each token copies one account, and
@@ -546,14 +551,14 @@ planned ring payment is made.
 | Entry | Cue | Features it reaches |
 |---|---|---|
 | S-LIFE-1 | no history before the window | Known starts, `mule prepare`'s lookback check |
-| S-LIFE-2 | laundering-free warm-up (settled: 275 unexported burn-in days with laundering running, rings starting mid-life at the burn-in's start) | positives per Monday, the label rate: the burn-in, the representative start and the stationarity gates keep the weekly active-ring count flat |
-| S-LIFE-3 | ring activity anchored to the window's edges | `age`, `pair_age`, positives per Monday |
+| S-LIFE-2 | laundering-free warm-up (settled: 275 unexported burn-in days with laundering running, rings starting mid-life at the burn-in's start) | positives per week, the label rate: the burn-in, the representative start and the stationarity gates keep the weekly active-ring count flat |
+| S-LIFE-3 | ring activity anchored to the window's edges | `age`, `pair_age`, positives per week |
 | S-LIFE-4 | no purpose-opened mule accounts, and short ordinary dormancy (7 to 45 days) | `accounts_owned`, newness from counts (`in_90d` against `in_30d`), new payers, `pair_age`, `since_first_use` |
 | S-LIFE-5 | closure only at death, almost no arrivals | `accounts_owned`, the population, the newness lift |
 | S-LIFE-6 | ring rows outside a member's membership dropped | labels, joiner mules' counts |
 | S-LIFE-7 | positional ring budget cut | `held_share` 1 on received-only mules, `flow_present`, `left_*`, empty tenures |
 | S-LIFE-8 | a ring stops at its first member's death | `since_last_in`, `since_last_out` jumping together across members, `internal_amount_30d` |
-| S-LIFE-9 | rings never form or end | `new_link_share_30d`, `since_start` of ring links, positives per Monday |
+| S-LIFE-9 | rings never form or end | `new_link_share_30d`, `since_start` of ring links, positives per week |
 | S-IDN-1 to S-IDN-5 | label completeness, dates, range, roles, masking | labels and evaluation only; S-IDN-2 settled (identification closes nothing) |
 
 **Shortcuts noted but not yet researched**, and the other residuals PhantomLedger's steps
@@ -588,7 +593,7 @@ declared before any development world is generated, from research where it exist
 otherwise at the value PhantomLedger's plan suggests in its section "Lifts, distances and
 ceilings", as the owner decided on 2026-10-17 (see the design's [Gates](design.md#gates)); a
 development world must meet it, never set it. A lift compares P(true mule | the cue) with
-P(true mule) among scored account-Mondays.
+P(true mule) among scored account-weeks.
 
 **PhantomLedger's world checks**, reported as pass or fail in its gate record:
 
@@ -604,22 +609,24 @@ P(true mule) among scored account-Mondays.
 | G-SHARED-LINKS | the lift of "a link to a node shared with another customer, started in the last 14 days" | at most 10 | every ring tenure is followed by ring money in PhantomLedger |
 | G-EXTERNAL-SHARES | the lift, between mules and matched ordinary receivers, of the external share of new payers; and between mules and matched ordinary senders, of the external share of onward P2P value | each ratio between mules and matched ordinary accounts within [1/3, 3] | `is_external` and the internal or external split of new payers rest on a declared share of victims at the same bank |
 | G-ORIGIN-C | the origin C look-alike lift: the lift of "the customer joined in the 90 days before t, holds exactly one device link, and its accounts received no payroll credit in the 90 days before t" | at most 10 | "new and quiet" must not be a mule-only marker |
-| G-COVER-VOLUME | the cover-volume lift: the lift of "in the 30 days before t the account made more outgoing P2P, bill and card payments than the 90th percentile of internal deposit accounts of the same persona and age band on that Monday" | at most 3 | cover payments stay as behaviour, and their volume alone must not stand in for the label |
+| G-COVER-VOLUME | the cover-volume lift: the lift of "in the 30 days before t the account made more outgoing P2P, bill and card payments than the 90th percentile of internal deposit accounts of the same persona and age band at that t" | at most 3 | cover payments stay as behaviour, and their volume alone must not stand in for the label |
 
 Sign-up links starting exactly at `joined_ms` and zero self-payments stay PhantomLedger's own
 checks; the loader only reports them, and no feature depends on them, since the
 [known-start rule](design.md#time) reads a joiner's first link as unknown either way and no
 query reads a self-payment.
 
-**MulePatternLearner's checks**, run by `mule audit` (evaluation code) and read by
-`mule evaluate`, and for pass or fail only by the `mule train` command, which stops on a failure
-that stops the run (see the design's [Gates](design.md#gates)):
+**MulePatternLearner's checks**, run by `mule audit` (evaluation code; the clock invariance test,
+which judges the trained model, by `mule evaluate`) and read by `mule evaluate`, and for pass or
+fail only by the `mule train` command, which stops on a failure that stops the run (see the
+design's [Gates](design.md#gates)):
 
 | Check | Bound | Why |
 |---|---|---|
-| the clock probe | upper end of the ROC AUC interval below 0.55 | durations measured to t |
+| the clock gain test | at least 30 mule clusters in the audit sample (`audit.clock_min_mule_clusters`), and the upper end of the paired, ring-resampled interval of the ROC AUC gain from adding event clock values to controls of plain activity below 0.02 | durations measured to t are their event's clock time shifted by t (see [the clock tests](design.md#the-clock-tests)) |
+| the clock invariance test, run by `mule evaluate` on the trained GNN and the test world | at least 30 mule clusters among the account-weeks compared, which are the same at both times, and the interval of recall at 1% at the random scoring times minus recall at 1% at Monday 00:00 inside plus and minus 0.05 | a trained model's ranking must not depend on whether t is a Monday 00:00, where every duration gives its event's clock time back, or a random time in the week |
 | the identified share of true mules by onset month | each month within its binomial band around the pooled share | the [identification horizon](design.md#identification-horizon) |
 | the label checks of the design's [Checks on every world](design.md#checks-on-every-world) | every one | labels as the design reads them |
 | on development worlds only: the [feature audit](design.md#the-feature-audit) | ROC AUC within (0.05, 0.95) and no near-pure region | a leak or shortcut stops the run |
-| on development worlds only: no positive is an account hub, and the share of ring devices and IPs that are leaves on their ring's active Mondays is near 0 (a device or IP is a ring's on a Monday when the own edges of active true mules of that ring that belong to at least two different customers reach it, as [the design's feature audit](design.md#the-feature-audit) defines it) | no positive a hub; the leaf share reported and judged near 0 | hub handling and the crowd threshold must not hide mule evidence |
+| on development worlds only: no positive is an account hub, and the share of ring devices and IPs that are leaves in their ring's active weeks is near 0 (a device or IP is a ring's at a scoring time when the own edges of active true mules of that ring that belong to at least two different customers reach it, as [the design's feature audit](design.md#the-feature-audit) defines it) | no positive a hub; the leaf share reported and judged near 0 | hub handling and the crowd threshold must not hide mule evidence |
 | on development worlds only: busy ordinary accounts' card spending does not fill `left_15m` to `left_1d` | reported; if it does, the dwell shares count transfer and cash outflows only | the short dwell shares must measure pass-through, not shopping |

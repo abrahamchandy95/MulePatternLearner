@@ -1,0 +1,80 @@
+USE GRAPH Mule_Pattern_Learner
+
+/* reads the other accounts of each account's customer, as of time t.
+
+   For each account: up to 8 other accounts of its customer that exist at t, both owned through
+   a visible ownership link, most recently active first by their latest payment in the 90 days
+   before t, then those with none, ties by account id.
+
+   Inputs: t_ms; account_ids, the accounts to read.
+   Prints: per account, others: each other account's id and the second of its latest payment,
+   0 with none.
+   Refuses: invalid parameters; a repeated, unknown or not-yet-opened account. */
+CREATE OR REPLACE QUERY read_other_accounts(
+    UINT t_ms,
+    LIST<STRING> account_ids
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+    TYPEDEF TUPLE<INT sec, STRING id> Sibling;
+    /* An account's latest payment in the lookback; an account's other accounts, the newest 8. */
+    MaxAccum<UINT> @last_active;
+    HeapAccum<Sibling>(8, sec DESC, id ASC) @others;
+    /* The request's ids, each once, and how many it gave. */
+    SetAccum<STRING> @@ids;
+    SumAccum<INT> @@given;
+    UINT lookback_ms = 7776000000;
+
+    IF t_ms <= lookback_ms OR t_ms % 1000 != 0 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+    FOREACH account_id IN account_ids DO
+        @@ids += account_id;
+        @@given += 1;
+    END;
+    IF @@given == 0 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+    IF @@ids.size() != @@given THEN
+        PRINT "duplicate_account" AS status;
+        RETURN;
+    END;
+    Requested = to_vertex_set(@@ids, "Account");
+    IF Requested.size() != @@ids.size() THEN
+        PRINT "unknown_account" AS status;
+        RETURN;
+    END;
+    Accounts = SELECT s FROM Requested:s WHERE s.opened_ms < t_ms;
+    IF Accounts.size() != Requested.size() THEN
+        PRINT "invisible_account" AS status;
+        RETURN;
+    END;
+
+    /* The other accounts, then the latest payment of each, then the newest 8 per account. */
+    Others = SELECT b FROM Accounts:a -(Account_Owned_By_Party>:o)- Party:q
+        -(Party_Owns_Account>:w)- Account:b
+        WHERE o.valid_from_ms < t_ms
+        AND (o.valid_to_ms == 0 OR o.valid_to_ms > t_ms - lookback_ms)
+        AND w.valid_from_ms < t_ms
+        AND (w.valid_to_ms == 0 OR w.valid_to_ms > t_ms - lookback_ms)
+        AND b.opened_ms < t_ms AND b != a;
+    Active = SELECT b FROM Others:b
+        -((Account_Initiated_Transaction>|Account_Received_Transaction>
+        |Account_Sent_Zelle_Transfer>|Account_Received_Zelle_Transfer>):e)-
+        (Payment_Transaction|Zelle_Transfer):p
+        -((Transaction_From_Account>|Transaction_To_Account>
+        |Transfer_From_Account>|Transfer_To_Account>):f)- Account:x
+        WHERE p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms AND x != b
+        ACCUM b.@last_active += p.event_ts_ms;
+    Ranked = SELECT a FROM Accounts:a -(Account_Owned_By_Party>:o)- Party:q
+        -(Party_Owns_Account>:w)- Account:b
+        WHERE o.valid_from_ms < t_ms
+        AND (o.valid_to_ms == 0 OR o.valid_to_ms > t_ms - lookback_ms)
+        AND w.valid_from_ms < t_ms
+        AND (w.valid_to_ms == 0 OR w.valid_to_ms > t_ms - lookback_ms)
+        AND b.opened_ms < t_ms AND b != a
+        ACCUM a.@others += Sibling(floor(b.@last_active / 1000), b.id);
+
+    PRINT "ok" AS status, "read_other_accounts-1757ed3d0993" AS version;
+    PRINT Accounts[Accounts.id AS account_id, Accounts.@others AS others] AS accounts;
+}

@@ -1,0 +1,133 @@
+USE GRAPH Mule_Pattern_Learner
+CREATE OR REPLACE QUERY profile_hubs(
+    UINT t_ms // The scoring time after the first 90 days
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+
+    /* Constants */
+    UINT LOOKBACK_MS = 7776000000; // 90 days
+
+    /* Vertex and edge types, each a set so that one pattern serves devices and IPs, transactions and transfers */
+    SetAccum<STRING> @@payment_vertex_type; // A transaction or a transfer
+    SetAccum<STRING> @@node_vertex_type; // A device or an IP
+    SetAccum<STRING> @@account_to_payment_edge_type; // Account -> the payments it sent or received
+    SetAccum<STRING> @@payment_to_account_edge_type; // Payment -> the accounts that sent and received it
+    SetAccum<STRING> @@account_to_owner_edge_type; // Account -> its owner
+    SetAccum<STRING> @@node_to_customer_edge_type; // Device or IP -> the customers who registered it
+    SetAccum<STRING> @@node_to_payment_edge_type; // Device or IP -> the payments seen on it
+    SetAccum<STRING> @@payment_to_sender_edge_type; // Payment -> the account that sent it
+    @@payment_vertex_type += "Payment_Transaction";
+    @@payment_vertex_type += "Zelle_Transfer";
+    @@node_vertex_type += "Device";
+    @@node_vertex_type += "IP";
+    @@account_to_payment_edge_type += "Account_Initiated_Transaction";
+    @@account_to_payment_edge_type += "Account_Received_Transaction";
+    @@account_to_payment_edge_type += "Account_Sent_Zelle_Transfer";
+    @@account_to_payment_edge_type += "Account_Received_Zelle_Transfer";
+    @@payment_to_account_edge_type += "Transaction_From_Account";
+    @@payment_to_account_edge_type += "Transaction_To_Account";
+    @@payment_to_account_edge_type += "Transfer_From_Account";
+    @@payment_to_account_edge_type += "Transfer_To_Account";
+    @@account_to_owner_edge_type += "Account_Owned_By_Party";
+    @@node_to_customer_edge_type += "Device_Used_By_Party";
+    @@node_to_customer_edge_type += "IP_Used_By_Party";
+    @@node_to_payment_edge_type += "Device_Used_By_Transaction";
+    @@node_to_payment_edge_type += "Device_Used_By_Transfer";
+    @@node_to_payment_edge_type += "IP_Observed_In_Transaction";
+    @@node_to_payment_edge_type += "IP_Used_By_Transfer";
+    @@payment_to_sender_edge_type += "Transaction_From_Account";
+    @@payment_to_sender_edge_type += "Transfer_From_Account";
+
+    /* Accumulators */
+    SetAccum<VERTEX<Party>> @hub_customers; // The owners of the accounts at the other end of an account's payments
+    SetAccum<VERTEX<Party>> @crowd_customers; // A device's or IP's customers
+    SetAccum<VERTEX<Party>> @crowd_enrolled; // Those of them who registered it
+    MapAccum<INT, SumAccum<INT>> @@accounts; // Customers -> how many accounts have that many
+    MapAccum<INT, SumAccum<INT>> @@registered_devices, @@observed_devices; // Customers -> how many devices have that many
+    MapAccum<INT, SumAccum<INT>> @@registered_ips, @@observed_ips; // Customers -> how many IPs have that many
+
+    IF t_ms <= LOOKBACK_MS OR t_ms % 1000 != 0 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+
+    nodes = {@@node_vertex_type};
+
+    /* The accounts open by t */
+    existing = SELECT a FROM Account:a WHERE a.opened_ms < t_ms;
+
+    /* Traverse: Account -> Payment -> the account at its other end -> its owner, over the 90 days before t */
+    counted = SELECT a
+        FROM existing:a - (@@account_to_payment_edge_type>:e) - @@payment_vertex_type:p
+            - (@@payment_to_account_edge_type>:f) - Account:b
+            - (@@account_to_owner_edge_type>:o) - Party:q
+        WHERE p.event_ts_ms >= t_ms - LOOKBACK_MS AND p.event_ts_ms < t_ms
+            AND b != a AND b.opened_ms < t_ms
+            AND o.valid_from_ms < t_ms
+            AND ( o.valid_to_ms == 0 OR o.valid_to_ms > t_ms - LOOKBACK_MS )
+        ACCUM
+            a.@hub_customers += q
+    ;
+
+    /* Histogram the accounts by their customers */
+    account_profiles = SELECT a
+        FROM existing:a
+        POST-ACCUM
+            @@accounts += ( a.@hub_customers.size() -> 1 )
+    ;
+
+    /* Traverse: Device or IP -> Party, through a registration visible at t */
+    enrolled = SELECT n
+        FROM nodes:n - (@@node_to_customer_edge_type>:l) - Party:q
+        WHERE l.valid_from_ms < t_ms
+            AND ( l.valid_to_ms == 0 OR l.valid_to_ms > t_ms - LOOKBACK_MS )
+        ACCUM
+            n.@crowd_customers += q,
+            n.@crowd_enrolled += q
+    ;
+
+    /* Traverse: Device or IP -> Payment -> the deposit account that sent it -> its owner, over the 90 days before t */
+    seen = SELECT n
+        FROM nodes:n - (@@node_to_payment_edge_type>:u) - @@payment_vertex_type:p
+            - (@@payment_to_sender_edge_type>:f) - Account:b
+            - (@@account_to_owner_edge_type>:o) - Party:q
+        WHERE p.event_ts_ms >= t_ms - LOOKBACK_MS AND p.event_ts_ms < t_ms
+            AND b.account_type == "deposit" AND b.opened_ms < t_ms
+            AND o.valid_from_ms < t_ms
+            AND ( o.valid_to_ms == 0 OR o.valid_to_ms > t_ms - LOOKBACK_MS )
+        ACCUM
+            n.@crowd_customers += q
+    ;
+
+    /* Histogram the devices by their customers, registered or observed-only */
+    device_profiles = SELECT n
+        FROM nodes:n
+        WHERE n.@crowd_customers.size() > 0 AND n.type == "Device"
+        POST-ACCUM
+            IF n.@crowd_enrolled.size() > 0 THEN
+                @@registered_devices += ( n.@crowd_customers.size() -> 1 )
+            ELSE
+                @@observed_devices += ( n.@crowd_customers.size() -> 1 )
+            END
+    ;
+
+    /* Histogram the IPs by their customers, registered or observed-only */
+    ip_profiles = SELECT n
+        FROM nodes:n
+        WHERE n.@crowd_customers.size() > 0 AND n.type == "IP"
+        POST-ACCUM
+            IF n.@crowd_enrolled.size() > 0 THEN
+                @@registered_ips += ( n.@crowd_customers.size() -> 1 )
+            ELSE
+                @@observed_ips += ( n.@crowd_customers.size() -> 1 )
+            END
+    ;
+
+    /* Printing the histograms */
+    PRINT "ok" AS status,
+        @@accounts AS accounts,
+        @@registered_devices AS registered_devices,
+        @@observed_devices AS observed_devices,
+        @@registered_ips AS registered_ips,
+        @@observed_ips AS observed_ips;
+
+}

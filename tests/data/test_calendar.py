@@ -1,5 +1,5 @@
-"""The scored Mondays and the check of the export window against the loaded world
-(docs/design.md, "Worlds and calendar" and the Lookback guard)."""
+"""The scored weeks and scoring times, and the check of the export window against the loaded
+world (docs/design.md, "Worlds and calendar" and the Lookback guard)."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from datetime import date
 import pytest
 
 from mule_pattern_learner.config import DEFAULT_CONFIG, CalendarConfig
-from mule_pattern_learner.data.calendar import check_window, epoch_ms, mondays
+from mule_pattern_learner.data.calendar import check_window, epoch_ms, scoring_times, week_starts
 from mule_pattern_learner.testing.calendar import calendar_world, world_of
 from mule_pattern_learner.tigergraph.queries.rows import DAY_MS
 
@@ -24,11 +24,19 @@ def test_the_export_starts_on_day_0_at_midnight_utc() -> None:
     assert epoch_ms(CALENDAR.export_start) == DAY_0 == 19_723 * DAY_MS
 
 
-def test_the_mondays_are_the_calendars() -> None:
-    found = mondays(CALENDAR)
+def test_the_week_starts_are_the_calendars() -> None:
+    found = week_starts(CALENDAR)
     # 2024-04-01 is day 91, the first Monday at or after day 90; 2025-03-24 is day 448.
     assert found[0] == DAY_0 + 91 * DAY_MS and found[-1] == DAY_0 + 448 * DAY_MS
-    assert len(found) == 52 and found == CALENDAR.mondays()
+    assert len(found) == 52 and found == CALENDAR.week_starts()
+
+
+def test_the_scoring_times_are_the_calendars_for_the_worlds_seed() -> None:
+    found = scoring_times(CALENDAR, 1001)
+    assert found == CALENDAR.scoring_times(1001) and found != scoring_times(CALENDAR, 1002)
+    # One time inside each week, a whole second after the week's Monday midnight.
+    for start, t_ms in zip(week_starts(CALENDAR), found, strict=True):
+        assert start <= t_ms < start + 7 * DAY_MS and t_ms % 1_000 == 0
 
 
 def test_a_world_holding_the_export_window_passes() -> None:

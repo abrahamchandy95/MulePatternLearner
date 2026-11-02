@@ -1,0 +1,298 @@
+USE GRAPH Mule_Pattern_Learner
+CREATE OR REPLACE QUERY read_device_counts(
+    UINT t_ms, // The scoring time after the first 90 days
+    LIST<STRING> node_ids // The ids of the devices and IPs to read
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+
+    /* Constants */
+    UINT LOOKBACK_MS = 7776000000; // 90 days
+    UINT MONTH_MS = 2592000000; // 30 days
+    UINT WEEK_MS = 604800000; // 7 days
+
+    /* Vertex and edge types, each a set so that one pattern serves devices and IPs, transactions and transfers */
+    SetAccum<STRING> @@payment_vertex_type; // A transaction or a transfer
+    SetAccum<STRING> @@node_vertex_type; // A device or an IP
+    SetAccum<STRING> @@node_to_customer_edge_type; // Device or IP -> the customers who registered it
+    SetAccum<STRING> @@node_to_payment_edge_type; // Device or IP -> the payments seen on it
+    SetAccum<STRING> @@payment_to_node_edge_type; // Payment -> the devices and IPs it was seen on
+    SetAccum<STRING> @@payment_to_sender_edge_type; // Payment -> the account that sent it
+    SetAccum<STRING> @@payment_to_receiver_edge_type; // Payment -> the account that received it
+    SetAccum<STRING> @@account_to_owner_edge_type; // Account -> its owner
+    SetAccum<STRING> @@owner_to_account_edge_type; // Customer -> the accounts it owns
+    SetAccum<STRING> @@sender_to_payment_edge_type; // Account -> the payments it sent
+    @@payment_vertex_type += "Payment_Transaction";
+    @@payment_vertex_type += "Zelle_Transfer";
+    @@node_vertex_type += "Device";
+    @@node_vertex_type += "IP";
+    @@node_to_customer_edge_type += "Device_Used_By_Party";
+    @@node_to_customer_edge_type += "IP_Used_By_Party";
+    @@node_to_payment_edge_type += "Device_Used_By_Transaction";
+    @@node_to_payment_edge_type += "Device_Used_By_Transfer";
+    @@node_to_payment_edge_type += "IP_Observed_In_Transaction";
+    @@node_to_payment_edge_type += "IP_Used_By_Transfer";
+    @@payment_to_node_edge_type += "Transaction_Used_Device";
+    @@payment_to_node_edge_type += "Transaction_Used_IP";
+    @@payment_to_node_edge_type += "Transfer_Used_Device";
+    @@payment_to_node_edge_type += "Transfer_Used_IP";
+    @@payment_to_sender_edge_type += "Transaction_From_Account";
+    @@payment_to_sender_edge_type += "Transfer_From_Account";
+    @@payment_to_receiver_edge_type += "Transaction_To_Account";
+    @@payment_to_receiver_edge_type += "Transfer_To_Account";
+    @@account_to_owner_edge_type += "Account_Owned_By_Party";
+    @@owner_to_account_edge_type += "Party_Owns_Account";
+    @@sender_to_payment_edge_type += "Account_Initiated_Transaction";
+    @@sender_to_payment_edge_type += "Account_Sent_Zelle_Transfer";
+
+    /* Accumulators */
+    OrAccum @leaf; // A crowd at t, read as a leaf
+    SetAccum<VERTEX<Party>> @crowd_customers; // A node's customers over the 90 days
+    SetAccum<VERTEX<Party>> @crowd_enrolled; // Those of them who registered it
+    SetAccum<STRING> @seen_accounts; // The accounts that paid from it in the 30 days
+    MaxAccum<STRING> @receiver_id; // A payment's receiver
+    MaxAccum<STRING> @user_id; // A payment's sender's owner
+    SetAccum<STRING> @seen_on; // The devices and IPs a payment was seen on
+    SumAccum<INT> @customers_30d, @customers_90d, @new_customers_7d, @new_customers_30d;
+    SumAccum<INT> @accounts_seen_30d, @payments_seen_30d;
+    OrAccum @observed_only;
+    MapAccum<STRING, SetAccum<STRING>> @@node_users; // Each node's users
+    MapAccum<STRING, SetAccum<STRING>> @@shares; // The nodes a user shares
+    MapAccum<STRING, MapAccum<STRING, MinAccum<UINT>>> @@link_start; // Each link's earliest start
+    MapAccum<STRING, MapAccum<STRING, MinAccum<UINT>>> @@known_link_start; // The known link starts
+    MapAccum<STRING, MapAccum<STRING, MinAccum<UINT>>> @@deposit_first_use; // First deposit use
+    MapAccum<STRING, MapAccum<STRING, MinAccum<UINT>>> @@share_start; // When a user began sharing
+    MapAccum<STRING, MinAccum<UINT>> @@first_own; // A user's first own payment
+    MapAccum<STRING, SetAccum<STRING>> @@own_seen; // The nodes its own payments were seen on
+    MapAccum<STRING, MapAccum<STRING, MinAccum<UINT>>> @@first_unseen; // First payment not seen there
+    SetAccum<STRING> @@ids; // The node ids, each once
+    SumAccum<INT> @@given; // How many node ids were given
+
+    IF t_ms <= LOOKBACK_MS OR t_ms % 1000 != 0 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+    FOREACH node_id IN node_ids DO
+        @@ids += node_id;
+        @@given += 1;
+    END;
+    IF @@given == 0 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+    IF @@ids.size() != @@given THEN
+        PRINT "duplicate_node" AS status;
+        RETURN;
+    END;
+    devices_listed = to_vertex_set(@@ids, "Device");
+    ips_listed = to_vertex_set(@@ids, "IP");
+    nodes_listed = devices_listed UNION ips_listed;
+    IF nodes_listed.size() != @@ids.size() THEN
+        PRINT "unknown_node" AS status;
+        RETURN;
+    END;
+
+    /* Mark the crowds at t as leaves, and keep the other devices and IPs */
+    leaves = SELECT d
+        FROM nodes_listed:d
+        POST-ACCUM
+            d.@leaf += d.crowd_at_ms == t_ms
+    ;
+    open_nodes = SELECT d FROM nodes_listed:d WHERE NOT d.@leaf;
+
+    /* Traverse: Device or IP -> Party, through a registration visible at t */
+    enrolled_crowd = SELECT d
+        FROM open_nodes:d - (@@node_to_customer_edge_type>:l) - Party:q
+        WHERE l.valid_from_ms < t_ms
+            AND ( l.valid_to_ms == 0 OR l.valid_to_ms > t_ms - LOOKBACK_MS )
+        ACCUM
+            d.@crowd_customers += q,
+            d.@crowd_enrolled += q
+    ;
+
+    /* Traverse: Device or IP -> Payment -> Account -> Party, the owners of its payments' deposit senders */
+    seen_crowd = SELECT d
+        FROM open_nodes:d - (@@node_to_payment_edge_type>:u) - @@payment_vertex_type:p
+            - (@@payment_to_sender_edge_type>:f) - Account:b
+            - (@@account_to_owner_edge_type>:o) - Party:q
+        WHERE p.event_ts_ms >= t_ms - LOOKBACK_MS AND p.event_ts_ms < t_ms
+            AND b.account_type == "deposit" AND b.opened_ms < t_ms
+            AND o.valid_from_ms < t_ms
+            AND ( o.valid_to_ms == 0 OR o.valid_to_ms > t_ms - LOOKBACK_MS )
+        ACCUM
+            d.@crowd_customers += q
+    ;
+
+    /* Traverse: Device or IP -> Payment -> Account, the receivers of its payments of the 90 days */
+    open_receivers = SELECT p
+        FROM open_nodes:d - (@@node_to_payment_edge_type>:u) - _:p
+            - (@@payment_to_receiver_edge_type>:f) - Account:r
+        WHERE NOT d.@leaf AND p.event_ts_ms >= t_ms - LOOKBACK_MS AND p.event_ts_ms < t_ms
+        ACCUM
+            p.@receiver_id += r.id
+    ;
+
+    /* Traverse: Device or IP -> Party, through a registration visible at t */
+    link_users = SELECT q
+        FROM open_nodes:d - (@@node_to_customer_edge_type>:l) - Party:q
+        WHERE NOT d.@leaf AND l.valid_from_ms < t_ms
+            AND ( l.valid_to_ms == 0 OR l.valid_to_ms > t_ms - LOOKBACK_MS )
+        ACCUM
+            @@link_start += (q.id -> (d.id -> l.valid_from_ms)),
+            IF l.valid_from_ms < t_ms
+                AND ( l.valid_to_ms == 0 OR l.valid_to_ms > t_ms - MONTH_MS ) THEN
+                @@shares += (q.id -> d.id)
+            END,
+            @@node_users += (d.id -> q.id)
+    ;
+
+    /* Traverse: Device or IP -> Payment -> Account -> Party, the owners of its payments' deposit senders */
+    seen_users = SELECT q
+        FROM open_nodes:d - (@@node_to_payment_edge_type>:u) - _:p
+            - (@@payment_to_sender_edge_type>:f) - Account:b
+            - (@@account_to_owner_edge_type>:o) - Party:q
+        WHERE NOT d.@leaf
+            AND p.event_ts_ms >= t_ms - LOOKBACK_MS AND p.event_ts_ms < t_ms
+            AND b.account_type == "deposit" AND b.opened_ms < t_ms AND b.id != p.@receiver_id
+            AND o.valid_from_ms < t_ms
+            AND ( o.valid_to_ms == 0 OR o.valid_to_ms > t_ms - LOOKBACK_MS )
+        ACCUM
+            @@deposit_first_use += (q.id -> (d.id -> p.event_ts_ms)),
+            @@node_users += (d.id -> q.id),
+            IF p.event_ts_ms >= t_ms - MONTH_MS THEN @@shares += (q.id -> d.id) END
+    ;
+
+    /* Traverse: Device or IP -> Payment -> Account, the senders of its payments of the 30 days */
+    open_activity = SELECT d
+        FROM open_nodes:d - (@@node_to_payment_edge_type>:u) - _:p
+            - (@@payment_to_sender_edge_type>:f) - Account:b
+        WHERE NOT d.@leaf
+            AND p.event_ts_ms >= t_ms - MONTH_MS AND p.event_ts_ms < t_ms
+            AND b.id != p.@receiver_id
+        ACCUM
+            d.@seen_accounts += b.id,
+            d.@payments_seen_30d += 1
+    ;
+
+    /* Traverse: Party -> Account -> Payment -> Account, own payments of the 90 days, self-payments aside */
+    users = link_users UNION seen_users;
+    user_sent = SELECT p
+        FROM users:q - (@@owner_to_account_edge_type>:w) - Account:b
+            - (@@sender_to_payment_edge_type>:e) - _:p
+            - (@@payment_to_receiver_edge_type>:f) - Account:r
+        WHERE w.valid_from_ms < t_ms
+            AND ( w.valid_to_ms == 0 OR w.valid_to_ms > t_ms - LOOKBACK_MS )
+            AND b.opened_ms < t_ms
+            AND p.event_ts_ms >= t_ms - LOOKBACK_MS AND p.event_ts_ms < t_ms AND r != b
+        ACCUM
+            p.@user_id += q.id,
+            @@first_own += (q.id -> p.event_ts_ms)
+    ;
+
+    /* Traverse: Payment -> the devices and IPs it was seen on */
+    user_seen = SELECT n
+        FROM user_sent:p - (@@payment_to_node_edge_type>:u) - @@node_vertex_type:n
+        ACCUM
+            p.@seen_on += n.id,
+            @@own_seen += (p.@user_id -> n.id)
+    ;
+
+    /* Find each user's first own payment not seen on each of its nodes */
+    user_unseen = SELECT p
+        FROM user_sent:p
+        POST-ACCUM
+            FOREACH n IN @@own_seen.get(p.@user_id) DO
+                IF NOT p.@seen_on.contains(n) THEN
+                    @@first_unseen += (p.@user_id -> (n -> p.event_ts_ms))
+                END
+            END
+    ;
+
+    /* Keep the link starts that are known, and each share start (the lookback's start when not known) */
+    user_starts = SELECT q
+        FROM users:q
+        POST-ACCUM
+            UINT unseen_ms = 0,
+            BOOL found = FALSE,
+            FOREACH (n, start_ms) IN @@link_start.get(q.id) DO
+                IF @@own_seen.get(q.id).contains(n) THEN
+                    found = @@first_unseen.get(q.id).containsKey(n),
+                    unseen_ms = @@first_unseen.get(q.id).get(n)
+                ELSE
+                    found = @@first_own.containsKey(q.id),
+                    unseen_ms = @@first_own.get(q.id)
+                END,
+                IF start_ms > t_ms - LOOKBACK_MS AND start_ms > q.joined_ms
+                    AND found AND unseen_ms < start_ms THEN
+                    @@known_link_start += (q.id -> (n -> start_ms)),
+                    @@share_start += (q.id -> (n -> start_ms))
+                ELSE
+                    @@share_start += (q.id -> (n -> t_ms - LOOKBACK_MS))
+                END
+            END,
+            FOREACH (n, start_ms) IN @@deposit_first_use.get(q.id) DO
+                IF @@own_seen.get(q.id).contains(n) THEN
+                    found = @@first_unseen.get(q.id).containsKey(n),
+                    unseen_ms = @@first_unseen.get(q.id).get(n)
+                ELSE
+                    found = @@first_own.containsKey(q.id),
+                    unseen_ms = @@first_own.get(q.id)
+                END,
+                IF start_ms > t_ms - LOOKBACK_MS AND start_ms > q.joined_ms
+                    AND found AND unseen_ms < start_ms THEN
+                    @@share_start += (q.id -> (n -> start_ms))
+                ELSE
+                    @@share_start += (q.id -> (n -> t_ms - LOOKBACK_MS))
+                END
+            END
+    ;
+
+    /* Count each device's or IP's customers, accounts and payments */
+    node_rows = SELECT d
+        FROM open_nodes:d
+        POST-ACCUM
+            FOREACH c IN @@node_users.get(d.id) DO
+                IF @@shares.get(c).contains(d.id) THEN d.@customers_30d += 1 END,
+                IF @@share_start.get(c).get(d.id) >= t_ms - WEEK_MS THEN
+                    d.@new_customers_7d += 1
+                END,
+                IF @@share_start.get(c).get(d.id) >= t_ms - MONTH_MS THEN
+                    d.@new_customers_30d += 1
+                END
+            END,
+            d.@customers_90d += d.@crowd_customers.size(),
+            d.@accounts_seen_30d += d.@seen_accounts.size(),
+            d.@observed_only += d.@crowd_enrolled.size() == 0
+    ;
+
+    /* Refuse unless the crowd stamps on the graph are this t's */
+    current_marks = SELECT m FROM Mark:m WHERE m.id == "crowds" AND m.at_ms == t_ms;
+    IF current_marks.size() != 1 THEN
+        PRINT "unmarked_time" AS status;
+        RETURN;
+    END;
+
+    /* Printing the devices and IPs */
+    PRINT "ok" AS status;
+    PRINT devices_listed[
+        devices_listed.id AS node_id,
+        devices_listed.@leaf AS leaf,
+        devices_listed.@customers_30d AS customers_30d,
+        devices_listed.@customers_90d AS customers_90d,
+        devices_listed.@new_customers_7d AS new_customers_7d,
+        devices_listed.@new_customers_30d AS new_customers_30d,
+        devices_listed.@accounts_seen_30d AS accounts_seen_30d,
+        devices_listed.@payments_seen_30d AS payments_seen_30d,
+        devices_listed.@observed_only AS observed_only
+    ] AS devices;
+    PRINT ips_listed[
+        ips_listed.id AS node_id,
+        ips_listed.@leaf AS leaf,
+        ips_listed.@customers_30d AS customers_30d,
+        ips_listed.@customers_90d AS customers_90d,
+        ips_listed.@new_customers_7d AS new_customers_7d,
+        ips_listed.@new_customers_30d AS new_customers_30d,
+        ips_listed.@accounts_seen_30d AS accounts_seen_30d,
+        ips_listed.@payments_seen_30d AS payments_seen_30d,
+        ips_listed.@observed_only AS observed_only
+    ] AS ips;
+
+}

@@ -1,5 +1,5 @@
 """mule prepare's data work on the calendar world through a spy executor backed by the reference
-graph: it runs read_world, read_labels and list_accounts and nothing else, caches each Monday's
+graph: it runs read_world, read_labels and list_accounts and nothing else, caches each week's
 population once, and writes the examples of each role the world plays (docs/design.md, "The
 pipeline" and "Worlds, examples and weights")."""
 
@@ -29,10 +29,21 @@ from mule_pattern_learner.data.population import POPULATION_FILE
 from mule_pattern_learner.data.prepare import Prepared, prepare
 from mule_pattern_learner.data.report import REPORT_FILE, REPORT_SCHEMA
 from mule_pattern_learner.data.worlds import SELECT, TEST, TRAIN
-from mule_pattern_learner.testing.calendar import Spy, calendar_world, identity_text, world_of
+from mule_pattern_learner.testing.calendar import (
+    EARLY,
+    EDGE,
+    GONE,
+    LONG,
+    SHORT,
+    Spy,
+    calendar_world,
+    identity_text,
+    positive_times,
+    world_of,
+)
 from mule_pattern_learner.testing.world import DAY_MS, T
 from mule_pattern_learner.tigergraph.executor import FetchExecutor, QueryExecutor, QueryNotAllowed
-from mule_pattern_learner.tigergraph.world import cache_key, identity
+from mule_pattern_learner.tigergraph.world import cache_key, identity, time_folder
 
 Records = Callable[[str, str], Path]
 # Selection needs 3 identified active mules here: the calendar world has a_long, a_short and
@@ -44,6 +55,29 @@ CONFIG = replace(
     ),
 )
 W = 7 * DAY_MS
+# The identified mules that can ever be examples: a_gone closed before its window, and a_early's
+# last payment is more than 7 days before the first scoring time of the year.
+ACTIVE = {"a_edge": EDGE, "a_long": LONG, "a_short": SHORT}
+
+
+def _positives(seed: int) -> dict[int, list[str]]:
+    """The identified mules positive at each scoring time of the world of that seed, by the rule
+    read literally (testing.calendar.positive_times); a_gone, closed on 2024-06-01 and active
+    in July, is never scorable then."""
+    times = CONFIG.calendar.scoring_times(seed)
+    found: dict[int, list[str]] = {t_ms: [] for t_ms in times}
+    assert not set(positive_times(GONE, times)) & {t_ms for t_ms in times if t_ms < T - 30 * DAY_MS}
+    assert positive_times(EARLY, times) == ()
+    for account, mule in sorted(ACTIVE.items()):
+        for t_ms in positive_times(mule, times):
+            found[t_ms].append(account)
+    return found
+
+
+def _scorable(t_ms: int) -> int:
+    """The scorable accounts of the calendar world at t: 18 until a_gone closes, on 2024-06-01,
+    and 17 after."""
+    return 18 if t_ms < T - 30 * DAY_MS else 17
 
 
 def _prepared(records: Records, seed: int, config: RunConfig = CONFIG) -> tuple[Spy, Prepared]:
@@ -65,25 +99,32 @@ def test_a_world_that_plays_every_role(records: Records, data_dir: Path) -> None
         [TRAINING_FILE, SELECTION_FILE, TEST_FILE, REPORT_FILE]
     )
     # The data code ran these and nothing else: read_world once, read_labels once, and one page
-    # of list_accounts per scored Monday.
+    # of list_accounts per scoring time.
     assert spy.names() == ["read_world", "read_labels"] + ["list_accounts"] * 52
+    # The world's own scoring times, one a week from the seed of the world A, 2001.
+    times = CONFIG.calendar.scoring_times(2001)
+    positives = _positives(2001)
+    total = sum(len(held) for held in positives.values())
     training = read_table(prepared.folder / TRAINING_FILE, TRAINING_SCHEMA)
-    positives = training[training["label"] == POSITIVE]
-    assert sorted(set(positives["account_id"])) == ["a_edge", "a_long", "a_short"]
-    assert len(training) == 28 + 157
+    assert set(training["t_ms"]) <= set(times)
+    positive_rows = training[training["label"] == POSITIVE]
+    assert sorted(set(positive_rows["account_id"])) == ["a_edge", "a_long", "a_short"]
+    assert len(positive_rows) == total
+    # Each scoring time draws min(13, max(2 x positives, 3)) of the 13 that are no identified mule.
+    drawn = sum(min(13, max(2 * len(held), 3)) for held in positives.values())
+    assert len(training) == total + drawn
     selection = read_table(prepared.folder / SELECTION_FILE, SELECTION_SCHEMA)
-    # 18 scorable accounts on the 9 Mondays before a_gone closed, 17 on the other 43.
-    assert len(selection) == 9 * 18 + 43 * 17
-    assert selection["positive"].sum() == 28
+    assert len(selection) == sum(_scorable(t_ms) for t_ms in times)
+    assert selection["positive"].sum() == total
     test = read_table(prepared.folder / TEST_FILE, TEST_SCHEMA)
-    assert len(test) == len(selection) and set(test["t_ms"]) == set(CONFIG.calendar.mondays())
+    assert len(test) == len(selection) and set(test["t_ms"]) == set(times)
     report = prepared.report
     assert report.identified == 5 and report.identified_active == 3
-    assert report.unscored.no_active_monday == ("a_early",)
+    assert report.unscored.no_active_week == ("a_early",)
     assert report.unscored.never_scorable == ("a_gone",)
-    # Each Monday's population is in the world's cache, in the Monday's folder.
+    # Each scoring time's population is in the world's cache, in the folder of its time.
     population = data_dir / "cache" / world_identity / cache_key(CONFIG.subgraph)
-    assert (population / "2024-07-01" / POPULATION_FILE).is_file()
+    assert (population / time_folder(times[13]) / POPULATION_FILE).is_file()
     assert len(list(population.iterdir())) == 52
 
 
@@ -94,7 +135,7 @@ def test_a_second_prepare_reads_the_cached_populations(records: Records, data_di
     spy = Spy(graph)
     second = prepare(spy, CONFIG, [path])
     assert spy.names() == ["read_world", "read_labels"]
-    assert second.report.mondays.equals(first.report.mondays)
+    assert second.report.weeks.equals(first.report.weeks)
     training = read_table(second.folder / TRAINING_FILE, TRAINING_SCHEMA)
     assert training.equals(read_table(first.folder / TRAINING_FILE, TRAINING_SCHEMA))
     assert data_dir.is_dir()
@@ -124,7 +165,7 @@ def test_each_world_writes_the_tables_of_its_roles(
     # written to the folder as in the one prepare returns.
     drawn = ["pool", "unlabelled", "positive_weight", "unlabelled_weight", "ratio"]
     for frame in (
-        prepared.report.mondays,
+        prepared.report.weeks,
         read_table(prepared.folder / REPORT_FILE, REPORT_SCHEMA),
     ):
         if TRAINING_FILE in tables:
@@ -132,8 +173,9 @@ def test_each_world_writes_the_tables_of_its_roles(
             assert (frame["unlabelled_weight"] > 0).all()
         else:
             assert frame[drawn].eq(0).all().all()
-        # Every world reports its Mondays' scorable accounts and positives.
-        assert frame["scorable"].gt(0).all() and frame["positives"].sum() == 28
+        # Every world reports its scoring times' scorable accounts and positives.
+        total = sum(len(held) for held in _positives(seed).values())
+        assert frame["scorable"].gt(0).all() and frame["positives"].sum() == total
 
 
 def test_a_selection_world_with_too_few_identified_active_mules_is_refused(

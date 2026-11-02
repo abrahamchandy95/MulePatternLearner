@@ -5,7 +5,7 @@ parameters that queries share (docs/design.md, "Query plumbing").
   the query prints, alone.
 - A PRINT of a vertex set's projection is a list of vertices, each with its projected fields
   under "attributes".
-- A query with t takes a Monday at 00:00 UTC after the lookback's length; a paged query takes
+- A query with t takes a whole second after the lookback's length; a paged query takes
   1 to PAGE_LIMIT accounts a page.
 - A per-account query takes its accounts as a list of ids, at least one, each once, each in
   the graph and existing at t, and refuses any other request with a status row. A query that
@@ -19,8 +19,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict
 from typing import TYPE_CHECKING, Any
 
-from ...tigergraph.queries import VERSIONS
-from ...tigergraph.queries.rows import LOOKBACK_MS, MONDAY_MS, PAGE_LIMIT, WEEK_MS
+from ...tigergraph.queries.rows import LOOKBACK_MS, PAGE_LIMIT
 
 if TYPE_CHECKING:
     from _typeshed import DataclassInstance
@@ -36,8 +35,9 @@ INVISIBLE_HUB = "invisible_hub"
 
 
 def head(name: str) -> dict[str, Any]:
-    """The status row of an answer: the query ran, and is of its version."""
-    return {"status": OK, "version": VERSIONS[name]}
+    """The status row of an answer: the query ran."""
+    del name
+    return {"status": OK}
 
 
 def refused(status: str, **fields: Any) -> list[dict[str, Any]]:
@@ -56,10 +56,9 @@ def vertices(kind: str, rows: Iterable[DataclassInstance]) -> list[dict[str, Any
     return printed
 
 
-def monday(t_ms: int) -> bool:
-    """t is a Monday at 00:00 UTC after the lookback's length, which every query with t
-    requires."""
-    return t_ms > LOOKBACK_MS and t_ms % WEEK_MS == MONDAY_MS
+def valid_time(t_ms: int) -> bool:
+    """t is a whole second after the lookback's length, which every query with t requires."""
+    return t_ms > LOOKBACK_MS and t_ms % 1000 == 0
 
 
 def valid_page(size: int) -> bool:
@@ -69,9 +68,9 @@ def valid_page(size: int) -> bool:
 
 def request_refusal(graph: ReferenceGraph, t_ms: int, account_ids: Sequence[str]) -> str | None:
     """Why a per-account query refuses a request, in the order the queries check it, or None
-    when it answers: t no Monday or no account, an account named twice, an account the graph
-    lacks, an account that does not exist at t."""
-    if not monday(t_ms) or not account_ids:
+    when it answers: t no whole second after the lookback or no account, an account named twice,
+    an account the graph lacks, an account that does not exist at t."""
+    if not valid_time(t_ms) or not account_ids:
         return INVALID_PARAMETERS
     if len(set(account_ids)) != len(account_ids):
         return DUPLICATE_ACCOUNT

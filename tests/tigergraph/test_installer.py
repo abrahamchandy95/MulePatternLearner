@@ -314,6 +314,17 @@ def test_query_texts_compare_without_comments_layout_or_keyword_case() -> None:
     assert normalized(definitions(other)["q"]) != normalized(definitions(text)["q"])
 
 
+def test_a_comment_in_the_parameter_list_is_no_parameter() -> None:
+    text = (
+        "CREATE OR REPLACE QUERY q(\n"
+        "    UINT t_ms, // the scoring time: a whole second, after (90) days\n"
+        "    LIST<STRING> account_ids /* the accounts, each once */,\n"
+        '    STRING note = "a // b, c" // a default that holds a slash\n'
+        ") {\n}\n"
+    )
+    assert parameter_names(definitions(text)["q"]) == ["t_ms", "account_ids", "note"]
+
+
 # One record of gsql/parity.toml: a query version that passed parity.
 PASSED = """
 [[passed]]

@@ -1,5 +1,5 @@
-"""The reference graph's core and its six infrastructure queries, on small worlds whose answers
-are worked out by hand from docs/design.md ("Time", "The scored population", "Shared rules"
+"""The reference graph's core, its six infrastructure queries and mark_crowds, on small worlds
+whose answers are worked out by hand from docs/design.md ("Time", "The scored population", "Shared rules"
 and the sections of each query).
 
 Every answer goes through ReferenceGraph.run and the query's own parser, so it has the shape
@@ -9,15 +9,17 @@ TigerGraph prints and the parser's checks hold of it.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import asdict, replace
 
 import pandas as pd
 import pytest
 
 from mule_pattern_learner.testing.reference import ReferenceGraph
+from mule_pattern_learner.testing.reference.answer import valid_time
 from mule_pattern_learner.testing.reference.graph import DEVICE, IP, Link, cents, frame
 from mule_pattern_learner.testing.reference.infrastructure import (
     UINT_MAX,
+    crowds,
     hub_profile,
     hubs,
     world,
@@ -26,18 +28,21 @@ from mule_pattern_learner.testing.reference.infrastructure import (
 from mule_pattern_learner.testing.world import DAY_MS, HOUR_MS, Mule, T, WorldBuilder
 from mule_pattern_learner.tigergraph.queries import (
     LIST_ACCOUNTS,
+    MARK_CROWDS,
     PROFILE_HUBS,
     READ_ANSWER_KEY,
     READ_HUBS,
     READ_LABELS,
     READ_WORLD,
     list_accounts,
+    mark_crowds,
     profile_hubs,
     read_hubs,
     read_labels,
     read_world,
 )
 from mule_pattern_learner.tigergraph.queries import read_answer_key as answer_key
+from mule_pattern_learner.tigergraph.queries.mark_crowds import Crowd, Crowds
 from mule_pattern_learner.tigergraph.queries.read_hubs import HubAccount, Hubs, Leaf
 from mule_pattern_learner.tigergraph.queries.read_world import World
 from mule_pattern_learner.tigergraph.queries.rows import PAGE_LIMIT, QueryRefused
@@ -53,6 +58,18 @@ def _scorable(graph: ReferenceGraph, t: int = T) -> dict[str, str]:
 
 def _hubs(graph: ReferenceGraph, t: int = T) -> Hubs:
     return read_hubs.parse(graph.run(READ_HUBS, read_hubs.params(t)))
+
+
+def _crowds(graph: ReferenceGraph, t: int = T) -> Crowds:
+    return mark_crowds.parse(graph.run(MARK_CROWDS, mark_crowds.params(t)))
+
+
+def _crowds_of(hubs: Hubs) -> Crowds:
+    """read_hubs' device and IP leaves, as mark_crowds prints the same crowds."""
+    return Crowds(
+        tuple(Crowd(**asdict(leaf)) for leaf in hubs.devices),
+        tuple(Crowd(**asdict(leaf)) for leaf in hubs.ips),
+    )
 
 
 # The core.
@@ -265,12 +282,15 @@ def test_run_answers_an_installed_query_with_exactly_its_parameters() -> None:
 @pytest.mark.parametrize(
     ("name", "params"),
     [
-        (LIST_ACCOUNTS, {"t_ms": T + D, "after_id": "", "page": 10}),
+        (LIST_ACCOUNTS, {"t_ms": T + 1, "after_id": "", "page": 10}),
         (LIST_ACCOUNTS, {"t_ms": T, "after_id": "", "page": 0}),
         (LIST_ACCOUNTS, {"t_ms": T, "after_id": "", "page": PAGE_LIMIT + 1}),
         (READ_HUBS, {"t_ms": T + 1}),
         (READ_HUBS, {"t_ms": 88 * D}),
-        (PROFILE_HUBS, {"t_ms": T - H}),
+        (MARK_CROWDS, {"t_ms": T + 1}),
+        (MARK_CROWDS, {"t_ms": 90 * D}),
+        (PROFILE_HUBS, {"t_ms": T - 999}),
+        (PROFILE_HUBS, {"t_ms": 90 * D}),
         (READ_LABELS, {"after_id": "", "page": 0}),
         (READ_ANSWER_KEY, {"after_id": "", "page": PAGE_LIMIT + 1}),
     ],
@@ -279,6 +299,19 @@ def test_each_query_refuses_invalid_parameters_with_a_status_row(
     name: str, params: dict[str, object]
 ) -> None:
     assert _small().graph().run(name, params) == [{"status": "invalid_parameters"}]
+
+
+def test_the_reference_graph_answers_any_whole_second_after_the_lookback() -> None:
+    graph = _small().graph()
+    # A Tuesday at 13:47:21 and a Sunday a second before midnight are times as a Monday at
+    # midnight is, and the first second after the lookback is the earliest.
+    for t in (T + D + 49_641_000, T + 7 * D - 1_000, LOOKBACK + 1_000):
+        assert valid_time(t)
+        assert read_hubs.parse(graph.run(READ_HUBS, {"t_ms": t})) == _hubs(graph, t)
+        assert mark_crowds.parse(graph.run(MARK_CROWDS, {"t_ms": t})) == _crowds(graph, t)
+        profile_hubs.parse(graph.run(PROFILE_HUBS, {"t_ms": t}))  # a refusal would raise
+    # Half a second, a millisecond, and the lookback's length itself are not.
+    assert not any(valid_time(t) for t in (T + 500, T + 1, LOOKBACK, LOOKBACK - 1_000, 0))
 
 
 # list_accounts.
@@ -658,6 +691,7 @@ def test_a_crowd_has_more_than_8_customers_by_the_one_account_rule(
     leaves = (Leaf("d_cafe" if kind == DEVICE else "i_cafe", 9, False, False),) if crowd else ()
     expected = Hubs((), leaves, ()) if kind == DEVICE else Hubs((), (), leaves)
     assert _hubs(graph) == expected
+    assert _crowds(graph) == _crowds_of(expected)
 
 
 def _busy_node_world(kind: str, customers: int, enrolled: int) -> WorldBuilder:
@@ -695,7 +729,9 @@ def test_a_device_or_ip_is_a_hub_with_more_than_200_customers(
     graph = _busy_node_world(kind, customers, enrolled).graph()
     leaf = Leaf("d_busy" if kind == DEVICE else "i_busy", customers, enrolled == 0, hub)
     # Either way it is a crowd, with more than 8 customers; it is a hub only with more than 200.
-    assert _hubs(graph) == (Hubs((), (leaf,), ()) if kind == DEVICE else Hubs((), (), (leaf,)))
+    expected = Hubs((), (leaf,), ()) if kind == DEVICE else Hubs((), (), (leaf,))
+    assert _hubs(graph) == expected
+    assert _crowds(graph) == _crowds_of(expected)
 
 
 def test_a_leaf_says_whether_it_is_observed_only_and_a_hub() -> None:
@@ -718,8 +754,9 @@ def test_a_leaf_says_whether_it_is_observed_only_and_a_hub() -> None:
         (Leaf("d_atm", 9, True, False),),
         (Leaf("i_carrier", 201, False, True),),
     )
-    # The printed rows are those hubs() computes.
+    # The printed rows are those hubs() computes, and mark_crowds prints the same crowds.
     assert hubs(graph, T) == _hubs(graph)
+    assert crowds(graph, T) == _crowds(graph) == _crowds_of(_hubs(graph))
 
 
 # profile_hubs.

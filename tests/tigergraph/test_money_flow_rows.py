@@ -21,15 +21,19 @@ from mule_pattern_learner.tigergraph.queries.rows import DAY_MS, QueryRefused
 T_MS = 1_711_929_600_000  # 2024-04-01 00:00 UTC, a Monday
 
 
-def test_a_request_takes_a_monday_and_its_accounts_each_once() -> None:
+def test_a_request_takes_a_time_and_its_accounts_each_once() -> None:
     """The accounts go as a list of ids, which the query checks itself: an installed query
     drops an id the graph lacks from a SET<VERTEX> parameter without a word."""
     assert read_money_flow.params(T_MS, ["a_02", "a_01"]) == {
         "t_ms": T_MS,
         "account_ids": ["a_02", "a_01"],
     }
-    with pytest.raises(ValueError, match="Monday"):
-        read_money_flow.params(T_MS + DAY_MS, ["a_01"])
+    # Any whole second is a time: a Tuesday afternoon is one, a millisecond is not.
+    assert read_money_flow.params(T_MS + DAY_MS + 3_661_000, ["a_01"])["t_ms"] == (
+        T_MS + DAY_MS + 3_661_000
+    )
+    with pytest.raises(ValueError, match="whole second"):
+        read_money_flow.params(T_MS + 1, ["a_01"])
     with pytest.raises(ValueError, match="repeats an account"):
         read_money_flow.params(T_MS, ["a_01", "a_01"])
     with pytest.raises(ValueError, match="at least one account"):
@@ -124,7 +128,7 @@ def test_an_answer_parses_each_account_and_tracked_inflow_sorted_by_id() -> None
     assert read_money_flow.parse(answer, {"a_01", "a_02"}).accounts[1].left_15m == 0.0
 
 
-def test_a_status_row_or_another_version_is_refused() -> None:
+def test_a_status_row_is_refused() -> None:
     refusal = {"status": "unsorted_heap", "accounts": ["a_01"]}
     with pytest.raises(QueryRefused) as refused:
         read_money_flow.parse([refusal], ["a_01"])
@@ -137,8 +141,6 @@ def test_a_status_row_or_another_version_is_refused() -> None:
     ):
         with pytest.raises(QueryRefused, match=status):
             read_money_flow.parse([{"status": status}], ["a_01"])
-    with pytest.raises(ValueError, match="mule install"):
-        read_money_flow.parse([{"status": "ok", "version": "read_money_flow-0123456789ab"}], [])
 
 
 @pytest.mark.parametrize(

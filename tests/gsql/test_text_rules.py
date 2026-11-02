@@ -559,12 +559,11 @@ def test_a_file_defines_its_query_alone() -> None:
 
 def test_the_version_is_the_hash_of_the_text() -> None:
     definition = _definition()
-    version = text_version(f"{NAME}-", definition, "read_example-000000000000")
+    version = text_version(f"{NAME}-", definition)
+    # A version an old query still prints is left out of the hash.
     stamped = GOOD.replace("read_example-000000000000", version)
     assert version_rule(NAME, _definition(stamped), version) == []
-    assert version_rule(NAME, definition, version) == [
-        f"{NAME} does not print {version} AS version"
-    ]
+    assert version_rule(NAME, definition, version) == []
     changed = _changed("HeapAccum<Lot>(256,", "HeapAccum<Lot>(255,", stamped)
     assert version_rule(NAME, _definition(changed), version) == [
         f"{NAME}'s text has changed since {version}: run testing.versions"

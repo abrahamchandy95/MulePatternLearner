@@ -1,0 +1,113 @@
+USE GRAPH Mule_Pattern_Learner
+CREATE OR REPLACE QUERY mark_payment_gaps() FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+
+    /* Tuples */
+    TYPEDEF TUPLE<UINT ts> Time;
+
+    /* Constants */
+    UINT LOOKBACK_MS = 7776000000; // 90 days
+
+    /* Vertex and edge types, each a set so that one pattern serves transactions and transfers */
+    SetAccum<STRING> @@payment_vertex_type; // A transaction or a transfer
+    SetAccum<STRING> @@sender_to_payment_edge_type; // Account -> the payments it sent
+    SetAccum<STRING> @@payment_to_sender_edge_type; // Payment -> the account that sent it
+    SetAccum<STRING> @@payment_to_receiver_edge_type; // Payment -> the account that received it
+    @@payment_vertex_type += "Payment_Transaction";
+    @@payment_vertex_type += "Zelle_Transfer";
+    @@sender_to_payment_edge_type += "Account_Initiated_Transaction";
+    @@sender_to_payment_edge_type += "Account_Sent_Zelle_Transfer";
+    @@payment_to_sender_edge_type += "Transaction_From_Account";
+    @@payment_to_sender_edge_type += "Transfer_From_Account";
+    @@payment_to_receiver_edge_type += "Transaction_To_Account";
+    @@payment_to_receiver_edge_type += "Transfer_To_Account";
+
+    /* Accumulators */
+    HeapAccum<Time>(100000000, ts ASC) @times_out, @times_in; // On an account: when it paid and when it was paid, oldest first, with room for all of them
+    MapAccum<UINT, UINT> @previous_out, @previous_in; // On an account: for each of those times, the one before it, if at most 90 days before
+    MinAccum<VERTEX> @receiver; // On a payment: its receiver (a payment has one)
+    MaxAccum<UINT> @sender_previous, @receiver_previous; // On a payment: when its sender last paid, and when its receiver was last paid, before it
+    OrAccum @@unsorted; // A heap read out of order
+
+    payments = {@@payment_vertex_type};
+
+    /* Traverse: Account -> Payment -> Account; the sender notes when it paid, the receiver when it was paid; self-payments aside */
+    paid = SELECT a
+        FROM Account:a - (@@sender_to_payment_edge_type>:e) - @@payment_vertex_type:p
+            - (@@payment_to_receiver_edge_type>:f) - Account:b
+        WHERE b != a
+        ACCUM
+            a.@times_out += Time(p.event_ts_ms),
+            b.@times_in += Time(p.event_ts_ms)
+    ;
+
+    /* Each account reads its times oldest first, noting for each the time before it, if at most 90 days before */
+    walked = SELECT a
+        FROM Account:a
+        POST-ACCUM
+            UINT last = 0,
+            FOREACH x IN a.@times_out DO
+                IF x.ts < last THEN
+                    @@unsorted += TRUE
+                ELSE IF last > 0 AND last < x.ts AND x.ts - last <= LOOKBACK_MS THEN
+                    a.@previous_out += ( x.ts -> last )
+                END,
+                last = x.ts
+            END,
+            last = 0,
+            FOREACH x IN a.@times_in DO
+                IF x.ts < last THEN
+                    @@unsorted += TRUE
+                ELSE IF last > 0 AND last < x.ts AND x.ts - last <= LOOKBACK_MS THEN
+                    a.@previous_in += ( x.ts -> last )
+                END,
+                last = x.ts
+            END,
+            a.@times_out.clear(),
+            a.@times_in.clear()
+    ;
+
+    /* Refuse a heap read out of order */
+    IF @@unsorted THEN
+        PRINT "unsorted_heap" AS status;
+        RETURN;
+    END;
+
+    /* Traverse: Payment -> its receiver, remembered on the payment */
+    received = SELECT p
+        FROM payments:p - (@@payment_to_receiver_edge_type>:g) - Account:b
+        ACCUM
+            p.@receiver += b
+    ;
+
+    /* Traverse: Payment -> its sender, which gives when it last paid before this payment; self-payments aside */
+    from_senders = SELECT p
+        FROM received:p - (@@payment_to_sender_edge_type>:f) - Account:a
+        WHERE a != p.@receiver
+        ACCUM
+            IF a.@previous_out.containsKey(p.event_ts_ms) THEN
+                p.@sender_previous += a.@previous_out.get(p.event_ts_ms)
+            END
+    ;
+
+    /* Traverse: Payment -> its receiver, which gives when it was last paid before this payment */
+    from_receivers = SELECT p
+        FROM from_senders:p - (@@payment_to_receiver_edge_type>:g) - Account:b
+        ACCUM
+            IF b.@previous_in.containsKey(p.event_ts_ms) THEN
+                p.@receiver_previous += b.@previous_in.get(p.event_ts_ms)
+            END
+    ;
+
+    /* Stamp every payment: the time since its sender last paid and since its receiver was last paid, 0 when none */
+    marked = SELECT p
+        FROM payments:p
+        POST-ACCUM
+            p.sender_gap_ms = CASE WHEN p.@sender_previous > 0 THEN p.event_ts_ms - p.@sender_previous ELSE 0 END,
+            p.receiver_gap_ms = CASE WHEN p.@receiver_previous > 0 THEN p.event_ts_ms - p.@receiver_previous ELSE 0 END,
+            p.gaps_marked = TRUE
+    ;
+
+    /* Printing how many payments were marked */
+    PRINT "ok" AS status, marked.size() AS marked;
+
+}

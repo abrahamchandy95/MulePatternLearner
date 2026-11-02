@@ -1,5 +1,5 @@
 """read_counterparties, B2: who pays it and whom it pays. For each account of a request at one
-Monday, how many accounts paid it and were paid by it, how new they are, and where its money
+time t, how many accounts paid it and were paid by it, how new they are, and where its money
 went (docs/design.md, "read_counterparties (B2): who pays it and whom it pays", and
 docs/features.md, "Account node", columns 22 to 33)."""
 
@@ -56,8 +56,8 @@ SHARES = ("new_payer_share_30d", "top_payee_share_30d", "hub_payee_share_30d")
 
 
 def params(t_ms: int, accounts: Iterable[str], hubs: Iterable[str]) -> dict[str, Any]:
-    """The parameters of a request: the Monday t, the accounts, at least one, each once, and
-    the account hubs of t, read_hubs' accounts of the same Monday, each once."""
+    """The parameters of a request: the time t, the accounts, at least one, each once, and
+    the account hubs of t, read_hubs' accounts of the same t, each once."""
     return {
         "t_ms": as_of(t_ms),
         "account_ids": account_ids(accounts),
@@ -95,9 +95,9 @@ def _check(row: Counterparties) -> None:
 def parse(rows: Sequence[object], accounts: Collection[str]) -> tuple[Counterparties, ...]:
     """The answer to the request params(t_ms, accounts, hubs) made: a row for every account
     asked for and no other, sorted by id."""
-    from . import READ_COUNTERPARTIES, VERSIONS  # the registry imports this module
+    from . import READ_COUNTERPARTIES  # the registry imports this module
 
-    response_head(rows, READ_COUNTERPARTIES, VERSIONS[READ_COUNTERPARTIES])
+    response_head(rows, READ_COUNTERPARTIES)
     found = [
         parse_row(Counterparties, row) for row in projected(rows, "accounts", READ_COUNTERPARTIES)
     ]

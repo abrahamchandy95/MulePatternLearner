@@ -6,9 +6,11 @@ last on the first days of the export so that each has an identity of its own, an
 payments that span the export window (the first on day 0, the last on its last day) that
 mule prepare's calendar check asks for. They are the loaded worlds D1, D2 and D3 of the
 rotation, each behind a spy executor, and mule prepare, mule fetch, mule train and mule evaluate
-run on them as they run on three worlds loaded in turn. The calendar has three scored Mondays,
-T, 2024-07-01, T + 1 week and T + 2 weeks. Two of the world's mules, a_mule and a_r1, are
-identified and active on T only.
+run on them as they run on three worlds loaded in turn. The calendar has three scored weeks,
+starting on T - 1 week, 2024-06-24, T and T + 1 week, each scored at a time of its own inside it.
+The world's mules are active in the days before T, so from the first week's scoring time, in the
+last days of that week for the seeds of D1, D2 and D3, they are inside the label rule's window:
+two of them, a_mule and a_r1, are identified and active at that time.
 """
 
 from __future__ import annotations
@@ -44,14 +46,24 @@ from mule_pattern_learner.data.worlds import LoadedWorld, registered
 from mule_pattern_learner.evaluation import audit as auditing
 from mule_pattern_learner.evaluation.answer_key import read_answer_key
 from mule_pattern_learner.evaluation.audit import (
-    CLOCK_PROBE,
+    CLOCK_GAIN,
     FEATURE_AUDIT,
     GATE_RECORD,
     audit_settings,
 )
-from mule_pattern_learner.evaluation.fallback import fallback_keys
+from mule_pattern_learner.evaluation.clock_invariance import (
+    CLOCK_INVARIANCE,
+    Compared,
+    Invariance,
+    week_start_keys,
+    with_week_starts,
+)
+from mule_pattern_learner.evaluation.fallback import by_week, fallback_keys
 from mule_pattern_learner.evaluation.label_checks import IDENTIFICATION_HORIZON, LABEL_CHECKS
+from mule_pattern_learner.evaluation.sample import audit_sample
 from mule_pattern_learner.evaluation.store import AuditRecord, Store
+from mule_pattern_learner.subgraph.cache import Cache
+from mule_pattern_learner.subgraph.fetch import fetch
 from mule_pattern_learner.testing import fixtures
 from mule_pattern_learner.testing.calendar import DAY_0, Spy, identity_text, world_of
 from mule_pattern_learner.testing.parity import Communities, Parity, QueryParity
@@ -59,14 +71,14 @@ from mule_pattern_learner.testing.reference import ReferenceGraph
 from mule_pattern_learner.testing.world import DAY_MS, HOUR_MS, T, WorldBuilder
 from mule_pattern_learner.tigergraph import installer
 from mule_pattern_learner.tigergraph.queries import QUERY_FILES, VERSIONS
-from mule_pattern_learner.tigergraph.world import cache_key
+from mule_pattern_learner.tigergraph.world import cache_key, time_folder
 from mule_pattern_learner.training.batches import ScoringBatches
 
 W = 7 * DAY_MS
-CALENDAR = CalendarConfig(history_days=182, scored_mondays=3)
+CALENDAR = CalendarConfig(history_days=175, scored_weeks=3)
 LAST_DAY = DAY_0 + (CALENDAR.export_days - 1) * DAY_MS
 ROTATION = Rotation("D1", "D2", "D3")
-# Three scored Mondays; one rotation of the development worlds; small, fast settings: batches of
+# Three scored weeks; one rotation of the development worlds; small, fast settings: batches of
 # 32, two epochs, one seed, the grid of two priors, a few replicates.
 CONFIG = replace(
     FULL_DESIGN_CONFIG,
@@ -96,7 +108,7 @@ PASSING = {
     GATE_RECORD: True,
     **dict.fromkeys(LABEL_CHECKS, True),
     IDENTIFICATION_HORIZON: True,
-    CLOCK_PROBE: False,
+    CLOCK_GAIN: False,
     FEATURE_AUDIT: True,
 }
 
@@ -126,6 +138,27 @@ class Live(Spy):
 
     def gsql(self, text: str, *, what: str = "gsql", attempts: int | None = None) -> str:
         raise AssertionError("these commands run no GSQL statement")
+
+
+def _store_clock_sample(name: str, graph: ReferenceGraph, seed: int) -> None:
+    """What mule audit leaves of a test-role world beside its pass record: the audit sample
+    stored with the start of each row's week, and the rows at those starts fetched."""
+    spy = Spy(graph)
+    identity = registered(name).identity
+    cache = Cache.of(identity, CONFIG.subgraph)
+    times = CONFIG.calendar.scoring_times(seed)
+    populations = {t_ms: [row.account_id for row in list_population(spy, t_ms)] for t_ms in times}
+    sample = audit_sample(
+        read_answer_key(spy), populations, CONFIG.audit.nonmule_sample, CONFIG.data.draw_key, times
+    )
+    fetch(spy, cache, by_week(sample), CONFIG.transport)
+    starts = dict(zip(times, CONFIG.calendar.week_starts(), strict=True))
+    scorable = {
+        start: [row.account_id for row in list_population(spy, start)] for start in starts.values()
+    }
+    stored = with_week_starts(sample, starts, scorable)
+    Store(identity).write_clock_sample(stored)
+    fetch(spy, cache, by_week(week_start_keys(stored)), CONFIG.transport)
 
 
 def _verified(executor: object) -> None:
@@ -202,6 +235,8 @@ def pipeline(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Pipeline]:
                     dict(PASSING),
                 )
             )
+        # D3 tests in the rotation, so mule audit leaves its clock sample.
+        _store_clock_sample("D3", graphs["D3"], seeds["D3"])
         yield found
 
 
@@ -331,7 +366,7 @@ def test_readiness_passes_on_a_loaded_world_and_changes_nothing(
     assert loaded.config.name == "D2"
     assert [line.split(":")[0] for line in shown] == ["ready", "ready", "ready"]
     assert "one training step ran" in shown[-1]
-    # The first scorable account of the first Monday was fetched, into a scratch folder.
+    # The first scorable account of the first week was fetched, into a scratch folder.
     assert {name for name in spy.names()} >= {"read_world", "list_accounts", "read_payment_events"}
     assert sorted(path for path in paths.DATA_DIR.rglob("*") if path.is_file()) == before
 
@@ -450,8 +485,12 @@ def test_prepare_registered_each_world_and_wrote_the_examples_of_its_role(
         found = list(paths.examples_dir(held.identity).glob("*/*/*.parquet"))
         assert {path.name for path in found} == tables
     # The caches hold the keys the roles need: the training draw, the ranked selection keys and
-    # every scorable account of every Monday of the test world.
-    assert len(list(paths.cache_dir(registered("D3").identity).glob("*/*"))) == 3
+    # every scorable account of every week of the test world, at the week's scoring time; and, in
+    # the test world's, the rows of mule audit's clock sample at the start of each week.
+    times = CONFIG.calendar.scoring_times(pipeline.seeds["D3"])
+    folders = {path.name for path in paths.cache_dir(registered("D3").identity).glob("*/*")}
+    assert folders == {time_folder(t_ms) for t_ms in (*times, *CONFIG.calendar.week_starts())}
+    assert len(folders) == 6
 
 
 def test_fetch_makes_no_request_for_a_cache_that_is_full(
@@ -461,7 +500,7 @@ def test_fetch_makes_no_request_for_a_cache_that_is_full(
     cli.fetch_command(CONFIG, lambda: spy)
     requested = {name for name in spy.names()}
     # The readiness check fetches one account, a scratch folder's, and the world is read; the
-    # real fetch finds every row of the test world cached, and asks for the hubs of no Monday
+    # real fetch finds every row of the test world cached, and asks for the hubs of no week
     # (the account of the readiness check apart).
     assert requested <= {
         "read_world",
@@ -531,7 +570,7 @@ def test_train_stops_on_a_failed_label_check_and_a_missing_record(pipeline: Pipe
             cli.train_command(CONFIG, cli.connect)
     finally:
         _records(pipeline, {"D1": {label: True}})
-    # A failed clock probe of a development world does not stop it (D1's, D2's and D3's all
+    # A failed clock gain test of a development world does not stop it (D1's, D2's and D3's all
     # fail it): a world with no record does.
     record = Store(pipeline.identity("D3")).folder / "audit.toml"
     kept = record.read_text()
@@ -666,7 +705,7 @@ def evaluated(trained: Path) -> Path:
 def test_evaluate_writes_the_tables_marked_development_only(evaluated: Path) -> None:
     for name in (
         "metrics",
-        "per_monday",
+        "per_week",
         "groups",
         "spread",
         "comparisons",
@@ -674,6 +713,7 @@ def test_evaluate_writes_the_tables_marked_development_only(evaluated: Path) -> 
         "victim_origin",
         "selection_epochs",
         "selection_correlation",
+        CLOCK_INVARIANCE,
     ):
         table = pd.read_parquet(evaluated / f"{name}.parquet")
         assert table["development_only"].all() and (table["rotation"] == "D1-D2-D3").all()
@@ -699,6 +739,101 @@ def test_evaluate_writes_the_tables_marked_development_only(evaluated: Path) -> 
     assert (evaluated / "missed" / "mules.parquet").is_file()
     events = [json.loads(line) for line in (evaluated / "events.jsonl").read_text().splitlines()]
     assert ("evaluate", "finished") in [(e["command"], e["event"]) for e in events]
+
+
+def test_evaluate_runs_the_clock_invariance_test_of_the_selected_gnn_on_the_stored_sample(
+    evaluated: Path, pipeline: Pipeline, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """mule evaluate hands the invariance test the sample mule audit stored for the test world,
+    its scoring times and the week starts of the calendar, and a scorer that gives the selected
+    GNN's logits; the table is written, and the events say how it ended."""
+    seen: dict[str, Any] = {}
+    real = cli.invariance
+
+    def watching(
+        stored: pd.DataFrame,
+        key: Any,
+        scoring_times: Any,
+        week_starts: Any,
+        score: Callable[[pd.DataFrame], pd.DataFrame],
+        audit: Any,
+        seed: int,
+    ) -> Any:
+        seen.update(stored=stored, times=scoring_times, starts=week_starts, seed=seed)
+        seen["scored"] = score(stored.loc[:, ["t_ms", "account_id"]])
+        return real(stored, key, scoring_times, week_starts, score, audit, seed)
+
+    monkeypatch.setattr(cli, "invariance", watching)
+    worlds = cli.rotation_worlds(ROTATION, CONFIG)
+    cli.evaluate_rotation(worlds, CONFIG, torch.device("cpu"))
+    identity = pipeline.identity("D3")
+    stored = Store(identity).clock_sample()
+    assert stored is not None
+    pd.testing.assert_frame_equal(seen["stored"], stored)
+    assert seen["times"] == CONFIG.calendar.scoring_times(pipeline.seeds["D3"])
+    assert seen["starts"] == CONFIG.calendar.week_starts()
+    assert seen["seed"] == CONFIG.training.bootstrap_seed
+    # The scorer is the selected GNN's: the one seed's model file, under the current lock.
+    keys = stored.loc[:, ["t_ms", "account_id"]]
+    direct = cli.score_gnn(
+        evaluated / "gnn_seed0.pt",
+        cli.gnn_lock(None, CONFIG.model, CONFIG.subgraph, CONFIG.training),
+        ScoringBatches(
+            Cache.of(identity, CONFIG.subgraph), identity, keys, CONFIG.training.batch_size
+        ),
+    )
+    assert seen["scored"].equals(direct) and len(direct) == len(keys)
+    table = pd.read_parquet(evaluated / "clock_invariance.parquet")
+    assert len(table) == 1 and bool(table["passed"].item()) in (True, False)
+    events = [json.loads(line) for line in (evaluated / "events.jsonl").read_text().splitlines()]
+    ended = [e["event"] for e in events if e["event"].startswith("clock invariance")]
+    assert ended and set(ended) <= {"clock invariance passed", "clock invariance not passed"}
+
+
+def test_evaluate_without_a_stored_clock_sample_runs_no_invariance_test_and_says_so(
+    evaluated: Path, pipeline: Pipeline, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    folder = tmp_path / "results" / cli.run_name(ROTATION)
+    shutil.copytree(evaluated, folder)
+    (folder / "clock_invariance.parquet").unlink()
+    monkeypatch.setattr(paths, "RESULTS_DIR", tmp_path / "results")
+    stored = Store(pipeline.identity("D3")).folder / "clock_sample.parquet"
+    kept = stored.read_bytes()
+    stored.unlink()
+    try:
+        cli.evaluate_rotation(cli.rotation_worlds(ROTATION, CONFIG), CONFIG, torch.device("cpu"))
+    finally:
+        stored.write_bytes(kept)
+    assert not (folder / "clock_invariance.parquet").exists()
+    manifest = json.loads((folder / "manifest.json").read_text())
+    assert f"{CLOCK_INVARIANCE} was not run" in manifest["not_reported_because"]
+    events = [json.loads(line) for line in (folder / "events.jsonl").read_text().splitlines()]
+    assert "clock invariance not run" in [event["event"] for event in events]
+
+
+def test_a_rotations_verdict_holds_the_clock_invariance_test(pipeline: Pipeline) -> None:
+    worlds = cli.rotation_worlds(ROTATION, CONFIG)
+    verdict = cli._verdict  # pyright: ignore[reportPrivateUsage]
+
+    def finding(passed: bool) -> Invariance:
+        nothing = Compared(0.5, 0.5, 0.0, (-0.01, 0.01))
+        return Invariance(
+            nothing,
+            nothing,
+            0.05,
+            passed,
+            rows=8,
+            mule_rows=4,
+            clusters=8,
+            mule_clusters=4,
+            mule_rows_left_out=0,
+            nonmule_rows_left_out=0,
+        )
+
+    assert f"{CLOCK_INVARIANCE} was not run" in verdict(worlds, CONFIG, None).reasons
+    assert f"{CLOCK_INVARIANCE} did not pass" in verdict(worlds, CONFIG, finding(False)).reasons
+    reasons = verdict(worlds, CONFIG, finding(True)).reasons
+    assert not any(reason.startswith(CLOCK_INVARIANCE) for reason in reasons)
 
 
 def test_evaluate_builds_each_test_example_once_when_the_examples_are_kept(
@@ -824,11 +959,11 @@ def test_the_proof_of_concept_trains_one_seed_and_evaluates_on_sampled_worlds(
         cli.prepare_command(poc, pipeline.connect(name))
     # The test world's fallback list is mule audit's: the true mules and a sample of the rest.
     graph = pipeline.graphs["D3"]
-    populations = {
-        t_ms: [row.account_id for row in list_population(graph, t_ms)]
-        for t_ms in poc.calendar.mondays()
-    }
-    listed = fallback_keys(read_answer_key(Spy(graph)), populations, poc.data)
+    times = poc.calendar.scoring_times(
+        {world.name: world.seed for world in poc.worlds.worlds}["D3"]
+    )
+    populations = {t_ms: [row.account_id for row in list_population(graph, t_ms)] for t_ms in times}
+    listed = fallback_keys(read_answer_key(Spy(graph)), populations, poc.data, times)
     Store(pipeline.identity("D3")).write_fallback(listed)
     assert 0 < len(listed) < sum(len(accounts) for accounts in populations.values())
     cli.train_command(poc, cli.connect)
@@ -844,8 +979,8 @@ def test_the_proof_of_concept_trains_one_seed_and_evaluates_on_sampled_worlds(
     metrics = pd.read_parquet(folder / "metrics.parquet")
     assert set(metrics["ranker"]) == {"gnn", "xgboost_own", "xgboost_graph"}
     assert metrics["development_only"].all()
-    per_monday = pd.read_parquet(folder / "per_monday.parquet")
-    assert set(per_monday["ranker"]) == {"gnn", "xgboost_own", "xgboost_graph"}
+    per_week = pd.read_parquet(folder / "per_week.parquet")
+    assert set(per_week["ranker"]) == {"gnn", "xgboost_own", "xgboost_graph"}
 
 
 # mule score.
@@ -864,6 +999,36 @@ def test_score_ranks_the_accounts_asked_with_the_best_selection_seed(
     assert set(scored["date"].astype(str)) == {"2024-07-01"} and set(scored["t_ms"]) == {T}
     assert sorted(scored["rank"]) == [1, 2, 3]
     assert any("scored with the seed 0 model" in line for line in shown)
+
+
+def test_score_takes_any_date_at_midnight_not_only_a_monday(
+    pipeline: Pipeline, evaluated: Path
+) -> None:
+    # A Wednesday and a Sunday, each scored at 00:00 UTC.
+    days = (date(2024, 7, 3), date(2024, 7, 7))
+    config = replace(CONFIG, score=ScoreConfig(("a_mule", "a_h1"), days, "D1-D2-D3"))
+    cli.score_command(config, pipeline.connect("D3"))
+    scored = pd.read_parquet(evaluated / "scores.parquet")
+    assert set(scored["date"].astype(str)) == {"2024-07-03", "2024-07-07"}
+    assert set(scored["t_ms"]) == {T + 2 * DAY_MS, T + 6 * DAY_MS}
+    assert sorted(scored["account_id"]) == ["a_h1", "a_h1", "a_mule", "a_mule"]
+
+
+def test_score_matches_no_world_so_a_graph_without_an_identity_file_is_scored(
+    pipeline: Pipeline, evaluated: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # A bank's graph has no PhantomLedger identity file: the records folder is empty, and
+    # read_world never runs.
+    monkeypatch.setenv("MULE_PL_RECORDS_DIR", str(tmp_path))
+    spy = Live(pipeline.graphs["D3"])
+    config = replace(
+        CONFIG, score=ScoreConfig(("a_mule", "a_h1"), (date(2024, 7, 1),), "D1-D2-D3")
+    )
+    cli.score_command(config, lambda: spy)
+    assert "read_world" not in set(spy.names())
+    scored = pd.read_parquet(evaluated / "scores.parquet")
+    assert sorted(scored["account_id"]) == ["a_h1", "a_mule"]
+    assert sorted(scored["rank"]) == [1, 2]
 
 
 def test_score_needs_its_accounts_dates_and_run_and_a_trained_run(
@@ -906,15 +1071,20 @@ def test_parity_reports_a_query_that_did_not_match(
     pipeline: Pipeline, monkeypatch: pytest.MonkeyPatch, shown: list[str]
 ) -> None:
 
-    def matches(executor: object, config: object) -> Parity:
+    seeds: list[int] = []
+
+    def matches(executor: object, config: object, *, seed: int) -> Parity:
+        seeds.append(seed)
         return _parity(())
 
-    def differs(executor: object, config: object) -> Parity:
+    def differs(executor: object, config: object, *, seed: int) -> Parity:
         return _parity(("read_hubs",))
 
     monkeypatch.setattr(cli.parity, "run", matches)
     cli.parity_command(CONFIG, pipeline.connect("D1"))
     assert shown[-1].startswith("every query matched the reference graph")
+    # The run is given the configured seed of the loaded world, D1's, which names its times.
+    assert seeds == [{world.name: world.seed for world in CONFIG.worlds.worlds}["D1"]]
     monkeypatch.setattr(cli.parity, "run", differs)
     with pytest.raises(cli.CommandError, match=r"1 query did not match .*: read_hubs; .* the 11"):
         cli.parity_command(CONFIG, pipeline.connect("D1"))

@@ -1,6 +1,6 @@
 """A ranking of the rows of a test frame (docs/design.md, "Rankings" and "Metrics"): the rows, which
-are positive, and their Monday ranking and pooled ranking, with the headline metrics and the
-per-Monday table of the ranking.
+are positive, and their per-week ranking and pooled ranking, with the headline metrics and the
+per-week table of the ranking.
 
 The class lives apart from evaluation.rankings, which reads the truth through the answer key, so
 that the benchmark can rank a synthetic frame without importing the answer key's module: this
@@ -16,7 +16,7 @@ import numpy as np
 from numpy.typing import NDArray
 import pandas as pd
 
-from ..metrics import TEST_BUDGETS, MondayRanking, budget_name
+from ..metrics import TEST_BUDGETS, WeekRanking, budget_name
 from .statuses import NON_MULE
 from .uncertainty import Ranked
 
@@ -24,11 +24,11 @@ from .uncertainty import Ranked
 @dataclass(frozen=True)
 class Ranking:
     """A ranking of rows of a test frame: the rows (non-mules, and the positives chosen), which
-    are positive, and their Monday ranking and pooled ranking."""
+    are positive, and their per-week ranking and pooled ranking."""
 
     frame: pd.DataFrame
     positive: NDArray[np.bool_]
-    order: MondayRanking
+    order: WeekRanking
     pooled: Ranked
 
     @classmethod
@@ -41,7 +41,7 @@ class Ranking:
         return cls(
             rows,
             chosen,
-            MondayRanking(rows["t_ms"].to_numpy(dtype=np.int64), logits),
+            WeekRanking(rows["t_ms"].to_numpy(dtype=np.int64), logits),
             Ranked(logits, chosen),
         )
 
@@ -62,13 +62,13 @@ class Ranking:
             recall, precision, self.pooled.roc_auc(used), self.pooled.average_precision(used)
         ]
 
-    def per_monday(self) -> pd.DataFrame:
-        """Recall and precision at each budget on each Monday, with its positives' weight."""
+    def per_week(self) -> pd.DataFrame:
+        """Recall and precision at each budget in each week, with its positives' weight."""
         weight = self.weight
         found, positives, sizes = self.order.budget_found(
             self.order.shares(weight), self.positive, weight
         )
-        table = pd.DataFrame({"t_ms": self.order.mondays, "positives": positives})
+        table = pd.DataFrame({"t_ms": self.order.weeks, "positives": positives})
         for column, budget in enumerate(TEST_BUDGETS):
             name = budget_name(budget)
             table[f"recall_at_{name}"] = np.divide(

@@ -57,18 +57,13 @@ from mule_pattern_learner.tigergraph.queries.profile_hubs import HubProfile
 from mule_pattern_learner.tigergraph.queries.read_hubs import HubAccount, Leaf
 from mule_pattern_learner.tigergraph.queries.read_labels import IdentifiedMule
 from mule_pattern_learner.tigergraph.queries.read_world import SECONDS, World
-from mule_pattern_learner.tigergraph.queries.rows import (
-    LOOKBACK_MS,
-    MONDAY_MS,
-    PAGE_LIMIT,
-    WEEK_MS,
-)
+from mule_pattern_learner.tigergraph.queries.rows import LOOKBACK_MS, PAGE_LIMIT
 
 INFRASTRUCTURE = (LIST_ACCOUNTS, READ_LABELS, READ_ANSWER_KEY, READ_HUBS, READ_WORLD, PROFILE_HUBS)
 TEXTS = {name: (GSQL_DIR / QUERY_FILES[name]).read_text() for name in INFRASTRUCTURE}
 DEFINITIONS = {name: definitions(text)[name] for name, text in TEXTS.items()}
 SUBGRAPH = DEFAULT_CONFIG.subgraph
-# A Monday after the lookback, for the builders.
+# A whole second after the lookback, for the builders.
 T_MS = 1_711_929_600_000  # 2024-04-01 00:00 UTC, the first scored Monday
 
 # Each query's arguments for its builder, and the dataclass of each printed set.
@@ -280,10 +275,10 @@ def test_every_refusal_returns_at_once(name: str) -> None:
 
 
 @pytest.mark.parametrize("name", AS_OF)
-def test_a_query_with_t_refuses_a_t_other_than_a_monday_after_the_lookback(name: str) -> None:
+def test_a_query_with_t_refuses_a_t_other_than_a_whole_second_after_the_lookback(name: str) -> None:
     conditions = _refusal(name).split(" OR ")
     assert "t_ms <= lookback_ms" in conditions
-    assert f"t_ms % {WEEK_MS} != {MONDAY_MS}" in conditions
+    assert "t_ms % 1000 != 0" in conditions
     assert re.search(rf"UINT lookback_ms = {LOOKBACK_MS};", DEFINITIONS[name])
 
 

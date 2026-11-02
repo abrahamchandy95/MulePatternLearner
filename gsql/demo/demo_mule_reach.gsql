@@ -1,0 +1,158 @@
+USE GRAPH Mule_Pattern_Learner
+
+/* Demo: how far the mules the bank knows reach, on the graph loaded by the earlier
+   pipeline (pu_label, is_mule_masked, first_seen_ts_ms), not on gsql/schema/schema.gsql.
+
+   From every known mule (pu_label 1) it walks up to max_links links. A link is a shared
+   owner; a device, IP or address shared through the owners; or, with use_payments, a
+   payment either way. Devices, IPs and addresses linked to more than max_parties parties,
+   the bank's ledger accounts (account_type "gl") and accounts with more than max_payments
+   payments are hubs and are not walked through.
+
+   Prints, for each distance, how many accounts it reaches and how many of them are hidden
+   mules (is_mule 1, pu_label 0): the list an analyst would review, and what is in it. Then
+   the top_k hidden mules out of reach, most linked first, each with its ring and the other
+   hidden mules one link away. Reads the answer key (is_mule, mule_ring_id): a demo query,
+   never a training input. */
+CREATE OR REPLACE QUERY demo_mule_reach(
+    INT max_links = 2,
+    BOOL use_payments = TRUE,
+    INT max_parties = 50,
+    INT max_payments = 1500,
+    INT top_k = 20
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+    /* Links from the nearest known mule; unreached accounts keep the default. */
+    MinAccum<INT> @dist = 1000000;
+    SetAccum<STRING> @hidden_links;
+    SumAccum<INT> @ring_size;
+    MapAccum<INT, SumAccum<INT>> @@ring_size;
+    MapAccum<STRING, SumAccum<INT>> @@hidden_by_distance, @@accounts_by_distance;
+    INT step = 0;
+
+    Mules = SELECT a FROM Account:a WHERE a.is_mule == 1
+      ACCUM @@ring_size += (a.mule_ring_id -> 1);
+    Frontier = SELECT a FROM Mules:a WHERE a.pu_label == 1
+      POST-ACCUM a.@dist += 0;
+
+    WHILE step < max_links AND Frontier.size() > 0 DO
+        step = step + 1;
+        Siblings = SELECT b FROM Frontier:a -(Account_Owned_By_Party>:o1)- Party:p
+            -(Party_Owns_Account>:o2)- Account:b
+          WHERE b.@dist > step
+          ACCUM b.@dist += step;
+        Devices = SELECT b FROM Frontier:a -(Account_Owned_By_Party>:o1)- Party:p
+            -(Party_Uses_Device>:l1)- Device:d -(Device_Used_By_Party>:l2)- Party:q
+            -(Party_Owns_Account>:o2)- Account:b
+          WHERE q != p AND b.@dist > step AND d.outdegree("Device_Used_By_Party") <= max_parties
+          ACCUM b.@dist += step;
+        IPs = SELECT b FROM Frontier:a -(Account_Owned_By_Party>:o1)- Party:p
+            -(Party_Uses_IP>:l1)- IP:i -(IP_Used_By_Party>:l2)- Party:q
+            -(Party_Owns_Account>:o2)- Account:b
+          WHERE q != p AND b.@dist > step AND i.outdegree("IP_Used_By_Party") <= max_parties
+          ACCUM b.@dist += step;
+        Addresses = SELECT b FROM Frontier:a -(Account_Owned_By_Party>:o1)- Party:p
+            -(Party_Has_Address>:l1)- Address:x -(Address_Used_By_Party>:l2)- Party:q
+            -(Party_Owns_Account>:o2)- Account:b
+          WHERE q != p AND b.@dist > step AND x.outdegree("Address_Used_By_Party") <= max_parties
+          ACCUM b.@dist += step;
+        IF use_payments THEN
+            /* Only accounts that are not hubs pass money on to the next step. */
+            Payers = SELECT a FROM Frontier:a
+              WHERE a.account_type != "gl"
+                AND a.outdegree("Account_Initiated_Transaction")
+                  + a.outdegree("Account_Received_Transaction")
+                  + a.outdegree("Account_Sent_Zelle_Transfer")
+                  + a.outdegree("Account_Received_Zelle_Transfer") <= max_payments;
+            PaidTo = SELECT b FROM Payers:a -(Account_Initiated_Transaction>:e1)-
+                Payment_Transaction:t -(Transaction_To_Account>:e2)- Account:b
+              WHERE b.@dist > step AND b.account_type != "gl"
+                AND b.outdegree("Account_Initiated_Transaction")
+                  + b.outdegree("Account_Received_Transaction")
+                  + b.outdegree("Account_Sent_Zelle_Transfer")
+                  + b.outdegree("Account_Received_Zelle_Transfer") <= max_payments
+              ACCUM b.@dist += step;
+            PaidBy = SELECT b FROM Payers:a -(Account_Received_Transaction>:e1)-
+                Payment_Transaction:t -(Transaction_From_Account>:e2)- Account:b
+              WHERE b.@dist > step AND b.account_type != "gl"
+                AND b.outdegree("Account_Initiated_Transaction")
+                  + b.outdegree("Account_Received_Transaction")
+                  + b.outdegree("Account_Sent_Zelle_Transfer")
+                  + b.outdegree("Account_Received_Zelle_Transfer") <= max_payments
+              ACCUM b.@dist += step;
+            ZelleTo = SELECT b FROM Payers:a -(Account_Sent_Zelle_Transfer>:e1)-
+                Zelle_Transfer:t -(Transfer_To_Account>:e2)- Account:b
+              WHERE b.@dist > step
+                AND b.outdegree("Account_Initiated_Transaction")
+                  + b.outdegree("Account_Received_Transaction")
+                  + b.outdegree("Account_Sent_Zelle_Transfer")
+                  + b.outdegree("Account_Received_Zelle_Transfer") <= max_payments
+              ACCUM b.@dist += step;
+            ZelleFrom = SELECT b FROM Payers:a -(Account_Received_Zelle_Transfer>:e1)-
+                Zelle_Transfer:t -(Transfer_From_Account>:e2)- Account:b
+              WHERE b.@dist > step
+                AND b.outdegree("Account_Initiated_Transaction")
+                  + b.outdegree("Account_Received_Transaction")
+                  + b.outdegree("Account_Sent_Zelle_Transfer")
+                  + b.outdegree("Account_Received_Zelle_Transfer") <= max_payments
+              ACCUM b.@dist += step;
+        END;
+        Frontier = SELECT b FROM Account:b WHERE b.@dist == step;
+        @@accounts_by_distance += (to_string(step) + " links from a known mule" -> Frontier.size());
+    END;
+
+    Hidden = SELECT a FROM Mules:a WHERE a.pu_label == 0
+      ACCUM
+        IF a.@dist <= max_links THEN
+            @@hidden_by_distance += (to_string(a.@dist) + " links from a known mule" -> 1)
+        ELSE
+            @@hidden_by_distance += ("out of reach" -> 1)
+        END;
+    Far = SELECT a FROM Hidden:a WHERE a.@dist > max_links
+      POST-ACCUM a.@ring_size += @@ring_size.get(a.mule_ring_id);
+
+    /* The other hidden mules one link from each hidden mule out of reach. */
+    FarSiblings = SELECT b FROM Far:a -(Account_Owned_By_Party>:o1)- Party:p
+        -(Party_Owns_Account>:o2)- Account:b
+      WHERE b != a AND b.is_mule == 1 AND b.pu_label == 0
+      ACCUM a.@hidden_links += b.id;
+    FarDevices = SELECT b FROM Far:a -(Account_Owned_By_Party>:o1)- Party:p
+        -(Party_Uses_Device>:l1)- Device:d -(Device_Used_By_Party>:l2)- Party:q
+        -(Party_Owns_Account>:o2)- Account:b
+      WHERE q != p AND b.is_mule == 1 AND b.pu_label == 0
+      ACCUM a.@hidden_links += b.id;
+    FarIPs = SELECT b FROM Far:a -(Account_Owned_By_Party>:o1)- Party:p
+        -(Party_Uses_IP>:l1)- IP:i -(IP_Used_By_Party>:l2)- Party:q
+        -(Party_Owns_Account>:o2)- Account:b
+      WHERE q != p AND b.is_mule == 1 AND b.pu_label == 0
+      ACCUM a.@hidden_links += b.id;
+    FarAddresses = SELECT b FROM Far:a -(Account_Owned_By_Party>:o1)- Party:p
+        -(Party_Has_Address>:l1)- Address:x -(Address_Used_By_Party>:l2)- Party:q
+        -(Party_Owns_Account>:o2)- Account:b
+      WHERE q != p AND b.is_mule == 1 AND b.pu_label == 0
+      ACCUM a.@hidden_links += b.id;
+    FarPaidTo = SELECT b FROM Far:a -(Account_Initiated_Transaction>:e1)-
+        Payment_Transaction:t -(Transaction_To_Account>:e2)- Account:b
+      WHERE b.is_mule == 1 AND b.pu_label == 0
+      ACCUM a.@hidden_links += b.id;
+    FarPaidBy = SELECT b FROM Far:a -(Account_Received_Transaction>:e1)-
+        Payment_Transaction:t -(Transaction_From_Account>:e2)- Account:b
+      WHERE b.is_mule == 1 AND b.pu_label == 0
+      ACCUM a.@hidden_links += b.id;
+    FarZelleTo = SELECT b FROM Far:a -(Account_Sent_Zelle_Transfer>:e1)-
+        Zelle_Transfer:t -(Transfer_To_Account>:e2)- Account:b
+      WHERE b.is_mule == 1 AND b.pu_label == 0
+      ACCUM a.@hidden_links += b.id;
+    FarZelleFrom = SELECT b FROM Far:a -(Account_Received_Zelle_Transfer>:e1)-
+        Zelle_Transfer:t -(Transfer_From_Account>:e2)- Account:b
+      WHERE b.is_mule == 1 AND b.pu_label == 0
+      ACCUM a.@hidden_links += b.id;
+
+    Top = SELECT a FROM Far:a
+      ORDER BY a.@hidden_links.size() DESC, a.@ring_size DESC, a.id ASC
+      LIMIT top_k;
+    PRINT Mules.size() AS mules, Mules.size() - Hidden.size() AS known_mules,
+      Hidden.size() AS hidden_mules, @@accounts_by_distance AS accounts_by_distance,
+      @@hidden_by_distance AS hidden_mules_by_distance;
+    PRINT Top[Top.mule_ring_id AS ring, Top.@ring_size AS ring_size,
+      Top.@hidden_links AS hidden_mules_one_link_away] AS hidden_mules_out_of_reach;
+}

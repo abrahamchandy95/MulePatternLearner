@@ -1,54 +1,31 @@
 USE GRAPH Mule_Pattern_Learner
 
-/* read_payment_events (B4, the payment graph): the payments around each scored account, one
-   edge per payment, each with its own timing.
+/* reads the payments around each scored account, as of time t.
 
-   Inputs: t_ms, a Monday at 00:00 UTC; account_ids, the scored accounts, each once;
-   hub_accounts, read_hubs' account hubs of the same t.
-   Prints, for all the scored accounts' subgraphs together: accounts, each once with
-   is_external; payments, each once with its row (docs/features.md, "Payment edges"); and per
-   scored account, by its id, subgraph_accounts and subgraph_payments, the ids of its
-   accounts and payments, and owned_by, its ownership edges.
-   Refuses: invalid_parameters, duplicate_account, unknown_account, invisible_account and
-   invisible_hub (a hub that does not exist at t).
+   From the 90 days before t, for each scored account:
+   - its newest 32 payments sent and 32 received;
+   - for each account at their other end that is not a hub, that account's newest 16 each way;
+   - up to 8 other accounts of the same customer, and the ownership links of these accounts.
 
-   Money passed on within minutes, a burst from new payers and a victim paying in escalating
-   amounts exist only payment by payment, so the GNN gets one edge per payment, never one per
-   pair (docs/design.md, "read_payment_events (B4): the payment graph"). The subgraph of a
-   scored account s (docs/features.md, "What one example's subgraph holds"):
-   - s's newest 32 payments sent and newest 32 received in [t - 90 days, t);
-   - the hop-1 accounts at their other ends. A hop-1 account that is a hub is not expanded;
-     every other adds its own newest 16 payments each way, whose other ends are the hop-2
-     accounts;
-   - up to 8 other accounts of s's customer that exist at t through a visible ownership link,
-     open or closed, most recently active first;
-   - the ownership edges of s and of each expanded hop-1 account to its customer, and of every
-     account of the subgraph that s's customer owns.
-   Every cap keeps the newest by the second of the payment, then by id, a pseudonym, so no cap
-   follows the row order of one second.
-
-   A payment's row depends on the payment, t and the hub set alone, never on which account is
-   scored, so it can be cached per payment. So a gap at a hub end is absent even when the hub
-   is the scored account, as it is at a hub that is flag-only. Every amount is integer cents,
-   floor(amount x 100 + 0.5). A self-payment is read nowhere. Per-request state is kept by the
-   scored account, on its own vertex or in maps keyed by its id, never in a flag two scored
-   accounts of one request could share. The accounts come as ids, as read_money_flow
-   explains. */
+   Inputs: t_ms; account_ids, the accounts being scored; hub_accounts, read_hubs' hubs at t.
+   Prints: each payment once, with its amount, rail, sender, receiver and timing: its age at t;
+   how many earlier payments the same pair made, and the time since the pair's first and last
+   one; and the time since the sender's and the receiver's previous payments. Also each account
+   once with is_external, and per scored account the ids of its accounts and payments and its
+   ownership links.
+   Refuses: invalid parameters; a repeated, unknown or not-yet-opened account; a not-yet-opened
+   hub. */
 CREATE OR REPLACE QUERY read_payment_events(
     UINT t_ms,
     LIST<STRING> account_ids,
     SET<VERTEX<Account>> hub_accounts
 ) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
-    /* A payment of a capped list: its second, its id and the account at its other end.
-       Another account of a scored account's customer: the second of its latest payment in
-       the lookback, 0 with none, and its id. An ownership edge: the account and its
-       customer. */
     TYPEDEF TUPLE<INT sec, STRING id, STRING other> Picked;
     TYPEDEF TUPLE<INT sec, STRING id> Sibling;
     TYPEDEF TUPLE<STRING account_id, STRING customer_id> OwnedBy;
     /* The account hubs of t. */
     OrAccum @hub;
-    /* A scored account's newest payments each way, and an expanded account's. */
+    /* A scored account's newest payments, counterparty payments. */
     HeapAccum<Picked>(32, sec DESC, id ASC) @scored_out, @scored_in;
     HeapAccum<Picked>(16, sec DESC, id ASC) @other_out, @other_in;
     /* An account's latest payment in the lookback; a scored account's other accounts of its
@@ -59,14 +36,14 @@ CREATE OR REPLACE QUERY read_payment_events(
     SumAccum<INT> @amount, @pair_prior_count;
     MaxAccum<STRING> @rail, @sender_id, @receiver_id;
     OrAccum @sender_hub, @receiver_hub, @pair_gap_present, @pair_age_present,
-      @sender_gap_present, @receiver_gap_present;
+        @sender_gap_present, @receiver_gap_present;
     MinAccum<UINT> @pair_first;
     MaxAccum<UINT> @pair_last, @sender_last, @receiver_last;
     SumAccum<UINT> @age_ms, @pair_gap_ms, @pair_age_ms, @sender_gap_ms, @receiver_gap_ms;
     /* Per scored account by id: its accounts, its payments and its ownership edges; per
        hop-1 account by id, the scored accounts it is a hop-1 account of. */
     MapAccum<STRING, SetAccum<STRING>> @@subgraph_accounts, @@subgraph_payments,
-      @@reached_by;
+        @@reached_by;
     MapAccum<STRING, SetAccum<OwnedBy>> @@owned_by;
     /* The hop-1 accounts, the accounts and the payments of every subgraph, by id. */
     SetAccum<STRING> @@hop1_ids, @@account_ids, @@payment_ids;
@@ -75,14 +52,10 @@ CREATE OR REPLACE QUERY read_payment_events(
     SumAccum<INT> @@given;
     UINT lookback_ms = 7776000000;
 
-    /* Mondays are 4 days after the Thursday of 1970-01-01, modulo a week. */
-    IF t_ms <= lookback_ms OR t_ms % 604800000 != 345600000 THEN
+    IF t_ms <= lookback_ms OR t_ms % 1000 != 0 THEN
         PRINT "invalid_parameters" AS status;
         RETURN;
     END;
-    /* The ids: at least one; none twice, which a list keeps and a set would drop; each an
-       account of the graph, since to_vertex_set drops an unknown id; each existing at t. Then
-       the hubs, which must exist at t too. */
     FOREACH account_id IN account_ids DO
         @@ids += account_id;
         @@given += 1;
@@ -116,21 +89,21 @@ CREATE OR REPLACE QUERY read_payment_events(
     /* Each scored account's newest 32 payments each way, but self-payments; they and the
        hop-1 accounts at their other ends join its subgraph. */
     ScoredSent = SELECT a FROM Scored:a
-      -((Account_Initiated_Transaction>|Account_Sent_Zelle_Transfer>):e)-
-      (Payment_Transaction|Zelle_Transfer):p
-      -((Transaction_To_Account>|Transfer_To_Account>):f)- Account:b
-      WHERE p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms AND b != a
-      ACCUM
+        -((Account_Initiated_Transaction>|Account_Sent_Zelle_Transfer>):e)-
+        (Payment_Transaction|Zelle_Transfer):p
+        -((Transaction_To_Account>|Transfer_To_Account>):f)- Account:b
+        WHERE p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms AND b != a
+        ACCUM
         a.@scored_out += Picked(floor(p.event_ts_ms / 1000), p.id, b.id);
     ScoredReceived = SELECT a FROM Scored:a
-      -((Account_Received_Transaction>|Account_Received_Zelle_Transfer>):e)-
-      (Payment_Transaction|Zelle_Transfer):p
-      -((Transaction_From_Account>|Transfer_From_Account>):f)- Account:b
-      WHERE p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms AND b != a
-      ACCUM
+        -((Account_Received_Transaction>|Account_Received_Zelle_Transfer>):e)-
+        (Payment_Transaction|Zelle_Transfer):p
+        -((Transaction_From_Account>|Transfer_From_Account>):f)- Account:b
+        WHERE p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms AND b != a
+        ACCUM
         a.@scored_in += Picked(floor(p.event_ts_ms / 1000), p.id, b.id);
     ScoredPicked = SELECT a FROM Scored:a
-      POST-ACCUM
+        POST-ACCUM
         @@subgraph_accounts += (a.id -> a.id),
         @@account_ids += a.id,
         FOREACH x IN a.@scored_out DO
@@ -150,28 +123,27 @@ CREATE OR REPLACE QUERY read_payment_events(
             @@payment_ids += x.id
         END;
 
-    /* The hop-1 accounts that are no hub are expanded: their newest 16 payments each way,
+    /* The hop-1 accounts are expanded: their newest 16 payments each way,
        but self-payments, and the hop-2 accounts at their other ends join the subgraph of every
-       scored account they are a hop-1 account of. A hub is left as it is: it would bring in
-       thousands of strangers. */
+       scored account they are a hop-1 account of. */
     Hop1Listed = to_vertex_set(@@hop1_ids, "Account");
     Hop1 = SELECT c FROM Hop1Listed:c WHERE c.opened_ms < t_ms AND NOT c.@hub;
     Hop1Sent = SELECT c FROM Hop1:c
-      -((Account_Initiated_Transaction>|Account_Sent_Zelle_Transfer>):e)-
-      (Payment_Transaction|Zelle_Transfer):p
-      -((Transaction_To_Account>|Transfer_To_Account>):f)- Account:b
-      WHERE p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms AND b != c
-      ACCUM
+        -((Account_Initiated_Transaction>|Account_Sent_Zelle_Transfer>):e)-
+        (Payment_Transaction|Zelle_Transfer):p
+        -((Transaction_To_Account>|Transfer_To_Account>):f)- Account:b
+        WHERE p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms AND b != c
+        ACCUM
         c.@other_out += Picked(floor(p.event_ts_ms / 1000), p.id, b.id);
     Hop1Received = SELECT c FROM Hop1:c
-      -((Account_Received_Transaction>|Account_Received_Zelle_Transfer>):e)-
-      (Payment_Transaction|Zelle_Transfer):p
-      -((Transaction_From_Account>|Transfer_From_Account>):f)- Account:b
-      WHERE p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms AND b != c
-      ACCUM
+        -((Account_Received_Transaction>|Account_Received_Zelle_Transfer>):e)-
+        (Payment_Transaction|Zelle_Transfer):p
+        -((Transaction_From_Account>|Transfer_From_Account>):f)- Account:b
+        WHERE p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms AND b != c
+        ACCUM
         c.@other_in += Picked(floor(p.event_ts_ms / 1000), p.id, b.id);
     Hop1Picked = SELECT c FROM Hop1:c
-      POST-ACCUM
+        POST-ACCUM
         FOREACH x IN c.@other_out DO
             FOREACH i IN @@reached_by.get(c.id) DO
                 @@subgraph_payments += (i -> x.id),
@@ -189,34 +161,32 @@ CREATE OR REPLACE QUERY read_payment_events(
             @@payment_ids += x.id
         END;
 
-    /* The other accounts of each scored account's customer, ranked by their latest payment
-       in the lookback, but self-payments, 0 with none; the newest 8 per scored account join
-       its subgraph. They are never ordered by when they were opened, a date of record. */
+    /* Other customer accounts */
     Siblings = SELECT b FROM Scored:a -(Account_Owned_By_Party>:o)- Party:q
-      -(Party_Owns_Account>:w)- Account:b
-      WHERE o.valid_from_ms < t_ms
+        -(Party_Owns_Account>:w)- Account:b
+        WHERE o.valid_from_ms < t_ms
         AND (o.valid_to_ms == 0 OR o.valid_to_ms > t_ms - lookback_ms)
         AND w.valid_from_ms < t_ms
         AND (w.valid_to_ms == 0 OR w.valid_to_ms > t_ms - lookback_ms)
         AND b.opened_ms < t_ms AND b != a;
     Active = SELECT b FROM Siblings:b
-      -((Account_Initiated_Transaction>|Account_Received_Transaction>
+        -((Account_Initiated_Transaction>|Account_Received_Transaction>
         |Account_Sent_Zelle_Transfer>|Account_Received_Zelle_Transfer>):e)-
-      (Payment_Transaction|Zelle_Transfer):p
-      -((Transaction_From_Account>|Transaction_To_Account>
+        (Payment_Transaction|Zelle_Transfer):p
+        -((Transaction_From_Account>|Transaction_To_Account>
         |Transfer_From_Account>|Transfer_To_Account>):f)- Account:x
-      WHERE p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms AND x != b
-      ACCUM b.@last_active += p.event_ts_ms;
+        WHERE p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms AND x != b
+        ACCUM b.@last_active += p.event_ts_ms;
     SiblingsRanked = SELECT a FROM Scored:a -(Account_Owned_By_Party>:o)- Party:q
-      -(Party_Owns_Account>:w)- Account:b
-      WHERE o.valid_from_ms < t_ms
+        -(Party_Owns_Account>:w)- Account:b
+        WHERE o.valid_from_ms < t_ms
         AND (o.valid_to_ms == 0 OR o.valid_to_ms > t_ms - lookback_ms)
         AND w.valid_from_ms < t_ms
         AND (w.valid_to_ms == 0 OR w.valid_to_ms > t_ms - lookback_ms)
         AND b.opened_ms < t_ms AND b != a
-      ACCUM a.@siblings += Sibling(floor(b.@last_active / 1000), b.id);
+        ACCUM a.@siblings += Sibling(floor(b.@last_active / 1000), b.id);
     SiblingsPicked = SELECT a FROM Scored:a
-      POST-ACCUM
+        POST-ACCUM
         FOREACH x IN a.@siblings DO
             @@subgraph_accounts += (a.id -> x.id),
             @@account_ids += x.id
@@ -226,20 +196,20 @@ CREATE OR REPLACE QUERY read_payment_events(
        account of a subgraph that the scored account's customer owns, the scored account among
        them. Any other ownership edge would join two nodes two hops away. */
     ExpandedOwners = SELECT c FROM Hop1:c -(Account_Owned_By_Party>:o)- Party:q
-      WHERE o.valid_from_ms < t_ms
+        WHERE o.valid_from_ms < t_ms
         AND (o.valid_to_ms == 0 OR o.valid_to_ms > t_ms - lookback_ms)
-      ACCUM
+        ACCUM
         FOREACH i IN @@reached_by.get(c.id) DO
             @@owned_by += (i -> OwnedBy(c.id, q.id))
         END;
     CustomerAccounts = SELECT a FROM Scored:a -(Account_Owned_By_Party>:o)- Party:q
-      -(Party_Owns_Account>:w)- Account:b
-      WHERE o.valid_from_ms < t_ms
+        -(Party_Owns_Account>:w)- Account:b
+        WHERE o.valid_from_ms < t_ms
         AND (o.valid_to_ms == 0 OR o.valid_to_ms > t_ms - lookback_ms)
         AND w.valid_from_ms < t_ms
         AND (w.valid_to_ms == 0 OR w.valid_to_ms > t_ms - lookback_ms)
         AND b.opened_ms < t_ms
-      ACCUM
+        ACCUM
         IF @@subgraph_accounts.get(a.id).contains(b.id) THEN
             @@owned_by += (a.id -> OwnedBy(b.id, q.id))
         END;
@@ -256,39 +226,39 @@ CREATE OR REPLACE QUERY read_payment_events(
     TransactionsListed = to_vertex_set(@@payment_ids, "Payment_Transaction");
     TransfersListed = to_vertex_set(@@payment_ids, "Zelle_Transfer");
     Transactions = SELECT p FROM TransactionsListed:p
-      WHERE p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms
-      POST-ACCUM
+        WHERE p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms
+        POST-ACCUM
         INT cents = floor(p.amount * 100 + 0.5),
         p.@amount += cents,
         p.@rail += p.payment_rail,
         p.@age_ms += t_ms - p.event_ts_ms;
     Transfers = SELECT p FROM TransfersListed:p
-      WHERE p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms
-      POST-ACCUM
+        WHERE p.event_ts_ms >= t_ms - lookback_ms AND p.event_ts_ms < t_ms
+        POST-ACCUM
         INT cents = floor(p.amount * 100 + 0.5),
         p.@amount += cents,
         p.@rail += "zelle",
         p.@age_ms += t_ms - p.event_ts_ms;
     Payments = Transactions UNION Transfers;
     Senders = SELECT p FROM Payments:p
-      -((Transaction_From_Account>|Transfer_From_Account>):f)- Account:a
-      ACCUM p.@sender_id += a.id, p.@sender_hub += a.@hub;
+        -((Transaction_From_Account>|Transfer_From_Account>):f)- Account:a
+        ACCUM p.@sender_id += a.id, p.@sender_hub += a.@hub;
     Receivers = SELECT p FROM Payments:p
-      -((Transaction_To_Account>|Transfer_To_Account>):f)- Account:b
-      ACCUM p.@receiver_id += b.id, p.@receiver_hub += b.@hub;
+        -((Transaction_To_Account>|Transfer_To_Account>):f)- Account:b
+        ACCUM p.@receiver_id += b.id, p.@receiver_hub += b.@hub;
 
     /* Each payment's earlier payments in [t - 90 days, ts), ts its time, strictly earlier so
        that a payment never counts itself. The receiver's give its gap and the pair's, unless
        the receiver is a hub; the sender's give its gap unless it is a hub, and the pair's
        when the receiver is a hub, whose own 90 days are the longest to read. */
     ReceiverHistory = SELECT p FROM Payments:p
-      -((Transaction_To_Account>|Transfer_To_Account>):g)- Account:b
-      -((Account_Received_Transaction>|Account_Received_Zelle_Transfer>):e)-
-      (Payment_Transaction|Zelle_Transfer):q
-      -((Transaction_From_Account>|Transfer_From_Account>):f)- Account:a
-      WHERE NOT p.@receiver_hub
+        -((Transaction_To_Account>|Transfer_To_Account>):g)- Account:b
+        -((Account_Received_Transaction>|Account_Received_Zelle_Transfer>):e)-
+        (Payment_Transaction|Zelle_Transfer):q
+        -((Transaction_From_Account>|Transfer_From_Account>):f)- Account:a
+        WHERE NOT p.@receiver_hub
         AND q.event_ts_ms >= t_ms - lookback_ms AND q.event_ts_ms < p.event_ts_ms AND a != b
-      ACCUM
+        ACCUM
         p.@receiver_last += q.event_ts_ms,
         IF a.id == p.@sender_id THEN
             p.@pair_prior_count += 1,
@@ -296,13 +266,13 @@ CREATE OR REPLACE QUERY read_payment_events(
             p.@pair_last += q.event_ts_ms
         END;
     SenderHistory = SELECT p FROM Payments:p
-      -((Transaction_From_Account>|Transfer_From_Account>):f)- Account:a
-      -((Account_Initiated_Transaction>|Account_Sent_Zelle_Transfer>):e)-
-      (Payment_Transaction|Zelle_Transfer):q
-      -((Transaction_To_Account>|Transfer_To_Account>):g)- Account:b
-      WHERE (NOT p.@sender_hub OR p.@receiver_hub)
+        -((Transaction_From_Account>|Transfer_From_Account>):f)- Account:a
+        -((Account_Initiated_Transaction>|Account_Sent_Zelle_Transfer>):e)-
+        (Payment_Transaction|Zelle_Transfer):q
+        -((Transaction_To_Account>|Transfer_To_Account>):g)- Account:b
+        WHERE (NOT p.@sender_hub OR p.@receiver_hub)
         AND q.event_ts_ms >= t_ms - lookback_ms AND q.event_ts_ms < p.event_ts_ms AND b != a
-      ACCUM
+        ACCUM
         IF NOT p.@sender_hub THEN p.@sender_last += q.event_ts_ms END,
         IF p.@receiver_hub AND b.id == p.@receiver_id THEN
             p.@pair_prior_count += 1,
@@ -313,7 +283,7 @@ CREATE OR REPLACE QUERY read_payment_events(
     /* The gaps, each absent with no earlier payment; every subtraction is of an earlier
        time from a later one. */
     Rows = SELECT p FROM Payments:p
-      POST-ACCUM
+        POST-ACCUM
         IF p.@pair_prior_count > 0 THEN
             p.@pair_gap_present += TRUE,
             p.@pair_gap_ms += p.event_ts_ms - p.@pair_last,
@@ -329,16 +299,16 @@ CREATE OR REPLACE QUERY read_payment_events(
             p.@receiver_gap_ms += p.event_ts_ms - p.@receiver_last
         END;
 
-    PRINT "ok" AS status, "read_payment_events-ee69e736b059" AS version;
+    PRINT "ok" AS status, "read_payment_events-011b7ee36654" AS version;
     PRINT Accounts[Accounts.id AS account_id, Accounts.is_external AS is_external] AS accounts;
     PRINT Rows[Rows.id AS payment_id, Rows.@sender_id AS sender_id,
-      Rows.@receiver_id AS receiver_id, Rows.@amount AS amount, Rows.@rail AS rail,
-      Rows.@age_ms AS age_ms, Rows.@pair_prior_count AS pair_prior_count,
-      Rows.@pair_gap_present AS pair_gap_present, Rows.@pair_gap_ms AS pair_gap_ms,
-      Rows.@pair_age_present AS pair_age_present, Rows.@pair_age_ms AS pair_age_ms,
-      Rows.@sender_gap_present AS sender_gap_present, Rows.@sender_gap_ms AS sender_gap_ms,
-      Rows.@receiver_gap_present AS receiver_gap_present,
-      Rows.@receiver_gap_ms AS receiver_gap_ms] AS payments;
+        Rows.@receiver_id AS receiver_id, Rows.@amount AS amount, Rows.@rail AS rail,
+        Rows.@age_ms AS age_ms, Rows.@pair_prior_count AS pair_prior_count,
+        Rows.@pair_gap_present AS pair_gap_present, Rows.@pair_gap_ms AS pair_gap_ms,
+        Rows.@pair_age_present AS pair_age_present, Rows.@pair_age_ms AS pair_age_ms,
+        Rows.@sender_gap_present AS sender_gap_present, Rows.@sender_gap_ms AS sender_gap_ms,
+        Rows.@receiver_gap_present AS receiver_gap_present,
+        Rows.@receiver_gap_ms AS receiver_gap_ms] AS payments;
     PRINT @@subgraph_accounts AS subgraph_accounts;
     PRINT @@subgraph_payments AS subgraph_payments;
     PRINT @@owned_by AS owned_by;

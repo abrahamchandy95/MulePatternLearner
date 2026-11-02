@@ -21,12 +21,10 @@ if TYPE_CHECKING:
 OK = "ok"
 # The types a row's field may have, by name.
 FIELD_TYPES: dict[str, type] = {"str": str, "bool": bool, "int": int, "float": float}
-# A query with t takes a Monday at 00:00 UTC after the lookback's length, so that t - lookback
-# never goes below 0 (docs/design.md, "Time"). 1970-01-01 was a Thursday, so a Monday starts 4
-# days into a week of epoch time. The queries refuse any other t, and so do their builders.
+# A query with t takes any whole second, in epoch milliseconds, after the lookback's length, so
+# that t - lookback never goes below 0 (docs/design.md, "Time"). The queries refuse any other t,
+# and so do their builders.
 DAY_MS = 86_400_000
-WEEK_MS = 7 * DAY_MS
-MONDAY_MS = 4 * DAY_MS
 LOOKBACK_MS = DEFAULT_CONFIG.subgraph.lookback_days * DAY_MS
 # The most accounts a page of list_accounts, read_labels or read_answer_key holds, which they
 # page by strictly increasing id.
@@ -45,11 +43,11 @@ class QueryRefused(ValueError):
         self.row = dict(row)
 
 
-def response_head(rows: Sequence[object], query: str, version: str) -> dict[str, Any]:
-    """The first row of a query's answer, once it says the query ran and is of version.
+def response_head(rows: Sequence[object], query: str) -> dict[str, Any]:
+    """The first row of a query's answer, once it says the query ran.
 
-    A status other than "ok" raises QueryRefused. An answer of another version is refused
-    too: the installed query is not the one this code reads, so install the queries again.
+    A status other than "ok" raises QueryRefused. No query prints its version: every command
+    checks that the installed queries are the repository's before it runs (installer.verify).
     """
     head = rows[0] if rows else None
     if not isinstance(head, Mapping) or "status" not in head:
@@ -58,10 +56,6 @@ def response_head(rows: Sequence[object], query: str, version: str) -> dict[str,
     status = head["status"]
     if status != OK:
         raise QueryRefused(query, str(status), head)
-    if head.get("version") != version:
-        raise ValueError(
-            f"{query} is version {head.get('version')!r}, not {version}: run `mule install`"
-        )
     return head
 
 
@@ -152,14 +146,16 @@ def account_ids(accounts: Iterable[object]) -> list[str]:
 
 
 def as_of(t_ms: object) -> int:
-    """t, when it is a Monday at 00:00 UTC after the lookback's length."""
+    """t, when it is a whole second after the lookback's length."""
     if (
         isinstance(t_ms, bool)
         or not isinstance(t_ms, int)
         or t_ms <= LOOKBACK_MS
-        or t_ms % WEEK_MS != MONDAY_MS
+        or t_ms % 1000 != 0
     ):
-        raise ValueError(f"t must be a Monday at 00:00 UTC in epoch milliseconds, got {t_ms!r}")
+        raise ValueError(
+            f"t must be a whole second in epoch milliseconds after the lookback, got {t_ms!r}"
+        )
     return t_ms
 
 

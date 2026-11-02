@@ -1,7 +1,7 @@
 """The examples and their weights on the calendar world, worked out by hand (docs/design.md,
 "Worlds, examples and weights").
 
-At every Monday the calendar world has 17 scorable accounts (18 before a_gone closes on
+At every week the calendar world has 17 scorable accounts (18 before a_gone closes on
 2024-06-01): the twelve ordinary ones, a_hidden, and the identified a_long, a_short, a_edge and
 a_early. The unlabelled pool is the 13 that are no identified mule: the twelve and a_hidden.
 """
@@ -27,17 +27,17 @@ from mule_pattern_learner.data.examples import (
     TRAINING_SCHEMA,
     UNLABELLED,
     ExampleKeys,
-    Monday,
     TableWriter,
+    Week,
     examples_folder,
     examples_key,
-    monday,
     read_first,
     read_table,
     scored_frame,
     selection_frame,
     training_frame,
     unlabelled,
+    week,
 )
 from mule_pattern_learner.data.labels import Labels, read_identified
 from mule_pattern_learner.data.population import population
@@ -52,31 +52,33 @@ from mule_pattern_learner.tigergraph.queries import (
 from mule_pattern_learner.tigergraph.queries.read_labels import IdentifiedMule
 
 W = 7 * DAY_MS
-MONDAYS = DEFAULT_CONFIG.calendar.mondays()
+# The scoring times of these tests are the 52 Mondays at 00:00 UTC, a grid given by hand so that
+# every expectation is worked out by hand; a world's own scoring times are one a week at random.
+TIMES = DEFAULT_CONFIG.calendar.week_starts()
 DATA = DataConfig(per_positive=2, min_unlabelled=3)
 POOL = sorted([f"a_{name}" for name in ORDINARY] + ["a_hidden"])
 IDENTITY = "0123456789abcdef0123456789abcdef"
 
 
 @pytest.fixture(scope="module")
-def days(tmp_path_factory: pytest.TempPathFactory) -> tuple[Labels, list[Monday]]:
-    """The identified mules and every scored Monday of the calendar world."""
+def days(tmp_path_factory: pytest.TempPathFactory) -> tuple[Labels, list[Week]]:
+    """The identified mules and every scored week of the calendar world."""
     spy = Spy(calendar_world().graph())
     root = tmp_path_factory.mktemp("cache")
     labels = read_identified(spy)
     found = [
-        monday(t_ms, [row.account_id for row in population(spy, root, t_ms)], labels.mules)
-        for t_ms in MONDAYS
+        week(t_ms, [row.account_id for row in population(spy, root, t_ms)], labels.mules, TIMES)
+        for t_ms in TIMES
     ]
     return labels, found
 
 
-def _on(days: list[Monday], t_ms: int) -> Monday:
+def _on(days: list[Week], t_ms: int) -> Week:
     return next(day for day in days if day.t_ms == t_ms)
 
 
 def test_the_positives_are_identified_mules_active_and_scorable(
-    days: tuple[Labels, list[Monday]],
+    days: tuple[Labels, list[Week]],
 ) -> None:
     _, found = days
     assert _on(found, T).positives == ("a_long",)
@@ -88,16 +90,19 @@ def test_the_positives_are_identified_mules_active_and_scorable(
     assert _on(found, T + 30 * W).positives == ()
     assert _on(found, T + 31 * W).positives == ("a_edge",)
     assert _on(found, T - W).positives == ()
+    # a_early was active in February: its last payment plus 7 days is before the first week,
+    # 2024-04-01, so it is positive in none.
+    assert all("a_early" not in day.positives for day in found)
     assert len(_on(found, T).accounts) == 17 and len(found[0].accounts) == 18
     positive = sum(len(day.positives) for day in found)
     assert positive == 26 + 1 + 1
 
 
 def test_the_dropped_mules_are_the_identified_scorable_and_not_active(
-    days: tuple[Labels, list[Monday]],
+    days: tuple[Labels, list[Week]],
 ) -> None:
     _, found = days
-    # On the first Monday, 2024-04-01, all five identified mules are scorable (a_gone has not
+    # In the first week, 2024-04-01, all five identified mules are scorable (a_gone has not
     # closed) and none is active yet: 5 dropped.
     assert (found[0].dropped, found[0].positives) == (5, ())
     # A week before T, a_long is not active yet (its onset is T - 1 day) and is dropped with
@@ -115,7 +120,7 @@ def test_the_dropped_mules_are_the_identified_scorable_and_not_active(
     assert _on(found, T + 30 * W).tally().dropped == 4
 
 
-def test_a_mule_not_scorable_that_monday_is_neither_positive_nor_dropped() -> None:
+def test_a_mule_not_scorable_that_week_is_neither_positive_nor_dropped() -> None:
     mules = (
         IdentifiedMule("a_past", T - 3 * W, T - 2 * W),
         IdentifiedMule("a_later", T + W, T + 2 * W),
@@ -123,19 +128,22 @@ def test_a_mule_not_scorable_that_monday_is_neither_positive_nor_dropped() -> No
         IdentifiedMule("a_closed", T - W, T + W),
     )
     # a_later is not scorable yet and a_closed is closed: neither is an example at T.
-    day = monday(T, ["a_n1", "a_past", "a_now"], mules)
+    day = week(T, ["a_n1", "a_past", "a_now"], mules, TIMES)
     assert (day.positives, day.dropped) == (("a_now",), 1)
-    assert monday(T, [], mules).dropped == 0 and monday(T, ["a_past"], mules).dropped == 1
+    assert week(T, [], mules, TIMES).dropped == 0
+    assert week(T, ["a_past"], mules, TIMES).dropped == 1
 
 
-def test_each_mule_counts_once_however_long_it_ran(days: tuple[Labels, list[Monday]]) -> None:
+def test_each_mule_counts_once_however_long_it_ran(days: tuple[Labels, list[Week]]) -> None:
     labels, found = days
     draws = [unlabelled(day, labels.accounts, DATA) for day in found]
     frame = training_frame([day.tally() for day in found], draws)
     positives = frame[frame["label"] == POSITIVE]
-    # Before division: a_long 1/26 on each of its 26 Mondays, a_short and a_edge 1 each; their
-    # mean is 3/28, so a_long's rows weigh 28/78 and the others 28/3, every mule 28/3 in all.
+    # Before division: a_long 1/26 in each of its 26 weeks, a_short and a_edge 1 each (a_early
+    # is positive in none); their mean is 3/28, so a_long's rows weigh 28/78 and the others
+    # 28/3, every mule 28/3 in all.
     totals = positives.groupby("account_id")["weight"].sum()
+    assert set(totals.index) == {"a_long", "a_short", "a_edge"}
     for account in ("a_long", "a_short", "a_edge"):
         assert totals[account] == pytest.approx(28 / 3)
     long_rows = positives[positives["account_id"] == "a_long"]
@@ -143,22 +151,22 @@ def test_each_mule_counts_once_however_long_it_ran(days: tuple[Labels, list[Mond
     assert positives["weight"].mean() == pytest.approx(1.0)
 
 
-def test_the_unlabelled_draw_stands_for_its_mondays_pool(
-    days: tuple[Labels, list[Monday]],
+def test_the_unlabelled_draw_stands_for_its_weeks_pool(
+    days: tuple[Labels, list[Week]],
 ) -> None:
     labels, found = days
     draws = {day.t_ms: unlabelled(day, labels.accounts, DATA) for day in found}
-    # n = min(13, max(2 x positives, 3)): 3 on a Monday of 0 or 1 positive, 4 on T + 9 weeks.
+    # n = min(13, max(2 x positives, 3)): 3 in a week of 0 or 1 positive, 4 on T + 9 weeks.
     assert draws[T].pool == 13 and draws[T].drawn == tuple(lowest(DATA.draw_key, POOL, T, 3))
     assert len(draws[T + 9 * W].drawn) == 4 and draws[T + 9 * W].weight == 13 / 4
-    assert draws[MONDAYS[0]].pool == 13 and draws[MONDAYS[0]].weight == 13 / 3
-    # Identified mules are never drawn, on any Monday; the hidden mule can be.
+    assert draws[TIMES[0]].pool == 13 and draws[TIMES[0]].weight == 13 / 3
+    # Identified mules are never drawn, in any week; the hidden mule can be.
     drawn = {account for draw in draws.values() for account in draw.drawn}
     assert not drawn & labels.accounts
     assert "a_hidden" in drawn
     frame = training_frame([day.tally() for day in found], list(draws.values()))
     rows = frame[frame["label"] == UNLABELLED]
-    # 51 Mondays of 3 at 13/3 and one of 4 at 13/4: they sum to 676 over 157 rows, so each
+    # 51 weeks of 3 at 13/3 and one of 4 at 13/4: they sum to 676 over 157 rows, so each
     # divides by 676/157.
     assert len(rows) == 157
     assert 51 * 3 * Fraction(13, 3) + 4 * Fraction(13, 4) == 676
@@ -168,27 +176,27 @@ def test_the_unlabelled_draw_stands_for_its_mondays_pool(
     at_9 = rows[rows["t_ms"] == T + 9 * W]["weight"]
     assert at_9.tolist() == pytest.approx([float(Fraction(2041, 2704))] * 4)
     assert rows["weight"].mean() == pytest.approx(1.0)
-    # The table is by Monday, positives first, then by account.
+    # The table is by week, positives first, then by account.
     assert frame[frame["t_ms"] == T]["label"].tolist() == [POSITIVE] + [UNLABELLED] * 3
     assert list(frame.columns) == ["t_ms", "account_id", "label", "weight"]
 
 
 def test_the_draw_is_at_least_the_minimum_and_at_most_the_pool() -> None:
-    day = Monday(T, tuple(POOL), (), 0)
+    day = Week(T, tuple(POOL), (), 0)
     assert len(unlabelled(day, (), DATA).drawn) == 3
     assert len(unlabelled(day, (), FULL_DESIGN_CONFIG.data).drawn) == 13
-    busy = Monday(T, tuple(POOL), tuple(POOL[:5]), 0)
+    busy = Week(T, tuple(POOL), tuple(POOL[:5]), 0)
     assert len(unlabelled(busy, POOL[:5], DATA).drawn) == 8
-    assert unlabelled(Monday(T, (), (), 0), (), DATA).weight == 0.0
+    assert unlabelled(Week(T, (), (), 0), (), DATA).weight == 0.0
 
 
-def test_the_selection_keys_rank_by_pu_label_alone(days: tuple[Labels, list[Monday]]) -> None:
+def test_the_selection_keys_rank_by_pu_label_alone(days: tuple[Labels, list[Week]]) -> None:
     labels, found = days
     frame = selection_frame(_on(found, T + W), labels.accounts, FULL_DESIGN_CONFIG.data)
     assert len(frame) == 17 and frame["weight"].eq(1.0).all()
     by_id = frame.set_index("account_id")
     assert by_id.loc["a_long", "positive"] and by_id.loc["a_long", "ranked"]
-    # Identified mules on their other Mondays are out of the ranking; a hidden mule is ranked
+    # Identified mules in their other weeks are out of the ranking; a hidden mule is ranked
     # like anyone else.
     for account in ("a_short", "a_edge", "a_early"):
         assert not by_id.loc[account, "positive"] and not by_id.loc[account, "ranked"]
@@ -196,7 +204,7 @@ def test_the_selection_keys_rank_by_pu_label_alone(days: tuple[Labels, list[Mond
     assert by_id["ranked"].sum() == 14
 
 
-def test_the_fallback_selection_keys_sample_the_rest(days: tuple[Labels, list[Monday]]) -> None:
+def test_the_fallback_selection_keys_sample_the_rest(days: tuple[Labels, list[Week]]) -> None:
     labels, found = days
     data = replace(FULL_DESIGN_CONFIG.data, scoring="fallback")
     frame = selection_frame(_on(found, T), labels.accounts, data)
@@ -208,7 +216,7 @@ def test_the_fallback_selection_keys_sample_the_rest(days: tuple[Labels, list[Mo
     assert frame["ranked"].all()
 
 
-def test_the_test_keys_are_every_scorable_account(days: tuple[Labels, list[Monday]]) -> None:
+def test_the_test_keys_are_every_scorable_account(days: tuple[Labels, list[Week]]) -> None:
     _, found = days
     frame = scored_frame(_on(found, T))
     assert frame["account_id"].tolist() == sorted(_on(found, T).accounts)
@@ -221,7 +229,7 @@ def test_the_examples_are_keyed_by_the_settings_they_read(monkeypatch: pytest.Mo
     assert len(key) == 32 and key == examples_key(calendar, DataConfig())
     assert examples_key(calendar, DATA) != key
     assert examples_key(calendar, replace(DEFAULT_CONFIG.data, draw_key=b"other")) != key
-    assert examples_key(replace(calendar, scored_mondays=51), DEFAULT_CONFIG.data) != key
+    assert examples_key(replace(calendar, scored_weeks=51), DEFAULT_CONFIG.data) != key
     # The versions of the two queries the examples are made of move the key; those of the
     # queries only the cache holds do not.
     for query in (LIST_ACCOUNTS, READ_LABELS):
@@ -245,7 +253,7 @@ def _write(folder: Path, name: str, schema: object, frame: pd.DataFrame) -> None
     writer.commit()
 
 
-def test_the_keys_of_the_examples_tables_come_a_monday_at_a_time(tmp_path: Path) -> None:
+def test_the_keys_of_the_examples_tables_come_a_week_at_a_time(tmp_path: Path) -> None:
     # The training table holds a_1 and a_2 on T and a_2 on T + 1 week; the selection table holds
     # a_2 (ranked) and a_3 (not ranked) on T and a_4 on T + 2 weeks; the test table a_5 on T.
     _write(
@@ -277,7 +285,7 @@ def test_the_keys_of_the_examples_tables_come_a_monday_at_a_time(tmp_path: Path)
     )
     _write(tmp_path, TEST_FILE, TEST_SCHEMA, pd.DataFrame({"t_ms": [T], "account_id": ["a_5"]}))
     keys = ExampleKeys(tmp_path, [TRAINING_FILE, SELECTION_FILE, TEST_FILE])
-    # Each Monday once, the accounts of every table together by increasing id, and an account
+    # Each week once, the accounts of every table together by increasing id, and an account
     # the selection table does not rank left out.
     assert list(keys) == [T, T + W, T + 2 * W] and len(keys) == 3
     assert keys[T] == ["a_1", "a_2", "a_5"]
@@ -290,7 +298,7 @@ def test_the_keys_of_the_examples_tables_come_a_monday_at_a_time(tmp_path: Path)
 
 
 def test_the_first_rows_of_a_table_are_its_first_row_group_alone(tmp_path: Path) -> None:
-    # A table written a Monday at a time holds a row group each: the first look reads the first.
+    # A table written a week at a time holds a row group each: the first look reads the first.
     writer = TableWriter(tmp_path / TEST_FILE, TEST_SCHEMA)
     writer.write(pd.DataFrame({"t_ms": [T, T], "account_id": ["a_1", "a_2"]}))
     writer.write(pd.DataFrame({"t_ms": [T + W], "account_id": ["a_3"]}))
@@ -311,14 +319,14 @@ def test_the_first_rows_of_a_table_are_its_first_row_group_alone(tmp_path: Path)
 
 def test_the_proof_of_concept_keeps_every_positive_and_a_fixed_sample_of_the_rest() -> None:
     """Proof of concept (docs/design.md, "Proof-of-concept settings (25 October 2026)"): on a
-    Monday of a 30,000-person world, 47,326 scorable accounts of which 6 are identified mules
-    active, the training draw is every positive's account-Monday beside 8 unlabelled ones, and the
+    week of a 30,000-person world, 47,326 scorable accounts of which 6 are identified mules
+    active, the training draw is every positive's account-week beside 8 unlabelled ones, and the
     selection keys are the 6 positives beside a keyed sample of the others, each standing for
     6,000; both are the same on every run."""
     data = DEFAULT_CONFIG.data
     accounts = tuple(f"a_{index:05d}" for index in range(47_326))
     mules = tuple(accounts[index] for index in (5, 900, 4_100, 30_000, 41_000, 47_000))
-    day = Monday(MONDAYS[10], accounts, mules, 2)
+    day = Week(TIMES[10], accounts, mules, 2)
     identified = set(mules) | {accounts[7], accounts[8]}
     draw = unlabelled(day, identified, data)
     assert len(draw.drawn) == 8 and draw.pool == 47_326 - 8
@@ -335,5 +343,5 @@ def test_the_proof_of_concept_keeps_every_positive_and_a_fixed_sample_of_the_res
     assert len(rest) == 11
     assert selection_frame(day, identified, data).equals(keys)
     # More positives draw more: one unlabelled account for each.
-    busy = Monday(MONDAYS[10], accounts, accounts[:20], 0)
+    busy = Week(TIMES[10], accounts, accounts[:20], 0)
     assert len(unlabelled(busy, set(accounts[:20]), data).drawn) == 20

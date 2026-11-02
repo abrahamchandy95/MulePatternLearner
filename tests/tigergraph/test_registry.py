@@ -83,7 +83,7 @@ def test_every_query_file_is_registered() -> None:
     assert set(written_files().values()) <= set(QUERY_FILES.values())
 
 
-def test_every_written_query_defines_itself_and_prints_its_registered_version() -> None:
+def test_every_written_query_defines_itself_and_its_registered_version_is_its_hash() -> None:
     assert set(VERSIONS) == set(written_files()), "a version needs its file, and a file a version"
     for name, relative in written_files().items():
         defined = definitions((GSQL_DIR / relative).read_text())

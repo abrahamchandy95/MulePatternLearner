@@ -1,4 +1,4 @@
-"""list_accounts: the scorable accounts of one Monday with their owner, a page at a time by
+"""list_accounts: the scorable accounts at one time t with their owner, a page at a time by
 strictly increasing id (docs/design.md, "The scored population" and "list_accounts")."""
 
 from __future__ import annotations
@@ -27,9 +27,9 @@ def params(t_ms: int, after_id: str, page: int) -> dict[str, Any]:
 def parse(rows: Sequence[object], after_id: str, page: int) -> tuple[ScorableAccount, ...]:
     """The accounts of the page that params(t_ms, after_id, page) asked for, each with its
     owner."""
-    from . import LIST_ACCOUNTS, VERSIONS  # the registry imports this module
+    from . import LIST_ACCOUNTS  # the registry imports this module
 
-    response_head(rows, LIST_ACCOUNTS, VERSIONS[LIST_ACCOUNTS])
+    response_head(rows, LIST_ACCOUNTS)
     accounts = paged(ScorableAccount, rows, LIST_ACCOUNTS, after_id, page)
     for account in accounts:
         if not account.owner_id:

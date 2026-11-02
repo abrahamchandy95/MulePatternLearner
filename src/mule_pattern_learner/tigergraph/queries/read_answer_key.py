@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ...contract import ACCOUNT_TYPES
-from . import READ_ANSWER_KEY, VERSIONS
+from . import READ_ANSWER_KEY
 from .rows import after, page_size, paged, response_head
 
 # An internal account's is_mule: 1 for a mule, 0 for any other (the label convention, by
@@ -47,7 +47,7 @@ def params(after_id: str, page: int) -> dict[str, Any]:
 def parse(rows: Sequence[object], after_id: str, page: int) -> tuple[AccountTruth, ...]:
     """The accounts of the page that params(after_id, page) asked for. An is_mule other than 0
     or 1, a ring below -1 or an account_type outside the contract's is refused."""
-    response_head(rows, READ_ANSWER_KEY, VERSIONS[READ_ANSWER_KEY])
+    response_head(rows, READ_ANSWER_KEY)
     truths = paged(
         AccountTruth, rows, READ_ANSWER_KEY, after_id, page, signed=frozenset({"mule_ring_id"})
     )

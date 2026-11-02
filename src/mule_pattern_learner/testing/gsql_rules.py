@@ -1185,15 +1185,12 @@ def leaf_rule(name: str, definition: str) -> list[str]:
 
 
 def version_rule(name: str, definition: str, version: str | None) -> list[str]:
-    """A written query prints the version the registry holds, which is the hash of its text."""
+    """The registry holds the version of a written query, the hash of its text."""
     if version is None:
         return [f"{name} has no version in the registry"]
-    problems: list[str] = []
-    if f'"{version}" AS version' not in definition:
-        problems.append(f"{name} does not print {version} AS version")
-    elif text_version(f"{name}-", definition, version) != version:
-        problems.append(f"{name}'s text has changed since {version}: run testing.versions")
-    return problems
+    if text_version(f"{name}-", definition) != version:
+        return [f"{name}'s text has changed since {version}: run testing.versions"]
+    return []
 
 
 def parameter_rule(name: str, definition: str, built: Iterable[str]) -> list[str]:
@@ -1222,11 +1219,11 @@ def projection_items(definition: str, vertex_set: str) -> list[tuple[str, str]]:
 
 
 def status_items(definition: str) -> list[tuple[str, str]]:
-    """What a query's PRINT of its "ok" status prints after the status and the version: each
-    expression and the name it is printed as."""
+    """What a query's PRINT of its "ok" status prints after the status, and after the version
+    an old query still prints: each expression and the name it is printed as."""
     for statement in statements(definition):
         if statement[:4] == ["PRINT", '"ok"', "AS", "status"]:
-            return _printed(statement[1:])[2:]
+            return [item for item in _printed(statement[1:])[1:] if item[1] != "version"]
     raise ValueError('No PRINT "ok" AS status')
 
 
@@ -1236,7 +1233,8 @@ def projection_fields(definition: str, vertex_set: str) -> list[str]:
 
 
 def status_fields(definition: str) -> list[str]:
-    """What a query's PRINT of its "ok" status prints after the status and the version."""
+    """What a query's PRINT of its "ok" status prints after the status (and an old query's
+    version)."""
     return [name for _, name in status_items(definition)]
 
 

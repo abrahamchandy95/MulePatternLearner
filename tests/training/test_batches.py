@@ -1,5 +1,5 @@
 """The training and scoring batches built from the batch world's cache of conftest.py: built
-once, shuffled across Mondays and labels by a fixed seed, every example with its label and
+once, shuffled across weeks and labels by a fixed seed, every example with its label and
 weight; scoring batches in the order of their keys, the same on every pass."""
 
 from __future__ import annotations
@@ -43,14 +43,14 @@ def test_training_batches_hold_every_example_once_with_its_label_and_weight(
     assert {batch.keys[0].world for batch in made} == {world.identity}
 
 
-def test_training_batches_are_shuffled_once_across_mondays_and_labels(
+def test_training_batches_are_shuffled_once_across_weeks_and_labels(
     world: Any, planted: list[Batch]
 ) -> None:
     again = training_batches(world.cache, world.identity, world.examples(), 32, seed=SEED)
     assert _examples(again) == _examples(planted)
-    # The examples come in (Monday, account) order, and the batches mix them.
-    mondays = [{key.t_ms for key in batch.keys} for batch in planted]
-    assert sum(len(found) == 2 for found in mondays) >= 12
+    # The examples come in (t, account) order, and the batches mix them.
+    weeks = [{key.t_ms for key in batch.keys} for batch in planted]
+    assert sum(len(found) == 2 for found in weeks) >= 12
     labels = [set(batch.data.label.tolist()) for batch in planted]
     assert sum(found == {0, 1} for found in labels) >= 4
     # The order does not follow the examples' order.
@@ -130,7 +130,7 @@ def _scored_rows(batches: list[Batch]) -> dict[str, Any]:
 def test_a_pass_over_several_read_groups_equals_one_over_a_single_group(
     world: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Every real run reads a Monday in groups of READ_GROUP accounts. With 50 a Monday of 224
+    """Every real run reads a week in groups of READ_GROUP accounts. With 50 a week of 224
     accounts takes five reads (four of 50 and one of 24), and the keys, their order, the scored
     rows, the community blocks and the edges are those of one read of all 224."""
     keys = world.examples()[["t_ms", "account_id"]].iloc[::-1]

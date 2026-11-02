@@ -5,8 +5,13 @@ session of 2026-10-17, and it replaces the October 17 revision of this file (com
 and ed62329), which was written before that session. Where three reviews of this design found
 a choice the owner had not made, the design stated a safe interim rule and listed the choice
 under [Pending the owner](#pending-the-owner). The owner settled most of them later the same
-day, and those decisions are written in below; what is still open stays listed there. Nothing
-here is built yet.
+day, and those decisions are written in below; what is still open stays listed there. One later
+decision changed it: on 27 October 2026 the owner replaced the fixed scoring time, a Monday at
+00:00 UTC, with a random time inside each week (see [Time](#time)). After a review of that
+change the owner settled four more points the same day: when a mule is a positive (see
+[Positives](#positives-dropped-weeks-and-the-activity-period)), its one early-warning time (see
+[Metrics](#metrics)), and the minimum of mule clusters and the same account-weeks of the two
+clock tests (see [the clock tests](#the-clock-tests)). Nothing here is built yet.
 
 - [The features](features.md) is part of this design: every number that reaches the model in
   a batch, with its exact definition, encoding, width, leak guard and the generator gates it
@@ -41,34 +46,36 @@ here is built yet.
 
 A temporal heterogeneous graph neural network learns the behaviour of money-mule accounts
 from what accounts do over time and how they are connected: their payments with their speed
-and order, their owners, and the devices and IPs they share with other customers. On every
-Monday it ranks a bank's accounts by how likely each is to be acting as a mule.
+and order, their owners, and the devices and IPs they share with other customers. In every
+week, at that week's scoring time, it ranks a bank's accounts by how likely each is to be
+acting as a mule.
 
 - **Behaviour, not detection.** The owner's framing (2026-10-16): a model trained today can
   learn from a period long past, whose identified mules are all known by now, so "the date
   of discovery adds unnecessary complexity". Training uses a period whose identified mules
   are all in, and nothing reads when a mule was found. "All in" needs identification to see
-  past the last scored Monday (see [Identification horizon](#identification-horizon)).
+  past the last scored week (see [Identification horizon](#identification-horizon)).
 - **Sparse labels.** Only some mules are identified by the bank (the owner: "we cannot go
   back to pretending it was fully labeled"). Training is positive-unlabelled, with the nnPU
   loss.
 - **Inductive.** The model has no per-account embedding and no memory, so it scores accounts
   it never saw, including accounts opened after training. Training, selection and test use
   three independent worlds that share no account, ring, device or IP.
-- **What success means.** In the test world every true mule is scored on every Monday it is
-  active, beside every ordinary account, and should rank high. The owner: "we need to
-  score every one of the true mules that were hidden from the model. the model needs to be
-  able to identify all of them, or atleast score them high. if not, we need to investigate
-  why. maybe theres a bug, or we are missing some features that need to be added." The
-  headline group is mules in rings the bank never surfaced, found from behaviour and shared
-  devices alone. Short-lived mules must never be missed (the owner: "these are most
+- **What success means.** In the test world every true mule is scored at every scoring time at
+  which it is active, beside every ordinary account, and should rank high.
+  The owner: "we need to score every one of the true mules that were hidden from the model.
+  the model needs to be able to identify all of them, or atleast score them high. if not, we
+  need to investigate why. maybe theres a bug, or we are missing some features that need to be
+  added." The headline group is mules in rings the bank never surfaced, found from behaviour
+  and shared devices alone. Short-lived mules must never be missed (the owner: "these are most
   important").
 - **What the graph adds.** The GNN is compared with XGBoost given the same information, and
   ablations measure what neighbours, devices and IPs, the community block and per-payment
   timing add.
-- **Early warning.** How often a mule is flagged on the Monday before its first ring payment,
-  from the devices and IPs it shares and from its neighbours, is reported apart.
-- **The scored unit is an account at a date.** The owner: "we want to detect mule
+- **Early warning.** How often a mule is flagged at its early-warning time, the last scoring
+  time at or before its first ring payment, from the devices and IPs it shares and from its
+  neighbours, is reported apart.
+- **The scored unit is an account at a time.** The owner: "we want to detect mule
   accounts. not customers." Customer, device, IP and community features describe the
   account's surroundings; they never turn the model into a customer score.
 
@@ -102,10 +109,11 @@ decides which accounts its label calls mules:
 |---|---|---|
 | Worlds | Three independent worlds from different seeds: one trains, one selects, one tests. Reported runs rotate the roles (A/B/C, B/C/A, C/A/B); development uses one rotation. | Every test account, ring, device and IP is new to the model, which is "mule accounts created after the GNN was trained", with no split machinery. Rotation gives three test numbers and a spread across worlds. |
 | Sizes | Development worlds have 30,000 people, reported worlds 300,000. Development worlds use other seeds, never those of A, B or C. | Thresholds and caps are tuned on development worlds only, from label-free statistics or the selection score (see the Same rule for all guard), and frozen before the reported worlds are generated. A change made after a reported run, whatever prompted it, needs new reported worlds from new seeds before the next report, and the manifest records which run's report led to which change. |
-| Burn-in, representative start and label tail | PhantomLedger simulates 730 days per world, defined in the use case, not a flag: 275 burn-in days, not exported, then the 455 exported days. After the export it simulates a 90-day label tail, also not exported, which only identification reads. Laundering runs throughout. Rings start mid-life at the burn-in's start: the rings alive on the first simulated day are drawn from the stationary law (a representative start). MulePatternLearner reads only the 455 exported days. | The burn-in fills the mule-level history: earlier ring payments in a lookback, open tenures, balances. It does not by itself make the ring count steady: rings born at a constant rate and living about 730 days on average, started cold, would reach about 0.39 of their steady-state count by the first scored Monday and about 0.63 by the last, a rise that would put more positives late in the year. With the representative start the weekly active-ring count is flat from the first simulated day, which PhantomLedger's stationarity gates check. The label tail lets identification see whole mule lives (see [Identification horizon](#identification-horizon)). |
-| Export window | 455 days: 90 days of history only, then 365 scored days holding 52 Mondays. Laundering may run from day 0. There is no laundering-free warm-up. The window may grow if research shows a need. | Every scored Monday has a full 90-day lookback, for mules and ordinary accounts alike, and nobody loads a year nobody reads (the owner: "we would have our window of 365 days + 90 days"). |
-| Scored Mondays | Config holds one export start date, 2024-01-01 (day 0, PhantomLedger's `--start`, a Monday), the same for every world, and each world's fixed seed and size. The burn-in then runs from 2023-04-01, the export to 2025-03-30 and the label tail to 2025-06-28. The scored Mondays are the 52 Mondays at 00:00 UTC from the first Monday at or after day 90, 2024-04-01 to 2025-03-24; `mule prepare` derives them and checks them against the loaded world. | The calendar is the same in every world. Which calendar does not matter, since no feature reads the clock, except that every exported time must fit the schema (see [The export contract](#the-export-contract)). |
-| Scoring frequency | Weekly, on Mondays, everywhere. Daily scoring is a later option once the benchmark shows its cost (see [future design work](future_design.md)). | A mule active Tuesday to Thursday is still scored the next Monday with its whole burst in view. |
+| Burn-in, representative start and label tail | PhantomLedger simulates 730 days per world, defined in the use case, not a flag: 275 burn-in days, not exported, then the 455 exported days. After the export it simulates a 90-day label tail, also not exported, which only identification reads. Laundering runs throughout. Rings start mid-life at the burn-in's start: the rings alive on the first simulated day are drawn from the stationary law (a representative start). MulePatternLearner reads only the 455 exported days. | The burn-in fills the mule-level history: earlier ring payments in a lookback, open tenures, balances. It does not by itself make the ring count steady: rings born at a constant rate and living about 730 days on average, started cold, would reach about 0.39 of their steady-state count by the first scored week and about 0.63 by the last, a rise that would put more positives late in the year. With the representative start the weekly active-ring count is flat from the first simulated day, which PhantomLedger's stationarity gates check. The label tail lets identification see whole mule lives (see [Identification horizon](#identification-horizon)). |
+| Export window | 455 days: 90 days of history only, then 365 scored days holding 52 scored weeks. Laundering may run from day 0. There is no laundering-free warm-up. The window may grow if research shows a need. | Every scoring time has a full 90-day lookback, for mules and ordinary accounts alike, and nobody loads a year nobody reads (the owner: "we would have our window of 365 days + 90 days"). |
+| Scored weeks | Config holds one export start date, 2024-01-01 (day 0, PhantomLedger's `--start`, a Monday), the same for every world, and each world's fixed seed and size. The burn-in then runs from 2023-04-01, the export to 2025-03-30 and the label tail to 2025-06-28. The scored weeks are the 52 weeks that start on a Monday at 00:00 UTC, from the first Monday at or after day 90, 2024-04-01 to 2025-03-24; each lasts 7 days, so the last ends at the export's end, 2025-03-31 00:00 UTC. Config refuses a calendar whose last week would end after the export's end. `mule prepare` derives the weeks and checks them against the loaded world. | The week grid is the same in every world. Which calendar does not matter, since no feature reads the clock, except that every exported time must fit the schema (see [The export contract](#the-export-contract)). |
+| Scoring times | Each scored week is scored at one time inside it, a whole number of seconds after its Monday 00:00 UTC, uniform in the week and drawn from the world's own seed (the rule is in [Time](#time)). Every account of a world is scored at its week's time. The owner, 27 October 2026. | With t always a Monday at 00:00 UTC, every duration measured to t gave back the clock time of its event, and a model could learn the generated data's clock habits instead of mule behaviour (see [Time](#time)). Drawn from the seed, the times are the same in every run, so a cache stays keyed by (world, t). |
+| Scoring frequency | Weekly, at the week's scoring time, everywhere. The queries and Python accept any `t` that is a whole second after the lookback, so scoring in production can run at any moment, daily included. Evaluating the test world more than once a week is a later option once the benchmark shows its cost (see [future design work](future_design.md)). The owner, 27 October 2026. | A mule active Tuesday to Thursday is scored at its week's time, which can fall before, during or after its burst, and the label rule makes it active at the first scoring time after each of its ring payments, however far apart two scoring times are, so a burst that falls between two scoring times is flagged at the second (see [Positives](#positives-dropped-weeks-and-the-activity-period) and [Limitations](#limitations)). |
 
 ### What PhantomLedger must provide
 
@@ -121,7 +129,7 @@ a gate (see [Gates](#gates)).
 | Usage edges | Every observed device and IP, carrier networks, public terminals and hotspots included, gets usage edges at the declared coverage; `read_hubs` marks the big ones as crowds. |
 | Link tenures built from uses | Every `Party_Uses_Device` and `Party_Uses_IP` tenure that PhantomLedger builds from uses (observed payments, or a ring's attempted payments), ring and ordinary alike, starts a new tenure wherever two consecutive uses are more than 21 days apart and ends at most four days after the start of its last use's day (the end of that day plus a tail of 0 to 3 days). Tenures are derived from every simulated use, burn-in included, never from exported rows only. Every other tenure ends at a real event of its own (a new phone, a move, a closure). A world check proves it on every party link table. Without it a link's end is set by uses after t: a hotspot used on 1 January and 1 June would read current on 1 March. |
 | Onward money | A declared 0.6 of mules' onward value goes to accounts at other banks, following RUSI's direction. The share of victims at the same bank is pinned in the dossier. |
-| Identification | The mechanism of [Identification](#identification-as-phantomledger-defines-it), written as `pu_label` only. Identification closes nothing, and it sees past the last scored Monday (see [Identification horizon](#identification-horizon)). |
+| Identification | The mechanism of [Identification](#identification-as-phantomledger-defines-it), written as `pu_label` only. Identification closes nothing, and it sees past the last scored week (see [Identification horizon](#identification-horizon)). |
 | Customer lifecycle | One research-backed change: relationship starts backdated years before the data by the customer's age (the owner: a world of 2030 to 2031 must not have its first account opened in 2030); each account's own opening date; small-business and other secondary accounts; device, IP and token starts; ordinary openings and closures all year; mule account origins; no exported row before its account opens. No date before 1970 (the owner: "we do not need data before 1970"): backdated relationship, account and link starts are drawn from their distributions truncated at 1970-01-02 by redrawing, never by clamping, so nothing piles up at 1970 and very few of a reported world's 300,000 people get starts that early. Small-business accounts are deposit accounts (`account_type` `deposit`), so a business account used as a mule is scored; no new account type is added. |
 | Lifecycle numbers | New to the bank: at least 0.033 of customers a year, a floor (NAFBS 2024: 3.3% of US adults have held their primary account under a year; 0.014 at 60 and over), by age, so that about 0.8% or more of customers joined in the last 90 days on any date. Closures from ordinary churn and death only: charge-off about 0.06 of accounts a year, switch-outs 0.02 to 0.03 a year. Small-business accounts for 0.045 of adults (adults only), mostly owners without employees, with owner transfers in both directions. One mule account per customer at one bank, a second with chance 0.02 (UK 2025: 1.02 accounts per offboarded customer). |
 | Mule origins | Three: the mule's own established account; an account the person opens for the purpose; and, new, accounts a controller opens under a stolen or synthetic identity (about 0.10 of mule accounts, declared, below Experian's bound of about 0.23), run from the controller's devices, with legitimate look-alikes (new, quiet, single-device customers) so that "new and quiet" is not a mule-only marker. |
@@ -158,10 +166,13 @@ only when, for each of the rotation's three worlds:
   TigerGraph on the fields they share (see [Cache](#cache)), comes from a clean tree, and
   shows every code gate of its commit and
   every world check mapped to a feature as passed;
-- `mule audit` passed on it: its label checks, the clock probe and the identified share by
+- `mule audit` passed on it: its label checks, the clock gain test and the identified share by
   onset month;
 - the [feature audit](#the-feature-audit) passed on the development rotation for the same
-  query versions and settings.
+  query versions and settings;
+- the clock invariance test passed for the selected GNN on the rotation's test world, which
+  `mule evaluate` runs itself because it judges the trained model (see
+  [the clock tests](#the-clock-tests)).
 
 Otherwise its results are marked development only, as on development worlds. The operator
 runs `mule audit` on each world before `mule train`, and no training code reads its records.
@@ -178,8 +189,8 @@ band found in reality), and otherwise a declared bound, which the owner set on 2
 the value PhantomLedger's plan suggests; every such ceiling is gated. A development world must
 meet a ceiling, never set it. Each gate belongs to one repository: the
 lift gates on generator behaviour are PhantomLedger's world checks, defined once in
-[the features](features.md#gates-the-features-add); the clock probe, the feature audit and the
-label checks are MulePatternLearner's.
+[the features](features.md#gates-the-features-add); the clock gain test, the clock invariance
+test, the feature audit and the label checks are MulePatternLearner's.
 
 ## The graph
 
@@ -252,12 +263,15 @@ with the master at the same pin. In the master:
   `is_external`, the empty string for `account_type` and `payment_rail`, and -1 for
   `is_mule`, `pu_label` and `mule_ring_id`, though the loader leaves no attribute at its
   default;
-- there is no loading job and no query that writes: MulePatternLearner writes nothing to the
-  graph, and loading is the loader's job alone.
+- there is no loading job: loading is the loader's job alone. The only queries that write are
+  the `mark_` queries of `gsql/final/`, and they write only MulePatternLearner's own attributes
+  and Marks (`gsql/schema/mule_attributes.gsql`), never a loaded attribute.
 
-`mule-load push` creates the schema from its copy when the graph is empty and checks it exactly
-otherwise. It writes each column into the attribute of the same name, from headerless PSV
-shards, by a position computed from the column names.
+`mule-load push` creates the schema from its copy when the graph is empty, then
+MulePatternLearner's own attributes and the `Mark` type from its copy of `mule_attributes.gsql`,
+and checks that one shape exactly otherwise. It writes each column into the attribute of the same
+name, from headerless PSV shards, by a position computed from the column names, and leaves
+MulePatternLearner's attributes at their defaults (0 and false).
 
 Before loading, the loader refuses an export with: a repeated id; a dangling edge end; a
 repeated link of one pair and start, which `DISCRIMINATOR(valid_from_ms)` would merge; a
@@ -295,11 +309,42 @@ is not ready for MulePatternLearner:
 
 ## Time
 
-Every example is an (account, t) pair, with t a Monday at 00:00 UTC. The lookback is 90 days:
-it sees the current burst and the account's ordinary life around it, which needs a few months.
+Every example is an (account, t) pair, with t the scoring time of a week: a random time inside
+the week, the same for every account of the world. The lookback is 90 days: it sees the current
+burst and the account's ordinary life around it, which needs a few months.
 
-**Bounds.** Every boundary is strictly before t (an event at t would leak, and
-PhantomLedger starts about one ring tenure in seven exactly on a Monday 00:00).
+**Scoring times.** The scored weeks are the 52 weeks that start on a Monday at 00:00 UTC (see
+[Worlds and calendar](#worlds-and-calendar)). Week k, counting from 0, is scored at
+`t_k = week_start_k + offset_k`, with `offset_k` a whole number of seconds, uniform on
+[0, 604,800). The world draws it from its own configured seed without a random generator: the
+first 8 bytes of the BLAKE2b digest of `scoring-time|<seed>|<k>`, read as an unsigned
+little-endian integer, times 604,800, shifted right by 64 bits; t is that many seconds after the
+week's start, in milliseconds. The digest is BLAKE2b with its default 64-byte size, cut to its
+first 8 bytes: not a `digest_size=8` digest, which is a different hash and gives different
+times. The times are therefore the same in every run and in any program that follows the rule. Every account of a world is scored at its week's t, so a cache stays per
+(world, t), and each world's times are its own: the test world's are independent of the
+training world's. The owner, 27 October 2026.
+
+- **Why.** A duration measured to t is the clock time of its event, shifted by t. When t was
+  always a Monday at 00:00 UTC, every duration gave its event's clock time back: 2.5 days before
+  Monday 00:00 is Friday 12:00, and a `since_last_out` of 16 to 17 hours was a Sunday 07:xx
+  outflow. A model could learn the generated data's clock habits instead of mule behaviour. A
+  probe trained with t at Monday 00:00 on the development world D3 fell in ROC AUC from 0.72
+  to 0.55 and 0.58 when it was scored at random times: part of what it learned was tied to
+  the Monday clock. The owner made removing the fixed phase the top priority on 27 October
+  2026. With a random offset in each week, the clock time of t differs from week to week and no
+  feature shows it, so a duration no longer gives its event's clock time back (the
+  [clock tests](#the-clock-tests) check that nothing else does).
+- **Any t.** The queries and the Python accept any t that is a whole second in epoch
+  milliseconds (`t_ms % 1000 == 0`) after the lookback (`t_ms > lookback`), so production scoring
+  can run at any moment, daily included. `score.dates` takes any date, scored at 00:00 UTC.
+- **The label rule** reads the world's scoring times (see
+  [Positives](#positives-dropped-weeks-and-the-activity-period)), so a mule's positive times
+  depend on them.
+
+**Bounds.** Every boundary is strictly before t (an event at t would leak, and PhantomLedger
+starts about one ring tenure in seven exactly on a Monday 00:00, where the clock invariance
+test scores).
 
 - A payment counts when `t - 90 d <= ts < t`. "Last w" means `t - w <= ts < t`. "Within w of
   x" means `[x, x + w)`.
@@ -379,9 +424,11 @@ encoding. Every unsigned time subtraction is guarded.
 **Self-payments.** A payment with the same account at both ends is read by no query.
 
 **No clock.** No feature reads the time of day, day of week, day of month or second of the
-minute, the Monday's index or days since the data start. A model that reads a
+minute, the week's index or days since the data start. A model that reads a
 simulator's clock habits learns the simulator, and this also keeps the model calendar-free
-across worlds: one trained on one year scores another the same way.
+across worlds: one trained on one year scores another the same way. Random scoring times keep a
+duration from giving its event's clock time back, and the [clock tests](#the-clock-tests)
+check it.
 
 ## Labels
 
@@ -439,21 +486,54 @@ the identified share of true mules by onset month stays flat across the scored y
 month within its binomial band around the pooled share. A world that fails it gives
 development-only results.
 
-### Positives, dropped Mondays and the activity period
+### Positives, dropped weeks and the activity period
 
-- A **positive** is an identified mule (`pu_label` 1) on a Monday t on which it is active:
-  `mule_onset_ms < t <= mule_last_ms + 7 days`, and it is in the scored population that
-  Monday. Since events must be before t, its first ring payment is in view on every positive
-  Monday, and the week after its last payment gives every mule at least one positive Monday.
-- Its other Mondays are **dropped**, never unlabelled, because ring participants carry ring
-  signatures outside their activity.
+- A **positive** is an identified mule (`pu_label` 1) at a scoring time t at which it is active,
+  when it is in the scored population then. A mule is **active** at t when `mule_onset_ms < t`
+  and `t <= mule_last_ms + W(t)`, where the window W(t) is the longer of 7 days and the time
+  since the previous scoring time (the last one before t; 7 days when there is none). In words:
+  it has started, and it made a ring payment in the 7 days before t or since the previous
+  scoring time. Since events must be before t, its first ring payment is before t at every
+  positive time, and a ring payment exactly at the previous scoring time counts, since the
+  events of that time were not in view at it. The owner, 27 October 2026.
+- **Why this window.** Consecutive scoring times can be almost 14 days apart (one week's time
+  near its start, the next week's near its end). A fixed 7 days after a mule's last payment held
+  a Monday for certain; it can now hold no scoring time, and a short-lived mule whose whole life
+  and the 7 days after it fall between two scoring times would have no positive time at all,
+  though short-lived mules are the ones that matter most. The window grows with the gap just far
+  enough that every ring payment from 7 days before the first scoring time on counts at the
+  first scoring time after it, and no further. A rule that gave such a mule the first scoring
+  time after its onset, whenever its last payment was, had no limit: a mule that stopped in
+  January could be positive in April. What follows from the window:
+  - On scoring times 7 days apart, as when every scoring time was a Monday, the window is 7
+    days: a mule is active until 7 days after its last ring payment.
+  - `t - W(t)` is the smaller of `t - 7 days` and the previous scoring time, and it never
+    decreases along the scoring times. So a mule is active at consecutive scoring times, and
+    none of its after-activity times comes before an active one.
+  - A mule that started before the year's last scoring time and made a ring payment no earlier
+    than 7 days before the year's first scoring time is active at least once. A mule whose last
+    ring payment is more than 7 days before the year's first scoring time has no positive time,
+    and `mule prepare` reports it as an identified mule active in no scored week.
+- Its other scoring times are **dropped**, never unlabelled, because ring participants carry
+  ring signatures outside their activity.
 - Labels follow mule activity, not the catch: an investigation reads the account's whole
   history and records the activity's date range (a US SAR has a field for it), which is why
   `mule_onset_ms` and `mule_last_ms` are the only label attributes besides `is_mule` and
   `pu_label`. With PhantomLedger's activity model the range carries almost no silent
   weeks.
-- Boundary tests: an onset exactly at t is not positive; `mule_last_ms + 7 days` exactly at t
-  is.
+- Boundary tests: an onset exactly at t is not positive; a last ring payment exactly at
+  `t - W(t)` still counts, which is exactly 7 days before t or, after a longer gap, exactly at
+  the previous scoring time.
+- Evaluation applies the same rule to every true mule, with the test world's scoring times. At
+  a scoring time t a true mule is **active** (the rule above), **at its early-warning time**
+  when `t <= mule_onset_ms < next(t)`, next(t) being the first scoring time after t (t + 7 days
+  when none follows), **before** activity at every scoring time before its early-warning time,
+  and **after** activity at any t after its onset at which it is not active. Its early-warning
+  time is the last scoring time at or before its first ring payment, so a mule has exactly one
+  when its onset is at or after the year's first scoring time and before the last one plus 7
+  days. An onset exactly at a scoring time makes that time its early-warning time, not the one
+  before it. On scoring times 7 days apart it is the scoring time in the 7 days before the
+  onset. The owner, 27 October 2026.
 
 ### No label inputs
 
@@ -472,15 +552,15 @@ owner: `is_mule` is "the truth, read only by evaluation").
 
 - **`mule prepare`** (data code, reading `read_labels` and `list_accounts` only) refuses a
   world where `read_labels` returns a row without `0 < mule_onset_ms <= mule_last_ms`, and
-  reports every identified mule that is never in the scored population on a Monday of its
-  activity.
+  reports every identified mule that is never in the scored population at a scoring time of
+  its activity.
 - **`mule audit`** (evaluation code, reading `read_answer_key`) refuses a world where a
   `pu_label` 1 account has `is_mule` other than 1; an `is_mule` 1 account lacks its activity
   dates or a ring value (a ring id or -1); a scorable account lacks truth; or a truth join
   shares a column other than the account id. It counts `is_mule` 1 by `account_type` and
-  ownership and reports every true mule outside the scored population on any of its active
-  Mondays as a mule never scored there: the agreed population assumes every mule is an owned
-  deposit account, and this checks it on every world.
+  ownership and reports every true mule outside the scored population at any of its active
+  scoring times as a mule never scored there: the agreed population assumes every mule is an
+  owned deposit account, and this checks it on every world.
 - The loader and PhantomLedger already refuse the label columns outside their convention:
   `is_mule` and `pu_label` are -1 exactly on external accounts.
 
@@ -488,8 +568,8 @@ owner: `is_mule` is "the truth, read only by evaluation").
 
 ### The scored population
 
-On each Monday t the **scorable accounts** are the internal deposit accounts open at t with a
-visible ownership link: owned by a customer. Ring money moves between deposit accounts. Other
+At each scoring time t the **scorable accounts** are the internal deposit accounts open at t
+with a visible ownership link: owned by a customer. Ring money moves between deposit accounts. Other
 accounts (credit cards and brokerage accounts, which customers own too, the bank's ledgers,
 other banks' accounts) appear only as neighbours; a payment to one's own card is a same-owner
 move (the owner, 18 October 2026). `account_type` chooses the population and is not a feature: the rail on each
@@ -499,48 +579,49 @@ payment says what kind of payment it was.
 
 | Kind | Which | Weight |
 |---|---|---|
-| Positive | each identified mule active at t (see [Positives](#positives-dropped-mondays-and-the-activity-period)) | 1 divided by its number of active Mondays, so every mule counts once however long it ran |
-| Dropped | identified mules on their other Mondays | none |
-| Unlabelled | a uniform keyed draw of the other scorable accounts of that Monday: 15 per positive and at least 500. Hidden mules can be drawn; identified mules never | the number of accounts it was drawn from divided by the number drawn, so each Monday's draw stands for that Monday's scorable population |
+| Positive | each identified mule active at t (see [Positives](#positives-dropped-weeks-and-the-activity-period)) | 1 divided by its number of active weeks, so every mule counts once however long it ran |
+| Dropped | identified mules in their other weeks | none |
+| Unlabelled | a uniform keyed draw of the other scorable accounts of that week: 15 per positive and at least 500. Hidden mules can be drawn; identified mules never | the number of accounts it was drawn from divided by the number drawn, so each week's draw stands for that week's scorable population |
 
-- The draw takes the accounts with the lowest keyed blake2b hash of (account id, Monday), so
+- The draw takes the accounts with the lowest keyed blake2b hash of (account id, t), so
   it is uniform and nests: when a few accounts join or leave the pool, the rest of the draw and
   their cached rows stay. Hash outputs are pinned by a golden test.
 - Each label's weights are then divided by their mean over all training batches, once, since
   the loss divides each label's weighted sum by its count in the batch. Without it a 26-date
   mule pulled 2.4 to 3.9 times as hard as a 1-date one.
-- `mule prepare` reports the per-Monday ratio of positive to unlabelled weight, positives and
-  weight per Monday (if identified mules cluster in some months, seasonal spending could act
+- `mule prepare` reports the per-week ratio of positive to unlabelled weight, positives and
+  weight per week (if identified mules cluster in some months, seasonal spending could act
   as a clock; the [identification horizon](#identification-horizon) gate holds the cause
   flat), and the identified active share. It refuses a selection world with fewer than 5
   identified active mules.
 
 ### Selection world
 
-Scored whole: every scorable account on every Monday. Only `pu_label` is read, as a bank
-would: the positives are the identified mules active that Monday, and identified mules'
-inactive Mondays are left out of the ranking. Hidden mules are ranked like anyone else.
+Scored whole: every scorable account in every week. Only `pu_label` is read, as a bank
+would: the positives are the identified mules active that week, and identified mules'
+inactive weeks are left out of the ranking. Hidden mules are ranked like anyone else.
 The answer key never chooses the model: if every true mule were scored in selection, the
 truth would pick the epoch and prior.
 
 ### Test world
 
-Scored whole: every scorable account on every Monday. Every true mule is scored on every Monday
-of its activity and on its early-warning Monday, beside every normal account.
-The answer key is read only by evaluation code, once the world is cached. True mules on Mondays outside their activity
-are left out of the rankings, being neither mule nor clean; their scores before onset count as
-early warning and after activity are reported apart.
+Scored whole: every scorable account in every week. Every true mule is scored at every
+scoring time at which it is active and at its early-warning time, beside every normal account.
+The answer key is read only by evaluation code, once the world is cached. True mules at scoring
+times outside their activity are left out of the rankings, being neither mule nor clean; their
+scores at the early-warning time count as early warning, and those after activity are reported
+apart.
 
 ### If whole-world scoring is too slow
 
 `mule bench` decides on the 30,000-person worlds, before any 300,000-person world is
 generated. If a fallback is needed it is written per world:
 
-- **Selection world:** every identified mule on its active Mondays, plus a uniform keyed sample
-  of every other scorable account, hidden mules included at the same rate, each weighted by the
-  inverse of its chance of inclusion, so that no sampled account stands for more than about 10.
-  The answer key is never read.
-- **Test world:** every true mule on its active and early-warning Mondays, plus a uniform
+- **Selection world:** every identified mule at its active scoring times, plus a uniform keyed
+  sample of every other scorable account, hidden mules included at the same rate, each weighted
+  by the inverse of its chance of inclusion, so that no sampled account stands for more than
+  about 10. The answer key is never read.
+- **Test world:** every true mule at its active times and its early-warning time, plus a uniform
   weighted sample of the rest under the same bound. `mule audit` builds this list while the
   world is loaded, since the list depends on the truth and never on a model, and fetches it
   through the fetch code, which never imports evaluation; the cache stores rows only, never
@@ -552,8 +633,8 @@ generated. If a fallback is needed it is written per world:
   runs selection on a world after a test-role fallback fetch of it, with the answer key
   erased, and requires every selection input byte-identical.
 
-Scoring one Monday in four was rejected: most mule lives are under 30 days, so it would catch a
-short-lived mule's active Monday with chance about 1 in 4. A small sample of normal accounts,
+Scoring one week in four was rejected: most mule lives are under 30 days, so it would catch a
+short-lived mule's active scoring time with chance about 1 in 4. A small sample of normal accounts,
 each standing for many, makes PR AUC fragile, hence the bound of about 10.
 
 ## The queries
@@ -565,22 +646,22 @@ lookback is 90 days and no query reads clock time.
 
 | Query | Job | Runs | Prints |
 |---|---|---|---|
-| `list_accounts` | the scorable accounts at t | once per (world, Monday) | account id and owner id |
+| `list_accounts` | the scorable accounts at t | once per (world, t) | account id and owner id |
 | `read_labels` | the identified mules and their activity period | once per world | accounts with `pu_label` 1 and their `mule_onset_ms`, `mule_last_ms` |
 | `read_answer_key` | the truth | evaluation only, once per world by `mule audit`; the fetch executor refuses it | `is_mule`, `mule_ring_id`, the activity period, `opened_ms`, `account_type`, whether the account has an owner |
-| `read_hubs` | the accounts, devices and IPs too connected to expand | once per (world, Monday) | account hubs, device and IP crowds and hubs, each with its measure, and `observed_only` for devices and IPs |
+| `read_hubs` | the accounts, devices and IPs too connected to expand | once per (world, t) | account hubs, device and IP crowds and hubs, each with its measure, and `observed_only` for devices and IPs |
 | `read_world` | the loaded world's identity | once per world | counts and sums (see [Cache](#cache)) |
 | `profile_hubs` | the distributions behind the hub and crowd thresholds | `mule bench` only | histograms |
-| `read_money_flow` (B1) | velocity | per (world, Monday, account), cached | the velocity columns, and one row per tracked inflow, carrying its lot's values |
-| `read_counterparties` (B2) | who pays it and whom it pays | per (world, Monday, account), cached | the counterparty columns |
-| `read_activity_change` (B3) | the account against its own past | per (world, Monday, account), cached | the activity columns |
+| `read_money_flow` (B1) | velocity | per (world, t, account), cached | the velocity columns, and one row per tracked inflow, carrying its lot's values |
+| `read_counterparties` (B2) | who pays it and whom it pays | per (world, t, account), cached | the counterparty columns |
+| `read_activity_change` (B3) | the account against its own past | per (world, t, account), cached | the activity columns |
 | `read_payment_events` (B4) | the payment graph | per scored account | the subgraph's accounts with `is_external`, payment edges and their fields, ownership edges |
-| `read_shared_identity` (B5) | the device and IP graph | per scored account; node rows cached per (world, Monday, node) | customer, device and IP rows; enrolment, owner-enrolment and seen edges |
+| `read_shared_identity` (B5) | the device and IP graph | per scored account; node rows cached per (world, t, node) | customer, device and IP rows; enrolment, owner-enrolment and seen edges |
 | `read_community` (B6) | how the account's network formed | per scored account | the community block |
 
 B1 to B3 run on every account of every subgraph, not only the scored one, so a neighbour's
 behaviour reaches the score. They are computed on demand for the accounts the batches
-need and cached per (world, Monday, account), so an account shared by many subgraphs costs
+need and cached per (world, t, account), so an account shared by many subgraphs costs
 once. A hub that is not the scored account gets a flag-only row and no B1 to B3.
 
 ### Shared rules
@@ -613,7 +694,7 @@ once. A hub that is not the scored account gets a flag-only row and no B1 to B3.
   PhantomLedger's households and ring timing steps, counting customers, never accounts, and
   frozen before any reported run. On development worlds, read from the answer key in
   evaluation: no positive is an account hub, and the share of ring devices and IPs that are
-  leaves on their ring's active Mondays is near 0 (what a ring's devices and IPs are is
+  leaves on their ring's active weeks is near 0 (what a ring's devices and IPs are is
   defined under [the feature audit](#the-feature-audit)).
 
 **Sharing a device or IP.** A customer shares a device or IP that is not a leaf when it has a
@@ -654,17 +735,17 @@ world is reloaded for evaluation.
 
 ### `read_hubs`
 
-Prints the Monday's account hubs, crowds and device and IP hubs with their measure (distinct
+Prints the account hubs, crowds and device and IP hubs of t with their measure (distinct
 customers over 90 days), and each device's and IP's `observed_only`, under the rules above.
 
 - **Account hubs** travel as a `SET<VERTEX>` parameter to B2, B4, B5 and B6: an account hub
   needs to be known before a subgraph is built, and its test reads a whole lookback of a busy
-  account, so it runs once per Monday rather than once per request. B5 takes it because it
+  account, so it runs once per scoring time rather than once per request. B5 takes it because it
   finds B4's accounts again, and an expanded hop-1 account is one that is no hub. Billers,
   merchants and ledgers are few, and `mule bench` measures the request bytes.
 - **Device and IP leaves** are never sent as a parameter: with carrier IPs renumbering daily
-  there can be hundreds of thousands of crowds per Monday, and resending them with each of
-  about 720,000 requests would dwarf the answers. B5 and B6 apply the same crowd rule inline
+  there can be hundreds of thousands of crowds at one scoring time, and resending them with
+  each of about 720,000 requests would dwarf the answers. B5 and B6 apply the same crowd rule inline
   to each device or IP they touch, stopping at the ninth customer, since they need only
   whether it is a leaf. A leaf's row (its measure, kind and `observed_only`) is joined by id
   from `read_hubs`' cached output when the batch is built, and the batch builder refuses a
@@ -674,11 +755,28 @@ customers over 90 days), and each device's and IP's `observed_only`, under the r
   TigerGraph only where a sampled community reaches a crowd. The reference graph's own test
   world, where a crowd sits between two members, pins the rule the reference applies and does
   not exercise B6 on TigerGraph.
+- **Marks of a scoring time.** The queries in `gsql/final/`, which replace both of the above as
+  the Python moves to them, read stamps instead (the owner, 1 November 2026). `mark_hubs`
+  stamps each account hub of t with `hub_at_ms = t`, and `mark_crowds` each crowd with
+  `crowd_at_ms = t`. A reader at t treats an account or a device or IP as a leaf only when its
+  stamp equals t, so a stamp of another time is harmless. A mark query first clears the stamps
+  of its own t that an earlier run left, so marking t again after a rule change leaves no stale
+  leaf. A stamp holds one time, so the marks of two scoring times on one graph must not
+  overlap: each mark query also records its t on a `Mark` vertex (`hubs` or `crowds`), and
+  every query that reads a stamp checks, just before it prints its answer, that the Mark of
+  each stamp it reads holds its own t, and refuses with `unmarked_time` otherwise, which also
+  catches a mark that lands while it reads. The stamps and the Marks are MulePatternLearner's
+  own schema (`gsql/schema/mule_attributes.gsql`). The loader creates them with the schema and
+  leaves them at their defaults when it loads, and `mule-load clear` empties them with the
+  data, so a new world needs no schema change and no query installed again (the owner, 2
+  November 2026).
 
 ### `read_world`
 
 Prints what identifies the loaded world, for the cache key and the lookback check (see
-[Cache](#cache)). It reads no label.
+[Cache](#cache)). It reads no label. Only research on PhantomLedger worlds reads it, so it stays
+in `gsql/queries/` and never joins `gsql/final/`: `mule score` matches no world and scores a
+bank's graph as it is loaded (the owner, 2 November 2026).
 
 ### `profile_hubs`
 
@@ -791,6 +889,14 @@ than 90 days that pays again reads new, for everyone alike.
 | `max_new_payers_24h` | a burst of victims, against a seller's sale day or a group collection |
 | `top_payee_share_30d` | a mule forwards to one fixed account; a saver's sweep to its own savings shows as the same customer through the ownership edge |
 | `hub_payee_share_30d` | ordinary money goes to merchants and billers, mule money to people |
+
+**How it is read.** In `gsql/final/`, two queries of one job each replace `read_counterparties`
+once the Python moves to them, which keeps it until then. `read_counterparty_payers` reads the
+payments received and gives the payer fields (`payers_30d`, the new internal and external
+payers, `new_payer_share_30d` and `max_new_payers_24h`); `read_counterparty_payees` reads the
+payments sent and gives the payee fields (`payees_30d`, `new_payees_7d`, `_30d`,
+`top_payee_share_30d` and `hub_payee_share_30d`). Only `read_counterparty_payees` reads the hub
+stamps.
 
 ### `read_activity_change` (B3): the account against its own past
 
@@ -921,6 +1027,15 @@ crowd and never expanded, so a non-leaf node has at most 7 other customers.
 | customer node | `co_users`, `new_co_users_30d` | its sharing across all its devices in one number; rings form fast, households are old |
 | customer node | `co_users_both` | a ring shares a device and an IP. In PhantomLedger today only rings do, which is a shortcut; once households land, families share both too and it must separate a family from a ring |
 
+**How the customer columns are read.** In `gsql/final/`, two queries of one job each give the
+customer node's columns 1 to 8, and replace `read_shared_identity`'s customer rows once the
+Python moves to them. `read_customer_link_counts` reads the customer's own links
+(`accounts_owned`, `devices_30d`, `ips_30d`, `new_devices_30d`, `new_ips_30d`) and no stamp.
+`read_customer_co_user_counts` reads its co-users (`co_users`, `new_co_users_30d`,
+`co_users_both`); it is the only one that reads crowd stamps, refuses a time whose crowds are not
+marked before it walks anything, and reads the own payments only of the users who share an open
+device or IP, since only they can pair.
+
 ### `read_community` (B6): how the mule network formed
 
 **Job.** Find the cluster of customers around the scored account's owner, as of t, and measure
@@ -961,6 +1076,26 @@ by the "without community" ablation, and by [the ring reports](#the-ring-reports
 positives whose block differs from that of a customer who shares nothing, by whether they hold a
 ring node (a ring's device or IP, as [the feature audit](#the-feature-audit) defines it).
 
+**How it is read.** In `gsql/final/`, three queries of one job each replace `read_community`,
+and the rounds and the block are worked out in Python from their answers. That Python is not
+written yet, so `read_community` serves until it is.
+
+- `read_community_devices`: for each customer, the devices and IPs it shares, each with how long
+  ago it began sharing it (90 days when the start is not known).
+- `read_community_device_users`: for each device or IP, the customers who share it (none for a
+  crowd).
+- `read_community_payments`: for each customer, its payments of the last 30 days from its
+  accounts that are no hub, summed by the customer at the other end: the payments sent, their
+  cents, the payments received, and how long ago the latest either way was. An account that is
+  no customer's (another bank's, an account hub, or one with no visible owner) counts under the
+  empty id, and a payment between two of the customer's own accounts is left out.
+
+Each sharing round reads the devices and IPs of the members it starts from, then their users,
+then those users' devices and IPs, for every community of a request at once; the payment round
+reads the payments of every member kept so far, and the block reads every member's. A payment
+is internal when a member sent it to another member, and external when it is between a member
+and anyone else.
+
 **Never a library algorithm.** Connected components, Louvain and label propagation run on the
 whole graph with no as-of time, so future ring members would leak into training, and hubs and
 crowds would merge strangers. The demo query `demo_account_web` also reads `is_mule`.
@@ -975,14 +1110,24 @@ crowds would merge strangers. The demo query `demo_account_web` also reads `is_m
 
 ### Query plumbing
 
-- Every query prints a version: a hash of its normalised text. The model file and the manifest
-  record them; fetch refuses a version with no passing parity record (see
-  [Commands](#commands)).
+- Every query has a version: a hash of its normalised text, which the code's registry holds and
+  no query prints. Every command checks that the installed queries are the repository's
+  before it runs. The model file and the manifest record the versions; fetch refuses a
+  version with no passing parity record (see [Commands](#commands)).
 - Every per-account query refuses invalid parameters and duplicate, unknown or invisible
   (not existing at t) accounts with a status row, and `read_counterparties`,
   `read_payment_events`, `read_shared_identity` and `read_community` also refuse a member of
   their hub set that does not exist at t (`invisible_hub`). `list_accounts`, `read_labels` and
   `read_answer_key` page by strictly increasing id.
+- Every query of `gsql/final/` that reads a stamp refuses with `unmarked_time` unless the stamps
+  are for its t (see [Marks of a scoring time](#read_hubs)). A query that takes customers, or
+  devices and IPs, instead of accounts refuses a duplicate or unknown one the same way
+  (`duplicate_customer`, `unknown_customer`, `duplicate_node`, `unknown_node`).
+- Every query that takes a t refuses, with `invalid_parameters`, a t that is not a whole second
+  in epoch milliseconds after the 90-day lookback (`t_ms % 1000 == 0` and `t_ms > lookback`), and
+  so does its Python builder. It accepts any other t, so a scoring time inside a week and a
+  date at 00:00 UTC are alike to it; the earlier guard that refused every t but a Monday
+  at 00:00 UTC is gone (the owner, 27 October 2026).
 - Every PRINT of a vertex set is a projection: a bare `PRINT Accounts;` once leaked every
   attribute while all 160 tests passed.
 - Per-request state is kept in accumulators keyed by the scored account, never in a vertex
@@ -1048,11 +1193,11 @@ features](features.md) cites them by name for every feature.
 | Selection by labels only | Selection reads `pu_label`, never the answer key, in every scoring mode. | with the answer key erased, every selection input is byte-identical |
 | Before t | Values come only from payments with `t - 90 d <= ts < t` and links with `valid_from_ms < t`; an account exists only when `opened_ms < t`. | fixtures with a payment, a link start and an account opening exactly at t, a link end exactly at `t - 90 d` and at `t - 30 d`, and a closure exactly at t; text tests that require one exact allowed form for every bound; an account alone equals itself among 31 others |
 | No link ends as values | `valid_to_ms` appears only in the visible and current tests, both at least 30 days back; `closed_ms` only in the population test. These are decided by the past only while no tenure built from uses, ring or ordinary, is quiet for more than 21 days or ends more than four days after the start of its last use's day, which a PhantomLedger world check proves on every party link table. | fixtures of two holders with identical pasts, one with a later ring payment and one with a later ordinary use of a hotspot, giving identical rows at t; text tests allowing only the two forms; PhantomLedger's gate record |
-| Lookback | Every window and duration lies inside `[t - 90 d, t)`, which with 90 days of history is always inside the export, so no value reaches the data start, a clamped date or the burn-in boundary. | `mule prepare` checks the first Monday against the first payment, never the first join |
-| Known starts | A link start or first seen use is used only when known: after the lookback start, after joining, and after a payment of the customer's own not seen on that node. | fixtures: a joiner and a long-standing customer with the same behaviour read the same; a joiner whose first device and IP links start hours after joining reads no new link and no `since_start`; a pre-data customer reads the same on two Mondays far apart |
+| Lookback | Every window and duration lies inside `[t - 90 d, t)`, which with 90 days of history is always inside the export, so no value reaches the data start, a clamped date or the burn-in boundary. | `mule prepare` checks the export window's first and last day against the first and last payment, never the first join |
+| Known starts | A link start or first seen use is used only when known: after the lookback start, after joining, and after a payment of the customer's own not seen on that node. | fixtures: a joiner and a long-standing customer with the same behaviour read the same; a joiner whose first device and IP links start hours after joining reads no new link and no `since_start`; a pre-data customer reads the same at two scoring times far apart |
 | No dates of record | `opened_ms`, `joined_ms` and `closed_ms` decide existence, the population and the known-start test, never a value or an order; no token is read; caps order by activity. | a perturbation test moves every date of record and link start before `t - 90 d` by keyed amounts that keep each on the same side of every bound it meets, on the reference graph and in live parity, and requires every answer byte-identical; a test that the batch builder never reads `opened_ms` |
 | No identification closure | Identification closes nothing in PhantomLedger, so no end, silence or missing account is caused by a catch. | a caught neighbour reads exactly like an uncaught one |
-| Clock | No column holds a clock value. Durations measured to t (payment `age`, `since_last_in`, `since_last_out`, enrolment `since_start` and `since_last_seen`, seen `since_first_use` and `since_last_use`) carry their event's clock time, since t is always Monday 00:00, and a monthly payment in the subgraph can fix the day of month. | a reported result is refused unless PhantomLedger's Clocks gates passed and the clock probe of `mule audit` passed: a classifier on the residues of every such duration modulo 60 seconds, an hour, a day and a week, and on each event's day of month, must predict `is_mule` so poorly that the upper end of its ring-resampled 95% ROC AUC interval is below 0.55 (set by the owner on 2026-10-17). A probe with too few mules has a wide interval and fails, so low power never passes. Until then results are development only |
+| Clock | No column holds a clock value. Durations measured to t (payment `age`, `since_last_in`, `since_last_out`, enrolment `since_start` and `since_last_seen`, seen `since_first_use` and `since_last_use`) are their event's clock time shifted by t, and a monthly payment in the subgraph can fix the day of month. Each week is scored at a random time inside it, so t is no longer a Monday at 00:00 and a duration does not give its event's clock time back. | random scoring times (see [Time](#time)); a reported result is refused unless PhantomLedger's Clocks gates passed and both [clock tests](#the-clock-tests) passed. The gain test of `mule audit`, before training: the upper end of the paired, ring-resampled 95% interval of the gain in ROC AUC from adding every event's clock values to controls that hold plain activity must be below 0.02. The invariance test of `mule evaluate`, on the trained GNN and the test world: the interval of the difference in recall at 1% between the random scoring times and Monday 00:00, on the same account-weeks at both, must lie within plus and minus 0.05. Each test also needs at least 30 mule clusters (`audit.clock_min_mule_clusters`) among the rows it reads and fails below them, whatever its interval says, so low power never passes. Until both pass, results are development only (the owner, 27 October 2026, replacing the clock probe's bound of 0.55) |
 | Order-free ties | Same-second payments have no order (see [Time](#time)). | a fixture swapping same-second ids changes no B1, B2, B3 or B6 value; the loader refuses payment ids that follow event time |
 | Same rule for all | Caps, orders, hub handling and subgraph shape are identical for positives, unlabelled draws, neighbours and accounts scored in selection or test; one query with one set of settings builds all of them. Every setting is chosen on development worlds only, from label-free statistics (the bench histograms, cost) or the selection score, never the answer key; the pass or fail checks the owner approved (the feature audit, the hub and leaf checks, the gates) are the only reads of the truth there. On reported worlds a check only verifies and a failure stops the run. | the cache key holds query versions and settings; the contract lock; the manifest records what each setting was chosen from |
 | Keys chosen by their reader | Training, selection and scoring read only the cache keys they computed themselves, never the cache's index, so rows fetched for a test-role list chosen by the truth never steer them. | selection on a world after a test-role fallback fetch of it, with the answer key erased, gives byte-identical inputs |
@@ -1076,7 +1221,7 @@ chains).
 | A label in a feature query | the rebuild's bare `PRINT Accounts;` | Labels guard |
 | A date of record leaving a query | `list_accounts` printing `opened_ms` into every cache | `opened_ms` only in `read_answer_key` |
 | The answer key in selection | a fallback scoring every hidden mule at weight 1 against 10 for others | Selection by labels only |
-| An event at t | a ring tenure starting exactly on Monday 00:00 | Before t |
+| An event at t | a ring tenure starting exactly at t, as one in seven starts on a Monday 00:00 | Before t |
 | A link end read against t | two ring-mates last paid on 3 March; one resumes on 20 March; on 16 March one read active, the other ended | No link ends as values, while its gate holds |
 | A future account in the subgraph | a co-user's fallback account opened at t + 3 days | every account node passes `opened_ms < t` and visible ownership |
 | A date of record as a value | a backdated join makes a clamped link's age measure the calendar | Known starts, No dates of record |
@@ -1089,7 +1234,7 @@ chains).
 | Cached keys chosen by the truth | world C's test-role fallback rows read back when world C is the selection world | Keys chosen by their reader |
 | Account newness rebuilt from behaviour | an account opened 20 days before t | a bank sees it; its strength is gated |
 | Closure or silence from a catch | a caught mule's links end and payments stop | No identification closure |
-| Clock phase | a `since_last_out` of 16 to 17 hours is a Sunday 07:xx outflow, and only mules make night ATM withdrawals | Clock |
+| Clock phase | with t always Monday 00:00, a `since_last_out` of 16 to 17 hours is a Sunday 07:xx outflow, and only mules make night ATM withdrawals | Clock |
 | Same-second ties by row order | whether a victim edge shows a 9-minute dwell followed the generator's row order | Order-free ties |
 | Generator cues | a Zelle credit from a first-time payer and an internal move of USD 662 to the same owner 9 minutes later is mule-only today | Gates |
 | Settings tuned on reported worlds | raising the hub threshold after seeing world C's collector | Same rule for all |
@@ -1108,7 +1253,7 @@ chains).
 | Head | the scored account's final 64 numbers joined with its 8-number community block: Linear(72, 32), ReLU, Linear(32, 1) |
 | Inductive | no per-account embedding and no memory; no batch-statistics layer, so a score never depends on its batch |
 
-An example is one (account, Monday) with its own copy of its two-hop subgraph, so no node is
+An example is one (account, t) with its own copy of its two-hop subgraph, so no node is
 shared between examples and a node reached by two paths appears once, which keeps cycles
 visible. The ablations are switches on built batches ([exact
 rules](features.md#ablation-and-comparison-switches)).
@@ -1118,13 +1263,13 @@ rules](features.md#ablation-and-comparison-switches)).
 - **Loss.** nnPU with balanced weighting (imbalanced nnPU with a balanced target, Su, Chen and
   Xu 2021), because with positives this rare the textbook weighting lets the loss settle at
   the prior and stop learning. The positive risk keeps each mule's weight
-  of 1 divided by its active Mondays; the negative-risk correction uses unit weights over
-  positives, because a hidden mule enters the unlabelled draw once per active Monday. The loss
+  of 1 divided by its active weeks; the negative-risk correction uses unit weights over
+  positives, because a hidden mule enters the unlabelled draw once per active week. The loss
   for a positive uses `1 - sigmoid(f)` for float32, and a test drives the negative risk below
   zero.
 - **Prior.** The share of hidden active mules among the unlabelled is unknown, as in a bank.
   The grid is 1, 3 and 10 times the identified active share measured in the training world
-  (identified active mules divided by scorable accounts, averaged over Mondays). The grid is
+  (identified active mules divided by scorable accounts, averaged over weeks). The grid is
   run on the development rotation and judged by the selection score alone: if every pair of
   priors has a paired interval of the score difference that contains zero (resampled by
   identified mule account, since ring ids are evaluation only), the prior is fixed at 1 times
@@ -1134,16 +1279,16 @@ rules](features.md#ablation-and-comparison-switches)).
   rebuild's setting), at most 30 epochs, patience 5.
 - **Selection.** After each epoch the selection world is scored whole. The score is the mean
   of the recall of identified active mules within the top 1% and within the top 5% of each
-  Monday's ranking, pooled over Mondays (mules found on all Mondays divided by positives on
-  all Mondays), using `pu_label` only. Each seed keeps the prior and epoch with the best
-  score; a later epoch or prior must be strictly better. Pooled recall never fails on a
-  Monday with no positive.
+  week's ranking, pooled over weeks (mules found in all weeks divided by positives in all
+  weeks), using `pu_label` only. Each seed keeps the prior and epoch with the best
+  score; a later epoch or prior must be strictly better. Pooled recall never fails in a
+  week with no positive.
 - **Seeds.** Five model seeds, 0 to 4, vary only the initial weights, dropout and batch order;
   the draw seed is a separate setting and stays fixed, since the three worlds vary the data.
 - **No refit.** With separate worlds the selected model is final.
 - **Which model scores.** `mule score` uses the seed with the best selection score, never
   chosen by test; its test metrics are reported beside the mean and spread over seeds.
-- **Determinism.** Batches are built once, shuffled across Mondays and labels, and reused;
+- **Determinism.** Batches are built once, shuffled across weeks and labels, and reused;
   per-step reseeding and deterministic flags; PyG's scatter softmax is checked under
   `torch.use_deterministic_algorithms` on CUDA. A per-epoch checkpoint is written atomically
   so a run can resume.
@@ -1156,7 +1301,7 @@ rules](features.md#ablation-and-comparison-switches)).
 ## Comparisons
 
 Every ranker trains on the same examples, weights and labels as the GNN and is scored on the
-same Mondays and groups. They read the features of the fetched subgraphs, so they see exactly
+same weeks and groups. They read the features of the fetched subgraphs, so they see exactly
 what TigerGraph gives the GNN.
 
 | Ranker | What it reads | Question it answers |
@@ -1177,7 +1322,7 @@ what TigerGraph gives the GNN.
   world by the same selection score, as the GNN chooses its epochs. At those defaults a seed
   changes nothing (five seeds gave byte-identical boosters), so each of the two comparisons is
   trained once, with no seed: both have no seed spread, and the GNN's five seeds are compared
-  with that one model. Every XGBoost fit and prediction, the clock probe's included, runs in a
+  with that one model. Every XGBoost fit and prediction, the clock gain test's included, runs in a
   Python process of its own that never imports torch, because torch and XGBoost load different
   OpenMP runtimes and a process that holds both crashes in XGBoost's threads.
 - Each ablation trains and selects its epoch like the full model, at the prior the full model
@@ -1202,23 +1347,23 @@ answer key from the evaluation store.
 
 ### Rankings
 
-On each test Monday the ranking holds every scorable account except true mules outside their
-activity. Positives are the true mules active that Monday; the rest are non-mules. A mule is
-**flagged** on a Monday when it ranks within that Monday's top 1% or top 5% (two budgets,
-tie-aware). Scores are ranked as raw logits in float64, since a float32 sigmoid tied every
-logit above about 17.
+In each test week the ranking holds every scorable account except true mules outside their
+activity, ranked at the week's scoring time. Positives are the true mules active that week; the
+rest are non-mules. A mule is **flagged** in a week when it ranks within that week's top 1% or
+top 5% (two budgets, tie-aware). Scores are ranked as raw logits in float64, since a float32
+sigmoid tied every logit above about 17.
 
 ### Metrics
 
 | Metric | Definition |
 |---|---|
-| Recall and precision in the top 1% and 5% | per Monday and pooled over Mondays; these lead the report |
-| ROC AUC, PR AUC | over all ranked account-Mondays, with ring-resampled intervals |
-| Share ever flagged while active | per mule, flagged on any active Monday |
-| Time to first flag | days from onset to the first Monday it is flagged while active |
-| Early warning | the share of mules flagged on their early-warning Monday, the one Monday with `mule_onset_ms - 7 days < t <= mule_onset_ms`, against that Monday's thresholds; also among mules whose ring link is visible that Monday (a device or IP of the mule's own that the own edges of a true mule of its ring at another customer, scored that Monday in any status, also reach; this is not the ring's devices and IPs of [the feature audit](#the-feature-audit)). Reported as conditional on PhantomLedger's researched lead law, since tenures with no payment are not generated |
-| After activity | flags on Mondays after `mule_last_ms + 7 days`, reported apart |
-| Distinct accounts alerted | over the scored year at each budget, beside the share ever flagged, which otherwise rewards lists that churn. Counted only when every key is scored whole. When evaluation falls back to the weighted sample (see [If whole-world scoring is too slow](#if-whole-world-scoring-is-too-slow)) it is reported as not available, with the reason: it has no value, and the metrics table gives the reason beside it, that a weighted sample cannot count distinct accounts. The sample takes each non-mule account-Monday on its own, so an account is in it on only a few of its 52 Mondays, and a count over those few would come out low and favour the lists that churn most |
+| Recall and precision in the top 1% and 5% | per week and pooled over weeks; these lead the report |
+| ROC AUC, PR AUC | over all ranked account-weeks, with ring-resampled intervals |
+| Share ever flagged while active | per mule, flagged in any active week |
+| Time to first flag | days from onset to the first scoring time at which it is flagged while active |
+| Early warning | the share of mules flagged at their early-warning time, the last scoring time at or before the mule's first ring payment (`t <= mule_onset_ms < next(t)`), against that week's thresholds (a mule with no early-warning time, or not scored at it, is not counted); also among mules whose ring link is visible then (a device or IP of the mule's own that the own edges of a true mule of its ring at another customer, scored then in any status, also reach; this is not the ring's devices and IPs of [the feature audit](#the-feature-audit)). Reported as conditional on PhantomLedger's researched lead law, since tenures with no payment are not generated |
+| After activity | flags at the scoring times after a mule's onset at which it is no longer active (`mule_last_ms + W(t) < t`), reported apart |
+| Distinct accounts alerted | over the scored year at each budget, beside the share ever flagged, which otherwise rewards lists that churn. Counted only when every key is scored whole. When evaluation falls back to the weighted sample (see [If whole-world scoring is too slow](#if-whole-world-scoring-is-too-slow)) it is reported as not available, with the reason: it has no value, and the metrics table gives the reason beside it, that a weighted sample cannot count distinct accounts. The sample takes each non-mule account-week on its own, so an account is in it in only a few of its 52 weeks, and a count over those few would come out low and favour the lists that churn most |
 
 Lift is never printed beside recall at the same budget. The top of the list leads because a
 bank works its alert list from the top, and PR AUC can be carried by a few mules ranked above
@@ -1243,12 +1388,12 @@ removes known cases:
 - mules with no ring (account-takeover drops and impostor payees);
 - mules whose account opened within 90 days of t (from `read_answer_key`'s `opened_ms`):
   purpose-opened mules are the hard case;
-- mules scored with no payment in the lookback (on an early-warning Monday, an account
+- mules scored with no payment in the lookback (at an early-warning time, an account
   opened for a ring and not yet used, or a recruit no ring money reached), which only links
   to other mules, such as shared devices and IPs, can reveal: the
   owner's Account Z, reported beside the enrolment ceiling (72% of device and 61% of IP
   associations are on file);
-- recall by hop distance from the nearest identified mule: on each Monday, the fewest edges,
+- recall by hop distance from the nearest identified mule: at each scoring time, the fewest edges,
   of any of the 16 relations and in either direction, between the mule's account and an
   account with `pu_label` 1 inside the mule's own fetched subgraph at that t, in bins 1, 2 and
   "not within two hops" (an account node counts; customer, device and IP nodes are steps on
@@ -1257,9 +1402,9 @@ removes known cases:
 
 ### Uncertainty
 
-A ring bootstrap within each world resamples whole rings with all their account-Mondays, each
-ringless mule as its own cluster, and whole non-mule accounts with all their Mondays, since an
-account's 52 Mondays are correlated. Comparisons use paired replicates. The spread over the
+A ring bootstrap within each world resamples whole rings with all their account-weeks, each
+ringless mule as its own cluster, and whole non-mule accounts with all their weeks, since an
+account's 52 weeks are correlated. Comparisons use paired replicates. The spread over the
 five seeds (of the GNN and its ablations only, since each XGBoost comparison is one model) and
 the three rotations is reported beside it.
 
@@ -1270,10 +1415,10 @@ model needs to be able to identify all of them, or atleast score them high. if n
 investigate why. maybe theres a bug, or we are missing some features that need to be added."
 
 - **Who is in it.** Every true mule hidden from the model that did not score high: one never
-  flagged in the top 5% on any of its active Mondays (**missed**), and one whose median rank
-  over its active Mondays is outside the top 5% though it was flagged on some (**weak**). The
+  flagged in the top 5% in any of its active weeks (**missed**), and one whose median rank
+  over its active weeks is outside the top 5% though it was flagged in some (**weak**). The
   owner set both thresholds on 2026-10-17.
-- **What it holds.** For each, its decoded feature rows on each active Monday, its subgraph
+- **What it holds.** For each, its decoded feature rows in each active week, its subgraph
   (nodes and edges with their fields), its group, its ring, and how each ring-mate scored and
   whether it was identified.
 - **What follows.** Each is explained as a bug or a missing feature. The investigation and any
@@ -1285,7 +1430,7 @@ investigate why. maybe theres a bug, or we are missing some features that need t
 
 On development worlds, `mule audit` (evaluation code, reading the cache and the answer key)
 measures each feature's univariate separation of active mules from non-mules over scored
-account-Mondays: its ROC AUC against `is_mule`, with a ring-resampled interval. Every column
+account-weeks: its ROC AUC against `is_mule`, with a ring-resampled interval. Every column
 of the scored account's row, its customer row, its own device and IP rows (aggregated by mean
 and maximum), its own edge fields (likewise), its degree columns and its community block is
 audited.
@@ -1295,8 +1440,8 @@ audited.
   suspected leak or shortcut and stops the run.
 - A near-pure region also stops the run, since a marker held by a minority of mules and by no
   ordinary account keeps its ROC AUC near 0.5 to 0.6: for each feature, at each flag value
-  and in its top and bottom 0.1% of scored account-Mondays, a region that holds at least 1% of
-  active true-mule account-Mondays and in which true mules are more than half (set by the
+  and in its top and bottom 0.1% of scored account-weeks, a region that holds at least 1% of
+  active true-mule account-weeks and in which true mules are more than half (set by the
   owner on 2026-10-17). A tail is read only when the sample measures it, when its 0.1% of the
   weight is at least one sampled non-mule's weight: otherwise its edge is the most extreme
   sampled non-mule and the region beyond it holds mules alone by construction. Such tails are
@@ -1308,23 +1453,107 @@ audited.
   [Gates](#gates)).
 
 On development worlds the same command also checks that no positive is an account hub, that
-the share of ring devices and IPs that are leaves on their ring's active Mondays is near 0,
+the share of ring devices and IPs that are leaves in their ring's active weeks is near 0,
 and that busy ordinary accounts' card spending does not fill B1's short dwell shares.
 
 **A ring's devices and IPs.** The leaf check above names a ring's devices and IPs one way: a
-device or IP is a ring's on a Monday when the own edges of active true mules of that ring that
-belong to at least two different customers reach it. A mule's own edges are its account's
+device or IP is a ring's at a scoring time when the own edges of active true mules of that
+ring that belong to at least two different customers reach it. A mule's own edges are its account's
 owner-enrolment edges (its customer's enrolment, copied onto the account) and its seen edges in
-its fetched subgraph that Monday. A node that the own edges of one customer's mules alone reach
+its fetched subgraph at that time. A node that the own edges of one customer's mules alone reach
 is not the ring's, and a mule with no ring has none. Mules are counted as customers, as the
 sharing rules count them: two accounts of one customer, each carrying that customer's enrolment,
 count as one, so a node that only that customer reaches is no ring's. The development checks
-build it so, from the audit sample, which holds every active true mule on each Monday it is
-scorable and active, and each mule's customer as its scored example holds it.
+build it so, from the audit sample, which holds every active true mule at each scoring time at
+which it is scorable and active, and each mule's customer as its scored example holds it.
 
 The early-warning ring link of the [Metrics](#metrics) table does not use this definition. A mule
-on its early-warning Monday is not yet active, so it is not one of the active true mules that make
+at an early-warning time is not yet active, so it is not one of the active true mules that make
 ring nodes, and its link is read as that table's Early warning row says.
+
+### The clock tests
+
+A duration measured to t is the clock time of its event shifted by t (see [Time](#time)).
+Random scoring times keep a duration from giving that clock time back, and two tests check that
+the generated data's clock habits are not what the model learns. They replace the clock probe of
+the 17 October design, a classifier on the residues of every duration with a bound of 0.55 on the
+upper end of its ROC AUC interval (the owner, 27 October 2026). Both read the audit sample (every
+active true mule at every scoring time it is scorable and active, and a keyed sample of the
+non-mule account-weeks, each standing for its weight), and neither feeds a feature.
+
+**The gain test** runs in `mule audit` on every world, before training. It measures whether the
+clock times of events separate mules beyond plain activity, a property of the data and not of a
+model.
+
+- The events are the durations measured to t of fourteen families: seven for the scored
+  account's own edges and rows (the age of its own payments, `since_last_in` and
+  `since_last_out`, the `since_start` and `since_last_seen` of its owner-enrolment edges, the
+  `since_first_use` and `since_last_use` of its seen edges), and the same seven for everything
+  else in its subgraph, which the model reads through message passing too. A duration that is
+  absent gives no event.
+- The clock values are 560 numbers: for each family its 8 newest events, each as the time of the
+  event (t minus the duration) reduced modulo a minute, an hour, a day and a week, and its day of
+  the month, with -1 where a family has fewer events.
+- The controls say what plain activity says: for each family the number of events with a present
+  duration, the number of nodes of each type in the example's subgraph, and each kept event's
+  duration floored to whole days (-1 where absent). They hold nothing of an event's time of day,
+  day of week or day of month.
+- XGBoost with its default settings, out of fold, learns `is_mule` from the controls alone and
+  from the controls plus the clock values. There are two folds, and a ring with all its
+  account-weeks, a ringless mule and a non-mule account each fall wholly in one, by a hash of
+  its name, so that no ring is learned in one fold and scored in the other. It runs in a Python
+  process of its own that never imports torch, as every XGBoost fit does.
+- **Pass rule.** The test passes only when the sample holds at least 30 mule clusters
+  (`audit.clock_min_mule_clusters`: the positive clusters of the ring bootstrap, each ring and
+  each ringless mule alone) and the paired, ring-resampled 95% interval of the gain, the ROC AUC
+  with the clock values minus the ROC AUC with the controls alone, has its upper end below 0.02
+  (`audit.clock_gain_upper`). Below the minimum it fails whatever its interval says, and with no
+  interval it fails: low power never passes. A few mules give a wide interval, or none, or a lucky
+  narrow one (3 rings and 10 non-mules passed on the interval alone in 2 of 6 seeds), and about 30
+  clusters is a common floor for a cluster-resampled interval. The owner, 27 October 2026. Its
+  table, `clock_gain`, reports the true-mule account-weeks (`mule_rows`), the clusters
+  (`clusters`) and the mule clusters (`mule_clusters`) it read.
+
+**The invariance test** judges the trained model on the test world, since only the model shows
+what it learned.
+
+- `mule audit` on a world that plays the test role also stores the audit sample with the start
+  of each example's week, a Monday at 00:00 UTC, and whether the account is scorable then, and
+  fetches the sample's rows at those starts.
+- `mule evaluate` scores the sample with the GNN that `mule score` uses, the seed with the best
+  selection score, and ranks each week at each time as the test rankings do, but only the same
+  account-weeks at both times: the sampled non-mules scorable at their week's start, and the true
+  mules active at their scoring time and active at their week's start. The label at the scoring
+  time is the rule of [Positives](#positives-dropped-weeks-and-the-activity-period) under the
+  world's scoring times. At the week start it is the same rule with the week starts as the
+  scoring times, so the window is 7 days, as it would be had t always been a Monday at 00:00.
+- **Left out.** Every other row of the sample is left out of both rankings, and is not scored at
+  either time: a non-mule or a mule not scorable at its week's start (an account opened or
+  linked between the start and the scoring time), and a mule not active at one of the two
+  times. The typical one is a mule whose onset falls between the week's start and its scoring
+  time: it is active at the scoring time alone, the newest and the hardest, and ranked at that
+  time alone it would move the difference for a reason that is not the clock. So the two
+  rankings hold the same account-weeks with the same labels, and only t differs. The owner, 27
+  October 2026.
+- **Pass rule.** The test passes only when the account-weeks compared hold at least 30 mule
+  clusters (`audit.clock_min_mule_clusters`, counted as for the gain test) and the paired,
+  ring-resampled 95% interval of recall at 1% pooled over the weeks at the random scoring times,
+  minus recall at 1% at the week starts, lies inside plus and minus 0.05
+  (`audit.clock_invariance_margin`, a default the owner may change). The interval resamples the
+  clusters of the compared rows. The difference in ROC AUC is reported beside it. Below the
+  minimum the test fails whatever its interval says: with 3 mules ranked at the top at both
+  times the difference is exactly 0 on every resample, so its interval [0, 0] would pass. The
+  owner, 27 October 2026. Its table, `clock_invariance`, reports the account-weeks compared
+  (`rows`), the true mules' among them (`mule_rows`), the clusters and mule clusters of those
+  (`clusters`, `mule_clusters`), and the mule and non-mule rows of the sample left out
+  (`mule_rows_left_out`, `nonmule_rows_left_out`).
+
+A reported result is refused unless both tests passed, as the old probe's rule did, and
+PhantomLedger's Clocks gates passed (see [Gates](#gates)). A failed gain test stops `mule train`
+on a reported world, like every failed check there; the invariance test stops no command and
+decides whether `mule evaluate` marks the result development only. On development worlds both
+are reported and nothing stops. The gain test's table is `clock_gain` in the evaluation store
+and the invariance test's is `clock_invariance` in the rotation's results.
 
 ### The ring reports
 
@@ -1332,13 +1561,13 @@ Two reports count a ring's devices and IPs by [the rule above](#the-feature-audi
 evaluate` writes both for every rotation, from that rotation's test world, into its results
 folder beside the metrics and comparisons tables. They are evaluation outputs that nothing reads
 back, and neither is a feature. Their positives are the active true mules of the test world, the
-account-Mondays of [the positives](#positives-dropped-mondays-and-the-activity-period), and their
-ring nodes are read from every active true mule of the frame on each Monday.
+account-weeks of [the positives](#positives-dropped-weeks-and-the-activity-period), and their
+ring nodes are read from every active true mule of the frame at each scoring time.
 
-- `ring_endpoints` is one row: the positives, how many of them hold any ring node on their
-  Monday (a device or IP of their ring, as above), and that share. It is the share of positives
-  with any ring-device link that [Comparisons](#comparisons) reads beside the device and IP
-  ablation.
+- `ring_endpoints` is one row: the positives, how many of them hold any ring node at their
+  scoring time (a device or IP of their ring, as above), and that share. It is the share of
+  positives with any ring-device link that [Comparisons](#comparisons) reads beside the device
+  and IP ablation.
 - `ring_community` is one row for each of the two groups, positives that hold a ring node and
   positives that hold none. Each row gives the positives of its group and, twice, how many have
   a community block that differs from that of a customer who shares nothing, and that share:
@@ -1357,7 +1586,7 @@ ring nodes are read from every active true mule of the frame on each Monday.
 Victim reports may identify more often the mules whose victims bank here, so
 `new_internal_payers_*` could learn who gets caught rather than what mules do.
 Evaluation reports identified against hidden mules by victim origin: the internal share of
-their new payers over their active Mondays, from their own B2 rows, and recall of hidden mules
+their new payers over their active weeks, from their own B2 rows, and recall of hidden mules
 by that share. It also reports how well the features separate identified from hidden mules.
 On the development rotation only, for seed 0, training keeps every epoch's checkpoint, and
 evaluation rescores the selection world with each to report the correlation of the selection
@@ -1389,30 +1618,35 @@ loaded from the NVIDIA training machine, which also fetches and trains.
       `world_<seed>.gates.toml` into `MULE_PL_RECORDS_DIR`;
    3. `mule prepare` reads `read_world`, finds the configured world whose identity file
       matches on the fields the two share, checks the lookback and the labels, and writes
-      the training examples;
+      the training examples, with t the scoring time that the world's seed gives each week;
    4. `mule fetch` fills the cache for every role the world plays in the configured rotations;
    5. `mule audit` reads the answer key into the evaluation store, checks the gate record,
-      builds and fetches a test-role fallback list if one is configured, runs its checks and
-      writes pass records;
+      builds and fetches a test-role fallback list if one is configured, runs its checks (the
+      clock gain test among them) and writes pass records; on a world that plays the test role
+      it also stores the audit sample with the start of each row's week and fetches its rows at
+      those starts, for the clock invariance test of `mule evaluate`;
    6. `mule-load clear` empties the graph.
 4. **`mule train`** trains from the cache and never queries TigerGraph. It first reads the pass
    or fail of the audit records, and stops on a failure that stops the run (see
    [Gates](#gates)).
 5. **`mule evaluate`** scores the test world from the cache, reads the evaluation store and the
-   pass records, and writes the results; it marks them development only unless every gate
-   passed (see [Gates](#gates)).
+   pass records, runs the clock invariance test of the selected GNN on the stored audit sample,
+   and writes the results; it marks them development only unless every gate passed and the
+   invariance test passed (see [Gates](#gates)).
 
 No world is reloaded: everything evaluation needs from the graph, the answer key included, is
 taken while the world is loaded.
 
 ### Cache
 
-- One folder per (world, Monday) holds the population, that Monday's labels and the hubs, and
-  one Parquet table per query: one row per node or edge, every field named as in [the
-  features](features.md). Parquet tables can be opened and checked by hand.
+- One folder per (world, t) holds the population, the hubs and one Parquet table per query: one
+  row per node or edge, every field named as in [the features](features.md). The folder is
+  named by t's UTC time to the second, with hyphens for the colons (`2024-04-03T14-37-12Z`),
+  and any t that is a whole second after the lookback has one. Parquet tables can be opened and
+  checked by hand.
 - Each table is a set of part files written once (a temporary file, then rename) with an index
-  of their accounts; fetch computes only missing accounts. Only 00:00 UTC dates are accepted,
-  and cached rows are reparsed with the live checks.
+  of their accounts; fetch computes only missing accounts. Cached rows are reparsed with the
+  live checks.
 - The key, held in the path so other settings never overwrite, is the world's identity, the
   query versions and the settings, plus a label identity (a hash of `read_labels`' output) for
   the label tables.
@@ -1420,8 +1654,10 @@ taken while the world is loaded.
   read the rows of the keys they computed themselves (see the Keys chosen by their reader
   guard).
 - **The evaluation store** sits beside the cache, keyed by world identity: the answer key's
-  rows and `mule audit`'s pass records. Only `evaluation/` and `testing/` open it (see the Files
-  that carry labels guard).
+  rows, `mule audit`'s pass records and report tables, and, for a world that plays the test
+  role, the audit sample with the start of each row's week (`clock_sample.parquet`), which
+  `mule evaluate` scores at both times for the clock invariance test. Only `evaluation/` and
+  `testing/` open it (see the Files that carry labels guard).
 - **World identity** (`read_world`): counts per vertex type and per forward edge type (a
   reverse edge type is the forward edge read from its other end, so its count is the
   forward count and is not printed), and per value of
@@ -1460,7 +1696,9 @@ taken while the world is loaded.
 
 `results/<run>/` holds the result tables, the model files and a manifest, and is never
 committed: the owner zips it on the training machine and copies it to Downloads on this laptop.
-`.gitignore` stays as it is.
+`.gitignore` stays as it is. Its tables include `per_week` (recall and precision at each budget
+in each week, for each ranker and seed; it was `per_monday`) and `clock_invariance` (the
+[clock invariance test](#the-clock-tests) of the rotation's selected GNN).
 
 The manifest records the code commit and whether the tree was dirty (a reported run refuses a
 dirty tree: the NVIDIA results came from a commit with 71 files differing), the query versions,
@@ -1510,17 +1748,18 @@ Commands take no options: worlds, roles, dates and settings live in config.
 | Command | What it does |
 |---|---|
 | `mule install` | installs the changed queries of `gsql/queries/` and `gsql/evaluation/` |
-| `mule parity` | testing code: runs every installed query on the loaded world, and the reference graph on the same export (the loader's shards whose `read_world` identity equals the live graph's, found under the configured export folder), on a seeded sample of Mondays and accounts with mules oversampled; compares the canonical answers and refusals (B6's hubs and crowds are checked by the parity of its whole community block, since it prints no leaf flag; its inline crowd rule meets the live server only where a sampled community reaches a crowd), that an account fetched alone equals itself among 31 others, and that B5's inline leaf flags equal `read_hubs`; writes the versions that pass, the TigerGraph version and the world identity to `gsql/parity.toml`, committed with the code |
-| `mule prepare` | data code: reads `read_world` and matches the configured world by its identity file, on the fields the two share; checks the scored Mondays and the lookback, the value sets and the labels from `read_labels`; reads the populations; writes the training examples and weights; reports counts, the identified active share and the weight balance per Monday |
-| `mule fetch` | fills the cache for every example the configured roles of the loaded world need: the training draw, and every scorable account of every Monday of a selection or test role |
-| `mule audit` | evaluation code, on the loaded world: reads the answer key into the evaluation store; checks PhantomLedger's gate record against the world's identity; builds and fetches a test-role fallback list if configured; runs the label checks, the clock probe and the identified share by onset month; on development worlds also the feature audit and the hub, leaf and card-spending checks; writes pass records to the evaluation store |
+| `mule parity` | testing code: runs every installed query on the loaded world, and the reference graph on the same export (the loader's shards whose `read_world` identity equals the live graph's, found under the configured export folder), on a seeded sample of scored weeks, each at its scoring time, and of accounts with mules oversampled; compares the canonical answers and refusals (B6's hubs and crowds are checked by the parity of its whole community block, since it prints no leaf flag; its inline crowd rule meets the live server only where a sampled community reaches a crowd), that an account fetched alone equals itself among 31 others, and that B5's inline leaf flags equal `read_hubs`; writes the versions that pass, the TigerGraph version and the world identity to `gsql/parity.toml`, committed with the code |
+| `mule prepare` | data code: reads `read_world` and matches the configured world by its identity file, on the fields the two share; checks the calendar's scored weeks and the lookback, the value sets and the labels from `read_labels`; reads the populations at the world's scoring times; writes the training examples and weights; reports counts, the identified active share and the weight balance per week |
+| `mule fetch` | fills the cache for every example the configured roles of the loaded world need: the training draw, and every scorable account of every week of a selection or test role, at its scoring time |
+| `mule audit` | evaluation code, on the loaded world: reads the answer key into the evaluation store; checks PhantomLedger's gate record against the world's identity; builds and fetches a test-role fallback list if configured; runs the label checks, the clock gain test and the identified share by onset month; on a world that plays the test role also stores the audit sample with the start of each row's week and fetches its rows at those starts, for the clock invariance test; on development worlds also the feature audit and the hub, leaf and card-spending checks; writes pass records to the evaluation store |
 | `mule train` | first reads the pass or fail of the audit records of its rotation's worlds, and nothing else of them, and stops on a failure that stops the run (see [Gates](#gates)); then trains the GNN over the prior grid and five seeds with selection after each epoch, the ablations and the two XGBoost comparisons, once each; training code reads no gate or audit record |
-| `mule evaluate` | scores the test world and writes the metrics, groups, uncertainty, missed-mule report, identification bias and the [ring reports](#the-ring-reports); marks the results development only unless every gate passed |
-| `mule score` | scores the accounts and dates set in config (`score.accounts`, `score.dates`) with the model of the best-selection seed among the full models of the run `score.run` names, a results folder such as `A-B-C` |
+| `mule evaluate` | scores the test world and writes the metrics, groups, uncertainty, missed-mule report, identification bias, the [ring reports](#the-ring-reports) and the [clock invariance test](#the-clock-tests) of the selected GNN on the test world's stored audit sample; marks the results development only unless every gate passed and the invariance test passed |
+| `mule score` | scores the accounts and dates set in config (`score.accounts`, `score.dates`, any date, each scored at 00:00 UTC) with the model of the best-selection seed among the full models of the run `score.run` names, a results folder such as `A-B-C`; it matches no world, so it scores any loaded graph, a bank's included, and fetches into a scratch cache that the run alone reads |
 | `mule bench` | measures cost on the loaded world and writes `results/bench/` |
 
 Every long command first runs a read-only readiness check: installed versions, the world's
-identity, one account fetched, one training step. `mule train` and `mule evaluate` never query
+identity, one account fetched, one training step. `mule score` checks the installed versions
+alone, since it matches no world. `mule train` and `mule evaluate` never query
 TigerGraph, so theirs reads what they read: the worlds of every rotation are registered, one
 example is read from the cache of each world the command reads (`mule train` the training world
 and the selection world, whose examples are read lazily and would otherwise fail after the first
@@ -1539,10 +1778,10 @@ Each command appends to an `events.jsonl`, in the run's folder for these two, in
 ## Scaling and the benchmark
 
 **Size.** A 300,000-person world has about 1.6 million accounts and about 46 million payments
-in any 90 days. Whole-world scoring is about 23 million account-Mondays (about 2.3 million at
+in any 90 days. Whole-world scoring is about 23 million account-weeks (about 2.3 million at
 30,000 people); at the old rate of about 80 subgraphs a second that is 80 to 90 hours per
 300,000-person world. Each is fetched once and cached, after which scoring is a cheap GPU
-pass. A training Monday needs a few thousand scored accounts and their neighbours.
+pass. A training week needs a few thousand scored accounts and their neighbours.
 
 **Bounds.** The caps are the sampler: deterministic, newest first, so an account's subgraph is
 the same in every run. Leaves keep billers, ledgers, carrier lines and terminals from pulling
@@ -1569,7 +1808,7 @@ per world to `results/bench/`:
   numbers for the graph features);
 - `profile_hubs`' histograms and the share of positives that are hubs, which must be 0;
 - a projection of a whole-world scoring run, against its fallback;
-- whether co-user rows are cheaper per Monday for every customer or on demand; the rule is
+- whether co-user rows are cheaper per week for every customer or on demand; the rule is
   the same either way;
 - what selection costs, priced by its passes: the seconds to build one selection example, the
   examples a selection pass scores, the passes a rotation makes (seeds x (priors + ablations)
@@ -1577,10 +1816,10 @@ per world to `results/bench/`:
   and 300,000 people, so that whole-world selection is accepted or replaced by its fallback
   with its price in view;
 - what `mule audit` and `mule evaluate` cost at those sizes: the audit's fetch of every active
-  true-mule account-Monday and 200,000 non-mule ones, from the measured seconds to fetch a
-  sparse account-Monday (the mule term counts the identified mules alone, a lower bound, since
+  true-mule account-week and 200,000 non-mule ones, from the measured seconds to fetch a
+  sparse account-week (the mule term counts the identified mules alone, a lower bound, since
   the bench never reads the truth), and the paired bootstrap, `audit.replicates` x the runs x
-  the ranked account-Mondays, from the measured seconds a replicate takes per ranked row.
+  the ranked account-weeks, from the measured seconds a replicate takes per ranked row.
 
 Whole-world scoring is settled against its fallback on the 30,000-person bench before any
 300,000-person world is generated. The README's recommended training architecture follows
@@ -1604,7 +1843,7 @@ development rotation D1, D2, D3 (30,000 people each, seeds 1001 to 1003) in abou
 machine time, through TigerGraph as designed. The benchmark of world T priced selection at
 about 702 days a rotation at 30,000 people (`mule bench`, 24 October 2026), because every
 selection example was rebuilt on every epoch of every prior, seed and ablation, and fetching
-cost about 3 s an account-Monday.
+cost about 3 s an account-week.
 
 The design above is unchanged: it is what the reported runs build. These settings replace the
 design's values in the defaults of `config.py`, and each is marked in the code with a comment
@@ -1617,27 +1856,27 @@ proof of concept is development only, from worlds whose PhantomLedger steps are 
 | Setting | Proof of concept | Full design | Why |
 |---|---|---|---|
 | `training.reuse_built_examples` | True: the selection world's and the test world's examples are built once and kept in memory, and every epoch of selection and every run of the test world replays them | False: every pass builds them anew | An example costs about 0.022 s to build and 0.001 s to score, so rebuilding it on every pass was almost all of the selection cost. Kept in memory they fit only because the worlds are sampled (see below); the full design's whole worlds do not. The training world's batches were already built once and shared by every seed, prior, epoch and ablation of a rotation. A test shows that kept batches equal freshly built ones and that training gives the same result |
-| `transport.concurrent_requests` | 2: the requests of one query run two at a time, a query's accounts cut into at least two requests when it has two or more accounts | 1: one request at a time | The benchmark of world T fetched B4's accounts 3.4 times as fast at 2 requests at once, and B1 to B3, B5 and B6 1.3 to 1.6 times as fast, which is 1.5 times as fast for a sparse account-Monday (3.04 s at 1, 1.99 s at 2). Four gave no more for B4. The requests of a round go out in the order of their accounts and their answers are kept in that order, so the cache and the counts are those of one at a time; each request keeps its own retries, whose backoff the threads share |
-| `data.scoring` and `data.fallback_weight` | "fallback" and 6,000: the selection world is every identified active mule account-Monday and a keyed sample of the other non-mule account-Mondays, each standing for 6,000, and the test world is scored on [the fallback list](#if-whole-world-scoring-is-too-slow) at the same weight. About 410 non-mule account-Mondays a world, 8 a Monday. The bound `FALLBACK_WEIGHTS` is raised from 1,000 to 100,000 | "whole" and 10: every scorable account on every Monday, and where a fallback is needed, no sampled account standing for more than about 10 | A 30,000-person world has 47,326 scorable accounts a Monday and 2.46 million account-Mondays a year, which is about 57 days of fetching at 2 s each. The fallback of the design is a sample at weight 10, 246,000 account-Mondays, which is 5.7 days a world. Nothing smaller than a weight in the thousands fits a run of hours. Under the fallback the selection world reads `pu_label` alone and the answer key never chooses a sample, as before |
-| `data.min_unlabelled` and `data.per_positive` | 8 and 1: a training Monday draws the larger of 8 and one unlabelled account for each positive, the lowest keyed hashes of its pool, so the draw is fixed and seeded, and every identified active mule account-Monday is kept. About 460 unlabelled account-Mondays beside the positives | 500 and 15: at least 500, and 15 for each positive | At 15 for each positive, and about 300 positive account-Mondays in a world, the training world alone is more than 4,500 account-Mondays, 2.5 hours of fetching. Each unlabelled example stands for its Monday's pool over the draw, about 5,900, so the weights still make the draw stand for the Monday's population |
-| `audit.nonmule_sample` | 300 | 200,000 | The audit's non-mule account-Mondays are the lowest keyed hashes of the year and a fallback sample is every account-Monday under a hash threshold, so while the audit asks for fewer than a fallback sample holds, they are all in it and the audit fetches none a second time. The selection and test worlds hold about 410 a world, and 300 lies inside that by four standard deviations (a test pins it). The training world's draw takes the lowest of each Monday and not of the year, so about a quarter of the audit's sample is fetched again there. At 300 one sampled non-mule stands for about 8,150 account-Mondays, more than a 0.1% tail of a 30,000-person world (about 2,450), so the feature audit cannot measure its near-pure tails: it reports them as not measured, and judges ROC AUC and flag values alone (the owner, 25 October 2026) |
+| `transport.concurrent_requests` | 2: the requests of one query run two at a time, a query's accounts cut into at least two requests when it has two or more accounts | 1: one request at a time | The benchmark of world T fetched B4's accounts 3.4 times as fast at 2 requests at once, and B1 to B3, B5 and B6 1.3 to 1.6 times as fast, which is 1.5 times as fast for a sparse account-week (3.04 s at 1, 1.99 s at 2). Four gave no more for B4. The requests of a round go out in the order of their accounts and their answers are kept in that order, so the cache and the counts are those of one at a time; each request keeps its own retries, whose backoff the threads share |
+| `data.scoring` and `data.fallback_weight` | "fallback" and 6,000: the selection world is every identified active mule account-week and a keyed sample of the other non-mule account-weeks, each standing for 6,000, and the test world is scored on [the fallback list](#if-whole-world-scoring-is-too-slow) at the same weight. About 410 non-mule account-weeks a world, 8 a week. The bound `FALLBACK_WEIGHTS` is raised from 1,000 to 100,000 | "whole" and 10: every scorable account in every week, at its scoring time, and where a fallback is needed, no sampled account standing for more than about 10 | A 30,000-person world has 47,326 scorable accounts a week and 2.46 million account-weeks a year, which is about 57 days of fetching at 2 s each. The fallback of the design is a sample at weight 10, 246,000 account-weeks, which is 5.7 days a world. Nothing smaller than a weight in the thousands fits a run of hours. Under the fallback the selection world reads `pu_label` alone and the answer key never chooses a sample, as before |
+| `data.min_unlabelled` and `data.per_positive` | 8 and 1: a training week draws the larger of 8 and one unlabelled account for each positive, the lowest keyed hashes of its pool, so the draw is fixed and seeded, and every identified active mule account-week is kept. About 460 unlabelled account-weeks beside the positives | 500 and 15: at least 500, and 15 for each positive | At 15 for each positive, and about 300 positive account-weeks in a world, the training world alone is more than 4,500 account-weeks, 2.5 hours of fetching. Each unlabelled example stands for its week's pool over the draw, about 5,900, so the weights still make the draw stand for the week's population |
+| `audit.nonmule_sample` | 300 | 200,000 | The audit's non-mule account-weeks are the lowest keyed hashes of the year and a fallback sample is every account-week under a hash threshold, so while the audit asks for fewer than a fallback sample holds, they are all in it and the audit fetches none a second time. The selection and test worlds hold about 410 a world, and 300 lies inside that by four standard deviations (a test pins it). The training world's draw takes the lowest of each week and not of the year, so about a quarter of the audit's sample is fetched again there. At 300 one sampled non-mule stands for about 8,150 account-weeks, more than a 0.1% tail of a 30,000-person world (about 2,450), so the feature audit cannot measure its near-pure tails: it reports them as not measured, and judges ROC AUC and flag values alone (the owner, 25 October 2026) |
 | `training.seeds` | (0,): one seed | (0, 1, 2, 3, 4): five seeds | Each seed is a whole training. One seed has no spread over seeds, which the results report as 0. The rule that fixes the seeds at five before any result is seen is for reported worlds ([Test worlds stay unseen](#leak-rules-and-how-tests-enforce-them)); these are development worlds |
 | `training.ablations` | False: the full GNN and the two XGBoost comparisons alone | True: each seed also trains the four ablations | An ablation trains and selects like the full model, so the four are four of every five trainings of a seed. What neighbours, devices and IPs, the community block and per-payment timing add is not measured |
 | `training.fixed_prior` | 1.0: the prior is 1 times the identified active share of the training world, with no grid | None: the grid of 1, 3 and 10 times, judged by the selection score on the development rotation | The grid is three trainings of the full model. The design fixes the prior at 1 times for reported runs when no pair of the grid's priors differs; the proof of concept has not shown that, so its result is one prior's. The prior is never set from the answer key |
 | `training.development_audit_stops` | False: a development world's failed or missing audit is reported, in `mule train`'s output and the rotation's events, and training goes on; a reported world's still stops it | True: it stops training | The owner, 25 October 2026 ("Record it and train"). D3's 90-day money in and out and its community's internal money separate at 0.95 or more over the whole world, because every layering hop stays among the ring's own accounts at the bank (PhantomLedger's shortcut S-RAIL-10). Its fix, a declared 0.6 of mules' onward money to other banks, is decided and deferred for the proof of concept |
 | `worlds.rotations` | D1, D2, D3 alone (`PROOF_OF_CONCEPT_ROTATIONS`) | A, B, C; B, C, A; C, A, B; and D1, D2, D3 (`ROTATIONS`) | Only the development rotation runs; the reported worlds A, B and C are not generated, and play no role |
 
-What the weight of 6,000 does to a result. The top 1% and the top 5% of a Monday are 473 and 2,366 of its 47,326 accounts, and one sampled ordinary account weighs 6,000, so on a Monday both budgets end inside the first sampled account. Each reads the share of positives that score above the best of that Monday's sampled ordinary accounts, about 8 of them: the estimate is unbiased, and the two budgets read the same number. It is coarse, and noisy with few positives, and a PR AUC over a sample this thin is fragile, which is why the design bounds a sampled account's weight at about 10. Selection by it picks an epoch by a rough score, and every result is development only.
+What the weight of 6,000 does to a result. The top 1% and the top 5% of a week are 473 and 2,366 of its 47,326 accounts, and one sampled ordinary account weighs 6,000, so in a week both budgets end inside the first sampled account. Each reads the share of positives that score above the best of that week's sampled ordinary accounts, about 8 of them: the estimate is unbiased, and the two budgets read the same number. It is coarse, and noisy with few positives, and a PR AUC over a sample this thin is fragile, which is why the design bounds a sampled account's weight at about 10. Selection by it picks an epoch by a rough score, and every result is development only.
 
 ### The projection
 
 The run is, for each of D1, D2 and D3 in turn, PhantomLedger's generation, `mule-load push`, `mule prepare`, `mule fetch`, `mule audit` and `mule-load clear`, then `mule train` and `mule evaluate`, on the machine the benchmark ran on, this laptop's CPU. Its seconds are projected from the rates of the 24 October 2026 benchmark of world T (5,000 people; `tests/test_proof_of_concept.py` holds every rate and prints this table with `pytest -s`), scaled to 30,000 people, which is 6 times:
 
-- generation 40.4 s at 455 days, 1.6 times that for the 730 simulated days; the push 529 s; `mule prepare` 113 s; a command's readiness check 34 s, of which `read_world` 15.6 s; `read_hubs` 1.6 s for each Monday; the clear 60 s and the first wipe 100 s;
-- the fetch of a sparse account-Monday 3.04 s one request at a time, and 1.99 s two at a time, from the benchmark's accounts a second for each query at 1 and 2 requests at once;
+- generation 40.4 s at 455 days, 1.6 times that for the 730 simulated days; the push 529 s; `mule prepare` 113 s; a command's readiness check 34 s, of which `read_world` 15.6 s; `read_hubs` 1.6 s for each scoring time; the clear 60 s and the first wipe 100 s;
+- the fetch of a sparse account-week 3.04 s one request at a time, and 1.99 s two at a time, from the benchmark's accounts a second for each query at 1 and 2 requests at once;
 - allowances for what the benchmark did not time: 60 s for the answer key and the labels, 300 s of computing in each `mule audit`, and 900 s for `mule train` and `mule evaluate` together.
 
-Every world has `mules` true-mule account-Mondays that `mule audit` fetches and the test world's fallback list holds. The benchmark never read the truth, so this is the design's expectation and not a measurement: about 700 where the calibration holds (75 identified customers in a 30,000-person world, about half of the true mules, 3.9 active Mondays each and an early-warning Monday), 900 as a high case, and 200 at the rate of world T, whose 14 mules in 5,000 people are uncalibrated.
+Every world has `mules` true-mule account-weeks that `mule audit` fetches and the test world's fallback list holds. The benchmark never read the truth, so this is the design's expectation and not a measurement: about 700 where the calibration holds (75 identified customers in a 30,000-person world, about half of the true mules, 3.9 active weeks each and an early-warning time), 900 as a high case, and 200 at the rate of world T, whose 14 mules in 5,000 people are uncalibrated.
 
 | Stage, in hours | World T's rate (200 mules a world) | Expected (700) | High (900) |
 |---|---|---|---|
@@ -1646,14 +1885,14 @@ Every world has `mules` true-mule account-Mondays that `mule audit` fetches and 
 | wipe and clear | 0.08 | 0.08 | 0.08 |
 | `mule prepare` of three worlds | 0.56 | 0.56 | 0.56 |
 | `mule fetch`: readiness checks | 0.09 | 0.09 | 0.09 |
-| `mule fetch`: `read_hubs` for 156 Mondays | 0.42 | 0.42 | 0.42 |
+| `mule fetch`: `read_hubs` for 156 weeks | 0.42 | 0.42 | 0.42 |
 | `mule fetch` and the audit's fetch: accounts (1,953, 3,453 or 4,053) | 1.08 | 1.91 | 2.25 |
 | `mule audit`: readiness checks and answer keys | 0.14 | 0.14 | 0.14 |
 | `mule audit`: computing | 0.25 | 0.25 | 0.25 |
 | `mule train` and `mule evaluate` | 0.25 | 0.25 | 0.25 |
 | **Total** | **5.85** | **6.68** | **7.01** |
 
-Not in it, and why the totals are not padded further: the benchmark never timed a mule's account-Monday (world T had one identified mule), and a mule's subgraph is likely larger than a sparse sample's, so that at 1.5 times the cost of a sparse one the expected case is 0.58 hours longer (a test prices it); generating the next world while the last one loads would save up to 0.3 hours; and the training and scoring rates are this laptop's CPU's. The push is 40% of the expected total, and the stages that no sampling shortens come to 4.8 hours.
+Not in it, and why the totals are not padded further: the benchmark never timed a mule's account-week (world T had one identified mule), and a mule's subgraph is likely larger than a sparse sample's, so that at 1.5 times the cost of a sparse one the expected case is 0.58 hours longer (a test prices it); generating the next world while the last one loads would save up to 0.3 hours; the audit's second fetch, on the test world, of its sample at the week starts for the clock invariance test (up to the sample's size again, and a `list_accounts` and `read_hubs` at each week start); and the training and scoring rates are this laptop's CPU's. The push is 40% of the expected total, and the stages that no sampling shortens come to 4.8 hours.
 
 ## Package layout
 
@@ -1661,19 +1900,22 @@ Not in it, and why the totals are not padded further: the benchmark never timed 
 |---|---|
 | `config.py`, `paths.py` | frozen, validated settings (the export start date; worlds with their seeds, sizes and rotations; caps, thresholds and seeds; the lookback must exceed the 30-day "new" window); every file location, each with one accessor, including the export folder, PhantomLedger's identity and gate record folder and the evaluation store |
 | `tigergraph/` | connection, client with retries, executor, installer, query names, versions and row parsers, the world identity |
-| `data/` | the Monday calendar, the population, the labels reader, the keyed draws, the training examples and weights |
+| `data/` | the week calendar and scoring times, the population, the labels reader, the keyed draws, the training examples and weights |
 | `subgraph/` | fetch and the cache; rows to tensors, degree columns and ablation switches |
 | `model/` | the Fourier time encoding, the heterogeneous attention model, the nnPU loss |
 | `training/` | the trainer, selection, the prior grid and seeds, the contract lock, scoring with a saved model |
 | `comparisons/` | the two XGBoost comparisons |
-| `evaluation/` | the answer-key reader, test scoring and the fallback list, metrics and the ring bootstrap, groups, the missed-mule report, the feature audit, the clock probe, identification bias |
+| `evaluation/` | the answer-key reader, test scoring and the fallback list, metrics and the ring bootstrap, groups, the missed-mule report, the feature audit, the clock gain and invariance tests, identification bias |
 | `testing/` | the reference graph, reference worlds and fixtures, the loader shard reader, parity, the planted-slip harness and the version restamper |
 | `bench.py`, `cli.py` | the benchmark; the commands |
 
-GSQL: `gsql/schema/schema.gsql` (no loading job); `gsql/queries/` (`list_accounts`,
+GSQL: `gsql/schema/schema.gsql` (no loading job), with `mule_attributes.gsql`,
+MulePatternLearner's own attributes and Marks, which the loader creates; `gsql/final/`, the
+single-job queries that replace `gsql/queries/` as the Python moves to them; `gsql/queries/` (`list_accounts`,
 `read_labels`, `read_hubs`, `read_world`, `profile_hubs`, `read_money_flow`,
 `read_counterparties`, `read_activity_change`, `read_payment_events`, `read_shared_identity`,
-`read_community`); `gsql/evaluation/` (`read_answer_key`); `gsql/parity.toml`, the parity
+`read_community`), where `read_world` stays, since only research reads it; `gsql/evaluation/`
+(`read_answer_key`); `gsql/parity.toml`, the parity
 record (TOML, since `.gitignore` keeps every JSON file out of git).
 
 The import contracts in `pyproject.toml` keep every layer exhaustive: no package but
@@ -1718,6 +1960,7 @@ on 2026-10-17, and each is written into its section above.
 | Choice | Interim rule in this design |
 |---|---|
 | The internal and external new-payer split as a declared cue until the on-us share is sourced | kept, with its lift gates |
+| The margin of the clock invariance test: how far recall at 1% at the random scoring times may differ from recall at 1% at the Monday starts | plus and minus 0.05, a default of 27 October 2026 (`audit.clock_invariance_margin`) |
 
 ## Limitations
 
@@ -1741,9 +1984,17 @@ on 2026-10-17, and each is written into its section above.
 - Dwell near t is censored: an inflow less than w before t shows only part of its curve.
 - Account newness read from behaviour is real, and only as strong as PhantomLedger's
   lifecycle makes it.
-- Results stay development only until PhantomLedger's Clocks gates pass and the clock probe
-  shows chance.
-- Weekly scoring flags a short burst up to six days after it ends.
+- Results stay development only until PhantomLedger's Clocks gates pass and both clock tests
+  pass: the gain test of `mule audit` and the invariance test of `mule evaluate`. Each needs at
+  least 30 mule clusters among the rows it reads, so a world whose audit sample holds fewer fails
+  it by count, whatever its interval says.
+- Weekly scoring flags a short burst at the first scoring time after it starts, so a burst that
+  falls between two scoring times is flagged at the second, only after it ends, up to the gap
+  between those two times: with t on every Monday that was a week at most (the earlier design
+  said six days), and now it is almost 14 days at most, since consecutive scoring times are 0
+  to 14 days apart. The label rule makes the mule active at that second time, so the burst is
+  late and not missed. A mule can now be flagged mid-week, because t moves within the week and a
+  scoring time can fall inside its burst. Daily evaluation of the test world is not built.
 - Each world has few identified mules (about 750 a year at 300,000 people), so the intervals
   matter and selection is noisy.
 - Token and Address are not read; device and IP are the identity signal.

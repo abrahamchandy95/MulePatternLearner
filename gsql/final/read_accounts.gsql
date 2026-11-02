@@ -1,0 +1,63 @@
+USE GRAPH Mule_Pattern_Learner
+CREATE OR REPLACE QUERY read_accounts(
+    UINT t_ms, // The scoring time after the first 90 days
+    LIST<STRING> account_ids // The ids of the accounts to read
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+
+    /* Constants */
+    UINT LOOKBACK_MS = 7776000000; // 90 days
+
+    /* Edge types */
+    SetAccum<STRING> @@account_to_owner_edge_type; // Account -> its owner
+    @@account_to_owner_edge_type += "Account_Owned_By_Party";
+
+    /* Accumulators */
+    MaxAccum<STRING> @customer_id; // An account's owner at t
+    SetAccum<STRING> @@ids; // The ids given, without repeats
+    SumAccum<INT> @@given; // How many ids were given, repeats included
+
+    IF t_ms <= LOOKBACK_MS OR t_ms % 1000 != 0 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+    FOREACH account_id IN account_ids DO
+        @@ids += account_id;
+        @@given += 1;
+    END;
+    IF @@given == 0 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+    IF @@ids.size() != @@given THEN
+        PRINT "duplicate_account" AS status;
+        RETURN;
+    END;
+    requested = to_vertex_set(@@ids, "Account");
+    IF requested.size() != @@ids.size() THEN
+        PRINT "unknown_account" AS status;
+        RETURN;
+    END;
+    accounts = SELECT s FROM requested:s WHERE s.opened_ms < t_ms;
+    IF accounts.size() != requested.size() THEN
+        PRINT "invisible_account" AS status;
+        RETURN;
+    END;
+
+    /* Traverse: Account -> its owner, through an ownership visible at t */
+    owned = SELECT a
+        FROM accounts:a - (@@account_to_owner_edge_type>:o) - Party:q
+        WHERE o.valid_from_ms < t_ms
+            AND ( o.valid_to_ms == 0 OR o.valid_to_ms > t_ms - LOOKBACK_MS )
+        ACCUM
+            a.@customer_id += q.id
+    ;
+
+    /* Printing the accounts */
+    PRINT "ok" AS status;
+    PRINT accounts[
+        accounts.id AS account_id,
+        accounts.is_external AS is_external,
+        accounts.@customer_id AS customer_id
+    ] AS accounts;
+
+}

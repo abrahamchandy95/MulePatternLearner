@@ -1,23 +1,23 @@
 """The selection score, from pu_label alone (docs/design.md, "Training and selection" and
 "Selection world").
 
-The selection world's keys (data.examples' selection table) hold, on every Monday, each
+The selection world's keys (data.examples' selection table) hold, in every week, each
 account scored then (every scorable account, or under the fallback the identified mules and a
 weighted sample of the rest), whether it is a positive (an identified mule active that
-Monday), whether it is ranked (an identified mule's inactive Monday is not), and its weight
+week), whether it is ranked (an identified mule's inactive week is not), and its weight
 (1, or the sample's weight under the fallback). Hidden mules are ranked like anyone else; the
 answer key is never read.
 
-On each Monday the ranked accounts are ordered by their logits in float64, highest first, and
-a positive is found by a budget when it lies within the Monday's top 1% or 5% of the ranked
+In each week the ranked accounts are ordered by their logits in float64, highest first, and
+a positive is found by a budget when it lies within the week's top 1% or 5% of the ranked
 weight. Accounts with tied logits form one block, and a budget that ends inside a block finds
 the same share of each of its accounts, the expected result of ordering them at random. Recall
-is pooled over Mondays: the positives found on every Monday divided by the positives on every
-Monday, so a Monday without a positive never fails it. The selection score is the mean of the
+is pooled over weeks: the positives found in every week divided by the positives in every
+week, so a week without a positive never fails it. The selection score is the mean of the
 two pooled recalls; a later epoch or prior must be strictly better to be kept.
 
 paired_interval gives the interval of the difference between two runs' scores, the identified
-mule accounts resampled with all their positive Mondays (ring ids are evaluation's alone), for
+mule accounts resampled with all their positive weeks (ring ids are evaluation's alone), for
 the prior grid's decision (training.priors). Its replicates, level and seed are settings the
 caller reads from config (audit.replicates, audit.interval and training.bootstrap_seed).
 """
@@ -31,7 +31,7 @@ import numpy as np
 from numpy.typing import NDArray
 import pandas as pd
 
-# The budgets of the selection score: the top 1% and 5% of each Monday's ranking.
+# The budgets of the selection score: the top 1% and 5% of each week's ranking.
 BUDGETS = (0.01, 0.05)
 # The columns of the selection keys.
 SELECTION_COLUMNS = ("t_ms", "account_id", "positive", "ranked", "weight")
@@ -39,7 +39,7 @@ SELECTION_COLUMNS = ("t_ms", "account_id", "positive", "ranked", "weight")
 
 @dataclass(frozen=True)
 class Found:
-    """What a ranking of the selection world found: for each positive account-Monday, in the
+    """What a ranking of the selection world found: for each positive account-week, in the
     order of the keys, its account, its weight, and the share of it each budget found (a row
     per positive, a column per budget of BUDGETS)."""
 
@@ -59,7 +59,7 @@ class Found:
 
 
 def ranked_keys(keys: pd.DataFrame) -> pd.DataFrame:
-    """The selection keys a ranking scores: the ranked ones, by Monday and account."""
+    """The selection keys a ranking scores: the ranked ones, by week and account."""
     missing = [column for column in SELECTION_COLUMNS if column not in keys.columns]
     if missing:
         raise ValueError(f"The selection keys lack the columns {missing}")
@@ -94,11 +94,11 @@ def found(keys: pd.DataFrame, logits: NDArray[np.floating]) -> Found:
     shares = np.zeros((len(keys), len(BUDGETS)))
     t_ms = keys["t_ms"].to_numpy(dtype=np.int64)
     if (t_ms[1:] < t_ms[:-1]).any():
-        raise ValueError("The selection keys are not in the order of their Mondays")
-    # The keys run Monday after Monday, so each Monday's rows are one slice.
+        raise ValueError("The selection keys are not in the order of their weeks")
+    # The keys run week after week, so each week's rows are one slice.
     starts = np.flatnonzero(np.r_[True, t_ms[1:] != t_ms[:-1]])
     for first, last in zip(starts, np.r_[starts[1:], len(t_ms)], strict=True):
-        shares[first:last] = _monday_shares(scores[first:last], weights[first:last])
+        shares[first:last] = _week_shares(scores[first:last], weights[first:last])
     return Found(
         tuple(str(account) for account in keys["account_id"].to_numpy()[positive]),
         weights[positive],
@@ -106,10 +106,8 @@ def found(keys: pd.DataFrame, logits: NDArray[np.floating]) -> Found:
     )
 
 
-def _monday_shares(
-    scores: NDArray[np.float64], weights: NDArray[np.float64]
-) -> NDArray[np.float64]:
-    """The share of each account of one Monday that each budget's top finds."""
+def _week_shares(scores: NDArray[np.float64], weights: NDArray[np.float64]) -> NDArray[np.float64]:
+    """The share of each account of one week that each budget's top finds."""
     order = np.argsort(-scores, kind="stable")
     ranked = scores[order]
     # Each account's block of tied logits: the weight ranked above the block, and its weight.
@@ -153,7 +151,7 @@ def paired_interval(
     """The central level interval of the difference between the mean score of the first runs
     and of the second (several seeds each, all on one selection world), over replicates that
     resample the identified mule accounts with replacement, each with all its positive
-    Mondays, the same draws for every run."""
+    weeks, the same draws for every run."""
     runs = [*first, *second]
     if not first or not second:
         raise ValueError("A paired interval compares at least one run with another")

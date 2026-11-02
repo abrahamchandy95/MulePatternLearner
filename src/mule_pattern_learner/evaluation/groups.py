@@ -11,15 +11,15 @@ known cases:
 - new_account: mules whose account opened within 90 days of t (opened_ms > t - 90 days, from
   the answer key), purpose-opened mules being the hard case;
 - no_payment: mules scored with no payment in the lookback (their B3 row's in_90d and out_90d
-  both 0), on an active Monday or on their early-warning Monday, which only links to other
+  both 0), in an active week or at an early-warning time, which only links to other
   mules can reveal: the owner's Account Z, reported beside the enrolment ceiling (72% of
   device and 61% of IP associations are on file);
 - hop_1, hop_2, hop_beyond: mules at one edge, at two edges or not within two hops of the
-  nearest identified mule in their own subgraph that Monday (evaluation.hops).
+  nearest identified mule in their own subgraph that week (evaluation.hops).
 
-Every group but no_payment holds active account-Mondays only. A group's metrics are its pooled
+Every group but no_payment holds active account-weeks only. A group's metrics are its pooled
 recall and precision at each budget, ROC AUC and PR AUC, the chance of each of its mules being
-flagged on any of its Mondays in the group, averaged, and its mules and account-Mondays.
+flagged in any of its weeks in the group, averaged, and its mules and account-weeks.
 """
 
 from __future__ import annotations
@@ -64,13 +64,13 @@ def surfaced_rings(key: AnswerKey, identified: Collection[str]) -> frozenset[int
 
 
 def quiet_rows(cache: Cache, keys: Iterable[tuple[int, str]]) -> frozenset[tuple[int, str]]:
-    """Of keys, (Monday, account), those with no payment in the lookback, by their B3 rows in
+    """Of keys, (t, account), those with no payment in the lookback, by their B3 rows in
     the cache: no payment received and none sent in the last 90 days."""
-    by_monday: dict[int, list[str]] = {}
+    by_week: dict[int, list[str]] = {}
     for t_ms, account in keys:
-        by_monday.setdefault(t_ms, []).append(account)
+        by_week.setdefault(t_ms, []).append(account)
     found: set[tuple[int, str]] = set()
-    for t_ms, accounts in sorted(by_monday.items()):
+    for t_ms, accounts in sorted(by_week.items()):
         for row in cache.rows(ACTIVITY, t_ms, accounts):
             if row.in_90d == 0 and row.out_90d == 0:
                 found.add((t_ms, row.account_id))
@@ -83,7 +83,7 @@ def group_rows(
     no_payment: Collection[tuple[int, str]],
     hops: Mapping[tuple[int, str], int | None],
 ) -> dict[str, NDArray[np.bool_]]:
-    """Each group's rows of a test frame: no_payment the (Monday, account) rows with no payment
+    """Each group's rows of a test frame: no_payment the (t, account) rows with no payment
     in the lookback, hops each active row's hop distance."""
     status = frame["status"].to_numpy()
     active = status == ACTIVE
@@ -132,7 +132,7 @@ def group_metrics(frame: pd.DataFrame, rows: Mapping[str, NDArray[np.bool_]]) ->
     for group in GROUPS:
         chosen = rows[group]
         mules = int(frame.loc[chosen, "account_id"].nunique())
-        found += [(group, "mules", float(mules)), (group, "account_mondays", float(chosen.sum()))]
+        found += [(group, "mules", float(mules)), (group, "account_weeks", float(chosen.sum()))]
         if not chosen.any():
             continue
         ranking = Ranking.of(frame, chosen)

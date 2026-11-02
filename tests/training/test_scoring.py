@@ -1,6 +1,6 @@
 """Scoring with a saved model (docs/design.md, "Training and selection"): mule score takes the
 seed with the best selection score, refuses a model of another lock, and ranks raw logits in
-float64 within each Monday."""
+float64 within each week."""
 
 from __future__ import annotations
 
@@ -65,7 +65,7 @@ def test_a_model_of_other_settings_is_refused_with_its_fields(tmp_path: Path) ->
         best_seed([], LOCK)
 
 
-def test_scores_are_float64_logits_ranked_within_each_monday(world: Any, tmp_path: Path) -> None:
+def test_scores_are_float64_logits_ranked_within_each_week(world: Any, tmp_path: Path) -> None:
     saved = best_seed(_files(tmp_path, {0: 0.3}), LOCK)
     keys = world.examples()[["t_ms", "account_id"]]
     keys = keys[keys["account_id"].isin(["a_mule", "a_r1", "a_h1", "a_shop"])]
@@ -78,7 +78,7 @@ def test_scores_are_float64_logits_ranked_within_each_monday(world: Any, tmp_pat
         expected = day["logit"].rank(method="min", ascending=False).astype(int)
         assert day["rank"].tolist() == expected.tolist()
         assert sorted(day["rank"]) == [1, 2, 3, 4]
-    # Logits a float32 sigmoid would tie still rank apart: one batch per Monday, whose four
+    # Logits a float32 sigmoid would tie still rank apart: one batch per week, whose four
     # logits are 40 and steps of 1e-5 above it.
     model = saved.model
 

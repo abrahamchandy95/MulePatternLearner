@@ -7,20 +7,20 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
+from mule_pattern_learner.config import DEFAULT_CONFIG
 from mule_pattern_learner.contract import TABLES
 from mule_pattern_learner.testing.reference.graph import DTYPES, frame
 from mule_pattern_learner.testing.world import DAY_MS, HOUR_MS, NO_RING, Mule, T, WorldBuilder
-from mule_pattern_learner.tigergraph.queries.rows import MONDAY_MS, WEEK_MS
 
 
 def _rows(world: WorldBuilder, table: str) -> list[tuple[object, ...]]:
     return list(world.tables()[table].itertuples(index=False, name=None))
 
 
-def test_t_is_a_scored_monday_at_midnight() -> None:
+def test_t_is_the_start_of_a_scored_week_at_midnight() -> None:
     # 2024-07-01 is 182 days, 26 weeks, after the export start 2024-01-01 (1,704,067,200,000).
     assert T == 1_704_067_200_000 + 182 * DAY_MS
-    assert T % WEEK_MS == MONDAY_MS and DAY_MS == 24 * HOUR_MS
+    assert T in DEFAULT_CONFIG.calendar.week_starts() and DAY_MS == 24 * HOUR_MS
 
 
 def test_every_table_has_the_contracts_columns_and_types_even_when_empty() -> None:

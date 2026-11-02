@@ -1,0 +1,45 @@
+USE GRAPH Mule_Pattern_Learner
+CREATE OR REPLACE QUERY list_accounts(
+    UINT t_ms, // The scoring time after the first 90 days
+    STRING after_id, // The id the page starts after, empty for the first page
+    INT page // The most accounts the page holds, from 1 to 10000
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+
+    /* Constants */
+    UINT LOOKBACK_MS = 7776000000; // 90 days
+
+    /* Edge types */
+    SetAccum<STRING> @@account_to_owner_edge_type; // Account -> its owner
+    @@account_to_owner_edge_type += "Account_Owned_By_Party";
+
+    /* Accumulators */
+    MaxAccum<STRING> @owner_id; // The id of an account's owner, the largest if several
+
+    IF t_ms <= LOOKBACK_MS OR t_ms % 1000 != 0 OR page < 1 OR page > 10000 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+
+    /* Traverse: Account -> its owner, for the internal deposit accounts open at t, a page by id */
+    accounts = SELECT a
+        FROM Account:a - (@@account_to_owner_edge_type>:o) - Party:q
+        WHERE a.id > after_id
+            AND NOT a.is_external AND a.account_type == "deposit"
+            AND a.opened_ms < t_ms
+            AND ( a.closed_ms == 0 OR a.closed_ms >= t_ms )
+            AND o.valid_from_ms < t_ms
+            AND ( o.valid_to_ms == 0 OR o.valid_to_ms > t_ms - LOOKBACK_MS )
+        ACCUM
+            a.@owner_id += q.id
+        ORDER BY a.id ASC
+        LIMIT page
+    ;
+
+    /* Printing the accounts */
+    PRINT "ok" AS status;
+    PRINT accounts[
+        accounts.id AS account_id,
+        accounts.@owner_id AS owner_id
+    ] AS accounts;
+
+}

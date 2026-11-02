@@ -34,7 +34,7 @@ KEY = AnswerKey(
 
 
 def _world() -> WorldBuilder:
-    """On the Monday T:
+    """At the time T:
 
     - a_r1 and a_r2, customers r1 and r2 of ring 7, both active; both are enrolled on the device
       d_r since 30 days before t, so d_r is a ring node (two customers reach it) and both accounts
@@ -45,7 +45,7 @@ def _world() -> WorldBuilder:
     - a_b2, of ring 8, active and alone on the device d_solo, paying 50.00 to an external
       account only. No other customer reaches d_solo, and its community is a customer who shares
       nothing, so it does not differ.
-    - a_e1, of ring 7 on its early-warning Monday (active from 2 days after t), enrolled on d_r.
+    - a_e1, of ring 7 at its early-warning time (active from 2 days after t), enrolled on d_r.
       It is no positive, so it counts in neither table, and no ring node, since only active
       mules make ring nodes.
     """
@@ -68,7 +68,7 @@ def _world() -> WorldBuilder:
 def _frame(accounts: list[str]) -> pd.DataFrame:
     scores = pd.DataFrame({"t_ms": [T] * len(accounts), "account_id": accounts, "logit": 0.0})
     return evaluation_frame(
-        scores, scores.loc[:, ["t_ms", "account_id"]].assign(weight=1.0), KEY, frozenset()
+        scores, scores.loc[:, ["t_ms", "account_id"]].assign(weight=1.0), KEY, frozenset(), (T,)
     )
 
 
@@ -106,7 +106,7 @@ def test_the_ring_reports_of_a_reference_world(parity: Path, tmp_path: Path) -> 
 def test_the_ring_reports_with_no_positive_have_no_share(parity: Path, tmp_path: Path) -> None:
     cache = Cache(tmp_path / "cache")
     fetch(Spy(_world().graph()), cache, {T: ACCOUNTS}, parity=parity)
-    # a_e1 alone is on its early-warning Monday, so there is no positive to share anything.
+    # a_e1 alone is at its early-warning time, so there is no positive to share anything.
     tables = ring_reports(cache, _frame(["a_e1"]))
     assert tables[ENDPOINTS]["positives"].tolist() == [0]
     assert np.isnan(tables[ENDPOINTS]["share"].iloc[0])

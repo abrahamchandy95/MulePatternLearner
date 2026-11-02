@@ -30,7 +30,7 @@ from mule_pattern_learner.testing.world import DAY_MS, T
 from mule_pattern_learner.training.batches import training_batches
 
 T1 = T + 7 * DAY_MS
-MONDAYS = (T, T1)
+TIMES = (T, T1)
 MULES = ("a_collector", "a_mule", "a_mule2", "a_mule3", "a_r1", "a_r2")
 WORLD = "0123456789abcdef0123456789abcdef"
 # Short training runs: a few epochs of small batches at a higher learning rate, one prior.
@@ -41,28 +41,28 @@ SHORT = replace(
 
 @dataclass(frozen=True)
 class TrainingWorld:
-    """The cache of the batch world's rows, its world identity, its Mondays, its scorable
+    """The cache of the batch world's rows, its world identity, its times, its scorable
     accounts of T and its mules."""
 
     cache: Cache
     identity: str
-    mondays: tuple[int, ...]
+    times: tuple[int, ...]
     accounts: tuple[str, ...]
     mules: tuple[str, ...]
 
     def examples(self, positives: tuple[str, ...] | None = None) -> pd.DataFrame:
-        """The training examples of both Mondays: every scorable account, positive when it is
+        """The training examples of both weeks: every scorable account, positive when it is
         one of positives (the mules by default), each weighing 1."""
         chosen = self.mules if positives is None else positives
         rows = [
             (t_ms, account, int(account in chosen), 1.0)
-            for t_ms in self.mondays
+            for t_ms in self.times
             for account in self.accounts
         ]
         return pd.DataFrame(rows, columns=["t_ms", "account_id", "label", "weight"])
 
     def selection_keys(self, t_ms: int = T) -> pd.DataFrame:
-        """The selection keys of one Monday: every scorable account ranked, the mules
+        """The selection keys of one week: every scorable account ranked, the mules
         positive, each weighing 1."""
         return pd.DataFrame(
             {
@@ -90,8 +90,8 @@ def world(tmp_path_factory: pytest.TempPathFactory) -> TrainingWorld:
     accounts = tuple(account.account_id for account in list_population(graph, T))
     assert len(accounts) == 224 and set(MULES) <= set(accounts)
     cache = Cache(folder / "cache")
-    fetch(Spy(graph), cache, {t_ms: accounts for t_ms in MONDAYS}, parity=parity)
-    return TrainingWorld(cache, WORLD, MONDAYS, accounts, MULES)
+    fetch(Spy(graph), cache, {t_ms: accounts for t_ms in TIMES}, parity=parity)
+    return TrainingWorld(cache, WORLD, TIMES, accounts, MULES)
 
 
 @pytest.fixture(scope="session")

@@ -19,7 +19,12 @@ from mule_pattern_learner.config import DEFAULT_CONFIG, WorldConfig
 from mule_pattern_learner.data.labels import read_identified
 from mule_pattern_learner.data.population import list_population
 from mule_pattern_learner.evaluation.answer_key import read_answer_key
-from mule_pattern_learner.evaluation.audit import CLOCK_PROBE, FEATURE_AUDIT, GATE_RECORD
+from mule_pattern_learner.evaluation.audit import CLOCK_GAIN, FEATURE_AUDIT, GATE_RECORD
+from mule_pattern_learner.evaluation.clock_invariance import (
+    CLOCK_INVARIANCE,
+    Compared,
+    Invariance,
+)
 from mule_pattern_learner.evaluation.label_checks import IDENTIFICATION_HORIZON, LABEL_CHECKS
 from mule_pattern_learner.evaluation.rankings import HEADLINE
 from mule_pattern_learner.evaluation.report import (
@@ -45,7 +50,7 @@ from mule_pattern_learner.testing.world import DAY_MS, T
 from mule_pattern_learner.tigergraph.queries import VERSIONS
 
 W = 7 * DAY_MS
-MONDAYS = (T, T + W, T + 2 * W)
+TIMES = (T, T + W, T + 2 * W)
 CURRENT = MadeUnder(dict(VERSIONS), "c" * 32, "s" * 32)
 PASSED = {GATE_RECORD: True, **dict.fromkeys(LABEL_CHECKS, True), IDENTIFICATION_HORIZON: True}
 
@@ -75,28 +80,56 @@ def _record(
     )
 
 
+def _invariance(passed: bool) -> Invariance:
+    """The clock invariance test's finding of a model whose recall moves by nothing, or by 0.3."""
+    shift = 0.0 if passed else 0.3
+    interval = (-0.01, 0.01) if passed else (0.25, 0.35)
+    recall = Compared(0.6 + shift, 0.6, shift, interval)
+    return Invariance(
+        recall,
+        Compared(0.9, 0.9, 0.0, (-0.01, 0.01)),
+        0.05,
+        passed,
+        rows=80,
+        mule_rows=40,
+        clusters=80,
+        mule_clusters=40,
+        mule_rows_left_out=2,
+        nonmule_rows_left_out=5,
+    )
+
+
 def _all_passing() -> None:
     for world in ROTATION:
-        _record(world, {**PASSED, CLOCK_PROBE: True})
+        _record(world, {**PASSED, CLOCK_GAIN: True})
     for world in DEVELOPMENT:
-        _record(world, {**PASSED, CLOCK_PROBE: False, FEATURE_AUDIT: True})
+        _record(world, {**PASSED, CLOCK_GAIN: False, FEATURE_AUDIT: True})
 
 
 def test_a_result_is_reported_when_every_gate_passed(data_dir: Path) -> None:
     _all_passing()
-    found = verdict(ROTATION, DEVELOPMENT, CURRENT)
+    found = verdict(ROTATION, DEVELOPMENT, CURRENT, _invariance(True))
     assert found.reported and found.reasons == ()
+
+
+def test_a_result_needs_the_clock_invariance_test_to_have_run_and_passed(data_dir: Path) -> None:
+    _all_passing()
+    # Every audit record passes; the model does not, or the test was not run.
+    failed = verdict(ROTATION, DEVELOPMENT, CURRENT, _invariance(False))
+    assert not failed.reported and failed.reasons == (f"{CLOCK_INVARIANCE} did not pass",)
+    skipped = verdict(ROTATION, DEVELOPMENT, CURRENT, None)
+    assert not skipped.reported and skipped.reasons == (f"{CLOCK_INVARIANCE} was not run",)
 
 
 def test_a_missing_or_failed_record_makes_results_development_only(data_dir: Path) -> None:
     _all_passing()
-    _record(ROTATION[1], {**PASSED, CLOCK_PROBE: False})
+    _record(ROTATION[1], {**PASSED, CLOCK_GAIN: False})
     _record(DEVELOPMENT[2], {**PASSED, FEATURE_AUDIT: False})
     (Store(ROTATION[2][1]).folder / "audit.toml").unlink()
-    found = verdict(ROTATION, DEVELOPMENT, CURRENT)
+    found = verdict(ROTATION, DEVELOPMENT, CURRENT, _invariance(True))
     assert not found.reported
     assert found.reasons == (
-        "B: clock_probe did not pass",
+        "B: clock_gain did not pass",
         "C has no audit record",
         "D3: the feature audit did not pass",
     )
@@ -108,12 +141,16 @@ def test_records_of_other_versions_or_development_worlds_are_not_reported(
     _all_passing()
     other = replace(CURRENT, versions={**CURRENT.versions, "read_hubs": "read_hubs-000000000000"})
     _record(DEVELOPMENT[0], {**PASSED, FEATURE_AUDIT: True}, other)
-    assert verdict(ROTATION, DEVELOPMENT, CURRENT).reasons == (
+    passed = _invariance(True)
+    assert verdict(ROTATION, DEVELOPMENT, CURRENT, passed).reasons == (
         "D1 was audited under other query versions or settings",
     )
-    found = verdict(DEVELOPMENT, DEVELOPMENT[1:], CURRENT)
+    found = verdict(DEVELOPMENT, DEVELOPMENT[1:], CURRENT, passed)
     assert "D2 is a development world" in found.reasons and not found.reported
-    assert "no world of the development rotation is given" in verdict(ROTATION, [], CURRENT).reasons
+    assert (
+        "no world of the development rotation is given"
+        in verdict(ROTATION, [], CURRENT, passed).reasons
+    )
 
 
 def _manifest(reasons: tuple[str, ...], dirty: bool) -> dict[str, object]:
@@ -156,21 +193,19 @@ def _noise(name: str) -> float:
 
 
 def _scored_world(graph: ReferenceGraph, parity: Path, tmp_path: Path) -> ScoredWorld:
-    """The evaluation world scored whole on its three Mondays: every key at weight 1."""
+    """The evaluation world scored whole in its three weeks: every key at weight 1."""
     identity = "ab" * 16
     store = Store(identity)
     store.write_answer_key(read_answer_key(Spy(graph)))
     store.write_labels(read_identified(Spy(graph)))
-    populations = {
-        t_ms: [row.account_id for row in list_population(graph, t_ms)] for t_ms in MONDAYS
-    }
+    populations = {t_ms: [row.account_id for row in list_population(graph, t_ms)] for t_ms in TIMES}
     cache = Cache(tmp_path / "cache")
     fetch(Spy(graph), cache, populations, parity=parity)
     keys = pd.DataFrame(
         [(t_ms, account, 1.0) for t_ms, accounts in populations.items() for account in accounts],
         columns=["t_ms", "account_id", "weight"],
     )
-    return ScoredWorld.of(identity, cache, keys)
+    return ScoredWorld.of(identity, cache, keys, TIMES)
 
 
 def _run(world: ScoredWorld, ranker: str, seed: int | None, score: float, strength: float) -> Run:
@@ -216,7 +251,7 @@ def test_a_rotations_evaluation(
     # The GNN ranks the planted mules far above the ablation, which ranks them at random.
     assert comparisons[("gnn_scored_alone", "roc_auc")]["difference"] > 0.3
     assert comparisons[("gnn_scored_alone", "roc_auc")]["shown"]
-    assert len(tables["per_monday"]) == 5 * 3
+    assert len(tables["per_week"]) == 5 * 3
     spread = {
         (str(row["ranker"]), str(row["group"]), str(row["metric"])): row
         for row in tables["spread"].to_dict("records")
@@ -225,7 +260,7 @@ def test_a_rotations_evaluation(
     # An XGBoost comparison is one model: no seed in its rows, no spread over seeds, and the
     # comparison sets the mean of the GNN's seeds against that one model.
     assert {ranker for ranker, _, _ in spread} == {"gnn", "gnn_scored_alone"}
-    for name in ("metrics", "per_monday", "groups"):
+    for name in ("metrics", "per_week", "groups"):
         held = tables[name]
         assert str(held["seed"].dtype) == "Int64"
         assert held.loc[held["ranker"] == "xgboost_own", "seed"].isna().all()
@@ -240,6 +275,8 @@ def test_a_rotations_evaluation(
     )
     assert "hidden_ring" in set(tables["groups"]["group"])
     assert "groups" in tables["mules"].columns and "selection_correlation" not in tables
+    # No invariance test was handed in, so no table of one is written.
+    assert CLOCK_INVARIANCE not in tables and not (folder / "clock_invariance.parquet").exists()
     # The two ring reports are written with the other results of the rotation.
     assert {"ring_endpoints", "ring_community"} <= set(tables)
     assert (folder / "ring_endpoints.parquet").exists() and (
@@ -274,6 +311,37 @@ def test_a_rotations_evaluation(
     assert calls == dict.fromkeys([(held.ranker, held.seed) for held in runs], 1)
     pd.testing.assert_frame_equal(lazy["metrics"], tables["metrics"])
     pd.testing.assert_frame_equal(lazy["groups"], tables["groups"])
+
+
+def test_the_clock_invariance_table_is_written_beside_the_other_results(
+    graph: ReferenceGraph, parity: Path, data_dir: Path, tmp_path: Path
+) -> None:
+    world = _scored_world(graph, parity, tmp_path)
+    folder = tmp_path / "results"
+    audit = replace(DEFAULT_CONFIG.audit, replicates=30)
+    tables = evaluate(
+        world,
+        [_run(world, "gnn", 0, 0.5, 2.0)],
+        audit,
+        0,
+        folder,
+        rotation="D1D2D3",
+        verdict_found=Verdict(()),
+        invariance=_invariance(False),
+    )
+    assert tables[CLOCK_INVARIANCE].equals(_invariance(False).frame())
+    written = pd.read_parquet(folder / "clock_invariance.parquet")
+    # One row, marked with the rotation and, the verdict having no reason, reported: the table
+    # holds the test's finding, which the caller has already judged into the verdict.
+    assert written["rotation"].tolist() == ["D1D2D3"] and written["development_only"].tolist() == [
+        False
+    ]
+    assert written["passed"].tolist() == [False]
+    assert written["recall_at_1pct_difference"].item() == pytest.approx(0.3)
+    # The rows compared and left out, and the mule clusters the minimum is judged by.
+    counts = ["rows", "mule_rows", "clusters", "mule_clusters"]
+    left_out = ["mule_rows_left_out", "nonmule_rows_left_out"]
+    assert written[counts + left_out].iloc[0].tolist() == [80, 40, 80, 40, 2, 5]
 
 
 def test_distinct_accounts_alerted_are_not_available_under_the_fallback_sample(

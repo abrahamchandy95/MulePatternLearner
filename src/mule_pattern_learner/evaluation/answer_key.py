@@ -3,22 +3,28 @@ per world by mule audit through the evaluation executor, which runs read_answer_
 page at a time by strictly increasing id, and kept in the evaluation store (evaluation.store) so
 that no world is loaded again for evaluation.
 
-Beside the reader, what evaluation asks of a true mule on a Monday t (docs/design.md,
-"Positives, dropped Mondays and the activity period" and "Metrics"):
+Beside the reader, what evaluation asks of a true mule at a scoring time t (docs/design.md,
+"Positives, dropped weeks and the activity period" and "Metrics"):
 
-- active when mule_onset_ms < t <= mule_last_ms + 7 days, as an identified mule is positive;
-- on its early-warning Monday, the one Monday with mule_onset_ms - 7 days < t <= mule_onset_ms;
-- before activity on every earlier Monday, and after activity on every Monday after
-  mule_last_ms + 7 days.
+- active when mule_onset_ms < t <= mule_last_ms + W(t), W(t) being the longer of 7 days and the
+  time since the previous scoring time, as an identified mule is positive (data.labels, which the
+  world's scoring times are passed to, never recomputed here);
+- at its early-warning time when t <= mule_onset_ms < next(t), next(t) being the first scoring
+  time after t, or t + 7 days when there is none: the last scoring time at or before its first
+  ring payment, so a mule has exactly one when the first scoring time is no later than its
+  onset and its onset is before the last scoring time plus 7 days;
+- before activity at every other time up to its onset, and after activity at every later time at
+  which it is not active.
 
-An account with is_mule 0 is a non-mule on every Monday. True mules outside their activity are
-left out of every ranking; their scores on the early-warning Monday and after activity are
+An account with is_mule 0 is a non-mule at every time. True mules outside their activity are
+left out of every ranking; their scores at the early-warning time and after activity are
 reported apart.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from bisect import bisect_right
+from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass, fields
 from functools import cached_property
 
@@ -26,34 +32,60 @@ import numpy as np
 from numpy.typing import NDArray
 import pandas as pd
 
+from ..data.labels import active_at, active_rows
 from ..tigergraph.executor import EvaluationExecutor, QueryExecutor
-from ..tigergraph.queries import READ_ANSWER_KEY, VERSIONS
+from ..tigergraph.queries import READ_ANSWER_KEY
 from ..tigergraph.queries import read_answer_key as answer_key_query
 from ..tigergraph.queries.read_answer_key import AccountTruth
 from ..tigergraph.queries.rows import DAY_MS, PAGE_LIMIT
 from .statuses import ACTIVE, AFTER, BEFORE, EARLY_WARNING, NON_MULE
 
-# How long after its last payment a mule stays active, and how long before its onset its
-# early-warning Monday may fall: a week each.
+# How far after t the next scoring time is taken to be when none follows it: a week.
 WEEK_MS = 7 * DAY_MS
 # The answer key's columns, in the order of its rows' fields.
 COLUMNS = tuple(field.name for field in fields(AccountTruth))
 
 
-def active(truth: AccountTruth, t_ms: int) -> bool:
-    """Whether a true mule is active on the Monday t: its onset strictly before t, its last
-    payment at most 7 days before t."""
-    return truth.is_mule == 1 and truth.mule_onset_ms < t_ms <= truth.mule_last_ms + WEEK_MS
+def active(truth: AccountTruth, t_ms: int, scoring_times: Sequence[int]) -> bool:
+    """Whether a true mule is active at the scoring time t (data.labels.active_at) in the world
+    whose scoring times, in increasing order, are given."""
+    return truth.is_mule == 1 and active_at(
+        truth.mule_onset_ms, truth.mule_last_ms, t_ms, scoring_times
+    )
 
 
-def status(truth: AccountTruth, t_ms: int) -> str:
-    """What the account is on the Monday t: a non-mule, or a true mule active, on its
-    early-warning Monday, before it or after its activity."""
+def early_warning_at(onset_ms: int, t_ms: int, scoring_times: Sequence[int]) -> bool:
+    """Whether t is the early-warning time of a mule whose first ring payment is at onset_ms:
+    t <= onset_ms < next(t), next(t) the first of scoring_times (in increasing order) after t, or
+    t + 7 days when none is. So an onset exactly at a scoring time makes that time its
+    early-warning time, and not the one before."""
+    after = bisect_right(scoring_times, t_ms)
+    following = scoring_times[after] if after < len(scoring_times) else t_ms + WEEK_MS
+    return t_ms <= onset_ms < following
+
+
+def early_warning_rows(
+    onset_ms: NDArray[np.int64], t_ms: NDArray[np.int64], scoring_times: Sequence[int]
+) -> NDArray[np.bool_]:
+    """early_warning_at for every row of aligned arrays, as a vectorised form of it."""
+    following = t_ms + WEEK_MS
+    times = np.asarray(scoring_times, dtype=np.int64)
+    if len(times):
+        after = np.searchsorted(times, t_ms, side="right")
+        following = np.where(
+            after < len(times), times[np.minimum(after, len(times) - 1)], following
+        )
+    return (t_ms <= onset_ms) & (onset_ms < following)
+
+
+def status(truth: AccountTruth, t_ms: int, scoring_times: Sequence[int]) -> str:
+    """What the account is at the scoring time t: a non-mule, or a true mule active, at its
+    early-warning time, before it or after its activity."""
     if truth.is_mule != 1:
         return NON_MULE
-    if active(truth, t_ms):
+    if active(truth, t_ms, scoring_times):
         return ACTIVE
-    if truth.mule_onset_ms - WEEK_MS < t_ms <= truth.mule_onset_ms:
+    if early_warning_at(truth.mule_onset_ms, t_ms, scoring_times):
         return EARLY_WARNING
     return BEFORE if t_ms <= truth.mule_onset_ms else AFTER
 
@@ -63,14 +95,16 @@ def statuses(
     is_mule: NDArray[np.int64],
     onset_ms: NDArray[np.int64],
     last_ms: NDArray[np.int64],
+    scoring_times: Sequence[int],
 ) -> NDArray[np.str_]:
     """status for every row of aligned arrays, as a vectorised form of it."""
     mule = is_mule == 1
+    active = active_rows(onset_ms, last_ms, t_ms, scoring_times)
     found = np.full(len(t_ms), NON_MULE, dtype=object)
     found[mule & (t_ms <= onset_ms)] = BEFORE
-    found[mule & (onset_ms - WEEK_MS < t_ms) & (t_ms <= onset_ms)] = EARLY_WARNING
-    found[mule & (onset_ms < t_ms) & (t_ms <= last_ms + WEEK_MS)] = ACTIVE
-    found[mule & (t_ms > last_ms + WEEK_MS)] = AFTER
+    found[mule & early_warning_rows(onset_ms, t_ms, scoring_times)] = EARLY_WARNING
+    found[mule & active] = ACTIVE
+    found[mule & (onset_ms < t_ms) & ~active] = AFTER
     return found.astype(str)
 
 
@@ -127,7 +161,7 @@ def parse_rows(rows: Iterable[dict[str, object]]) -> AnswerKey:
     account, so that stored rows pass the live checks."""
     listed = list(rows)
     response: list[dict[str, object]] = [
-        {"status": "ok", "version": VERSIONS[READ_ANSWER_KEY]},
+        {"status": "ok"},
         {"accounts": [{"attributes": row} for row in listed]},
     ]
     return AnswerKey(answer_key_query.parse(response, "", max(1, len(listed))))

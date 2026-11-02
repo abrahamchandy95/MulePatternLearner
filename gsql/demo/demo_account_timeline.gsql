@@ -1,0 +1,179 @@
+USE GRAPH Mule_Pattern_Learner
+
+/* Demo: one account's money over time, the behaviour the temporal features are built to
+   see, on gsql/schema/schema.gsql (the 22-table export contract of docs/design.md).
+
+   Prints, per week (from its Monday): payments in and out, their amounts, and the inflows
+   from a sender paying the account for the first time, so a sudden burst of new senders
+   shows. Then how fast money that came in went out again. An inflow is passed on within an
+   hour, a day or a week when the account's payments out, from its arrival to the end of
+   that window, add up to at least cover_share of it; the amount that left is those payments
+   out, up to the inflow's amount. The inflows are counted by the first window that passes
+   each on, or "not within a week", with the amount received and the amount that left. A
+   payment out counts toward every inflow it follows, so when inflows arrive close together
+   one payment out can cover several of them. Every payment of the account counts whatever
+   its date, since a demo shows the loaded world as it stands, not a Monday's view of it.
+
+   Then max_rows payments in time order from from_ms (a UTC time in milliseconds), each with
+   its time, its counterparty, what that counterparty is (known mule, hidden mule, customer,
+   other bank or the bank's ledger) and, for an inflow, the first window that passed it on
+   and the share of it that had left by then. They are drawn too: each payment between the
+   account that paid and the account paid, its edges pointing the way the money went, with
+   the accounts on the other side, so GraphStudio shows the money flowing through the
+   account. A payer with more than 5,000 payments out is drawn by the payment's edge to it
+   instead, which points the other way.
+
+   This is a demo only. It reads is_mule, the truth, and pu_label, the bank's identification,
+   which the Labels guard of docs/design.md allows read_answer_key and read_labels alone to
+   read. It is never a training input, no example, cache or model is built from it, and it
+   is not one of the twelve queries that mule install installs. */
+CREATE OR REPLACE QUERY demo_account_timeline(
+    VERTEX<Account> account,
+    UINT from_ms = 0,
+    INT max_rows = 100,
+    DOUBLE cover_share = 0.8
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+    SumAccum<STRING> @direction, @rail, @counterparty, @counterparty_kind, @window, @passed_on,
+        @time;
+    SumAccum<DOUBLE> @out_1h, @out_1d, @out_7d, @left;
+    OrAccum @row;
+    MapAccum<STRING, MinAccum<UINT>> @@first_from;
+    MapAccum<STRING, SumAccum<INT>> @@weekly_in, @@weekly_out, @@weekly_new_senders;
+    MapAccum<STRING, SumAccum<DOUBLE>> @@weekly_in_amount, @@weekly_out_amount;
+    MapAccum<STRING, SumAccum<INT>> @@passed_on_count;
+    MapAccum<STRING, SumAccum<DOUBLE>> @@amount_received, @@amount_left;
+    SetAccum<EDGE> @@flow;
+
+    IF cover_share <= 0 OR cover_share > 1 THEN
+        PRINT "cover_share must be above 0 and at most 1" AS error;
+        RETURN;
+    END;
+
+    Start = {account};
+    InPay = SELECT t FROM Start:a -(Account_Received_Transaction>:e1)- Payment_Transaction:t
+        -(Transaction_From_Account>:e2)- Account:b
+      ACCUM t.@direction += "in", t.@rail += t.payment_rail, t.@counterparty += b.id,
+        t.@counterparty_kind += (CASE WHEN b.pu_label == 1 THEN "known mule"
+          WHEN b.is_mule == 1 THEN "hidden mule" WHEN b.account_type == "gl" THEN "bank ledger"
+          WHEN b.is_external THEN "other bank" ELSE "customer" END),
+        @@first_from += (b.id -> t.event_ts_ms);
+    InZelle = SELECT t FROM Start:a -(Account_Received_Zelle_Transfer>:e1)- Zelle_Transfer:t
+        -(Transfer_From_Account>:e2)- Account:b
+      ACCUM t.@direction += "in", t.@rail += "zelle", t.@counterparty += b.id,
+        t.@counterparty_kind += (CASE WHEN b.pu_label == 1 THEN "known mule"
+          WHEN b.is_mule == 1 THEN "hidden mule" WHEN b.account_type == "gl" THEN "bank ledger"
+          WHEN b.is_external THEN "other bank" ELSE "customer" END),
+        @@first_from += (b.id -> t.event_ts_ms);
+    OutPay = SELECT t FROM Start:a -(Account_Initiated_Transaction>:e1)- Payment_Transaction:t
+        -(Transaction_To_Account>:e2)- Account:b
+      ACCUM t.@direction += "out", t.@rail += t.payment_rail, t.@counterparty += b.id,
+        t.@counterparty_kind += (CASE WHEN b.pu_label == 1 THEN "known mule"
+          WHEN b.is_mule == 1 THEN "hidden mule" WHEN b.account_type == "gl" THEN "bank ledger"
+          WHEN b.is_external THEN "other bank" ELSE "customer" END);
+    OutZelle = SELECT t FROM Start:a -(Account_Sent_Zelle_Transfer>:e1)- Zelle_Transfer:t
+        -(Transfer_To_Account>:e2)- Account:b
+      ACCUM t.@direction += "out", t.@rail += "zelle", t.@counterparty += b.id,
+        t.@counterparty_kind += (CASE WHEN b.pu_label == 1 THEN "known mule"
+          WHEN b.is_mule == 1 THEN "hidden mule" WHEN b.account_type == "gl" THEN "bank ledger"
+          WHEN b.is_external THEN "other bank" ELSE "customer" END);
+    Inflows = InPay UNION InZelle;
+    Outflows = OutPay UNION OutZelle;
+
+    /* The account's payments out within an hour, a day and a week of each inflow, from its
+       arrival on. */
+    Followed = SELECT i FROM Inflows:i -((Transaction_To_Account>|Transfer_To_Account>):e1)-
+        Account:a -((Account_Initiated_Transaction>|Account_Sent_Zelle_Transfer>):e2)-
+        (Payment_Transaction|Zelle_Transfer):o
+      WHERE a == account AND o.event_ts_ms >= i.event_ts_ms
+        AND o.event_ts_ms <= i.event_ts_ms + 604800000
+      ACCUM
+        i.@out_7d += o.amount,
+        IF o.event_ts_ms <= i.event_ts_ms + 86400000 THEN i.@out_1d += o.amount END,
+        IF o.event_ts_ms <= i.event_ts_ms + 3600000 THEN i.@out_1h += o.amount END;
+    /* The first window whose payments out cover cover_share of each inflow, and the amount
+       that left by its end, up to the inflow's amount. */
+    Covered = SELECT i FROM Inflows:i
+      POST-ACCUM
+        IF i.@out_1h >= cover_share * i.amount THEN
+            i.@window += "within an hour",
+            i.@left += (CASE WHEN i.@out_1h < i.amount THEN i.@out_1h ELSE i.amount END)
+        ELSE IF i.@out_1d >= cover_share * i.amount THEN
+            i.@window += "within a day",
+            i.@left += (CASE WHEN i.@out_1d < i.amount THEN i.@out_1d ELSE i.amount END)
+        ELSE IF i.@out_7d >= cover_share * i.amount THEN
+            i.@window += "within a week",
+            i.@left += (CASE WHEN i.@out_7d < i.amount THEN i.@out_7d ELSE i.amount END)
+        ELSE
+            i.@window += "not within a week",
+            i.@left += (CASE WHEN i.@out_7d < i.amount THEN i.@out_7d ELSE i.amount END)
+        END;
+    Labelled = SELECT i FROM Inflows:i
+      POST-ACCUM
+        i.@passed_on += i.@window + " ("
+          + to_string(CASE WHEN i.amount > 0
+              THEN float_to_int(100.0 * i.@left / i.amount + 0.5) ELSE 100 END)
+          + "% left)";
+
+    Payments = Inflows UNION Outflows;
+    /* Each payment's time as a date and a time of day in UTC. */
+    Timed = SELECT t FROM Payments:t
+      POST-ACCUM
+        t.@time += datetime_format(epoch_to_datetime(t.event_ts_ms / 1000), "%Y-%m-%d %H:%M:%S");
+    Weekly = SELECT t FROM Payments:t
+      ACCUM
+        INT day = t.event_ts_ms / 86400000,
+        STRING week = datetime_format(epoch_to_datetime((day - (day + 3) % 7) * 86400), "%Y-%m-%d"),
+        IF t.@direction == "in" THEN
+            @@weekly_in += (week -> 1),
+            @@weekly_in_amount += (week -> t.amount),
+            IF t.event_ts_ms == @@first_from.get(t.@counterparty) THEN
+                @@weekly_new_senders += (week -> 1)
+            END,
+            @@passed_on_count += (t.@window -> 1),
+            @@amount_received += (t.@window -> t.amount),
+            @@amount_left += (t.@window -> t.@left)
+        ELSE
+            @@weekly_out += (week -> 1),
+            @@weekly_out_amount += (week -> t.amount)
+        END;
+
+    Rows = SELECT t FROM Payments:t WHERE t.event_ts_ms >= from_ms
+      ORDER BY t.event_ts_ms ASC, t.@direction ASC
+      LIMIT max_rows;
+    /* The rows' money flow: from the account that paid to the payment, and from the
+       payment to the account paid. Every edge is walked forward: walking a payer's edge
+       backward from one payment took about 30 seconds on the 300,000-person graph. So a
+       payer's edge to its payment is found among the payer's own payments, unless it has
+       more than 5,000 of them. */
+    Marked = SELECT t FROM Rows:t POST-ACCUM t.@row += TRUE;
+    Payers = SELECT s FROM Rows:t -((Transaction_From_Account>|Transfer_From_Account>):e)- Account:s
+      ACCUM
+        IF s.outdegree("Account_Initiated_Transaction")
+            + s.outdegree("Account_Sent_Zelle_Transfer") > 5000 THEN
+            @@flow += e
+        END;
+    SmallPayers = SELECT s FROM Payers:s
+      WHERE s.outdegree("Account_Initiated_Transaction")
+        + s.outdegree("Account_Sent_Zelle_Transfer") <= 5000;
+    PaidBy = SELECT t FROM SmallPayers:s
+        -((Account_Initiated_Transaction>|Account_Sent_Zelle_Transfer>):e)-
+        (Payment_Transaction|Zelle_Transfer):t
+      WHERE t.@row
+      ACCUM @@flow += e;
+    Payees = SELECT r FROM Rows:t -((Transaction_To_Account>|Transfer_To_Account>):e)- Account:r
+      ACCUM @@flow += e;
+    FlowAccounts = Payers UNION Payees;
+
+    PRINT Start[Start.account_type, Start.is_mule, Start.pu_label, Start.mule_ring_id];
+    PRINT Inflows.size() AS payments_in, Outflows.size() AS payments_out,
+      @@passed_on_count AS inflows_passed_on, @@amount_received AS amount_received,
+      @@amount_left AS amount_left;
+    PRINT @@weekly_in AS weekly_in, @@weekly_new_senders AS weekly_in_from_new_senders,
+      @@weekly_out AS weekly_out, @@weekly_in_amount AS weekly_in_amount,
+      @@weekly_out_amount AS weekly_out_amount;
+    PRINT Rows[Rows.@time AS time, Rows.amount AS amount, Rows.@direction AS direction,
+      Rows.@rail AS rail, Rows.@counterparty AS counterparty,
+      Rows.@counterparty_kind AS counterparty_kind,
+      Rows.@passed_on AS passed_on] AS payments;
+    PRINT FlowAccounts AS accounts, @@flow AS money_flow;
+}

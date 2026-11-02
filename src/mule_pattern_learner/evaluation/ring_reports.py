@@ -3,7 +3,7 @@ ablation and the community block (docs/design.md, "Comparisons" and "The payment
 read the positives of a run's test world, the active true mules of its frame, and their rows from
 the cache, and nothing else. They are evaluation outputs, never features.
 
-- ring_endpoints: the positives, and how many hold any ring node on their Monday: a device or IP
+- ring_endpoints: the positives, and how many hold any ring node at their t: a device or IP
   that the own edges of active true mules of their ring, at two or more customers, reach
   (development_checks.ring_nodes).
 - ring_community: the positives by whether they hold a ring node, and how many of each have a
@@ -43,7 +43,7 @@ def differs_by_payments(block: Community) -> bool:
 
 def ring_reports(cache: Cache, frame: pd.DataFrame) -> dict[str, pd.DataFrame]:
     """The tables ENDPOINTS and COMMUNITY of a run's test world. frame holds every scored
-    account-Monday with its status and ring (evaluation.rankings.evaluation_frame), and the cache
+    account-week with its status and ring (evaluation.rankings.evaluation_frame), and the cache
     the rows of every active true mule in it, as the test keys always score them."""
     active = frame.loc[frame["status"] == ACTIVE, ["t_ms", "account_id", "mule_ring_id"]]
     accounts_of: dict[int, list[str]] = {}

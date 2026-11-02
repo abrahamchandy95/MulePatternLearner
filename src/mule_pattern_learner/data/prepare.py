@@ -5,14 +5,15 @@ answer key:
 1. match the loaded world to a configured one by its identity file (worlds), and check that it
    holds the calendar's export window (calendar);
 2. read the identified mules once (labels);
-3. for every scored Monday, read the population from the world's cache or list and cache it
-   (population), then find its positives, and, for each role the world plays in the
-   configured rotations, its training draw, its selection keys and its test keys (examples);
+3. for every scored week, at its scoring time, read the population from the world's cache or
+   list and cache it (population), then find its positives, and, for each role the world plays
+   in the configured rotations, its training draw, its selection keys and its test keys
+   (examples);
 4. weigh the training examples, report the world (report), refuse a selection world with too
    few identified active mules, and write the tables to the world's examples folder.
 
 The selection and test keys of a 300,000-person world run to millions of rows, so they are
-written a Monday at a time, and every table appears whole or not at all.
+written a week at a time, and every table appears whole or not at all.
 """
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ from ..config import DEFAULT_CONFIG, RunConfig
 from ..paths import cache_dir
 from ..tigergraph.executor import FetchExecutor, QueryExecutor
 from ..tigergraph.world import cache_key
-from .calendar import check_window, mondays
+from .calendar import check_window, scoring_times
 from .examples import (
     SELECTION_FILE,
     SELECTION_SCHEMA,
@@ -39,11 +40,11 @@ from .examples import (
     Tally,
     examples_folder,
     examples_key,
-    monday,
     scored_frame,
     selection_frame,
     training_frame,
     unlabelled,
+    week,
 )
 from .labels import Labels, read_identified, unscored
 from .population import population
@@ -87,10 +88,10 @@ def prepare(
     tallies: list[Tally] = []
     draws: list[Draw] = []
     try:
-        scored = mondays(config.calendar)
+        scored = scoring_times(config.calendar, loaded.config.seed)
         for t_ms in scored:
             accounts = population(fetch, root, t_ms)
-            day = monday(t_ms, [account.account_id for account in accounts], labels.mules)
+            day = week(t_ms, [account.account_id for account in accounts], labels.mules, scored)
             tallies.append(day.tally())
             if TRAIN in played:
                 draws.append(unlabelled(day, identified, config.data))
@@ -108,7 +109,7 @@ def prepare(
             writers[TRAINING_FILE] = TableWriter(folder / TRAINING_FILE, TRAINING_SCHEMA)
             writers[TRAINING_FILE].write(training)
         writers[REPORT_FILE] = TableWriter(folder / REPORT_FILE, REPORT_SCHEMA)
-        writers[REPORT_FILE].write(report.mondays)
+        writers[REPORT_FILE].write(report.weeks)
     except BaseException:
         for writer in writers.values():
             writer.abort()

@@ -30,11 +30,11 @@ class NonNegativePULoss(Module):
         R_u^-   = (1/n_u) * sum_{i in U} w_i * l_neg_i     # unlabeled, as negative
 
     Each sum is divided by its group's count in the batch, n_p or n_u. The positive
-    risk keeps each mule's weight of 1 over its active Mondays, so every mule counts
+    risk keeps each mule's weight of 1 over its active weeks, so every mule counts
     once however long it ran; the unlabeled risk keeps each draw's weight, so each
-    Monday's draw stands for that Monday's scorable population. The correction term
+    week's draw stands for that week's scorable population. The correction term
     R_p^- reads every positive at unit weight, because a hidden mule enters the
-    unlabeled draw once per active Monday, so the positives it subtracts must count
+    unlabeled draw once per active week, so the positives it subtracts must count
     the same way. data.examples divides each label's weights by their mean over all
     the training examples, once, so a weight is an example's share of its group's
     influence, and unit weights, the default, give the textbook risks exactly.

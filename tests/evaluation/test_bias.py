@@ -51,7 +51,7 @@ def world(graph: ReferenceGraph, parity: Path, tmp_path: Path) -> tuple[Cache, p
     scores = pd.DataFrame({"t_ms": [T] * len(accounts), "account_id": accounts, "logit": 0.0})
     keys = scores.loc[:, ["t_ms", "account_id"]].assign(weight=1.0)
     identified = frozenset({"a_mule", "a_drop"})
-    return cache, evaluation_frame(scores, keys, read_answer_key(Spy(graph)), identified)
+    return cache, evaluation_frame(scores, keys, read_answer_key(Spy(graph)), identified, (T,))
 
 
 def test_the_bins_of_the_internal_share() -> None:
@@ -155,7 +155,7 @@ def test_kept_epochs_are_rescored_on_the_selection_world(
     keys = frame.loc[:, ["t_ms", "account_id", "weight"]]
     batches = ScoringBatches(cache, "w", keys, 8)
     table = rescore_epochs(
-        [path], lock, batches, keys, read_answer_key(Spy(graph)), frozenset({"a_mule"})
+        [path], lock, batches, keys, read_answer_key(Spy(graph)), frozenset({"a_mule"}), (T,)
     )
     row = table.iloc[0]
     assert (row["prior"], row["epoch"], row["selection_score"]) == (1.0, 2, 0.25)

@@ -128,7 +128,7 @@ def _digest(*parts: bytes) -> str:
 
 def training_digest(training: Sequence[Batch]) -> str:
     """A digest of the training examples as the batches hold them, in their order: each one's
-    Monday, account, label and weight."""
+    t, account, label and weight."""
     keys = [key for batch in training for key in batch.keys]
     labels = torch.cat([batch.data.label.cpu() for batch in training]).to(torch.int64)
     weights = torch.cat([batch.data.weight.cpu() for batch in training]).to(torch.float64)
@@ -203,7 +203,7 @@ class SelectionWorld:
 
     @cached_property
     def digest(self) -> str:
-        """A digest of the ranked selection keys: each one's Monday, account, whether it is a
+        """A digest of the ranked selection keys: each one's t, account, whether it is a
         positive and its weight."""
         keys = self.keys
         return _digest(
@@ -326,7 +326,7 @@ def logits(
     device: torch.device,
 ) -> tuple[list[tuple[int, str]], NDArray[np.float64]]:
     """The model's logit of every example of batches, under switch, in evaluation mode, as
-    float64, with each example's (Monday, account) key."""
+    float64, with each example's (t, account) key."""
     model.eval()
     keys: list[tuple[int, str]] = []
     found: list[Tensor] = []

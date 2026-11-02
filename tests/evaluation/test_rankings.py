@@ -1,14 +1,14 @@
 """The rankings of the test world and what one run found, on hand-made rankings (docs/design.md,
-"Rankings" and "Metrics"), and the ring link of an early-warning Monday on the reference world.
+"Rankings" and "Metrics"), and the ring link of an early-warning time on the reference world.
 
-Two Mondays, T and T + 1 week, each ranking eight non-mules n1 to n8 at logits 0.1 to 0.8, each
-standing for 25 accounts, and the true mules active that Monday at weight 1, 202 in all: the
+Two weeks, T and T + 1 week, each ranking eight non-mules n1 to n8 at logits 0.1 to 0.8, each
+standing for 25 accounts, and the true mules active that week at weight 1, 202 in all: the
 top 1% is 2.02 and the top 5% 10.1.
 
-- m1, of ring 5 and identified, active on both Mondays (onset the day before T): at 0.95 it tops
+- m1, of ring 5 and identified, active in both weeks (onset the day before T): at 0.95 it tops
   T; at 0.25 on T + 1 week, 151 of weight rank above it.
-- m2, of ring 5, onset 4 days after T: T is its early-warning Monday, at 0.9, under m1 alone;
-  active on T + 1 week, where at 0.99 it tops the Monday.
+- m2, of ring 5, onset 4 days after T: T is its early-warning time, at 0.9, under m1 alone;
+  active on T + 1 week, where at 0.99 it tops the week.
 - m3, of no ring, active at T (its last payment the day before T), where at 0.05 it is last;
   after its activity on T + 1 week, at 0.85, under m2 alone.
 """
@@ -60,6 +60,8 @@ from mule_pattern_learner.training.trainer import gnn_lock, logits
 
 D, W = DAY_MS, 7 * DAY_MS
 T1 = T + W
+# The world's two scoring times, a week apart, which the status of each account is read at.
+TIMES = (T, T1)
 KEY = AnswerKey(
     (
         AccountTruth("m1", 1, 5, T - D, T + 3 * D, 0, "deposit", True),
@@ -88,7 +90,7 @@ def _frame() -> pd.DataFrame:
     keys = scores.loc[:, ["t_ms", "account_id"]].assign(
         weight=[25.0 if account[0] == "n" else 1.0 for account in scores["account_id"]]
     )
-    return evaluation_frame(scores, keys, KEY, frozenset({"m1"}))
+    return evaluation_frame(scores, keys, KEY, frozenset({"m1"}), TIMES)
 
 
 def test_the_evaluation_frame_holds_each_keys_status_and_truth() -> None:
@@ -108,10 +110,10 @@ def test_an_evaluation_frame_needs_a_logit_and_a_truth_for_every_key() -> None:
     scores = pd.DataFrame({"t_ms": [T], "account_id": ["n1"], "logit": [0.1]})
     keys = pd.DataFrame({"t_ms": [T, T], "account_id": ["n1", "n2"], "weight": [1.0, 1.0]})
     with pytest.raises(ValueError, match="not those of the test keys"):
-        evaluation_frame(scores, keys, KEY, frozenset())
+        evaluation_frame(scores, keys, KEY, frozenset(), TIMES)
     scores = pd.DataFrame({"t_ms": [T], "account_id": ["ghost"], "logit": [0.1]})
     with pytest.raises(ValueError, match="no truth"):
-        evaluation_frame(scores, keys.iloc[:1].assign(account_id="ghost"), KEY, frozenset())
+        evaluation_frame(scores, keys.iloc[:1].assign(account_id="ghost"), KEY, frozenset(), TIMES)
 
 
 def test_an_evaluation_frame_refuses_a_truth_that_shares_a_column_with_its_keys(
@@ -130,15 +132,15 @@ def test_an_evaluation_frame_refuses_a_truth_that_shares_a_column_with_its_keys(
 def test_the_ranking_leaves_out_mules_outside_their_activity() -> None:
     frame = _frame()
     ranking = Ranking.of(frame, (frame["status"] == ACTIVE).to_numpy())
-    # m2 at T and m3 at T + 1 week are not ranked: ten rows each Monday.
+    # m2 at T and m3 at T + 1 week are not ranked: ten rows each week.
     assert len(ranking.frame) == 20 and int(ranking.positive.sum()) == 4
     values = dict(zip(HEADLINE, ranking.headline().tolist(), strict=True))
-    # m1 at T and m2 at T + 1 week top their Mondays, inside even the 2.02 of the top 1%;
+    # m1 at T and m2 at T + 1 week top their weeks, inside even the 2.02 of the top 1%;
     # m3 at T and m1 at T + 1 week are under the top 5%: 2 of 4 found at each budget.
     assert values["recall_at_1pct"] == 0.5 and values["recall_at_5pct"] == 0.5
     assert values["precision_at_1pct"] == pytest.approx(2 / (2 * 2.02))
     assert values["precision_at_5pct"] == pytest.approx(2 / (2 * 10.1))
-    table = ranking.per_monday()
+    table = ranking.per_week()
     assert table["recall_at_1pct"].tolist() == [0.5, 0.5] and table["positives"].tolist() == [2, 2]
 
 
@@ -152,19 +154,18 @@ def test_what_one_run_found() -> None:
     assert mules.loc["m3", "ever_at_5pct"] == 0
     # m1 ranks 0.5 of 202 at T and 151.5 at T + 1 week: its median is their mean.
     assert mules.loc["m1", "median_rank"] == pytest.approx((0.5 + 151.5) / 2 / 202)
-    # m2 at 0.9 on its early-warning Monday is under m1 alone, inside both budgets; m3 after
+    # m2 at 0.9 at its early-warning time is under m1 alone, inside both budgets; m3 after
     # its activity at 0.85 is under m2 alone.
     assert (
-        mules.loc["m2", "early_warning_at_1pct"] == 1
-        and mules.loc["m2", "early_warning_monday"] == T
+        mules.loc["m2", "early_warning_at_1pct"] == 1 and mules.loc["m2", "early_warning_t_ms"] == T
     )
     assert pd.isna(mules.at["m1", "early_warning_at_1pct"])
     assert mules.loc["m3", "after_at_5pct"] == 1 and mules.loc["m1", "after_at_5pct"] == 0
     values = found.values
     assert values["ever_flagged_at_1pct"] == pytest.approx(2 / 3)
-    # m3 is the one mule after its activity, on one Monday, inside both budgets.
+    # m3 is the one mule after its activity, in one week, inside both budgets.
     assert values["early_warning_at_5pct"] == 1 and values["after_activity_at_1pct"] == 1
-    assert values["after_activity_account_mondays"] == 1
+    assert values["after_activity_account_weeks"] == 1
     assert np.isnan(values["early_warning_ring_link_at_1pct"])
     assert values["first_flag_mean_days_at_1pct"] == 2 and values["mules_scored"] == 3
     # The non-mules stand for 25 accounts each, so the keys are weighted: no distinct count, and
@@ -178,8 +179,8 @@ def test_what_one_run_found() -> None:
 
 
 def test_distinct_accounts_alerted_are_counted_when_every_key_is_scored_whole() -> None:
-    # m1 tops both Mondays, each of 9 ranked account-Mondays at weight 1: its budgets are 0.09
-    # and 0.45 of an account, so it is flagged on a Monday with chance 0.09 at 1% and 0.45 at 5%,
+    # m1 tops both weeks, each of 9 ranked account-weeks at weight 1: its budgets are 0.09
+    # and 0.45 of an account, so it is flagged in a week with chance 0.09 at 1% and 0.45 at 5%,
     # and on at least one of the two with 1 - 0.91 ** 2 and 1 - 0.55 ** 2. No non-mule is
     # within either budget.
     rows = [
@@ -189,27 +190,27 @@ def test_distinct_accounts_alerted_are_counted_when_every_key_is_scored_whole() 
     ]
     scores = pd.DataFrame(rows, columns=["t_ms", "account_id", "logit"])
     keys = scores.loc[:, ["t_ms", "account_id"]].assign(weight=1.0)
-    whole = run_metrics(evaluation_frame(scores, keys, KEY, frozenset()), frozenset())
+    whole = run_metrics(evaluation_frame(scores, keys, KEY, frozenset(), TIMES), frozenset())
     values = whole.values
     assert values["accounts_alerted_at_1pct"] == pytest.approx(1 - 0.91**2)
     assert values["accounts_alerted_at_5pct"] == pytest.approx(1 - 0.55**2)
     assert whole.not_available == {}
     # Under the fallback list the non-mules are a sample, each of one in ten and standing for
-    # ten, and an account is in the list on a few of its Mondays only: a flag on any of them
+    # ten, and an account is in the list in a few of its weeks only: a flag on any of them
     # would be counted over those few, so the count is not reported.
     sampled = keys.assign(
         weight=[1.0 if account == "m1" else 10.0 for account in keys["account_id"]]
     )
-    found = run_metrics(evaluation_frame(scores, sampled, KEY, frozenset()), frozenset())
+    found = run_metrics(evaluation_frame(scores, sampled, KEY, frozenset(), TIMES), frozenset())
     assert np.isnan(found.values["accounts_alerted_at_1pct"])
     assert np.isnan(found.values["accounts_alerted_at_5pct"])
     assert set(found.not_available) == {"accounts_alerted_at_1pct", "accounts_alerted_at_5pct"}
 
 
-def test_a_ring_link_visible_on_the_early_warning_monday(
+def test_a_ring_link_visible_on_the_early_warning_t_ms(
     graph: ReferenceGraph, parity: Path, tmp_path: Path
 ) -> None:
-    # a_late's early-warning Monday is T + 1 week; its customer has been enrolled on d_hidden
+    # a_late's early-warning time is T + 1 week; its customer has been enrolled on d_hidden
     # since 3 days after T, as have ring 11's three active mules for weeks.
     cache = Cache(tmp_path / "cache")
     ring = ["a_hr1", "a_hr2", "a_hr3", "a_late", "a_o00"]
@@ -232,11 +233,11 @@ def test_a_ring_link_visible_on_the_early_warning_monday(
     )
     scores = pd.DataFrame({"t_ms": [T1] * 5, "account_id": ring, "logit": [0.0] * 5})
     frame = evaluation_frame(
-        scores, scores.loc[:, ["t_ms", "account_id"]].assign(weight=1.0), key, frozenset()
+        scores, scores.loc[:, ["t_ms", "account_id"]].assign(weight=1.0), key, frozenset(), TIMES
     )
     assert scored_keys(frame, (EARLY_WARNING,)) == [(T1, "a_late")]
     assert ring_links(cache, frame, scored_keys(frame, (EARLY_WARNING,))) == {(T1, "a_late")}
-    # Without its ring-mates on the Monday, nothing shares its device.
+    # Without its ring-mates in the week, nothing shares its device.
     alone = frame[frame["account_id"].isin(["a_late", "a_o00"])]
     assert ring_links(cache, alone, [(T1, "a_late")]) == frozenset()
 
@@ -251,7 +252,7 @@ def _mules_of_ring_four(accounts: list[str]) -> pd.DataFrame:
     )
     scores = pd.DataFrame({"t_ms": [T] * len(accounts), "account_id": accounts, "logit": 0.0})
     return evaluation_frame(
-        scores, scores.loc[:, ["t_ms", "account_id"]].assign(weight=1.0), key, frozenset()
+        scores, scores.loc[:, ["t_ms", "account_id"]].assign(weight=1.0), key, frozenset(), TIMES
     )
 
 

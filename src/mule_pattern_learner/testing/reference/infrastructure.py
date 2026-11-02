@@ -1,6 +1,7 @@
-"""The reference answers of the six infrastructure queries, written from docs/design.md ("The
+"""The reference answers of the infrastructure queries, written from docs/design.md ("The
 scored population", "Shared rules", and the sections of list_accounts, read_labels,
-read_answer_key, read_hubs, read_world and profile_hubs), apart from their GSQL.
+read_answer_key, read_hubs, read_world and profile_hubs), apart from their GSQL, and of
+mark_crowds, which prints the crowds of read_hubs.
 
 Each query's rows are computed as the dataclasses its parser reads, then printed as TigerGraph
 prints its PRINT statements: a status row with the version first; a vertex set's projection as
@@ -18,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 from ...config import DEFAULT_CONFIG
 from ...tigergraph.queries import (
     LIST_ACCOUNTS,
+    MARK_CROWDS,
     PROFILE_HUBS,
     READ_ANSWER_KEY,
     READ_HUBS,
@@ -26,13 +28,14 @@ from ...tigergraph.queries import (
 )
 from ...tigergraph.queries import read_world as world_rows
 from ...tigergraph.queries.list_accounts import ScorableAccount
+from ...tigergraph.queries.mark_crowds import Crowd, Crowds
 from ...tigergraph.queries.profile_hubs import HubProfile
 from ...tigergraph.queries.read_answer_key import AccountTruth
 from ...tigergraph.queries.read_hubs import HubAccount, Hubs, Leaf
 from ...tigergraph.queries.read_labels import IdentifiedMule
 from ...tigergraph.queries.read_world import PAYMENT_TYPES, SECONDS, World
 from ...tigergraph.world import identity
-from .answer import INVALID_PARAMETERS, head, monday, refused, valid_page, vertices
+from .answer import INVALID_PARAMETERS, head, refused, valid_page, valid_time, vertices
 from .graph import BY_NAME, DEVICE, EDGE_TABLES, IP, NODE_KINDS, VERTEX_TABLES, Account, AsOf, cents
 
 if TYPE_CHECKING:
@@ -62,7 +65,7 @@ def list_accounts(
     graph: ReferenceGraph, t_ms: int, after_id: str, page: int
 ) -> list[dict[str, Any]]:
     """A page of the scorable accounts of t, each with its owner."""
-    if not monday(t_ms) or not valid_page(page):
+    if not valid_time(t_ms) or not valid_page(page):
         return refused(INVALID_PARAMETERS)
     view = graph.as_of(t_ms)
     rows = [
@@ -116,7 +119,7 @@ def read_answer_key(graph: ReferenceGraph, after_id: str, page: int) -> list[dic
     return [head(READ_ANSWER_KEY), {"accounts": vertices("Account", rows)}]
 
 
-# read_hubs and profile_hubs.
+# read_hubs, mark_crowds and profile_hubs.
 
 
 def hub_customers(view: AsOf, account_id: str) -> set[str]:
@@ -147,11 +150,27 @@ def crowd_customers(view: AsOf, kind: str, node: str) -> tuple[set[str], set[str
     return customers, enrolled
 
 
+def crowds(graph: ReferenceGraph, t_ms: int) -> Crowds:
+    """The crowds of t: the devices and IPs with more than the crowd threshold of customers by
+    the crowd measure, each a hub too above the hub threshold."""
+    view = graph.as_of(t_ms)
+    found: dict[str, tuple[Crowd, ...]] = {}
+    for kind in NODE_KINDS:
+        nodes: list[Crowd] = []
+        for node in graph.ids[kind]:
+            customers, enrolled = crowd_customers(view, kind, node)
+            if len(customers) > SUBGRAPH.crowd_threshold:
+                hub = len(customers) > SUBGRAPH.hub_threshold
+                nodes.append(Crowd(node, len(customers), not enrolled, hub))
+        found[kind] = tuple(nodes)
+    return Crowds(found[DEVICE], found[IP])
+
+
 def hubs(graph: ReferenceGraph, t_ms: int) -> Hubs:
-    """The leaves of t: the account hubs, and the device and IP crowds, each a hub too above
-    the hub threshold. The query skips the account test for an account with at most 200
-    payments in all time, which cannot pass it: each payment adds at most one customer. So
-    this graph tests every account that exists at t, with the same answer."""
+    """The leaves of t: the account hubs, and the device and IP crowds. The query skips the
+    account test for an account with at most 200 payments in all time, which cannot pass it:
+    each payment adds at most one customer. So this graph tests every account that exists at
+    t, with the same answer."""
     view = graph.as_of(t_ms)
     accounts: list[HubAccount] = []
     for account_id in graph.ids["Account"]:
@@ -159,26 +178,34 @@ def hubs(graph: ReferenceGraph, t_ms: int) -> Hubs:
             customers = len(hub_customers(view, account_id))
             if customers > SUBGRAPH.hub_threshold:
                 accounts.append(HubAccount(account_id, customers))
-    leaves: dict[str, tuple[Leaf, ...]] = {}
-    for kind in NODE_KINDS:
-        found: list[Leaf] = []
-        for node in graph.ids[kind]:
-            customers, enrolled = crowd_customers(view, kind, node)
-            if len(customers) > SUBGRAPH.crowd_threshold:
-                hub = len(customers) > SUBGRAPH.hub_threshold
-                found.append(Leaf(node, len(customers), not enrolled, hub))
-        leaves[kind] = tuple(found)
-    return Hubs(tuple(accounts), leaves[DEVICE], leaves[IP])
+    found = crowds(graph, t_ms)
+
+    def leaves(nodes: tuple[Crowd, ...]) -> tuple[Leaf, ...]:
+        return tuple(Leaf(**asdict(node)) for node in nodes)
+
+    return Hubs(tuple(accounts), leaves(found.devices), leaves(found.ips))
 
 
 def read_hubs(graph: ReferenceGraph, t_ms: int) -> list[dict[str, Any]]:
     """The leaves of t with their measures."""
-    if not monday(t_ms):
+    if not valid_time(t_ms):
         return refused(INVALID_PARAMETERS)
     found = hubs(graph, t_ms)
     return [
         head(READ_HUBS),
         {"accounts": vertices("Account", found.accounts)},
+        {"devices": vertices(DEVICE, found.devices)},
+        {"ips": vertices(IP, found.ips)},
+    ]
+
+
+def mark_crowds(graph: ReferenceGraph, t_ms: int) -> list[dict[str, Any]]:
+    """The crowds of t with their measures. No stamp is kept: no read of this graph tests one."""
+    if not valid_time(t_ms):
+        return refused(INVALID_PARAMETERS)
+    found = crowds(graph, t_ms)
+    return [
+        head(MARK_CROWDS),
         {"devices": vertices(DEVICE, found.devices)},
         {"ips": vertices(IP, found.ips)},
     ]
@@ -218,7 +245,7 @@ def hub_profile(graph: ReferenceGraph, t_ms: int) -> HubProfile:
 def profile_hubs(graph: ReferenceGraph, t_ms: int) -> list[dict[str, Any]]:
     """The histograms of t, each measure printed as a string, as TigerGraph prints a map's
     integer keys."""
-    if not monday(t_ms):
+    if not valid_time(t_ms):
         return refused(INVALID_PARAMETERS)
     profile = asdict(hub_profile(graph, t_ms))
     printed = {

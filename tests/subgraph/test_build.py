@@ -1,5 +1,5 @@
 """The batch builder: the hand-built two-example batch of conftest.py with every column of every
-row checked, nodes reached by two paths, flag-only hubs and leaf rows from read_hubs, B1's
+row checked, nodes reached by two paths, flag-only hubs and crowd rows from mark_crowds, B1's
 dwell on its payment edges, its refusals, and a batch built from a fetched cache (docs/features.md,
 "What one example's subgraph holds" and "The other tensors of a batch")."""
 
@@ -9,6 +9,7 @@ import ast
 from collections.abc import Sequence
 from dataclasses import fields, is_dataclass, replace
 from pathlib import Path
+import shutil
 from typing import get_args, get_type_hints
 
 import numpy as np
@@ -25,7 +26,7 @@ from mule_pattern_learner.subgraph.build import (
     build,
     read_rows,
 )
-from mule_pattern_learner.subgraph.cache import Cache
+from mule_pattern_learner.subgraph.cache import CROWDS, Cache
 from mule_pattern_learner.subgraph.fetch import fetch
 from mule_pattern_learner.subgraph.layouts import (
     ACCOUNT_LAYOUT,
@@ -43,8 +44,9 @@ from mule_pattern_learner.subgraph.layouts import (
 )
 from mule_pattern_learner.testing.calendar import Spy
 from mule_pattern_learner.testing.reference import ReferenceGraph
-from mule_pattern_learner.testing.world import DAY_MS, HOUR_MS, T
-from mule_pattern_learner.tigergraph.queries.read_hubs import Hubs, Leaf
+from mule_pattern_learner.testing.world import DAY_MS, HOUR_MS, T, WorldBuilder
+from mule_pattern_learner.tigergraph.queries.mark_crowds import Crowd, Crowds
+from mule_pattern_learner.tigergraph.queries.read_hubs import Hubs
 from mule_pattern_learner.tigergraph.queries.read_money_flow import TrackedInflow
 from mule_pattern_learner.tigergraph.queries.read_payment_events import OwnedBy
 from mule_pattern_learner.tigergraph.queries.read_shared_identity import OwnerEnrolled
@@ -142,7 +144,7 @@ EXPECTED_CUSTOMERS = [
 ]
 # Devices and IPs: customers_30d, customers_90d, new over 7 and 30 days, accounts and payments
 # seen, observed_only, crowd, hub, then enrolment, owner-enrolment and seen edges. A leaf's
-# measure, observed_only and hub come from read_hubs, B5's row giving its flag alone.
+# measure, observed_only and hub come from mark_crowds, B5's row giving its flag alone.
 EXPECTED_DEVICES = [
     [0, 12, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1],
     [2, 3, 1, 2, 2, 5, 0, 0, 0, 2, 3, 1],
@@ -254,7 +256,7 @@ def test_every_relation_has_its_reverse_with_the_same_attributes(hand_batch: Bat
 def test_a_node_reached_by_two_paths_appears_once_in_its_example(hand_batch: Batch) -> None:
     """a_two is a hop-2 account of B4 and a co-user's account of B5, and d_home is both a
     device of p_c1 and one seen on a_s1's payments: one node each. x_payer is in both examples,
-    so it has a copy in each, with its own Monday's rows."""
+    so it has a copy in each, with its own time's rows."""
     rows = hand_batch.data["account"].x
     assert rows.shape[0] == 9 and hand_batch.data["device"].num_nodes == 2
     # B1's in_amount_7d is 1000 k + 1 for the account numbered k: a_two is 3, x_payer 2 at T
@@ -284,17 +286,17 @@ def test_a_scoring_batch_is_the_training_batch_without_labels_and_weights(
     assert torch.equal(scoring.data.community, training.community)
 
 
-def test_a_leaf_flag_unlike_read_hubs_is_refused(hand: list[ExampleRows]) -> None:
+def test_a_leaf_flag_unlike_mark_crowds_is_refused(hand: list[ExampleRows]) -> None:
     first = hand[0]
-    without = Leaves.of(Hubs((), (), ()))
-    with pytest.raises(ValueError, match="d_crowd as a leaf, unlike read_hubs"):
+    without = Leaves.of(Hubs((), (), ()), Crowds((), ()))
+    with pytest.raises(ValueError, match="d_crowd as a leaf, unlike mark_crowds"):
         build([replace(first, leaves=replace(without, accounts={"a_hub": 250}))], "w")
     marked = replace(
-        first.leaves, devices={**first.leaves.devices, "d_home": Leaf("d_home", 9, False, False)}
+        first.leaves, devices={**first.leaves.devices, "d_home": Crowd("d_home", 9, False, False)}
     )
-    with pytest.raises(ValueError, match="d_home as no leaf, unlike read_hubs"):
+    with pytest.raises(ValueError, match="d_home as no leaf, unlike mark_crowds"):
         build([replace(first, leaves=marked)], "w")
-    # read_hubs names d_crowd among its IPs, not its devices.
+    # mark_crowds names d_crowd among its IPs, not its devices.
     moved = replace(first.leaves, devices={}, ips={"d_crowd": first.leaves.devices["d_crowd"]})
     with pytest.raises(ValueError, match="d_crowd as a leaf"):
         build([replace(first, leaves=moved)], "w")
@@ -410,7 +412,7 @@ def test_the_builder_never_reads_a_date_of_record_or_a_label() -> None:
             hints += get_args(hint)
             if isinstance(hint, type) and is_dataclass(hint):
                 read.append(hint)
-    assert {kind.__name__ for kind in kinds} >= {"MoneyFlow", "PaymentEvent", "Seen", "Leaf"}
+    assert {kind.__name__ for kind in kinds} >= {"MoneyFlow", "PaymentEvent", "Seen", "Crowd"}
     names = {field.name for kind in kinds for field in fields(kind)}
     assert not names & {*DATES_OF_RECORD, *LABEL_FIELDS}
 
@@ -488,3 +490,25 @@ def test_rows_read_from_the_cache_keep_the_order_asked(fetched: Cache) -> None:
     assert set(c000.inflows) <= {payment.payment_id for payment in c000.payments.payments}
     with pytest.raises(KeyError, match="no hubs"):
         read_rows(fetched, [(T + 7 * DAY_MS, "a_r1")])
+    shutil.rmtree(fetched.folder(CROWDS.name, T))
+    with pytest.raises(KeyError, match="no crowds"):
+        read_rows(fetched, [(T, "a_r1")])
+
+
+def test_a_crowd_s_row_is_joined_from_the_crowds_fetch_cached(tmp_path: Path, parity: Path) -> None:
+    # Nine customers pay a shop from a kiosk nobody registered, 3 days before T: a crowd at T,
+    # observed only, and no hub.
+    w = WorldBuilder()
+    w.external("x_shop", T - 900 * DAY_MS)
+    for index in range(9):
+        account = w.customer(f"s{index}", T - 400 * DAY_MS)
+        w.pay(f"x_s{index}", account, "x_shop", T - 3 * DAY_MS, 40.0, "card", device="d_kiosk")
+    cache = Cache(tmp_path)
+    fetch(Spy(w.graph()), cache, {T: ["a_s0"]}, parity=parity)
+    assert cache.crowds(T) == Crowds((Crowd("d_kiosk", 9, True, False),), ())
+    # a_s0's payment was seen on the kiosk, so its subgraph holds it as a leaf: B5 gives the
+    # flag alone, and the row joins mark_crowds' measure, observed_only, crowd 1 and hub 0.
+    (rows,) = read_rows(cache, [(T, "a_s0")])
+    assert [(row.node_id, row.leaf) for row in rows.identity.devices] == [("d_kiosk", True)]
+    device = build([rows], "w").data["device"].x
+    assert device[0, :9].tolist() == [0, 9, 0, 0, 0, 0, 1, 1, 0]

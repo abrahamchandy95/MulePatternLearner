@@ -1,6 +1,6 @@
-"""The scored population of each Monday (docs/design.md, "The scored population" and "Cache"):
+"""The scored population of each week (docs/design.md, "The scored population" and "Cache"):
 list_accounts, read a page at a time by strictly increasing id, and kept in the world's cache
-as population.parquet in the Monday's folder, beside the hubs and the query tables.
+as population.parquet in the scoring time's folder, beside the hubs and the query tables.
 
 The file is written once, through a temporary file and a rename, and read back through
 list_accounts' own parser, so cached rows pass the live checks. Its folder is keyed by the
@@ -17,10 +17,10 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from ..tigergraph.executor import QueryExecutor
-from ..tigergraph.queries import LIST_ACCOUNTS, VERSIONS, list_accounts
+from ..tigergraph.queries import LIST_ACCOUNTS, list_accounts
 from ..tigergraph.queries.list_accounts import ScorableAccount
 from ..tigergraph.queries.rows import PAGE_LIMIT
-from ..tigergraph.world import monday_folder
+from ..tigergraph.world import time_folder
 
 POPULATION_FILE = "population.parquet"
 SCHEMA = pa.schema([("account_id", pa.string()), ("owner_id", pa.string())])
@@ -29,7 +29,7 @@ SCHEMA = pa.schema([("account_id", pa.string()), ("owner_id", pa.string())])
 def list_population(
     executor: QueryExecutor, t_ms: int, page: int = PAGE_LIMIT
 ) -> tuple[ScorableAccount, ...]:
-    """The scorable accounts of the Monday t, each with its owner, by increasing id: every page
+    """The scorable accounts at the time t, each with its owner, by increasing id: every page
     of list_accounts, until one comes back short."""
     found: list[ScorableAccount] = []
     after_id = ""
@@ -43,13 +43,13 @@ def list_population(
 
 
 def population_file(root: Path, t_ms: int) -> Path:
-    """The population of the Monday t in a world's cache folder of query versions and
+    """The population at the time t in a world's cache folder of query versions and
     settings."""
-    return root / monday_folder(t_ms) / POPULATION_FILE
+    return root / time_folder(t_ms) / POPULATION_FILE
 
 
 def write_population(path: Path, accounts: tuple[ScorableAccount, ...]) -> None:
-    """Write a Monday's population once, through a temporary file and a rename."""
+    """Write a scoring time's population once, through a temporary file and a rename."""
     table = pa.table(
         {
             "account_id": [account.account_id for account in accounts],
@@ -70,7 +70,7 @@ def read_population(path: Path) -> tuple[ScorableAccount, ...]:
     """A cached population, reparsed by list_accounts' parser as one page of every account."""
     rows = pq.read_table(path, schema=SCHEMA).to_pylist()
     response: list[dict[str, object]] = [
-        {"status": "ok", "version": VERSIONS[LIST_ACCOUNTS]},
+        {"status": "ok"},
         {"accounts": [{"attributes": row} for row in rows]},
     ]
     return list_accounts.parse(response, "", max(1, len(rows)))
@@ -79,7 +79,7 @@ def read_population(path: Path) -> tuple[ScorableAccount, ...]:
 def population(
     executor: QueryExecutor, root: Path, t_ms: int, page: int = PAGE_LIMIT
 ) -> tuple[ScorableAccount, ...]:
-    """The scorable accounts of the Monday t: from the cache when it holds them, else listed
+    """The scorable accounts at the time t: from the cache when it holds them, else listed
     and cached."""
     path = population_file(root, t_ms)
     if path.is_file():

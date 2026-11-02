@@ -2,7 +2,8 @@ USE GRAPH Mule_Pattern_Learner
 
 /* read_activity_change (B3): each account's recent activity against its own past.
 
-   Inputs: t_ms, a Monday at 00:00 UTC; account_ids, the accounts to read, each once.
+   Inputs: t_ms, a whole second in UTC epoch milliseconds after the 90-day lookback; account_ids,
+   the accounts to read, each once.
    Prints: accounts, per account its 13 activity columns (docs/features.md, "Account node",
    columns 34 to 46), each duration as presence and milliseconds.
    Refuses: invalid_parameters, duplicate_account, unknown_account and invisible_account (an
@@ -42,8 +43,7 @@ CREATE OR REPLACE QUERY read_activity_change(
     SumAccum<INT> @@given;
     UINT lookback_ms = 7776000000;
 
-    /* Mondays are 4 days after the Thursday of 1970-01-01, modulo a week. */
-    IF t_ms <= lookback_ms OR t_ms % 604800000 != 345600000 THEN
+    IF t_ms <= lookback_ms OR t_ms % 1000 != 0 THEN
         PRINT "invalid_parameters" AS status;
         RETURN;
     END;
@@ -178,7 +178,7 @@ CREATE OR REPLACE QUERY read_activity_change(
             a.@since_last_out_present += TRUE, a.@since_last_out_ms += t_ms - a.@last_out
         END;
 
-    PRINT "ok" AS status, "read_activity_change-fbaa2ddc1360" AS version;
+    PRINT "ok" AS status, "read_activity_change-1615ec14e0f2" AS version;
     PRINT Rows[Rows.id AS account_id, Rows.@in_7d AS in_7d, Rows.@in_30d AS in_30d,
       Rows.@in_90d AS in_90d, Rows.@out_7d AS out_7d, Rows.@out_30d AS out_30d,
       Rows.@out_90d AS out_90d, Rows.@burst_in_1h AS burst_in_1h,

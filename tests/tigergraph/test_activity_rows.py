@@ -25,13 +25,17 @@ T_MS = 1_711_929_600_000  # 2024-04-01 00:00 UTC, a Monday
 HOUR_MS = 3_600_000
 
 
-def test_a_request_takes_a_monday_and_its_accounts_each_once() -> None:
+def test_a_request_takes_a_time_and_its_accounts_each_once() -> None:
     assert read_activity_change.params(T_MS, ["a_02", "a_01"]) == {
         "t_ms": T_MS,
         "account_ids": ["a_02", "a_01"],
     }
-    with pytest.raises(ValueError, match="Monday"):
-        read_activity_change.params(T_MS + DAY_MS, ["a_01"])
+    # Any whole second is a time: a Tuesday afternoon is one, a millisecond is not.
+    assert read_activity_change.params(T_MS + DAY_MS + 3_661_000, ["a_01"])["t_ms"] == (
+        T_MS + DAY_MS + 3_661_000
+    )
+    with pytest.raises(ValueError, match="whole second"):
+        read_activity_change.params(T_MS + 1, ["a_01"])
     with pytest.raises(ValueError, match="repeats an account"):
         read_activity_change.params(T_MS, ["a_01", "a_01"])
     with pytest.raises(ValueError, match="at least one account"):
@@ -126,7 +130,7 @@ def test_an_answer_parses_each_account_sorted_by_id() -> None:
     assert parsed == (MULE, DORMANT)
 
 
-def test_a_status_row_or_another_version_is_refused() -> None:
+def test_a_status_row_is_refused() -> None:
     for status in (
         "invalid_parameters",
         "duplicate_account",
@@ -136,10 +140,6 @@ def test_a_status_row_or_another_version_is_refused() -> None:
         with pytest.raises(QueryRefused, match=status) as refused:
             read_activity_change.parse([{"status": status}], ["a_01"])
         assert refused.value.status == status
-    with pytest.raises(ValueError, match="mule install"):
-        read_activity_change.parse(
-            [{"status": "ok", "version": "read_activity_change-0123456789ab"}], []
-        )
 
 
 @pytest.mark.parametrize(

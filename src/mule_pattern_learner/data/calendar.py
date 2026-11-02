@@ -1,14 +1,16 @@
-"""The scored Mondays, and the check that the loaded world holds the export window they need
-(docs/design.md, "Worlds and calendar" and the Lookback guard).
+"""The scored weeks and scoring times, and the check that the loaded world holds the export
+window they need (docs/design.md, "Worlds and calendar" and the Lookback guard).
 
 Every world shares one calendar, which config holds: the export starts on export_start (day
-0) and lasts 455 days, its first 90 history only, and the 52 scored Mondays follow. mule
-prepare derives the Mondays from config and checks them against the loaded world through
-read_world: its first payment must fall on day 0 and its last on day 454, the same 455 days the
-loader verifies after loading. The check reads the first payment, never the first join, since
-backdated joins put the first join years before the data. That every scored Monday's lookback
-lies inside the export needs no check here: CalendarConfig holds history_days at least
-lookback_days, which puts the first scored Monday at or after day 90.
+0) and lasts 455 days, its first 90 history only, and the 52 scored weeks follow, each from a
+Monday at 00:00 UTC. A world scores each week at one time inside it, drawn from the world's own
+seed (CalendarConfig.scoring_times). mule prepare derives the weeks and times from config and
+checks the calendar against the loaded world through read_world: its first payment must fall on
+day 0 and its last on day 454, the same 455 days the loader verifies after loading. The check
+reads the first payment, never the first join, since backdated joins put the first join years
+before the data. That every scoring time's lookback lies inside the export needs no check here:
+CalendarConfig holds history_days at least lookback_days, which puts the first scored week at or
+after day 90.
 """
 
 from __future__ import annotations
@@ -25,9 +27,16 @@ def epoch_ms(day: date) -> int:
     return (day - date(1970, 1, 1)).days * DAY_MS
 
 
-def mondays(calendar: CalendarConfig) -> tuple[int, ...]:
-    """The scored Mondays, as UTC epoch milliseconds in increasing order."""
-    return calendar.mondays()
+def week_starts(calendar: CalendarConfig) -> tuple[int, ...]:
+    """The start of each scored week, its Monday at 00:00 UTC, as UTC epoch milliseconds in
+    increasing order."""
+    return calendar.week_starts()
+
+
+def scoring_times(calendar: CalendarConfig, seed: int) -> tuple[int, ...]:
+    """The time each scored week is scored at in the world of that seed, as UTC epoch
+    milliseconds in increasing order."""
+    return calendar.scoring_times(seed)
 
 
 def check_window(world: World, calendar: CalendarConfig) -> None:

@@ -1,5 +1,5 @@
 """What the evaluation tests share: a reference world with mules of every kind the groups and
-checks read, a calendar of three scored Mondays around it, the identity file and gate record
+checks read, a calendar of three scored weeks around it, the identity file and gate record
 PhantomLedger would write for it, a parity record and a data folder of the test's own.
 
 The world is testing.fixtures.catalogue (the look-alikes, and ring 7: a_mule, which the bank
@@ -11,11 +11,12 @@ identified, its collector a_collector and a_mule2 and a_mule3), with:
 - a_drop, a ringless mule (an account-takeover drop) the bank identified, active from 3 days
   before T to T, receiving 900.00 from x_drop 3 days before T;
 - a_late, a ring 11 mule active from 10 to 12 days after T, so that T + 1 week is its
-  early-warning Monday and T + 2 weeks its one active Monday, enrolled on d_hidden from 3
-  days after T, so that its ring link is visible on its early-warning Monday;
+  early-warning time and T + 2 weeks its one active time, enrolled on d_hidden from 3
+  days after T, so that its ring link is visible at its early-warning time;
 - twelve ordinary customers, a_o00 to a_o11, each paying x_shop 20.00 by card 2 days before T.
 
-The calendar's scored Mondays are T, T + 1 week and T + 2 weeks (2024-07-01 to 2024-07-15).
+The calendar's three scored weeks start on T, T + 1 week and T + 2 weeks (2024-07-01 to
+2024-07-15), and the tests score each at its start.
 """
 
 from __future__ import annotations
@@ -42,9 +43,9 @@ HIDDEN = Mule(T - 10 * D, T + 9 * D, ring=11)
 DROP = Mule(T - 3 * D, T, identified=True)
 LATE = Mule(T + 10 * D, T + 12 * D, ring=11)
 ORDINARY = tuple(f"o{index:02d}" for index in range(12))
-# The calendar of the tests: three scored Mondays from T.
-CALENDAR = CalendarConfig(export_start=date(2024, 1, 1), history_days=182, scored_mondays=3)
-MONDAYS = (T, T + W, T + 2 * W)
+# The calendar of the tests: three scored weeks from T.
+CALENDAR = CalendarConfig(export_start=date(2024, 1, 1), history_days=182, scored_weeks=3)
+TIMES = (T, T + W, T + 2 * W)
 # The full design's settings (its four rotations, whole scoring), with small samples and few
 # replicates, so that an audit runs in seconds.
 CONFIG = replace(
@@ -77,7 +78,7 @@ def evaluation_world() -> WorldBuilder:
 
 @pytest.fixture
 def config() -> RunConfig:
-    """The settings of the tests: the calendar of three Mondays, small samples."""
+    """The settings of the tests: the calendar of three weeks, small samples."""
     return CONFIG
 
 

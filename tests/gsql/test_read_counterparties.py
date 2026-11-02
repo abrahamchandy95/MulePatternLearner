@@ -49,7 +49,7 @@ from mule_pattern_learner.tigergraph.queries import (
     written_files,
 )
 from mule_pattern_learner.tigergraph.queries.read_counterparties import Counterparties
-from mule_pattern_learner.tigergraph.queries.rows import LOOKBACK_MS, MONDAY_MS, WEEK_MS
+from mule_pattern_learner.tigergraph.queries.rows import LOOKBACK_MS
 
 TEXT = (GSQL_DIR / QUERY_FILES[READ_COUNTERPARTIES]).read_text()
 DEFINITION = definitions(TEXT)[READ_COUNTERPARTIES]
@@ -178,8 +178,7 @@ def test_t_then_every_account_then_every_hub_is_checked_before_any_payment_is_re
     found = [" ".join(statement) for statement in statements(DEFINITION)]
     start = next(at for at, text in enumerate(found) if text.startswith("IF "))
     assert found[start : start + 25] == [
-        f"IF t_ms <= lookback_ms OR t_ms % {WEEK_MS} != {MONDAY_MS} THEN "
-        'PRINT "invalid_parameters" AS status',
+        'IF t_ms <= lookback_ms OR t_ms % 1000 != 0 THEN PRINT "invalid_parameters" AS status',
         "RETURN",
         "END",
         "FOREACH account_id IN account_ids DO @@ids += account_id",

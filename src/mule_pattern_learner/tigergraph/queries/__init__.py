@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any
 from ...paths import GSQL_DIR
 from . import (
     list_accounts,
+    mark_crowds,
     profile_hubs,
     read_activity_change,
     read_community,
@@ -54,10 +55,46 @@ READ_ACTIVITY_CHANGE = "read_activity_change"
 READ_PAYMENT_EVENTS = "read_payment_events"
 READ_SHARED_IDENTITY = "read_shared_identity"
 READ_COMMUNITY = "read_community"
+# read_payment_events split into queries of one job each: the payment graph's reads, and the
+# marks that store what they read on the graph.
+READ_NEWEST_PAYMENTS = "read_newest_payments"
+READ_PAYMENTS = "read_payments"
+READ_ACCOUNTS = "read_accounts"
+READ_OTHER_ACCOUNTS = "read_other_accounts"
+MARK_HUBS = "mark_hubs"
+MARK_PAYMENT_GAPS = "mark_payment_gaps"
+MARK_PAIR_HISTORY = "mark_pair_history"
+# read_shared_identity split into queries of one job each.
+MARK_CROWDS = "mark_crowds"
+READ_CUSTOMER_ACCOUNTS = "read_customer_accounts"
+READ_CUSTOMER_DEVICES = "read_customer_devices"
+READ_ACCOUNT_DEVICES = "read_account_devices"
+READ_DEVICE_USERS = "read_device_users"
+READ_DEVICE_COUNTS = "read_device_counts"
+READ_CUSTOMER_LINK_COUNTS = "read_customer_link_counts"
+READ_CUSTOMER_CO_USER_COUNTS = "read_customer_co_user_counts"
+
+# read_money_flow and read_activity_change split into queries of one job each.
+READ_PAYMENT_TOTALS = "read_payment_totals"
+READ_MONEY_VELOCITY = "read_money_velocity"
+READ_PAYMENT_RHYTHM = "read_payment_rhythm"
+
+# read_counterparties split into queries of one job each.
+READ_COUNTERPARTY_PAYERS = "read_counterparty_payers"
+READ_COUNTERPARTY_PAYEES = "read_counterparty_payees"
+
+# read_community split into queries of one job each.
+READ_COMMUNITY_DEVICES = "read_community_devices"
+READ_COMMUNITY_DEVICE_USERS = "read_community_device_users"
+READ_COMMUNITY_PAYMENTS = "read_community_payments"
 
 # The folders of gsql/ that hold queries: evaluation/ holds the answer key's alone.
 QUERIES_FOLDER = "queries"
 EVALUATION_FOLDER = "evaluation"
+# The finalized queries of one job each, beside the old ones until the refactor removes them.
+# read_world stays in queries/: only research on PhantomLedger worlds reads it, never production
+# (the owner, 2 November 2026).
+FINAL_FOLDER = "final"
 
 
 @dataclass(frozen=True)
@@ -82,64 +119,64 @@ REGISTRY: dict[str, Query] = {
     for query in (
         Query(
             LIST_ACCOUNTS,
-            QUERIES_FOLDER,
-            "list_accounts-a270fbdf9620",
+            FINAL_FOLDER,
+            "list_accounts-ff764a4688c6",
             list_accounts.params,
             (list_accounts.ScorableAccount,),
         ),
         Query(
             READ_LABELS,
-            QUERIES_FOLDER,
-            "read_labels-e22e410b15e2",
+            FINAL_FOLDER,
+            "read_labels-52bb4b4a5df5",
             read_labels.params,
             (read_labels.IdentifiedMule,),
         ),
         Query(
             READ_HUBS,
             QUERIES_FOLDER,
-            "read_hubs-3b28b3433685",
+            "read_hubs-13de3a1aab4c",
             read_hubs.params,
             (read_hubs.HubAccount, read_hubs.Leaf),
         ),
         Query(
             READ_WORLD,
             QUERIES_FOLDER,
-            "read_world-0c985b5f9e81",
+            "read_world-7264bd8030e8",
             read_world.params,
             (read_world.World,),
         ),
         Query(
             PROFILE_HUBS,
-            QUERIES_FOLDER,
-            "profile_hubs-a4603a434498",
+            FINAL_FOLDER,
+            "profile_hubs-5afd8c9e5601",
             profile_hubs.params,
             (profile_hubs.HubProfile,),
         ),
         Query(
             READ_MONEY_FLOW,
             QUERIES_FOLDER,
-            "read_money_flow-04c652eeaf53",
+            "read_money_flow-5c7b4142fc25",
             read_money_flow.params,
             (read_money_flow.MoneyFlow, read_money_flow.TrackedInflow),
         ),
         Query(
             READ_COUNTERPARTIES,
             QUERIES_FOLDER,
-            "read_counterparties-07a31e72fd65",
+            "read_counterparties-d1144ba6fca5",
             read_counterparties.params,
             (read_counterparties.Counterparties,),
         ),
         Query(
             READ_ACTIVITY_CHANGE,
             QUERIES_FOLDER,
-            "read_activity_change-fbaa2ddc1360",
+            "read_activity_change-1615ec14e0f2",
             read_activity_change.params,
             (read_activity_change.ActivityChange,),
         ),
         Query(
             READ_PAYMENT_EVENTS,
             QUERIES_FOLDER,
-            "read_payment_events-ee69e736b059",
+            "read_payment_events-011b7ee36654",
             read_payment_events.params,
             (
                 read_payment_events.EventAccount,
@@ -150,7 +187,7 @@ REGISTRY: dict[str, Query] = {
         Query(
             READ_SHARED_IDENTITY,
             QUERIES_FOLDER,
-            "read_shared_identity-84ffb72a34b2",
+            "read_shared_identity-59f0ed612e93",
             read_shared_identity.params,
             (
                 read_shared_identity.CustomerRow,
@@ -164,11 +201,46 @@ REGISTRY: dict[str, Query] = {
         Query(
             READ_COMMUNITY,
             QUERIES_FOLDER,
-            "read_community-8406b3785a46",
+            "read_community-04e5fd86e262",
             read_community.params,
             (read_community.Community,),
         ),
-        Query(READ_ANSWER_KEY, EVALUATION_FOLDER, "read_answer_key-3d5467c23b01"),
+        Query(READ_ANSWER_KEY, EVALUATION_FOLDER, "read_answer_key-7efe564ea071"),
+        Query(READ_NEWEST_PAYMENTS, FINAL_FOLDER, "read_newest_payments-0b75a96e6c3a"),
+        Query(READ_PAYMENTS, FINAL_FOLDER, "read_payments-7f75d3d900c9"),
+        Query(READ_ACCOUNTS, FINAL_FOLDER, "read_accounts-1b9facb47b88"),
+        Query(READ_OTHER_ACCOUNTS, QUERIES_FOLDER, "read_other_accounts-1757ed3d0993"),
+        Query(MARK_HUBS, FINAL_FOLDER, "mark_hubs-d41d68e819d7"),
+        Query(MARK_PAYMENT_GAPS, FINAL_FOLDER, "mark_payment_gaps-a6cef942330c"),
+        Query(MARK_PAIR_HISTORY, FINAL_FOLDER, "mark_pair_history-22f750e11ac2"),
+        Query(
+            MARK_CROWDS,
+            FINAL_FOLDER,
+            "mark_crowds-8a193ea9b67c",
+            mark_crowds.params,
+            (mark_crowds.Crowd,),
+        ),
+        Query(READ_CUSTOMER_ACCOUNTS, FINAL_FOLDER, "read_customer_accounts-0b6630ec2f5f"),
+        Query(READ_CUSTOMER_DEVICES, FINAL_FOLDER, "read_customer_devices-66e0b1e8fc96"),
+        Query(READ_ACCOUNT_DEVICES, FINAL_FOLDER, "read_account_devices-ebe7e275c834"),
+        Query(READ_DEVICE_USERS, FINAL_FOLDER, "read_device_users-0938bb0b2960"),
+        Query(READ_DEVICE_COUNTS, FINAL_FOLDER, "read_device_counts-4785da1c511a"),
+        Query(READ_CUSTOMER_LINK_COUNTS, FINAL_FOLDER, "read_customer_link_counts-cf32f9df822e"),
+        Query(
+            READ_CUSTOMER_CO_USER_COUNTS,
+            FINAL_FOLDER,
+            "read_customer_co_user_counts-ce87d067be77",
+        ),
+        Query(READ_PAYMENT_TOTALS, FINAL_FOLDER, "read_payment_totals-91e3358b33f7"),
+        Query(READ_MONEY_VELOCITY, FINAL_FOLDER, "read_money_velocity-9c1b28e9c436"),
+        Query(READ_PAYMENT_RHYTHM, FINAL_FOLDER, "read_payment_rhythm-310dc9fdcdc5"),
+        Query(READ_COUNTERPARTY_PAYERS, FINAL_FOLDER, "read_counterparty_payers-2a91b4691286"),
+        Query(READ_COUNTERPARTY_PAYEES, FINAL_FOLDER, "read_counterparty_payees-9fa110e16b6a"),
+        Query(READ_COMMUNITY_DEVICES, FINAL_FOLDER, "read_community_devices-5d655005c1d4"),
+        Query(
+            READ_COMMUNITY_DEVICE_USERS, FINAL_FOLDER, "read_community_device_users-7158523c79b8"
+        ),
+        Query(READ_COMMUNITY_PAYMENTS, FINAL_FOLDER, "read_community_payments-388eca70b7ae"),
     )
 }
 
@@ -195,12 +267,35 @@ FETCH_ALLOWLIST = frozenset(
         READ_PAYMENT_EVENTS,
         READ_SHARED_IDENTITY,
         READ_COMMUNITY,
+        MARK_HUBS,
+        READ_NEWEST_PAYMENTS,
+        READ_PAYMENTS,
+        READ_ACCOUNTS,
+        READ_OTHER_ACCOUNTS,
+        MARK_CROWDS,
+        READ_CUSTOMER_ACCOUNTS,
+        READ_CUSTOMER_DEVICES,
+        READ_ACCOUNT_DEVICES,
+        READ_DEVICE_USERS,
+        READ_DEVICE_COUNTS,
+        READ_CUSTOMER_LINK_COUNTS,
+        READ_CUSTOMER_CO_USER_COUNTS,
+        READ_PAYMENT_TOTALS,
+        READ_MONEY_VELOCITY,
+        READ_PAYMENT_RHYTHM,
+        READ_COUNTERPARTY_PAYERS,
+        READ_COUNTERPARTY_PAYEES,
+        READ_COMMUNITY_DEVICES,
+        READ_COMMUNITY_DEVICE_USERS,
+        READ_COMMUNITY_PAYMENTS,
     }
 )
 # profile_hubs runs only from mule bench.
 BENCH_ONLY = frozenset({PROFILE_HUBS})
 # read_answer_key runs only from evaluation's executor.
 EVALUATION_ONLY = frozenset({READ_ANSWER_KEY})
+# The marks of every payment's timing run once per loaded world, from mule mark.
+MARK_ONLY = frozenset({MARK_PAYMENT_GAPS, MARK_PAIR_HISTORY})
 
 
 def written_files() -> dict[str, str]:

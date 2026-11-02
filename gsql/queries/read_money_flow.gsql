@@ -2,7 +2,8 @@ USE GRAPH Mule_Pattern_Learner
 
 /* read_money_flow (B1, velocity): how fast each account passes on the money it receives.
 
-   Inputs: t_ms, a Monday at 00:00 UTC; account_ids, the accounts to read, each once.
+   Inputs: t_ms, a whole second in UTC epoch milliseconds after the 90-day lookback; account_ids,
+   the accounts to read, each once.
    Prints: accounts, per account its 18 velocity columns (docs/features.md, "Account node":
    the amounts in and out, flow_present, the left_* shares, held_share, median_dwell as
    presence and milliseconds, and left_by_*) and scan_steps, a work counter for mule bench
@@ -77,8 +78,7 @@ CREATE OR REPLACE QUERY read_money_flow(
     SumAccum<INT> @@given;
     UINT lookback_ms = 7776000000;
 
-    /* Mondays are 4 days after the Thursday of 1970-01-01, modulo a week. */
-    IF t_ms <= lookback_ms OR t_ms % 604800000 != 345600000 THEN
+    IF t_ms <= lookback_ms OR t_ms % 1000 != 0 THEN
         PRINT "invalid_parameters" AS status;
         RETURN;
     END;
@@ -335,7 +335,7 @@ CREATE OR REPLACE QUERY read_money_flow(
         RETURN;
     END;
 
-    PRINT "ok" AS status, "read_money_flow-04c652eeaf53" AS version;
+    PRINT "ok" AS status, "read_money_flow-5c7b4142fc25" AS version;
     PRINT Rows[Rows.id AS account_id, Rows.@in_amount_7d AS in_amount_7d,
       Rows.@in_amount_30d AS in_amount_30d, Rows.@in_amount_90d AS in_amount_90d,
       Rows.@out_amount_7d AS out_amount_7d, Rows.@out_amount_30d AS out_amount_30d,

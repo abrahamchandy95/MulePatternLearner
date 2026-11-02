@@ -3,12 +3,12 @@ loaded world, and the reference graph on the same export, compared.
 
 The export is found under the loader's export root (paths.export_root): the folder whose manifest
 counts equal the live read_world's counts and whose reference read_world, computed from its
-shards, has the live identity (find_export). Then, on a seeded sample of scored Mondays, and on
-each a seeded sample of accounts with true mules oversampled to a share (the truth comes from the
-reference graph, which holds every column):
+shards, has the live identity (find_export). Then, on a seeded sample of scored weeks, each at
+its scoring time, and on each a seeded sample of accounts with true mules oversampled to a share
+(the truth comes from the reference graph, which holds every column):
 
 - the infrastructure queries, whole: read_world, read_labels and read_answer_key once, and per
-  Monday every page of list_accounts, read_hubs and profile_hubs;
+  scoring time every page of list_accounts, mark_crowds, read_hubs and profile_hubs;
 - B1 to B6, in requests of parity.together accounts, each answer parsed by the query's own
   parser and compared in the form the cache stores it (subgraph.cache's tables), the rows of
   each kind sorted, doubles compared to parity.tolerance and everything else exactly: TigerGraph
@@ -19,10 +19,10 @@ reference graph, which holds every column):
 - an account fetched alone against the same account among the others of its request, on the
   live graph (per-request state is kept by the scored account, never in a vertex flag two
   accounts of a request could share);
-- B5's leaf flags against read_hubs' leaves, both read from the live graph;
-- the refusals, each sent raw, as the builders refuse them: a t that is no Monday, a page out of
-  range, no account, a repeated account, an unknown account, an account that does not exist at t
-  and a hub that does not exist at t (the status rows are compared exactly).
+- B5's leaf flags against mark_crowds' crowds, both read from the live graph;
+- the refusals, each sent raw, as the builders refuse them: a t that is no whole second, a page
+  out of range, no account, a repeated account, an unknown account, an account that does not
+  exist at t and a hub that does not exist at t (the status rows are compared exactly).
 
 B6 prints no per-node leaf flag, so its hubs and crowds are checked by the parity of its whole
 community block, which meets B6's inline crowd rule only where a sampled community reaches a
@@ -51,12 +51,14 @@ import random
 from typing import Any
 
 from ..config import DEFAULT_CONFIG, ParityConfig, RunConfig
+from ..data.labels import active_at
 from ..paths import export_root, parity_record
-from ..subgraph.cache import HUBS, Table
+from ..subgraph.cache import CROWDS, HUBS, Table
 from ..subgraph.fetch import PARAMS, PER_ACCOUNT
 from ..tigergraph.executor import ConnectionExecutor, ParityExecutor
 from ..tigergraph.queries import (
     LIST_ACCOUNTS,
+    MARK_CROWDS,
     PROFILE_HUBS,
     QUERY_FILES,
     READ_ANSWER_KEY,
@@ -70,12 +72,14 @@ from ..tigergraph.queries import (
     READ_WORLD,
     VERSIONS,
     list_accounts,
+    mark_crowds,
     profile_hubs,
     read_answer_key,
     read_hubs,
     read_labels,
     read_world,
 )
+from ..tigergraph.queries.mark_crowds import Crowds
 from ..tigergraph.queries.read_hubs import Hubs
 from ..tigergraph.queries.read_shared_identity import IdentityGraph
 from ..tigergraph.queries.read_world import EDGE_TYPES, VERTEX_TYPES, World
@@ -98,9 +102,8 @@ TAKES_HUBS = frozenset(
 # How many mismatches of a query are kept to be shown, and how many differences of one answer.
 MOST_MISMATCHES = 20
 MOST_DIFFERENCES = 4
-# The id no account has, and the days a true mule stays active after its last payment.
+# The id no account has.
 NO_ACCOUNT = "~no_such_account~"
-WEEK_MS = 7 * 86_400_000
 # The work counters a query prints for mule bench alone, by query. No feature reads them and the
 # reference graph does not mirror them, so parity leaves them out of every comparison
 # (docs/design.md, "Query plumbing").
@@ -161,12 +164,12 @@ class Communities:
 @dataclass(frozen=True)
 class Parity:
     """A parity run: the world's identity and TigerGraph's version, the export it compared with,
-    the Mondays sampled, each query's result and what B6's sample met."""
+    the weeks sampled, each query's result and what B6's sample met."""
 
     identity: str
     tigergraph: str
     export: Path
-    mondays: tuple[int, ...]
+    weeks: tuple[int, ...]
     queries: Mapping[str, QueryParity]
     communities: Communities
 
@@ -367,25 +370,29 @@ def find_export(root: Path, live: World) -> tuple[Path, ReferenceGraph]:
 # The sample.
 
 
-def sample_mondays(mondays: Sequence[int], config: ParityConfig) -> tuple[int, ...]:
-    """The seeded sample of scored Mondays, in increasing order; all of them when the calendar
-    has no more than parity.mondays."""
-    if len(mondays) <= config.mondays:
-        return tuple(sorted(mondays))
-    return tuple(sorted(random.Random(config.seed).sample(list(mondays), config.mondays)))
+def sample_weeks(times: Sequence[int], config: ParityConfig) -> tuple[int, ...]:
+    """The scoring times of a seeded sample of the scored weeks, in increasing order; all of
+    them when the calendar has no more than parity.weeks."""
+    if len(times) <= config.weeks:
+        return tuple(sorted(times))
+    return tuple(sorted(random.Random(config.seed).sample(list(times), config.weeks)))
 
 
-def _active(account: Account, t_ms: int) -> bool:
-    """Whether the account is a true mule active on the Monday t."""
-    return account.is_mule == 1 and account.mule_onset_ms < t_ms <= account.mule_last_ms + WEEK_MS
+def _active(account: Account, t_ms: int, scoring_times: Sequence[int]) -> bool:
+    """Whether the account is a true mule active at the scoring time t (data.labels.active_at),
+    in the world whose scoring times, in increasing order, are given."""
+    return account.is_mule == 1 and active_at(
+        account.mule_onset_ms, account.mule_last_ms, t_ms, scoring_times
+    )
 
 
 def sample_accounts(
-    graph: ReferenceGraph, t_ms: int, config: ParityConfig
+    graph: ReferenceGraph, t_ms: int, config: ParityConfig, scoring_times: Sequence[int]
 ) -> tuple[list[str], list[str]]:
-    """The seeded sample of the Monday's scorable accounts: its true mules, up to the share
-    parity.mule_share of parity.accounts, those active that Monday first, and then other
-    accounts. The mules, and the others, each by increasing id."""
+    """The seeded sample of the scorable accounts at t: its true mules, up to the share
+    parity.mule_share of parity.accounts, those active at t first, and then other
+    accounts. The mules, and the others, each by increasing id. scoring_times are the world's,
+    which the active state reads."""
     view = graph.as_of(t_ms)
     scored = [account for account in graph.accounts.values() if scorable(view, account)]
     rng = random.Random(f"{config.seed}|{t_ms}")
@@ -393,8 +400,8 @@ def sample_accounts(
         (account for account in scored if account.is_mule == 1), key=lambda account: account.id
     )
     wanted = min(len(mules), round(config.accounts * config.mule_share))
-    active = [account for account in mules if _active(account, t_ms)]
-    rest = [account for account in mules if not _active(account, t_ms)]
+    active = [account for account in mules if _active(account, t_ms, scoring_times)]
+    rest = [account for account in mules if not _active(account, t_ms, scoring_times)]
     chosen = rng.sample(active, min(len(active), wanted))
     chosen += rng.sample(rest, min(len(rest), wanted - len(chosen)))
     others = sorted((account for account in scored if account.is_mule != 1), key=lambda a: a.id)
@@ -538,7 +545,7 @@ def _plain(rows: Sequence[object]) -> list[dict[str, Any]]:
 
 
 def _infrastructure(run: _Comparison) -> None:
-    """The queries with no Monday: the world, the identified mules and the answer key, whole."""
+    """The queries with no t: the world, the identified mules and the answer key, whole."""
     live, reference = run.both(READ_WORLD, read_world.params(), read_world.parse)
     run.check(READ_WORLD, "world", _world(live), _world(reference))
     labels = run.paged(
@@ -572,17 +579,20 @@ def _listed(value: Sequence[object] | Failure) -> object:
     return value if isinstance(value, Failure) else {"accounts": _plain(value)}
 
 
-def _monday_infrastructure(run: _Comparison, t_ms: int, where: str) -> tuple[Hubs | Failure, Hubs]:
-    """The queries of one Monday that name no account: the scorable accounts, the hubs and the
-    hub profile. The live hubs, which B5's leaf flags are checked against, and the reference's,
-    which every request of the Monday names its account hubs from, so that a difference in
-    read_hubs shows in read_hubs alone."""
+def _infrastructure_at(run: _Comparison, t_ms: int, where: str) -> tuple[Crowds | Failure, Hubs]:
+    """The queries of one t that name no account: the scorable accounts, the crowds, which
+    mark_crowds stamps on the live graph before any read of t, the hubs and the hub profile.
+    The live crowds, which B5's leaf flags are checked against, and the reference's hubs, which
+    every request of t names its account hubs from, so that a difference in read_hubs shows in
+    read_hubs alone."""
     live_pages, reference_pages = run.paged(
         LIST_ACCOUNTS,
         lambda after_id: list_accounts.params(t_ms, after_id, PAGE_LIMIT),
         lambda rows, after_id: list_accounts.parse(rows, after_id, PAGE_LIMIT),
     )
     run.check(LIST_ACCOUNTS, where, _listed(live_pages), _listed(reference_pages))
+    crowds, reference_crowds = run.both(MARK_CROWDS, mark_crowds.params(t_ms), mark_crowds.parse)
+    run.check(MARK_CROWDS, where, _crowds(crowds), _crowds(reference_crowds))
     live, reference = run.both(READ_HUBS, read_hubs.params(t_ms), read_hubs.parse)
     run.check(READ_HUBS, where, _hubs(live), _hubs(reference))
     live_profile, reference_profile = run.both(
@@ -598,7 +608,11 @@ def _monday_infrastructure(run: _Comparison, t_ms: int, where: str) -> tuple[Hub
     )
     if isinstance(reference, Failure):
         raise ParityError(f"The reference graph's read_hubs failed on {where}: {reference.why}")
-    return live, reference
+    return crowds, reference
+
+
+def _crowds(value: Crowds | Failure) -> object:
+    return value if isinstance(value, Failure) else _canonical(CROWDS, value)
 
 
 def _hubs(value: Hubs | Failure) -> object:
@@ -608,7 +622,7 @@ def _hubs(value: Hubs | Failure) -> object:
 def _per_account(
     run: _Comparison, t_ms: int, where: str, accounts: Sequence[str], hubs: Hubs
 ) -> list[IdentityGraph]:
-    """B1 to B6 on the Monday's sample, in requests of parity.together accounts, each against
+    """B1 to B6 on the sample of t, in requests of parity.together accounts, each against
     the reference; an account alone against itself among the others of its request. The live B5
     answers, which the leaf flags are read from."""
     config = run.config
@@ -687,27 +701,27 @@ def _alone(run: _Comparison, accounts: Sequence[str], full: Sequence[Sequence[st
 
 
 def _leaf_flags(
-    run: _Comparison, where: str, answers: Sequence[IdentityGraph], hubs: Hubs | Failure
+    run: _Comparison, where: str, answers: Sequence[IdentityGraph], crowds: Crowds | Failure
 ) -> None:
-    """B5's inline leaf flags against the leaves of the live read_hubs of the same Monday, both
-    from the live graph."""
-    if isinstance(hubs, Failure):
-        run.found[READ_SHARED_IDENTITY].record(where, [f"live read_hubs failed: {hubs.why}"])
+    """B5's inline leaf flags against the crowds the live mark_crowds stamped at the same t,
+    both from the live graph."""
+    if isinstance(crowds, Failure):
+        run.found[READ_SHARED_IDENTITY].record(where, [f"live mark_crowds failed: {crowds.why}"])
         return
     leaves = {
-        "device": {leaf.node_id for leaf in hubs.devices},
-        "ip": {leaf.node_id for leaf in hubs.ips},
+        "device": {crowd.node_id for crowd in crowds.devices},
+        "ip": {crowd.node_id for crowd in crowds.ips},
     }
     wrong = [
         f"{kind} {row.node_id} of {graph.scored_id} is flagged "
-        f"{'a leaf' if row.leaf else 'no leaf'}, read_hubs says the opposite"
+        f"{'a leaf' if row.leaf else 'no leaf'}, mark_crowds says the opposite"
         for graph in answers
         for kind, nodes in (("device", graph.devices), ("ip", graph.ips))
         for row in nodes
         if row.leaf != (row.node_id in leaves[kind])
     ]
     run.found[READ_SHARED_IDENTITY].record(
-        f"{where}, leaf flags against read_hubs", wrong[:MOST_DIFFERENCES]
+        f"{where}, leaf flags against mark_crowds", wrong[:MOST_DIFFERENCES]
     )
 
 
@@ -724,19 +738,23 @@ def _refusals(run: _Comparison, t_ms: int, where: str, accounts: Sequence[str], 
         (
             LIST_ACCOUNTS,
             {
-                "t that is no Monday": list_accounts.params(t_ms, "", 1) | {"t_ms": mistaken},
+                "t that is no whole second": list_accounts.params(t_ms, "", 1) | {"t_ms": mistaken},
                 "a page of 0": list_accounts.params(t_ms, "", 1) | {"page": 0},
                 "a page above the limit": list_accounts.params(t_ms, "", 1)
                 | {"page": PAGE_LIMIT + 1},
             },
         ),
         (
+            MARK_CROWDS,
+            {"t that is no whole second": mark_crowds.params(t_ms) | {"t_ms": mistaken}},
+        ),
+        (
             READ_HUBS,
-            {"t that is no Monday": read_hubs.params(t_ms) | {"t_ms": mistaken}},
+            {"t that is no whole second": read_hubs.params(t_ms) | {"t_ms": mistaken}},
         ),
         (
             PROFILE_HUBS,
-            {"t that is no Monday": profile_hubs.params(t_ms) | {"t_ms": mistaken}},
+            {"t that is no whole second": profile_hubs.params(t_ms) | {"t_ms": mistaken}},
         ),
     ):
         for label, params in probes.items():
@@ -745,7 +763,7 @@ def _refusals(run: _Comparison, t_ms: int, where: str, accounts: Sequence[str], 
     for query in PER_ACCOUNT:
         valid = PARAMS[query](t_ms, sample, hub_ids)
         probes = {
-            "t that is no Monday": valid | {"t_ms": mistaken},
+            "t that is no whole second": valid | {"t_ms": mistaken},
             "no account": valid | {"account_ids": []},
             "a repeated account": valid | {"account_ids": [sample[0], sample[0]]},
             "an unknown account": valid | {"account_ids": [sample[0], NO_ACCOUNT]},
@@ -775,22 +793,23 @@ def _refusal(run: _Comparison, query: str, where: str, params: dict[str, Any]) -
 def run_on(
     live: ParityExecutor,
     graph: ReferenceGraph,
-    mondays: Sequence[int],
+    weeks: Sequence[int],
     config: ParityConfig,
+    scoring_times: Sequence[int],
 ) -> tuple[dict[str, QueryParity], Communities]:
-    """The comparison of the live graph and the reference graph on the sampled Mondays, as the
-    module says."""
+    """The comparison of the live graph and the reference graph on the sampled weeks, as the
+    module says; scoring_times are all of the world's, of which weeks are a sample."""
     comparison = _Comparison(live, graph, config)
     _infrastructure(comparison)
-    for t_ms in mondays:
-        where = f"Monday {t_ms}"
-        live_hubs, hubs = _monday_infrastructure(comparison, t_ms, where)
-        mules, others = sample_accounts(graph, t_ms, config)
+    for t_ms in weeks:
+        where = f"t={t_ms}"
+        live_crowds, hubs = _infrastructure_at(comparison, t_ms, where)
+        mules, others = sample_accounts(graph, t_ms, config, scoring_times)
         accounts = [*mules, *others]
         if not accounts:
             continue
         answers = _per_account(comparison, t_ms, where, accounts, hubs)
-        _leaf_flags(comparison, where, answers, live_hubs)
+        _leaf_flags(comparison, where, answers, live_crowds)
         _refusals(comparison, t_ms, where, accounts, hubs)
         sharing = Sharing(Lookback(graph.as_of(t_ms)))
         hub_ids = frozenset(hub.account_id for hub in hubs.accounts)
@@ -825,21 +844,23 @@ def run(
     executor: ConnectionExecutor,
     config: RunConfig = DEFAULT_CONFIG,
     *,
+    seed: int,
     exports: Path | None = None,
     record: Path | None = None,
     today: date | None = None,
 ) -> Parity:
-    """Run mule parity on the loaded world: find its export (under exports, by default the
-    loader's export root in .env), compare, and write the record (record, by default
-    gsql/parity.toml) of the queries that passed. The run's Parity; the record is written even
-    when some query failed, holding the others."""
+    """Run mule parity on the loaded world, whose configured seed gives its scoring times: find
+    its export (under exports, by default the loader's export root in .env), compare, and
+    write the record (record, by default gsql/parity.toml) of the queries that passed. The
+    run's Parity; the record is written even when some query failed, holding the others."""
     live = ParityExecutor(executor)
     found = read_world.parse(live.run(READ_WORLD, read_world.params()))
     folder, graph = find_export(export_root() if exports is None else exports, found)
     version = str(executor.call(lambda conn: conn.getVer(), what="getVer"))
-    mondays = sample_mondays(config.calendar.mondays(), config.parity)
-    queries, communities = run_on(live, graph, mondays, config.parity)
-    parity = Parity(identity(found), version, folder, mondays, queries, communities)
+    scoring_times = config.calendar.scoring_times(seed)
+    weeks = sample_weeks(scoring_times, config.parity)
+    queries, communities = run_on(live, graph, weeks, config.parity, scoring_times)
+    parity = Parity(identity(found), version, folder, weeks, queries, communities)
     path = parity_record() if record is None else record
     path.write_text(record_text(parity, date.today() if today is None else today))
     return parity

@@ -1,4 +1,4 @@
-"""profile_hubs: exact whole-world histograms on one Monday of the measures behind read_hubs'
+"""profile_hubs: exact whole-world histograms at one time t of the measures behind read_hubs'
 thresholds, for mule bench only (docs/design.md, "profile_hubs")."""
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ class HubProfile:
 
 
 def params(t_ms: int) -> dict[str, Any]:
-    """The parameters of the Monday t."""
+    """The parameters of the time t."""
     return {"t_ms": as_of(t_ms)}
 
 
@@ -42,11 +42,11 @@ def _histogram(value: object, what: str, query: str) -> dict[int, int]:
 
 
 def parse(rows: Sequence[object]) -> HubProfile:
-    """The histograms of the Monday params(t_ms) asked for."""
-    from . import PROFILE_HUBS, VERSIONS  # the registry imports this module
+    """The histograms at the time params(t_ms) asked for."""
+    from . import PROFILE_HUBS  # the registry imports this module
 
-    head = response_head(rows, PROFILE_HUBS, VERSIONS[PROFILE_HUBS])
+    head = response_head(rows, PROFILE_HUBS)
     names = [field.name for field in fields(HubProfile)]
-    if set(head) != {"status", "version", *names}:
+    if set(head) != {"status", *names}:
         raise ValueError(f"{PROFILE_HUBS} printed the fields {sorted(head)}")
     return HubProfile(**{name: _histogram(head[name], name, PROFILE_HUBS) for name in names})

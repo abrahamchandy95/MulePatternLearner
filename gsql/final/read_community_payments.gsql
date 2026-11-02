@@ -1,0 +1,140 @@
+USE GRAPH Mule_Pattern_Learner
+CREATE OR REPLACE QUERY read_community_payments(
+    UINT t_ms, // The scoring time after the first 90 days
+    LIST<STRING> customer_ids // The ids of the customers to read
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+
+    /* Constants */
+    UINT LOOKBACK_MS = 7776000000; // 90 days
+    UINT MONTH_MS = 2592000000; // 30 days
+
+    /* Edge types, each a set so that one pattern serves transactions and transfers */
+    SetAccum<STRING> @@customer_to_account_edge_type; // Customer -> the accounts it owns
+    SetAccum<STRING> @@account_to_owner_edge_type; // Account -> its owner
+    SetAccum<STRING> @@account_to_payment_edge_type; // Account -> the payments it sent or received
+    SetAccum<STRING> @@payment_to_account_edge_type; // Payment -> the accounts that sent and received it
+    SetAccum<STRING> @@sender_to_payment_edge_type; // Account -> the payments it sent
+    SetAccum<STRING> @@payment_to_receiver_edge_type; // Payment -> the account that received it
+    SetAccum<STRING> @@receiver_to_payment_edge_type; // Account -> the payments it received
+    SetAccum<STRING> @@payment_to_sender_edge_type; // Payment -> the account that sent it
+    @@customer_to_account_edge_type += "Party_Owns_Account";
+    @@account_to_owner_edge_type += "Account_Owned_By_Party";
+    @@account_to_payment_edge_type += "Account_Initiated_Transaction";
+    @@account_to_payment_edge_type += "Account_Received_Transaction";
+    @@account_to_payment_edge_type += "Account_Sent_Zelle_Transfer";
+    @@account_to_payment_edge_type += "Account_Received_Zelle_Transfer";
+    @@payment_to_account_edge_type += "Transaction_From_Account";
+    @@payment_to_account_edge_type += "Transaction_To_Account";
+    @@payment_to_account_edge_type += "Transfer_From_Account";
+    @@payment_to_account_edge_type += "Transfer_To_Account";
+    @@sender_to_payment_edge_type += "Account_Initiated_Transaction";
+    @@sender_to_payment_edge_type += "Account_Sent_Zelle_Transfer";
+    @@payment_to_receiver_edge_type += "Transaction_To_Account";
+    @@payment_to_receiver_edge_type += "Transfer_To_Account";
+    @@receiver_to_payment_edge_type += "Account_Received_Transaction";
+    @@receiver_to_payment_edge_type += "Account_Received_Zelle_Transfer";
+    @@payment_to_sender_edge_type += "Transaction_From_Account";
+    @@payment_to_sender_edge_type += "Transfer_From_Account";
+
+    /* Accumulators, each map keyed by the customer at the other end, the empty id for an account that is no customer's */
+    MaxAccum<STRING> @customer_id; // On an account at the other end: its owner, when it is this bank's, open by t and no hub
+    MapAccum<STRING, SumAccum<INT>> @sent_30d; // On a customer: the payments it sent
+    MapAccum<STRING, SumAccum<INT>> @cents_sent_30d; // On a customer: their cents
+    MapAccum<STRING, SumAccum<INT>> @received_30d; // On a customer: the payments it received
+    MapAccum<STRING, MinAccum<UINT>> @since_latest_ms; // On a customer: how long ago its latest payment either way was
+    SetAccum<STRING> @@ids; // The customer ids, each once
+    SumAccum<INT> @@given; // How many customer ids were given
+
+    IF t_ms <= LOOKBACK_MS OR t_ms % 1000 != 0 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+    FOREACH customer_id IN customer_ids DO
+        @@ids += customer_id;
+        @@given += 1;
+    END;
+    IF @@given == 0 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+    IF @@ids.size() != @@given THEN
+        PRINT "duplicate_customer" AS status;
+        RETURN;
+    END;
+    customers = to_vertex_set(@@ids, "Party");
+    IF customers.size() != @@ids.size() THEN
+        PRINT "unknown_customer" AS status;
+        RETURN;
+    END;
+
+    /* Traverse: Customer -> Account -> Payment -> the account at its other end, for its accounts open by t that are no hub, in the 30 days before t */
+    ends = SELECT r
+        FROM customers:q - (@@customer_to_account_edge_type>:w) - Account:b
+            - (@@account_to_payment_edge_type>:e) - _:p
+            - (@@payment_to_account_edge_type>:f) - Account:r
+        WHERE w.valid_from_ms < t_ms
+            AND ( w.valid_to_ms == 0 OR w.valid_to_ms > t_ms - LOOKBACK_MS )
+            AND b.opened_ms < t_ms AND b.hub_at_ms != t_ms
+            AND p.event_ts_ms >= t_ms - MONTH_MS AND p.event_ts_ms < t_ms AND r != b
+    ;
+
+    /* Traverse: Account -> its owner, through an ownership visible at t, for the other ends that are this bank's, open by t and no hub */
+    owned_ends = SELECT r
+        FROM ends:r - (@@account_to_owner_edge_type>:o) - Party:c
+        WHERE NOT r.is_external AND r.opened_ms < t_ms AND r.hub_at_ms != t_ms
+            AND o.valid_from_ms < t_ms
+            AND ( o.valid_to_ms == 0 OR o.valid_to_ms > t_ms - LOOKBACK_MS )
+        ACCUM
+            r.@customer_id += c.id
+    ;
+
+    /* Traverse: Customer -> Account -> Payment -> the account it paid, payments between two of its own accounts aside */
+    sent = SELECT q
+        FROM customers:q - (@@customer_to_account_edge_type>:w) - Account:b
+            - (@@sender_to_payment_edge_type>:e) - _:p
+            - (@@payment_to_receiver_edge_type>:f) - Account:r
+        WHERE w.valid_from_ms < t_ms
+            AND ( w.valid_to_ms == 0 OR w.valid_to_ms > t_ms - LOOKBACK_MS )
+            AND b.opened_ms < t_ms AND b.hub_at_ms != t_ms
+            AND p.event_ts_ms >= t_ms - MONTH_MS AND p.event_ts_ms < t_ms AND r != b
+            AND r.@customer_id != q.id
+        ACCUM
+            INT cents = floor(p.amount * 100 + 0.5),
+            q.@sent_30d += (r.@customer_id -> 1),
+            q.@cents_sent_30d += (r.@customer_id -> cents),
+            q.@since_latest_ms += (r.@customer_id -> t_ms - p.event_ts_ms)
+    ;
+
+    /* Traverse: Customer -> Account -> Payment -> the account that paid it, payments between two of its own accounts aside */
+    received = SELECT q
+        FROM customers:q - (@@customer_to_account_edge_type>:w) - Account:b
+            - (@@receiver_to_payment_edge_type>:e) - _:p
+            - (@@payment_to_sender_edge_type>:f) - Account:r
+        WHERE w.valid_from_ms < t_ms
+            AND ( w.valid_to_ms == 0 OR w.valid_to_ms > t_ms - LOOKBACK_MS )
+            AND b.opened_ms < t_ms AND b.hub_at_ms != t_ms
+            AND p.event_ts_ms >= t_ms - MONTH_MS AND p.event_ts_ms < t_ms AND r != b
+            AND r.@customer_id != q.id
+        ACCUM
+            q.@received_30d += (r.@customer_id -> 1),
+            q.@since_latest_ms += (r.@customer_id -> t_ms - p.event_ts_ms)
+    ;
+
+    /* Refuse unless the hub stamps on the graph are this t's */
+    current_marks = SELECT m FROM Mark:m WHERE m.id == "hubs" AND m.at_ms == t_ms;
+    IF current_marks.size() != 1 THEN
+        PRINT "unmarked_time" AS status;
+        RETURN;
+    END;
+
+    /* Printing the customers */
+    PRINT "ok" AS status;
+    PRINT customers[
+        customers.id AS customer_id,
+        customers.@sent_30d AS sent_30d,
+        customers.@cents_sent_30d AS cents_sent_30d,
+        customers.@received_30d AS received_30d,
+        customers.@since_latest_ms AS since_latest_ms
+    ] AS customers;
+
+}

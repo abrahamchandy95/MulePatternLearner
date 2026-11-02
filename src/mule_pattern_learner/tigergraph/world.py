@@ -2,7 +2,7 @@
 which names every cache and store folder, and the fields PhantomLedger's world record shares
 with read_world, under the record's key names. Beside it, the rest of a cached row's key: the
 folder of the query versions and settings under a world's identity, and the folder of each
-Monday under it.
+scoring time under it.
 
 A world regenerated or changed has another identity, so stale rows are never read. Every field
 is an integer, so a world has the same identity on every run.
@@ -18,6 +18,7 @@ import json
 from ..config import SubgraphConfig
 from .queries import (
     LIST_ACCOUNTS,
+    MARK_CROWDS,
     READ_ACTIVITY_CHANGE,
     READ_COMMUNITY,
     READ_COUNTERPARTIES,
@@ -37,11 +38,12 @@ SHARED_MAPS = ("vertices", "edges", "account_types", "payment_rails", "seconds",
 SHARED_VALUES = ("external_accounts", "first_joined_ms", "first_event_ms", "last_event_ms")
 # The bytes of a blake2b digest that names a world: 32 hex digits (paths.IDENTITY).
 IDENTITY_BYTES = 16
-# The queries whose rows the cache of a world holds, in a folder per Monday: the population, the
-# hubs, and B1 to B6 (docs/design.md, "Cache").
+# The queries whose rows the cache of a world holds, in a folder per scoring time: the
+# population, the hubs, the crowds, and B1 to B6 (docs/design.md, "Cache").
 CACHED_QUERIES = (
     LIST_ACCOUNTS,
     READ_HUBS,
+    MARK_CROWDS,
     READ_MONEY_FLOW,
     READ_COUNTERPARTIES,
     READ_ACTIVITY_CHANGE,
@@ -82,7 +84,8 @@ def cache_key(subgraph: SubgraphConfig) -> str:
     return canonical_hash({"versions": versions, "subgraph": asdict(subgraph)})
 
 
-def monday_folder(t_ms: int) -> str:
-    """The folder of the Monday t in a world's cache, its date (2024-04-01). Only a Monday at
-    00:00 UTC is a folder."""
-    return datetime.fromtimestamp(as_of(t_ms) // 1000, UTC).date().isoformat()
+def time_folder(t_ms: int) -> str:
+    """The folder of the scoring time t in a world's cache, its UTC time to the second with
+    colons written as hyphens so that it is a filesystem-safe name (2024-04-03T14-37-12Z). Any
+    t that is a whole second after the lookback is a folder."""
+    return datetime.fromtimestamp(as_of(t_ms) // 1000, UTC).strftime("%Y-%m-%dT%H-%M-%SZ")

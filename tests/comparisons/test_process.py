@@ -77,7 +77,7 @@ def test_importing_the_xgboost_module_leaves_torch_out_of_a_fresh_interpreter() 
 
 
 def test_nothing_that_holds_torch_imports_xgboost() -> None:
-    """The comparisons' ranker and vectors, the clock probe and the evaluation report hold
+    """The comparisons' ranker and vectors, the clock tests and the evaluation report hold
     torch, so none of them, nor anything they import, imports xgboost."""
     found = fresh(
         """
@@ -87,7 +87,8 @@ def test_nothing_that_holds_torch_imports_xgboost() -> None:
         import mule_pattern_learner.comparisons.process
         import mule_pattern_learner.comparisons.rankers
         import mule_pattern_learner.evaluation.audit
-        import mule_pattern_learner.evaluation.clock_probe
+        import mule_pattern_learner.evaluation.clock_gain
+        import mule_pattern_learner.evaluation.clock_invariance
         import mule_pattern_learner.evaluation.report
         print("torch" in sys.modules, "xgboost" in sys.modules)
         """
@@ -169,7 +170,7 @@ def test_at_xgboosts_defaults_neither_a_seed_nor_a_thread_count_changes_the_boos
     assert found == "identical"
 
 
-def test_the_clock_probes_folds_equal_an_in_process_fit() -> None:
+def test_the_clock_gain_tests_folds_equal_an_in_process_fit() -> None:
     found = fresh(
         PLANTED,
         """

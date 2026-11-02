@@ -77,7 +77,7 @@ def _identity(identity: object) -> str:
 
 
 def cache_dir(identity: str) -> Path:
-    """The cache of a world: its folders per query versions and settings, then per Monday."""
+    """The cache of a world: its folders per query versions and settings, then per scoring time."""
     return DATA_DIR / "cache" / _identity(identity)
 
 

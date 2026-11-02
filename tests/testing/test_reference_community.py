@@ -333,7 +333,7 @@ def test_the_payment_round_keeps_the_candidates_with_the_latest_payments_ties_by
         ({"hub_accounts": [{"id": "g_hub"}, {"id": "a_late"}]}, "invisible_hub"),
     ],
     ids=[
-        "no Monday",
+        "no whole second",
         "no account",
         "an account twice",
         "an unknown account",

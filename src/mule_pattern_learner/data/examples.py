@@ -1,23 +1,23 @@
 """The examples and their weights (docs/design.md, "Worlds, examples and weights"). An example is
-an (account, Monday t); every one is a scorable account of t.
+an (account, t) with t the scoring time of a week; every one is a scorable account of t.
 
 Training world:
 - a positive is an identified mule active at t and scorable at t, weighing 1 over its number
-  of positive Mondays, so every mule counts once however long it ran;
-- an identified mule's other Mondays, when it is scorable, are dropped, never unlabelled;
+  of positive weeks, so every mule counts once however long it ran;
+- an identified mule's other weeks, when it is scorable, are dropped, never unlabelled;
 - the unlabelled examples of t are the training draw (draw.lowest) of n = min(pool, max(15 x
   positives, 500)) accounts from the pool, every scorable account of t that is no identified
-  mule; hidden mules can be drawn. Each weighs the pool over n, so each Monday's draw stands
-  for that Monday's scorable population;
+  mule; hidden mules can be drawn. Each weighs the pool over n, so each week's draw stands
+  for that week's scorable population;
 - each label's weights are then divided by their mean over the training examples, once.
 
-Selection world, by pu_label alone: every scorable account on every Monday, positive when it is
-an identified mule active then, and left out of the ranking when it is an identified mule on
-one of its other Mondays. Under the fallback scoring mode: the positives, plus the fallback
+Selection world, by pu_label alone: every scorable account in every week, positive when it is
+an identified mule active then, and left out of the ranking when it is an identified mule in
+one of its other weeks. Under the fallback scoring mode: the positives, plus the fallback
 sample (draw.sampled) of every other scorable account that is no identified mule, hidden mules
 at the same rate, each weighing the sample's weight.
 
-Test world, under whole scoring: every scorable account on every Monday. Its fallback list
+Test world, under whole scoring: every scorable account in every week. Its fallback list
 depends on the truth, so mule audit builds it, never this module.
 
 The tables are written to the examples folder of the world, keyed by the query versions and
@@ -76,7 +76,7 @@ EXAMPLE_QUERIES = (LIST_ACCOUNTS, READ_LABELS)
 
 @dataclass(frozen=True)
 class Tally:
-    """What the training weights and the report need of a Monday: how many accounts are
+    """What the training weights and the report need of a week: how many accounts are
     scorable then, its positives, by id, and how many identified mules are dropped."""
 
     t_ms: int
@@ -86,11 +86,11 @@ class Tally:
 
 
 @dataclass(frozen=True)
-class Monday:
-    """A Monday's scorable accounts, by id; its positives, the identified mules active then
-    and scorable then, by id; and how many are dropped, the identified mules scorable then and
-    not active: examples on their other Mondays, so no mule that is not an example that Monday
-    (not yet open, or closed) is counted."""
+class Week:
+    """A week's scorable accounts at its scoring time t, by id; its positives, the identified
+    mules active then and scorable then, by id; and how many are dropped, the identified mules
+    scorable then and not active: examples in their other weeks, so no mule that is not an
+    example that week (not yet open, or closed) is counted."""
 
     t_ms: int
     accounts: tuple[str, ...]
@@ -101,18 +101,24 @@ class Monday:
         return Tally(self.t_ms, len(self.accounts), self.positives, self.dropped)
 
 
-def monday(t_ms: int, accounts: Collection[str], mules: Sequence[IdentifiedMule]) -> Monday:
-    """The Monday t's scorable accounts, positives and dropped identified mules."""
+def week(
+    t_ms: int,
+    accounts: Collection[str],
+    mules: Sequence[IdentifiedMule],
+    scoring_times: Sequence[int],
+) -> Week:
+    """The scoring time t's scorable accounts, positives and dropped identified mules;
+    scoring_times are the world's, which the label rule reads (data.labels.active)."""
     scorable = set(accounts)
     held = [mule for mule in mules if mule.account_id in scorable]
-    positives = sorted(mule.account_id for mule in held if active(mule, t_ms))
-    dropped = sum(1 for mule in held if not active(mule, t_ms))
-    return Monday(t_ms, tuple(sorted(scorable)), tuple(positives), dropped)
+    positives = sorted(mule.account_id for mule in held if active(mule, t_ms, scoring_times))
+    dropped = sum(1 for mule in held if not active(mule, t_ms, scoring_times))
+    return Week(t_ms, tuple(sorted(scorable)), tuple(positives), dropped)
 
 
 @dataclass(frozen=True)
 class Draw:
-    """A training Monday's unlabelled draw: the size of its pool and the accounts drawn, in
+    """A training week's unlabelled draw: the size of its pool and the accounts drawn, in
     the draw's order. Each weighs pool / len(drawn) before the weights are divided by their
     mean."""
 
@@ -125,8 +131,8 @@ class Draw:
         return self.pool / len(self.drawn) if self.drawn else 0.0
 
 
-def unlabelled(day: Monday, identified: Collection[str], data: DataConfig) -> Draw:
-    """The Monday's training draw: n = min(pool, max(per_positive x positives,
+def unlabelled(day: Week, identified: Collection[str], data: DataConfig) -> Draw:
+    """The week's training draw: n = min(pool, max(per_positive x positives,
     min_unlabelled)) of the scorable accounts that are no identified mule."""
     pool = [account for account in day.accounts if account not in identified]
     n = min(len(pool), max(data.per_positive * len(day.positives), data.min_unlabelled))
@@ -134,8 +140,8 @@ def unlabelled(day: Monday, identified: Collection[str], data: DataConfig) -> Dr
 
 
 def training_frame(days: Sequence[Tally], draws: Sequence[Draw]) -> pd.DataFrame:
-    """The training examples, by Monday, label (positives first) and account: each positive
-    weighing 1 over its mule's positive Mondays and each unlabelled the pool over the draw,
+    """The training examples, by week, label (positives first) and account: each positive
+    weighing 1 over its mule's positive weeks and each unlabelled the pool over the draw,
     then each label's weights divided by their mean."""
     counts = Counter(account for day in days for account in day.positives)
     rows: list[tuple[int, str, int, float]] = [
@@ -157,10 +163,10 @@ def training_frame(days: Sequence[Tally], draws: Sequence[Draw]) -> pd.DataFrame
     return found.reset_index(drop=True)
 
 
-def selection_frame(day: Monday, identified: Collection[str], data: DataConfig) -> pd.DataFrame:
-    """The Monday's selection keys. Whole: every scorable account, each weighing 1, positive
+def selection_frame(day: Week, identified: Collection[str], data: DataConfig) -> pd.DataFrame:
+    """The week's selection keys. Whole: every scorable account, each weighing 1, positive
     when it is a positive, and out of the ranking when it is an identified mule on another of
-    its Mondays. Fallback: the positives, weighing 1, and the fallback sample of the scorable
+    its weeks. Fallback: the positives, weighing 1, and the fallback sample of the scorable
     accounts that are no identified mule, each weighing the sample's weight."""
     positives = set(day.positives)
     if data.scoring == "whole":
@@ -187,8 +193,8 @@ def selection_frame(day: Monday, identified: Collection[str], data: DataConfig) 
     return found.sort_values("account_id").reset_index(drop=True)
 
 
-def scored_frame(day: Monday) -> pd.DataFrame:
-    """The Monday's test keys under whole scoring: every scorable account."""
+def scored_frame(day: Week) -> pd.DataFrame:
+    """The week's test keys under whole scoring: every scorable account."""
     return pd.DataFrame(
         {
             "t_ms": pd.Series([day.t_ms] * len(day.accounts), dtype="int64"),
@@ -257,11 +263,11 @@ def read_first(path: Path, schema: pa.Schema) -> pd.DataFrame:
 
 
 class ExampleKeys(Mapping[int, list[str]]):
-    """The accounts of each Monday that the examples tables of a folder hold, read a Monday at a
+    """The accounts of each week that the examples tables of a folder hold, read a week at a
     time: mule fetch asks for the keys of a whole world, which run to millions of rows, and holds
-    one Monday's accounts at once. The tables are the training table (every example), the
+    one week's accounts at once. The tables are the training table (every example), the
     selection table (the ranked ones) and the test table (every one), whichever the folder
-    holds; a Monday's accounts are those of every table together, once each, by increasing id."""
+    holds; a week's accounts are those of every table together, once each, by increasing id."""
 
     def __init__(self, folder: Path, tables: Sequence[str]) -> None:
         self._tables: list[tuple[Path, list[tuple[str, str, bool]]]] = []
@@ -271,20 +277,20 @@ class ExampleKeys(Mapping[int, list[str]]):
                 raise FileNotFoundError(f"{path} is missing: run `mule prepare` first")
             filters = [("ranked", "=", True)] if name == SELECTION_FILE else []
             self._tables.append((path, filters))  # pyright: ignore[reportArgumentType]
-        mondays: set[int] = set()
+        weeks: set[int] = set()
         for path, filters in self._tables:
             column = pq.read_table(path, columns=["t_ms"], filters=filters or None)["t_ms"]
-            mondays |= {int(t_ms) for t_ms in column.unique().to_pylist()}
-        self._mondays = sorted(mondays)
+            weeks |= {int(t_ms) for t_ms in column.unique().to_pylist()}
+        self._weeks = sorted(weeks)
 
     def __iter__(self) -> Iterator[int]:
-        return iter(self._mondays)
+        return iter(self._weeks)
 
     def __len__(self) -> int:
-        return len(self._mondays)
+        return len(self._weeks)
 
     def __getitem__(self, t_ms: int) -> list[str]:
-        if t_ms not in self._mondays:
+        if t_ms not in self._weeks:
             raise KeyError(t_ms)
         found: set[str] = set()
         for path, filters in self._tables:

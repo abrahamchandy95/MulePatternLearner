@@ -7,7 +7,7 @@ the lowest seed among equals. A model file built under another contract lock tha
 query versions and settings is refused, and its differing fields named (training.contract).
 
 The scored keys are built into batches by the same builder and settings as training's, and
-each logit is ranked as a raw logit in float64 within its Monday, highest first, since a
+each logit is ranked as a raw logit in float64 within its week, highest first, since a
 float32 sigmoid tied every logit above about 17.
 """
 
@@ -44,8 +44,8 @@ def score(
     switch: Switch | None = None,
     device: torch.device | str = "cpu",
 ) -> pd.DataFrame:
-    """The logit of every key of batches under the model, and its rank within its Monday (1 the
-    highest; tied logits share the best rank), by Monday and account."""
+    """The logit of every key of batches under the model, and its rank within its week (1 the
+    highest; tied logits share the best rank), by week and account."""
     keys, found = logits(saved.model, batches, switch, torch.device(device))
     frame = pd.DataFrame(
         {

@@ -1,11 +1,11 @@
 """The cache of fetched rows (docs/design.md, "Cache").
 
 Under a world's identity and the key of its query versions and settings
-(tigergraph.world.cache_key), one folder per Monday holds the population (data.population),
-the hubs, and one table per query, B1 to B6:
+(tigergraph.world.cache_key), one folder per scoring time holds the population (data.population),
+the hubs, the crowds, and one table per query, B1 to B6:
 
-    data/cache/<world identity>/<cache key>/<Monday>/<table>/part-<n>/<kind>.parquet
-    data/cache/<world identity>/<cache key>/<Monday>/<table>/part-<n>/index.parquet
+    data/cache/<world identity>/<cache key>/<time>/<table>/part-<n>/<kind>.parquet
+    data/cache/<world identity>/<cache key>/<time>/<table>/part-<n>/index.parquet
 
 - A table holds one Parquet file per kind of row its query prints, one row per node or edge,
   every field named as its row dataclass names it: B4's accounts, payments and ownership
@@ -17,18 +17,18 @@ the hubs, and one table per query, B1 to B6:
   those accounts go into a temporary folder, which a rename puts in place whole. So a part is
   never without its index, and a crash between the two leaves nothing: no part, and no
   account that reads as cached without its rows. A table's index is its parts' indexes
-  together, read once and kept for the Monday being read.
-- The hubs of a Monday are one part, without an index. The complete table is parts that hold
-  an index alone: the scored accounts whose subgraph and every account node's B1 to B3 rows
-  are all cached.
+  together, read once and kept for the time being read.
+- The hubs and the crowds of a scoring time are one part each, without an index. The complete
+  table is parts that hold an index alone: the scored accounts whose subgraph and every account
+  node's B1 to B3 rows are all cached.
 - Rows read back are reparsed by their query's own parser, from the response they were parsed
   from, so cached rows pass the live checks.
-- The cache holds the indexes of one Monday at a time, the one last asked about, and forget
-  drops them early, so a fetch or a reader that goes through 52 Mondays never holds more than
-  one Monday's. A 300,000-person world has millions of entries in a Monday's indexes.
+- The cache holds the indexes of one scoring time at a time, the one last asked about, and
+  forget drops them early, so a fetch or a reader that goes through 52 weeks never holds more
+  than one time's. A 300,000-person world has millions of entries in a time's indexes.
 
 Only fetch asks which accounts a table lacks (missing). Every other reader names its keys:
-rows(table, Monday, accounts) gives exactly those accounts' rows, and nothing lists the index
+rows(table, t, accounts) gives exactly those accounts' rows, and nothing lists the index
 to its caller, so training, selection and scoring read only the keys they computed themselves
 (the Keys chosen by their reader guard).
 """
@@ -49,6 +49,7 @@ import pyarrow.parquet as pq
 from ..config import SubgraphConfig
 from ..paths import cache_dir
 from ..tigergraph.queries import (
+    MARK_CROWDS,
     READ_ACTIVITY_CHANGE,
     READ_COMMUNITY,
     READ_COUNTERPARTIES,
@@ -56,7 +57,7 @@ from ..tigergraph.queries import (
     READ_MONEY_FLOW,
     READ_PAYMENT_EVENTS,
     READ_SHARED_IDENTITY,
-    VERSIONS,
+    mark_crowds,
     read_activity_change,
     read_community,
     read_counterparties,
@@ -65,6 +66,7 @@ from ..tigergraph.queries import (
     read_payment_events,
     read_shared_identity,
 )
+from ..tigergraph.queries.mark_crowds import Crowd, Crowds
 from ..tigergraph.queries.read_activity_change import ActivityChange
 from ..tigergraph.queries.read_community import Community
 from ..tigergraph.queries.read_counterparties import Counterparties
@@ -85,7 +87,7 @@ from ..tigergraph.queries.read_shared_identity import (
     OwnerEnrolled,
     Seen,
 )
-from ..tigergraph.world import cache_key, monday_folder
+from ..tigergraph.world import cache_key, time_folder
 
 if TYPE_CHECKING:
     from _typeshed import DataclassInstance
@@ -96,8 +98,8 @@ ACCOUNT = "account_id"
 # The file of a part that names its accounts.
 INDEX_FILE = "index.parquet"
 INDEX_SCHEMA = pa.schema([(ACCOUNT, pa.string())])
-# The part of a Monday's hubs.
-HUBS_PART = "part-0"
+# The one part of the hubs and of the crowds of a scoring time.
+WHOLE_PART = "part-0"
 # The Arrow type of each type a row's field may have (tigergraph.queries.rows.FIELD_TYPES).
 ARROW_TYPES = {"str": pa.string(), "int": pa.int64(), "bool": pa.bool_(), "float": pa.float64()}
 # The rows of each kind of a table, as plain dicts.
@@ -155,8 +157,8 @@ def _unscored(row: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _unique(rows: Iterable[Mapping[str, Any]], id_field: str) -> list[dict[str, Any]]:
-    """One row per id of rows the subgraphs share (a vertex's row depends on it, the Monday and
-    the hubs alone, never on the scored account), refusing two that differ."""
+    """One row per id of rows the subgraphs share (a vertex's row depends on it, the scoring time
+    and the hubs alone, never on the scored account), refusing two that differ."""
     found: dict[str, dict[str, Any]] = {}
     for row in rows:
         plain = _unscored(row)
@@ -267,6 +269,29 @@ HUBS = Table[Hubs](
     _hubs_rows,
     _hubs_printed,
     _hubs_parse,
+)
+
+
+def _crowds_rows(crowds: Crowds) -> Rows:
+    return {"devices": _plain(crowds.devices), "ips": _plain(crowds.ips)}
+
+
+def _crowds_printed(rows: Rows) -> list[dict[str, Any]]:
+    return [{name: _vertices(rows[name])} for name in ("devices", "ips")]
+
+
+def _crowds_parse(rows: Sequence[object], accounts: Collection[str]) -> Crowds:
+    del accounts
+    return mark_crowds.parse(rows)
+
+
+CROWDS = Table[Crowds](
+    "crowds",
+    MARK_CROWDS,
+    (Kind("devices", Crowd, "node_id"), Kind("ips", Crowd, "node_id")),
+    _crowds_rows,
+    _crowds_printed,
+    _crowds_parse,
 )
 MONEY_FLOW = Table[MoneyFlows](
     "money_flow",
@@ -382,8 +407,8 @@ class Cache:
 
     def __init__(self, root: Path) -> None:
         self.root = root
-        # The indexes held, by table name: those of one Monday, the one last asked about.
-        self._monday: str | None = None
+        # The indexes held, by table name: those of one scoring time, the one last asked about.
+        self._time: str | None = None
         self._indexes: dict[str, dict[str, int]] = {}
 
     @classmethod
@@ -393,17 +418,17 @@ class Cache:
         return cls(cache_dir(identity) / cache_key(subgraph))
 
     def folder(self, name: str, t_ms: int) -> Path:
-        """The folder of a table on the Monday t; only a Monday at 00:00 UTC has one."""
-        return self.root / monday_folder(t_ms) / name
+        """The folder of a table at the time t; only a whole second after the lookback has one."""
+        return self.root / time_folder(t_ms) / name
 
     def _index(self, name: str, t_ms: int) -> dict[str, int]:
-        """The part of each account the table name holds on the Monday t: its parts' indexes,
+        """The part of each account the table name holds at the time t: its parts' indexes,
         read once, a later part naming an account that two hold. The indexes of another
-        Monday are dropped first."""
-        monday = monday_folder(t_ms)
-        if monday != self._monday:
+        time are dropped first."""
+        stamp = time_folder(t_ms)
+        if stamp != self._time:
             self._indexes.clear()
-            self._monday = monday
+            self._time = stamp
         if name not in self._indexes:
             folder = self.folder(name, t_ms)
             found: dict[str, int] = {}
@@ -414,12 +439,12 @@ class Cache:
         return self._indexes[name]
 
     def forget(self, t_ms: int) -> None:
-        """Drop the indexes held for the Monday t, which a reader that has finished with the
-        Monday no longer needs; they are read again from the parts if it is asked about
+        """Drop the indexes held for the time t, which a reader that has finished with the
+        time no longer needs; they are read again from the parts if it is asked about
         again."""
-        if self._monday == monday_folder(t_ms):
+        if self._time == time_folder(t_ms):
             self._indexes.clear()
-            self._monday = None
+            self._time = None
 
     def _add(
         self,
@@ -438,7 +463,7 @@ class Cache:
         self._index(name, t_ms).update(dict.fromkeys(accounts, part))
 
     def missing(self, name: str, t_ms: int, accounts: Iterable[str]) -> list[str]:
-        """Of accounts, those the table name lacks on the Monday t, each once, sorted. Only
+        """Of accounts, those the table name lacks at the time t, each once, sorted. Only
         fetch asks."""
         index = self._index(name, t_ms)
         return sorted({account for account in accounts if account not in index})
@@ -446,7 +471,7 @@ class Cache:
     def write[R](
         self, table: Table[R], t_ms: int, accounts: Collection[str], answers: Iterable[R]
     ) -> None:
-        """Cache the answers of table's query for accounts on the Monday t, as one new part."""
+        """Cache the answers of table's query for accounts at the time t, as one new part."""
         rows: Rows = {kind.name: [] for kind in table.kinds}
         for answer in answers:
             for name, found in table.encode(answer).items():
@@ -461,14 +486,14 @@ class Cache:
         self._add(COMPLETE, t_ms, (), {}, accounts)
 
     def rows[R](self, table: Table[R], t_ms: int, accounts: Iterable[str]) -> R:
-        """The cached answer of table's query for exactly these accounts on the Monday t,
+        """The cached answer of table's query for exactly these accounts at the time t,
         reparsed by the query's parser. An account the table lacks is refused."""
         asked = sorted(set(accounts))
         folder = self.folder(table.name, t_ms)
         index = self._index(table.name, t_ms)
         lacking = [account for account in asked if account not in index]
         if lacking:
-            raise KeyError(f"The cache of {table.name} on {monday_folder(t_ms)} lacks {lacking}")
+            raise KeyError(f"The cache of {table.name} on {time_folder(t_ms)} lacks {lacking}")
         rows: Rows = {kind.name: [] for kind in table.kinds}
         for part in sorted({index[account] for account in asked}):
             for kind in table.kinds:
@@ -478,26 +503,43 @@ class Cache:
                     filters=[(kind.key, "in", asked)],
                 )
                 rows[kind.name] += found.to_pylist()
-        head = {"status": "ok", "version": VERSIONS[table.query]}
+        head = {"status": "ok"}
         return table.parse([head, *table.printed(rows)], asked)
 
-    def hubs(self, t_ms: int) -> Hubs | None:
-        """The Monday t's cached hubs, reparsed, or None when they are not cached."""
-        folder = self.folder(HUBS.name, t_ms) / HUBS_PART
+    def _whole[R](self, table: Table[R], t_ms: int) -> R | None:
+        """The cached answer of a table kept whole at the time t, the hubs or the crowds,
+        reparsed, or None when it is not cached."""
+        folder = self.folder(table.name, t_ms) / WHOLE_PART
         if not folder.is_dir():
             return None
         rows: Rows = {
             kind.name: pq.read_table(
                 folder / f"{kind.name}.parquet", schema=kind.schema
             ).to_pylist()
-            for kind in HUBS.kinds
+            for kind in table.kinds
         }
-        head = {"status": "ok", "version": VERSIONS[READ_HUBS]}
-        return HUBS.parse([head, *HUBS.printed(rows)], ())
+        head = {"status": "ok"}
+        return table.parse([head, *table.printed(rows)], ())
+
+    def _write_whole[R](self, table: Table[R], t_ms: int, answer: R) -> None:
+        """Cache a table kept whole at the time t, once."""
+        folder = self.folder(table.name, t_ms)
+        if (folder / WHOLE_PART).is_dir():
+            raise ValueError(f"The {table.name} of {time_folder(t_ms)} are cached already")
+        _write_part(folder, WHOLE_PART, table.kinds, table.encode(answer))
+
+    def hubs(self, t_ms: int) -> Hubs | None:
+        """The cached hubs of the time t, reparsed, or None when they are not cached."""
+        return self._whole(HUBS, t_ms)
 
     def write_hubs(self, t_ms: int, hubs: Hubs) -> None:
-        """Cache the Monday t's hubs, once."""
-        folder = self.folder(HUBS.name, t_ms)
-        if (folder / HUBS_PART).is_dir():
-            raise ValueError(f"The hubs of {monday_folder(t_ms)} are cached already")
-        _write_part(folder, HUBS_PART, HUBS.kinds, HUBS.encode(hubs))
+        """Cache the hubs of the time t, once."""
+        self._write_whole(HUBS, t_ms, hubs)
+
+    def crowds(self, t_ms: int) -> Crowds | None:
+        """The cached crowds of the time t, reparsed, or None when they are not cached."""
+        return self._whole(CROWDS, t_ms)
+
+    def write_crowds(self, t_ms: int, crowds: Crowds) -> None:
+        """Cache the crowds of the time t, once."""
+        self._write_whole(CROWDS, t_ms, crowds)

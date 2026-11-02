@@ -36,7 +36,6 @@ ROW: dict[str, Any] = {
     "gap_ms": -5,
     "amount": 12,
 }
-VERSION = "read_example-0123456789ab"
 
 
 def test_a_row_parses_into_its_dataclass() -> None:
@@ -104,14 +103,17 @@ def test_a_field_of_another_type_is_refused_by_name(kind: type[Any]) -> None:
 
 
 def test_the_head_of_an_answer_says_it_ran_and_its_version() -> None:
-    head = {"status": "ok", "version": VERSION, "received": 3}
-    assert response_head([head, {"accounts": []}], "read_example", VERSION) == head
+    head = {"status": "ok", "received": 3}
+    assert response_head([head, {"accounts": []}], "read_example") == head
+    # No query prints its version any more; an old query that does is read alike.
+    old = {"status": "ok", "version": "read_example-0123456789ab"}
+    assert response_head([old], "read_example") == old
 
 
 def test_a_refusal_raises_with_its_status() -> None:
     refusal = {"status": "invisible_account", "accounts": ["a_02"]}
     with pytest.raises(QueryRefused) as refused:
-        response_head([refusal], "read_example", VERSION)
+        response_head([refusal], "read_example")
     assert (refused.value.query, refused.value.status) == ("read_example", "invisible_account")
     assert refused.value.row == refusal
     assert "read_example refused the request: invisible_account" in str(refused.value)
@@ -124,16 +126,12 @@ def test_a_refusal_raises_with_its_status() -> None:
     [
         ([], "without a status first"),
         ([["ok"]], "without a status first"),
-        ([{"version": VERSION}], "without a status first"),
-        ([{"status": "ok", "version": "read_example-ba9876543210"}], "run `mule install`"),
-        ([{"status": "ok"}], "is version None"),
+        ([{"received": 3}], "without a status first"),
     ],
 )
-def test_an_answer_without_a_status_or_of_another_version_is_refused(
-    rows: list[Any], message: str
-) -> None:
+def test_an_answer_without_a_status_is_refused(rows: list[Any], message: str) -> None:
     with pytest.raises(ValueError, match=message):
-        response_head(rows, "read_example", VERSION)
+        response_head(rows, "read_example")
 
 
 def test_printed_ids_are_distinct_and_sorted() -> None:

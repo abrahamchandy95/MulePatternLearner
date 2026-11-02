@@ -1,4 +1,4 @@
-"""mule prepare's data work: which configured world is loaded, the Monday calendar and its
+"""mule prepare's data work: which configured world is loaded, the weekly calendar and its
 check, the scored population, the labels reader, the keyed draws, the training examples and
 their weights, the selection and test keys, and the report (docs/design.md, "Worlds,
 examples and weights").

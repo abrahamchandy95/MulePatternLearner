@@ -1,12 +1,16 @@
-"""The clock probe of mule audit (docs/design.md, the Clock guard).
+"""The clock gain test of mule audit (docs/design.md, the Clock guard).
 
-t is always a Monday at 00:00 UTC, so a duration measured to t gives its event's clock time
-back: a since_last_out of 16 to 17 hours is a Sunday 07:xx outflow. The probe asks whether the
-clock times of every duration measured to t in the batch predict is_mule, which a model could
-learn as the simulator's clock habits rather than mule behaviour.
+A duration measured to t is its event's clock time shifted by t. At a fixed t, a Monday at 00:00
+UTC, every duration would give its event's clock time back (a since_last_out of 16 to 17 hours is
+a Sunday 07:xx outflow), and a model could learn the generated data's clock habits instead of
+mule behaviour. Each week is scored at a time of its own inside it (data.calendar,
+scoring_times), so a model cannot read an event's clock time from a duration, and what the audit
+asks is a property of the data: whether the clock times of events separate mules from non-mules
+beyond what plain activity does. The invariance test of the trained model
+(evaluation.clock_invariance) checks the model directly.
 
-For each account-Monday of the audit sample (evaluation.sample: every active true mule, and a
-keyed sample of non-mule account-Mondays), the events of its durations measured to t, in
+For each account-week of the audit sample (evaluation.sample: every active true mule, and a
+keyed sample of non-mule account-weeks), the events of its durations measured to t, in
 seven families (OWN) of two scopes. The scored account's own: the age of its own payments
 (B4's payments it sent or received), since_last_in and since_last_out (B3), since_start and
 since_last_seen of its owner-enrolment edges (B5), and since_first_use and since_last_use of
@@ -17,20 +21,32 @@ since_last_in and since_last_out of every other account node, the since_start an
 since_last_seen of every enrolment edge of a customer (a co-user's among them) and of the
 owner-enrolment edges of every other account, and the since_first_use and since_last_use of
 the seen edges of every other account. A clock habit visible on a neighbour's payment, a co-user's
-enrolment or a hop-1 account's seen edge alone would reach the score and escape a probe that read
-the scored account's own edges only. Of each family, its EVENTS newest events (the shortest
-durations), each as the event time t - duration reduced modulo a minute, an hour, a day and a
-week, and its day of the month (UTC): 14 x 8 x 5 = 560 numbers, -1 where a family has fewer
-events. Durations that are absent give no event.
+enrolment or a hop-1 account's seen edge alone would reach the score and escape a test that
+read the scored account's own edges only. Durations that are absent give no event. Two blocks of
+numbers are made of them:
 
-XGBoost with its default settings learns is_mule from them in two folds, each cluster of the
-ring bootstrap in one fold by a hash of its name (a ring with all its account-Mondays, a
-ringless mule and a non-mule account each its own), so that no ring is learned in one fold and
-scored in the other. It runs in a Python process of its own that never imports torch
-(comparisons.process), as every XGBoost fit does. The out-of-fold scores give a ROC AUC with a
-ring-resampled interval (evaluation.uncertainty), and the probe passes when the interval's upper
-end is below the owner's 0.55 (audit.clock_probe_upper). A probe with too few mules has a wide
-interval, or none, and fails, so low power never passes.
+- the clock values: of each family, its EVENTS newest events (the shortest durations), each as
+  the event time t - duration reduced modulo a minute, an hour, a day and a week, and its day of
+  the month (UTC): 14 x 8 x 5 = 560 numbers, -1 where a family has fewer events;
+- the controls: for each family the number of its events with a present duration, the number of
+  nodes of each type in the example's subgraph (account, customer, device and IP), and each of
+  the same newest events' duration floored to whole days, -1 where a family has fewer events:
+  14 + 4 + 14 x 8 = 130 numbers. They hold what plain activity says (how many events, how
+  recent, how big a subgraph) and nothing of an event's time of day, day of week or day of month.
+
+XGBoost with its default settings learns is_mule out of fold from the controls alone and from the
+controls with the clock values, in two folds, each cluster of the ring bootstrap in one fold by a
+hash of its name (a ring with all its account-weeks, a ringless mule and a non-mule account each
+its own), so that no ring is learned in one fold and scored in the other. It runs in a Python
+process of its own that never imports torch (comparisons.process), as every XGBoost fit does. The
+gain is the out-of-fold ROC AUC with the clock values minus the one without them. Its interval
+comes from resampling the clusters of the ring bootstrap once and computing both ROC AUCs on each
+resample (evaluation.uncertainty), so that the two are paired. The test passes only when the
+sample holds at least audit.clock_min_mule_clusters (30) mule clusters (the positive clusters of
+evaluation.uncertainty.Clusters: each ring, and each ringless mule alone) and the interval's upper
+end is below the owner's 0.02 (audit.clock_gain_upper). A few mules give a wide interval, or none,
+or a lucky narrow one (3 rings and 10 non-mules passed on the interval alone in 2 of 6 seeds), so
+below the minimum the test fails whatever its interval says, and low power never passes.
 """
 
 from __future__ import annotations
@@ -45,7 +61,9 @@ import pandas as pd
 
 from ..comparisons import process
 from ..config import AuditConfig
-from ..subgraph.build import ExampleRows
+from ..subgraph.build import ExampleRows, account_nodes
+from ..subgraph.layouts import ACCOUNT, CUSTOMER, DEVICE, IP, NODE_TYPES
+from ..tigergraph.queries.rows import DAY_MS
 from .uncertainty import Clusters, Ranked, interval
 
 # The families of durations measured to t of the scored account's own edges and rows, those of
@@ -68,9 +86,11 @@ EVENTS = 8
 MODULI = (60_000, 3_600_000, 86_400_000, 604_800_000)
 PER_EVENT = len(MODULI) + 1
 WIDTH = len(FAMILIES) * EVENTS * PER_EVENT
+# The numbers of the controls: each family's events, each type of node, each kept event's days.
+CONTROLS = len(FAMILIES) + len(NODE_TYPES) + len(FAMILIES) * EVENTS
 # The value of an event a family lacks.
 MISSING = -1.0
-# The folds of the probe.
+# The folds of the test.
 FOLDS = 2
 
 
@@ -136,38 +156,70 @@ def clock_values(t_ms: int, found: dict[str, list[int]]) -> NDArray[np.float64]:
     return values.reshape(-1)
 
 
+def node_counts(rows: ExampleRows) -> list[int]:
+    """The number of nodes of each type (NODE_TYPES) in an example's subgraph: the accounts of
+    B4's subgraph and of B5's co-users, and B5's customers, devices and IPs."""
+    identity = rows.identity
+    found = {
+        ACCOUNT: len(account_nodes(rows.payments, identity)),
+        CUSTOMER: len(identity.customers),
+        DEVICE: len(identity.devices),
+        IP: len(identity.ips),
+    }
+    return [found[kind] for kind in NODE_TYPES]
+
+
+def control_values(found: dict[str, list[int]], nodes: Sequence[int]) -> NDArray[np.float64]:
+    """An example's CONTROLS numbers: the events of each family that have a duration, the nodes
+    of each type (node_counts), and for each family its EVENTS newest events' durations floored
+    to whole days, MISSING for an event the family lacks."""
+    days = np.full((len(FAMILIES), EVENTS), MISSING)
+    for row, family in enumerate(FAMILIES):
+        kept = sorted(found[family])[:EVENTS]
+        days[row, : len(kept)] = np.asarray(kept, dtype=np.int64) // DAY_MS
+    counts = [len(found[family]) for family in FAMILIES]
+    return np.concatenate([counts, nodes, days.reshape(-1)]).astype(np.float64)
+
+
 def folds(keys: Sequence[str]) -> NDArray[np.int64]:
     """The fold of each row: one of FOLDS by a hash of its cluster's name, so that a cluster's
     rows share their fold."""
     found: dict[str, int] = {}
     for key in set(keys):
-        digest = hashlib.blake2b(f"clock-probe|{key}".encode(), digest_size=8).digest()
+        digest = hashlib.blake2b(f"clock-gain|{key}".encode(), digest_size=8).digest()
         found[key] = int.from_bytes(digest, "big") % FOLDS
     return np.array([found[key] for key in keys], dtype=np.int64)
 
 
 @dataclass(frozen=True)
-class Probe:
-    """What the probe found: its ROC AUC, the ring-resampled interval, whether it passed, and
-    the true-mule account-Mondays and clusters it read."""
+class Gain:
+    """What the gain test found: the ROC AUC out of fold of the controls alone and with the
+    clock values, their difference, its paired ring-resampled interval, whether it passed, and
+    the true-mule account-weeks, the clusters and the mule clusters it read."""
 
-    roc_auc: float
+    roc_auc_controls: float
+    roc_auc_with_clock: float
+    gain: float
     interval: tuple[float, float] | None
     passed: bool
     mule_rows: int
     clusters: int
+    mule_clusters: int
 
     def frame(self) -> pd.DataFrame:
-        """The probe as a one-row report table."""
+        """The test as a one-row report table."""
         low, high = self.interval if self.interval is not None else (np.nan, np.nan)
         return pd.DataFrame(
             {
-                "roc_auc": [self.roc_auc],
+                "roc_auc_controls": [self.roc_auc_controls],
+                "roc_auc_with_clock": [self.roc_auc_with_clock],
+                "gain": [self.gain],
                 "low": [low],
                 "high": [high],
                 "passed": [self.passed],
                 "mule_rows": [self.mule_rows],
                 "clusters": [self.clusters],
+                "mule_clusters": [self.mule_clusters],
             }
         )
 
@@ -184,31 +236,57 @@ def out_of_fold(
     return process.fold_scores(values, positive, fold, seed)
 
 
-def probe(
+def gain(
+    controls: NDArray[np.float64],
     values: NDArray[np.float64],
     positive: NDArray[np.bool_],
     weight: NDArray[np.float64],
     keys: Sequence[str],
     audit: AuditConfig,
     seed: int,
-) -> Probe:
-    """The probe on the audit sample's clock values (a row of WIDTH per account-Monday), its
-    classes, sample weights and cluster names."""
+) -> Gain:
+    """The gain test on the audit sample's controls (a row of CONTROLS per account-week) and
+    clock values (a row of WIDTH), its classes, sample weights and cluster names. It passes only
+    with at least audit.clock_min_mule_clusters mule clusters and an interval whose upper end is
+    below audit.clock_gain_upper."""
+    if controls.shape != (len(positive), CONTROLS):
+        raise ValueError(f"The controls are {controls.shape}, not ({len(positive)}, {CONTROLS})")
     if values.shape != (len(positive), WIDTH):
         raise ValueError(f"The clock values are {values.shape}, not ({len(positive)}, {WIDTH})")
     clusters = Clusters.of(keys, positive)
     mules = int(positive.sum())
-    scores = out_of_fold(values, positive, folds(keys), seed)
-    if scores is None:
-        return Probe(float("nan"), None, False, mules, len(clusters))
-    ranked = Ranked(scores, positive)
+    mule_clusters = int(clusters.positive.sum())
+    fold = folds(keys)
+    plain = out_of_fold(controls, positive, fold, seed)
+    clocked = out_of_fold(np.hstack([controls, values]), positive, fold, seed)
+    if plain is None or clocked is None:
+        nan = float("nan")
+        return Gain(nan, nan, nan, None, False, mules, len(clusters), mule_clusters)
+    without, with_clock = Ranked(plain, positive), Ranked(clocked, positive)
+
+    def difference(draws: NDArray[np.float64]) -> float:
+        return with_clock.roc_auc(draws) - without.roc_auc(draws)
+
     found = interval(
-        ranked.roc_auc,
+        difference,
         clusters,
         weight,
         replicates=audit.replicates,
         level=audit.interval,
         seed=seed,
     )
-    passed = found is not None and found[1] < audit.clock_probe_upper
-    return Probe(ranked.roc_auc(weight), found, passed, mules, len(clusters))
+    passed = (
+        mule_clusters >= audit.clock_min_mule_clusters
+        and found is not None
+        and found[1] < audit.clock_gain_upper
+    )
+    return Gain(
+        without.roc_auc(weight),
+        with_clock.roc_auc(weight),
+        difference(weight),
+        found,
+        passed,
+        mules,
+        len(clusters),
+        mule_clusters,
+    )

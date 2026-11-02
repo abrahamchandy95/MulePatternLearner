@@ -45,7 +45,7 @@ EMPTY_WEIGHTS = np.zeros(0, dtype=np.float64)
 
 
 def _planted(n: int, seed: int, *, labelled: bool = True) -> tuple[Vectors, pd.DataFrame]:
-    """n accounts on each of two Mondays with random vectors, positive when their column 3
+    """n accounts in each of two weeks with random vectors, positive when their column 3
     (in_amount_7d) is above 1.5 and noise does not hide it; the vectors, carrying their labels
     and weights of 1 unless labelled is false, and the selection keys of the same accounts."""
     rng = np.random.default_rng(seed)
@@ -82,7 +82,7 @@ def test_a_constant_feature_changes_nothing() -> None:
 
 def test_the_rankers_learn_a_planted_cue_and_choose_their_rounds() -> None:
     """Each ranker comes within 10% of the best score a ranking of the selection world can get,
-    every positive first: about 15 positives a Monday, of which the top 1% holds 2."""
+    every positive first: about 15 positives a week, of which the top 1% holds 2."""
     training, _ = _planted(300, 3)
     selection, keys = _planted(200, 4, labelled=False)
     perfect = selection_score(keys, keys["positive"].to_numpy(dtype=np.float64))

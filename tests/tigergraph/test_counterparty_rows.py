@@ -24,7 +24,7 @@ from mule_pattern_learner.tigergraph.queries.rows import DAY_MS, QueryRefused
 T_MS = 1_711_929_600_000  # 2024-04-01 00:00 UTC, a Monday
 
 
-def test_a_request_takes_a_monday_its_accounts_and_the_hubs_each_once() -> None:
+def test_a_request_takes_a_time_its_accounts_and_the_hubs_each_once() -> None:
     """The accounts go as a list of ids, which the query checks itself; the hubs as a set of
     vertices, in TigerGraph's JSON for SET<VERTEX<Account>>."""
     assert read_counterparties.params(T_MS, ["a_02", "a_01"], ["h_01", "h_02"]) == {
@@ -32,10 +32,14 @@ def test_a_request_takes_a_monday_its_accounts_and_the_hubs_each_once() -> None:
         "account_ids": ["a_02", "a_01"],
         "hub_accounts": [{"id": "h_01"}, {"id": "h_02"}],
     }
-    # A Monday may have no account hub.
+    # A scoring time may have no account hub.
     assert read_counterparties.params(T_MS, ["a_01"], [])["hub_accounts"] == []
-    with pytest.raises(ValueError, match="Monday"):
-        read_counterparties.params(T_MS + DAY_MS, ["a_01"], [])
+    # Any whole second is a time: a Tuesday afternoon is one, a millisecond is not.
+    assert read_counterparties.params(T_MS + DAY_MS + 3_661_000, ["a_01"], [])["t_ms"] == (
+        T_MS + DAY_MS + 3_661_000
+    )
+    with pytest.raises(ValueError, match="whole second"):
+        read_counterparties.params(T_MS + 1, ["a_01"], [])
     with pytest.raises(ValueError, match="repeats an account"):
         read_counterparties.params(T_MS, ["a_01", "a_01"], [])
     with pytest.raises(ValueError, match="at least one account"):
@@ -130,7 +134,7 @@ def test_an_answer_parses_each_account_sorted_by_id() -> None:
     assert isinstance(parsed[1].top_payee_share_30d, float)
 
 
-def test_a_status_row_or_another_version_is_refused() -> None:
+def test_a_status_row_is_refused() -> None:
     for status in (
         "invalid_parameters",
         "duplicate_account",
@@ -141,10 +145,6 @@ def test_a_status_row_or_another_version_is_refused() -> None:
         with pytest.raises(QueryRefused, match=status) as refused:
             read_counterparties.parse([{"status": status}], ["a_01"])
         assert refused.value.status == status
-    with pytest.raises(ValueError, match="mule install"):
-        read_counterparties.parse(
-            [{"status": "ok", "version": "read_counterparties-0123456789ab"}], []
-        )
 
 
 @pytest.mark.parametrize(

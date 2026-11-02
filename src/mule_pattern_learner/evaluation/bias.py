@@ -4,12 +4,12 @@ Victim reports may identify more often the mules whose victims bank here, so
 new_internal_payers_* could learn who gets caught rather than what mules do. Evaluation reports:
 
 - identified against hidden mules by victim origin: each true mule's new payers over 30 days,
-  internal and external, summed over its active Mondays from its own B2 rows, and the internal
+  internal and external, summed over its active weeks from its own B2 rows, and the internal
   share of them (victim_origin, origin_table);
 - recall of hidden mules by that share, in bins of a quarter (hidden_recall_by_origin): the
   mean chance of a flag of the hidden mules of each bin, and of those with no new payer;
 - how well the features separate identified from hidden mules: each audited column's ROC AUC
-  over the true mules' active account-Mondays, the identified as the positive class
+  over the true mules' active account-weeks, the identified as the positive class
   (identification_separation);
 - on the development rotation only, for seed 0: the correlation of the selection score with
   the recall of all true mules of the selection world, per prior and epoch, from every
@@ -37,7 +37,7 @@ from ..training.batches import ScoringBatches
 from ..training.contract import Lock
 from ..training.trainer import logits
 from .answer_key import ACTIVE, AnswerKey
-from .fallback import by_monday
+from .fallback import by_week
 from .feature_audit import COLUMNS, audit_columns
 from .rankings import Ranking, evaluation_frame
 from .uncertainty import Ranked
@@ -54,12 +54,12 @@ def _active(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def victim_origin(cache: Cache, frame: pd.DataFrame) -> pd.DataFrame:
-    """Per true mule with an active Monday: whether the bank identified it, its new internal
-    and external payers over 30 days summed over its active Mondays, from its own B2 rows, and
+    """Per true mule with an active week: whether the bank identified it, its new internal
+    and external payers over 30 days summed over its active weeks, from its own B2 rows, and
     the internal share of them (NaN with none)."""
     active = _active(frame)
     sums: dict[str, list[int]] = {}
-    for t_ms, accounts in by_monday(active).items():
+    for t_ms, accounts in by_week(active).items():
         for row in cache.rows(COUNTERPARTIES, t_ms, accounts):
             held = sums.setdefault(row.account_id, [0, 0])
             held[0] += row.new_internal_payers_30d
@@ -117,7 +117,7 @@ def hidden_recall_by_origin(origin: pd.DataFrame, mules: pd.DataFrame) -> pd.Dat
 
 def identification_separation(cache: Cache, frame: pd.DataFrame, world: str) -> pd.DataFrame:
     """How well each audited column separates identified from hidden true mules over their
-    active account-Mondays: its ROC AUC with the identified as the positive class (NaN without
+    active account-weeks: its ROC AUC with the identified as the positive class (NaN without
     both classes)."""
     active = _active(frame)
     keys = [
@@ -150,13 +150,15 @@ def rescore_epochs(
     keys: pd.DataFrame,
     key: AnswerKey,
     identified: Collection[str],
+    scoring_times: Sequence[int],
     device: torch.device | str = "cpu",
 ) -> pd.DataFrame:
     """Every kept epoch's model (training.trainer keeps them under lock for seed 0 of the
     development rotation) rescored on the selection world: its prior's multiple, its epoch,
     its selection score and the pooled recall of every true mule of the selection world at
     each budget. keys are the selection world's scored keys with their weights, batches their
-    scoring batches, key its answer key and identified its identified mules."""
+    scoring batches, key its answer key, identified its identified mules and scoring_times its
+    scoring times."""
     target = torch.device(device)
     rows: list[dict[str, object]] = []
     for path in paths:
@@ -171,7 +173,7 @@ def rescore_epochs(
                 "logit": pd.Series(found, dtype="float64"),
             }
         )
-        frame = evaluation_frame(scores, keys, key, identified)
+        frame = evaluation_frame(scores, keys, key, identified, scoring_times)
         recall = Ranking.of(frame, (frame["status"] == ACTIVE).to_numpy()).headline()
         row: dict[str, object] = {
             "prior": float(stored["prior"][0]),

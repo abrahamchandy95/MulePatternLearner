@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import date, timedelta
+import hashlib
 
 # The ranges of the transport settings; the executor checks the ones it is given too.
 QUERY_ATTEMPTS = range(1, 21)
@@ -24,9 +25,9 @@ RESPONSE_BUDGETS = range(1, RESPONSE_LIMIT_BYTES // 2 + 1)
 # The ranges of the calendar and the subgraph settings. A lookback must exceed the 30-day
 # "new" window, or a start that is not known would count as new.
 HISTORY_DAYS = range(1, 3_651)
-SCORED_MONDAYS = range(1, 1_001)
+SCORED_WEEKS = range(1, 1_001)
 LOOKBACK_DAYS = range(31, 3_651)
-# The scored days of the export window, after its history: 52 Mondays fit in them
+# The scored days of the export window, after its history: 52 weeks fit in them
 # (docs/design.md, "Worlds and calendar").
 SCORED_DAYS = 365
 CAPS = range(1, 1_025)
@@ -43,7 +44,7 @@ PER_POSITIVE = range(1, 1_001)
 MIN_UNLABELLED = range(1, 10_000_001)
 MIN_IDENTIFIED = range(1, 1_000_001)
 # Proof of concept (25 October 2026, docs/design.md, "Proof-of-concept settings (25 October
-# 2026)"): a sampled account may stand for up to 100,000 account-Mondays. The full design's bound
+# 2026)"): a sampled account may stand for up to 100,000 account-weeks. The full design's bound
 # is 1,000, and its weight about 10.
 FALLBACK_WEIGHTS = range(1, 100_001)
 # blake2b takes a key of at most 64 bytes.
@@ -57,8 +58,9 @@ BATCH_SIZES = range(1, 100_001)
 # The ranges of the audit settings.
 REPLICATES = range(1, 1_000_001)
 SAMPLE_SIZES = range(1, 1_000_000_001)
+MULE_CLUSTERS = range(1, 1_000_000_001)
 # The ranges of the parity and benchmark settings.
-SAMPLED_MONDAYS = range(1, 1_001)
+SAMPLED_WEEKS = range(1, 1_001)
 SAMPLED_ACCOUNTS = range(1, 1_000_001)
 REQUEST_ACCOUNTS = range(2, 1_025)
 CONCURRENCY = range(1, 65)
@@ -130,19 +132,27 @@ def _epoch_ms(day: date) -> int:
     return (day - date(1970, 1, 1)).days * 86_400_000
 
 
+# Seconds and milliseconds in a week, for the scoring times inside a week and for the last
+# week's end.
+WEEK_SECONDS = 7 * 86_400
+WEEK_MS = WEEK_SECONDS * 1_000
+
+
 @dataclass(frozen=True)
 class CalendarConfig:
     """The calendar every world shares (docs/design.md, "Worlds and calendar").
 
     The export starts on export_start (day 0, PhantomLedger's --start). Its first
-    history_days days are history only; the scored Mondays follow, 00:00 UTC, from the first
-    Monday at or after day history_days, inside the export's 365 scored days.
+    history_days days are history only; the scored weeks follow, each starting on a Monday at
+    00:00 UTC, from the first Monday at or after day history_days, inside the export's 365
+    scored days. A world scores each week at one time inside it (scoring_times), drawn from the
+    world's seed.
     """
 
     export_start: date = date(2024, 1, 1)
     history_days: int = 90
-    scored_mondays: int = 52
-    # Days before each Monday that the queries read.
+    scored_weeks: int = 52
+    # Days before each scoring time that the queries read.
     lookback_days: int = 90
 
     def __post_init__(self) -> None:
@@ -153,18 +163,19 @@ class CalendarConfig:
                 f"unsigned milliseconds, got {start!r}"
             )
         _integer("calendar.history_days", self.history_days, HISTORY_DAYS)
-        _integer("calendar.scored_mondays", self.scored_mondays, SCORED_MONDAYS)
+        _integer("calendar.scored_weeks", self.scored_weeks, SCORED_WEEKS)
         _integer("calendar.lookback_days", self.lookback_days, LOOKBACK_DAYS)
         if self.history_days < self.lookback_days:
             raise ValueError(
                 f"calendar.history_days ({self.history_days}) must be at least "
-                f"calendar.lookback_days ({self.lookback_days}), so every Monday has a full "
-                "lookback inside the export"
+                f"calendar.lookback_days ({self.lookback_days}), so every scoring time has a "
+                "full lookback inside the export"
             )
-        if self.mondays()[-1] >= _epoch_ms(start + timedelta(days=self.export_days)):
+        if self.week_starts()[-1] + WEEK_MS > _epoch_ms(start + timedelta(days=self.export_days)):
             raise ValueError(
-                f"calendar.scored_mondays ({self.scored_mondays}) do not fit in the "
-                f"{SCORED_DAYS} scored days of the export"
+                f"calendar.scored_weeks ({self.scored_weeks}) do not fit in the "
+                f"{SCORED_DAYS} scored days of the export: the last week must end by the "
+                "export's end"
             )
 
     @property
@@ -172,13 +183,30 @@ class CalendarConfig:
         """The days of the export window: its history, then the scored days."""
         return self.history_days + SCORED_DAYS
 
-    def mondays(self) -> tuple[int, ...]:
-        """The scored Mondays, as UTC epoch milliseconds in increasing order."""
+    def week_starts(self) -> tuple[int, ...]:
+        """The start of each scored week, its Monday at 00:00 UTC, as UTC epoch milliseconds
+        in increasing order."""
         first = self.export_start + timedelta(days=self.history_days)
         first += timedelta(days=-first.weekday() % 7)
-        return tuple(
-            _epoch_ms(first + timedelta(weeks=week)) for week in range(self.scored_mondays)
-        )
+        return tuple(_epoch_ms(first + timedelta(weeks=week)) for week in range(self.scored_weeks))
+
+    def scoring_times(self, seed: int) -> tuple[int, ...]:
+        """The time each scored week is scored at, as UTC epoch milliseconds in increasing
+        order: the week's start plus an offset of a whole number of seconds, uniform in [0, 7
+        days), that a world draws from its seed alone. Offset k is the first 8 bytes of the
+        blake2b digest of "scoring-time|<seed>|<k>" (the default 64-byte digest cut to its first
+        8 bytes, not a digest_size=8 digest, which is a different hash), read as an unsigned
+        little-endian integer, times the seconds of a week, shifted right by 64 bits: no random
+        generator, so the times are the same in every run and in any program that follows the
+        rule. Every account of a world is scored at its week's time, and each world's times are
+        its own."""
+        _integer("scoring_times seed", seed, SEEDS)
+        times: list[int] = []
+        for week, start in enumerate(self.week_starts()):
+            digest = hashlib.blake2b(f"scoring-time|{seed}|{week}".encode()).digest()
+            seconds = (int.from_bytes(digest[:8], "little") * WEEK_SECONDS) >> 64
+            times.append(start + seconds * 1_000)
+        return tuple(times)
 
 
 # The kinds of world (docs/design.md, "Worlds and calendar"). Development worlds test the
@@ -295,11 +323,11 @@ class TransportConfig:
     # Seconds one query may run before TigerGraph stops it: 24 hours, so that a slow request
     # is waited for, never lost (the owner, 25 October 2026).
     query_timeout_s: int = 86_400
-    # Accounts of one Monday per per-account request; a refused request is halved.
+    # Accounts of one scoring time per per-account request; a refused request is halved.
     accounts_per_request: int = 32
     # The bytes a request's answer is sized to stay under: half of the response limit.
     response_budget_bytes: int = RESPONSE_LIMIT_BYTES // 2
-    # Accounts of one Monday in a part of the cache, which is written once: a fetch that stops
+    # Accounts of one scoring time in a part of the cache, which is written once: a fetch that stops
     # loses at most the part it was filling.
     accounts_per_part: int = 1_024
     # Proof of concept (25 October 2026, docs/design.md, "Proof-of-concept settings (25 October
@@ -377,7 +405,7 @@ class SubgraphConfig:
 
 
 # How the selection and test worlds are scored (docs/design.md, "If whole-world scoring is
-# too slow"): every scorable account on every Monday, or the fallback sample.
+# too slow"): every scorable account in every week, or the fallback sample.
 SCORING_MODES = ("whole", "fallback")
 
 
@@ -388,9 +416,9 @@ class DataConfig:
     docs/design.md, "Proof-of-concept settings (25 October 2026)", each with the full design's
     value beside it; FULL_DESIGN_CONFIG holds the full design's."""
 
-    # Unlabelled accounts drawn on a training Monday per positive, and at least this many. Proof of
+    # Unlabelled accounts drawn in a training week per positive, and at least this many. Proof of
     # concept: 1 per positive and at least 8, the training world's fixed, seeded sample of
-    # non-mule account-Mondays beside every identified active mule's; the full design's values are
+    # non-mule account-weeks beside every identified active mule's; the full design's values are
     # 15 and 500.
     per_positive: int = 1
     min_unlabelled: int = 8
@@ -403,7 +431,7 @@ class DataConfig:
     # "whole".
     scoring: str = "fallback"
     # Under the fallback, each sampled account stands for this many: its inclusion chance is the
-    # inverse. Proof of concept: 6,000, about 410 non-mule account-Mondays in a world of 30,000
+    # inverse. Proof of concept: 6,000, about 410 non-mule account-weeks in a world of 30,000
     # people; the full design's value is 10.
     fallback_weight: int = 6_000
 
@@ -517,24 +545,34 @@ class AuditConfig:
     "Leak rules and how tests enforce them" and "Evaluation"); every value is the design's,
     the owner's of 2026-10-17 among them."""
 
-    # The clock probe passes when the upper end of its ROC AUC interval is below this.
-    clock_probe_upper: float = 0.55
+    # The clock gain test passes when the upper end of the interval of its ROC AUC gain (the
+    # clock values added to the controls) is below this.
+    clock_gain_upper: float = 0.02
+    # The clock invariance test passes when the interval of the difference in recall at 1%
+    # between the random scoring times and the week starts lies inside plus and minus this.
+    clock_invariance_margin: float = 0.05
+    # The fewest mule clusters (each ring, and each ringless mule alone) the rows a clock test
+    # reads must hold for it to pass: below it the test fails whatever its interval says, since
+    # a few mules give a wide interval, or a point (three mules ranked at the top both times
+    # differ by exactly 0 on every resample). About 30 clusters is a common floor for a
+    # cluster-resampled interval.
+    clock_min_mule_clusters: int = 30
     # A feature whose ROC AUC is at least this, or at most 1 minus it, stops the run.
     separation_auc: float = 0.95
     # A near-pure region: a flag value, or the top or bottom near_pure_tail of scored
-    # account-Mondays, holding at least near_pure_min_mule_share of active true-mule
-    # account-Mondays, in which true mules are more than near_pure_purity.
+    # account-weeks, holding at least near_pure_min_mule_share of active true-mule
+    # account-weeks, in which true mules are more than near_pure_purity.
     near_pure_tail: float = 0.001
     near_pure_min_mule_share: float = 0.01
     near_pure_purity: float = 0.5
-    # The top share of a Monday's ranking a hidden mule must reach not to be missed or weak.
+    # The top share of a week's ranking a hidden mule must reach not to be missed or weak.
     report_budget: float = 0.05
     # Ring-resampled replicates, and the level of every interval.
     replicates: int = 1000
     interval: float = 0.95
-    # Non-mule account-Mondays the clock probe samples. Proof of concept (docs/design.md,
+    # Non-mule account-weeks the audit sample holds. Proof of concept (docs/design.md,
     # "Proof-of-concept settings (25 October 2026)"): 300, which the fallback samples of the
-    # selection and test worlds hold, so that the audit fetches no non-mule account-Monday they
+    # selection and test worlds hold, so that the audit fetches no non-mule account-week they
     # did not; the full design's value is 200,000. At 300 one sampled non-mule outweighs the
     # feature audit's 0.1% tails, which it reports as not measured.
     nonmule_sample: int = 300
@@ -543,7 +581,9 @@ class AuditConfig:
     horizon_level: float = 1 - 0.01 / 12
 
     def __post_init__(self) -> None:
-        _between("audit.clock_probe_upper", self.clock_probe_upper, 0.5, 1)
+        _between("audit.clock_gain_upper", self.clock_gain_upper, 0, 1)
+        _between("audit.clock_invariance_margin", self.clock_invariance_margin, 0, 1)
+        _integer("audit.clock_min_mule_clusters", self.clock_min_mule_clusters, MULE_CLUSTERS)
         _between("audit.separation_auc", self.separation_auc, 0.5, 1)
         _between("audit.near_pure_tail", self.near_pure_tail, 0, 0.5)
         _fraction("audit.near_pure_min_mule_share", self.near_pure_min_mule_share, zero=False)
@@ -558,18 +598,18 @@ class AuditConfig:
 @dataclass(frozen=True)
 class ParityConfig:
     """The sample mule parity compares the live graph and the reference graph on (docs/design.md,
-    "Commands"): a seeded sample of scored Mondays, and on each a seeded sample of accounts with
+    "Commands"): a seeded sample of scored weeks, and on each a seeded sample of accounts with
     true mules oversampled to a share."""
 
-    # Scored Mondays sampled, and accounts sampled on each.
-    mondays: int = 8
+    # Scored weeks sampled, and accounts sampled on each.
+    weeks: int = 8
     accounts: int = 200
-    # The share of each Monday's accounts that are true mules, as far as it has them.
+    # The share of each week's accounts that are true mules, as far as it has them.
     mule_share: float = 0.25
-    # Accounts a request holds when a Monday's sample is asked for: an account alone is checked
+    # Accounts a request holds when a week's sample is asked for: an account alone is checked
     # against its rows among this many, the 31 others and itself.
     together: int = 32
-    # Accounts of each Monday fetched alone, a true mule first.
+    # Accounts of each week fetched alone, a true mule first.
     alone: int = 2
     # The seed of the samples.
     seed: int = 0
@@ -578,7 +618,7 @@ class ParityConfig:
     tolerance: float = 1e-12
 
     def __post_init__(self) -> None:
-        _integer("parity.mondays", self.mondays, SAMPLED_MONDAYS)
+        _integer("parity.weeks", self.weeks, SAMPLED_WEEKS)
         _integer("parity.accounts", self.accounts, SAMPLED_ACCOUNTS)
         _fraction("parity.mule_share", self.mule_share, zero=False)
         _integer("parity.together", self.together, REQUEST_ACCOUNTS)
@@ -592,8 +632,8 @@ class BenchConfig:
     """What mule bench measures on the loaded world and projects (docs/design.md, "Scaling and
     the benchmark")."""
 
-    # Scored Mondays measured: the first, the last and those evenly between.
-    mondays: int = 3
+    # Scored weeks measured: the first, the last and those evenly between.
+    weeks: int = 3
     # Accounts measured on each: unlabelled ones from the training draw (data.examples), and the
     # identified active mules, reported apart.
     unlabelled: int = 64
@@ -609,7 +649,7 @@ class BenchConfig:
     projected_people: tuple[int, ...] = (30_000, 300_000)
 
     def __post_init__(self) -> None:
-        _integer("bench.mondays", self.mondays, SAMPLED_MONDAYS)
+        _integer("bench.weeks", self.weeks, SAMPLED_WEEKS)
         _integer("bench.unlabelled", self.unlabelled, SAMPLED_ACCOUNTS)
         _integer("bench.positives", self.positives, SAMPLED_ACCOUNTS)
         if not _distinct("bench.concurrency", self.concurrency):
@@ -627,8 +667,8 @@ class BenchConfig:
 
 @dataclass(frozen=True)
 class ScoreConfig:
-    """The accounts and Mondays mule score scores, and the run whose model scores them
-    (docs/design.md, "Commands")."""
+    """The accounts and dates mule score scores, each date at 00:00 UTC, and the run whose
+    model scores them (docs/design.md, "Commands")."""
 
     accounts: tuple[str, ...] = ()
     dates: tuple[date, ...] = ()
@@ -642,8 +682,7 @@ class ScoreConfig:
             if not isinstance(account, str) or not account:
                 raise ValueError(f"score.accounts must be account ids, got {account!r}")
         for day in _distinct("score.dates", self.dates):
-            if _date("score.dates", day).weekday() != 0:
-                raise ValueError(f"score.dates must be Mondays, got {day!r}")
+            _date("score.dates", day)
 
 
 @dataclass(frozen=True)

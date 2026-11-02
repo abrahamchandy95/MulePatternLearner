@@ -3,7 +3,7 @@
 torch and XGBoost each bring an OpenMP runtime (on macOS, torch 2.12's own and the one of
 XGBoost 3.2.0), and a process that holds both crashes in XGBoost's threads. The owner's answer
 is a separate process, not a limit on the threads: every XGBoost fit and prediction, of the two
-comparisons (comparisons.rankers) and of the clock probe (evaluation.clock_probe), runs here, in
+comparisons (comparisons.rankers) and of the clock gain test (evaluation.clock_gain), runs here, in
 a child that comparisons.process starts and that never imports torch, at XGBoost's full thread
 count. This is the only module that imports xgboost, and it imports nothing that imports torch
 (a test checks both in fresh interpreters, and an import contract checks the second).
@@ -99,7 +99,8 @@ def fold_scores(
     seed: int,
 ) -> NDArray[np.float64]:
     """Each row's margin from XGBoost with its default settings, random_state seed, trained on
-    the rows of the other folds: the clock probe's out-of-fold scores (evaluation.clock_probe)."""
+    the rows of the other folds: the clock gain test's out-of-fold scores
+    (evaluation.clock_gain)."""
     out = np.zeros(len(values))
     for held in np.unique(fold):
         train = fold != held

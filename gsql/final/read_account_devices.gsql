@@ -1,0 +1,184 @@
+USE GRAPH Mule_Pattern_Learner
+CREATE OR REPLACE QUERY read_account_devices(
+    UINT t_ms, // The scoring time after the first 90 days
+    LIST<STRING> account_ids // The accounts to read
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+
+    /* Tuples */
+    TYPEDEF TUPLE<
+        STRING node_id,
+        INT uses_90d,
+        BOOL since_first_use_present,
+        UINT since_first_use_ms,
+        UINT since_last_use_ms
+    > Used;
+
+    /* Constants */
+    UINT LOOKBACK_MS = 7776000000; // 90 days
+
+    /* Vertex and edge types, each a set so that one pattern serves devices and IPs, transactions and transfers */
+    SetAccum<STRING> @@node_vertex_type; // A device or an IP
+    SetAccum<STRING> @@sender_to_payment_edge_type; // Account -> the payments it sent
+    SetAccum<STRING> @@payment_to_receiver_edge_type; // Payment -> the account that received it
+    SetAccum<STRING> @@payment_to_node_edge_type; // Payment -> the devices and IPs it was seen on
+    SetAccum<STRING> @@account_to_owner_edge_type; // Account -> its owner
+    SetAccum<STRING> @@owner_to_account_edge_type; // Customer -> the accounts it owns
+    @@node_vertex_type += "Device";
+    @@node_vertex_type += "IP";
+    @@sender_to_payment_edge_type += "Account_Initiated_Transaction";
+    @@sender_to_payment_edge_type += "Account_Sent_Zelle_Transfer";
+    @@payment_to_receiver_edge_type += "Transaction_To_Account";
+    @@payment_to_receiver_edge_type += "Transfer_To_Account";
+    @@payment_to_node_edge_type += "Transaction_Used_Device";
+    @@payment_to_node_edge_type += "Transaction_Used_IP";
+    @@payment_to_node_edge_type += "Transfer_Used_Device";
+    @@payment_to_node_edge_type += "Transfer_Used_IP";
+    @@account_to_owner_edge_type += "Account_Owned_By_Party";
+    @@owner_to_account_edge_type += "Party_Owns_Account";
+
+    /* Accumulators */
+    HeapAccum<Used>(8, since_last_use_ms ASC, node_id ASC) @devices, @ips; // An account's 8 most recently used of each kind
+    OrAccum @asked; // An account asked for
+    MaxAccum<STRING> @owner_id; // An account's owner, or a payment's sender's owner
+    MaxAccum<UINT> @owner_joined_ms; // When an account's owner joined
+    MaxAccum<STRING> @sender_id; // A payment's sender, when it was asked for
+    SetAccum<STRING> @seen_on; // The devices and IPs a payment was seen on
+    MapAccum<STRING, MapAccum<STRING, SumAccum<INT>>> @@uses; // Account -> device or IP -> its payments seen on it
+    MapAccum<STRING, MapAccum<STRING, MinAccum<UINT>>> @@first_use; // Account -> device or IP -> its first payment seen on it
+    MapAccum<STRING, MapAccum<STRING, MaxAccum<UINT>>> @@last_use; // Account -> device or IP -> its last payment seen on it
+    MapAccum<STRING, SetAccum<STRING>> @@used; // Owner -> the devices and IPs its asked accounts used
+    MapAccum<STRING, MapAccum<STRING, MinAccum<UINT>>> @@first_unseen; // Owner -> device or IP -> its first own payment not seen on it
+    SetAccum<STRING> @@ip_ids; // The IPs the asked accounts used
+    SetAccum<STRING> @@ids; // The account ids, each once
+    SumAccum<INT> @@given; // How many account ids were given
+
+    IF t_ms <= LOOKBACK_MS OR t_ms % 1000 != 0 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+    FOREACH account_id IN account_ids DO
+        @@ids += account_id;
+        @@given += 1;
+    END;
+    IF @@given == 0 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+    IF @@ids.size() != @@given THEN
+        PRINT "duplicate_account" AS status;
+        RETURN;
+    END;
+    requested = to_vertex_set(@@ids, "Account");
+    IF requested.size() != @@ids.size() THEN
+        PRINT "unknown_account" AS status;
+        RETURN;
+    END;
+    accounts = SELECT a
+        FROM requested:a
+        WHERE a.opened_ms < t_ms
+        POST-ACCUM
+            a.@asked += TRUE
+    ;
+    IF accounts.size() != requested.size() THEN
+        PRINT "invisible_account" AS status;
+        RETURN;
+    END;
+
+    /* Traverse: Account -> its owner, through an ownership visible at t */
+    owners = SELECT q
+        FROM accounts:a - (@@account_to_owner_edge_type>:o) - Party:q
+        WHERE o.valid_from_ms < t_ms
+            AND ( o.valid_to_ms == 0 OR o.valid_to_ms > t_ms - LOOKBACK_MS )
+        ACCUM
+            a.@owner_id += q.id,
+            a.@owner_joined_ms += q.joined_ms
+    ;
+
+    /* Traverse: Customer -> Account -> Payment -> its receiver, every own payment of the 90 days, self-payments aside */
+    own_sent = SELECT p
+        FROM owners:q - (@@owner_to_account_edge_type>:w) - Account:b
+            - (@@sender_to_payment_edge_type>:e) - _:p
+            - (@@payment_to_receiver_edge_type>:f) - Account:r
+        WHERE w.valid_from_ms < t_ms
+            AND ( w.valid_to_ms == 0 OR w.valid_to_ms > t_ms - LOOKBACK_MS )
+            AND b.opened_ms < t_ms
+            AND p.event_ts_ms >= t_ms - LOOKBACK_MS AND p.event_ts_ms < t_ms AND r != b
+        ACCUM
+            p.@owner_id += q.id,
+            IF b.@asked THEN
+                p.@sender_id += b.id
+            END
+    ;
+
+    /* Traverse: Account -> Payment -> its receiver, the payments of the 90 days of the accounts with no owner, self-payments aside */
+    ownerless_sent = SELECT p
+        FROM accounts:a - (@@sender_to_payment_edge_type>:e) - _:p
+            - (@@payment_to_receiver_edge_type>:f) - Account:r
+        WHERE a.@owner_id == ""
+            AND p.event_ts_ms >= t_ms - LOOKBACK_MS AND p.event_ts_ms < t_ms AND r != a
+        ACCUM
+            p.@sender_id += a.id
+    ;
+
+    /* Traverse: Payment -> the devices and IPs it was seen on; an asked account's uses of each */
+    paid = own_sent UNION ownerless_sent;
+    seen = SELECT n
+        FROM paid:p - (@@payment_to_node_edge_type>:u) - @@node_vertex_type:n
+        ACCUM
+            p.@seen_on += n.id,
+            IF p.@sender_id != "" THEN
+                @@uses += (p.@sender_id -> (n.id -> 1)),
+                @@first_use += (p.@sender_id -> (n.id -> p.event_ts_ms)),
+                @@last_use += (p.@sender_id -> (n.id -> p.event_ts_ms)),
+                IF p.@owner_id != "" THEN
+                    @@used += (p.@owner_id -> n.id)
+                END,
+                IF n.type == "IP" THEN
+                    @@ip_ids += n.id
+                END
+            END
+    ;
+
+    /* Each owner's first own payment not seen on each device and IP its asked accounts used */
+    unseen = SELECT p
+        FROM own_sent:p
+        POST-ACCUM
+            FOREACH n IN @@used.get(p.@owner_id) DO
+                IF NOT p.@seen_on.contains(n) THEN
+                    @@first_unseen += (p.@owner_id -> (n -> p.event_ts_ms))
+                END
+            END
+    ;
+
+    /* Keep each account's 8 most recently used devices and IPs; a first use is known after the lookback's start, after the owner joined, and after an own payment not seen on it */
+    kept = SELECT a
+        FROM accounts:a
+        POST-ACCUM
+            UINT first_ms = 0,
+            BOOL known = FALSE,
+            UINT since_first_ms = 0,
+            FOREACH (n, last_ms) IN @@last_use.get(a.id) DO
+                first_ms = @@first_use.get(a.id).get(n),
+                known = a.@owner_id != ""
+                    AND first_ms > t_ms - LOOKBACK_MS
+                    AND first_ms > a.@owner_joined_ms
+                    AND @@first_unseen.get(a.@owner_id).containsKey(n)
+                    AND @@first_unseen.get(a.@owner_id).get(n) < first_ms,
+                since_first_ms = CASE WHEN known THEN t_ms - first_ms ELSE 0 END,
+                IF @@ip_ids.contains(n) THEN
+                    a.@ips += Used(n, @@uses.get(a.id).get(n), known, since_first_ms, t_ms - last_ms)
+                ELSE
+                    a.@devices += Used(n, @@uses.get(a.id).get(n), known, since_first_ms, t_ms - last_ms)
+                END
+            END
+    ;
+
+    /* Printing the accounts */
+    PRINT "ok" AS status;
+    PRINT accounts[
+        accounts.id AS account_id,
+        accounts.@devices AS devices,
+        accounts.@ips AS ips
+    ] AS accounts;
+
+}

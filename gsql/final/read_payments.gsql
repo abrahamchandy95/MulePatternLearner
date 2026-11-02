@@ -1,0 +1,139 @@
+USE GRAPH Mule_Pattern_Learner
+CREATE OR REPLACE QUERY read_payments(
+    UINT t_ms, // The scoring time after the first 90 days
+    LIST<STRING> payment_ids // The payments to read, transactions and transfers
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+
+    /* Constants */
+    UINT LOOKBACK_MS = 7776000000; // 90 days
+
+    /* Edge types, each a set so that one pattern serves transactions and transfers */
+    SetAccum<STRING> @@payment_to_sender_edge_type; // Payment -> the account that sent it
+    SetAccum<STRING> @@payment_to_receiver_edge_type; // Payment -> the account that received it
+    @@payment_to_sender_edge_type += "Transaction_From_Account";
+    @@payment_to_sender_edge_type += "Transfer_From_Account";
+    @@payment_to_receiver_edge_type += "Transaction_To_Account";
+    @@payment_to_receiver_edge_type += "Transfer_To_Account";
+
+    /* Accumulators */
+    SumAccum<INT> @amount; // A payment's amount in cents
+    MaxAccum<STRING> @rail, @sender_id, @receiver_id;
+    SumAccum<UINT> @age_ms, @sender_gap_ms, @receiver_gap_ms; // Age at t; each gap, 0 when not read
+    OrAccum @pair_present, @sender_gap_present, @receiver_gap_present;
+    SetAccum<STRING> @@ids; // The payment ids given, each once
+    SumAccum<INT> @@given; // How many were given
+
+    IF t_ms <= LOOKBACK_MS OR t_ms % 1000 != 0 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+    FOREACH payment_id IN payment_ids DO
+        @@ids += payment_id;
+        @@given += 1;
+    END;
+    IF @@given == 0 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+    IF @@ids.size() != @@given THEN
+        PRINT "duplicate_payment" AS status;
+        RETURN;
+    END;
+    listed_transactions = to_vertex_set(@@ids, "Payment_Transaction");
+    listed_transfers = to_vertex_set(@@ids, "Zelle_Transfer");
+    listed = listed_transactions UNION listed_transfers;
+    IF listed.size() != @@ids.size() THEN
+        PRINT "unknown_payment" AS status;
+        RETURN;
+    END;
+    payments = SELECT p
+        FROM listed:p
+        WHERE p.event_ts_ms >= t_ms - LOOKBACK_MS AND p.event_ts_ms < t_ms
+    ;
+    IF payments.size() != listed.size() THEN
+        PRINT "invisible_payment" AS status;
+        RETURN;
+    END;
+    marked = SELECT p FROM payments:p WHERE p.gaps_marked AND p.pair_marked;
+    IF marked.size() != payments.size() THEN
+        PRINT "unmarked_payment" AS status;
+        RETURN;
+    END;
+
+    /* Read each payment's cents, rail and age at t */
+    transactions = SELECT p
+        FROM listed_transactions:p
+        WHERE p.event_ts_ms >= t_ms - LOOKBACK_MS AND p.event_ts_ms < t_ms
+        POST-ACCUM
+            INT cents = floor(p.amount * 100 + 0.5),
+            p.@amount += cents,
+            p.@rail += p.payment_rail,
+            p.@age_ms += t_ms - p.event_ts_ms
+    ;
+    transfers = SELECT p
+        FROM listed_transfers:p
+        WHERE p.event_ts_ms >= t_ms - LOOKBACK_MS AND p.event_ts_ms < t_ms
+        POST-ACCUM
+            INT cents = floor(p.amount * 100 + 0.5),
+            p.@amount += cents,
+            p.@rail += "zelle",
+            p.@age_ms += t_ms - p.event_ts_ms
+    ;
+
+    /* Traverse: Payment -> its sender, the stored gap read unless the sender is a hub at t */
+    sent = SELECT p
+        FROM payments:p - (@@payment_to_sender_edge_type>:f) - Account:a
+        ACCUM
+            p.@sender_id += a.id,
+            IF p.sender_gap_ms > 0 AND a.hub_at_ms != t_ms THEN
+                p.@sender_gap_present += TRUE,
+                p.@sender_gap_ms += p.sender_gap_ms
+            END
+    ;
+
+    /* Traverse: Payment -> its receiver, the stored gap read unless the receiver is a hub at t */
+    received = SELECT p
+        FROM payments:p - (@@payment_to_receiver_edge_type>:g) - Account:b
+        ACCUM
+            p.@receiver_id += b.id,
+            IF p.receiver_gap_ms > 0 AND b.hub_at_ms != t_ms THEN
+                p.@receiver_gap_present += TRUE,
+                p.@receiver_gap_ms += p.receiver_gap_ms
+            END
+    ;
+
+    /* Flag the payments whose pair paid before */
+    rows = SELECT p
+        FROM payments:p
+        POST-ACCUM
+            p.@pair_present += p.pair_prior_count > 0
+    ;
+
+    /* Refuse unless the hub stamps on the graph are this t's */
+    current_marks = SELECT m FROM Mark:m WHERE m.id == "hubs" AND m.at_ms == t_ms;
+    IF current_marks.size() != 1 THEN
+        PRINT "unmarked_time" AS status;
+        RETURN;
+    END;
+
+    /* Printing the payments */
+    PRINT "ok" AS status;
+    PRINT rows[
+        rows.id AS payment_id,
+        rows.@sender_id AS sender_id,
+        rows.@receiver_id AS receiver_id,
+        rows.@amount AS amount,
+        rows.@rail AS rail,
+        rows.@age_ms AS age_ms,
+        rows.pair_prior_count AS pair_prior_count,
+        rows.@pair_present AS pair_gap_present,
+        rows.pair_gap_ms AS pair_gap_ms,
+        rows.@pair_present AS pair_age_present,
+        rows.pair_age_ms AS pair_age_ms,
+        rows.@sender_gap_present AS sender_gap_present,
+        rows.@sender_gap_ms AS sender_gap_ms,
+        rows.@receiver_gap_present AS receiver_gap_present,
+        rows.@receiver_gap_ms AS receiver_gap_ms
+    ] AS payments;
+
+}

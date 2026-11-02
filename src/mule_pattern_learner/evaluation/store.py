@@ -5,6 +5,8 @@ and testing/ open (the Files that carry labels guard):
     data/evaluation/<world identity>/answer_key.parquet   read_answer_key's rows
     data/evaluation/<world identity>/labels.parquet       read_labels' rows
     data/evaluation/<world identity>/fallback.parquet     the test-role fallback list
+    data/evaluation/<world identity>/clock_sample.parquet the test-role audit sample, with the
+                                                          start of each row's week
     data/evaluation/<world identity>/tables/<name>.parquet the audit's report tables
     data/evaluation/<world identity>/audit.toml           the pass record
 
@@ -32,13 +34,14 @@ import pyarrow.parquet as pq
 
 from ..data.labels import Labels, label_identity
 from ..paths import evaluation_store_dir
-from ..tigergraph.queries import READ_LABELS, VERSIONS, read_labels
+from ..tigergraph.queries import VERSIONS, read_labels
 from .answer_key import COLUMNS, AnswerKey, parse_rows
 from .atomic import write_bytes, write_parquet
 
 ANSWER_KEY_FILE = "answer_key.parquet"
 LABELS_FILE = "labels.parquet"
 FALLBACK_FILE = "fallback.parquet"
+CLOCK_SAMPLE_FILE = "clock_sample.parquet"
 RECORD_FILE = "audit.toml"
 TABLES = "tables"
 ANSWER_KEY_SCHEMA = pa.schema(
@@ -58,6 +61,17 @@ LABELS_SCHEMA = pa.schema(
 )
 FALLBACK_SCHEMA = pa.schema(
     [("t_ms", pa.int64()), ("account_id", pa.string()), ("weight", pa.float64())]
+)
+CLOCK_SAMPLE_SCHEMA = pa.schema(
+    [
+        ("t_ms", pa.int64()),
+        ("account_id", pa.string()),
+        ("positive", pa.bool_()),
+        ("weight", pa.float64()),
+        ("cluster", pa.string()),
+        ("week_ms", pa.int64()),
+        ("at_week_start", pa.bool_()),
+    ]
 )
 
 
@@ -173,7 +187,7 @@ class Store:
         the label identity of their rows."""
         rows = pq.read_table(self.folder / LABELS_FILE, schema=LABELS_SCHEMA).to_pylist()
         response: list[dict[str, object]] = [
-            {"status": "ok", "version": VERSIONS[READ_LABELS]},
+            {"status": "ok"},
             {"accounts": [{"attributes": row} for row in rows]},
         ]
         mules = read_labels.parse(response, "", max(1, len(rows)))
@@ -192,6 +206,25 @@ class Store:
     def fallback(self) -> pd.DataFrame:
         """The stored test-role fallback list: (t_ms, account_id, weight)."""
         return pq.read_table(self.folder / FALLBACK_FILE, schema=FALLBACK_SCHEMA).to_pandas()
+
+    def write_clock_sample(self, sample: pd.DataFrame) -> None:
+        write_parquet(
+            self.folder / CLOCK_SAMPLE_FILE,
+            pa.Table.from_pandas(
+                sample.loc[:, list(CLOCK_SAMPLE_SCHEMA.names)],
+                schema=CLOCK_SAMPLE_SCHEMA,
+                preserve_index=False,
+            ),
+        )
+
+    def clock_sample(self) -> pd.DataFrame | None:
+        """The stored test-role audit sample with the start of each row's week and whether the
+        row's account is scorable then (evaluation.clock_invariance.COLUMNS), or None when mule
+        audit has not stored one."""
+        path = self.folder / CLOCK_SAMPLE_FILE
+        if not path.is_file():
+            return None
+        return pq.read_table(path, schema=CLOCK_SAMPLE_SCHEMA).to_pandas()
 
     def write_table(self, name: str, frame: pd.DataFrame) -> None:
         """Write one of the audit's report tables."""

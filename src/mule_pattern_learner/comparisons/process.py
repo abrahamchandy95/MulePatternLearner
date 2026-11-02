@@ -140,7 +140,7 @@ def choose(
 ) -> tuple[int, Found, tuple[tuple[int, float], ...]]:
     """The round count with the best selection score on the ranked selection keys, chosen in
     a child process (boosting.choose): the count, what it found and the score of every count
-    tried. Only the keys' Monday, account, class and weight are read."""
+    tried. Only the keys' t, account, class and weight are read."""
     found = run(
         "choose",
         {

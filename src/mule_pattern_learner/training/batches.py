@@ -1,14 +1,14 @@
 """The batches training and scoring read, built from the cache (docs/design.md, "Training and
-selection": batches are built once, shuffled across Mondays and labels, and reused).
+selection": batches are built once, shuffled across weeks and labels, and reused).
 
 - The training batches of a world are built once from its training examples (data.examples'
   training table: t_ms, account_id, label, weight) and serve every seed, prior, epoch and
   ablation. Their examples are shuffled once, by a generator of the shuffle seed (config's
-  training.shuffle_seed), so that every batch mixes Mondays and labels; the model seed then
+  training.shuffle_seed), so that every batch mixes weeks and labels; the model seed then
   orders the batches in each epoch (training.trainer). So the seeds vary only the initial
   weights, dropout and batch order, and the batches themselves are the same for every seed.
 - The scoring batches of a world (selection, test, mule score) are built anew each time they
-  are read, a Monday at a time in the order of their keys, since a whole world's examples
+  are read, a week at a time in the order of their keys, since a whole world's examples
   do not fit in memory. They are built by the same builder with the same settings as the
   training batches, without labels and weights. Selection reads them once per epoch of every
   prior, seed and ablation (training.trainer.selection_passes), so the time spent reading rows
@@ -40,7 +40,7 @@ from ..subgraph.cache import Cache
 # The columns of the training examples, and of the keys of a scoring run.
 TRAINING_COLUMNS = ("t_ms", "account_id", "label", "weight")
 KEY_COLUMNS = ("t_ms", "account_id")
-# The examples of one Monday whose rows a scoring run reads from the cache at a time.
+# The examples of one week whose rows a scoring run reads from the cache at a time.
 READ_GROUP = 4_096
 
 
@@ -49,7 +49,7 @@ def _check_keys(keys: pd.DataFrame, columns: Sequence[str], what: str) -> None:
     if missing:
         raise ValueError(f"The {what} lack the columns {missing}")
     if keys.duplicated(list(KEY_COLUMNS)).any():
-        raise ValueError(f"The {what} hold an (account, Monday) twice")
+        raise ValueError(f"The {what} hold an (account, t) twice")
 
 
 def training_batches(
@@ -90,7 +90,7 @@ def training_batches(
 
 class ScoringBatches:
     """The scoring batches of keys (t_ms, account_id) of a world, at most size examples each,
-    built anew on every pass, Monday by Monday in increasing order, each Monday's accounts in
+    built anew on every pass, week by week in increasing order, each week's accounts in
     increasing order, or, with keep, built by the first whole pass and replayed by every later
     one. keys holds them in that order; the scores of a pass follow it."""
 
@@ -127,7 +127,7 @@ class ScoringBatches:
         held: list[Batch] = []
         t_ms = self.keys["t_ms"].to_numpy(dtype=np.int64)
         accounts = [str(account) for account in self.keys["account_id"]]
-        # The keys run Monday after Monday, so each Monday's examples are one slice of them.
+        # The keys run week after week, so each week's examples are one slice of them.
         starts = np.flatnonzero(np.r_[True, t_ms[1:] != t_ms[:-1]])
         for first, last in zip(starts.tolist(), np.r_[starts[1:], len(t_ms)].tolist(), strict=True):
             day = int(t_ms[first])

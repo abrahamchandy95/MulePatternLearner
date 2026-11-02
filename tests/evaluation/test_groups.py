@@ -28,9 +28,11 @@ from mule_pattern_learner.testing.world import DAY_MS, T
 from mule_pattern_learner.tigergraph.queries.read_answer_key import AccountTruth
 
 D, W = DAY_MS, 7 * DAY_MS
+# The world's one scoring time, which the status of each account is read at.
+TIMES = (T,)
 OLD = T - 400 * D
 # Ring 3 surfaced through a; ring 4 never did. d is a ringless drop whose account opened 10 days
-# before T; e is on its early-warning Monday at T.
+# before T; e is at its early-warning time, T.
 KEY = AnswerKey(
     (
         AccountTruth("a", 1, 3, T - D, T + D, OLD, "deposit", True),
@@ -54,7 +56,7 @@ def _frame() -> pd.DataFrame:
     keys = scores.loc[:, ["t_ms", "account_id"]].assign(
         weight=[100.0 if account[0] == "n" else 1.0 for account in accounts]
     )
-    return evaluation_frame(scores, keys, KEY, frozenset({"a"}))
+    return evaluation_frame(scores, keys, KEY, frozenset({"a"}), TIMES)
 
 
 def test_each_group_holds_its_rows() -> None:
@@ -69,7 +71,7 @@ def test_each_group_holds_its_rows() -> None:
         "identified": ["a"],
         "no_ring": ["d"],
         "new_account": ["d"],
-        # The early-warning Monday counts in this group alone.
+        # The early-warning time counts in this group alone.
         "no_payment": ["d", "e"],
         "hop_1": ["b"],
         "hop_2": ["a", "d"],
@@ -104,9 +106,9 @@ def test_each_group_is_ranked_with_the_other_mules_removed() -> None:
     assert (
         table[("identified", "roc_auc")] == 1 and table[("surfaced_unidentified", "roc_auc")] == 0
     )
-    # e alone of no_payment is on its early-warning Monday: d at 0.6 and e at 0.9 both top it.
+    # e alone of no_payment is at its early-warning time: d at 0.6 and e at 0.9 both top it.
     assert table[("no_payment", "mules")] == 2 and table[("no_payment", "recall_at_5pct")] == 1
-    assert table[("hop_1", "account_mondays")] == 0 and ("hop_1", "roc_auc") not in table.index
+    assert table[("hop_1", "account_weeks")] == 0 and ("hop_1", "roc_auc") not in table.index
     assert table[("hidden_ring", "ever_flagged_at_1pct")] == 1
     assert table[("no_payment", "enrolment_ceiling_device")] == 0.72
 

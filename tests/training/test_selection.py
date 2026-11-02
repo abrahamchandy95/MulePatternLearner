@@ -1,6 +1,6 @@
 """The selection score on hand-made rankings, worked out by hand (docs/design.md, "Training and
-selection"): pooled recall in the top 1% and 5% of each Monday, ties shared, identified mules'
-inactive Mondays out of the ranking, the fallback's weights, and the paired interval."""
+selection"): pooled recall in the top 1% and 5% of each week, ties shared, identified mules'
+inactive weeks out of the ranking, the fallback's weights, and the paired interval."""
 
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ def _interval(first: Sequence[Found], second: Sequence[Found]) -> tuple[float, f
 def _keys(
     t_ms: int, n: int, positives: dict[int, float] | None = None, weight: float = 1.0
 ) -> pd.DataFrame:
-    """n accounts of the Monday t, a000 to a<n - 1>, positive at the rows positives names,
+    """n accounts of the week t, a000 to a<n - 1>, positive at the rows positives names,
     each weighing weight."""
     return pd.DataFrame(
         {
@@ -66,8 +66,8 @@ def _ranked(n: int, places: dict[int, int]) -> np.ndarray:
     )
 
 
-def test_pooled_recall_over_mondays_and_the_score_is_their_mean() -> None:
-    """Two Mondays of 200 accounts: the top 1% is 2 accounts, the top 5% 10. On the first, the
+def test_pooled_recall_over_weeks_and_the_score_is_their_mean() -> None:
+    """Two weeks of 200 accounts: the top 1% is 2 accounts, the top 5% 10. On the first, the
     positives rank 1st, 5th and 20th; on the second, the one positive ranks 3rd. Pooled over 4
     positives: 1 found in the top 1% and 3 in the top 5%."""
     keys = ranked_keys(pd.concat([_keys(M2, 200, {7: 1}), _keys(M1, 200, {0: 1, 1: 1, 2: 1})]))
@@ -80,7 +80,7 @@ def test_pooled_recall_over_mondays_and_the_score_is_their_mean() -> None:
     assert selection_score(keys, scores) == result.score
 
 
-def test_a_monday_without_a_positive_counts_nothing() -> None:
+def test_a_week_without_a_positive_counts_nothing() -> None:
     keys = ranked_keys(pd.concat([_keys(M1, 100, {0: 1}), _keys(M2, 100)]))
     scores = np.where(keys["positive"], 10.0, 0.0) - np.arange(200) * 1e-3
     assert found(keys, scores).score == pytest.approx(1.0)
@@ -108,7 +108,7 @@ def test_logits_are_ranked_in_float64() -> None:
 
 
 def test_inactive_identified_mules_are_left_out_of_the_ranking() -> None:
-    """101 accounts with an identified mule on an inactive Monday: left out, the 100 others rank
+    """101 accounts with an identified mule in an inactive week: left out, the 100 others rank
     and the positive is 1st of them, inside the top 1% of 1 account."""
     keys = _keys(M1, 101, {1: 1})
     keys.loc[0, "ranked"] = False
@@ -191,11 +191,11 @@ def test_the_paired_interval_reads_its_settings_from_the_caller() -> None:
         paired_interval([half], [none])  # pyright: ignore[reportCallIssue]
 
 
-def test_keys_out_of_the_order_of_their_mondays_are_refused() -> None:
-    """The ranking slices each Monday out of the sorted keys, so unsorted ones are refused
+def test_keys_out_of_the_order_of_their_weeks_are_refused() -> None:
+    """The ranking slices each week out of the sorted keys, so unsorted ones are refused
     rather than ranked wrongly."""
     keys = ranked_keys(pd.concat([_keys(M1, 100, {0: 1}), _keys(M2, 100, {1: 1})]))
     scores = -np.arange(200, dtype=np.float64)
     assert found(keys, scores).accounts == ("a000", "a001")
-    with pytest.raises(ValueError, match="not in the order of their Mondays"):
+    with pytest.raises(ValueError, match="not in the order of their weeks"):
         found(keys.iloc[::-1].reset_index(drop=True), scores)

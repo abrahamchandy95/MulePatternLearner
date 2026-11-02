@@ -6,7 +6,7 @@ answer otherwise than the reference does (a tamper), and the export is written h
 loader's format (testing.shards.write_export). The world is testing.fixtures.batch_world, whose
 mules (a_collector, a_mule, a_mule2, a_mule3, a_r1 and a_r2) are the true mules the sample
 oversamples, and whose 224 scorable accounts of T, 2024-07-01, and of T + 1 week give a sample of
-24 accounts on each of two Mondays: 6 mules, a quarter of 24, and 18 others, in 3 requests of 8.
+24 accounts in each of two weeks: 6 mules, a quarter of 24, and 18 others, in 3 requests of 8.
 """
 
 from __future__ import annotations
@@ -34,6 +34,7 @@ from mule_pattern_learner.testing.parity import (
     Communities,
     Failure,
     ParityError,
+    _active,  # pyright: ignore[reportPrivateUsage]
     _canonical,  # pyright: ignore[reportPrivateUsage]
     _Comparison,  # pyright: ignore[reportPrivateUsage]
     differences,
@@ -41,15 +42,17 @@ from mule_pattern_learner.testing.parity import (
     run,
     run_on,
     sample_accounts,
-    sample_mondays,
+    sample_weeks,
 )
 from mule_pattern_learner.testing.reference import ReferenceGraph
+from mule_pattern_learner.testing.reference.graph import Account
 from mule_pattern_learner.testing.shards import write_export
-from mule_pattern_learner.testing.world import DAY_MS, T, WorldBuilder
+from mule_pattern_learner.testing.world import DAY_MS, HOUR_MS, T, WorldBuilder
 from mule_pattern_learner.tigergraph.executor import ParityExecutor
 from mule_pattern_learner.tigergraph.installer import parity_versions
 from mule_pattern_learner.tigergraph.queries import (
     LIST_ACCOUNTS,
+    MARK_CROWDS,
     PROFILE_HUBS,
     QUERY_FILES,
     READ_ACTIVITY_CHANGE,
@@ -68,13 +71,16 @@ from mule_pattern_learner.tigergraph.queries import (
 from mule_pattern_learner.tigergraph.queries.read_money_flow import MoneyFlows
 
 W = 7 * DAY_MS
+# The configured seed of the world loaded: its scoring times, one a week, are the weeks parity
+# samples from.
+SEED = 1001
 MULES = {"a_collector", "a_mule", "a_mule2", "a_mule3", "a_r1", "a_r2"}
-# Two scored Mondays, T and T + 1 week; 24 accounts on each in requests of 8, two of them
-# fetched alone.
+# Two scored weeks, starting on T and T + 1 week; 24 accounts on each in requests of 8, two of
+# them fetched alone.
 CONFIG = replace(
     DEFAULT_CONFIG,
-    calendar=CalendarConfig(history_days=182, scored_mondays=2),
-    parity=ParityConfig(mondays=2, accounts=24, together=8, alone=2),
+    calendar=CalendarConfig(history_days=182, scored_weeks=2),
+    parity=ParityConfig(weeks=2, accounts=24, together=8, alone=2),
 )
 TOLERANCE = CONFIG.parity.tolerance
 Tamper = Callable[[str, dict[str, Any], list[dict[str, Any]]], list[dict[str, Any]]]
@@ -145,20 +151,23 @@ def test_the_same_graph_on_both_sides_passes_every_query(
     graph: ReferenceGraph, exports: Path, tmp_path: Path
 ) -> None:
     record = tmp_path / "parity.toml"
-    found = run(Live(graph), CONFIG, exports=exports, record=record, today=date(2026, 10, 24))
+    found = run(
+        Live(graph), CONFIG, seed=SEED, exports=exports, record=record, today=date(2026, 10, 24)
+    )
     assert found.failed == () and found.passed == tuple(QUERY_FILES)
     assert found.tigergraph == "4.2.5" and found.export == exports / "mule_temporal_0123456789ab"
-    assert found.mondays == (T, T + W)
+    assert found.weeks == CONFIG.calendar.scoring_times(SEED)
     # read_world, read_labels and read_answer_key are read whole: once, and the pages and
     # refusals of the last two (a page of 0 and a page above the limit).
     checks = {name: result.checks for name, result in found.queries.items()}
     assert (checks[READ_WORLD], checks[READ_LABELS], checks[READ_ANSWER_KEY]) == (1, 3, 3)
-    # On each Monday: every page of the scorable accounts and 3 refusals; the hubs and the
-    # profile, and a refusal each.
-    assert (checks[LIST_ACCOUNTS], checks[READ_HUBS], checks[PROFILE_HUBS]) == (8, 4, 4)
-    # B1 and B3: 3 requests of 8, 2 accounts alone and 4 refusals (a t that is no Monday, no
+    # On each week: every page of the scorable accounts and 3 refusals; the crowds, the hubs
+    # and the profile, and a refusal each.
+    assert (checks[LIST_ACCOUNTS], checks[MARK_CROWDS]) == (8, 4)
+    assert (checks[READ_HUBS], checks[PROFILE_HUBS]) == (4, 4)
+    # B1 and B3: 3 requests of 8, 2 accounts alone and 4 refusals (a t that is no whole second, no
     # account, a repeated and an unknown account: this world has no account that opens after
-    # t) on each Monday; B2, B4 and B6 the same; B5 also checks its leaf flags once a Monday.
+    # t) in each week; B2, B4 and B6 the same; B5 also checks its leaf flags once a week.
     for name in (READ_MONEY_FLOW, READ_ACTIVITY_CHANGE, READ_COUNTERPARTIES):
         assert checks[name] == 2 * (3 + 2 + 4)
     assert checks[READ_PAYMENT_EVENTS] == checks[READ_COMMUNITY] == 2 * (3 + 2 + 4)
@@ -190,10 +199,20 @@ def test_a_double_within_the_tolerance_is_the_same_and_beyond_it_is_not(
         return tamper
 
     near = run(
-        Live(graph, scaled(1 + TOLERANCE / 10)), CONFIG, exports=exports, record=tmp_path / "a.toml"
+        Live(graph, scaled(1 + TOLERANCE / 10)),
+        CONFIG,
+        seed=SEED,
+        exports=exports,
+        record=tmp_path / "a.toml",
     )
     assert near.failed == ()
-    far = run(Live(graph, scaled(1 + 1e-9)), CONFIG, exports=exports, record=tmp_path / "b.toml")
+    far = run(
+        Live(graph, scaled(1 + 1e-9)),
+        CONFIG,
+        seed=SEED,
+        exports=exports,
+        record=tmp_path / "b.toml",
+    )
     assert far.failed == (READ_MONEY_FLOW,)
     result = far.queries[READ_MONEY_FLOW]
     assert result.mismatched >= 1 and "left_1d" in result.mismatches[0].what
@@ -215,7 +234,9 @@ def test_an_integer_is_exact_where_a_double_has_a_tolerance(
                 vertex["attributes"]["in_amount_90d"] += 1
         return rows
 
-    found = run(Live(graph, tamper), CONFIG, exports=exports, record=tmp_path / "parity.toml")
+    found = run(
+        Live(graph, tamper), CONFIG, seed=SEED, exports=exports, record=tmp_path / "parity.toml"
+    )
     assert found.failed == (READ_MONEY_FLOW,)
     assert "in_amount_90d" in found.queries[READ_MONEY_FLOW].mismatches[0].what
 
@@ -233,7 +254,7 @@ def test_a_work_counter_is_not_compared(
     graph: ReferenceGraph, exports: Path, tmp_path: Path
 ) -> None:
     record = tmp_path / "parity.toml"
-    found = run(Live(graph, _steps), CONFIG, exports=exports, record=record)
+    found = run(Live(graph, _steps), CONFIG, seed=SEED, exports=exports, record=record)
     assert found.failed == ()
     assert (READ_MONEY_FLOW, VERSIONS[READ_MONEY_FLOW]) in parity_versions(record)
 
@@ -250,7 +271,9 @@ def test_a_changed_field_fails_beside_a_changed_work_counter(
                 vertex["attributes"]["in_amount_90d"] += 1
         return rows
 
-    found = run(Live(graph, tamper), CONFIG, exports=exports, record=tmp_path / "parity.toml")
+    found = run(
+        Live(graph, tamper), CONFIG, seed=SEED, exports=exports, record=tmp_path / "parity.toml"
+    )
     assert found.failed == (READ_MONEY_FLOW,)
     what = found.queries[READ_MONEY_FLOW].mismatches[0].what
     assert "in_amount_90d" in what and "scan_steps" not in what
@@ -306,7 +329,9 @@ def test_a_live_answer_the_parser_refuses_fails_its_query(
                     block["payments"].pop()
         return rows
 
-    found = run(Live(graph, tamper), CONFIG, exports=exports, record=tmp_path / "parity.toml")
+    found = run(
+        Live(graph, tamper), CONFIG, seed=SEED, exports=exports, record=tmp_path / "parity.toml"
+    )
     assert found.failed == (READ_PAYMENT_EVENTS, READ_MONEY_FLOW) or found.failed == (
         READ_MONEY_FLOW,
         READ_PAYMENT_EVENTS,
@@ -325,7 +350,9 @@ def test_a_live_request_that_raises_is_a_mismatch_not_a_crash(
             raise RuntimeError("Parameter account_ids must not be empty")
         return rows
 
-    found = run(Live(graph, tamper), CONFIG, exports=exports, record=tmp_path / "parity.toml")
+    found = run(
+        Live(graph, tamper), CONFIG, seed=SEED, exports=exports, record=tmp_path / "parity.toml"
+    )
     assert found.failed == (READ_ACTIVITY_CHANGE,)
     mismatch = found.queries[READ_ACTIVITY_CHANGE].mismatches[0]
     assert "no account" in mismatch.where and "RuntimeError" in mismatch.what
@@ -341,18 +368,23 @@ def test_a_refusal_the_live_graph_words_otherwise_fails(
             return [{"status": "invisible_account"}]
         return rows
 
-    found = run(Live(graph, tamper), CONFIG, exports=exports, record=tmp_path / "parity.toml")
+    found = run(
+        Live(graph, tamper), CONFIG, seed=SEED, exports=exports, record=tmp_path / "parity.toml"
+    )
     assert found.failed == (READ_COUNTERPARTIES,)
     mismatch = found.queries[READ_COUNTERPARTIES].mismatches[0]
     assert "an unknown account" in mismatch.where and "invisible_account" in mismatch.what
 
 
 def _late_world() -> WorldBuilder:
-    """The batch world and one customer who joins two days after the first scored Monday: on that
-    Monday an account that does not exist yet, which the refusal probes of an account and of a
-    hub that do not exist at t are sent for (the module's other worlds have none)."""
+    """The batch world and one customer who joins an hour after the first scoring time of the
+    world's seed: at that time an account that does not exist yet, which the refusal probes of an
+    account and of a hub that do not exist at t are sent for (the module's other worlds have
+    none), and at the second scoring time an account that does."""
     w = fixtures.batch_world()
-    w.customer("late", T + 2 * DAY_MS)
+    first, second = CONFIG.calendar.scoring_times(SEED)
+    assert first + HOUR_MS < second
+    w.customer("late", first + HOUR_MS)
     return w
 
 
@@ -386,10 +418,14 @@ def test_an_account_and_a_hub_that_do_not_exist_at_t_are_refused_as_such(tmp_pat
         return rows
 
     found = run(
-        Live(w.graph(), record), CONFIG, exports=tmp_path / "exports", record=tmp_path / "p.toml"
+        Live(w.graph(), record),
+        CONFIG,
+        seed=SEED,
+        exports=tmp_path / "exports",
+        record=tmp_path / "p.toml",
     )
     assert found.failed == ()
-    # On the first Monday, the one with an account that does not exist yet, every per-account
+    # At the first scoring time, the one with an account that does not exist yet, every per-account
     # query is sent that account, and each that takes the hubs is sent it as a hub too.
     assert refused == {(name, "invisible_account"): 1 for name in PER_ACCOUNT_QUERIES} | {
         (name, "invisible_hub"): 1 for name in TAKES_HUBS_QUERIES
@@ -413,7 +449,11 @@ def test_a_late_account_or_hub_refused_in_other_words_fails(tmp_path: Path) -> N
         return rows
 
     found = run(
-        Live(w.graph(), tamper), CONFIG, exports=tmp_path / "exports", record=tmp_path / "p.toml"
+        Live(w.graph(), tamper),
+        CONFIG,
+        seed=SEED,
+        exports=tmp_path / "exports",
+        record=tmp_path / "p.toml",
     )
     assert set(found.failed) == {READ_MONEY_FLOW, READ_COMMUNITY}
     account = found.queries[READ_MONEY_FLOW].mismatches
@@ -438,7 +478,9 @@ def test_an_account_alone_must_equal_itself_among_the_others(
                     vertex["attributes"]["in_amount_90d"] += len(params["account_ids"])
         return rows
 
-    found = run(Live(graph, tamper), CONFIG, exports=exports, record=tmp_path / "parity.toml")
+    found = run(
+        Live(graph, tamper), CONFIG, seed=SEED, exports=exports, record=tmp_path / "parity.toml"
+    )
     assert found.failed == (READ_MONEY_FLOW,)
     where = [item.where for item in found.queries[READ_MONEY_FLOW].mismatches]
     # Against the reference, in every request of 8; and against itself, alone and among 7
@@ -451,7 +493,7 @@ def test_an_account_alone_is_asked_of_the_live_graph_only(
     tables: dict[str, pd.DataFrame], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # The reference graph has no use for the alone answer, which is compared with the live
-    # answer among the others: no request of one account is sent to it, in 2 Mondays x 2
+    # answer among the others: no request of one account is sent to it, in 2 weeks x 2
     # accounts x 6 queries.
     reference = ReferenceGraph(tables)
     asked: list[tuple[str, int]] = []
@@ -463,18 +505,18 @@ def test_an_account_alone_is_asked_of_the_live_graph_only(
 
     monkeypatch.setattr(reference, "run", counting)
     live = ParityExecutor(Live(ReferenceGraph(tables)))
-    queries, _ = run_on(live, reference, (T, T + W), CONFIG.parity)
+    queries, _ = run_on(live, reference, (T, T + W), CONFIG.parity, CONFIG.calendar.week_starts())
     assert all(result.passed for result in queries.values())
     assert any(size == 8 for _, size in asked) and not [name for name, size in asked if size == 1]
-    # The alone answers were still compared, with the live answers among the others: on each
-    # Monday 3 requests, 2 accounts alone and 4 refusals.
+    # The alone answers were still compared, with the live answers among the others: in each
+    # week 3 requests, 2 accounts alone and 4 refusals.
     assert queries[READ_MONEY_FLOW].checks == 2 * (3 + 2 + 4)
 
 
 def _crowd_world() -> WorldBuilder:
     """The reference's own test world (test_reference_community): p_s and p_m, a member by a
     payment, are enrolled on d_crowd with 6 others, and p_u, who never enrolled, sent a payment
-    seen on it, a ninth customer: a crowd read_hubs lists."""
+    seen on it, a ninth customer: a crowd mark_crowds stamps and read_hubs lists."""
     w = WorldBuilder()
     w.external("x_ext", fixtures.OPENED)
     for name in ("s", "m", *(f"k{n}" for n in range(1, 7))):
@@ -488,8 +530,8 @@ def _crowd_world() -> WorldBuilder:
 
 CROWD_CONFIG = replace(
     CONFIG,
-    calendar=CalendarConfig(history_days=182, scored_mondays=1),
-    parity=ParityConfig(mondays=1, accounts=9, together=4, alone=2),
+    calendar=CalendarConfig(history_days=182, scored_weeks=1),
+    parity=ParityConfig(weeks=1, accounts=9, together=4, alone=2),
 )
 
 
@@ -500,22 +542,26 @@ def test_a_world_with_a_crowd_between_two_members_is_counted(tmp_path: Path) -> 
     w = _crowd_world()
     write_export(tmp_path / "exports" / "e", w.tables())
     found = run(
-        Live(w.graph()), CROWD_CONFIG, exports=tmp_path / "exports", record=tmp_path / "p.toml"
+        Live(w.graph()),
+        CROWD_CONFIG,
+        seed=SEED,
+        exports=tmp_path / "exports",
+        record=tmp_path / "p.toml",
     )
     assert found.failed == ()
     assert found.communities == Communities(9, 9, 2)
     assert not any("met no crowd" in line for line in found.lines())
 
 
-def test_b5s_leaf_flags_are_read_against_the_live_read_hubs(tmp_path: Path) -> None:
+def test_b5s_leaf_flags_are_read_against_the_live_mark_crowds(tmp_path: Path) -> None:
     w = _crowd_world()
     write_export(tmp_path / "exports" / "e", w.tables())
 
     def tamper(
         name: str, params: dict[str, Any], rows: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
-        # The live read_hubs forgets the crowd, which B5 still flags a leaf.
-        if name == READ_HUBS and rows[0].get("status") == "ok":
+        # The live mark_crowds forgets the crowd, which B5 still flags a leaf.
+        if name == MARK_CROWDS and rows[0].get("status") == "ok":
             for block in rows:
                 if "devices" in block:
                     block["devices"] = []
@@ -524,12 +570,14 @@ def test_b5s_leaf_flags_are_read_against_the_live_read_hubs(tmp_path: Path) -> N
     found = run(
         Live(w.graph(), tamper),
         CROWD_CONFIG,
+        seed=SEED,
         exports=tmp_path / "exports",
         record=tmp_path / "p.toml",
     )
-    assert READ_SHARED_IDENTITY in found.failed and READ_HUBS in found.failed
+    assert READ_SHARED_IDENTITY in found.failed and MARK_CROWDS in found.failed
+    assert READ_HUBS not in found.failed
     where = [item.where for item in found.queries[READ_SHARED_IDENTITY].mismatches]
-    assert any("leaf flags against read_hubs" in place for place in where)
+    assert any("leaf flags against mark_crowds" in place for place in where)
     what = next(
         item.what
         for item in found.queries[READ_SHARED_IDENTITY].mismatches
@@ -582,23 +630,51 @@ def test_no_export_is_refused_naming_why(
 
 def test_the_samples_are_seeded_and_oversample_the_true_mules(graph: ReferenceGraph) -> None:
     config = CONFIG.parity
-    mondays = DEFAULT_CONFIG.calendar.mondays()
-    first = sample_mondays(mondays, config)
-    assert first == sample_mondays(mondays, config) and len(first) == 2
-    assert first == tuple(sorted(first)) and set(first) <= set(mondays)
-    assert sample_mondays(mondays, replace(config, seed=1)) != first
-    assert sample_mondays(mondays[:2], config) == mondays[:2]
-    mules, others = sample_accounts(graph, T, config)
+    times = DEFAULT_CONFIG.calendar.scoring_times(SEED)
+    first = sample_weeks(times, config)
+    assert first == sample_weeks(times, config) and len(first) == 2
+    assert first == tuple(sorted(first)) and set(first) <= set(times)
+    assert sample_weeks(times, replace(config, seed=1)) != first
+    assert sample_weeks(times[:2], config) == times[:2]
+    mules, others = sample_accounts(graph, T, config, times)
     # A quarter of 24 accounts are true mules, the rest are not.
     assert len(mules) == 6 and len(others) == 18
     assert set(mules) <= MULES and set(others).isdisjoint(MULES)
-    assert (mules, others) == sample_accounts(graph, T, config)
-    assert sample_accounts(graph, T, replace(config, seed=3))[1] != others
+    assert (mules, others) == sample_accounts(graph, T, config, times)
+    assert sample_accounts(graph, T, replace(config, seed=3), times)[1] != others
     # With fewer mules than a quarter, all of them, and the rest ordinary accounts.
-    few, rest = sample_accounts(graph, T, replace(config, accounts=8, mule_share=0.5))
+    few, rest = sample_accounts(graph, T, replace(config, accounts=8, mule_share=0.5), times)
     assert len(few) == 4 and len(rest) == 4
-    everyone, nobody = sample_accounts(graph, T, replace(config, accounts=400, mule_share=0.9))
+    everyone, nobody = sample_accounts(
+        graph, T, replace(config, accounts=400, mule_share=0.9), times
+    )
     assert set(everyone) == MULES and len(nobody) == 224 - len(MULES)
+
+
+def _mule(onset: int, last: int, *, is_mule: int = 1) -> Account:
+    return Account("a_x", "deposit", False, T - 400 * DAY_MS, 0, is_mule, 1, 5, onset, last)
+
+
+def test_the_sample_reads_a_mules_activity_by_the_label_rule() -> None:
+    # Scoring times 7, 9 and 7 days apart.
+    times = (T - 3 * DAY_MS, T + 4 * DAY_MS, T + 13 * DAY_MS, T + 20 * DAY_MS)
+    # Active from after its onset to a week after its last payment, the window of the rule.
+    mule = _mule(T, T + 3 * DAY_MS)
+    assert not _active(mule, T, times) and _active(mule, T + 1, times)
+    assert _active(mule, T + 3 * DAY_MS + W, times)
+    assert not _active(mule, T + 3 * DAY_MS + W + 1, times)
+    # A mule that lives an hour, with no scoring time in a week after it, is active at the one
+    # that ends the 9-day gap holding its payments, whose window is the gap, and at no other.
+    quiet = _mule(T + 5 * DAY_MS, T + 5 * DAY_MS + HOUR_MS)
+    assert [t_ms for t_ms in times if _active(quiet, t_ms, times)] == [T + 13 * DAY_MS]
+    # A payment exactly at a scoring time counts at the next, so it is active at both.
+    busy = _mule(T - 1, T + 4 * DAY_MS)
+    assert [t_ms for t_ms in times if _active(busy, t_ms, times)] == [
+        T + 4 * DAY_MS,
+        T + 13 * DAY_MS,
+    ]
+    # An account that is no true mule is never active.
+    assert not _active(_mule(T, T + 3 * DAY_MS, is_mule=0), T + 1, times)
 
 
 def test_two_requests_that_fail_alike_prove_nothing(graph: ReferenceGraph) -> None:
@@ -639,9 +715,14 @@ def test_two_answers_differ_where_they_differ() -> None:
 def test_the_loaded_world_matches_its_export(tmp_path: Path) -> None:
     """mule parity on the live MulePatternLearner workspace, which needs a world loaded by the
     loader and its export under MULE_EXPORT_DIR (the 5,000-person test)."""
+    from mule_pattern_learner.data.worlds import find_world
     from mule_pattern_learner.paths import export_root
     from mule_pattern_learner.tigergraph.connection import ConnectionSettings
-    from mule_pattern_learner.tigergraph.executor import ParityExecutor, TigerGraphExecutor
+    from mule_pattern_learner.tigergraph.executor import (
+        FetchExecutor,
+        ParityExecutor,
+        TigerGraphExecutor,
+    )
     from mule_pattern_learner.tigergraph.queries import read_world
 
     executor = TigerGraphExecutor(settings=ConnectionSettings())
@@ -652,9 +733,10 @@ def test_the_loaded_world_matches_its_export(tmp_path: Path) -> None:
         root = export_root()
     except ValueError as error:
         pytest.skip(f"no export folder is set: {error}")
-    parity = run(executor, DEFAULT_CONFIG, exports=root, record=tmp_path / "parity.toml")
+    seed = find_world(FetchExecutor(executor), DEFAULT_CONFIG.worlds).config.seed
+    parity = run(executor, DEFAULT_CONFIG, seed=seed, exports=root, record=tmp_path / "parity.toml")
     assert parity.failed == (), "\n".join(parity.lines())
 
 
 def test_a_config_names_the_calendar_the_sample_is_drawn_from() -> None:
-    assert isinstance(CONFIG, RunConfig) and CONFIG.calendar.mondays()[:2] == (T, T + W)
+    assert isinstance(CONFIG, RunConfig) and CONFIG.calendar.week_starts()[:2] == (T, T + W)

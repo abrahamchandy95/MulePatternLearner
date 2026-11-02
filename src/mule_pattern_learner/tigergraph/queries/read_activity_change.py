@@ -1,5 +1,5 @@
 """read_activity_change, B3: the account against its own past. For each account of a request
-at one Monday, how many payments it received and sent over the last 7, 30 and 90 days, its
+at one time t, how many payments it received and sent over the last 7, 30 and 90 days, its
 busiest hour and day of the last 30 days each way, the shortest gap between its inflows, and
 how long it has been quiet each way (docs/design.md, "read_activity_change (B3): the account
 against its own past", and docs/features.md, "Account node", columns 34 to 46)."""
@@ -57,7 +57,7 @@ class ActivityChange:
 
 
 def params(t_ms: int, accounts: Iterable[str]) -> dict[str, Any]:
-    """The parameters of a request: the Monday t and the accounts, at least one, each once."""
+    """The parameters of a request: the time t and the accounts, at least one, each once."""
     return {"t_ms": as_of(t_ms), "account_ids": account_ids(accounts)}
 
 
@@ -101,9 +101,9 @@ def _check(row: ActivityChange) -> None:
 def parse(rows: Sequence[object], accounts: Collection[str]) -> tuple[ActivityChange, ...]:
     """The answer to the request params(t_ms, accounts) made: a row for every account asked
     for and no other, sorted by id."""
-    from . import READ_ACTIVITY_CHANGE, VERSIONS  # the registry imports this module
+    from . import READ_ACTIVITY_CHANGE  # the registry imports this module
 
-    response_head(rows, READ_ACTIVITY_CHANGE, VERSIONS[READ_ACTIVITY_CHANGE])
+    response_head(rows, READ_ACTIVITY_CHANGE)
     found = [
         parse_row(ActivityChange, row) for row in projected(rows, "accounts", READ_ACTIVITY_CHANGE)
     ]

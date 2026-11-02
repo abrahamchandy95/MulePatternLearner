@@ -1,4 +1,4 @@
-"""read_payment_events, B4: the payment graph. For each account of a request at one Monday, the
+"""read_payment_events, B4: the payment graph. For each account of a request at one time t, the
 accounts and payments of its subgraph, one edge per payment with its own timing, and its
 ownership edges (docs/design.md, "read_payment_events (B4): the payment graph", and
 docs/features.md, "What one example's subgraph holds" and "Payment edges")."""
@@ -95,8 +95,8 @@ class PaymentGraph:
 
 
 def params(t_ms: int, accounts: Iterable[str], hubs: Iterable[str]) -> dict[str, Any]:
-    """The parameters of a request: the Monday t, the accounts, at least one, each once, and
-    the account hubs of t, read_hubs' accounts of the same Monday, each once."""
+    """The parameters of a request: the time t, the accounts, at least one, each once, and
+    the account hubs of t, read_hubs' accounts of the same t, each once."""
     return {
         "t_ms": as_of(t_ms),
         "account_ids": account_ids(accounts),
@@ -181,9 +181,9 @@ def parse(rows: Sequence[object], accounts: Collection[str]) -> tuple[PaymentGra
     account of each of its ownership edges, and at most the payments its caps allow; every
     account and payment printed belongs to a subgraph.
     """
-    from . import READ_PAYMENT_EVENTS, VERSIONS  # the registry imports this module
+    from . import READ_PAYMENT_EVENTS  # the registry imports this module
 
-    response_head(rows, READ_PAYMENT_EVENTS, VERSIONS[READ_PAYMENT_EVENTS])
+    response_head(rows, READ_PAYMENT_EVENTS)
     asked = set(accounts)
     found_accounts = [
         parse_row(EventAccount, row) for row in projected(rows, "accounts", READ_PAYMENT_EVENTS)

@@ -1,4 +1,4 @@
-"""Hop distance from the nearest identified mule (docs/design.md, "Groups"): on each Monday, the
+"""Hop distance from the nearest identified mule (docs/design.md, "Groups"): in each week, the
 fewest edges between a mule's account and an account with pu_label 1 inside the mule's own
 fetched subgraph at that t, of any of the 16 relations and in either direction.
 
@@ -59,7 +59,7 @@ def hop_distance(rows: ExampleRows, identified: Collection[str]) -> int | None:
 def hop_distances(
     cache: Cache, keys: Sequence[tuple[int, str]], identified: Collection[str]
 ) -> dict[tuple[int, str], int | None]:
-    """The hop distance of each (Monday, account) of keys, read from the cache."""
+    """The hop distance of each (t, account) of keys, read from the cache."""
     found: dict[tuple[int, str], int | None] = {}
     for example in read_rows(cache, list(keys)):
         found[(example.t_ms, example.scored)] = hop_distance(example, identified)

@@ -4,7 +4,8 @@ PhantomLedger's mule use case exports them.
 WorldBuilder adds customers, accounts, devices, IPs, tokens, links and payments by hand, with
 helpers for the shapes tests build again and again: a household, a ring sharing a device, a
 joiner whose first links start at its first use, and another bank's account. Times are UTC
-milliseconds; T, the Monday tests use most, is 2024-07-01 00:00 UTC, a scored Monday.
+milliseconds; T, the time tests use most, is 2024-07-01 00:00 UTC, the Monday that starts a scored
+week.
 """
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ from .reference.graph import (
 
 HOUR_MS = 3_600_000
 DAY_MS = 24 * HOUR_MS
-# Monday 2024-07-01 00:00 UTC, the 14th of the 52 scored Mondays.
+# Monday 2024-07-01 00:00 UTC, the start of the 14th of the 52 scored weeks.
 T = 1_719_792_000_000
 # The ring id of a mule with no ring, and of every account that is no mule.
 NO_RING = -1

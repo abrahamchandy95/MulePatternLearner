@@ -1,0 +1,43 @@
+USE GRAPH Mule_Pattern_Learner
+CREATE OR REPLACE QUERY read_labels(
+    STRING after_id, // The id the page starts after, empty for the first page
+    INT page // The most accounts the page holds, from 1 to 10000
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+
+    /* Accumulators */
+    SetAccum<STRING> @@invalid; // The ids of the mules whose activity period is not 0 < onset <= last
+
+    IF page < 1 OR page > 10000 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+
+    /* The identified mules (pu_label 1), a page by id */
+    identified = SELECT a
+        FROM Account:a
+        WHERE a.pu_label == 1 AND a.id > after_id
+        ORDER BY a.id ASC
+        LIMIT page
+    ;
+
+    /* Refuse the page if a mule's activity period is not 0 < onset <= last */
+    invalid = SELECT a
+        FROM identified:a
+        WHERE a.mule_onset_ms == 0 OR a.mule_onset_ms > a.mule_last_ms
+        POST-ACCUM
+            @@invalid += a.id
+    ;
+    IF invalid.size() > 0 THEN
+        PRINT "invalid_activity" AS status, @@invalid AS accounts;
+        RETURN;
+    END;
+
+    /* Printing the identified mules */
+    PRINT "ok" AS status;
+    PRINT identified[
+        identified.id AS account_id,
+        identified.mule_onset_ms AS mule_onset_ms,
+        identified.mule_last_ms AS mule_last_ms
+    ] AS accounts;
+
+}

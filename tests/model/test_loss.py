@@ -288,7 +288,7 @@ def test_the_default_weight_is_balanced() -> None:
 
 
 def test_the_correction_reads_the_positives_at_unit_weight() -> None:
-    """A positive's weight, 1 over its mule's active Mondays, scales its positive risk only:
+    """A positive's weight, 1 over its mule's active weeks, scales its positive risk only:
     the negative risk, and so the corrected loss when it fires, does not change with it."""
     f = torch.tensor([3.0, 1.0, -9.0, -9.0], dtype=torch.float64)
     t = torch.tensor([1, 1, 0, 0])

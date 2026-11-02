@@ -58,7 +58,7 @@ def _selection(world: Any, size: int = 64) -> SelectionWorld:
 def _small(world: Any) -> list[Batch]:
     """Three batches of 16 of the training examples of T: the six mules and 42 others."""
     frame = world.examples()
-    frame = frame[frame["t_ms"] == world.mondays[0]].reset_index(drop=True)
+    frame = frame[frame["t_ms"] == world.times[0]].reset_index(drop=True)
     chosen = frame[(frame["label"] == 1) | (frame.index < 42)]
     assert len(chosen) == 48
     return training_batches(world.cache, world.identity, chosen, 16, seed=SHORT.shuffle_seed)
@@ -281,7 +281,7 @@ def test_a_checkpoint_of_another_model_seed_world_or_examples_is_refused_by_name
     (tmp_path / "gnn_seed1_prior1.pt").rename(tmp_path / "gnn_seed0_prior1.pt")
     # Another training world, with the same examples.
     frame = world.examples()
-    frame = frame[frame["t_ms"] == world.mondays[0]].reset_index(drop=True)
+    frame = frame[frame["t_ms"] == world.times[0]].reset_index(drop=True)
     chosen = frame[(frame["label"] == 1) | (frame.index < 42)]
     elsewhere = "f" * 32
     moved = training_batches(world.cache, elsewhere, chosen, 16, seed=SHORT.shuffle_seed)

@@ -1,0 +1,59 @@
+USE GRAPH Mule_Pattern_Learner
+
+/* Demo: what the bank knows of its mules, against the truth, on the graph loaded by the
+   earlier pipeline (pu_label, is_mule_masked, mule_label_source), not on
+   gsql/schema/schema.gsql.
+
+   Prints the accounts, the true mules (is_mule 1), the known ones (pu_label 1) by the
+   channel that found them, and the hidden ones; then the rings, how many have a known
+   member, and the rings of at least min_ring_size mules with none known, each with its
+   members, to pick an account from for demo_account_web. Reads the answer key (is_mule,
+   mule_ring_id): a demo query, never a training input. */
+CREATE OR REPLACE QUERY demo_label_overview(
+    INT min_ring_size = 3
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+    MapAccum<STRING, SumAccum<INT>> @@known_by_channel;
+    MapAccum<INT, SumAccum<INT>> @@ring_size, @@ring_known;
+    MapAccum<INT, SetAccum<STRING>> @@ring_members;
+    MapAccum<INT, SetAccum<STRING>> @@unknown_rings;
+    SumAccum<INT> @@rings, @@rings_with_known, @@rings_without_known, @@mules_in_them;
+
+    Accounts = SELECT a FROM Account:a;
+    Mules = SELECT a FROM Accounts:a WHERE a.is_mule == 1
+      ACCUM
+        @@ring_size += (a.mule_ring_id -> 1),
+        @@ring_known += (a.mule_ring_id -> a.pu_label),
+        @@ring_members += (a.mule_ring_id -> a.id),
+        IF a.pu_label == 1 THEN
+            IF a.mule_label_source LIKE "%victim_report%" THEN
+                @@known_by_channel += ("victim report" -> 1)
+            ELSE IF a.mule_label_source LIKE "%monitoring%" THEN
+                @@known_by_channel += ("bank monitoring" -> 1)
+            ELSE IF a.mule_label_source LIKE "%network_trace%" THEN
+                @@known_by_channel += ("traced from another mule" -> 1)
+            ELSE
+                @@known_by_channel += ("other" -> 1)
+            END
+        END;
+    Known = SELECT a FROM Mules:a WHERE a.pu_label == 1;
+
+    FOREACH (ring, size) IN @@ring_size DO
+        @@rings += 1;
+        IF @@ring_known.get(ring) > 0 THEN
+            @@rings_with_known += 1;
+        ELSE
+            @@rings_without_known += 1;
+            @@mules_in_them += size;
+            IF size >= min_ring_size THEN
+                @@unknown_rings += (ring -> @@ring_members.get(ring));
+            END;
+        END;
+    END;
+
+    PRINT Accounts.size() AS accounts, Mules.size() AS true_mules, Known.size() AS known_mules,
+      Mules.size() - Known.size() AS hidden_mules, @@known_by_channel AS known_by_channel;
+    PRINT @@rings AS rings, @@rings_with_known AS rings_with_a_known_mule,
+      @@rings_without_known AS rings_with_no_known_mule,
+      @@mules_in_them AS mules_in_rings_with_no_known_mule;
+    PRINT @@unknown_rings AS rings_with_no_known_mule_by_members;
+}

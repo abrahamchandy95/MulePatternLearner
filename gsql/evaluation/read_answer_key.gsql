@@ -30,7 +30,7 @@ CREATE OR REPLACE QUERY read_answer_key(
       LIMIT page;
     Owned = SELECT a FROM Page:a -(Account_Owned_By_Party>:o)- Party:q
       ACCUM a.@owned += TRUE;
-    PRINT "ok" AS status, "read_answer_key-3d5467c23b01" AS version;
+    PRINT "ok" AS status;
     PRINT Page[Page.id AS account_id, Page.is_mule AS is_mule, Page.mule_ring_id AS mule_ring_id,
       Page.mule_onset_ms AS mule_onset_ms, Page.mule_last_ms AS mule_last_ms,
       Page.opened_ms AS opened_ms, Page.account_type AS account_type,

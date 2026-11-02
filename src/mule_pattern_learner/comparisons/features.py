@@ -10,7 +10,7 @@ comparison switches", XGBoost inputs), so the trees see exactly what TigerGraph 
 
 The scored account's customer C_s is the one its ownership edge reaches, and E_s the devices and
 IPs of C_s's enrolment edges in the batch, exactly what the GNN sees (the owner, 24 October
-2026; docs/features.md says so); a leaf among them has the row read_hubs gives it. B5's closure
+2026; docs/features.md says so); a leaf among them has the row mark_crowds gives it. B5's closure
 around the scored account's nodes also gives C_s an enrolment edge to a node seen on the
 account's payments that C_s is linked to beyond its 8 kept links (D_s), so with more than 8
 visible links of a kind E_s holds a node beyond the kept links. Only past evidence is read, so
@@ -93,7 +93,7 @@ MILLISECONDS = [
 
 @dataclass(frozen=True)
 class Vectors:
-    """The XGBoost vectors of examples: each example's (Monday, account) key, and its own and
+    """The XGBoost vectors of examples: each example's (t, account) key, and its own and
     graph vectors, a row per example in the order of the keys, float32; and, for examples of
     training batches, each one's label (1 identified, 0 unlabelled) and weight in the same
     order, both empty for examples of scoring batches."""

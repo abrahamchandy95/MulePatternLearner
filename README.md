@@ -42,14 +42,15 @@ thresholds, the model and the training. Commands take no options.
 | `mule parity` | runs every installed query on the loaded world and on the reference graph of the loader's export of it, and writes `gsql/parity.toml` |
 | `mule prepare` | matches the loaded world to a configured one, checks its calendar and labels, writes the training examples and weights, and registers the world |
 | `mule fetch` | fills the cache for every example the world's roles need |
-| `mule audit` | reads the answer key into the evaluation store, runs the label checks, the clock probe and, on development worlds, the feature audit, and writes pass records |
+| `mule audit` | reads the answer key into the evaluation store, runs the label checks, the clock gain test (it fails below `audit.clock_min_mule_clusters`, 30, mule clusters in the audit sample) and, on development worlds, the feature audit, on the test world stores the audit sample with the start of each row's week and fetches its rows there for the clock invariance test, and writes pass records |
 | `mule train` | trains the GNN over the prior grid and five seeds, its four ablations and the two XGBoost comparisons, from the cache |
-| `mule evaluate` | scores the test world, and writes the metrics, groups, uncertainty, missed-mule report and identification bias |
-| `mule score` | scores the accounts and dates set in `config.py` (`score.accounts`, `score.dates`) with the full model of the best-selection seed of the run `score.run` names |
+| `mule evaluate` | scores the test world, runs the clock invariance test of the selected GNN (the same account-weeks at the random scoring times and at the week starts, failing below the same minimum of mule clusters), and writes the metrics, groups, uncertainty, missed-mule report and identification bias |
+| `mule score` | scores the accounts and dates set in `config.py` (`score.accounts`, `score.dates`, any date, each scored at 00:00 UTC) with the full model of the best-selection seed of the run `score.run` names |
 | `mule bench` | measures what the loaded world costs and projects it to other sizes |
 
-`mule install`, `mule parity`, `mule prepare`, `mule fetch`, `mule audit`, `mule bench` and
-`mule score` need the world in TigerGraph. `mule train` and `mule evaluate` never query it.
+`mule install`, `mule parity`, `mule prepare`, `mule fetch`, `mule audit` and `mule bench` need
+the world in TigerGraph, and `mule score` any graph loaded with the repository's queries
+installed. `mule train` and `mule evaluate` never query it.
 
 Every long command first runs a read-only readiness check, and stops at the first check that
 fails, naming it:
@@ -58,6 +59,9 @@ fails, naming it:
   that the loaded world is a configured one with the calendar's 455 exported days, that one
   account can be fetched (into a scratch folder, never the cache) and that one training step
   runs;
+- `mule score` checks only that the installed queries are the repository's: it matches no world,
+  so it scores any loaded graph, a bank's included, and fetches into a scratch folder that the
+  run alone reads;
 - `mule train` and `mule evaluate` check, for every rotation before the first one starts, that
   every world of it was prepared, that one example can be read from the cache of each world the
   command reads (`mule train` the training world and the selection world, `mule evaluate` the test
@@ -125,13 +129,13 @@ three things before any 300,000-person world is generated, each projected at the
   every epoch of every prior, seed and ablation, so a rotation makes `passes_per_rotation` passes
   (1,050 with the prior grid, 750 with the prior fixed) over `examples_per_pass` examples, and the
   `selection` section prices them from the measured seconds to build one example;
-- what `mule audit` costs: it fetches every active true-mule account-Monday and 200,000 non-mule
-  account-Mondays on every world, priced in the `audit` section from the measured seconds to
-  fetch a sparse account-Monday (the mule term counts only the identified mules, since the bench
+- what `mule audit` costs: it fetches every active true-mule account-week and 200,000 non-mule
+  account-weeks on every world, priced in the `audit` section from the measured seconds to
+  fetch a sparse account-week (the mule term counts only the identified mules, since the bench
   never reads the truth, so it is a lower bound);
 - what `mule evaluate`'s paired bootstrap costs: 1,000 replicates over every run (27: five seeds
   of the full model and of each ablation, and each XGBoost comparison once) over every ranked
-  account-Monday, priced in the `bootstrap` section.
+  account-week, priced in the `bootstrap` section.
 
 Beside them it holds the fetch time and bytes per query at 1, 2 and 4 concurrent requests, the
 subgraph sizes, the cache bytes per account, the seconds to build a batch and take a training

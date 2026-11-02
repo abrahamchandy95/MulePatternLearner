@@ -254,7 +254,7 @@ def test_a_training_batchs_labels_and_weights_travel_with_its_vectors() -> None:
 
 
 def test_the_labels_and_weights_of_the_shuffled_batches_follow_their_keys(world: Any) -> None:
-    """The batch world's training batches hold their examples shuffled across both Mondays, so
+    """The batch world's training batches hold their examples shuffled across both weeks, so
     their order is neither the examples' nor sorted, yet every row's label is whether its own
     account is a mule and its weight is its own example's."""
     found = vectors_of(world.training)

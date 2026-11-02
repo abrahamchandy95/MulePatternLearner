@@ -1,0 +1,173 @@
+USE GRAPH Mule_Pattern_Learner
+CREATE OR REPLACE QUERY read_customer_link_counts(
+    UINT t_ms, // The scoring time after the first 90 days
+    LIST<STRING> customer_ids // The ids of the customers to read
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+
+    /* Constants */
+    UINT LOOKBACK_MS = 7776000000; // 90 days
+    UINT MONTH_MS = 2592000000; // 30 days
+
+    /* Vertex and edge types, each a set so that one pattern serves devices and IPs, transactions and transfers */
+    SetAccum<STRING> @@node_vertex_type; // A device or an IP
+    SetAccum<STRING> @@customer_to_node_edge_type; // Customer -> the devices and IPs it registered
+    SetAccum<STRING> @@owner_to_account_edge_type; // Customer -> the accounts it owns
+    SetAccum<STRING> @@sender_to_payment_edge_type; // Account -> the payments it sent
+    SetAccum<STRING> @@payment_to_receiver_edge_type; // Payment -> the account that received it
+    SetAccum<STRING> @@payment_to_node_edge_type; // Payment -> the devices and IPs it was seen on
+    @@node_vertex_type += "Device";
+    @@node_vertex_type += "IP";
+    @@customer_to_node_edge_type += "Party_Uses_Device";
+    @@customer_to_node_edge_type += "Party_Uses_IP";
+    @@owner_to_account_edge_type += "Party_Owns_Account";
+    @@sender_to_payment_edge_type += "Account_Initiated_Transaction";
+    @@sender_to_payment_edge_type += "Account_Sent_Zelle_Transfer";
+    @@payment_to_receiver_edge_type += "Transaction_To_Account";
+    @@payment_to_receiver_edge_type += "Transfer_To_Account";
+    @@payment_to_node_edge_type += "Transaction_Used_Device";
+    @@payment_to_node_edge_type += "Transaction_Used_IP";
+    @@payment_to_node_edge_type += "Transfer_Used_Device";
+    @@payment_to_node_edge_type += "Transfer_Used_IP";
+
+    /* Accumulators */
+    MaxAccum<STRING> @owner_id; // A payment's sender's owner, a customer
+    SetAccum<STRING> @seen_on; // The devices and IPs a payment was seen on
+    SumAccum<INT> @accounts_owned; // A customer's accounts at t
+    SumAccum<INT> @devices_30d, @ips_30d; // Its current devices and IPs
+    SumAccum<INT> @new_devices_30d, @new_ips_30d; // Those whose known start is in the last 30 days
+    MapAccum<STRING, MapAccum<STRING, MinAccum<UINT>>> @@link_start; // Each link's earliest start
+    MapAccum<STRING, MapAccum<STRING, MinAccum<UINT>>> @@known_link_start; // The link starts that are known
+    MapAccum<STRING, SetAccum<STRING>> @@link_current; // A customer's current links
+    MapAccum<STRING, MinAccum<UINT>> @@first_own; // A customer's first own payment
+    MapAccum<STRING, SetAccum<STRING>> @@own_seen; // The nodes its own payments were seen on
+    MapAccum<STRING, MapAccum<STRING, MinAccum<UINT>>> @@first_unseen; // Its first own payment not seen on each
+    SetAccum<STRING> @@ip_ids; // The nodes reached that are IPs
+    SetAccum<STRING> @@ids; // The customer ids, each once
+    SumAccum<INT> @@given; // How many customer ids were given
+
+    IF t_ms <= LOOKBACK_MS OR t_ms % 1000 != 0 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+    FOREACH customer_id IN customer_ids DO
+        @@ids += customer_id;
+        @@given += 1;
+    END;
+    IF @@given == 0 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+    IF @@ids.size() != @@given THEN
+        PRINT "duplicate_customer" AS status;
+        RETURN;
+    END;
+    customers = to_vertex_set(@@ids, "Party");
+    IF customers.size() != @@ids.size() THEN
+        PRINT "unknown_customer" AS status;
+        RETURN;
+    END;
+
+    /* Traverse: Party -> Device or IP, through a registration visible at t */
+    owner_links = SELECT n
+        FROM customers:q - (@@customer_to_node_edge_type>:l) - @@node_vertex_type:n
+        WHERE l.valid_from_ms < t_ms
+            AND ( l.valid_to_ms == 0 OR l.valid_to_ms > t_ms - LOOKBACK_MS )
+        ACCUM
+            @@link_start += (q.id -> (n.id -> l.valid_from_ms)),
+            IF l.valid_to_ms == 0 OR l.valid_to_ms > t_ms - MONTH_MS THEN
+                @@link_current += (q.id -> n.id)
+            END,
+            IF n.type == "IP" THEN @@ip_ids += n.id END
+    ;
+
+    /* Traverse: Party -> Account, through an ownership visible at t, the account open by t */
+    row_accounts = SELECT b
+        FROM customers:q - (@@owner_to_account_edge_type>:w) - Account:b
+        WHERE w.valid_from_ms < t_ms
+            AND ( w.valid_to_ms == 0 OR w.valid_to_ms > t_ms - LOOKBACK_MS )
+            AND b.opened_ms < t_ms
+        ACCUM
+            q.@accounts_owned += 1
+    ;
+
+    /* Traverse: Party -> Account -> Payment -> Account, own payments of the 90 days, self-payments aside */
+    owner_sent = SELECT p
+        FROM customers:q - (@@owner_to_account_edge_type>:w) - Account:b
+            - (@@sender_to_payment_edge_type>:e) - _:p
+            - (@@payment_to_receiver_edge_type>:f) - Account:r
+        WHERE w.valid_from_ms < t_ms
+            AND ( w.valid_to_ms == 0 OR w.valid_to_ms > t_ms - LOOKBACK_MS )
+            AND b.opened_ms < t_ms
+            AND p.event_ts_ms >= t_ms - LOOKBACK_MS AND p.event_ts_ms < t_ms AND r != b
+        ACCUM
+            p.@owner_id += q.id,
+            @@first_own += (q.id -> p.event_ts_ms)
+    ;
+
+    /* Traverse: Payment -> the devices and IPs it was seen on */
+    owner_seen = SELECT n
+        FROM owner_sent:p - (@@payment_to_node_edge_type>:u) - @@node_vertex_type:n
+        ACCUM
+            p.@seen_on += n.id,
+            @@own_seen += (p.@owner_id -> n.id),
+            IF n.type == "IP" THEN @@ip_ids += n.id END
+    ;
+
+    /* Find each customer's first own payment not seen on each of its nodes */
+    owner_unseen = SELECT p
+        FROM owner_sent:p
+        POST-ACCUM
+            FOREACH n IN @@own_seen.get(p.@owner_id) DO
+                IF NOT p.@seen_on.contains(n) THEN
+                    @@first_unseen += (p.@owner_id -> (n -> p.event_ts_ms))
+                END
+            END
+    ;
+
+    /* Keep the link starts that are known */
+    starts = SELECT q
+        FROM customers:q
+        POST-ACCUM
+            UINT unseen_ms = 0,
+            BOOL found = FALSE,
+            FOREACH (n, start_ms) IN @@link_start.get(q.id) DO
+                IF @@own_seen.get(q.id).contains(n) THEN
+                    found = @@first_unseen.get(q.id).containsKey(n),
+                    unseen_ms = @@first_unseen.get(q.id).get(n)
+                ELSE
+                    found = @@first_own.containsKey(q.id),
+                    unseen_ms = @@first_own.get(q.id)
+                END,
+                IF start_ms > t_ms - LOOKBACK_MS AND start_ms > q.joined_ms
+                    AND found AND unseen_ms < start_ms THEN
+                    @@known_link_start += (q.id -> (n -> start_ms))
+                END
+            END
+    ;
+
+    /* Count each customer's devices and IPs */
+    customer_rows = SELECT q
+        FROM customers:q
+        POST-ACCUM
+            FOREACH n IN @@link_current.get(q.id) DO
+                IF @@ip_ids.contains(n) THEN q.@ips_30d += 1 ELSE q.@devices_30d += 1 END
+            END,
+            FOREACH (n, start_ms) IN @@known_link_start.get(q.id) DO
+                IF start_ms >= t_ms - MONTH_MS THEN
+                    IF @@ip_ids.contains(n) THEN q.@new_ips_30d += 1 ELSE q.@new_devices_30d += 1 END
+                END
+            END
+    ;
+
+    /* Printing the customers */
+    PRINT "ok" AS status;
+    PRINT customers[
+        customers.id AS customer_id,
+        customers.@accounts_owned AS accounts_owned,
+        customers.@devices_30d AS devices_30d,
+        customers.@ips_30d AS ips_30d,
+        customers.@new_devices_30d AS new_devices_30d,
+        customers.@new_ips_30d AS new_ips_30d
+    ] AS customers;
+
+}

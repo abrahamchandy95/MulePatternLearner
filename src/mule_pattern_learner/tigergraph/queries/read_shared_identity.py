@@ -1,5 +1,5 @@
 """read_shared_identity, B5: the device and IP graph. For each account of a request at one
-Monday, the customers, devices and IPs of its subgraph and its enrolment, owner-enrolment and
+time t, the customers, devices and IPs of its subgraph and its enrolment, owner-enrolment and
 seen edges (docs/design.md, "read_shared_identity (B5): the device and IP graph", and
 docs/features.md, "What one example's subgraph holds" and the customer, device, IP, enrolment
 and seen tables)."""
@@ -143,8 +143,8 @@ class IdentityGraph:
 
 
 def params(t_ms: int, accounts: Iterable[str], hubs: Iterable[str]) -> dict[str, Any]:
-    """The parameters of a request: the Monday t, the accounts, at least one, each once, and
-    the account hubs of t, read_hubs' accounts of the same Monday, each once."""
+    """The parameters of a request: the time t, the accounts, at least one, each once, and
+    the account hubs of t, read_hubs' accounts of the same t, each once."""
     return {
         "t_ms": as_of(t_ms),
         "account_ids": account_ids(accounts),
@@ -278,9 +278,9 @@ def parse(rows: Sequence[object], accounts: Collection[str]) -> tuple[IdentityGr
     nodes to an account; every co-user's account is one printed. Every customer, node and
     account printed belongs to a subgraph.
     """
-    from . import READ_SHARED_IDENTITY, VERSIONS  # the registry imports this module
+    from . import READ_SHARED_IDENTITY  # the registry imports this module
 
-    response_head(rows, READ_SHARED_IDENTITY, VERSIONS[READ_SHARED_IDENTITY])
+    response_head(rows, READ_SHARED_IDENTITY)
     asked = set(accounts)
     customers = _rows(CustomerRow, rows, "customers", lambda row: row.customer_id)
     devices = _rows(NodeRow, rows, "devices", lambda row: row.node_id)

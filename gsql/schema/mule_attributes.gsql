@@ -1,0 +1,59 @@
+/*
+MulePatternLearner's own attributes, which PhantomLedger does not export. The loader creates them
+right after the schema, from its byte copy of this file, and its loading jobs leave them at their
+defaults; only MulePatternLearner's mark queries write them. mule-load clear empties them with the
+data, and nothing drops them between worlds.
+
+- On each payment, its timing against the 90 days before it: mark_payment_gaps writes the time
+  since its sender's and its receiver's previous payments, mark_pair_history its pair's earlier
+  payments, and each sets its own flag.
+- On each account, the scoring time at which mark_hubs last found it a hub; on each device and
+  IP, the scoring time at which mark_crowds last found it a crowd.
+- A Mark per kind of stamp, "hubs" and "crowds": the scoring time the stamps on the graph are
+  for. The queries that read stamps refuse any other time.
+*/
+
+USE GRAPH Mule_Pattern_Learner
+
+CREATE SCHEMA_CHANGE JOB add_mule_attributes FOR GRAPH Mule_Pattern_Learner {
+
+    ALTER VERTEX Payment_Transaction ADD ATTRIBUTE (
+        sender_gap_ms UINT DEFAULT 0,
+        receiver_gap_ms UINT DEFAULT 0,
+        gaps_marked BOOL DEFAULT "false",
+        pair_prior_count INT DEFAULT 0,
+        pair_gap_ms UINT DEFAULT 0,
+        pair_age_ms UINT DEFAULT 0,
+        pair_marked BOOL DEFAULT "false"
+    );
+
+    ALTER VERTEX Zelle_Transfer ADD ATTRIBUTE (
+        sender_gap_ms UINT DEFAULT 0,
+        receiver_gap_ms UINT DEFAULT 0,
+        gaps_marked BOOL DEFAULT "false",
+        pair_prior_count INT DEFAULT 0,
+        pair_gap_ms UINT DEFAULT 0,
+        pair_age_ms UINT DEFAULT 0,
+        pair_marked BOOL DEFAULT "false"
+    );
+
+    ALTER VERTEX Account ADD ATTRIBUTE (
+        hub_at_ms UINT DEFAULT 0
+    );
+
+    ALTER VERTEX Device ADD ATTRIBUTE (
+        crowd_at_ms UINT DEFAULT 0
+    );
+
+    ALTER VERTEX IP ADD ATTRIBUTE (
+        crowd_at_ms UINT DEFAULT 0
+    );
+
+    ADD VERTEX Mark (
+        PRIMARY_ID id STRING,
+        at_ms UINT DEFAULT 0
+    ) WITH PRIMARY_ID_AS_ATTRIBUTE="true";
+}
+
+RUN SCHEMA_CHANGE JOB add_mule_attributes
+DROP JOB add_mule_attributes

@@ -1,18 +1,18 @@
 """The ring bootstrap (docs/design.md, "Uncertainty"), and the ranking statistics it resamples.
 
 A replicate resamples whole clusters with replacement, the positive and the negative clusters
-apart, as many of each as there are: a ring with all its account-Mondays, each ringless true
-mule with all its account-Mondays as a cluster of its own, and each non-mule account with all
-its Mondays, since an account's 52 Mondays are correlated. A cluster drawn k times weighs k
+apart, as many of each as there are: a ring with all its account-weeks, each ringless true
+mule with all its account-weeks as a cluster of its own, and each non-mule account with all
+its weeks, since an account's 52 weeks are correlated. A cluster drawn k times weighs k
 times its rows' weights in the replicate, which is the same as taking its rows k times.
 Replicates are drawn from a generator of the seed in a fixed order, so the same clusters, seed
 and replicates give the same draws for any scores: applied to several runs over the same
-account-Mondays, they pair the runs (replicate_matrix).
+account-weeks, they pair the runs (replicate_matrix).
 
 Ring ids are the answer key's, so this is evaluation's alone; selection's paired interval
 resamples identified mule accounts instead (training.selection).
 
-Ranked holds account-Mondays ordered by score in blocks of tied scores, so that the weighted
+Ranked holds account-weeks ordered by score in blocks of tied scores, so that the weighted
 ROC AUC and the weighted average precision of any weights, a replicate's among them, take one
 pass over the rows: tied scores count half, as one threshold of the ROC and precision-recall
 curves.
@@ -33,7 +33,7 @@ CHUNK = 32
 def cluster_keys(
     accounts: Sequence[str], is_mule: NDArray[np.int64], rings: NDArray[np.int64]
 ) -> list[str]:
-    """Each account-Monday's cluster: its ring for a true mule of a ring, the account for a
+    """Each account-week's cluster: its ring for a true mule of a ring, the account for a
     ringless true mule or a non-mule."""
     found: list[str] = []
     for account, mule, ring in zip(accounts, is_mule.tolist(), rings.tolist(), strict=True):
@@ -65,7 +65,7 @@ class Clusters:
         positives = np.bincount(row, weights=positive.astype(np.float64), minlength=count)
         sizes = np.bincount(row, minlength=count)
         if ((positives > 0) & (positives < sizes)).any():
-            raise ValueError("A cluster holds positive and negative account-Mondays")
+            raise ValueError("A cluster holds positive and negative account-weeks")
         return cls(row.astype(np.intp), positives > 0)
 
     def __len__(self) -> int:

@@ -1,4 +1,4 @@
-"""read_money_flow, B1: velocity. For each account of a request at one Monday, the money it
+"""read_money_flow, B1: velocity. For each account of a request at one time t, the money it
 received and sent over the last 7, 30 and 90 days, and how fast the money it received in the
 last 30 days left again, matched last in, first out (docs/design.md, "read_money_flow (B1):
 velocity", and B1's walk in docs/features.md, "Account node")."""
@@ -93,7 +93,7 @@ SHARES = (*WINDOWS, "held_share", *RAILS)
 
 
 def params(t_ms: int, accounts: Iterable[str]) -> dict[str, Any]:
-    """The parameters of a request: the Monday t and the accounts, at least one, each once."""
+    """The parameters of a request: the time t and the accounts, at least one, each once."""
     return {"t_ms": as_of(t_ms), "account_ids": account_ids(accounts)}
 
 
@@ -140,9 +140,9 @@ def parse(rows: Sequence[object], accounts: Collection[str]) -> MoneyFlows:
     """The answer to the request params(t_ms, accounts) made: a row for every account asked
     for and no other, and the tracked inflows of those accounts, each payment once. An account
     with cents received in its span has a tracked inflow, and one without has none."""
-    from . import READ_MONEY_FLOW, VERSIONS  # the registry imports this module
+    from . import READ_MONEY_FLOW  # the registry imports this module
 
-    response_head(rows, READ_MONEY_FLOW, VERSIONS[READ_MONEY_FLOW])
+    response_head(rows, READ_MONEY_FLOW)
     found = [parse_row(MoneyFlow, row) for row in projected(rows, "accounts", READ_MONEY_FLOW)]
     asked = set(accounts)
     answered = [row.account_id for row in found]

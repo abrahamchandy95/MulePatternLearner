@@ -4,7 +4,7 @@ asks what message passing adds beyond hand-made graph features (comparisons.feat
 
 - Each trains on the GNN's training examples, with their labels and weights, which come with
   the vectors in the order of their keys (comparisons.features), and is scored on the same
-  selection Mondays from the same keys.
+  selection weeks from the same keys.
 - It learns identified (label 1) against unlabelled (0), with each label's weights rescaled to
   equal totals: when labels are selected completely at random, a classifier of labelled
   against unlabelled ranks like one of positive against negative (Elkan and Noto, 2008). Each

@@ -87,7 +87,7 @@ def test_a_scored_accounts_own_nodes_are_only_those_of_its_own_edges(
 def test_the_leaf_share_of_ring_nodes() -> None:
     # Ring 1's two mules, of two customers, both reach d1 and i1 at T, i1 a leaf: two ring nodes,
     # one leaf. Ring 2 has one mule at T, and a_m4 no ring, so neither makes a ring node. a_m1 is
-    # alone on i1 on T + W, so that Monday makes none.
+    # alone on i1 on T + W, so that week makes none.
     rows = [
         ActiveMule(T, "a_m1", "c1", 1),
         ActiveMule(T, "a_m2", "c2", 1),
@@ -157,7 +157,7 @@ def test_two_accounts_of_one_customer_make_no_ring_node_and_two_customers_do(
 
 
 def test_the_card_spending_report() -> None:
-    # Ten ordinary account-Mondays sending 1 to 10 payments, and two mules. The busy ones are
+    # Ten ordinary account-weeks sending 1 to 10 payments, and two mules. The busy ones are
     # those at or above the 90th percentile by weight, 9 payments (9 of the 10 send at most 9):
     # the one sending 9, with nothing matched, and the one sending 10, whose left_1d is 0.8,
     # 0.5 of it by card.
@@ -167,7 +167,7 @@ def test_the_card_spending_report() -> None:
     shares[9] = [0.1, 0.2, 0.4, 0.8, 0.5]
     shares[10:] = [0.3, 0.6, 0.9, 1.0, 0.0]
     found = card_spending(shares, out_30d, positive, np.ones(12)).set_index("group")
-    assert found.loc["busy_ordinary", "account_mondays"] == 2
+    assert found.loc["busy_ordinary", "account_weeks"] == 2
     assert found.loc["busy_ordinary", "left_1d"] == pytest.approx(0.4)
     assert found.loc["busy_ordinary", "card_part_of_left_1d"] == pytest.approx(0.2)
     assert found.loc["ordinary", "left_1d"] == pytest.approx(0.08)

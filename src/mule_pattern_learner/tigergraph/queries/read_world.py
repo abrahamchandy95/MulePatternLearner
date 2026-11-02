@@ -79,11 +79,11 @@ def params() -> dict[str, Any]:
 
 def parse(rows: Sequence[object]) -> World:
     """The loaded world's identity fields."""
-    from . import READ_WORLD, VERSIONS  # the registry imports this module
+    from . import READ_WORLD  # the registry imports this module
 
-    head = response_head(rows, READ_WORLD, VERSIONS[READ_WORLD])
+    head = response_head(rows, READ_WORLD)
     names = [field.name for field in fields(World)]
-    if set(head) != {"status", "version", *names}:
+    if set(head) != {"status", *names}:
         raise ValueError(f"{READ_WORLD} printed the fields {sorted(head)}")
     values: dict[str, Any] = {}
     for name in names:

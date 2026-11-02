@@ -8,7 +8,7 @@ The label checks, each failing on any account that breaks it:
   1, or which the answer key lacks;
 - label.mule_dates_and_ring: an is_mule 1 account without 0 < mule_onset_ms <= mule_last_ms,
   or without a ring value (a ring id, or -1 for none);
-- label.scorable_without_truth: a scorable account of some Monday the answer key lacks;
+- label.scorable_without_truth: a scorable account of some week the answer key lacks;
 - label.truth_join: a join of what evaluation scores with the truth that shares a column other
   than the account id, which a merge would rename. It is checked on the columns evaluation
   really joins (JOINED_COLUMNS: the test keys, their weight and the logit of each, which
@@ -16,11 +16,11 @@ The label checks, each failing on any account that breaks it:
   so a column added to either side fails the audit.
 
 Reported beside them, never failing: the true mules counted by account_type and by whether
-they are owned, and every true mule outside the scored population on a scored Monday of its
+they are owned, and every true mule outside the scored population in a scored week of its
 activity, which the agreed population (every mule an owned deposit account) does not score.
 
 The identification horizon: of the true mules whose onset falls in a calendar month (UTC) of
-the scored year, from the month of the first scored Monday to that of the last, the share PU
+the scored year, from the month of the first scoring time to that of the last, the share PU
 labels identified, month by month. Each month's identified count must lie inside its binomial
 band at audit.horizon_level around the pooled share; a month without a mule has no band. The
 check fails when a month falls outside, or when no true mule has its onset in the scored year.
@@ -47,7 +47,7 @@ LABEL_CHECKS = (IDENTIFIED_NOT_MULE, MULE_DATES_AND_RING, SCORABLE_WITHOUT_TRUTH
 IDENTIFICATION_HORIZON = "identification_horizon"
 # The column every truth join is made on.
 JOIN_COLUMN = "account_id"
-# The columns of what evaluation joins with the truth: the test keys (a Monday and an account)
+# The columns of what evaluation joins with the truth: the test keys (a t and an account)
 # with their weight, and the logit that a model scored each with.
 JOINED_COLUMNS = ("t_ms", "account_id", "weight", "logit")
 
@@ -98,10 +98,10 @@ def _month(t_ms: int) -> str:
     return datetime.fromtimestamp(t_ms / 1000, UTC).strftime("%Y-%m")
 
 
-def scored_months(mondays: Sequence[int]) -> list[str]:
-    """The calendar months of the scored year, from the first scored Monday's to the last's."""
-    first = datetime.fromtimestamp(mondays[0] / 1000, UTC)
-    last = datetime.fromtimestamp(mondays[-1] / 1000, UTC)
+def scored_months(times: Sequence[int]) -> list[str]:
+    """The calendar months of the scored year, from the first scoring time's to the last's."""
+    first = datetime.fromtimestamp(times[0] / 1000, UTC)
+    last = datetime.fromtimestamp(times[-1] / 1000, UTC)
     months: list[str] = []
     year, month = first.year, first.month
     while (year, month) <= (last.year, last.month):
@@ -111,12 +111,12 @@ def scored_months(mondays: Sequence[int]) -> list[str]:
 
 
 def horizon(
-    key: AnswerKey, identified: frozenset[str], mondays: Sequence[int], level: float
+    key: AnswerKey, identified: frozenset[str], times: Sequence[int], level: float
 ) -> pd.DataFrame:
     """The identification horizon's table: per month of the scored year, the true mules whose
     onset falls in it, the identified among them, the band around the pooled share and whether
     the month lies inside it."""
-    months = scored_months(mondays)
+    months = scored_months(times)
     mules = Counter[str]()
     found = Counter[str]()
     for truth in key.mules:
@@ -146,13 +146,13 @@ def check_labels(
     key: AnswerKey,
     identified: frozenset[str],
     populations: Mapping[int, Sequence[str]],
-    mondays: Sequence[int],
+    scoring_times: Sequence[int],
     level: float,
     joined: Sequence[str] = JOINED_COLUMNS,
 ) -> LabelChecks:
     """The label checks, their reports and the identification horizon: populations gives the
-    scorable accounts of each scored Monday, mondays the scored Mondays in increasing order, and
-    joined the columns of what evaluation joins with the truth."""
+    scorable accounts of each scored week, scoring_times the world's scoring times in
+    increasing order, and joined the columns of what evaluation joins with the truth."""
     truths = key.by_id
     breaking: dict[str, tuple[str, ...]] = {
         IDENTIFIED_NOT_MULE: tuple(
@@ -191,9 +191,9 @@ def check_labels(
         (t_ms, truth.account_id)
         for truth in key.mules
         for t_ms in sorted(populations)
-        if status(truth, t_ms) == ACTIVE and truth.account_id not in scorable[t_ms]
+        if status(truth, t_ms, scoring_times) == ACTIVE and truth.account_id not in scorable[t_ms]
     ]
     unscored = pd.DataFrame(missing, columns=["t_ms", "account_id"]).astype(
         {"t_ms": "int64", "account_id": "str"}
     )
-    return LabelChecks(breaking, counts, unscored, horizon(key, identified, mondays, level))
+    return LabelChecks(breaking, counts, unscored, horizon(key, identified, scoring_times, level))

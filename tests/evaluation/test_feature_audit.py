@@ -54,12 +54,12 @@ def test_the_audited_columns_of_a_built_batch(
     assert value["community.members"][1] == 1 and value["customer.accounts_owned"][1] == 1
 
 
-# The audit sample at production proportions: 1,200 active true-mule account-Mondays, each
+# The audit sample at production proportions: 1,200 active true-mule account-weeks, each
 # weighing 1, in 400 rings of three, and 20,000 non-mule ones each standing for 115, so that
-# the sample stands for 2.3 million account-Mondays and the mules are 1,200 / 2,301,200 = 0.052%
+# the sample stands for 2.3 million account-weeks and the mules are 1,200 / 2,301,200 = 0.052%
 # of the weight. In production about 12,000 of 23 million are mules, 0.052% as well: under the
 # 0.1% of a tail, so a tail holds every mule that a column marks and room for 1,100 ordinary
-# account-Mondays beside them.
+# account-weeks beside them.
 MULES, ORDINARY, STANDS_FOR = 1_200, 20_000, 115.0
 
 
@@ -129,7 +129,7 @@ def test_a_region_must_hold_one_percent_of_the_mules_and_be_mostly_mules() -> No
     few = np.zeros(len(positive))
     few[0] = 1
     assert near_pure(few, positive, weight, AUDIT) == []
-    # 180 mules (15%) with 2 ordinary account-Mondays of weight 115 beside them: 230 of 410, so
+    # 180 mules (15%) with 2 ordinary account-weeks of weight 115 beside them: 230 of 410, so
     # under half of the region; with 1, 180 of 295, over half.
     marked = np.zeros(len(positive))
     marked[:180] = 1
@@ -164,7 +164,7 @@ def test_a_tie_at_the_edge_of_a_tail_is_left_out_of_it() -> None:
 
 def test_a_tail_the_sample_cannot_measure_is_reported_and_stops_nothing() -> None:
     # D1's audit in the proof of concept: 188 mules and 300 sampled non-mules, each standing for
-    # 2,445,228 / 300, about 8,151 account-Mondays, more than the 0.1% tail (about 2,445). The
+    # 2,445,228 / 300, about 8,151 account-weeks, more than the 0.1% tail (about 2,445). The
     # top tail's edge would be the highest sampled non-mule, and 3 mules above every one of them
     # would make a region of mules alone, though nothing tells the classes apart.
     positive = np.array([True] * 188 + [False] * 300)

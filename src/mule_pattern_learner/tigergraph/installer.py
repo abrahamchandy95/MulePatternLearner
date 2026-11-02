@@ -51,13 +51,11 @@ def normalized(text: str) -> str:
     return "".join(token if token.startswith('"') else token.lower() for token in tokens)
 
 
-def text_version(prefix: str, definition: str, printed: str) -> str:
-    """The version a query prints: prefix and 12 hex digits of the sha256 of its definition.
-
-    The definition is normalized, with the printed version (a string literal) left out, so
-    the version covers the whole query but itself and no comment or layout changes it.
-    """
-    text = definition.replace(f'"{printed}"', '""')
+def text_version(prefix: str, definition: str) -> str:
+    """A query's version: prefix and 12 hex digits of the sha256 of its normalized definition,
+    so no comment or layout changes it. No query prints it; an old query that still prints
+    its version as a string literal has that literal left out."""
+    text = re.sub(rf'"{re.escape(prefix)}[0-9a-f]{{12}}"', '""', definition)
     return prefix + hashlib.sha256(normalized(text).encode()).hexdigest()[:12]
 
 
@@ -77,12 +75,21 @@ def definitions(text: str) -> dict[str, str]:
 
 
 def parameter_names(definition: str) -> list[str]:
-    """The parameter names of `QUERY name(TYPE a, TYPE b = default, ...)`, in order."""
+    """The parameter names of `QUERY name(TYPE a, TYPE b = default, ...)`, in order. A comment
+    in the list, such as `UINT t_ms // the scoring time, a whole second`, is skipped."""
     match = re.search(r"QUERY\s+\w+\s*\(", definition, re.I)
     if match is None:
         raise ValueError("A query definition has no parameter list")
     depth, quoted, current, parts = 1, False, "", list[str]()
-    for char in definition[match.end() :]:
+    rest = definition[match.end() :]
+    skip_to = 0
+    for index, char in enumerate(rest):
+        if index < skip_to:
+            continue
+        if not quoted and rest.startswith(("//", "/*"), index):
+            end = rest.find("\n" if rest.startswith("//", index) else "*/", index + 2)
+            skip_to = len(rest) if end < 0 else end + (0 if rest[end] == "\n" else 2)
+            continue
         if quoted:
             quoted = char != '"'
         elif char == '"':

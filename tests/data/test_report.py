@@ -26,7 +26,7 @@ MULES = (
     IdentifiedMule("c", T1 - 5 * W, T1 - 4 * W),
 )
 LABELS = Labels(MULES, label_identity(MULES))
-# The Mondays' dropped counts are the identified mules scorable then and not active: on T1, b
+# The weeks' dropped counts are the identified mules scorable then and not active: on T1, b
 # and c; on T2, c; on T3 nothing is scorable.
 TALLIES = [Tally(T1, 10, ("a",), 2), Tally(T2, 20, ("a", "b"), 1), Tally(T3, 0, (), 0)]
 DRAWS = [Draw(T1, 9, ("u1", "u2", "u3")), Draw(T2, 18, ("u1", "u4")), Draw(T3, 0, ())]
@@ -36,11 +36,11 @@ UNSCORED = Unscored(("c",), ())
 def test_the_report_of_a_training_world() -> None:
     training = training_frame(TALLIES, DRAWS)
     report = build_report(TALLIES, LABELS, UNSCORED, DRAWS, training)
-    frame = report.mondays
+    frame = report.weeks
     assert list(frame.columns) == REPORT_SCHEMA.names
     assert frame["scorable"].tolist() == [10, 20, 0]
     assert frame["positives"].tolist() == [1, 2, 0]
-    # Dropped is what each Monday's tally carries, not every identified mule that is not active
+    # Dropped is what each week's tally carries, not every identified mule that is not active
     # then: on T3, with no scorable account, none of the three is an example.
     assert frame["dropped"].tolist() == [2, 1, 0]
     assert frame["pool"].tolist() == [9, 18, 0]
@@ -51,13 +51,13 @@ def test_the_report_of_a_training_world() -> None:
     assert frame["unlabelled_weight"].tolist() == pytest.approx([5 / 3, 10 / 3, 0.0])
     assert frame["ratio"].tolist() == pytest.approx([0.45, 0.675, 0.0])
     assert report.identified == 3 and report.identified_active == 2
-    # (1/10 + 2/20) / 2, over the Mondays with a scorable account.
+    # (1/10 + 2/20) / 2, over the weeks with a scorable account.
     assert report.identified_active_share == pytest.approx(0.1)
     assert report.unscored == UNSCORED
 
 
-def test_the_identified_active_share_is_the_mean_over_mondays_not_the_pooled_ratio() -> None:
-    # One positive on a Monday of 10 scorable accounts and one on a Monday of 40: the shares
+def test_the_identified_active_share_is_the_mean_over_weeks_not_the_pooled_ratio() -> None:
+    # One positive in a week of 10 scorable accounts and one in a week of 40: the shares
     # 0.1 and 0.025 average 0.0625, where the pooled ratio, 2 over 50, is 0.04. The prior grid
     # is defined on the mean.
     tallies = [Tally(T1, 10, ("a",), 0), Tally(T2, 40, ("b",), 0)]
@@ -68,12 +68,12 @@ def test_the_identified_active_share_is_the_mean_over_mondays_not_the_pooled_rat
 
 def test_the_report_of_a_world_that_does_not_train() -> None:
     report = build_report(TALLIES, LABELS, UNSCORED)
-    frame = report.mondays
+    frame = report.weeks
     assert frame[["pool", "unlabelled"]].eq(0).all().all()
     assert frame[["positive_weight", "unlabelled_weight", "ratio"]].eq(0.0).all().all()
     assert report.identified_active == 2
     empty = build_report([], LABELS, UNSCORED)
-    assert empty.mondays.empty and empty.identified_active_share == 0.0
+    assert empty.weeks.empty and empty.identified_active_share == 0.0
 
 
 def test_a_selection_world_needs_enough_identified_active_mules() -> None:
@@ -89,15 +89,15 @@ def test_the_report_reads_as_lines() -> None:
         found[0]
         == "3 identified mules, 2 identified active mules; identified active share 0.100000"
     )
-    assert found[1] == "3 positives and 0 unlabelled examples over 3 Mondays"
-    assert found[2] == "1 identified mule active on no scored Monday: c"
-    assert found[3] == "1 identified mule never scorable on a Monday of its activity: d"
+    assert found[1] == "3 positives and 0 unlabelled examples over 3 weeks"
+    assert found[2] == "1 identified mule active in no scored week: c"
+    assert found[3] == "1 identified mule never scorable in a week of its activity: d"
 
 
 def test_the_identified_active_share_is_read_from_the_table_mule_prepare_wrote() -> None:
     report = build_report(TALLIES, LABELS, UNSCORED, DRAWS, training_frame(TALLIES, DRAWS))
     # 1 of 10 scorable accounts on T1, 2 of 20 on T2, and T3, with none scorable, is left out:
     # the mean of 1/10 and 2/20.
-    assert identified_active_share(report.mondays) == pytest.approx(0.1)
-    assert report.identified_active_share == identified_active_share(report.mondays)
-    assert identified_active_share(report.mondays.iloc[2:]) == 0.0
+    assert identified_active_share(report.weeks) == pytest.approx(0.1)
+    assert report.identified_active_share == identified_active_share(report.weeks)
+    assert identified_active_share(report.weeks.iloc[2:]) == 0.0

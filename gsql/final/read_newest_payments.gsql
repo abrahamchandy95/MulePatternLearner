@@ -1,0 +1,89 @@
+USE GRAPH Mule_Pattern_Learner
+CREATE OR REPLACE QUERY read_newest_payments(
+    UINT t_ms, // The scoring time after the first 90 days
+    LIST<STRING> account_ids // The ids of the accounts to read
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+
+    /* Tuples */
+    TYPEDEF TUPLE<INT sec, STRING id, STRING other> Picked;
+
+    /* Constants */
+    UINT LOOKBACK_MS = 7776000000; // 90 days
+
+    /* Vertex and edge types, each a set so that one pattern serves transactions and transfers */
+    SetAccum<STRING> @@payment_vertex_type; // A transaction or a transfer
+    SetAccum<STRING> @@sender_to_payment_edge_type; // Account -> the payments it sent
+    SetAccum<STRING> @@payment_to_receiver_edge_type; // Payment -> the account that received it
+    SetAccum<STRING> @@receiver_to_payment_edge_type; // Account -> the payments it received
+    SetAccum<STRING> @@payment_to_sender_edge_type; // Payment -> the account that sent it
+    @@payment_vertex_type += "Payment_Transaction";
+    @@payment_vertex_type += "Zelle_Transfer";
+    @@sender_to_payment_edge_type += "Account_Initiated_Transaction";
+    @@sender_to_payment_edge_type += "Account_Sent_Zelle_Transfer";
+    @@payment_to_receiver_edge_type += "Transaction_To_Account";
+    @@payment_to_receiver_edge_type += "Transfer_To_Account";
+    @@receiver_to_payment_edge_type += "Account_Received_Transaction";
+    @@receiver_to_payment_edge_type += "Account_Received_Zelle_Transfer";
+    @@payment_to_sender_edge_type += "Transaction_From_Account";
+    @@payment_to_sender_edge_type += "Transfer_From_Account";
+
+    /* Accumulators */
+    HeapAccum<Picked>(32, sec DESC, id ASC) @sent; // An account's 32 newest payments sent
+    HeapAccum<Picked>(32, sec DESC, id ASC) @received; // An account's 32 newest payments received
+    SetAccum<STRING> @@ids; // The ids given, without repeats
+    SumAccum<INT> @@given; // How many ids were given, repeats included
+
+    IF t_ms <= LOOKBACK_MS OR t_ms % 1000 != 0 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+    FOREACH account_id IN account_ids DO
+        @@ids += account_id;
+        @@given += 1;
+    END;
+    IF @@given == 0 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+    IF @@ids.size() != @@given THEN
+        PRINT "duplicate_account" AS status;
+        RETURN;
+    END;
+    requested = to_vertex_set(@@ids, "Account");
+    IF requested.size() != @@ids.size() THEN
+        PRINT "unknown_account" AS status;
+        RETURN;
+    END;
+    accounts = SELECT s FROM requested:s WHERE s.opened_ms < t_ms;
+    IF accounts.size() != requested.size() THEN
+        PRINT "invisible_account" AS status;
+        RETURN;
+    END;
+
+    /* Traverse: Account -> Payment sent -> Account, in the 90 days before t, to another account */
+    sent = SELECT a
+        FROM accounts:a - (@@sender_to_payment_edge_type>:e) - @@payment_vertex_type:p
+            - (@@payment_to_receiver_edge_type>:f) - Account:b
+        WHERE p.event_ts_ms >= t_ms - LOOKBACK_MS AND p.event_ts_ms < t_ms AND b != a
+        ACCUM
+            a.@sent += Picked(floor(p.event_ts_ms / 1000), p.id, b.id)
+    ;
+
+    /* Traverse: Account -> Payment received -> Account, in the 90 days before t, from another account */
+    received = SELECT a
+        FROM accounts:a - (@@receiver_to_payment_edge_type>:e) - @@payment_vertex_type:p
+            - (@@payment_to_sender_edge_type>:f) - Account:b
+        WHERE p.event_ts_ms >= t_ms - LOOKBACK_MS AND p.event_ts_ms < t_ms AND b != a
+        ACCUM
+            a.@received += Picked(floor(p.event_ts_ms / 1000), p.id, b.id)
+    ;
+
+    /* Printing the accounts */
+    PRINT "ok" AS status;
+    PRINT accounts[
+        accounts.id AS account_id,
+        accounts.@sent AS sent,
+        accounts.@received AS received
+    ] AS accounts;
+
+}

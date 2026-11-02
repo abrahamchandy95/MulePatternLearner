@@ -1,5 +1,5 @@
 """read_community, B6: how the account's network formed. For each account of a request at one
-Monday, the community of customers around its owner as of t, by sharing in two rounds and then
+time t, the community of customers around its owner as of t, by sharing in two rounds and then
 by payments, and the 8 numbers of its block (docs/design.md, "read_community (B6): how the mule
 network formed", and docs/features.md, "The community block")."""
 
@@ -48,8 +48,8 @@ SHARES = ("density", "new_link_share_30d", "isolation")
 
 
 def params(t_ms: int, accounts: Iterable[str], hubs: Iterable[str]) -> dict[str, Any]:
-    """The parameters of a request: the Monday t, the accounts, at least one, each once, and
-    the account hubs of t, read_hubs' accounts of the same Monday, each once."""
+    """The parameters of a request: the time t, the accounts, at least one, each once, and
+    the account hubs of t, read_hubs' accounts of the same t, each once."""
     return {
         "t_ms": as_of(t_ms),
         "account_ids": account_ids(accounts),
@@ -91,9 +91,9 @@ def _check(row: Community) -> None:
 def parse(rows: Sequence[object], accounts: Collection[str]) -> tuple[Community, ...]:
     """The answer to the request params(t_ms, accounts, hubs) made: a block for every account
     asked for and no other, sorted by id."""
-    from . import READ_COMMUNITY, VERSIONS  # the registry imports this module
+    from . import READ_COMMUNITY  # the registry imports this module
 
-    response_head(rows, READ_COMMUNITY, VERSIONS[READ_COMMUNITY])
+    response_head(rows, READ_COMMUNITY)
     found = [parse_row(Community, row) for row in projected(rows, "accounts", READ_COMMUNITY)]
     asked = set(accounts)
     answered = [row.account_id for row in found]

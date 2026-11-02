@@ -11,6 +11,7 @@ from typing import Any
 
 from ...tigergraph.queries import (
     LIST_ACCOUNTS,
+    MARK_CROWDS,
     PROFILE_HUBS,
     READ_ACTIVITY_CHANGE,
     READ_ANSWER_KEY,
@@ -40,6 +41,7 @@ ANSWERS: dict[str, Callable[..., list[dict[str, Any]]]] = {
     READ_LABELS: infrastructure.read_labels,
     READ_ANSWER_KEY: infrastructure.read_answer_key,
     READ_HUBS: infrastructure.read_hubs,
+    MARK_CROWDS: infrastructure.mark_crowds,
     READ_WORLD: infrastructure.read_world,
     PROFILE_HUBS: infrastructure.profile_hubs,
     READ_MONEY_FLOW: money_flow.read_money_flow,

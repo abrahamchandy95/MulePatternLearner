@@ -3,8 +3,8 @@ USE GRAPH Mule_Pattern_Learner
 /* read_community (B6): how each scored account's network formed, read from the community of
    customers around its owner as of t.
 
-   Inputs: t_ms, a Monday at 00:00 UTC; account_ids, the scored accounts, each once;
-   hub_accounts, read_hubs' account hubs of the same t.
+   Inputs: t_ms, a whole second in UTC epoch milliseconds after the 90-day lookback; account_ids,
+   the scored accounts, each once; hub_accounts, read_hubs' account hubs of the same t.
    Prints: accounts, per scored account its community block (docs/features.md, "The community
    block"): members, capped, shared_nodes, density, new_link_share_30d, internal_amount_30d,
    isolation and member_payments_30d. An account with no owner has no member, and every
@@ -89,8 +89,7 @@ CREATE OR REPLACE QUERY read_community(
     UINT crowd_threshold = 8;
     INT community_round = 0;
 
-    /* Mondays are 4 days after the Thursday of 1970-01-01, modulo a week. */
-    IF t_ms <= lookback_ms OR t_ms % 604800000 != 345600000 THEN
+    IF t_ms <= lookback_ms OR t_ms % 1000 != 0 THEN
         PRINT "invalid_parameters" AS status;
         RETURN;
     END;
@@ -466,7 +465,7 @@ CREATE OR REPLACE QUERY read_community(
         IF payments > 0 THEN s.@isolation += internal * 1.0 / payments END,
         s.@member_payments_30d += payments;
 
-    PRINT "ok" AS status, "read_community-8406b3785a46" AS version;
+    PRINT "ok" AS status, "read_community-04e5fd86e262" AS version;
     PRINT Blocks[Blocks.id AS account_id, Blocks.@members AS members,
       Blocks.@capped AS capped, Blocks.@shared_nodes AS shared_nodes,
       Blocks.@density AS density, Blocks.@new_link_share_30d AS new_link_share_30d,

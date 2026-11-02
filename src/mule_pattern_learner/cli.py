@@ -8,9 +8,10 @@ Nine commands, none with an option: worlds, roles, dates and every setting live 
     mule parity     compares every query with the reference graph, writes gsql/parity.toml
     mule prepare    matches the loaded world, checks its calendar and labels, writes the examples
     mule fetch      fills the cache for every example the loaded world's roles need
-    mule audit      reads the answer key, runs the label checks, clock probe and feature audit
+    mule audit      reads the answer key, runs the label checks, clock gain test and feature audit
     mule train      trains the GNN, its ablations and the two XGBoost comparisons
-    mule evaluate   scores the test world and writes the metrics and the missed-mule report
+    mule evaluate   scores the test world, runs the clock invariance test, and writes the
+                    metrics and the missed-mule report
     mule score      scores the configured accounts and dates with the best-selection model
     mule bench      measures what the loaded world costs, and projects it
 
@@ -89,6 +90,7 @@ from .data.worlds import (
 from .evaluation import audit as auditing
 from .evaluation.audit import DEVELOPMENT, audit_settings, train_may_run
 from .evaluation.bias import rescore_epochs
+from .evaluation.clock_invariance import Invariance, invariance
 from .evaluation.rankings import score_gnn, score_trees
 from .evaluation.report import (
     GNN,
@@ -100,6 +102,7 @@ from .evaluation.report import (
     evaluate,
     manifest,
     rotation_spread,
+    selected,
     verdict,
     write_manifest,
 )
@@ -143,9 +146,10 @@ COMMANDS = {
     "parity": "compare every query with the reference graph and write the parity record",
     "prepare": "match the loaded world, check its calendar and labels, write the examples",
     "fetch": "fill the cache for every example the loaded world's roles need",
-    "audit": "read the answer key and run the label checks, clock probe and feature audit",
+    "audit": "read the answer key and run the label checks, clock gain test and feature audit",
     "train": "train the GNN, its ablations and the two XGBoost comparisons",
-    "evaluate": "score the test world and write the metrics and the missed-mule report",
+    "evaluate": "score the test world, test the clock invariance, and write the metrics and "
+    "the missed-mule report",
     "score": "score the configured accounts and dates with the best-selection model",
     "bench": "measure the cost of fetching, building and training on the loaded world",
 }
@@ -158,6 +162,9 @@ ROTATIONS_RUN = "rotations"
 EPOCH_SEED = 0
 DECISION_FILE = "prior_decision.txt"
 SCORES_FILE = "scores.parquet"
+# The world of mule score's examples, which match no world: a name for their keys alone, which
+# never reaches the model.
+SCORED_WORLD = "scored"
 # The examples tables each role reads.
 ROLE_TABLES = {TRAIN: TRAINING_FILE, SELECT: SELECTION_FILE}
 # What the tuned settings of a manifest were chosen from (docs/design.md, "Results").
@@ -218,15 +225,21 @@ def _step(batch: Batch, config: RunConfig, device: torch.device) -> None:
         raise NotReady(f"one training step: the loss is {loss.item()}, not finite")
 
 
+def check_queries(executor: ConnectionExecutor) -> None:
+    """The first check of every command that reads the graph, and the only one of mule score,
+    which matches no world: the installed queries are the repository's (installer.verify)."""
+    try:
+        installer.verify(executor)
+    except ValueError as error:
+        raise NotReady(f"installed queries: {error}") from error
+
+
 def check_ready(executor: ConnectionExecutor, config: RunConfig) -> LoadedWorld:
     """The read-only readiness check of a command that reads the loaded world: the installed
     queries are the repository's (installer.verify), the loaded world is a configured one that
     holds the calendar's window, one account is fetched into a scratch folder and built into an
     example, and one training step runs on it. Each failure names its check. The loaded world."""
-    try:
-        installer.verify(executor)
-    except ValueError as error:
-        raise NotReady(f"installed queries: {error}") from error
+    check_queries(executor)
     try:
         loaded = find_world(FetchExecutor(executor), config.worlds)
         check_window(loaded.world, config.calendar)
@@ -234,7 +247,7 @@ def check_ready(executor: ConnectionExecutor, config: RunConfig) -> LoadedWorld:
         raise NotReady(f"the world's identity: {error}") from error
     show(f"ready: the loaded world is {loaded.config.name} ({loaded.identity})")
     fetching = FetchExecutor(executor)
-    for t_ms in config.calendar.mondays():
+    for t_ms in config.calendar.scoring_times(loaded.config.seed):
         found = list_accounts.parse(
             fetching.run(LIST_ACCOUNTS, list_accounts.params(t_ms, "", 1)), "", 1
         )
@@ -246,12 +259,12 @@ def check_ready(executor: ConnectionExecutor, config: RunConfig) -> LoadedWorld:
     with tempfile.TemporaryDirectory(prefix="mule-ready-") as folder:
         cache = Cache(Path(folder))
         try:
-            Fetcher(executor, cache, config.transport).monday(t_ms, [account])
+            Fetcher(executor, cache, config.transport).week(t_ms, [account])
             rows = read_rows(cache, [(t_ms, account)])
         except (ValueError, KeyError, RuntimeError) as error:
             raise NotReady(f"one account fetched: {error}") from error
     batch = build(rows, loaded.identity, labels=[1], weights=[1.0])
-    show(f"ready: fetched {account} on Monday {t_ms}")
+    show(f"ready: fetched {account} at {t_ms}")
     _step(batch, config, _device())
     show("ready: one training step ran")
     return loaded
@@ -361,8 +374,8 @@ def install_command(config: RunConfig, open_graph: Connect) -> None:
 
 def parity_command(config: RunConfig, open_graph: Connect) -> None:
     executor = open_graph()
-    check_ready(executor, config)
-    found = parity.run(executor, config)
+    loaded = check_ready(executor, config)
+    found = parity.run(executor, config, seed=loaded.config.seed)
     for line in found.lines():
         show(line)
     if found.failed:
@@ -418,7 +431,7 @@ def fetch_command(config: RunConfig, open_graph: Connect) -> None:
     began = time.monotonic()
     done = fetch(executor, Cache.of(loaded.identity, config.subgraph), keys, config.transport)
     show(
-        f"fetched {plural(len(keys), 'Monday')} of {loaded.config.name} in "
+        f"fetched {plural(len(keys), 'week')} of {loaded.config.name} in "
         f"{duration(time.monotonic() - began)}: "
         + ", ".join(f"{name} {done.accounts[name]:,}" for name in sorted(done.accounts))
     )
@@ -634,7 +647,7 @@ def _test_keys(
     read: Callable[[Path, pa.Schema], pd.DataFrame] = read_table,
 ) -> pd.DataFrame:
     """The test world's keys with their weights (t_ms, account_id, weight): every scorable
-    account of every Monday under whole scoring, each weighing 1, or the fallback list mule audit
+    account of every week under whole scoring, each weighing 1, or the fallback list mule audit
     stored, with its weights. read reads the examples table, read_table (the whole table) unless
     the readiness check asks only for its first rows (read_first)."""
     _, test_registered = worlds.test
@@ -646,9 +659,44 @@ def _test_keys(
     return read(folder / TEST_FILE, TEST_SCHEMA).assign(weight=1.0)
 
 
-def _verdict(worlds: RotationWorlds, config: RunConfig) -> Verdict:
+def _invariance(
+    worlds: RotationWorlds,
+    config: RunConfig,
+    scored: ScoredWorld,
+    runs: Sequence[Run],
+    device: torch.device,
+) -> Invariance | None:
+    """The clock invariance test (evaluation.clock_invariance) of the GNN mule score uses, the
+    seed with the best selection score, on the audit sample mule audit stored for the test
+    world; None when mule audit stored none."""
+    stored = Store(scored.identity).clock_sample()
+    if stored is None:
+        return None
+    best = selected(runs)
+    if best.seed is None:
+        raise ValueError("The selected GNN has no seed")
+    path = model_file(results_dir(worlds.name), ranker_name(None), best.seed)
+    lock = gnn_lock(None, config.model, config.subgraph, config.training)
+
+    def score_keys(keys: pd.DataFrame) -> pd.DataFrame:
+        batches = ScoringBatches(scored.cache, scored.identity, keys, config.training.batch_size)
+        return score_gnn(path, lock, batches, None, device)
+
+    return invariance(
+        stored,
+        scored.key,
+        scored.scoring_times,
+        config.calendar.week_starts(),
+        score_keys,
+        config.audit,
+        config.training.bootstrap_seed,
+    )
+
+
+def _verdict(worlds: RotationWorlds, config: RunConfig, tested: Invariance | None) -> Verdict:
     """Whether the rotation's result may be reported (evaluation.report.verdict): the worlds of
-    the rotation, and the development worlds that mule prepare registered."""
+    the rotation, the development worlds that mule prepare registered, and the clock invariance
+    test of the rotation's test world."""
     development: list[tuple[WorldConfig, str]] = []
     kinds = {world.name: world for world in config.worlds.worlds}
     for rotation in config.worlds.rotations:
@@ -660,15 +708,17 @@ def _verdict(worlds: RotationWorlds, config: RunConfig) -> Verdict:
                 except ValueError:
                     continue
     current = MadeUnder(dict(VERSIONS), cache_key(config.subgraph), audit_settings(config))
-    return verdict([(world, held.identity) for world, held in worlds.worlds], development, current)
+    return verdict(
+        [(world, held.identity) for world, held in worlds.worlds], development, current, tested
+    )
 
 
 def evaluate_rotation(
     worlds: RotationWorlds, config: RunConfig, device: torch.device
 ) -> pd.DataFrame:
     """Evaluate one rotation: score the test world with every model file of its results folder,
-    one run at a time, write the tables, the missed-mule report and the manifest. The metrics
-    table."""
+    one run at a time, run the clock invariance test of the selected GNN on the sample mule audit
+    stored, write the tables, the missed-mule report and the manifest. The metrics table."""
     began = time.monotonic()
     test_world, test_registered = worlds.test
     folder = results_dir(worlds.name)
@@ -681,11 +731,13 @@ def evaluate_rotation(
         config.training.batch_size,
         keep=config.training.reuse_built_examples,
     )
-    scored = ScoredWorld.of(test_registered.identity, cache, keys)
+    scored = ScoredWorld.of(
+        test_registered.identity, cache, keys, config.calendar.scoring_times(test_world.seed)
+    )
     runs = _runs(worlds, config, batches, device)
     epochs = None
     if worlds.train[0].kind == DEVELOPMENT and (folder / EPOCHS).is_dir():
-        _, select_registered = worlds.select
+        select_world, select_registered = worlds.select
         selection_table = read_table(
             examples_folder(
                 select_registered.identity,
@@ -710,9 +762,18 @@ def evaluate_rotation(
             ranked.loc[:, ["t_ms", "account_id", "weight"]],
             chosen.answer_key(),
             chosen.labels().accounts,
+            config.calendar.scoring_times(select_world.seed),
             device,
         )
-    found = _verdict(worlds, config)
+    tested = _invariance(worlds, config, scored, runs, device)
+    found = _verdict(worlds, config, tested)
+    append_event(
+        folder,
+        "evaluate",
+        "clock invariance not run"
+        if tested is None
+        else f"clock invariance {'passed' if tested.passed else 'not passed'}",
+    )
     tables = evaluate(
         scored,
         runs,
@@ -722,6 +783,7 @@ def evaluate_rotation(
         rotation=worlds.name,
         verdict_found=found,
         epochs=epochs,
+        invariance=tested,
     )
     write_manifest(
         folder,
@@ -791,30 +853,34 @@ def score_command(config: RunConfig, open_graph: Connect) -> None:
     if not accounts or not dates or not config.score.run:
         raise CommandError(
             "set score.accounts, score.dates and score.run in config.py: the accounts, the "
-            "Mondays and the results folder whose model scores them"
+            "dates and the results folder whose model scores them"
         )
     folder = results_dir(config.score.run)
     paths = sorted(folder.glob(f"{ranker_name(None)}_seed*.pt"))
     if not paths:
         raise CommandError(f"{folder} holds no model file of the full model: run `mule train`")
     executor = open_graph()
-    loaded = check_ready(executor, config)
-    cache = Cache.of(loaded.identity, config.subgraph)
-    by_monday = {epoch_ms(day): list(accounts) for day in dates}
-    fetch(executor, cache, by_monday, config.transport)
-    device = _device()
-    lock = gnn_lock(None, config.model, config.subgraph, config.training)
-    saved = best_seed(paths, lock, device)
-    keys = pd.DataFrame(
-        [(t_ms, account) for t_ms, held in by_monday.items() for account in held],
-        columns=["t_ms", "account_id"],
-    )
-    scored = score(
-        saved,
-        ScoringBatches(cache, loaded.identity, keys, config.training.batch_size),
-        None,
-        device,
-    )
+    # No world is matched, so any loaded graph is scored, a bank's included; its rows go to a
+    # scratch cache that this run alone reads, since a bank's graph changes between runs.
+    check_queries(executor)
+    show("ready: the installed queries are the repository's")
+    by_time = {epoch_ms(day): list(accounts) for day in dates}
+    with tempfile.TemporaryDirectory(prefix="mule-score-") as scratch:
+        cache = Cache(Path(scratch))
+        fetch(executor, cache, by_time, config.transport)
+        device = _device()
+        lock = gnn_lock(None, config.model, config.subgraph, config.training)
+        saved = best_seed(paths, lock, device)
+        keys = pd.DataFrame(
+            [(t_ms, account) for t_ms, held in by_time.items() for account in held],
+            columns=["t_ms", "account_id"],
+        )
+        scored = score(
+            saved,
+            ScoringBatches(cache, SCORED_WORLD, keys, config.training.batch_size),
+            None,
+            device,
+        )
     scored["date"] = [datetime.fromtimestamp(t_ms / 1000, UTC).date() for t_ms in scored["t_ms"]]
     write_parquet(folder / SCORES_FILE, pa.Table.from_pandas(scored, preserve_index=False))
     show(f"scored with the seed {saved.seed} model, selection score {saved.score:.4f}")

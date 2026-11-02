@@ -44,7 +44,7 @@ def test_the_grid_refuses_a_share_or_a_prior_outside_0_and_1() -> None:
 
 
 def _found(rate: float, seed: int, flipped: tuple[int, ...] = ()) -> Found:
-    """A seed's ranking of 40 mules with one positive Monday each, finding each with chance
+    """A seed's ranking of 40 mules with one positive week each, finding each with chance
     rate in both budgets, the mules of the rows flipped found when they were not and missed
     when they were found."""
     hits = np.random.default_rng(seed).random(len(MULES)) < rate

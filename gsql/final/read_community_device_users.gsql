@@ -1,0 +1,108 @@
+USE GRAPH Mule_Pattern_Learner
+CREATE OR REPLACE QUERY read_community_device_users(
+    UINT t_ms, // The scoring time after the first 90 days
+    LIST<STRING> node_ids // The ids of the devices and IPs to read
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+
+    /* Constants */
+    UINT LOOKBACK_MS = 7776000000; // 90 days
+    UINT MONTH_MS = 2592000000; // 30 days
+
+    /* Vertex and edge types, each a set so that one pattern serves devices and IPs, transactions and transfers */
+    SetAccum<STRING> @@node_to_customer_edge_type; // Device or IP -> the customers who registered it
+    SetAccum<STRING> @@node_to_payment_edge_type; // Device or IP -> the payments seen on it
+    SetAccum<STRING> @@payment_to_receiver_edge_type; // Payment -> the account that received it
+    SetAccum<STRING> @@payment_to_sender_edge_type; // Payment -> the account that sent it
+    SetAccum<STRING> @@account_to_owner_edge_type; // Account -> its owner
+    @@node_to_customer_edge_type += "Device_Used_By_Party";
+    @@node_to_customer_edge_type += "IP_Used_By_Party";
+    @@node_to_payment_edge_type += "Device_Used_By_Transaction";
+    @@node_to_payment_edge_type += "Device_Used_By_Transfer";
+    @@node_to_payment_edge_type += "IP_Observed_In_Transaction";
+    @@node_to_payment_edge_type += "IP_Used_By_Transfer";
+    @@payment_to_receiver_edge_type += "Transaction_To_Account";
+    @@payment_to_receiver_edge_type += "Transfer_To_Account";
+    @@payment_to_sender_edge_type += "Transaction_From_Account";
+    @@payment_to_sender_edge_type += "Transfer_From_Account";
+    @@account_to_owner_edge_type += "Account_Owned_By_Party";
+
+    /* Accumulators */
+    SetAccum<STRING> @users; // On a device or IP that is no crowd: the customers who used it in the 30 days
+    MaxAccum<STRING> @receiver_id; // On a payment: the account that received it
+    SetAccum<STRING> @@ids; // The device and IP ids, each once
+    SumAccum<INT> @@given; // How many ids were given
+
+    IF t_ms <= LOOKBACK_MS OR t_ms % 1000 != 0 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+    FOREACH node_id IN node_ids DO
+        @@ids += node_id;
+        @@given += 1;
+    END;
+    IF @@given == 0 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+    IF @@ids.size() != @@given THEN
+        PRINT "duplicate_node" AS status;
+        RETURN;
+    END;
+    devices = to_vertex_set(@@ids, "Device");
+    ips = to_vertex_set(@@ids, "IP");
+    nodes = devices UNION ips;
+    IF nodes.size() != @@ids.size() THEN
+        PRINT "unknown_node" AS status;
+        RETURN;
+    END;
+
+    /* Keep the devices and IPs that are no crowd at t: no one shares a crowd */
+    shareable = SELECT n FROM nodes:n WHERE n.crowd_at_ms != t_ms;
+
+    /* Traverse: Device or IP -> Party, through a registration that still held in the 30 days before t */
+    registered = SELECT q
+        FROM shareable:n - (@@node_to_customer_edge_type>:l) - Party:q
+        WHERE l.valid_from_ms < t_ms
+            AND ( l.valid_to_ms == 0 OR l.valid_to_ms > t_ms - MONTH_MS )
+        ACCUM
+            n.@users += q.id
+    ;
+
+    /* Traverse: Device or IP -> Payment -> its receiver, the payments seen on it in the 30 days before t */
+    received = SELECT p
+        FROM shareable:n - (@@node_to_payment_edge_type>:u) - _:p
+            - (@@payment_to_receiver_edge_type>:f) - Account:r
+        WHERE p.event_ts_ms >= t_ms - MONTH_MS AND p.event_ts_ms < t_ms
+        ACCUM
+            p.@receiver_id += r.id
+    ;
+
+    /* Traverse: Device or IP -> Payment -> its sender, a deposit account open by t -> its owner, self-payments aside */
+    paid = SELECT q
+        FROM shareable:n - (@@node_to_payment_edge_type>:u) - _:p
+            - (@@payment_to_sender_edge_type>:f) - Account:b
+            - (@@account_to_owner_edge_type>:o) - Party:q
+        WHERE p.event_ts_ms >= t_ms - MONTH_MS AND p.event_ts_ms < t_ms
+            AND b.account_type == "deposit" AND b.opened_ms < t_ms
+            AND b.id != p.@receiver_id
+            AND o.valid_from_ms < t_ms
+            AND ( o.valid_to_ms == 0 OR o.valid_to_ms > t_ms - LOOKBACK_MS )
+        ACCUM
+            n.@users += q.id
+    ;
+
+    /* Refuse unless the crowd stamps on the graph are this t's */
+    current_marks = SELECT m FROM Mark:m WHERE m.id == "crowds" AND m.at_ms == t_ms;
+    IF current_marks.size() != 1 THEN
+        PRINT "unmarked_time" AS status;
+        RETURN;
+    END;
+
+    /* Printing the devices and IPs */
+    PRINT "ok" AS status;
+    PRINT nodes[
+        nodes.id AS node_id,
+        nodes.@users AS users
+    ] AS nodes;
+
+}

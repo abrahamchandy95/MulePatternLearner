@@ -1,5 +1,5 @@
-"""The scored population of a Monday: every page of list_accounts, cached once in the world's
-folder of the Monday and reparsed by list_accounts' parser (docs/design.md, "The scored
+"""The scored population at a scoring time: every page of list_accounts, cached once in the
+world's folder of that time and reparsed by list_accounts' parser (docs/design.md, "The scored
 population" and "Cache")."""
 
 from __future__ import annotations
@@ -46,14 +46,14 @@ def test_every_page_is_read_until_one_comes_back_short() -> None:
 def test_the_population_is_cached_once_and_read_back(tmp_path: Path) -> None:
     spy = Spy(calendar_world().graph())
     path = population_file(tmp_path, T)
-    assert path == tmp_path / "2024-07-01" / POPULATION_FILE
+    assert path == tmp_path / "2024-07-01T00-00-00Z" / POPULATION_FILE
     first = population(spy, tmp_path, T)
     assert [account.account_id for account in first] == SCORABLE
     assert path.is_file() and [p.name for p in path.parent.iterdir()] == [POPULATION_FILE]
     calls = len(spy.calls)
     assert population(spy, tmp_path, T) == first and len(spy.calls) == calls
     assert read_population(path) == first
-    # Another Monday is listed on its own: a week later a_gone is still closed.
+    # Another time is listed on its own: a week later a_gone is still closed.
     later = population(spy, tmp_path, T + 7 * DAY_MS)
     assert len(spy.calls) > calls and len(later) == 17
 
@@ -71,7 +71,7 @@ def test_a_cached_population_is_reparsed_with_the_live_checks(tmp_path: Path) ->
     assert read_population(path) == (ScorableAccount("a_1", "p_1"),)
 
 
-def test_only_a_monday_at_midnight_has_a_folder(tmp_path: Path) -> None:
-    for t_ms in (T + 1, T + DAY_MS, T + 3_600_000):
-        with pytest.raises(ValueError, match="Monday at 00:00 UTC"):
+def test_only_a_whole_second_has_a_folder(tmp_path: Path) -> None:
+    for t_ms in (T + 1, T + 3_600_001, T - 999):
+        with pytest.raises(ValueError, match="whole second"):
             population_file(tmp_path, t_ms)

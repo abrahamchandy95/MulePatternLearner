@@ -6,20 +6,20 @@ investigate why." Every true mule of the test world was hidden from the model, i
 not, since the model never reads the test world's labels; the report reads the run of the model
 mule score uses, the GNN of the best selection score.
 
-- Who is in it: every true mule with an active Monday in the ranking that did not score high:
-  missed when it is never in the top 5% on any of its active Mondays (its chance of a flag at
-  5% is 0), and weak when its median rank over its active Mondays is outside the top 5%
+- Who is in it: every true mule with an active week in the ranking that did not score high:
+  missed when it is never in the top 5% in any of its active weeks (its chance of a flag at
+  5% is 0), and weak when its median rank over its active weeks is outside the top 5%
   though it was flagged on some. 5% is audit.report_budget, which the owner set.
 - What it holds, written into the run's results folder (missed/):
   - mules.parquet: each one, missed or weak, with its groups, ring, identification, median
     rank and chance of a flag;
-  - rows.parquet: its decoded feature rows on each active Monday, long, a row per column:
+  - rows.parquet: its decoded feature rows in each active week, long, a row per column:
     the audited columns of its built example (evaluation.feature_audit: its own row with
     its degrees, its customer's, its devices' and IPs' and its edges' aggregates and its
     community block), each value raw, before encoding;
-  - subgraph_<kind>.parquet: its subgraph on each active Monday, the nodes and edges with
+  - subgraph_<kind>.parquet: its subgraph in each active week, the nodes and edges with
     their fields as the cache holds them, a file per kind of row;
-  - ring_mates.parquet: on each Monday, how each other scored account of its ring scored
+  - ring_mates.parquet: in each week, how each other scored account of its ring scored
     (its logit and rank, its status) and whether the bank identified it.
 
 The report is read by nothing else; each mule is explained by a person as a bug or a missing
@@ -53,9 +53,9 @@ FOLDER = "missed"
 
 def missed_mules(mules: pd.DataFrame, budget: float) -> pd.DataFrame:
     """The missed and weak mules of a run's mule table (rankings.mule_table), with their
-    outcome, of those with an active Monday."""
+    outcome, of those with an active week."""
     name = budget_name(budget)
-    scored = mules[mules["active_mondays"] > 0].copy()
+    scored = mules[mules["active_weeks"] > 0].copy()
     never = scored[f"ever_at_{name}"] <= 0
     weak = ~never & (scored["median_rank"] > budget)
     scored["outcome"] = np.where(never, MISSED, np.where(weak, WEAK, ""))
@@ -126,8 +126,8 @@ def write_report(
 
 
 def ring_mates(frame: pd.DataFrame, reported: pd.DataFrame) -> pd.DataFrame:
-    """For each reported mule of a ring, every other scored account of its ring on each
-    Monday: its status, logit and rank fraction in that Monday's ranking (against it, when it
+    """For each reported mule of a ring, every other scored account of its ring in each
+    week: its status, logit and rank fraction in that week's ranking (against it, when it
     is a mule outside its activity), and whether the bank identified it."""
     ranking = Ranking.of(frame, (frame["status"] == "active").to_numpy())
     weight = ranking.weight

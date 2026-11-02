@@ -1,0 +1,92 @@
+USE GRAPH Mule_Pattern_Learner
+CREATE OR REPLACE QUERY read_customer_accounts(
+    UINT t_ms, // The scoring time after the first 90 days
+    LIST<STRING> customer_ids // The ids of the customers to read
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+
+    /* Tuples */
+    TYPEDEF TUPLE<INT sec, STRING id, STRING account_type> Owned;
+
+    /* Constants */
+    UINT LOOKBACK_MS = 7776000000; // 90 days
+
+    /* Vertex and edge types, each a set so that one pattern serves transactions and transfers, sent and received */
+    SetAccum<STRING> @@payment_vertex_type; // A transaction or a transfer
+    SetAccum<STRING> @@customer_to_account_edge_type; // Customer -> the accounts they own
+    SetAccum<STRING> @@account_to_payment_edge_type; // Account -> the payments it sent or received
+    SetAccum<STRING> @@payment_to_account_edge_type; // Payment -> the accounts that sent and received it
+    @@payment_vertex_type += "Payment_Transaction";
+    @@payment_vertex_type += "Zelle_Transfer";
+    @@customer_to_account_edge_type += "Party_Owns_Account";
+    @@account_to_payment_edge_type += "Account_Initiated_Transaction";
+    @@account_to_payment_edge_type += "Account_Received_Transaction";
+    @@account_to_payment_edge_type += "Account_Sent_Zelle_Transfer";
+    @@account_to_payment_edge_type += "Account_Received_Zelle_Transfer";
+    @@payment_to_account_edge_type += "Transaction_From_Account";
+    @@payment_to_account_edge_type += "Transaction_To_Account";
+    @@payment_to_account_edge_type += "Transfer_From_Account";
+    @@payment_to_account_edge_type += "Transfer_To_Account";
+
+    /* Accumulators */
+    MaxAccum<UINT> @last_active; // An account's latest payment with another account, in ms
+    SetAccum<Owned> @accounts; // A customer's accounts at t
+    SetAccum<STRING> @@ids; // The ids given, without repeats
+    SumAccum<INT> @@given; // How many ids were given, repeats included
+
+    IF t_ms <= LOOKBACK_MS OR t_ms % 1000 != 0 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+    FOREACH customer_id IN customer_ids DO
+        @@ids += customer_id;
+        @@given += 1;
+    END;
+    IF @@given == 0 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+    IF @@ids.size() != @@given THEN
+        PRINT "duplicate_customer" AS status;
+        RETURN;
+    END;
+    customers = to_vertex_set(@@ids, "Party");
+    IF customers.size() != @@ids.size() THEN
+        PRINT "unknown_customer" AS status;
+        RETURN;
+    END;
+
+    /* Traverse: Party -> Account, through an ownership visible at t, the account open by t */
+    accounts = SELECT b
+        FROM customers:q - (@@customer_to_account_edge_type>:w) - Account:b
+        WHERE w.valid_from_ms < t_ms
+            AND ( w.valid_to_ms == 0 OR w.valid_to_ms > t_ms - LOOKBACK_MS )
+            AND b.opened_ms < t_ms
+    ;
+
+    /* Traverse: Account -> Payment -> Account, in the 90 days before t, with another account */
+    active = SELECT b
+        FROM accounts:b - (@@account_to_payment_edge_type>:e) - @@payment_vertex_type:p
+            - (@@payment_to_account_edge_type>:f) - Account:x
+        WHERE p.event_ts_ms >= t_ms - LOOKBACK_MS AND p.event_ts_ms < t_ms AND x != b
+        ACCUM
+            b.@last_active += p.event_ts_ms
+    ;
+
+    /* Traverse: Party -> Account again, the same ownerships, listing each account on its customer */
+    listed = SELECT q
+        FROM customers:q - (@@customer_to_account_edge_type>:w) - Account:b
+        WHERE w.valid_from_ms < t_ms
+            AND ( w.valid_to_ms == 0 OR w.valid_to_ms > t_ms - LOOKBACK_MS )
+            AND b.opened_ms < t_ms
+        ACCUM
+            q.@accounts += Owned(floor(b.@last_active / 1000), b.id, b.account_type)
+    ;
+
+    /* Printing the customers */
+    PRINT "ok" AS status;
+    PRINT customers[
+        customers.id AS customer_id,
+        customers.@accounts AS accounts
+    ] AS customers;
+
+}

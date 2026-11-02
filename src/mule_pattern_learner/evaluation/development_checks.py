@@ -3,16 +3,16 @@
 the answer key and the cache of the audit sample (evaluation.sample):
 
 - No positive is an account hub: no active true mule's account is an account hub of
-  read_hubs on a Monday it is active. It passes or fails.
-- The share of ring devices and IPs that are leaves on their ring's active Mondays, reported
-  and judged near 0 by the owner. A device or IP is a ring node of a ring on a Monday when the
+  read_hubs in a week it is active. It passes or fails.
+- The share of ring devices and IPs that are leaves in their ring's active weeks, reported
+  and judged near 0 by the owner. A device or IP is a ring node of a ring in a week when the
   own edges (owner-enrolment or seen) of active true mules of the ring that belong to at least
-  two different customers reach it in their subgraphs that Monday; it is a leaf when B5 reads
+  two different customers reach it in their subgraphs that week; it is a leaf when B5 reads
   it as one.
 - Whether busy ordinary accounts' card spending fills B1's short dwell shares, reported: the
   weighted means of left_15m to left_1d and left_by_card, and the card part of left_1d
-  (left_1d times left_by_card), over busy non-mule account-Mondays (those at or above the 90th
-  percentile of non-mule out_30d by weight), over every non-mule account-Monday, and over the
+  (left_1d times left_by_card), over busy non-mule account-weeks (those at or above the 90th
+  percentile of non-mule out_30d by weight), over every non-mule account-week, and over the
   active true mules. If the card part fills them, the design's answer is to count transfer and
   cash outflows only.
 """
@@ -61,7 +61,7 @@ def own_nodes(rows: ExampleRows) -> OwnNodes:
 def positive_hubs(
     mule_rows: Sequence[tuple[int, str]], hubs: Mapping[int, frozenset[str]]
 ) -> pd.DataFrame:
-    """The active true-mule account-Mondays whose account is an account hub that Monday."""
+    """The active true-mule account-weeks whose account is an account hub that week."""
     found = [(t_ms, account) for t_ms, account in mule_rows if account in hubs[t_ms]]
     return pd.DataFrame(found, columns=["t_ms", "account_id"]).astype(
         {"t_ms": "int64", "account_id": "str"}
@@ -70,8 +70,8 @@ def positive_hubs(
 
 @dataclass(frozen=True)
 class ActiveMule:
-    """An active true mule on a Monday, as the ring nodes read it: the Monday, its account, the
-    customer that owns the account that Monday (None when none is known) and its ring (-1 for
+    """An active true mule in a week, as the ring nodes read it: its t, its account, the
+    customer that owns the account that week (None when none is known) and its ring (-1 for
     none)."""
 
     t_ms: int
@@ -96,9 +96,9 @@ def other_customer(mine: str | None, theirs: str | None) -> bool:
 def ring_nodes(
     mules: Sequence[ActiveMule], nodes: Sequence[OwnNodes]
 ) -> dict[tuple[int, int, tuple[str, str]], bool]:
-    """The ring nodes, as (ring, Monday, (kind, id)) with whether B5 reads the node as a leaf.
-    A device or IP is a ring's on a Monday when the own edges of active true mules of that
-    ring, belonging to at least two different customers, reach it that Monday. nodes holds each
+    """The ring nodes, as (ring, t, (kind, id)) with whether B5 reads the node as a leaf.
+    A device or IP is a ring's in a week when the own edges of active true mules of that
+    ring, belonging to at least two different customers, reach it that week. nodes holds each
     mule's own nodes, in the order of mules. A ringless mule, or one with no known customer,
     makes no ring node."""
     customers: dict[tuple[int, int, tuple[str, str]], set[str]] = defaultdict(set)
@@ -114,7 +114,7 @@ def ring_nodes(
 
 
 def ring_leaf_share(mules: Sequence[ActiveMule], nodes: Sequence[OwnNodes]) -> pd.DataFrame:
-    """The ring nodes (ring_nodes) and the leaves among them, over every ring and Monday."""
+    """The ring nodes (ring_nodes) and the leaves among them, over every ring and week."""
     found = ring_nodes(mules, nodes)
     leaves = sum(found.values())
     share = leaves / len(found) if found else float("nan")
@@ -132,7 +132,7 @@ def card_spending(
     positive: NDArray[np.bool_],
     weight: NDArray[np.float64],
 ) -> pd.DataFrame:
-    """The card-spending report: shares holds, a row per account-Monday, left_15m to left_1d
+    """The card-spending report: shares holds, a row per account-week, left_15m to left_1d
     and left_by_card in that order; out_30d its payments sent in the last 30 days."""
     ordinary = ~positive
     busy = np.zeros(len(positive), dtype=bool)
@@ -147,7 +147,7 @@ def card_spending(
     card_part = shares[:, 3] * shares[:, 4]
     rows: list[dict[str, object]] = []
     for group, chosen in (("busy_ordinary", busy), ("ordinary", ordinary), ("mules", positive)):
-        row: dict[str, object] = {"group": group, "account_mondays": int(chosen.sum())}
+        row: dict[str, object] = {"group": group, "account_weeks": int(chosen.sum())}
         for column, name in enumerate((*SHORT_SHARES, "left_by_card")):
             row[name] = _mean(shares[chosen, column], weight[chosen])
         row["card_part_of_left_1d"] = _mean(card_part[chosen], weight[chosen])

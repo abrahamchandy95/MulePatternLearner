@@ -680,7 +680,7 @@ def test_a_self_payment_changes_no_sharing_count_edge_or_cap() -> None:
         ({"hub_accounts": [{"id": "x_shop"}, {"id": "a_late"}]}, "invisible_hub"),
     ],
     ids=[
-        "no Monday",
+        "no whole second",
         "no account",
         "an account twice",
         "an unknown account",

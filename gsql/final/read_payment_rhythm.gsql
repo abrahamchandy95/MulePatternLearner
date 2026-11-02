@@ -1,0 +1,206 @@
+USE GRAPH Mule_Pattern_Learner
+CREATE OR REPLACE QUERY read_payment_rhythm(
+    UINT t_ms, // The scoring time after the first 90 days
+    LIST<STRING> account_ids // The accounts to read
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+
+    /* Tuples */
+    TYPEDEF TUPLE<UINT ts, STRING id> Paid;
+
+    /* Constants */
+    UINT LOOKBACK_MS = 7776000000; // 90 days
+    UINT MONTH_MS = 2592000000; // 30 days
+    UINT DAY_MS = 86400000; // 24 hours
+    UINT HOUR_MS = 3600000; // 1 hour
+
+    /* Vertex and edge types, each a set so that one pattern serves transactions and transfers */
+    SetAccum<STRING> @@payment_vertex_type; // A transaction or a transfer
+    SetAccum<STRING> @@receiver_to_payment_edge_type; // Account -> the payments it received
+    SetAccum<STRING> @@payment_to_sender_edge_type; // Payment -> the account that sent it
+    SetAccum<STRING> @@sender_to_payment_edge_type; // Account -> the payments it sent
+    SetAccum<STRING> @@payment_to_receiver_edge_type; // Payment -> the account that received it
+    @@payment_vertex_type += "Payment_Transaction";
+    @@payment_vertex_type += "Zelle_Transfer";
+    @@receiver_to_payment_edge_type += "Account_Received_Transaction";
+    @@receiver_to_payment_edge_type += "Account_Received_Zelle_Transfer";
+    @@payment_to_sender_edge_type += "Transaction_From_Account";
+    @@payment_to_sender_edge_type += "Transfer_From_Account";
+    @@sender_to_payment_edge_type += "Account_Initiated_Transaction";
+    @@sender_to_payment_edge_type += "Account_Sent_Zelle_Transfer";
+    @@payment_to_receiver_edge_type += "Transaction_To_Account";
+    @@payment_to_receiver_edge_type += "Transfer_To_Account";
+
+    /* Accumulators */
+    MaxAccum<UINT> @last_in, @last_out; // The time of an account's latest payment in and out
+    HeapAccum<Paid>(257, ts DESC, id DESC) @inflows, @outflows; // The newest payments of the last 30 days
+    SumAccum<INT> @burst_in_1h, @burst_in_24h; // Most payments received within an hour, a day
+    SumAccum<INT> @burst_out_1h, @burst_out_24h; // Most payments sent within an hour, a day
+    OrAccum @shortest_in_gap_present, @since_last_in_present, @since_last_out_present;
+    SumAccum<UINT> @shortest_in_gap_ms, @since_last_in_ms, @since_last_out_ms; // 0 when absent
+    SetAccum<STRING> @@ids; // The account ids given, each once
+    SumAccum<INT> @@given; // How many were given
+
+    IF t_ms <= LOOKBACK_MS OR t_ms % 1000 != 0 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+    FOREACH account_id IN account_ids DO
+        @@ids += account_id;
+        @@given += 1;
+    END;
+    IF @@given == 0 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+    IF @@ids.size() != @@given THEN
+        PRINT "duplicate_account" AS status;
+        RETURN;
+    END;
+    requested = to_vertex_set(@@ids, "Account");
+    IF requested.size() != @@ids.size() THEN
+        PRINT "unknown_account" AS status;
+        RETURN;
+    END;
+    accounts = SELECT s FROM requested:s WHERE s.opened_ms < t_ms;
+    IF accounts.size() != requested.size() THEN
+        PRINT "invisible_account" AS status;
+        RETURN;
+    END;
+
+    /* Traverse: Account -> Payment -> its sender, received in the 90 days before t, self-payments aside */
+    received = SELECT a
+        FROM accounts:a - (@@receiver_to_payment_edge_type>:e) - @@payment_vertex_type:p
+            - (@@payment_to_sender_edge_type>:f) - Account:b
+        WHERE p.event_ts_ms >= t_ms - LOOKBACK_MS AND p.event_ts_ms < t_ms AND b != a
+        ACCUM
+            a.@since_last_in_present += TRUE,
+            a.@last_in += p.event_ts_ms,
+            IF p.event_ts_ms >= t_ms - MONTH_MS THEN
+                a.@inflows += Paid(p.event_ts_ms, p.id)
+            END
+    ;
+
+    /* Traverse: Account -> Payment -> its receiver, sent in the 90 days before t, self-payments aside */
+    sent = SELECT a
+        FROM accounts:a - (@@sender_to_payment_edge_type>:e) - @@payment_vertex_type:p
+            - (@@payment_to_receiver_edge_type>:f) - Account:b
+        WHERE p.event_ts_ms >= t_ms - LOOKBACK_MS AND p.event_ts_ms < t_ms AND b != a
+        ACCUM
+            a.@since_last_out_present += TRUE,
+            a.@last_out += p.event_ts_ms,
+            IF p.event_ts_ms >= t_ms - MONTH_MS THEN
+                a.@outflows += Paid(p.event_ts_ms, p.id)
+            END
+    ;
+
+    /* Count the bursts, the shortest gap between inflows, and the time since the last payments */
+    rows = SELECT a
+        FROM accounts:a
+        POST-ACCUM
+            INT cut_in = -1,
+            INT cut_out = -1,
+            INT within_1h = 0,
+            INT within_24h = 0,
+            INT most_1h = 0,
+            INT most_24h = 0,
+            UINT shortest = 0,
+            BOOL gap_found = FALSE,
+            IF a.@inflows.size() > 256 THEN
+                FOREACH x IN a.@inflows DO
+                    IF cut_in < 0 OR floor(x.ts / 1000) < cut_in THEN
+                        cut_in = floor(x.ts / 1000)
+                    END
+                END
+            END,
+            IF a.@outflows.size() > 256 THEN
+                FOREACH x IN a.@outflows DO
+                    IF cut_out < 0 OR floor(x.ts / 1000) < cut_out THEN
+                        cut_out = floor(x.ts / 1000)
+                    END
+                END
+            END,
+            FOREACH x IN a.@inflows DO
+                IF floor(x.ts / 1000) > cut_in THEN
+                    within_1h = 0,
+                    within_24h = 0,
+                    FOREACH y IN a.@inflows DO
+                        IF floor(y.ts / 1000) > cut_in THEN
+                            IF y.ts >= x.ts AND y.ts < x.ts + HOUR_MS THEN
+                                within_1h = within_1h + 1
+                            END,
+                            IF y.ts >= x.ts AND y.ts < x.ts + DAY_MS THEN
+                                within_24h = within_24h + 1
+                            END,
+                            IF y.ts < x.ts THEN
+                                IF NOT gap_found OR x.ts - y.ts < shortest THEN
+                                    shortest = x.ts - y.ts,
+                                    gap_found = TRUE
+                                END
+                            END
+                        END
+                    END,
+                    IF within_1h > most_1h THEN
+                        most_1h = within_1h
+                    END,
+                    IF within_24h > most_24h THEN
+                        most_24h = within_24h
+                    END
+                END
+            END,
+            a.@burst_in_1h += most_1h,
+            a.@burst_in_24h += most_24h,
+            IF gap_found THEN
+                a.@shortest_in_gap_present += TRUE,
+                a.@shortest_in_gap_ms += shortest
+            END,
+            most_1h = 0,
+            most_24h = 0,
+            FOREACH x IN a.@outflows DO
+                IF floor(x.ts / 1000) > cut_out THEN
+                    within_1h = 0,
+                    within_24h = 0,
+                    FOREACH y IN a.@outflows DO
+                        IF floor(y.ts / 1000) > cut_out THEN
+                            IF y.ts >= x.ts AND y.ts < x.ts + HOUR_MS THEN
+                                within_1h = within_1h + 1
+                            END,
+                            IF y.ts >= x.ts AND y.ts < x.ts + DAY_MS THEN
+                                within_24h = within_24h + 1
+                            END
+                        END
+                    END,
+                    IF within_1h > most_1h THEN
+                        most_1h = within_1h
+                    END,
+                    IF within_24h > most_24h THEN
+                        most_24h = within_24h
+                    END
+                END
+            END,
+            a.@burst_out_1h += most_1h,
+            a.@burst_out_24h += most_24h,
+            IF a.@since_last_in_present THEN
+                a.@since_last_in_ms += t_ms - a.@last_in
+            END,
+            IF a.@since_last_out_present THEN
+                a.@since_last_out_ms += t_ms - a.@last_out
+            END
+    ;
+
+    /* Printing the accounts */
+    PRINT "ok" AS status;
+    PRINT rows[
+        rows.id AS account_id,
+        rows.@burst_in_1h AS burst_in_1h,
+        rows.@burst_in_24h AS burst_in_24h,
+        rows.@burst_out_1h AS burst_out_1h,
+        rows.@burst_out_24h AS burst_out_24h,
+        rows.@shortest_in_gap_present AS shortest_in_gap_present,
+        rows.@shortest_in_gap_ms AS shortest_in_gap_ms,
+        rows.@since_last_in_present AS since_last_in_present,
+        rows.@since_last_in_ms AS since_last_in_ms,
+        rows.@since_last_out_present AS since_last_out_present,
+        rows.@since_last_out_ms AS since_last_out_ms
+    ] AS accounts;
+
+}

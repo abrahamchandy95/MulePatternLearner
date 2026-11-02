@@ -1,15 +1,19 @@
-"""Fetch: fill the cache for the keys a role needs, (Monday, scored account) pairs, and only for
+"""Fetch: fill the cache for the keys a role needs, (t, scored account) pairs, and only for
 the rows it lacks (docs/design.md, "Cache" and "Query plumbing").
 
-For each Monday, fetch:
+For each scoring time t with a scored account whose subgraph is not complete, fetch:
 
-1. reads read_hubs once, from the cache or TigerGraph;
-2. takes the scored accounts whose subgraph is not complete, a part at a time, and runs B4, B5
-   and B6 for those whose rows each lacks, with the Monday's account hubs as a parameter;
-3. runs B1 to B3 for every account node of those subgraphs whose rows each lacks: the
+1. runs mark_crowds, which stamps the crowds of t on the graph and prints their rows, cached
+   once. The graph holds the stamps of one time alone, so t is marked again whenever its reads
+   run, and its reads all run before another time is marked; marking t again stamps the same
+   nodes, so the mark is retried as a read is;
+2. reads read_hubs once, from the cache or TigerGraph;
+3. takes the scored accounts whose subgraph is not complete, a part at a time, and runs B4, B5
+   and B6 for those whose rows each lacks, with the account hubs of t as a parameter;
+4. runs B1 to B3 for every account node of those subgraphs whose rows each lacks: the
    accounts of B4's subgraph and B5's co-users' accounts, but for the account hubs, which get
    flag-only rows; the scored account always gets them, even when it is a hub;
-4. records the part's scored accounts as complete, so a fetch interrupted at any point resumes
+5. records the part's scored accounts as complete, so a fetch interrupted at any point resumes
    where it stopped, and a second fetch of the same keys makes no request.
 
 Every table's rows are written a part of accounts_per_part accounts at a time, as soon as the
@@ -29,7 +33,7 @@ Proof of concept (25 October 2026, docs/design.md, "Proof-of-concept settings (2
 2026)"): the requests of one query run transport.concurrent_requests at a time. A query's
 accounts are cut into rounds of that many requests, each of at most the size the answers before
 the round give, and of fewer accounts when a smaller request keeps every slot of the round in use
-(a Monday of 30 accounts goes to B4 in two requests of 15, not one of 30). The requests of a
+(a scoring time of 30 accounts goes to B4 in two requests of 15, not one of 30). The requests of a
 round are sent in the order of their accounts, and their answers are parsed, measured, counted
 and kept in that order, so the same accounts make the same requests, fill the same cache and
 count the same whatever the timing of the answers; a request that fails raises the failure of
@@ -54,6 +58,7 @@ from ..config import DEFAULT_CONFIG, TransportConfig
 from ..tigergraph.executor import FetchExecutor, QueryExecutor, run_in_halves
 from ..tigergraph.installer import require_parity
 from ..tigergraph.queries import (
+    MARK_CROWDS,
     READ_ACTIVITY_CHANGE,
     READ_COMMUNITY,
     READ_COUNTERPARTIES,
@@ -62,6 +67,7 @@ from ..tigergraph.queries import (
     READ_PAYMENT_EVENTS,
     READ_SHARED_IDENTITY,
     VERSIONS,
+    mark_crowds,
     read_activity_change,
     read_community,
     read_counterparties,
@@ -88,6 +94,7 @@ from .cache import (
 type Replies = list[tuple[tuple[str, ...], list[dict[str, Any]]]]
 # Every query fetch runs; the parity record must hold each one's version.
 FETCHED = (
+    MARK_CROWDS,
     READ_HUBS,
     READ_PAYMENT_EVENTS,
     READ_SHARED_IDENTITY,
@@ -97,10 +104,10 @@ FETCHED = (
     READ_ACTIVITY_CHANGE,
 )
 # The share of a query's measured accounts whose bytes size its requests, and how many of the
-# latest accounts are kept: a Monday of a 300,000-person world has millions.
+# latest accounts are kept: a scoring time of a 300,000-person world has millions.
 PERCENTILE = 0.9
 MEASURED_ACCOUNTS = 10_000
-# Each query's parameters, from the Monday, the request's accounts and the account hubs.
+# Each query's parameters, from t, the request's accounts and the account hubs.
 PARAMS: dict[str, Callable[[int, tuple[str, ...], Sequence[str]], dict[str, Any]]] = {
     READ_PAYMENT_EVENTS: read_payment_events.params,
     READ_SHARED_IDENTITY: read_shared_identity.params,
@@ -183,8 +190,16 @@ class Fetcher:
         self.sizer = Sizer(transport)
         self.done = Fetched()
 
+    def crowds(self, t_ms: int) -> None:
+        """Mark the crowds of t on the graph, and cache their rows the first time."""
+        rows = self.executor.run(MARK_CROWDS, mark_crowds.params(t_ms))
+        self.done.requests[MARK_CROWDS] += 1
+        found = mark_crowds.parse(rows)
+        if self.cache.crowds(t_ms) is None:
+            self.cache.write_crowds(t_ms, found)
+
     def hubs(self, t_ms: int) -> Hubs:
-        """The Monday's hubs, cached once."""
+        """The hubs of t, cached once."""
         found = self.cache.hubs(t_ms)
         if found is not None:
             self.done.cached[READ_HUBS] += 1
@@ -274,19 +289,20 @@ class Fetcher:
             found |= listed
         return (found - set(hubs)) | set(scored)
 
-    def monday(self, t_ms: int, scored: Collection[str]) -> None:
-        """Fill the cache for the scored accounts of the Monday t, and drop the cache's
-        indexes of the Monday, which no later Monday needs."""
+    def week(self, t_ms: int, scored: Collection[str]) -> None:
+        """Fill the cache for the scored accounts at the time t, and drop the cache's indexes
+        of t, which no later week needs."""
         try:
-            self._monday(t_ms, scored)
+            self._week(t_ms, scored)
         finally:
             self.cache.forget(t_ms)
 
-    def _monday(self, t_ms: int, scored: Collection[str]) -> None:
+    def _week(self, t_ms: int, scored: Collection[str]) -> None:
         todo = self.cache.missing(COMPLETE, t_ms, scored)
         self.done.cached[COMPLETE] += len(set(scored)) - len(todo)
         if not todo:
             return
+        self.crowds(t_ms)
         hubs = {account.account_id for account in self.hubs(t_ms).accounts}
         listed = sorted(hubs)
         for part in chunks(todo, self.part_accounts):
@@ -305,11 +321,11 @@ def fetch(
     transport: TransportConfig = DEFAULT_CONFIG.transport,
     parity: Path | None = None,
 ) -> Fetched:
-    """Fill the cache for keys, the scored accounts of each Monday, through the fetch
+    """Fill the cache for keys, the scored accounts at each t, through the fetch
     executor. The parity record (gsql/parity.toml unless parity names another) must hold the
     version of every query fetch runs."""
     require_parity({name: VERSIONS[name] for name in FETCHED}, parity)
     fetcher = Fetcher(executor, cache, transport)
     for t_ms in sorted(keys):
-        fetcher.monday(t_ms, keys[t_ms])
+        fetcher.week(t_ms, keys[t_ms])
     return fetcher.done

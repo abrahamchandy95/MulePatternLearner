@@ -14,9 +14,11 @@ from mule_pattern_learner.tigergraph.queries import REGISTRY
 QUERY = """USE GRAPH Mule_Pattern_Learner
 
 CREATE OR REPLACE QUERY read_items(UINT t_ms) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
-    PRINT "ok" AS status, "read_items-000000000000" AS version;
+    PRINT "ok" AS status;
 }
 """
+# An old query, which still prints its version.
+OLD_QUERY = QUERY.replace("AS status;", 'AS status, "read_items-000000000000" AS version;')
 REGISTRY_TEXT = 'ITEMS = Query("read_items", "queries", "read_items-000000000000")\n'
 
 
@@ -25,16 +27,17 @@ def test_the_restamper_edits_the_registry_package() -> None:
     assert "REGISTRY" in REGISTRY_FILE.read_text() and REGISTRY
 
 
-def test_a_query_and_its_registry_entry_get_the_hash_of_its_text(tmp_path: Path) -> None:
+def test_a_query_s_registry_entry_gets_the_hash_of_its_text(tmp_path: Path) -> None:
     file, registry = tmp_path / "read_items.gsql", tmp_path / "__init__.py"
     file.write_text(QUERY)
     registry.write_text(REGISTRY_TEXT)
     version = restamp("read_items", file, registry)
     assert version.startswith("read_items-") and version != "read_items-000000000000"
     assert registry.read_text() == REGISTRY_TEXT.replace("read_items-000000000000", version)
+    # The query prints no version, so its file is left as it was.
+    assert file.read_text() == QUERY
     definition = definitions(file.read_text())["read_items"]
     assert version_rule("read_items", definition, version) == []
-    # The hash leaves the version out, so stamping again changes nothing.
     assert restamp("read_items", file, registry) == version
     # A change of text, not of layout or comments, is a new version.
     file.write_text(file.read_text().replace("PRINT", "/* the answer */\n    PRINT"))
@@ -43,15 +46,27 @@ def test_a_query_and_its_registry_entry_get_the_hash_of_its_text(tmp_path: Path)
     assert restamp("read_items", file, registry) != version
 
 
+def test_an_old_query_s_printed_version_is_replaced_and_left_out_of_the_hash(
+    tmp_path: Path,
+) -> None:
+    file, registry = tmp_path / "read_items.gsql", tmp_path / "__init__.py"
+    file.write_text(OLD_QUERY)
+    registry.write_text(REGISTRY_TEXT)
+    version = restamp("read_items", file, registry)
+    assert file.read_text() == OLD_QUERY.replace("read_items-000000000000", version)
+    assert restamp("read_items", file, registry) == version
+
+
 @pytest.mark.parametrize(
     ("text", "message"),
     [
-        (QUERY.replace("read_items-000000000000", "read_items-0"), "print its version once"),
-        (QUERY.replace("version;", 'version, "read_items-000000000000" AS other;'), "once"),
+        (OLD_QUERY.replace("version;", 'version, "read_items-000000000000" AS other;'), "once"),
         (QUERY.replace("QUERY read_items", "QUERY read_other"), "defines"),
     ],
 )
-def test_a_query_without_one_version_of_its_own_is_refused(text: str, message: str) -> None:
+def test_a_query_of_another_name_or_printing_two_versions_is_refused(
+    text: str, message: str
+) -> None:
     with pytest.raises(ValueError, match=message):
         stamped("read_items", text)
 

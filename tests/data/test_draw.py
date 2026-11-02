@@ -1,4 +1,4 @@
-"""The keyed draws: the hash of an (account, Monday), pinned; the training draw, uniform and
+"""The keyed draws: the hash of an (account, t), pinned; the training draw, uniform and
 nesting; the fallback sample, at its inclusion chance (docs/design.md, "Training world")."""
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ POOL = [f"a_n{index:02d}" for index in range(12)]
 
 def test_the_hashes_are_pinned() -> None:
     # Golden: blake2b keyed by b"mule-draw-v1" and four zero bytes, 8 bytes long, of
-    # "<account id>|<Monday ms>", big-endian. A change here changes every draw and sample.
+    # "<account id>|<t ms>", big-endian. A change here changes every draw and sample.
     assert KEY == b"mule-draw-v1\x00\x00\x00\x00"
     assert draw_hash(KEY, "a_n00", T) == 0x9C1A095EEF539F33
     assert draw_hash(KEY, "a_n00", T - 13 * WEEK) == 0xC5951F7F9200E281
@@ -28,7 +28,7 @@ def test_the_hashes_are_pinned() -> None:
     assert draw_hash(KEY, "a_n10", T) == 0x0311A7E6086A4266
     digest = hashlib.blake2b(b"a_n00|1719792000000", key=KEY, digest_size=8).digest()
     assert draw_hash(KEY, "a_n00", T) == int.from_bytes(digest, "big")
-    # Another key or another Monday gives another hash.
+    # Another key or another t gives another hash.
     assert draw_hash(b"other", "a_n00", T) != draw_hash(KEY, "a_n00", T)
 
 
@@ -56,7 +56,7 @@ def test_hashes_that_tie_are_broken_by_account_id(monkeypatch: pytest.MonkeyPatc
 
 
 def test_the_draw_is_uniform() -> None:
-    # 10,000 draws of 5 from a pool of 50, one per Monday: each account is drawn 1,000 times in
+    # 10,000 draws of 5 from a pool of 50, one per week: each account is drawn 1,000 times in
     # expectation. A chi-square test of the counts at the 0.1% level.
     pool = [f"acct-{index:03d}" for index in range(50)]
     counts = dict.fromkeys(pool, 0)

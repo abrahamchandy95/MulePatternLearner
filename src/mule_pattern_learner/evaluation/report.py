@@ -2,11 +2,13 @@
 
 A result is reported only when, for each of its rotation's three worlds, the world is a
 reported one and its pass record (evaluation.store) shows PhantomLedger's records passed, every
-label check, the identification horizon and the clock probe passed, under the current query
-versions and settings; and when every world of the development rotation has a passing feature
-audit of the same query versions and settings (verdict). Otherwise every table is marked
-development only, as on development worlds. Nothing here reads a pass record's values: there
-are none.
+label check, the identification horizon and the clock gain test passed, under the current query
+versions and settings; when the clock invariance test of the selected GNN on the rotation's
+test world passed (evaluation.clock_invariance, which mule evaluate runs itself, since it
+judges the trained model and no audit can); and when every world of the development rotation has
+a passing feature audit of the same query versions and settings (verdict). Otherwise every table
+is marked development only, as on development worlds. Nothing here reads a pass record's
+values: there are none.
 
 evaluate scores nothing itself: it takes each run's logits of the test keys (evaluation.rankings
 scores the model files) and measures the runs one at a time, from a test frame built for each and
@@ -19,7 +21,7 @@ kind, each with the rotation's name and a development_only column:
   score, marked selected) each headline metric's ring-resampled interval; and in not_available,
   for a metric with no value because of how the test keys are scored (distinct accounts alerted
   under the fallback's weighted sample), the reason, empty for every other row;
-- per_monday: recall and precision at each budget per Monday, per ranker and seed;
+- per_week: recall and precision at each budget per week, per ranker and seed;
 - groups: each group's metrics (evaluation.groups), per ranker and seed;
 - spread: per ranker, group and metric, the mean, standard deviation, least and greatest over
   the seeds (and, once every rotation is evaluated, over the rotations: rotation_spread);
@@ -33,7 +35,11 @@ kind, each with the rotation's name and a development_only column:
   sharing and how many by payments from that of a customer who shares nothing;
 - identification bias (evaluation.bias): victim_origin, origin_by_identification,
   hidden_recall_by_origin, identification_separation, and on the development rotation the
-  selection_epochs and selection_correlation the caller rescored.
+  selection_epochs and selection_correlation the caller rescored;
+- clock_invariance, when the caller ran the invariance test: the selected GNN's recall at 1% and
+  ROC AUC on the audit sample's rows in the same class at the scoring times and at the week
+  starts, their differences and the interval of each, the rows compared and left out, and the
+  mule clusters it was judged by (evaluation.clock_invariance).
 
 An XGBoost comparison is one model, trained once with no seed (the owner, 24 October 2026; the
 design's Comparisons): its run has no seed (Run.seed is None), its rows in the tables above have
@@ -71,7 +77,8 @@ from ..subgraph.cache import Cache
 from ..tigergraph.queries import VERSIONS
 from . import bias, groups, missed
 from .answer_key import ACTIVE, EARLY_WARNING, AnswerKey
-from .audit import CLOCK_PROBE, DEVELOPMENT, FEATURE_AUDIT, GATE_RECORD, REPORTED
+from .audit import CLOCK_GAIN, DEVELOPMENT, FEATURE_AUDIT, GATE_RECORD, REPORTED
+from .clock_invariance import CLOCK_INVARIANCE, Invariance
 from .hops import hop_distances
 from .label_checks import IDENTIFICATION_HORIZON, LABEL_CHECKS
 from .rankings import HEADLINE, evaluation_frame, ring_links, run_metrics, scored_keys
@@ -80,7 +87,7 @@ from .store import Store, write_parquet
 from .uncertainty import Clusters, cluster_keys, percentiles, replicate_matrix, spread
 
 # The checks a reported world's pass record must show passed.
-REPORTED_CHECKS = (GATE_RECORD, *LABEL_CHECKS, IDENTIFICATION_HORIZON, CLOCK_PROBE)
+REPORTED_CHECKS = (GATE_RECORD, *LABEL_CHECKS, IDENTIFICATION_HORIZON, CLOCK_GAIN)
 # The ranker the comparisons are made against, and whose best seed mule score uses.
 GNN = "gnn"
 EVENTS_FILE = "events.jsonl"
@@ -113,10 +120,12 @@ def verdict(
     rotation: Sequence[tuple[WorldConfig, str]],
     development: Sequence[tuple[WorldConfig, str]],
     current: MadeUnder,
+    invariance: Invariance | None,
 ) -> Verdict:
     """Whether a rotation's result may be reported: rotation gives its three worlds with their
-    identities, development those of the development rotation, and current what their pass
-    records must have been made under."""
+    identities, development those of the development rotation, current what their pass
+    records must have been made under, and invariance the clock invariance test of the
+    rotation's test world, None when it was not run."""
     reasons: list[str] = []
 
     def made_under(world: WorldConfig, identity: str) -> dict[str, bool] | None:
@@ -146,6 +155,10 @@ def verdict(
                 for check in REPORTED_CHECKS
                 if not checks.get(check, False)
             ]
+    if invariance is None:
+        reasons.append(f"{CLOCK_INVARIANCE} was not run")
+    elif not invariance.passed:
+        reasons.append(f"{CLOCK_INVARIANCE} did not pass")
     if not development:
         reasons.append("no world of the development rotation is given")
     for world, identity in development:
@@ -187,20 +200,26 @@ class Run:
 @dataclass(frozen=True)
 class ScoredWorld:
     """The test world as evaluation reads it: its identity and cache, the keys scored with
-    their weights (t_ms, account_id, weight), its answer key and its identified mules."""
+    their weights (t_ms, account_id, weight), its answer key and its identified mules, and its
+    scoring times, in increasing order, which the active state reads (answer_key.status)."""
 
     identity: str
     cache: Cache
     keys: pd.DataFrame
     key: AnswerKey
     identified: frozenset[str]
+    scoring_times: tuple[int, ...]
 
     @classmethod
-    def of(cls, identity: str, cache: Cache, keys: pd.DataFrame) -> ScoredWorld:
+    def of(
+        cls, identity: str, cache: Cache, keys: pd.DataFrame, scoring_times: Sequence[int]
+    ) -> ScoredWorld:
         """The test world of an identity, its answer key and labels read from its evaluation
         store, which mule audit filled while the world was loaded."""
         store = Store(identity)
-        return cls(identity, cache, keys, store.answer_key(), store.labels().accounts)
+        return cls(
+            identity, cache, keys, store.answer_key(), store.labels().accounts, tuple(scoring_times)
+        )
 
 
 def selected(runs: Sequence[Run]) -> Run:
@@ -257,13 +276,13 @@ def _long(run: Run, group: str, values: Mapping[str, float]) -> list[dict[str, o
 @dataclass(frozen=True)
 class _Measured:
     """What one run's measurement leaves, small enough to keep for every run at once: its
-    metrics by name, why some have no value (RunMetrics.not_available), its per-Monday table,
+    metrics by name, why some have no value (RunMetrics.not_available), its per-week table,
     its group table and its headline metrics on each replicate of the ring bootstrap
     (replicates by HEADLINE)."""
 
     values: Mapping[str, float]
     not_available: Mapping[str, str]
-    per_monday: pd.DataFrame
+    per_week: pd.DataFrame
     groups: pd.DataFrame
     replicates: NDArray[np.float64]
 
@@ -278,23 +297,27 @@ def evaluate(
     rotation: str,
     verdict_found: Verdict,
     epochs: pd.DataFrame | None = None,
+    invariance: Invariance | None = None,
 ) -> dict[str, pd.DataFrame]:
     """Evaluate every run on the test world and write the results into folder, as the module
-    says; seed is the seed of the ring bootstrap's draws, and epochs, on the development
-    rotation, the selection world's rescored epochs (bias.rescore_epochs). The tables written,
-    by name.
+    says; seed is the seed of the ring bootstrap's draws, epochs, on the development
+    rotation, the selection world's rescored epochs (bias.rescore_epochs), and invariance the
+    clock invariance test of the selected run, which the caller ran and which verdict_found
+    already holds. The tables written, by name.
 
-    A test frame holds a row for every scored account-Monday, with its strings, 23 million rows
+    A test frame holds a row for every scored account-week, with its strings, 23 million rows
     and about 2.6 GB for a reported world: so the runs are measured one at a time, each from a
     frame built for it and dropped, and what is kept of each is small (_Measured). Only the
     selected run's frame is kept, since the missed-mule report, the groups and the identification
     bias read it, and it is measured first: the ring bootstrap resamples its clusters, which every
-    run shares, since every run ranks the same account-Mondays."""
+    run shares, since every run ranks the same account-weeks."""
     _check_seeds(runs)
     best = selected(runs)
 
     def frame_of(run: Run) -> pd.DataFrame:
-        return evaluation_frame(run.logits(), world.keys, world.key, world.identified)
+        return evaluation_frame(
+            run.logits(), world.keys, world.key, world.identified, world.scoring_times
+        )
 
     frame = frame_of(best)
     links = ring_links(world.cache, frame, scored_keys(frame, (EARLY_WARNING,)))
@@ -329,12 +352,12 @@ def evaluate(
         elif any(
             not np.array_equal(held, same) for held, same in zip(rows, reference, strict=True)
         ):
-            raise ValueError("The runs did not rank the same account-Mondays")
+            raise ValueError("The runs did not rank the same account-weeks")
         chosen = groups.group_rows(run_frame, surfaced, quiet, hops)
         measured[(run.ranker, run.seed)] = _Measured(
             found.values,
             found.not_available,
-            _seeds(found.per_monday, run),
+            _seeds(found.per_week, run),
             _seeds(groups.group_metrics(run_frame, chosen), run),
             replicate_matrix(
                 [ranking.headline],
@@ -421,8 +444,8 @@ def evaluate(
     origin = bias.victim_origin(world.cache, frame)
     tables: dict[str, pd.DataFrame] = {
         "metrics": metrics,
-        "per_monday": pd.concat(
-            [measured[(run.ranker, run.seed)].per_monday for run in runs], ignore_index=True
+        "per_week": pd.concat(
+            [measured[(run.ranker, run.seed)].per_week for run in runs], ignore_index=True
         ),
         "groups": every_group,
         "spread": pd.DataFrame(spread_rows),
@@ -441,6 +464,8 @@ def evaluate(
     if epochs is not None:
         tables["selection_epochs"] = epochs
         tables["selection_correlation"] = bias.selection_correlation(epochs)
+    if invariance is not None:
+        tables[CLOCK_INVARIANCE] = invariance.frame()
     development_only = not verdict_found.reported
     write_tables(folder, tables, rotation, development_only)
     reported = missed.missed_mules(found_mules, audit.report_budget)

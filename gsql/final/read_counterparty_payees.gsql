@@ -1,0 +1,120 @@
+USE GRAPH Mule_Pattern_Learner
+CREATE OR REPLACE QUERY read_counterparty_payees(
+    UINT t_ms, // The scoring time after the first 90 days
+    LIST<STRING> account_ids // The accounts to read
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+
+    /* Constants */
+    UINT LOOKBACK_MS = 7776000000; // 90 days
+    UINT MONTH_MS = 2592000000; // 30 days
+    UINT WEEK_MS = 604800000; // 7 days
+
+    /* Vertex and edge types, each a set so that one pattern serves transactions and transfers */
+    SetAccum<STRING> @@payment_vertex_type; // A transaction or a transfer
+    SetAccum<STRING> @@sender_to_payment_edge_type; // Account -> the payments it sent
+    SetAccum<STRING> @@payment_to_receiver_edge_type; // Payment -> the account that received it
+    @@payment_vertex_type += "Payment_Transaction";
+    @@payment_vertex_type += "Zelle_Transfer";
+    @@sender_to_payment_edge_type += "Account_Initiated_Transaction";
+    @@sender_to_payment_edge_type += "Account_Sent_Zelle_Transfer";
+    @@payment_to_receiver_edge_type += "Transaction_To_Account";
+    @@payment_to_receiver_edge_type += "Transfer_To_Account";
+
+    /* Accumulators */
+    MapAccum<VERTEX, MinAccum<UINT>> @payee_first; // Each payee, with the first payment to it in the 90 days
+    MapAccum<VERTEX, SumAccum<INT>> @payee_cents; // Each payee's cents in the 30 days
+    SumAccum<INT> @sent_30d; // The cents sent in the 30 days
+    SumAccum<INT> @sent_to_hubs_30d; // Those sent to account hubs
+    SumAccum<INT> @payees_30d, @new_payees_7d, @new_payees_30d;
+    SumAccum<DOUBLE> @top_payee_share_30d, @hub_payee_share_30d;
+    SetAccum<STRING> @@ids; // The account ids given, each once
+    SumAccum<INT> @@given; // How many were given
+
+    IF t_ms <= LOOKBACK_MS OR t_ms % 1000 != 0 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+    FOREACH account_id IN account_ids DO
+        @@ids += account_id;
+        @@given += 1;
+    END;
+    IF @@given == 0 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+    IF @@ids.size() != @@given THEN
+        PRINT "duplicate_account" AS status;
+        RETURN;
+    END;
+    requested = to_vertex_set(@@ids, "Account");
+    IF requested.size() != @@ids.size() THEN
+        PRINT "unknown_account" AS status;
+        RETURN;
+    END;
+    accounts = SELECT s FROM requested:s WHERE s.opened_ms < t_ms;
+    IF accounts.size() != requested.size() THEN
+        PRINT "invisible_account" AS status;
+        RETURN;
+    END;
+
+    /* Traverse: Account -> Payment -> its receiver, sent in the 90 days before t, self-payments aside */
+    sent = SELECT a
+        FROM accounts:a - (@@sender_to_payment_edge_type>:e) - @@payment_vertex_type:p
+            - (@@payment_to_receiver_edge_type>:f) - Account:b
+        WHERE p.event_ts_ms >= t_ms - LOOKBACK_MS AND p.event_ts_ms < t_ms AND b != a
+        ACCUM
+            INT cents = floor(p.amount * 100 + 0.5),
+            a.@payee_first += (b -> p.event_ts_ms),
+            IF p.event_ts_ms >= t_ms - MONTH_MS THEN
+                a.@payee_cents += (b -> cents),
+                a.@sent_30d += cents,
+                IF b.hub_at_ms == t_ms THEN
+                    a.@sent_to_hubs_30d += cents
+                END
+            END
+    ;
+
+    /* Count the payees and the new ones among them, a payee being new when its first payment is in the 30 or 7 days, and the shares of the cents sent to the largest payee and to account hubs */
+    counted = SELECT a
+        FROM accounts:a
+        POST-ACCUM
+            INT top_cents = 0,
+            FOREACH (payee, first_ms) IN a.@payee_first DO
+                IF first_ms >= t_ms - MONTH_MS THEN
+                    a.@new_payees_30d += 1
+                END,
+                IF first_ms >= t_ms - WEEK_MS THEN
+                    a.@new_payees_7d += 1
+                END
+            END,
+            FOREACH (payee, cents) IN a.@payee_cents DO
+                IF cents > top_cents THEN
+                    top_cents = cents
+                END
+            END,
+            a.@payees_30d += a.@payee_cents.size(),
+            IF a.@sent_30d > 0 THEN
+                a.@top_payee_share_30d += top_cents * 1.0 / a.@sent_30d,
+                a.@hub_payee_share_30d += a.@sent_to_hubs_30d * 1.0 / a.@sent_30d
+            END
+    ;
+
+    /* Refuse unless the hub stamps on the graph are this t's */
+    current_marks = SELECT m FROM Mark:m WHERE m.id == "hubs" AND m.at_ms == t_ms;
+    IF current_marks.size() != 1 THEN
+        PRINT "unmarked_time" AS status;
+        RETURN;
+    END;
+
+    /* Printing the accounts */
+    PRINT "ok" AS status;
+    PRINT counted[
+        counted.id AS account_id,
+        counted.@payees_30d AS payees_30d,
+        counted.@new_payees_7d AS new_payees_7d,
+        counted.@new_payees_30d AS new_payees_30d,
+        counted.@top_payee_share_30d AS top_payee_share_30d,
+        counted.@hub_payee_share_30d AS hub_payee_share_30d
+    ] AS accounts;
+
+}

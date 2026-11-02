@@ -378,7 +378,7 @@ class ReferenceGraph:
         return payments
 
     def as_of(self, t_ms: int) -> AsOf:
-        """The graph as of the Monday t_ms."""
+        """The graph as of the time t_ms."""
         return AsOf(self, t_ms)
 
     def page(self, after_id: str, page: int, keep: Callable[[Account], bool]) -> list[Account]:
@@ -417,7 +417,7 @@ class ReferenceGraph:
 
 
 class AsOf:
-    """The graph as of a Monday t, by the rules of docs/design.md, "Time": every boundary is
+    """The graph as of a time t, by the rules of docs/design.md, "Time": every boundary is
     strictly before t.
 
     - A payment is in the lookback when t - 90 days <= ts < t.

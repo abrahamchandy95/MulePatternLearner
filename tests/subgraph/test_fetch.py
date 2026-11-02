@@ -1,6 +1,6 @@
 """Fetch against a spy executor backed by the reference graph: it fills the cache for the keys
 and nothing else, writes a part at a time and resumes where it stopped, makes no request the
-second time, forgets each Monday's indexes, and sizes and halves its requests without changing
+second time, forgets each week's indexes, and sizes and halves its requests without changing
 a result (docs/design.md, "Cache" and "Query plumbing")."""
 
 from __future__ import annotations
@@ -41,6 +41,7 @@ from mule_pattern_learner.testing.reference import ReferenceGraph
 from mule_pattern_learner.testing.world import DAY_MS, T
 from mule_pattern_learner.tigergraph.executor import TigerGraphExecutor
 from mule_pattern_learner.tigergraph.queries import (
+    MARK_CROWDS,
     READ_ACTIVITY_CHANGE,
     READ_COMMUNITY,
     READ_COUNTERPARTIES,
@@ -55,6 +56,7 @@ from mule_pattern_learner.tigergraph.queries import (
     read_payment_events,
     read_shared_identity,
 )
+from mule_pattern_learner.tigergraph.queries.mark_crowds import Crowds
 
 W = 7 * DAY_MS
 # The requests of the full design, one query's at a time: the tests of how a fetch sizes, orders
@@ -105,7 +107,9 @@ def test_fetch_fills_the_cache_for_the_keys(
     spy = Spy(graph)
     cache = Cache(tmp_path)
     done = fetch(spy, cache, {T: SCORED}, parity=parity)
-    assert set(spy.names()) <= set(FETCHED) and spy.names()[0] == READ_HUBS
+    # The crowds of T are marked before any read of T, then the hubs are read.
+    assert set(spy.names()) <= set(FETCHED) and spy.names()[:2] == [MARK_CROWDS, READ_HUBS]
+    assert cache.crowds(T) == Crowds((), ())
     # B4 to B6 for the scored accounts, equal to the reference's answers.
     assert cache.rows(PAYMENT_EVENTS, T, SCORED) == _reference(graph, PAYMENT_EVENTS, SCORED)
     for table in SUBGRAPH_TABLES[1:]:
@@ -125,6 +129,7 @@ def test_fetch_fills_the_cache_for_the_keys(
     assert asked == nodes - {"a_shop"}
     assert not cache.missing(COMPLETE, T, SCORED)
     assert done.requests[READ_HUBS] == 1 and done.accounts[READ_MONEY_FLOW] == len(asked)
+    assert done.requests[MARK_CROWDS] == 1
     # Every table of two accounts equals the reference's answer given a_shop as the hub set:
     # B2, B4, B5 and B6 ran with it, and it changes a_c000's rows. a_c000 pays only the hub,
     # so its payees are all hubs (hub_payee_share_30d 1.0, 0.0 without the set) and its
@@ -136,7 +141,7 @@ def test_fetch_fills_the_cache_for_the_keys(
     assert counterparties.hub_payee_share_30d == 1.0
     (community,) = cache.rows(COMMUNITY, T, ["a_c000"])
     assert community.members == 1
-    # The reader gives exactly the keys asked, after the larger fetch of the Monday.
+    # The reader gives exactly the keys asked, after the larger fetch of the same time.
     assert [row.account_id for row in cache.rows(COMMUNITY, T, ["a_h1", "a_r1"])] == [
         "a_h1",
         "a_r1",
@@ -168,12 +173,14 @@ def test_a_second_fetch_makes_no_request(
     spy = Spy(graph)
     done = fetch(spy, Cache(tmp_path), {T: list(reversed(SCORED))}, parity=parity)
     assert spy.calls == [] and done.cached[COMPLETE] == len(SCORED)
-    # A larger fetch of the same Monday asks only for what is new.
+    # A larger fetch of the same time asks only for what is new.
     fetch(spy, cache, {T: [*SCORED, "a_h2"]}, parity=parity)
     assert all(
         params["account_ids"] == ["a_h2"] for name, params in spy.calls if name in SUBGRAPH_QUERIES
     )
-    assert READ_HUBS not in spy.names()
+    # The graph may hold another time's crowds by then, so T is marked again; its rows are
+    # cached already.
+    assert spy.names()[0] == MARK_CROWDS and READ_HUBS not in spy.names()
 
 
 @dataclass
@@ -203,9 +210,10 @@ def test_an_interrupted_fetch_resumes_where_it_stopped(
     assert cache.missing(COMPLETE, T, SCORED) == sorted(SCORED)
     spy = Spy(graph)
     fetch(spy, Cache(tmp_path), {T: SCORED}, parity=parity)
-    # The hubs and B4 to B6 were cached before it stopped; B1 to B3 come now.
+    # The hubs and B4 to B6 were cached before it stopped; B1 to B3 come now, after T is
+    # marked again.
     assert not set(spy.names()) & {READ_HUBS, *SUBGRAPH_QUERIES}
-    assert READ_MONEY_FLOW in spy.names()
+    assert spy.names()[0] == MARK_CROWDS and READ_MONEY_FLOW in spy.names()
     nodes = _nodes(cache, SCORED)
     for table in ACCOUNT_TABLES:
         assert Cache(tmp_path).missing(table.name, T, nodes) == ["a_shop"]
@@ -332,18 +340,18 @@ def test_an_edge_of_an_account_the_subgraph_does_not_list_is_refused(
     assert Cache(tmp_path).missing(COMPLETE, T, ["a_r1"]) == ["a_r1"]
 
 
-def test_fetch_forgets_each_mondays_indexes(
+def test_fetch_forgets_each_times_indexes(
     graph: ReferenceGraph, tmp_path: Path, parity: Path, index_reads: list[Path]
 ) -> None:
     cache = Cache(tmp_path)
     fetch(Spy(graph), cache, {T: SCORED, T + W: SCORED}, parity=parity)
-    # Neither Monday's indexes are held once its fetch is done, the last included: asking
+    # Neither time's indexes are held once its fetch is done, the last included: asking
     # about either reads them again.
     for t_ms in (T + W, T):
         before = len(index_reads)
         assert not cache.missing(COMPLETE, t_ms, SCORED)
         assert len(index_reads) > before
-    # A fetch that stops forgets the Monday it was filling too, and one that has nothing to
+    # A fetch that stops forgets the time it was filling too, and one that has nothing to
     # fetch.
     stopped = Cache(tmp_path / "stopped")
     with pytest.raises(KeyboardInterrupt):
@@ -355,6 +363,20 @@ def test_fetch_forgets_each_mondays_indexes(
     before = len(index_reads)
     assert not cache.missing(COMPLETE, T, SCORED)
     assert len(index_reads) > before
+
+
+def test_each_time_is_marked_once_before_its_reads_and_read_whole_before_the_next(
+    graph: ReferenceGraph, tmp_path: Path, parity: Path
+) -> None:
+    spy = Spy(graph)
+    fetch(spy, Cache(tmp_path), {T + W: SCORED, T: SCORED}, parity=parity)
+    times = [params["t_ms"] for _, params in spy.calls]
+    marks = [index for index, name in enumerate(spy.names()) if name == MARK_CROWDS]
+    # The graph holds the crowds of one time alone: each time is marked first, and every read
+    # of it runs before the next time is marked.
+    assert [times[index] for index in marks] == [T, T + W] and marks[0] == 0
+    assert times == sorted(times) and times[marks[1] - 1] == T
+    assert spy.names()[marks[1] + 1] == READ_HUBS
 
 
 def test_a_fetch_of_33_accounts_makes_requests_of_32_and_1(
@@ -467,16 +489,18 @@ def test_requests_are_sized_by_the_bytes_measured_so_far(
     spy = Spy(graph)
     transport = replace(SEQUENTIAL, response_budget_bytes=3_000)
     fetch(spy, Cache(tmp_path), {T: FORTY, T + W: FORTY}, transport, parity)
-    # Forty accounts a Monday. Every query's first request holds 32, as nothing has been
-    # measured; every later request is sized by the answers before it, within a Monday's
-    # fetch as well as from one Monday to the next. The first answer sets the size of the
-    # next request, so the first Monday's last 8 accounts go in requests of the size that
-    # the 32 imply, and the second Monday's 40 in requests of the size all 40 imply.
+    # Forty accounts a week. Every query's first request holds 32, as nothing has been
+    # measured; every later request is sized by the answers before it, within a week's
+    # fetch as well as from one week to the next. The first answer sets the size of the
+    # next request, so the first week's last 8 accounts go in requests of the size that
+    # the 32 imply, and the second week's 40 in requests of the size all 40 imply.
     # B4: a shopper's rows take 531 to 533 bytes, the 90th percentile is 533 and
     # 3,000 // 533 is 5, so 8 accounts go as 5 and 3.
     # B5: 180 bytes, 16 fit. B6: 170 bytes, 17 fit. B1: 383 to 389 bytes, 7 fit. B2: 301
     # bytes, 9 fit. B3: 323 to 325 bytes, 9 fit.
-    assert {query: spy.sizes(query) for query in FETCHED if query != READ_HUBS} == {
+    assert {
+        query: spy.sizes(query) for query in FETCHED if query not in (MARK_CROWDS, READ_HUBS)
+    } == {
         READ_PAYMENT_EVENTS: [32, 5, 3, 5, 5, 5, 5, 5, 5, 5, 5],
         READ_SHARED_IDENTITY: [32, 8, 16, 16, 8],
         READ_COMMUNITY: [32, 8, 17, 17, 6],
@@ -535,12 +559,12 @@ def test_fetch_needs_a_parity_record_of_every_query_it_runs(
     assert spy.calls == []
 
 
-def test_a_key_that_is_not_a_monday_at_midnight_is_refused(
+def test_a_key_that_is_not_a_whole_second_is_refused(
     graph: ReferenceGraph, tmp_path: Path, parity: Path
 ) -> None:
     spy = Spy(graph)
-    with pytest.raises(ValueError, match="Monday at 00:00 UTC"):
-        fetch(spy, Cache(tmp_path), {T + 3_600_000: SCORED}, parity=parity)
+    with pytest.raises(ValueError, match="whole second"):
+        fetch(spy, Cache(tmp_path), {T + 3_600_001: SCORED}, parity=parity)
     assert spy.calls == []
 
 
@@ -610,10 +634,10 @@ def test_concurrent_requests_fill_the_same_cache_and_count_the_same_accounts(
 def test_requests_sized_by_the_measured_bytes_stay_the_same_run_after_run(
     graph: ReferenceGraph, tmp_path: Path, parity: Path
 ) -> None:
-    # Forty accounts a Monday and a budget of 3,000 bytes, two requests at a time. The first
+    # Forty accounts a week and a budget of 3,000 bytes, two requests at a time. The first
     # round of each query is sized by nothing measured and holds two requests of 20; every later
     # round is sized by the answers before it, so B4's 533 bytes an account give requests of 5 on
-    # the second Monday, in rounds of two.
+    # the second week, in rounds of two.
     transport = replace(TWO, response_budget_bytes=3_000)
     found: list[dict[str, list[int]]] = []
     for run in range(3):

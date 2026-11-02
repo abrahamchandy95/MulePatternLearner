@@ -1,0 +1,161 @@
+USE GRAPH Mule_Pattern_Learner
+CREATE OR REPLACE QUERY read_counterparty_payers(
+    UINT t_ms, // The scoring time after the first 90 days
+    LIST<STRING> account_ids // The accounts to read
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+
+    /* Tuples */
+    TYPEDEF TUPLE<UINT ts> FirstPayment;
+
+    /* Constants */
+    UINT LOOKBACK_MS = 7776000000; // 90 days
+    UINT MONTH_MS = 2592000000; // 30 days
+    UINT WEEK_MS = 604800000; // 7 days
+    UINT DAY_MS = 86400000; // 24 hours
+    INT BURST_LIMIT = 256; // The most new payers the 24-hour count reads
+
+    /* Vertex and edge types, each a set so that one pattern serves transactions and transfers */
+    SetAccum<STRING> @@payment_vertex_type; // A transaction or a transfer
+    SetAccum<STRING> @@receiver_to_payment_edge_type; // Account -> the payments it received
+    SetAccum<STRING> @@payment_to_sender_edge_type; // Payment -> the account that sent it
+    @@payment_vertex_type += "Payment_Transaction";
+    @@payment_vertex_type += "Zelle_Transfer";
+    @@receiver_to_payment_edge_type += "Account_Received_Transaction";
+    @@receiver_to_payment_edge_type += "Account_Received_Zelle_Transfer";
+    @@payment_to_sender_edge_type += "Transaction_From_Account";
+    @@payment_to_sender_edge_type += "Transfer_From_Account";
+
+    /* Accumulators */
+    MapAccum<VERTEX, MinAccum<UINT>> @internal_first; // Each payer of this bank, with its first payment in the 90 days
+    MapAccum<VERTEX, MinAccum<UINT>> @external_first; // Each payer of another bank, with its first payment in the 90 days
+    MapAccum<VERTEX, SumAccum<INT>> @payer_cents; // Each payer's cents in the 30 days
+    SumAccum<INT> @received_30d; // The cents received in the 30 days
+    HeapAccum<FirstPayment>(257, ts DESC) @new_payers; // The newest first payments of new payers, one more than the 24-hour count reads
+    SumAccum<INT> @payers_30d;
+    SumAccum<INT> @new_internal_payers_7d, @new_internal_payers_30d;
+    SumAccum<INT> @new_external_payers_7d, @new_external_payers_30d;
+    SumAccum<DOUBLE> @new_payer_share_30d;
+    SumAccum<INT> @max_new_payers_24h;
+    SetAccum<STRING> @@ids; // The account ids given, each once
+    SumAccum<INT> @@given; // How many were given
+
+    IF t_ms <= LOOKBACK_MS OR t_ms % 1000 != 0 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+    FOREACH account_id IN account_ids DO
+        @@ids += account_id;
+        @@given += 1;
+    END;
+    IF @@given == 0 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+    IF @@ids.size() != @@given THEN
+        PRINT "duplicate_account" AS status;
+        RETURN;
+    END;
+    requested = to_vertex_set(@@ids, "Account");
+    IF requested.size() != @@ids.size() THEN
+        PRINT "unknown_account" AS status;
+        RETURN;
+    END;
+    accounts = SELECT s FROM requested:s WHERE s.opened_ms < t_ms;
+    IF accounts.size() != requested.size() THEN
+        PRINT "invisible_account" AS status;
+        RETURN;
+    END;
+
+    /* Traverse: Account -> Payment -> its sender, received in the 90 days before t, self-payments aside */
+    received = SELECT a
+        FROM accounts:a - (@@receiver_to_payment_edge_type>:e) - @@payment_vertex_type:p
+            - (@@payment_to_sender_edge_type>:f) - Account:b
+        WHERE p.event_ts_ms >= t_ms - LOOKBACK_MS AND p.event_ts_ms < t_ms AND b != a
+        ACCUM
+            INT cents = floor(p.amount * 100 + 0.5),
+            IF b.is_external THEN
+                a.@external_first += (b -> p.event_ts_ms)
+            ELSE
+                a.@internal_first += (b -> p.event_ts_ms)
+            END,
+            IF p.event_ts_ms >= t_ms - MONTH_MS THEN
+                a.@payer_cents += (b -> cents),
+                a.@received_30d += cents
+            END
+    ;
+
+    /* Count the payers and the new ones among them (new: its first payment is in the 30 or 7 days), take the share of the cents from new ones, and keep the new ones' first payments for the 24-hour count */
+    counted = SELECT a
+        FROM accounts:a
+        POST-ACCUM
+            INT new_cents = 0,
+            FOREACH (payer, first_ms) IN a.@internal_first DO
+                IF first_ms >= t_ms - MONTH_MS THEN
+                    a.@new_internal_payers_30d += 1,
+                    a.@new_payers += FirstPayment(first_ms),
+                    new_cents = new_cents + a.@payer_cents.get(payer),
+                    IF first_ms >= t_ms - WEEK_MS THEN
+                        a.@new_internal_payers_7d += 1
+                    END
+                END
+            END,
+            FOREACH (payer, first_ms) IN a.@external_first DO
+                IF first_ms >= t_ms - MONTH_MS THEN
+                    a.@new_external_payers_30d += 1,
+                    a.@new_payers += FirstPayment(first_ms),
+                    new_cents = new_cents + a.@payer_cents.get(payer),
+                    IF first_ms >= t_ms - WEEK_MS THEN
+                        a.@new_external_payers_7d += 1
+                    END
+                END
+            END,
+            a.@payers_30d += a.@payer_cents.size(),
+            IF a.@received_30d > 0 THEN
+                a.@new_payer_share_30d += new_cents * 1.0 / a.@received_30d
+            END
+    ;
+
+    /* The most new payers whose first payments fall within 24 hours, over the newest 256: when there are more, every payer up to the second of the 257th newest is left out, so that no tie decides */
+    bursts = SELECT a
+        FROM accounts:a
+        POST-ACCUM
+            INT cut = -1,
+            INT within = 0,
+            INT most = 0,
+            IF a.@new_payers.size() > BURST_LIMIT THEN
+                FOREACH x IN a.@new_payers DO
+                    IF cut < 0 OR floor(x.ts / 1000) < cut THEN
+                        cut = floor(x.ts / 1000)
+                    END
+                END
+            END,
+            FOREACH x IN a.@new_payers DO
+                IF floor(x.ts / 1000) > cut THEN
+                    within = 0,
+                    FOREACH y IN a.@new_payers DO
+                        IF floor(y.ts / 1000) > cut AND y.ts >= x.ts AND y.ts < x.ts + DAY_MS THEN
+                            within = within + 1
+                        END
+                    END,
+                    IF within > most THEN
+                        most = within
+                    END
+                END
+            END,
+            a.@max_new_payers_24h += most
+    ;
+
+    /* Printing the accounts */
+    PRINT "ok" AS status;
+    PRINT bursts[
+        bursts.id AS account_id,
+        bursts.@payers_30d AS payers_30d,
+        bursts.@new_internal_payers_7d AS new_internal_payers_7d,
+        bursts.@new_internal_payers_30d AS new_internal_payers_30d,
+        bursts.@new_external_payers_7d AS new_external_payers_7d,
+        bursts.@new_external_payers_30d AS new_external_payers_30d,
+        bursts.@new_payer_share_30d AS new_payer_share_30d,
+        bursts.@max_new_payers_24h AS max_new_payers_24h
+    ] AS accounts;
+
+}

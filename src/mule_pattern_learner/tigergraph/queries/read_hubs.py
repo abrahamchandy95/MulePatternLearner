@@ -1,4 +1,4 @@
-"""read_hubs: the leaves of one Monday, the accounts, devices and IPs too connected to expand,
+"""read_hubs: the leaves at one time t, the accounts, devices and IPs too connected to expand,
 each with its measure (docs/design.md, "Shared rules" and "read_hubs")."""
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ class Leaf:
 
 @dataclass(frozen=True)
 class Hubs:
-    """The leaves of one Monday, each kind sorted by id."""
+    """The leaves at one time t, each kind sorted by id."""
 
     accounts: tuple[HubAccount, ...]
     devices: tuple[Leaf, ...]
@@ -44,7 +44,7 @@ class Hubs:
 
 
 def params(t_ms: int) -> dict[str, Any]:
-    """The parameters of the Monday t."""
+    """The parameters of the time t."""
     return {"t_ms": as_of(t_ms)}
 
 
@@ -57,11 +57,11 @@ def _sorted[T](found: list[T], ids: list[str], what: str) -> tuple[T, ...]:
 
 
 def parse(rows: Sequence[object]) -> Hubs:
-    """The leaves of the Monday params(t_ms) asked for. Every one is checked against the
+    """The leaves at the time params(t_ms) asked for. Every one is checked against the
     settings' thresholds, which the query declares too."""
-    from . import READ_HUBS, VERSIONS  # the registry imports this module
+    from . import READ_HUBS  # the registry imports this module
 
-    response_head(rows, READ_HUBS, VERSIONS[READ_HUBS])
+    response_head(rows, READ_HUBS)
     accounts = [parse_row(HubAccount, row) for row in projected(rows, "accounts", READ_HUBS)]
     for account in accounts:
         if account.customers_90d <= SUBGRAPH.hub_threshold:

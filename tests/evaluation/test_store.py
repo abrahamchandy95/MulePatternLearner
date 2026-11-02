@@ -1,6 +1,6 @@
-"""The evaluation store: the answer key, read_labels' rows, the fallback list and the pass record
-round-trip through their files, read back through the queries' parsers, and a pass record holds
-pass or fail per check and nothing else."""
+"""The evaluation store: the answer key, read_labels' rows, the fallback list, the test-role clock
+sample and the pass record round-trip through their files, read back through the queries'
+parsers, and a pass record holds pass or fail per check and nothing else."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ import pytest
 
 from mule_pattern_learner.data.labels import read_identified
 from mule_pattern_learner.evaluation.answer_key import read_answer_key
+from mule_pattern_learner.evaluation.clock_invariance import COLUMNS
 from mule_pattern_learner.evaluation.store import (
     RECORD_FILE,
     AuditRecord,
@@ -62,6 +63,28 @@ def test_the_fallback_list_round_trips(data_dir: Path) -> None:
     pd.testing.assert_frame_equal(store.fallback(), keys)
 
 
+def test_the_clock_sample_round_trips_and_is_none_until_it_is_written(data_dir: Path) -> None:
+    store = Store(IDENTITY)
+    assert store.clock_sample() is None
+    sample = pd.DataFrame(
+        {
+            "t_ms": pd.Series([5, 5, 9], dtype="int64"),
+            "account_id": pd.Series(["a", "b", "c"], dtype="str"),
+            "positive": [True, False, False],
+            "weight": [1.0, 10.0, 10.0],
+            "cluster": ["ring:3", "account:b", "account:c"],
+            "week_ms": pd.Series([2, 2, 7], dtype="int64"),
+            "at_week_start": [True, True, False],
+        }
+    )
+    store.write_clock_sample(sample)
+    assert (store.folder / "clock_sample.parquet").is_file()
+    stored = store.clock_sample()
+    assert stored is not None
+    pd.testing.assert_frame_equal(stored, sample)
+    assert tuple(stored.columns) == COLUMNS
+
+
 def _record(**checks: bool) -> AuditRecord:
     return AuditRecord("D1", "development", IDENTITY, "c" * 32, "s" * 32, dict(VERSIONS), checks)
 
@@ -69,21 +92,21 @@ def _record(**checks: bool) -> AuditRecord:
 def test_a_pass_record_round_trips_and_names_its_failures(data_dir: Path) -> None:
     store = Store(IDENTITY)
     assert store.record() is None
-    record = _record(**{"gate_record": True, "label.truth_join": False, "clock_probe": False})
+    record = _record(**{"gate_record": True, "label.truth_join": False, "clock_gain": False})
     store.write_record(record)
     assert store.record() == record
-    assert record.failed == ("clock_probe", "label.truth_join")
+    assert record.failed == ("clock_gain", "label.truth_join")
     text = (store.folder / RECORD_FILE).read_text()
     assert '"label.truth_join" = false' in text and 'world = "D1"' in text
 
 
 def test_a_pass_record_holds_nothing_but_its_fields(tmp_path: Path) -> None:
-    text = record_text(_record(clock_probe=True))
+    text = record_text(_record(clock_gain=True))
     path = tmp_path / RECORD_FILE
-    assert parse_record(text, path) == _record(clock_probe=True)
+    assert parse_record(text, path) == _record(clock_gain=True)
     for planted in (
         text + 'roc_auc = "0.51"\n',
-        text.replace('"clock_probe" = true', '"clock_probe" = 0.51'),
+        text.replace('"clock_gain" = true', '"clock_gain" = 0.51'),
         text.replace('world = "D1"', "world = 1"),
     ):
         with pytest.raises(ValueError):

@@ -1,12 +1,12 @@
 USE GRAPH Mule_Pattern_Learner
 
-/* read_hubs: the accounts, devices and IPs too connected to expand on Monday t.
+/* read_hubs: the accounts, devices and IPs too connected to expand at t.
 
-   Inputs: t_ms, a Monday at 00:00 UTC.
+   Inputs: t_ms, a whole second in UTC epoch milliseconds after the 90-day lookback.
    Prints: accounts, each account hub with customers_90d; devices and ips, each crowd (device
    and IP hubs among them) with customers_90d, observed_only (no customer has a visible
    enrolment link to it) and hub.
-   Refuses: invalid_parameters, for a t that is not a Monday after the 90-day lookback.
+   Refuses: invalid_parameters, for a t that is not a whole second after the 90-day lookback.
 
    Without leaves one biller or carrier IP would flood every subgraph, and "shares an IP with
    5,000 people" means nothing (docs/design.md, "Shared rules"). Every measure counts distinct
@@ -29,8 +29,7 @@ CREATE OR REPLACE QUERY read_hubs(
     UINT crowd_threshold = 8;
     UINT hub_threshold = 200;
 
-    /* Mondays are 4 days after the Thursday of 1970-01-01, modulo a week. */
-    IF t_ms <= lookback_ms OR t_ms % 604800000 != 345600000 THEN
+    IF t_ms <= lookback_ms OR t_ms % 1000 != 0 THEN
         PRINT "invalid_parameters" AS status;
         RETURN;
     END;
@@ -88,7 +87,7 @@ CREATE OR REPLACE QUERY read_hubs(
     DeviceLeaves = SELECT d FROM Leaves:d WHERE d.type == "Device";
     IpLeaves = SELECT d FROM Leaves:d WHERE d.type == "IP";
 
-    PRINT "ok" AS status, "read_hubs-3b28b3433685" AS version;
+    PRINT "ok" AS status, "read_hubs-13de3a1aab4c" AS version;
     PRINT HubAccounts[HubAccounts.id AS account_id,
       HubAccounts.@customers_90d AS customers_90d] AS accounts;
     PRINT DeviceLeaves[DeviceLeaves.id AS node_id, DeviceLeaves.@customers_90d AS customers_90d,

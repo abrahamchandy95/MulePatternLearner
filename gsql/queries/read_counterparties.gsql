@@ -3,8 +3,8 @@ USE GRAPH Mule_Pattern_Learner
 /* read_counterparties (B2): who pays each account and whom it pays, how new they are, and
    where its money goes.
 
-   Inputs: t_ms, a Monday at 00:00 UTC; account_ids, the accounts to read, each once;
-   hub_accounts, read_hubs' account hubs of the same t.
+   Inputs: t_ms, a whole second in UTC epoch milliseconds after the 90-day lookback; account_ids,
+   the accounts to read, each once; hub_accounts, read_hubs' account hubs of the same t.
    Prints: accounts, per account its 12 counterparty columns (docs/features.md, "Account
    node", columns 22 to 33).
    Refuses: invalid_parameters, duplicate_account, unknown_account, invisible_account, and
@@ -53,8 +53,7 @@ CREATE OR REPLACE QUERY read_counterparties(
     SumAccum<INT> @@given;
     UINT lookback_ms = 7776000000;
 
-    /* Mondays are 4 days after the Thursday of 1970-01-01, modulo a week. */
-    IF t_ms <= lookback_ms OR t_ms % 604800000 != 345600000 THEN
+    IF t_ms <= lookback_ms OR t_ms % 1000 != 0 THEN
         PRINT "invalid_parameters" AS status;
         RETURN;
     END;
@@ -185,7 +184,7 @@ CREATE OR REPLACE QUERY read_counterparties(
         END,
         a.@max_new_payers_24h += most;
 
-    PRINT "ok" AS status, "read_counterparties-07a31e72fd65" AS version;
+    PRINT "ok" AS status, "read_counterparties-d1144ba6fca5" AS version;
     PRINT Rows[Rows.id AS account_id, Rows.@payers_30d AS payers_30d,
       Rows.@payees_30d AS payees_30d, Rows.@new_internal_payers_7d AS new_internal_payers_7d,
       Rows.@new_internal_payers_30d AS new_internal_payers_30d,

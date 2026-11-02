@@ -1,0 +1,157 @@
+USE GRAPH Mule_Pattern_Learner
+
+/* Demo: the web around one account, to draw in GraphStudio, on gsql/schema/schema.gsql
+   (the 22-table export contract of docs/design.md).
+
+   From seed it walks up to hops links. Each step takes, from the accounts it reached: their
+   owners; their owners' other accounts; the devices and IPs their owners use, the other
+   parties on them and those parties' accounts; and the accounts they paid or were paid by,
+   when those are mules (or every one of them, with all_payment_neighbours). With mules_only,
+   only the mules among the accounts reached go on to the next step, so a ring shows without
+   the crowd around it. Devices and IPs linked to more than max_parties parties, the bank's
+   ledger accounts and accounts with more than max_payments payments are hubs and are not
+   walked through. The walk takes every link and payment whatever its date, since a demo
+   shows the loaded world as it stands, not a Monday's view of it.
+
+   Prints every vertex reached, the links between them and the payments among the accounts
+   shown: the latest of each pair's, or all of them with all_payments, and each pair's count
+   and total. Then a count of the accounts shown as known mules (pu_label 1), hidden mules
+   (is_mule 1, pu_label 0) and the rest. Colour Account by is_mule and pu_label to see which
+   is which.
+
+   This is a demo only. It reads is_mule, the truth, and pu_label, the bank's identification,
+   which the Labels guard of docs/design.md allows read_answer_key and read_labels alone to
+   read. It is never a training input, no example, cache or model is built from it, and it
+   is not one of the twelve queries that mule install installs. */
+CREATE OR REPLACE QUERY demo_account_web(
+    VERTEX<Account> seed,
+    INT hops = 2,
+    BOOL mules_only = TRUE,
+    BOOL all_payment_neighbours = FALSE,
+    BOOL all_payments = FALSE,
+    INT max_parties = 50,
+    INT max_payments = 1500
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+    OrAccum @shown, @reached;
+    SetAccum<EDGE> @@links;
+    MapAccum<STRING, SumAccum<INT>> @@accounts_shown, @@payments_per_pair;
+    MapAccum<STRING, SumAccum<DOUBLE>> @@amount_per_pair;
+    MapAccum<STRING, MaxAccum<UINT>> @@latest;
+    INT hop = 0;
+
+    Start = {seed};
+    Frontier = SELECT a FROM Start:a POST-ACCUM a.@shown += TRUE;
+
+    WHILE hop < hops AND Frontier.size() > 0 DO
+        hop = hop + 1;
+        Owners = SELECT p FROM Frontier:a -(Account_Owned_By_Party>:o)- Party:p
+          POST-ACCUM p.@shown += TRUE;
+        Siblings = SELECT b FROM Owners:p -(Party_Owns_Account>:o)- Account:b
+          WHERE NOT b.@shown
+          POST-ACCUM b.@shown += TRUE, b.@reached += TRUE;
+        Devices = SELECT d FROM Owners:p -(Party_Uses_Device>:l)- Device:d
+          WHERE d.outdegree("Device_Used_By_Party") <= max_parties
+          POST-ACCUM d.@shown += TRUE;
+        IPs = SELECT i FROM Owners:p -(Party_Uses_IP>:l)- IP:i
+          WHERE i.outdegree("IP_Used_By_Party") <= max_parties
+          POST-ACCUM i.@shown += TRUE;
+        Sharers = SELECT q FROM Devices:d -(Device_Used_By_Party>:l)- Party:q
+          POST-ACCUM q.@shown += TRUE;
+        IPSharers = SELECT q FROM IPs:i -(IP_Used_By_Party>:l)- Party:q
+          POST-ACCUM q.@shown += TRUE;
+        Neighbours = Sharers UNION IPSharers;
+        SharerAccounts = SELECT b FROM Neighbours:q -(Party_Owns_Account>:o)- Account:b
+          WHERE NOT b.@shown
+          POST-ACCUM b.@shown += TRUE, b.@reached += TRUE;
+        Payers = SELECT a FROM Frontier:a
+          WHERE a.account_type != "gl"
+            AND a.outdegree("Account_Initiated_Transaction")
+              + a.outdegree("Account_Received_Transaction")
+              + a.outdegree("Account_Sent_Zelle_Transfer")
+              + a.outdegree("Account_Received_Zelle_Transfer") <= max_payments;
+        PaidTo = SELECT b FROM Payers:a -(Account_Initiated_Transaction>:e1)-
+            Payment_Transaction:t -(Transaction_To_Account>:e2)- Account:b
+          WHERE NOT b.@shown AND b.account_type != "gl" AND (all_payment_neighbours OR b.is_mule == 1)
+            AND b.outdegree("Account_Initiated_Transaction")
+              + b.outdegree("Account_Received_Transaction")
+              + b.outdegree("Account_Sent_Zelle_Transfer")
+              + b.outdegree("Account_Received_Zelle_Transfer") <= max_payments
+          POST-ACCUM b.@shown += TRUE, b.@reached += TRUE;
+        PaidBy = SELECT b FROM Payers:a -(Account_Received_Transaction>:e1)-
+            Payment_Transaction:t -(Transaction_From_Account>:e2)- Account:b
+          WHERE NOT b.@shown AND b.account_type != "gl" AND (all_payment_neighbours OR b.is_mule == 1)
+            AND b.outdegree("Account_Initiated_Transaction")
+              + b.outdegree("Account_Received_Transaction")
+              + b.outdegree("Account_Sent_Zelle_Transfer")
+              + b.outdegree("Account_Received_Zelle_Transfer") <= max_payments
+          POST-ACCUM b.@shown += TRUE, b.@reached += TRUE;
+        ZelleTo = SELECT b FROM Payers:a -(Account_Sent_Zelle_Transfer>:e1)-
+            Zelle_Transfer:t -(Transfer_To_Account>:e2)- Account:b
+          WHERE NOT b.@shown AND (all_payment_neighbours OR b.is_mule == 1)
+            AND b.outdegree("Account_Initiated_Transaction")
+              + b.outdegree("Account_Received_Transaction")
+              + b.outdegree("Account_Sent_Zelle_Transfer")
+              + b.outdegree("Account_Received_Zelle_Transfer") <= max_payments
+          POST-ACCUM b.@shown += TRUE, b.@reached += TRUE;
+        ZelleFrom = SELECT b FROM Payers:a -(Account_Received_Zelle_Transfer>:e1)-
+            Zelle_Transfer:t -(Transfer_From_Account>:e2)- Account:b
+          WHERE NOT b.@shown AND (all_payment_neighbours OR b.is_mule == 1)
+            AND b.outdegree("Account_Initiated_Transaction")
+              + b.outdegree("Account_Received_Transaction")
+              + b.outdegree("Account_Sent_Zelle_Transfer")
+              + b.outdegree("Account_Received_Zelle_Transfer") <= max_payments
+          POST-ACCUM b.@shown += TRUE, b.@reached += TRUE;
+        /* The accounts first reached in this step go on, or only the mules among them. */
+        Frontier = SELECT b FROM Account:b
+          WHERE b.@reached AND (NOT mules_only OR b.is_mule == 1)
+          POST-ACCUM b.@reached = FALSE;
+        Cleared = SELECT b FROM Account:b WHERE b.@reached POST-ACCUM b.@reached = FALSE;
+    END;
+
+    /* What is shown, and the links between the vertices shown. */
+    ShownAccounts = SELECT a FROM Account:a WHERE a.@shown
+      ACCUM
+        IF a.pu_label == 1 THEN @@accounts_shown += ("known mule" -> 1)
+        ELSE IF a.is_mule == 1 THEN @@accounts_shown += ("hidden mule" -> 1)
+        ELSE @@accounts_shown += ("not a mule" -> 1)
+        END;
+    ShownParties = SELECT p FROM ShownAccounts:a -(Account_Owned_By_Party>:o)- Party:p
+      WHERE p.@shown
+      ACCUM @@links += o;
+    ShownDevices = SELECT d FROM ShownParties:p -(Party_Uses_Device>:l)- Device:d
+      WHERE d.@shown
+      ACCUM @@links += l;
+    ShownIPs = SELECT i FROM ShownParties:p -(Party_Uses_IP>:l)- IP:i
+      WHERE i.@shown
+      ACCUM @@links += l;
+    /* Each pair's payments either way between the accounts shown, then the ones drawn. */
+    PairPayments = SELECT t FROM ShownAccounts:a -(Account_Initiated_Transaction>:e1)-
+        Payment_Transaction:t -(Transaction_To_Account>:e2)- Account:b
+      WHERE b.@shown AND b != a
+      ACCUM @@latest += (a.id + " -> " + b.id -> t.event_ts_ms),
+        @@payments_per_pair += (a.id + " -> " + b.id -> 1),
+        @@amount_per_pair += (a.id + " -> " + b.id -> t.amount);
+    PairTransfers = SELECT t FROM ShownAccounts:a -(Account_Sent_Zelle_Transfer>:e1)-
+        Zelle_Transfer:t -(Transfer_To_Account>:e2)- Account:b
+      WHERE b.@shown AND b != a
+      ACCUM @@latest += (a.id + " -> " + b.id -> t.event_ts_ms),
+        @@payments_per_pair += (a.id + " -> " + b.id -> 1),
+        @@amount_per_pair += (a.id + " -> " + b.id -> t.amount);
+    ShownPayments = SELECT t FROM ShownAccounts:a -(Account_Initiated_Transaction>:e1)-
+        Payment_Transaction:t -(Transaction_To_Account>:e2)- Account:b
+      WHERE b.@shown AND b != a
+        AND (all_payments OR t.event_ts_ms == @@latest.get(a.id + " -> " + b.id))
+      ACCUM @@links += e1, @@links += e2;
+    ShownTransfers = SELECT t FROM ShownAccounts:a -(Account_Sent_Zelle_Transfer>:e1)-
+        Zelle_Transfer:t -(Transfer_To_Account>:e2)- Account:b
+      WHERE b.@shown AND b != a
+        AND (all_payments OR t.event_ts_ms == @@latest.get(a.id + " -> " + b.id))
+      ACCUM @@links += e1, @@links += e2;
+
+    PRINT ShownAccounts[ShownAccounts.account_type, ShownAccounts.is_mule,
+      ShownAccounts.pu_label, ShownAccounts.mule_ring_id];
+    PRINT ShownParties, ShownDevices, ShownIPs, ShownPayments, ShownTransfers;
+    PRINT @@links;
+    PRINT @@accounts_shown AS accounts_shown, @@payments_per_pair AS payments_per_pair,
+      @@amount_per_pair AS amount_per_pair;
+}

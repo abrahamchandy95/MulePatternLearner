@@ -11,12 +11,15 @@ The order of mule audit:
 4. when config scores the test world by its fallback and the world plays a test role, the
    fallback list (evaluation.fallback), into the store, and its rows fetched;
 5. the label checks and the identification horizon (evaluation.label_checks), on every scored
-   Monday's population (data.population, from the cache or listed);
-6. the audit sample (evaluation.sample), its rows fetched, and the clock probe
-   (evaluation.clock_probe);
-7. on a development world, the feature audit (evaluation.feature_audit) and the development
+   week's population (data.population, from the cache or listed);
+6. the audit sample (evaluation.sample), its rows fetched, and the clock gain test
+   (evaluation.clock_gain);
+7. when the world plays a test role, the sample stored with the start of each row's week, and
+   its rows fetched at those starts (evaluation.clock_invariance), which mule evaluate scores at
+   both times;
+8. on a development world, the feature audit (evaluation.feature_audit) and the development
    checks (evaluation.development_checks);
-8. the pass record into the store: pass or fail per check, the query versions, the cache key,
+9. the pass record into the store: pass or fail per check, the query versions, the cache key,
    the hash of the settings and the world's name, kind and identity, and nothing else.
 
 Every query runs through an entry point that allows it: read_answer_key through the
@@ -52,15 +55,15 @@ from ..subgraph.fetch import Fetcher, fetch
 from ..tigergraph.executor import FetchExecutor, QueryExecutor
 from ..tigergraph.queries import VERSIONS
 from ..tigergraph.world import cache_key, canonical_hash
-from . import clock_probe, development_checks, feature_audit, label_checks
+from . import clock_gain, clock_invariance, development_checks, feature_audit, label_checks
 from .answer_key import read_answer_key
-from .fallback import by_monday, fallback_keys
+from .fallback import by_week, fallback_keys
 from .gate_records import check_records
 from .sample import audit_sample
 from .store import AuditRecord, Store
 
 GATE_RECORD = "gate_record"
-CLOCK_PROBE = "clock_probe"
+CLOCK_GAIN = "clock_gain"
 FEATURE_AUDIT = "feature_audit"
 NO_POSITIVE_HUB = "no_positive_hub"
 # The kind of world on which the development checks run.
@@ -88,11 +91,12 @@ def audit_settings(config: RunConfig) -> str:
 
 @dataclass
 class Measured:
-    """What the audit reads of each account-Monday of its sample, in the sample's order: its
-    clock values for the probe, and on a development world its audited columns, its own
-    devices and IPs, the customer that owns it, its short dwell shares with left_by_card and
-    its out_30d."""
+    """What the audit reads of each account-week of its sample, in the sample's order: its
+    controls and clock values for the gain test, and on a development world its audited columns,
+    its own devices and IPs, the customer that owns it, its short dwell shares with
+    left_by_card and its out_30d."""
 
+    controls: list[NDArray[np.float64]] = field(default_factory=lambda: list[NDArray[np.float64]]())
     clock: list[NDArray[np.float64]] = field(default_factory=lambda: list[NDArray[np.float64]]())
     columns: list[NDArray[np.float64]] = field(default_factory=lambda: list[NDArray[np.float64]]())
     nodes: list[development_checks.OwnNodes] = field(
@@ -104,16 +108,20 @@ class Measured:
 
 
 def measure(cache: Cache, world: str, sample: pd.DataFrame, development: bool) -> Measured:
-    """Read every account-Monday of the sample from the cache, a Monday at a time, in the
+    """Read every account-week of the sample from the cache, a week at a time, in the
     sample's order."""
     found = Measured()
     t_values = sample["t_ms"].tolist()
     if t_values != sorted(t_values):
-        raise ValueError("The audit sample is not in the order of its Mondays")
-    for t_ms, accounts in by_monday(sample).items():
+        raise ValueError("The audit sample is not in the order of its weeks")
+    for t_ms, accounts in by_week(sample).items():
         rows = read_rows(cache, [(t_ms, account) for account in accounts])
         for example in rows:
-            found.clock.append(clock_probe.clock_values(t_ms, clock_probe.durations(example)))
+            events = clock_gain.durations(example)
+            found.controls.append(
+                clock_gain.control_values(events, clock_gain.node_counts(example))
+            )
+            found.clock.append(clock_gain.clock_values(t_ms, events))
         if not development:
             continue
         for start in range(0, len(rows), BATCH):
@@ -170,17 +178,17 @@ def audit(
     reasons[GATE_RECORD] = gates
 
     cache = Cache.of(loaded.identity, config.subgraph)
-    found = {t_ms: population(fetching, cache.root, t_ms) for t_ms in config.calendar.mondays()}
+    tested = TEST in roles(loaded.config.name, config.worlds.rotations)
+    scoring_times = config.calendar.scoring_times(loaded.config.seed)
+    found = {t_ms: population(fetching, cache.root, t_ms) for t_ms in scoring_times}
     populations = {t_ms: [row.account_id for row in rows] for t_ms, rows in found.items()}
-    if config.data.scoring == "fallback" and TEST in roles(
-        loaded.config.name, config.worlds.rotations
-    ):
-        keys = fallback_keys(key, populations, config.data)
+    if config.data.scoring == "fallback" and tested:
+        keys = fallback_keys(key, populations, config.data, scoring_times)
         store.write_fallback(keys)
-        fetch(executor, cache, by_monday(keys), config.transport, parity)
+        fetch(executor, cache, by_week(keys), config.transport, parity)
 
     labelled = label_checks.check_labels(
-        key, labels.accounts, populations, config.calendar.mondays(), config.audit.horizon_level
+        key, labels.accounts, populations, scoring_times, config.audit.horizon_level
     )
     checks |= labelled.results
     reasons |= {name: labelled.breaking[name] for name in label_checks.LABEL_CHECKS}
@@ -188,19 +196,42 @@ def audit(
     store.write_table("mules_never_scored", labelled.unscored)
     store.write_table("identification_horizon", labelled.horizon)
 
-    sample = audit_sample(key, populations, config.audit.nonmule_sample, config.data.draw_key)
-    fetch(executor, cache, by_monday(sample), config.transport, parity)
+    sample = audit_sample(
+        key, populations, config.audit.nonmule_sample, config.data.draw_key, scoring_times
+    )
+    fetch(executor, cache, by_week(sample), config.transport, parity)
+    if tested:
+        starts = dict(zip(scoring_times, config.calendar.week_starts(), strict=True))
+        scorable = {
+            start: [row.account_id for row in population(fetching, cache.root, start)]
+            for start in sorted({starts[int(t_ms)] for t_ms in sample["t_ms"].tolist()})
+        }
+        stored = clock_invariance.with_week_starts(sample, starts, scorable)
+        store.write_clock_sample(stored)
+        fetch(
+            executor,
+            cache,
+            by_week(clock_invariance.week_start_keys(stored)),
+            config.transport,
+            parity,
+        )
     development = loaded.config.kind == DEVELOPMENT
     measured = measure(cache, loaded.identity, sample, development)
     positive = sample["positive"].to_numpy(dtype=bool)
     weight = sample["weight"].to_numpy(dtype=np.float64)
     clusters = sample["cluster"].tolist()
     seed = config.training.bootstrap_seed
-    probe = clock_probe.probe(
-        _matrix(measured.clock, clock_probe.WIDTH), positive, weight, clusters, config.audit, seed
+    gained = clock_gain.gain(
+        _matrix(measured.controls, clock_gain.CONTROLS),
+        _matrix(measured.clock, clock_gain.WIDTH),
+        positive,
+        weight,
+        clusters,
+        config.audit,
+        seed,
     )
-    checks[CLOCK_PROBE] = probe.passed
-    store.write_table("clock_probe", probe.frame())
+    checks[CLOCK_GAIN] = gained.passed
+    store.write_table(CLOCK_GAIN, gained.frame())
 
     if development:
         audited = feature_audit.feature_audit(
@@ -215,10 +246,10 @@ def audit(
         reasons[FEATURE_AUDIT] = audited.stopping
         store.write_table("feature_audit", audited.table)
         fetcher = Fetcher(executor, cache, config.transport)
-        mondays = sorted(set(sample.loc[positive, "t_ms"].tolist()))
+        weeks = sorted(set(sample.loc[positive, "t_ms"].tolist()))
         hubs = {
             int(t_ms): frozenset(hub.account_id for hub in fetcher.hubs(int(t_ms)).accounts)
-            for t_ms in mondays
+            for t_ms in weeks
         }
         mules = sample[positive]
         hub_rows = development_checks.positive_hubs(

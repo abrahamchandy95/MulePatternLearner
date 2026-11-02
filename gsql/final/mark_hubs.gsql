@@ -1,0 +1,75 @@
+USE GRAPH Mule_Pattern_Learner
+CREATE OR REPLACE QUERY mark_hubs(
+    UINT t_ms // The scoring time after the first 90 days
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+
+    /* Constants */
+    UINT LOOKBACK_MS = 7776000000; // 90 days
+    INT HUB_THRESHOLD = 200; // More customers than this make an account a hub
+
+    /* Vertex and edge types, each a set so that one pattern serves transactions and transfers */
+    SetAccum<STRING> @@payment_vertex_type; // A transaction or a transfer
+    SetAccum<STRING> @@account_to_payment_edge_type; // Account -> the payments it sent or received
+    SetAccum<STRING> @@payment_to_account_edge_type; // Payment -> its sender and its receiver
+    SetAccum<STRING> @@account_to_owner_edge_type; // Account -> its owner
+    @@payment_vertex_type += "Payment_Transaction";
+    @@payment_vertex_type += "Zelle_Transfer";
+    @@account_to_payment_edge_type += "Account_Initiated_Transaction";
+    @@account_to_payment_edge_type += "Account_Received_Transaction";
+    @@account_to_payment_edge_type += "Account_Sent_Zelle_Transfer";
+    @@account_to_payment_edge_type += "Account_Received_Zelle_Transfer";
+    @@payment_to_account_edge_type += "Transaction_From_Account";
+    @@payment_to_account_edge_type += "Transaction_To_Account";
+    @@payment_to_account_edge_type += "Transfer_From_Account";
+    @@payment_to_account_edge_type += "Transfer_To_Account";
+    @@account_to_owner_edge_type += "Account_Owned_By_Party";
+
+    /* Accumulators */
+    SetAccum<VERTEX<Party>> @customers; // The owners of the accounts at the other end of its payments
+    SumAccum<INT> @customers_90d;
+
+    IF t_ms <= LOOKBACK_MS OR t_ms % 1000 != 0 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+
+    /* Clear the stamps an earlier run left at this t, so that only this run's hubs carry it */
+    cleared = SELECT a FROM Account:a WHERE a.hub_at_ms == t_ms POST-ACCUM a.hub_at_ms = 0;
+
+    /* Busy accounts: open by t, with more payments in all than the threshold */
+    busy = SELECT a
+        FROM Account:a
+        WHERE a.opened_ms < t_ms
+            AND a.outdegree(@@account_to_payment_edge_type) > HUB_THRESHOLD
+    ;
+
+    /* Traverse: Account -> Payment -> the other account -> its owner, over the 90 days before t; stamp the hubs */
+    hubs = SELECT a
+        FROM busy:a - (@@account_to_payment_edge_type>:e) - @@payment_vertex_type:p
+            - (@@payment_to_account_edge_type>:f) - Account:b
+            - (@@account_to_owner_edge_type>:o) - Party:q
+        WHERE e.event_ts_ms >= t_ms - LOOKBACK_MS AND e.event_ts_ms < t_ms
+            AND b != a AND b.opened_ms < t_ms
+            AND o.valid_from_ms < t_ms
+            AND ( o.valid_to_ms == 0 OR o.valid_to_ms > t_ms - LOOKBACK_MS )
+        ACCUM
+            a.@customers += q
+        POST-ACCUM
+            IF a.@customers.size() > HUB_THRESHOLD THEN
+                a.hub_at_ms = t_ms,
+                a.@customers_90d += a.@customers.size()
+            END
+        HAVING a.@customers.size() > HUB_THRESHOLD
+    ;
+
+    /* Record that the hub stamps are t's */
+    INSERT INTO Mark VALUES ("hubs", t_ms);
+
+    /* Printing the hubs */
+    PRINT "ok" AS status;
+    PRINT hubs[
+        hubs.id AS account_id,
+        hubs.@customers_90d AS customers_90d
+    ] AS accounts;
+
+}

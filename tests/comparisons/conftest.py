@@ -32,7 +32,7 @@ WORLD = "0123456789abcdef0123456789abcdef"
 
 @dataclass(frozen=True)
 class ComparisonWorld:
-    """The training batches of both Mondays with the mules positive, each example weighing
+    """The training batches of both weeks with the mules positive, each example weighing
     its own number (weights), and the selection world of T with the mules positive."""
 
     training: list[Batch]
@@ -48,19 +48,19 @@ def world(tmp_path_factory: pytest.TempPathFactory) -> ComparisonWorld:
     fixtures.write_parity_record(parity)
     graph = fixtures.batch_world().graph()
     accounts = [account.account_id for account in list_population(graph, T)]
-    mondays = (T, T + 7 * DAY_MS)
+    times = (T, T + 7 * DAY_MS)
     cache = Cache(folder / "cache")
-    fetch(Spy(graph), cache, {t_ms: accounts for t_ms in mondays}, parity=parity)
+    fetch(Spy(graph), cache, {t_ms: accounts for t_ms in times}, parity=parity)
     # Every example weighs its own number, so that a weight read in another order is caught.
     weights = {
         (t_ms, account): 1.0 + 0.5 * day + index / 1_000
-        for day, t_ms in enumerate(mondays)
+        for day, t_ms in enumerate(times)
         for index, account in enumerate(accounts)
     }
     examples = pd.DataFrame(
         [
             (t_ms, account, int(account in MULES), weights[t_ms, account])
-            for t_ms in mondays
+            for t_ms in times
             for account in accounts
         ],
         columns=["t_ms", "account_id", "label", "weight"],

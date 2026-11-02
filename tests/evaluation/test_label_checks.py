@@ -30,8 +30,9 @@ from mule_pattern_learner.tigergraph.queries.read_answer_key import AccountTruth
 D = 86_400_000
 W = 7 * D
 LEVEL = DEFAULT_CONFIG.audit.horizon_level
-MONDAYS = (T, T + W)
-YEAR = DEFAULT_CONFIG.calendar.mondays()
+# The scoring times of the label tests: two, a week apart, and the 52 of a world's year.
+TIMES = (T, T + W)
+YEAR = DEFAULT_CONFIG.calendar.scoring_times(1001)
 
 
 def _truth(
@@ -59,7 +60,7 @@ POPULATIONS = {T: ["a_m1", "a_n1", "a_n2"], T + W: ["a_m1", "a_n1", "a_n2"]}
 
 
 def test_a_world_with_sound_labels_passes_every_label_check() -> None:
-    found = check_labels(KEY, frozenset({"a_m1"}), POPULATIONS, MONDAYS, LEVEL)
+    found = check_labels(KEY, frozenset({"a_m1"}), POPULATIONS, TIMES, LEVEL)
     assert all(found.results[name] for name in LABEL_CHECKS)
     assert all(not found.breaking[name] for name in LABEL_CHECKS)
 
@@ -72,7 +73,7 @@ def test_each_label_check_fails_on_its_planted_case() -> None:
         planted,
         frozenset({"a_m1", "a_n2", "a_gone"}),
         populations,
-        MONDAYS,
+        TIMES,
         LEVEL,
         joined=(*JOINED_COLUMNS, "is_mule"),
     )
@@ -86,14 +87,15 @@ def test_each_label_check_fails_on_its_planted_case() -> None:
 
 
 def test_mules_are_counted_by_type_and_ownership_and_unscored_ones_reported() -> None:
-    found = check_labels(KEY, frozenset({"a_m1"}), POPULATIONS, MONDAYS, LEVEL)
+    found = check_labels(KEY, frozenset({"a_m1"}), POPULATIONS, TIMES, LEVEL)
     counts = {
         (str(kind), bool(owned)): int(mules)
         for kind, owned, mules in found.counts.itertuples(index=False, name=None)
     }
     assert counts == {("credit", True): 1, ("deposit", False): 1, ("deposit", True): 1}
     # a_m2 is active at T and T + 1 week but never scorable (it has no owner); a_card's
-    # activity ends 8 days before T, so it is active at neither.
+    # activity ends 8 days before T, and no scoring time comes before T to stretch its window,
+    # so it is active at neither.
     assert found.unscored.values.tolist() == [[T, "a_m2"], [T + W, "a_m2"]]
 
 
@@ -152,10 +154,10 @@ def test_the_horizon_fails_without_a_mule_in_the_scored_year() -> None:
 
 
 def test_the_join_of_the_keys_and_scores_with_the_truth_shares_the_account_id_alone() -> None:
-    # Evaluation joins a Monday, an account, a weight and a logit with the truth on the account;
+    # Evaluation joins a t, an account, a weight and a logit with the truth on the account;
     # the truth holds none of the other three.
     assert JOINED_COLUMNS == ("t_ms", "account_id", "weight", "logit")
-    found = check_labels(KEY, frozenset(), POPULATIONS, MONDAYS, LEVEL)
+    found = check_labels(KEY, frozenset(), POPULATIONS, TIMES, LEVEL)
     assert found.results[TRUTH_JOIN] and found.breaking[TRUTH_JOIN] == ()
 
 
@@ -169,5 +171,5 @@ def test_a_column_the_truth_gains_that_the_join_holds_fails_the_check(
         return frame(key).assign(**{column: 0})
 
     monkeypatch.setattr(AnswerKey, "frame", with_column)
-    found = check_labels(KEY, frozenset(), POPULATIONS, MONDAYS, LEVEL)
+    found = check_labels(KEY, frozenset(), POPULATIONS, TIMES, LEVEL)
     assert found.breaking[TRUTH_JOIN] == (column,) and not found.results[TRUTH_JOIN]

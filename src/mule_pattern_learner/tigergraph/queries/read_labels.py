@@ -30,9 +30,9 @@ def params(after_id: str, page: int) -> dict[str, Any]:
 def parse(rows: Sequence[object], after_id: str, page: int) -> tuple[IdentifiedMule, ...]:
     """The identified mules of the page that params(after_id, page) asked for. A mule without
     0 < mule_onset_ms <= mule_last_ms is refused, as the query refuses it."""
-    from . import READ_LABELS, VERSIONS  # the registry imports this module
+    from . import READ_LABELS  # the registry imports this module
 
-    response_head(rows, READ_LABELS, VERSIONS[READ_LABELS])
+    response_head(rows, READ_LABELS)
     mules = paged(IdentifiedMule, rows, READ_LABELS, after_id, page)
     for mule in mules:
         if not 0 < mule.mule_onset_ms <= mule.mule_last_ms:

@@ -31,7 +31,7 @@ HOUR_MS = 3_600_000
 MINUTE_MS = 60_000
 
 
-def test_a_request_takes_a_monday_its_accounts_and_the_hubs_each_once() -> None:
+def test_a_request_takes_a_time_its_accounts_and_the_hubs_each_once() -> None:
     """The accounts go as a list of ids, which the query checks itself; the hubs as a set of
     vertices, in TigerGraph's JSON for SET<VERTEX<Account>>."""
     assert read_payment_events.params(T_MS, ["a_02", "a_01"], ["h_01"]) == {
@@ -40,8 +40,12 @@ def test_a_request_takes_a_monday_its_accounts_and_the_hubs_each_once() -> None:
         "hub_accounts": [{"id": "h_01"}],
     }
     assert read_payment_events.params(T_MS, ["a_01"], [])["hub_accounts"] == []
-    with pytest.raises(ValueError, match="Monday"):
-        read_payment_events.params(T_MS + DAY_MS, ["a_01"], [])
+    # Any whole second is a time: a Tuesday afternoon is one, a millisecond is not.
+    assert read_payment_events.params(T_MS + DAY_MS + 3_661_000, ["a_01"], [])["t_ms"] == (
+        T_MS + DAY_MS + 3_661_000
+    )
+    with pytest.raises(ValueError, match="whole second"):
+        read_payment_events.params(T_MS + 1, ["a_01"], [])
     with pytest.raises(ValueError, match="repeats an account"):
         read_payment_events.params(T_MS, ["a_01", "a_01"], [])
     with pytest.raises(ValueError, match="at least one account"):
@@ -200,7 +204,7 @@ def test_a_scored_account_with_no_owner_has_no_ownership_edge() -> None:
     assert saver.owned_by == ()
 
 
-def test_a_status_row_or_another_version_is_refused() -> None:
+def test_a_status_row_is_refused() -> None:
     for status in (
         "invalid_parameters",
         "duplicate_account",
@@ -211,10 +215,6 @@ def test_a_status_row_or_another_version_is_refused() -> None:
         with pytest.raises(QueryRefused, match=status) as refused:
             read_payment_events.parse([{"status": status}], ["a_01"])
         assert refused.value.status == status
-    with pytest.raises(ValueError, match="mule install"):
-        read_payment_events.parse(
-            [{"status": "ok", "version": "read_payment_events-0123456789ab"}], []
-        )
 
 
 @pytest.mark.parametrize(
