@@ -80,38 +80,38 @@ CREATE OR REPLACE QUERY read_payments(
             p.@age_ms += t_ms - p.event_ts_ms
     ;
 
-    /* Traverse: Payment -> its sender, the stored gap read unless the sender is a hub at t */
+    /* Traverse: Payment -> its sender, the stored gap read when the sender's earlier payment is in the 90 days before t, unless the sender is a hub at t */
     sent = SELECT p
         FROM payments:p - (@@payment_to_sender_edge_type>:f) - Account:a
         ACCUM
             p.@sender_id += a.id,
-            IF p.sender_gap_ms > 0 AND a.hub_at_ms != t_ms THEN
+            IF p.sender_gap_ms > 0 AND p.event_ts_ms - p.sender_gap_ms >= t_ms - LOOKBACK_MS AND a.hub_at_ms != t_ms THEN
                 p.@sender_gap_present += TRUE,
                 p.@sender_gap_ms += p.sender_gap_ms
             END
     ;
 
-    /* Traverse: Payment -> its receiver, the stored gap read unless the receiver is a hub at t */
+    /* Traverse: Payment -> its receiver, the stored gap read when the receiver's earlier payment is in the 90 days before t, unless the receiver is a hub at t */
     received = SELECT p
         FROM payments:p - (@@payment_to_receiver_edge_type>:g) - Account:b
         ACCUM
             p.@receiver_id += b.id,
-            IF p.receiver_gap_ms > 0 AND b.hub_at_ms != t_ms THEN
+            IF p.receiver_gap_ms > 0 AND p.event_ts_ms - p.receiver_gap_ms >= t_ms - LOOKBACK_MS AND b.hub_at_ms != t_ms THEN
                 p.@receiver_gap_present += TRUE,
                 p.@receiver_gap_ms += p.receiver_gap_ms
             END
     ;
 
-    /* Flag the payments whose pair paid before */
+    /* Flag the payments whose pair paid before, in the 90 days before t */
     rows = SELECT p
         FROM payments:p
         POST-ACCUM
             p.@pair_present += p.pair_prior_count > 0
     ;
 
-    /* Refuse unless the hub stamps on the graph are this t's */
-    current_marks = SELECT m FROM Mark:m WHERE m.id == "hubs" AND m.at_ms == t_ms;
-    IF current_marks.size() != 1 THEN
+    /* Refuse unless the hub and pair stamps on the graph are this t's */
+    current_marks = SELECT m FROM Mark:m WHERE ( m.id == "hubs" OR m.id == "pairs" ) AND m.at_ms == t_ms;
+    IF current_marks.size() != 2 THEN
         PRINT "unmarked_time" AS status;
         RETURN;
     END;

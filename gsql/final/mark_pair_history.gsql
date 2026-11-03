@@ -1,5 +1,7 @@
 USE GRAPH Mule_Pattern_Learner
-CREATE OR REPLACE QUERY mark_pair_history() FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
+CREATE OR REPLACE QUERY mark_pair_history(
+    UINT t_ms // The scoring time after the first 90 days
+) FOR GRAPH Mule_Pattern_Learner SYNTAX V2 {
 
     /* Constants */
     UINT LOOKBACK_MS = 7776000000; // 90 days
@@ -17,16 +19,27 @@ CREATE OR REPLACE QUERY mark_pair_history() FOR GRAPH Mule_Pattern_Learner SYNTA
 
     /* Accumulators */
     MinAccum<VERTEX> @receiver; // On a payment: its receiver (a payment has one)
-    MapAccum<VERTEX, ListAccum<UINT>> @times_paid; // On a sender: for each receiver, the times it paid that receiver
-    SumAccum<INT> @prior_count; // On a payment: how many of those times are earlier and at most 90 days earlier
+    MapAccum<VERTEX, ListAccum<UINT>> @times_paid; // On a sender: for each receiver, the times it paid that receiver in the 90 days before t
+    SumAccum<INT> @prior_count; // On a payment: how many of those times are earlier
     MaxAccum<UINT> @prior_latest; // On a payment: the latest of them
     MinAccum<UINT> @prior_earliest; // On a payment: the earliest of them
 
+    IF t_ms <= LOOKBACK_MS OR t_ms % 1000 != 0 THEN
+        PRINT "invalid_parameters" AS status;
+        RETURN;
+    END;
+
     payments = {@@payment_vertex_type};
+
+    /* The payments of the 90 days before t, the only ones a reader at t reads */
+    recent = SELECT p
+        FROM payments:p
+        WHERE p.event_ts_ms >= t_ms - LOOKBACK_MS AND p.event_ts_ms < t_ms
+    ;
 
     /* Traverse: Payment -> its receiver, remembered on the payment */
     received = SELECT p
-        FROM payments:p - (@@payment_to_receiver_edge_type>:g) - Account:b
+        FROM recent:p - (@@payment_to_receiver_edge_type>:g) - Account:b
         ACCUM
             p.@receiver += b
     ;
@@ -39,13 +52,13 @@ CREATE OR REPLACE QUERY mark_pair_history() FOR GRAPH Mule_Pattern_Learner SYNTA
             a.@times_paid += ( p.@receiver -> p.event_ts_ms )
     ;
 
-    /* Traverse: Payment -> its sender, counting the times it paid the same receiver in the 90 days before */
+    /* Traverse: Payment -> its sender, counting the times it paid the same receiver earlier in the 90 days before t */
     counted = SELECT p
         FROM received:p - (@@payment_to_sender_edge_type>:f) - Account:a
         WHERE a != p.@receiver
         ACCUM
             FOREACH ts IN a.@times_paid.get(p.@receiver) DO
-                IF ts < p.event_ts_ms AND p.event_ts_ms - ts <= LOOKBACK_MS THEN
+                IF ts < p.event_ts_ms THEN
                     p.@prior_count += 1,
                     p.@prior_latest += ts,
                     p.@prior_earliest += ts
@@ -53,15 +66,18 @@ CREATE OR REPLACE QUERY mark_pair_history() FOR GRAPH Mule_Pattern_Learner SYNTA
             END
     ;
 
-    /* Stamp every payment: the count, and the time since the latest and since the earliest */
+    /* Stamp every payment of the 90 days before t: the count, and the time since the latest and since the earliest */
     marked = SELECT p
-        FROM payments:p
+        FROM recent:p
         POST-ACCUM
             p.pair_prior_count = p.@prior_count,
             p.pair_gap_ms = CASE WHEN p.@prior_count > 0 THEN p.event_ts_ms - p.@prior_latest ELSE 0 END,
             p.pair_age_ms = CASE WHEN p.@prior_count > 0 THEN p.event_ts_ms - p.@prior_earliest ELSE 0 END,
             p.pair_marked = TRUE
     ;
+
+    /* Record that the pair stamps are t's */
+    INSERT INTO Mark VALUES ("pairs", t_ms);
 
     /* Printing how many payments were marked */
     PRINT "ok" AS status, marked.size() AS marked;

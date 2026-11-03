@@ -251,6 +251,15 @@ them as one row per tracked payment (its id, its lot's `left_24h` and its lot's 
 presence and milliseconds), not one per lot, because a GSQL tuple cannot hold a list of ids;
 the row is joined to the payment's edge by the payment id.
 
+In `gsql/final/`, `read_payments` gives `pair_prior_count`, `pair_gap`, `pair_age`,
+`sender_gap` and `receiver_gap` with the same definitions, from stamps on the payment.
+`mark_payment_gaps` stamps the two gaps once per world, each over the 90 days before the
+payment itself, so `read_payments` reads a gap only when the earlier payment it measures to,
+ts minus the stamp, lies at or after `t - 90 d`. `mark_pair_history` stamps the three pair
+fields at t, from the payments of `[t - 90 d, t)` alone, and `read_payments` refuses a t whose
+pairs are not marked (see
+[How its payment rows are read](design.md#read_payment_events-b4-the-payment-graph)).
+
 ## Ownership edges: no attributes
 
 `owned_by` (account to customer) and `rev_owned_by` are built with `edge_dim` None: the edge

@@ -761,11 +761,14 @@ customers over 90 days), and each device's and IP's `observed_only`, under the r
   `crowd_at_ms = t`. A reader at t treats an account or a device or IP as a leaf only when its
   stamp equals t, so a stamp of another time is harmless. A mark query first clears the stamps
   of its own t that an earlier run left, so marking t again after a rule change leaves no stale
-  leaf. A stamp holds one time, so the marks of two scoring times on one graph must not
-  overlap: each mark query also records its t on a `Mark` vertex (`hubs` or `crowds`), and
-  every query that reads a stamp checks, just before it prints its answer, that the Mark of
-  each stamp it reads holds its own t, and refuses with `unmarked_time` otherwise, which also
-  catches a mark that lands while it reads. The stamps and the Marks are MulePatternLearner's
+  leaf. `mark_pair_history` marks t too: it stamps the pair history of each payment of
+  `[t - 90 d, t)` and clears nothing, since it rewrites every stamp a reader at t reads (see
+  [How its payment rows are read](#read_payment_events-b4-the-payment-graph)). A stamp holds
+  one time, so the marks of two scoring times on one graph must not overlap: each mark query
+  also records its t on a `Mark` vertex (`hubs`, `crowds` or `pairs`), and every query that
+  reads a stamp of a scoring time checks, just before it prints its answer, that the Mark of
+  each such stamp it reads holds its own t, and refuses with `unmarked_time` otherwise, which
+  also catches a mark that lands while it reads. The stamps and the Marks are MulePatternLearner's
   own schema (`gsql/schema/mule_attributes.gsql`). The loader creates them with the schema and
   leaves them at their defaults when it loads, and `mule-load clear` empties them with the
   data, so a new world needs no schema change and no query installed again (the owner, 2
@@ -960,6 +963,35 @@ customer, most recently active first. The full composition of an example's subgr
 | `sender_gap`, `receiver_gap` | rapid repeat payments and a mule's fast pieces, against a business's steady flow |
 | `dwell_tracked`, `left_24h`, `dwell` (from B1) | velocity on the event itself |
 
+**How its payment rows are read.** In `gsql/final/`, `read_payments` gives each payment's row
+from stamps that two mark queries write on the payment, and reads nothing before `t - 90 d`;
+`read_payment_events` serves until the Python moves to the final queries. Its gaps and pair
+fields are those of `read_payment_events`.
+
+- `mark_payment_gaps` runs once per loaded world. It stamps each payment with
+  `sender_gap_ms`, ts minus its sender's latest strictly earlier payment sent, and
+  `receiver_gap_ms`, ts minus its receiver's latest strictly earlier payment received, each
+  kept when that payment is at most 90 days before ts and 0 otherwise. Those 90 days are the
+  payment's own, not the lookback of any t.
+- `read_payments` reads a gap stamp only when the earlier payment it measures to, ts minus the
+  stamp, is at or after `t - 90 d`, and none at an end stamped a hub at t. A payment it reads
+  lies in `[t - 90 d, t)`, so an earlier payment inside the lookback is less than 90 days
+  before it and its stamp holds it; and when the latest earlier payment is before
+  `t - 90 d`, none lies inside. By hand: at t on Monday 1 July 2024 00:00 UTC the lookback
+  starts on 2 April, and a payment of 12 April whose sender last paid on 1 March is stamped
+  42 days but reads no `sender_gap`, as in `read_payment_events`. An earlier payment exactly
+  at `t - 90 d` is read, one a millisecond before it is not.
+- A pair's count and age cannot be filtered that way: a payment of 12 April whose pair also
+  paid on 1 March and 5 April has 2 earlier pair payments and an age of 42 days over its own
+  90 days, where t reads 1 and 7 days. So `mark_pair_history` marks a scoring time, like
+  `mark_hubs`: it stamps each payment of `[t - 90 d, t)` with `pair_prior_count`,
+  `pair_gap_ms` and `pair_age_ms`, from the payments its sender sent the same receiver in
+  `[t - 90 d, ts)`, strictly earlier, and records t on the `pairs` Mark. A payment outside the
+  window keeps a stamp of another time, which no reader at t reads.
+- `read_payments` refuses a payment outside its lookback (`invisible_payment`), a payment
+  without both marks' stamps (`unmarked_payment`), and, just before it prints, a t that the
+  `hubs` Mark and the `pairs` Mark do not both hold (`unmarked_time`).
+
 ### `read_shared_identity` (B5): the device and IP graph
 
 **Job.** Build the customer's devices and IPs, those seen on payments, and who else uses each
@@ -1119,10 +1151,10 @@ crowds would merge strangers. The demo query `demo_account_web` also reads `is_m
   `read_payment_events`, `read_shared_identity` and `read_community` also refuse a member of
   their hub set that does not exist at t (`invisible_hub`). `list_accounts`, `read_labels` and
   `read_answer_key` page by strictly increasing id.
-- Every query of `gsql/final/` that reads a stamp refuses with `unmarked_time` unless the stamps
-  are for its t (see [Marks of a scoring time](#read_hubs)). A query that takes customers, or
-  devices and IPs, instead of accounts refuses a duplicate or unknown one the same way
-  (`duplicate_customer`, `unknown_customer`, `duplicate_node`, `unknown_node`).
+- Every query of `gsql/final/` that reads a stamp of a scoring time refuses with `unmarked_time`
+  unless the stamps are for its t (see [Marks of a scoring time](#read_hubs)). A query that
+  takes customers, or devices and IPs, instead of accounts refuses a duplicate or unknown one
+  the same way (`duplicate_customer`, `unknown_customer`, `duplicate_node`, `unknown_node`).
 - Every query that takes a t refuses, with `invalid_parameters`, a t that is not a whole second
   in epoch milliseconds after the 90-day lookback (`t_ms % 1000 == 0` and `t_ms > lookback`), and
   so does its Python builder. It accepts any other t, so a scoring time inside a week and a
