@@ -5,7 +5,6 @@
 # ── Secrets / environment ──────────────────────────────────────────────────
 .env
 .env.*
-!.env.example
 *.secret
 secrets/
 # The pyTigerGraph convention of a cfg.py sometimes holds a secret.

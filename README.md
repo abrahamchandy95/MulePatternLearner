@@ -21,7 +21,7 @@ pip install -e ".[dev]"
 Run `pip install -e ".[dev]"` again after every pull: the `mule` command, the import contracts
 and the dependencies change with the code.
 
-Copy `.env.example` to `.env` and set:
+Create `.env` at the repository root and set:
 
 | Setting | What it is |
 |---|---|
